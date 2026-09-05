@@ -1,7 +1,7 @@
 {
   "displayName": "VSCodroid ようこそ",
   "description": "VSCodroid のようこそガイド",
-  "config.layout.autoHideSideBar": "ファイルを開いたときにサイドバーを閉じます。未設定のままなら画面に合わせます。ファイルツリーとエディターが横に並ばない画面ではオン、並ぶ画面ではオフです。自分で決めたいときはここで設定してください。",
+  "config.layout.autoHideSideBar": "ファイルを開いたときにサイドバーを閉じます。auto なら画面に合わせます。ファイルツリーとエディターが横に並ばない画面ではオン、並ぶ画面ではオフです。自分で決めたいときはここで on か off を選んでください。",
   "command.welcome.open": "VSCodroid: ようこそページを開く",
   "command.welcome.toolsDismissed": "VSCodroid: ツールの手順を完了する",
   "walkthrough.title": "VSCodroid をはじめる",

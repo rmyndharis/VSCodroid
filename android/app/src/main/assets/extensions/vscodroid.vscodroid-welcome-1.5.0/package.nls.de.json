@@ -1,7 +1,7 @@
 {
   "displayName": "VSCodroid Willkommen",
   "description": "Willkommens-Rundgang für VSCodroid",
-  "config.layout.autoHideSideBar": "Schließt die Seitenleiste, sobald Sie eine Datei öffnen. Ohne eigene Einstellung richtet sie sich nach dem Bildschirm: an, wenn Dateibaum und Editor nicht nebeneinander Platz haben, aus, wenn sie es tun. Hier legen Sie es selbst fest.",
+  "config.layout.autoHideSideBar": "Schließt die Seitenleiste, sobald Sie eine Datei öffnen. Mit auto richtet sie sich nach dem Bildschirm: an, wenn Dateibaum und Editor nicht nebeneinander Platz haben, aus, wenn sie es tun. Mit on oder off legen Sie es hier selbst fest.",
   "command.welcome.open": "VSCodroid: Willkommen öffnen",
   "command.welcome.toolsDismissed": "VSCodroid: Werkzeugschritt abschließen",
   "walkthrough.title": "Erste Schritte mit VSCodroid",

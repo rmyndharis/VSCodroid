@@ -27,9 +27,17 @@ const path = require('path');
 const Module = require('module');
 const { newestExtensionDir } = require('./lib/bundled-extension');
 
-const EXTENSION = path.join(
-    newestExtensionDir('vscodroid.vscodroid-welcome-'), 'extension.js',
+const EXTENSION_DIR = newestExtensionDir('vscodroid.vscodroid-welcome-');
+const EXTENSION = path.join(EXTENSION_DIR, 'extension.js');
+const MANIFEST = JSON.parse(
+    fs.readFileSync(path.join(EXTENSION_DIR, 'package.json'), 'utf8'),
 );
+
+// The user's key and the device fact the extension falls back to. Named once
+// because the stub, the cases and the manifest check all have to spell them the
+// same way, and a typo in any one of them reads as a feature that is off.
+const AUTO_HIDE = 'vscodroid.layout.autoHideSideBar';
+const COMPACT = 'vscodroid.layout.compactScreen';
 
 // The extension waits this long before opening the walkthrough, so nothing can
 // be asserted until it has elapsed. Read from the file rather than written out
@@ -44,12 +52,15 @@ const MARKER = '.vscodroid_welcome_shown';
 // Resolved to a stub instead, the way scripts/test-process-monitor-extension.js
 // does it.
 let executeCommand = () => Promise.resolve();
-let sideBarVisibility = 'hidden';
-// The side bar the extension closes when a file is opened, which is a setting
-// the app writes rather than a preference the extension owns, so the stub has
-// to answer for it by name. It defaults to off here on purpose: every case that
-// predates it must go on measuring what it measured.
-let autoHideSideBar = false;
+// Every configuration key the extension reads, answered by name and
+// independently of every other. One value plus a catch-all is what left the
+// device fallback untested: [AUTO_HIDE] was answered with the case's own
+// boolean and every other key with one fixed string, so the branch that reads
+// [COMPACT] never ran once. That branch is the one every device takes, because
+// the app writes the device fact and never writes the user's key, so nothing
+// answers [AUTO_HIDE] until its owner opens Settings. Deleting the branch
+// outright left this file green.
+const settings = {};
 // The listener the extension registers for the active editor. Held rather than
 // dropped, because it is the whole of that feature: nothing else can reach it,
 // and a stub without a `window` at all is what turned this script red when the
@@ -75,11 +86,7 @@ const vscodeStub = {
         },
     },
     workspace: {
-        getConfiguration: () => ({
-            get: (key) => (
-                key === 'vscodroid.layout.autoHideSideBar' ? autoHideSideBar : sideBarVisibility
-            ),
-        }),
+        getConfiguration: () => ({ get: (key) => settings[key] }),
     },
 };
 const resolveFilename = Module._resolveFilename;
@@ -99,13 +106,21 @@ process.on('unhandledRejection', (reason) => { escaped.push(String(reason)); });
 /**
  * Activates a fresh copy against a fresh HOME and returns what it recorded.
  *
- * `commandFor` decides what each executeCommand answers with, which is the only
- * variable: the same extension, the same empty state, a command that works or a
- * command that does not.
+ * `commandFor` decides what each executeCommand answers with, and the two layout
+ * keys decide what the side bar does when a file is opened. `autoHide` defaults
+ * to the value the manifest contributes, so a case that says nothing about the
+ * layout measures a device nobody has expressed a preference on, which is the
+ * state every device ships in.
  */
-async function activate(home, commandFor, { autoHide = false, openAFile = false } = {}) {
+async function activate(home, commandFor, {
+    autoHide = MANIFEST.contributes.configuration.properties[AUTO_HIDE].default,
+    compact = false,
+    openAFile = false,
+} = {}) {
     executeCommand = commandFor;
-    autoHideSideBar = autoHide;
+    settings['workbench.secondarySideBar.defaultVisibility'] = 'hidden';
+    settings[AUTO_HIDE] = autoHide;
+    settings[COMPACT] = compact;
     activeEditorListener = null;
     ran.length = 0;
     process.env.HOME = home;
@@ -210,28 +225,78 @@ async function main() {
             `a rejected close of the side bar escaped as an unhandled rejection: ${escaped}`,
         );
 
-        // The side bar closing itself when a file is opened, which is the whole
-        // of the portrait layout fix on this side. Two cases, because the
-        // feature is a setting and the setting has to decide: the app writes it
-        // true on a phone and false on a tablet, and a tablet closing its side
-        // bar on every file would be the regression.
-        const onPhone = await activate(
-            fs.mkdtempSync(path.join(base, 'phone-')), resolves,
-            { autoHide: true, openAFile: true },
-        );
-        assert.ok(
-            onPhone.onOpen.includes('workbench.action.closeSidebar'),
-            `opening a file did not close the side bar with the setting on: ${onPhone.onOpen}`,
-        );
-
-        const onTablet = await activate(
-            fs.mkdtempSync(path.join(base, 'tablet-')), resolves,
-            { autoHide: false, openAFile: true },
+        // The manifest half of the same feature. The Settings editor picks a
+        // control from the declared type, and it renders a two-member type array
+        // as `nullable-integer`, `nullable-number` or, for anything else,
+        // `complex` -- and `complex` is an "Edit in settings.json" link, not a
+        // control. `["boolean", "null"]` shipped as exactly that: the one place
+        // the description tells the user to set this was the one place they
+        // could not. A checkbox is no way back either, because unset and off
+        // look the same in one and unset is the answer that follows the screen.
+        const declared = MANIFEST.contributes.configuration.properties[AUTO_HIDE];
+        assert.strictEqual(
+            declared.type, 'string',
+            'the setting is no longer declared as a single string type, so the Settings editor ' +
+                'may resolve it to `complex` and draw an "Edit in settings.json" link where the ' +
+                `control should be: ${JSON.stringify(declared.type)}`,
         );
         assert.deepStrictEqual(
-            onTablet.onOpen, [],
-            'opening a file closed the side bar with the setting off, so a tablet loses its file ' +
-                `tree on every file it opens: ${onTablet.onOpen}`,
+            declared.enum, ['auto', 'on', 'off'],
+            'the three answers are what the cases below drive by name and what the description ' +
+                `in all fourteen bundles describes: ${JSON.stringify(declared.enum)}`,
+        );
+        assert.strictEqual(
+            declared.default, 'auto',
+            'the default has to be the value that follows the screen, or a device nobody has ' +
+                `expressed a preference on gets a decision it never made: ${declared.default}`,
+        );
+
+        // The side bar closing itself when a file is opened, which is the whole
+        // of the portrait layout fix on this side. Four cases, because two keys
+        // decide it and each of them can be wrong on its own: the app writes the
+        // device fact, the user writes the preference, and `auto` is what every
+        // device carries until someone opens Settings.
+        const phone = await activate(
+            fs.mkdtempSync(path.join(base, 'phone-')), resolves,
+            { compact: true, openAFile: true },
+        );
+        assert.ok(
+            phone.onOpen.includes('workbench.action.closeSidebar'),
+            'opening a file did not close the side bar on a phone with no preference set, which ' +
+                `is every phone until its user opens Settings: ${phone.onOpen}`,
+        );
+
+        const tablet = await activate(
+            fs.mkdtempSync(path.join(base, 'tablet-')), resolves,
+            { compact: false, openAFile: true },
+        );
+        assert.deepStrictEqual(
+            tablet.onOpen, [],
+            'opening a file closed the side bar on a screen wide enough for both, so a tablet ' +
+                `loses its file tree on every file it opens: ${tablet.onOpen}`,
+        );
+
+        // The other half: the user's answer outranks the screen, both ways
+        // round. Each case is given the device fact that disagrees with it, so
+        // an extension that reads only the fact would fail both.
+        const forcedOn = await activate(
+            fs.mkdtempSync(path.join(base, 'forced-on-')), resolves,
+            { autoHide: 'on', compact: false, openAFile: true },
+        );
+        assert.ok(
+            forcedOn.onOpen.includes('workbench.action.closeSidebar'),
+            'a user who asked for the side bar to close was ignored on a screen wide enough ' +
+                `for both, so their own setting decides nothing: ${forcedOn.onOpen}`,
+        );
+
+        const forcedOff = await activate(
+            fs.mkdtempSync(path.join(base, 'forced-off-')), resolves,
+            { autoHide: 'off', compact: true, openAFile: true },
+        );
+        assert.deepStrictEqual(
+            forcedOff.onOpen, [],
+            'a user who turned this off on a phone had it closed anyway, which is the defect ' +
+                `the setting exists to let them fix: ${forcedOff.onOpen}`,
         );
 
         // The same rejection rule as everywhere else in this file: the close is
@@ -239,7 +304,7 @@ async function main() {
         const closeRejects = await activate(
             fs.mkdtempSync(path.join(base, 'open-close-fails-')),
             (id) => (id === 'workbench.action.closeSidebar' ? rejects() : resolves()),
-            { autoHide: true, openAFile: true },
+            { autoHide: 'on', openAFile: true },
         );
         assert.ok(
             closeRejects.onOpen.includes('workbench.action.closeSidebar'),
@@ -272,8 +337,10 @@ async function main() {
     console.log(
         'ok -- neither the walkthrough marker nor the side bar marker is recorded for a command ' +
             'that failed, both are recorded for one that ran, no rejection escapes from either ' +
-            'command or from the close in between, the palette entry hands its failure back, and ' +
-            'opening a file closes the side bar only where the setting asks for it',
+            'command or from the close in between, the palette entry hands its failure back, ' +
+            'the layout setting is declared as something the Settings editor can draw a control ' +
+            'for, and opening a file closes the side bar where the screen asks for it and where ' +
+            'the user does, and nowhere else',
     );
 }
 

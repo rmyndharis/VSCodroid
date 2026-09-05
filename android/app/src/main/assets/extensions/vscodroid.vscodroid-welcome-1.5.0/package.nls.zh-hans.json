@@ -1,7 +1,7 @@
 {
   "displayName": "VSCodroid 欢迎",
   "description": "VSCodroid 欢迎导览",
-  "config.layout.autoHideSideBar": "打开文件时收起侧边栏。留空时会跟随屏幕：文件树和编辑器无法并排放下的屏幕上开启，放得下的屏幕上关闭。想自己决定，就在这里设置。",
+  "config.layout.autoHideSideBar": "打开文件时收起侧边栏。选择 auto 时会跟随屏幕：文件树和编辑器无法并排放下的屏幕上开启，放得下的屏幕上关闭。想自己决定，就在这里选择 on 或 off。",
   "command.welcome.open": "VSCodroid: 打开欢迎页",
   "command.welcome.toolsDismissed": "VSCodroid: 完成工具步骤",
   "walkthrough.title": "开始使用 VSCodroid",

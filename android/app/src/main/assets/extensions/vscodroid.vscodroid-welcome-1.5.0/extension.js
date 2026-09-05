@@ -74,8 +74,20 @@ function alignSecondarySideBar(context) {
  *
  * Gated on a setting rather than measured here, because this side cannot measure
  * it: nothing in the extension API reports the window's width. The app writes
- * `vscodroid.layout.autoHideSideBar` when it sets up (FirstRunSetup), true on a
- * phone and false on a tablet, and a user who disagrees changes it in Settings.
+ * `vscodroid.layout.compactScreen` (FirstRunSetup, true below the 600dp smallest
+ * width Android itself calls a phone) into the settings file it owns, and writes
+ * `vscodroid.layout.autoHideSideBar` nowhere at all: that key is the user's, it
+ * lives in their own settings file, and `auto` there means follow the screen.
+ *
+ * Three string values rather than the nullable boolean this began as, and the
+ * shape is not cosmetic. The Settings editor resolves a two-member type array to
+ * `nullable-integer`, `nullable-number` or `complex`, in that order, so
+ * `["boolean", "null"]` lands on `complex` and the row draws an "Edit in
+ * settings.json" link where the control should be: the setting could not be
+ * changed in the one place its own description tells the user to change it. A
+ * plain boolean draws a checkbox and loses the third answer, because an unset
+ * checkbox and a false one look the same, and unset is the one that follows the
+ * screen.
  *
  * Read on every event and not once at activation, so turning it off takes effect
  * on the next file rather than on the next launch.
@@ -104,15 +116,21 @@ function autoHideSideBar(context) {
             // Two keys, and the split is the point. The app owns
             // `vscodroid.layout.compactScreen`, which is a fact about the
             // device it cannot express as a static default; the user owns
-            // `vscodroid.layout.autoHideSideBar`, and unset means "follow the
+            // `vscodroid.layout.autoHideSideBar`, and `auto` means "follow the
             // screen". They were one key, written by the app into the settings
             // file the workbench merges ON TOP of the user's own, so changing
             // it in Settings did nothing at all.
+            //
+            // Anything that is not an explicit answer follows the screen:
+            // `auto`, a value missing because the contributed default has not
+            // been read yet, and the boolean an older build of this app wrote
+            // all mean the same thing here, and that boolean carried the
+            // device's own answer anyway.
             const config = vscode.workspace.getConfiguration();
             const chosen = config.get('vscodroid.layout.autoHideSideBar');
-            const enabled = chosen === null || chosen === undefined
-                ? config.get('vscodroid.layout.compactScreen') === true
-                : chosen === true;
+            const enabled = chosen === 'on' || chosen === 'off'
+                ? chosen === 'on'
+                : config.get('vscodroid.layout.compactScreen') === true;
             if (!enabled) {
                 return;
             }

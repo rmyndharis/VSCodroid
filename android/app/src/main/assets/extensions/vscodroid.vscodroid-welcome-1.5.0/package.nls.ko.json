@@ -1,7 +1,7 @@
 {
   "displayName": "VSCodroid 환영 안내",
   "description": "VSCodroid 환영 둘러보기",
-  "config.layout.autoHideSideBar": "파일을 열면 사이드 바를 닫습니다. 값을 지정하지 않으면 화면에 맞춰집니다. 파일 트리와 편집기가 나란히 들어가지 않는 화면에서는 켜지고, 들어가는 화면에서는 꺼집니다. 직접 정하려면 여기에서 설정하세요.",
+  "config.layout.autoHideSideBar": "파일을 열면 사이드 바를 닫습니다. auto로 두면 화면에 맞춰집니다. 파일 트리와 편집기가 나란히 들어가지 않는 화면에서는 켜지고, 들어가는 화면에서는 꺼집니다. 직접 정하려면 여기에서 on 또는 off를 고르세요.",
   "command.welcome.open": "VSCodroid: 환영 화면 열기",
   "command.welcome.toolsDismissed": "VSCodroid: 도구 단계 완료",
   "walkthrough.title": "VSCodroid 시작하기",

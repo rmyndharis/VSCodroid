@@ -1,7 +1,7 @@
 {
   "displayName": "VSCodroid Bienvenida",
   "description": "Recorrido de bienvenida de VSCodroid",
-  "config.layout.autoHideSideBar": "Cierra la barra lateral al abrir un archivo. Si lo dejas sin valor, sigue a la pantalla: activado donde el árbol de archivos y el editor no caben a la vez, desactivado donde sí caben. Ajústalo aquí para decidirlo tú.",
+  "config.layout.autoHideSideBar": "Cierra la barra lateral al abrir un archivo. Con auto sigue a la pantalla: activado donde el árbol de archivos y el editor no caben a la vez, desactivado donde sí caben. Elige on u off aquí para decidirlo tú.",
   "command.welcome.open": "VSCodroid: Abrir la bienvenida",
   "command.welcome.toolsDismissed": "VSCodroid: Completar el paso de herramientas",
   "walkthrough.title": "Primeros pasos con VSCodroid",

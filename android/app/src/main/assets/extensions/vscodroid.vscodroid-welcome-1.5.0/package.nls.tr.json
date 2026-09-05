@@ -1,7 +1,7 @@
 {
   "displayName": "VSCodroid Karşılama",
   "description": "VSCodroid karşılama turu",
-  "config.layout.autoHideSideBar": "Bir dosya açtığınızda kenar çubuğunu kapatır. Boş bırakıldığında ekrana uyar: dosya ağacı ile düzenleyici yan yana sığmıyorsa açık, sığıyorsa kapalı olur. Kendiniz karar vermek için burada belirleyin.",
+  "config.layout.autoHideSideBar": "Bir dosya açtığınızda kenar çubuğunu kapatır. auto seçiliyken ekrana uyar: dosya ağacı ile düzenleyici yan yana sığmıyorsa açık, sığıyorsa kapalı olur. Kendiniz karar vermek için burada on ya da off seçin.",
   "command.welcome.open": "VSCodroid: Karşılama sayfasını aç",
   "command.welcome.toolsDismissed": "VSCodroid: Araçlar adımını tamamla",
   "walkthrough.title": "VSCodroid ile başlayın",

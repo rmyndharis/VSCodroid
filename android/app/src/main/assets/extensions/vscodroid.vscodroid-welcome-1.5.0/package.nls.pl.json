@@ -1,7 +1,7 @@
 {
   "displayName": "VSCodroid Powitanie",
   "description": "Powitalny przewodnik po VSCodroid",
-  "config.layout.autoHideSideBar": "Zamyka pasek boczny po otwarciu pliku. Bez ustawionej wartości dostosowuje się do ekranu: włączone tam, gdzie drzewo plików i edytor nie mieszczą się obok siebie, wyłączone tam, gdzie się mieszczą. Ustaw tutaj, aby zdecydować samodzielnie.",
+  "config.layout.autoHideSideBar": "Zamyka pasek boczny po otwarciu pliku. Ustawienie auto dostosowuje się do ekranu: włączone tam, gdzie drzewo plików i edytor nie mieszczą się obok siebie, wyłączone tam, gdzie się mieszczą. Wybierz tutaj on albo off, aby zdecydować samodzielnie.",
   "command.welcome.open": "VSCodroid: Otwórz powitanie",
   "command.welcome.toolsDismissed": "VSCodroid: Zakończ krok z narzędziami",
   "walkthrough.title": "Pierwsze kroki z VSCodroid",

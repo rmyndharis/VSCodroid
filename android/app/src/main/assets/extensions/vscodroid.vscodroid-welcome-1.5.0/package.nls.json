@@ -1,7 +1,7 @@
 {
   "displayName": "VSCodroid Welcome",
   "description": "Welcome walkthrough for VSCodroid",
-  "config.layout.autoHideSideBar": "Close the side bar when you open a file. Left unset it follows the screen: on where the file tree and the editor cannot both fit across it, off where they can. Set it here to decide for yourself.",
+  "config.layout.autoHideSideBar": "Close the side bar when you open a file. auto follows the screen: on where the file tree and the editor cannot both fit across it, off where they can. Pick on or off here to decide for yourself.",
   "command.welcome.open": "VSCodroid: Open Welcome",
   "command.welcome.toolsDismissed": "VSCodroid: Dismiss Tools Step",
   "walkthrough.title": "Get Started with VSCodroid",

@@ -1,7 +1,7 @@
 {
   "displayName": "VSCodroid Boas-vindas",
   "description": "Tour de boas-vindas do VSCodroid",
-  "config.layout.autoHideSideBar": "Fecha a barra lateral quando você abre um arquivo. Sem valor definido, ele acompanha a tela: ligado onde a árvore de arquivos e o editor não cabem lado a lado, desligado onde cabem. Defina aqui para decidir você mesmo.",
+  "config.layout.autoHideSideBar": "Fecha a barra lateral quando você abre um arquivo. Em auto, ele acompanha a tela: ligado onde a árvore de arquivos e o editor não cabem lado a lado, desligado onde cabem. Escolha on ou off aqui para decidir você mesmo.",
   "command.welcome.open": "VSCodroid: Abrir as boas-vindas",
   "command.welcome.toolsDismissed": "VSCodroid: Concluir a etapa das ferramentas",
   "walkthrough.title": "Comece a usar o VSCodroid",

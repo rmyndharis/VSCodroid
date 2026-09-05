@@ -2,7 +2,7 @@
   "name": "vscodroid-welcome",
   "displayName": "%displayName%",
   "description": "%description%",
-  "version": "1.4.0",
+  "version": "1.5.0",
   "publisher": "vscodroid",
   "engines": {
     "vscode": "^1.96.0"
@@ -19,11 +19,13 @@
       "title": "VSCodroid",
       "properties": {
         "vscodroid.layout.autoHideSideBar": {
-          "type": [
-            "boolean",
-            "null"
+          "type": "string",
+          "enum": [
+            "auto",
+            "on",
+            "off"
           ],
-          "default": null,
+          "default": "auto",
           "description": "%config.layout.autoHideSideBar%"
         }
       }
