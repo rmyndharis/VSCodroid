@@ -18,9 +18,14 @@
  *
  * Both proxy shapes are implemented because HTTPS_PROXY is exported to the whole
  * server process, and VS Code's own proxy resolver reads it too: CONNECT for
- * TLS, plain forwarding for anything still on http. Node's own http/https
- * modules ignore these variables, so extension code written against them is
- * unaffected either way.
+ * TLS, and forwarding for a request that arrives as an absolute URI. Node's own
+ * http/https modules ignore these variables, but that is a statement about
+ * Node's modules and not about extension code, which is the mistake this
+ * paragraph used to make: a library that reads the environment itself, needle
+ * for one, forwards an absolute https URI over the plain leg rather than
+ * opening a tunnel. So the forwarding leg carries TLS traffic in practice and
+ * has to honour the scheme it was given. See the branch that picks between
+ * http.request and https.request below for what it cost when it did not.
  *
  * The listener lives inside the editor server, not inside the bootstrap that
  * forks it, and that is a correctness requirement rather than a preference. The
@@ -52,6 +57,7 @@
  */
 
 const http = require('http');
+const https = require('https');
 const net = require('net');
 const crypto = require('crypto');
 const { URL } = require('url');
@@ -271,14 +277,48 @@ function start(log) {
                 res.writeHead(400).end();
                 return;
             }
-            const upstream = http.request(
+            // Two schemes and no fallback. Anything else reaching the branch
+            // below would be dialled as plain HTTP on port 80 under a scheme
+            // that promised something different, which is the failure this leg
+            // spent its whole life having for https.
+            if (target.protocol !== 'http:' && target.protocol !== 'https:') {
+                res.writeHead(400).end();
+                return;
+            }
+
+            // The scheme picks the module and the default port. Getting that
+            // wrong was not merely a broken request: this leg called
+            // http.request for every absolute URI and defaulted the port to 80,
+            // so an https:// request left the device in cleartext on port 80,
+            // carrying whatever Authorization header the client had put on it.
+            //
+            // It read as a functional bug rather than a confidentiality one
+            // because the origin answers instead of failing. GitHub replies 301
+            // with a Location identical to the request URL, its ordinary
+            // redirect to TLS, so a client that does not follow redirects
+            // (needle, which several extensions bundle) sees a 301 with an
+            // empty body and reports the site as broken.
+            //
+            // Only clients that forward an absolute https URI over this leg
+            // were affected, which is why it survived: a TLS client normally
+            // arrives by CONNECT. The ones that do not are the libraries that
+            // read HTTPS_PROXY out of the environment themselves, and this
+            // process exports it to the whole editor server and every terminal.
+            //
+            // servername is deliberately not passed. Node derives SNI from
+            // `host` for a name and correctly omits it for an IP literal;
+            // measured on the bundled runtime, setting it explicitly for an IP
+            // literal fails the handshake with ECONNRESET, so supplying it
+            // would trade this bug for a narrower one.
+            const secure = target.protocol === 'https:';
+            const upstream = (secure ? https : http).request(
                 {
                     // Brackets off, or an IPv6 literal reaches DNS as text.
                     // The CONNECT leg below has always done this; this leg
                     // never did, so http://[::1]:8080/ came back 502 with
                     // ENOTFOUND naming an address rather than a name.
                     host: bareHost(target.hostname),
-                    port: target.port || 80,
+                    port: target.port || (secure ? 443 : 80),
                     method: req.method,
                     path: target.pathname + target.search,
                     headers: req.headers,

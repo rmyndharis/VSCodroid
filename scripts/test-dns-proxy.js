@@ -270,6 +270,62 @@ async function main() {
         'the proxy forwarded Proxy-Connection upstream: ' + JSON.stringify(hopSeen),
     );
 
+    // --- the forwarding leg has to honour the scheme it was given ---------
+    //
+    // Asserted at the wire rather than against a TLS origin, which would need a
+    // certificate this harness has no way to mint. What the origin sees is
+    // enough to tell the two apart with no ambiguity: a TLS client opens with a
+    // handshake record, 0x16 then the 0x03 of its version, and a plain client
+    // opens with the method. So a recorder that keeps the first bytes and then
+    // hangs up answers the only question that matters, which is what the proxy
+    // decided to speak.
+    //
+    // The bug this pins: the leg called http.request for every absolute URI and
+    // defaulted the port to 80, so an https:// request went out in cleartext
+    // carrying any Authorization header the client had set. It answered 200
+    // through a plaintext origin, which is why nothing caught it; against a real
+    // origin it surfaced only as GitHub's 301 back to TLS.
+    const firstBytes = [];
+    const recorder = net.createServer((socket) => {
+        socket.once('data', (chunk) => {
+            firstBytes.push(chunk);
+            socket.destroy();
+        });
+        socket.on('error', () => {});
+    });
+    const recorderPort = await listen(recorder);
+
+    const overTls = await proxiedGet(proxyPort, `https://127.0.0.1:${recorderPort}/`, goodCredentials);
+    assert.strictEqual(firstBytes.length, 1, 'an https:// request never reached the origin');
+    assert.ok(
+        firstBytes[0][0] === 0x16 && firstBytes[0][1] === 0x03,
+        'an https:// request was forwarded in cleartext: the origin\'s first bytes were ' +
+            JSON.stringify(firstBytes[0].subarray(0, 16).toString('latin1')),
+    );
+    // The recorder cannot complete a handshake, so the leg must fail closed
+    // through the existing upstream error path rather than throwing, which in
+    // this process would take the editor server with it.
+    assert.strictEqual(overTls.status, 502, `a failed TLS handshake did not become a 502: ${overTls.status}`);
+
+    // The other half of the same decision: http:// must still be plain, or the
+    // fix for the above would have broken every ordinary forward.
+    firstBytes.length = 0;
+    await proxiedGet(proxyPort, `http://127.0.0.1:${recorderPort}/`, goodCredentials);
+    assert.strictEqual(firstBytes.length, 1, 'an http:// request never reached the origin');
+    assert.ok(
+        firstBytes[0].subarray(0, 4).toString('latin1') === 'GET ',
+        'an http:// request was not forwarded as plain HTTP: ' +
+            JSON.stringify(firstBytes[0].subarray(0, 16).toString('latin1')),
+    );
+
+    // A scheme this proxy cannot speak is refused rather than guessed at.
+    // Forwarding it as HTTP is how https came to be downgraded in the first
+    // place, so the branch fails instead of picking a default.
+    firstBytes.length = 0;
+    const unknownScheme = await proxiedGet(proxyPort, `ftp://127.0.0.1:${recorderPort}/`, goodCredentials);
+    assert.strictEqual(unknownScheme.status, 400, 'an unsupported scheme was not refused');
+    assert.strictEqual(firstBytes.length, 0, 'an unsupported scheme was dialled anyway');
+
     // --- CONNECT ----------------------------------------------------------
     const connectHead = `CONNECT 127.0.0.1:${echoPort} HTTP/1.1\r\nHost: 127.0.0.1:${echoPort}\r\n`;
 
@@ -861,11 +917,13 @@ async function main() {
     echo.close();
     mute.close();
     gapped.close();
+    recorder.close();
     console.log(
-        `ok -- ws:// relayed, ${FLOOD} unauthenticated sockets bounded and the cap given back ` +
-            `within ${2 * SWEEP_MS + SHORT_MS} ms, a silent origin dropped at ${SHORT_MS} ms on ` +
-            `the plain and the upgrade leg alike, a ${GAP_MS} ms gap survived in a body and in a ` +
-            `tunnel, ${logLines.length} log line(s), none carrying a token`,
+        `ok -- https:// forwarded as TLS and http:// as plain on the same leg, an unsupported ` +
+            `scheme refused before the dial, ws:// relayed, ${FLOOD} unauthenticated sockets ` +
+            `bounded and the cap given back within ${2 * SWEEP_MS + SHORT_MS} ms, a silent origin ` +
+            `dropped at ${SHORT_MS} ms on the plain and the upgrade leg alike, a ${GAP_MS} ms gap ` +
+            `survived in a body and in a tunnel, ${logLines.length} log line(s), none carrying a token`,
     );
 }
 
