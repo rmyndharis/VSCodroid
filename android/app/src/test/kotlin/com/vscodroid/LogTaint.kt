@@ -116,7 +116,7 @@ internal object LogTaint {
 
     /** Statements printing a tainted value with nothing hiding it. */
     fun leaks(source: List<String>): List<String> {
-        val tainted = taintedNames(source)
+        val tainted = taintedNamesIn(source)
         return statements(source).filter { st ->
             val code = stripTreated(st.code)
             val raw = stripTreated(st.raw)
@@ -147,7 +147,7 @@ internal object LogTaint {
     fun reducedLogs(source: List<String>): List<String> = logsTreatedBy(source, REDUCTION)
 
     private fun logsTreatedBy(source: List<String>, calls: List<String>): List<String> {
-        val tainted = taintedNames(source)
+        val tainted = taintedNamesIn(source)
         return statements(source).filter { st ->
             argumentsOf(st.raw, calls).any { arg -> tainted.any { mentions(arg, it) } }
         }.map { "${it.line}: ${it.raw}" }
@@ -241,7 +241,18 @@ internal object LogTaint {
      * `NavigationTokenLoggingTest` argues the scope and pins this limit as a
      * case, so the trade stays measured rather than asserted.
      */
-    private fun taintedNames(source: List<String>): Set<String> {
+    /**
+     * The names this reader believes carry a token-bearing value.
+     *
+     * Exposed so a control can prove the reader is alive without needing a leak
+     * to exist. [leaks] answering empty is the outcome the suite wants and the
+     * outcome a broken reader produces, and the two have to be told apart: with
+     * nothing in MainActivity logging such a value any more, a control shaped as
+     * "some statement redacts one" can no longer do it.
+     */
+    fun taintedNames(source: List<String>): Set<String> = taintedNamesIn(source)
+
+    private fun taintedNamesIn(source: List<String>): Set<String> {
         val code = source.filterNot(::isComment).map(::codeView)
         val names = linkedSetOf<String>()
         for (line in code) {

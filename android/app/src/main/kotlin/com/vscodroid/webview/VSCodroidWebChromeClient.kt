@@ -12,7 +12,8 @@ import com.vscodroid.util.Logger
  *   actually got dispatched. `allowMultiple` carries what the page asked for.
  */
 class VSCodroidWebChromeClient(
-    private val openFileChooser: (allowMultiple: Boolean) -> Boolean
+    private val navigationIsOurs: () -> Boolean,
+    private val openFileChooser: (allowMultiple: Boolean) -> Boolean,
 ) : WebChromeClient() {
 
     private val tag = "WebChromeClient"
@@ -40,23 +41,32 @@ class VSCodroidWebChromeClient(
         get() = pendingFileChooser != null
 
     /**
-     * Answers the browser's "are you sure you want to leave" for the page.
+     * Answers the browser's "are you sure you want to leave" for a navigation
+     * this app started, and leaves it to the user for any other.
      *
-     * The workbench registers a `beforeunload` handler, and the WebView's default
-     * handling of it is a modal asking whether to leave the page, worded for a
-     * browser: "Changes you made may not be saved." There is nowhere to leave to.
-     * This app holds exactly one document, the user cannot type an address, and
-     * every navigation that reaches here is one the app or the workbench decided
-     * to perform: opening a folder, restoring the empty window, or the workbench
-     * asking for a second window, which on a device is this one. Measured: a
-     * same-origin `window.open` put that modal in front of the editor, over a
-     * navigation that was working.
+     * This callback is not a browser artifact and reaching it is not routine.
+     * The WebView raises it only for a `beforeunload` the page CANCELLED, and
+     * the one thing in this build that cancels it is the workbench vetoing its
+     * own shutdown: a modified file whose backup has not been written yet
+     * (`veto.backups`, which logs "Unload veto: pending backups"), or a save
+     * still in flight (`veto.textFiles`). So the callback firing is the editor
+     * saying there is work it cannot yet recover, and answering `confirm()` for
+     * everything threw exactly that away, silently. Backups are scheduled about
+     * a second after a keystroke and page timers are throttled while the app is
+     * in the background, so the window is not always a second wide.
      *
-     * The confirm is answered rather than the handler suppressed, so nothing
-     * about the page changes. Unsaved editor content is not what this protects:
-     * the workbench keeps it in browser storage and restores it on the next load,
-     * which is why its own reload and its own folder switch pass through here
-     * without asking either.
+     * The split is by who asked. A navigation this app performs, opening a
+     * folder or reloading on the way back from the background, has already been
+     * decided by the user through the app's own UI, and putting a browser's
+     * modal in front of it is the noise this override was added to remove:
+     * measured, a same-origin `window.open` drew "Changes you made may not be
+     * saved" over a navigation that was working. Anything else, including a
+     * navigation the page starts on its own, keeps the platform's dialog, which
+     * is the only place the user is offered the choice at all.
+     *
+     * Returning false is what leaves that dialog standing; the platform then
+     * answers the result itself, so the page is never left hanging on an
+     * unanswered confirm.
      */
     override fun onJsBeforeUnload(
         view: WebView?,
@@ -64,6 +74,10 @@ class VSCodroidWebChromeClient(
         message: String?,
         result: android.webkit.JsResult?,
     ): Boolean {
+        if (!navigationIsOurs()) {
+            Logger.i(tag, "The editor has unsaved work and something asked to leave the page")
+            return false
+        }
         result?.confirm()
         return true
     }

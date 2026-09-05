@@ -971,22 +971,63 @@ class NavigationTokenLoggingTest {
         )
     }
 
+    /**
+     * The navigation line prints the address, never the query.
+     *
+     * `redactToken` replaces the token parameter and nothing else, so a URL put
+     * through it still carries `?folder=` with the full path of the workspace
+     * the user opened. `Logger.i` has no debuggable gate, so that reached a
+     * release build's logcat on every cold start, every folder switch and every
+     * server restart, where anything holding READ_LOGS can read it. The sibling
+     * statement in `onPageFinished` was moved to the address alone and this one,
+     * printing the same string a line earlier, was not.
+     *
+     * LogTaint cannot see this: its model is the connection token, and
+     * `redactToken` is registered as the whole treatment such a value needs,
+     * which is true of the token and false of the path beside it. So the guard
+     * is written here, against the statement.
+     */
     @Test
-    fun `the navigation URL still reaches the log, redacted`() {
-        // Control, and it has to be a control on the *statement*. Asserting that
-        // some line somewhere calls `redactToken(url)` is satisfied by a spare
-        // `val safe = redactToken(url)` that nothing logs, which is exactly the
-        // company a raw log statement keeps. Deleting the log statement, renaming
-        // the local, or logging the URL by some other route all leave this empty.
-        val redacted = LogTaint.redactedLogs(source())
+    fun `the navigation log prints no query string`() {
+        val navigate = SourceScan.withoutComments(
+            SourceScan.body(mainActivity.readText(), "private fun navigateToFolder("),
+        )
 
         assertTrue(
-            redacted.isNotEmpty(),
-            "no log statement in MainActivity prints a token-bearing value through " +
-                "redactToken. Either the navigation log went, or it stopped going " +
-                "through the redactor, or the seeds in LogTaint no longer recognise " +
-                "where the token enters the file, and in every one of those cases the " +
-                "test above is passing by looking at nothing",
+            navigate.contains("urlLogLabel(url)"),
+            "the navigation is no longer logged by its address alone. Whatever replaced " +
+                "it prints more of the URL than the host, and the query is where the " +
+                "workspace path is",
+        )
+        assertFalse(
+            navigate.contains("redactToken(url)"),
+            "the navigation log went back through redactToken, which removes the token " +
+                "and leaves `?folder=` with the user's workspace path in release logcat",
+        )
+    }
+
+    @Test
+    fun `the reader still finds where the token enters the file`() {
+        // The control for the case above, and it had to change shape. It used to
+        // assert that some statement logged a token-bearing value through
+        // `redactToken`, which was a fair control while the navigation line
+        // printed the URL. That line now prints the address alone, without the
+        // query, because the query carries the workspace path; nothing in this
+        // file logs a token-bearing value any more, and the old control would
+        // fail on the very improvement that made it unnecessary.
+        //
+        // What still has to be proven is that `leaks` answering empty means
+        // "nothing logs one" rather than "the reader can no longer see one". So
+        // the control moves to the reader: the names the workbench URL flows
+        // into must still be recognised.
+        val tainted = LogTaint.taintedNames(source())
+
+        assertTrue(
+            tainted.isNotEmpty(),
+            "LogTaint no longer recognises any token-bearing name in MainActivity, so " +
+                "the case above is passing by looking at nothing. Either the seeds stopped " +
+                "matching where the URL is built, or the declaration reader broke: check " +
+                "`workbenchUrl(` and `getConnectionToken(` against URI_NAME's patterns",
         )
     }
 

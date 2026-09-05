@@ -73,6 +73,7 @@ import com.vscodroid.webview.DownloadOutcome
 import com.vscodroid.webview.VSCodroidWebChromeClient
 import com.vscodroid.webview.VSCodroidWebView
 import com.vscodroid.webview.VSCodroidWebViewClient
+import com.vscodroid.webview.urlLogLabel
 import com.vscodroid.webview.RETRY_URL
 import com.vscodroid.webview.TlsFailure
 import com.vscodroid.webview.TlsFailureReason
@@ -1765,6 +1766,7 @@ class MainActivity : AppCompatActivity() {
                 // that and it is wrong. The server writes the token once and
                 // reuses it on every later start, so what a cold start renews is
                 // the cookie, never the value inside it.
+                markAppNavigation()
                 webView?.reload()
             }
             ResumeAction.PROBE_CONNECTION -> checkConnectionHealth(bgMs)
@@ -2423,6 +2425,7 @@ class MainActivity : AppCompatActivity() {
         // which is the renderer-crash path: [recreateWebView] builds a new one.
         emptyWindowUrl(fromUrl ?: webView?.url, port)?.let {
             Logger.i(tag, "Restoring the closed-folder window rather than a folder")
+            markAppNavigation()
             webView?.loadUrl(it)
             return
         }
@@ -2740,7 +2743,9 @@ class MainActivity : AppCompatActivity() {
             // recreation. Both point at the same APK.
             interfaceTranslations = applicationContext.assets,
         )
-        wv.webChromeClient = VSCodroidWebChromeClient { allowMultiple ->
+        wv.webChromeClient = VSCodroidWebChromeClient(
+            navigationIsOurs = ::navigationIsOurs,
+        ) { allowMultiple ->
             // "*/*" rather than the input's accept types: the Upload command's
             // input declares none, and a filter derived from one could only ever
             // narrow what the user is allowed to import.
@@ -2847,6 +2852,31 @@ class MainActivity : AppCompatActivity() {
         workspacePrefs.getString(KEY_LAST_FOLDER, null) == NO_FOLDER
 
     /**
+     * When this app last asked the page to go somewhere, in `elapsedRealtime`.
+     *
+     * Read by [VSCodroidWebChromeClient.onJsBeforeUnload] to tell a navigation
+     * the user chose through this app's own UI from one the page started. The
+     * first is answered for them; the second keeps the platform's dialog,
+     * because a `beforeunload` only reaches that callback when the workbench has
+     * vetoed leaving, and a veto means there is work it cannot yet recover.
+     *
+     * A timestamp rather than a flag nobody clears: the callback runs
+     * synchronously inside the load it belongs to, so a few seconds is generous,
+     * and an expiry means a navigation that never happened cannot leave the
+     * answer armed for a page-initiated one minutes later.
+     */
+    @Volatile
+    private var lastAppNavigation = 0L
+
+    /** Marks the navigation about to be started as this app's own. */
+    private fun markAppNavigation() {
+        lastAppNavigation = SystemClock.elapsedRealtime()
+    }
+
+    private fun navigationIsOurs(): Boolean =
+        SystemClock.elapsedRealtime() - lastAppNavigation < APP_NAVIGATION_WINDOW_MS
+
+    /**
      * The remembered workspace, when reopening it is still the right thing.
      *
      * Two ways it stops being so, and the second is the one that costs
@@ -2912,14 +2942,19 @@ class MainActivity : AppCompatActivity() {
                 "Expected at ${Environment.getConnectionTokenPath(this)}")
         }
 
-        // Redacted rather than rebuilt without the token. This used to log a
-        // second string assembled beside the real one, so what kept the token out
-        // of logcat was a person keeping two expressions apart, and the obvious
-        // edit, logging the URL that is actually loaded, put the credential for
-        // every route but `/version` into a release build's logcat, readable by
-        // anything holding READ_LOGS. There is one URL now, and the redactor is
-        // the same one the webview layer uses.
-        Logger.i(tag, "Loading VS Code at ${redactToken(url)}")
+        // The address only, for the reason [urlLogLabel] gives and the reason
+        // the sibling line in `onPageFinished` gives: the query carries the
+        // workspace path, and `Logger.i` has no debuggable gate, so a release
+        // build wrote the folder a user opened into logcat on every cold start,
+        // every folder switch and every server restart, where anything holding
+        // READ_LOGS can read it. That line was changed and this one, printing
+        // the same string one line earlier, was not.
+        //
+        // `redactToken` is not enough here and never was: it replaces the token
+        // parameter and nothing else. It stays out of this statement entirely so
+        // no future edit can read it as "this URL is safe to print".
+        Logger.i(tag, "Loading VS Code at ${urlLogLabel(url)}")
+        markAppNavigation()
         wv.loadUrl(url)
     }
 
@@ -3015,31 +3050,6 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
-    /**
-     * Fix #2: Injects CSS to enlarge touch targets when the pointer is a fingertip.
-     * Targets WCAG 2.5.5 minimum 44×44px for primary actions, 36px for list items.
-     *
-     * The test is `pointer: coarse`, not a viewport width, because what these rules
-     * compensate for is the fingertip, and a fingertip does not change size with the
-     * screen. A phone held in landscape is wider than any width threshold that still
-     * excludes tablets, so a width test left exactly the orientation people turn to
-     * for code width with desktop-sized targets. Conversely a tablet driven by a
-     * mouse or a DeX-style desktop reports `fine` and correctly gets none of this.
-     *
-     * Height would have been the wrong axis for the same reason it looks tempting:
-     * `windowSoftInputMode="adjustResize"` on MainActivity in the manifest shrinks the
-     * window when the soft keyboard opens, and the WebView takes what is left
-     * (`layout_weight="1"`), so a height threshold would switch the sizing on and off
-     * while the user types.
-     *
-     * It has to be a media query rather than anything sampled in Kotlin: this runs
-     * once per page load, and MainActivity's `configChanges` in the manifest absorbs
-     * `orientation`, `screenSize` and `screenLayout` among others, with no
-     * `onConfigurationChanged`, so nothing re-invokes the injection when the window
-     * changes. Line numbers are left off deliberately: both citations here named
-     * the right attribute and the wrong line within a day of being written. Letting the browser hold the condition costs nothing and never goes
-     * stale.
-     */
     /**
      * Tells the page which language to ask for, before it asks.
      *
@@ -3288,6 +3298,31 @@ class MainActivity : AppCompatActivity() {
         )
     }
 
+    /**
+     * Fix #2: Injects CSS to enlarge touch targets when the pointer is a fingertip.
+     * Targets WCAG 2.5.5 minimum 44×44px for primary actions, 36px for list items.
+     *
+     * The test is `pointer: coarse`, not a viewport width, because what these rules
+     * compensate for is the fingertip, and a fingertip does not change size with the
+     * screen. A phone held in landscape is wider than any width threshold that still
+     * excludes tablets, so a width test left exactly the orientation people turn to
+     * for code width with desktop-sized targets. Conversely a tablet driven by a
+     * mouse or a DeX-style desktop reports `fine` and correctly gets none of this.
+     *
+     * Height would have been the wrong axis for the same reason it looks tempting:
+     * `windowSoftInputMode="adjustResize"` on MainActivity in the manifest shrinks the
+     * window when the soft keyboard opens, and the WebView takes what is left
+     * (`layout_weight="1"`), so a height threshold would switch the sizing on and off
+     * while the user types.
+     *
+     * It has to be a media query rather than anything sampled in Kotlin: this runs
+     * once per page load, and MainActivity's `configChanges` in the manifest absorbs
+     * `orientation`, `screenSize` and `screenLayout` among others, with no
+     * `onConfigurationChanged`, so nothing re-invokes the injection when the window
+     * changes. Line numbers are left off deliberately: both citations here named
+     * the right attribute and the wrong line within a day of being written. Letting the browser hold the condition costs nothing and never goes
+     * stale.
+     */
     private fun injectTouchTargetCSS() {
         webView?.evaluateJavascript(
             """
@@ -4199,6 +4234,17 @@ class MainActivity : AppCompatActivity() {
 
 
     companion object {
+
+        /**
+         * How long a navigation this app started stays recognisable as its own.
+         *
+         * The `beforeunload` callback runs inside the load it belongs to, so
+         * this only has to cover the moment between asking the WebView to go and
+         * the page answering. Generous rather than tight, because being late
+         * here costs one dialog the user did not need, while being early costs
+         * a dialog they did.
+         */
+        private const val APP_NAVIGATION_WINDOW_MS = 10_000L
 
         /** The preferences file `PortFinder` and `SplashActivity` already use. */
         private const val WORKSPACE_PREFS = "vscodroid"

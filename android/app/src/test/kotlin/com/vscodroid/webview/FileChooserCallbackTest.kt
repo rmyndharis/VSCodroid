@@ -50,7 +50,7 @@ class FileChooserCallbackTest {
         every { Logger.w(any(), any()) } just Runs
         dispatched.clear()
         launcherStarts = true
-        client = VSCodroidWebChromeClient { allowMultiple ->
+        client = VSCodroidWebChromeClient(navigationIsOurs = { false }) { allowMultiple ->
             dispatched += allowMultiple
             launcherStarts
         }
