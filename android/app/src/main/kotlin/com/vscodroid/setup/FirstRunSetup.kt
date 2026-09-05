@@ -904,7 +904,15 @@ class FirstRunSetup(
         val present = libDir.listFiles()?.map { it.name } ?: emptyList()
         for (name in supersededPythonEntries(present, runtime)) {
             Logger.i(tag, "Removing superseded Python $name")
-            File(libDir, name).deleteRecursively()
+            // [StorageManager.deleteRecursive] and not File.deleteRecursively,
+            // which asks isDirectory and listFiles and so walks through a
+            // symbolic link to whatever it points at. The directory being
+            // removed here is site-packages, which is where a person parks
+            // `ln -s ~/projects/mylib` to work on a package while they use it,
+            // so following one empties their project on the way past. The
+            // helper unlinks a link and never descends it, for the same reason
+            // the cache reclaim uses it.
+            StorageManager.deleteRecursive(File(libDir, name))
         }
 
         if (!File(libDir, runtime).exists()) {
