@@ -1339,6 +1339,51 @@ val verifyPythonPlatform = tasks.register<Exec>("verifyPythonPlatform") {
     )
 }
 
+/**
+ * Refuses a build whose bundled venv records a home the interpreter cannot start
+ * from.
+ *
+ * venv derives `home` from the base interpreter's own directory. That is right
+ * for a plain `python3 -m venv` and wrong from inside an environment already in
+ * use, where it names the outer environment's bin and the lib/python3.X beside
+ * that holds site-packages and no standard library. PYTHONHOME covers for it
+ * everywhere else, but the child venv bootstraps pip in has PYTHONHOME popped
+ * out of its environment, so the note in pyvenv.cfg is all it has to go on.
+ * `download-python.sh` rewrites the value; this is what stops a tree assembled
+ * from an older extraction shipping without it.
+ *
+ * Armed by the tree rather than unconditionally, like verifyPythonPlatform above
+ * and for the same reason: the lint and unit-test jobs stub an empty assets
+ * directory, and checking one would report a pass for a question it never asked.
+ */
+val verifyVenvHome = tasks.register<Exec>("verifyVenvHome") {
+    group = "verification"
+    description = "Checks the bundled venv records a home the interpreter can start from."
+
+    val stdlib = File(projectDir, "src/main/assets/usr/lib")
+        .listFiles()
+        ?.firstOrNull { it.name.startsWith("python3.") }
+    val venvModule = stdlib?.let { File(it, "venv/__init__.py") }
+
+    workingDir = rootProject.projectDir.parentFile
+    commandLine(
+        "python3", "scripts/patch-venv-home.py", "--check",
+        stdlib?.let { "android/app/src/main/assets/usr/lib/${it.name}/venv/__init__.py" } ?: "missing",
+    )
+
+    onlyIf { venvModule?.isFile == true }
+
+    failOnExit(
+        "The bundled Python still writes a venv home that can name a directory\n" +
+            "with no standard library under it. Creating an environment from\n" +
+            "inside an activated one fails there while it bootstraps pip, and\n" +
+            "reports only the child's exit status.\n" +
+            "\n" +
+            "Re-run scripts/download-python.sh, which applies the rewrite after\n" +
+            "unpacking the interpreter."
+    )
+}
+
 fun rubyPackHoldsPayload(): Boolean =
     File(rootProject.projectDir, "toolchain_ruby/src/main/assets/usr").isDirectory
 
@@ -1419,7 +1464,7 @@ val packagingGates = listOf(
     checkPatchFingerprints, verifyServerTree, verifyBundledBinaries,
     verifyRequiredBinaries, verifyBundledShellPaths, verifyRubyPackShellPaths,
     verifyNativeAddons, verifyPackagedAlignment, checkPackOverlap,
-    verifyPythonPlatform,
+    verifyPythonPlatform, verifyVenvHome,
 )
 
 tasks.matching { it.name.startsWith("merge") && it.name.endsWith("Assets") }

@@ -135,6 +135,7 @@ jobs:
           python3 scripts/verify-android-elf.py --self-test
           python3 scripts/verify-server-tree.py --self-test
           python3 scripts/check-patch-fingerprints.py --self-test
+          python3 scripts/patch-venv-home.py --self-test
 
       # The same question asked of the build tool itself, which the step above
       # cannot reach: `uses:` pinning covers the actions, and the wrapper

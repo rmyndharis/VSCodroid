@@ -184,6 +184,19 @@ echo ""
 echo "Pointing the stdlib's default shell at /system/bin/sh..."
 python3 "$SCRIPT_DIR/patch-default-shell.py" "$STDLIB_DST/subprocess.py"
 
+# Applied here rather than left to the device, because the value venv writes is
+# decided by where the interpreter is installed and that is decided by this
+# script. venv derives `home` from the base interpreter's own directory, which
+# is right for a plain `python3 -m venv` and wrong from inside an environment
+# already in use: `home` is then the outer environment's bin, whose lib/python3.X
+# holds site-packages and no standard library. PYTHONHOME covers for that
+# everywhere else, but the child that installs pip has it popped out of its
+# environment, so the note in pyvenv.cfg is all that child has to go on, and the
+# create fails with nothing on screen but a child's exit status.
+echo ""
+echo "Pointing venv's recorded home at a prefix the interpreter can start from..."
+python3 "$SCRIPT_DIR/patch-venv-home.py" "$STDLIB_DST/venv/__init__.py"
+
 # --- Step 6: Place pip ---
 echo ""
 echo "Placing pip..."
