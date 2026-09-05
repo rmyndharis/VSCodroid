@@ -255,8 +255,12 @@ class SafSyncEngine(private val context: Context) {
         if (outOfRoom) {
             Logger.w(
                 tag,
-                "Opening ${mirrorDir.name} needs ${toFetch / 1_048_576} MB and " +
-                    "${room / 1_048_576} MB is free; some documents will not be copied",
+                // Decimal, like every other MB this app prints. A maintainer
+                // reading this beside the storage screen or the low-storage
+                // message is comparing the same unit; see
+                // StorageManager.formatSize, which decides it once.
+                "Opening ${mirrorDir.name} needs ${toFetch / 1_000_000} MB and " +
+                    "${room / 1_000_000} MB is free; some documents will not be copied",
             )
         }
 
@@ -421,7 +425,9 @@ class SafSyncEngine(private val context: Context) {
                     // app's own half-written bytes, and phase 2b would then put
                     // that copy on the device.
                     val ownPartialWrite = deviceIsTruncatedMirror(doc.uri, localPath)
-                    if (!ownPartialWrite && !setAsideDeviceCopy(doc, localPath)) {
+                    val deviceCopy =
+                        if (ownPartialWrite) null else setAsideDeviceCopy(doc, localPath)
+                    if (deviceCopy == DeviceCopyOutcome.UNAVAILABLE) {
                         // Held back, not abandoned, and the record is deliberately
                         // NOT consumed: the mirror keeps the only complete copy,
                         // unvouched, and the next open tries the whole repair
@@ -431,8 +437,8 @@ class SafSyncEngine(private val context: Context) {
                         Logger.w(
                             tag,
                             "Not replacing ${doc.relativePath}: its device copy is not the " +
-                                "unfinished upload this app left and could not be read to " +
-                                "set aside, so the mirror keeps its copy and the next open " +
+                                "unfinished upload this app left and could not be set " +
+                                "aside, so the mirror keeps its copy and the next open " +
                                 "tries again",
                         )
                         // Said on screen as well, for the reason every sibling
@@ -450,21 +456,25 @@ class SafSyncEngine(private val context: Context) {
                     unfinishedUploads.remove(localPath.absolutePath)
                     consumeStaleUploadRecord(localPath.absolutePath)
                     keptLocal++
-                    if (!ownPartialWrite) setAside++
+                    if (deviceCopy == DeviceCopyOutcome.PRESERVED) setAside++
                     Logger.i(
                         tag,
-                        if (ownPartialWrite) {
-                            "Kept the mirror of ${doc.relativePath}: its device copy was an " +
-                                "upload this app did not finish"
-                        } else {
-                            // Reached only where the bytes said the opposite: the
-                            // device copy did not come from that upload, and
-                            // [setAsideDeviceCopy] has just preserved it beside
-                            // itself, or found it identical and removed its own
-                            // copy. This is the line a maintainer reads to explain
-                            // a `.device-` file in a user's folder.
-                            "Kept the mirror of ${doc.relativePath}: its device copy did not " +
-                                "come from an unfinished upload and was preserved first"
+                        when (deviceCopy) {
+                            null ->
+                                "Kept the mirror of ${doc.relativePath}: its device copy " +
+                                    "was an upload this app did not finish"
+                            // The line a maintainer reads to explain a `.device-` file in
+                            // a user's folder, so it is said only where one was really
+                            // left behind. It used to be said for the identical-bytes case
+                            // too, which is the case that deletes its own copy again.
+                            DeviceCopyOutcome.PRESERVED ->
+                                "Kept the mirror of ${doc.relativePath}: its device copy " +
+                                    "did not come from an unfinished upload and was " +
+                                    "preserved first"
+                            else ->
+                                "Kept the mirror of ${doc.relativePath}: its device copy " +
+                                    "did not come from an unfinished upload and holds the " +
+                                    "same bytes, so nothing was set aside"
                         },
                     )
                     writeLocalToSaf(localPath, doc.uri)
@@ -489,7 +499,7 @@ class SafSyncEngine(private val context: Context) {
                     // it, which is a folder that opens successfully and is quietly
                     // incomplete, and a user asking why they cannot find it needs the
                     // name rather than a number.
-                    Logger.i(tag, "Skipped large file: ${doc.relativePath} (${doc.size / 1_048_576}MB)")
+                    Logger.i(tag, "Skipped large file: ${doc.relativePath} (${doc.size / 1_000_000} MB)")
                     filesDone++
                     onProgress(filesDone, totalFiles)
                     continue
@@ -618,12 +628,14 @@ class SafSyncEngine(private val context: Context) {
                         // save never happening.
                         val deviceChanged =
                             previouslyRecorded?.let { deviceChangedSinceRecord(it, doc) } == true
-                        if (deviceChanged && !setAsideDeviceCopy(doc, localPath)) {
+                        val deviceCopy =
+                            if (deviceChanged) setAsideDeviceCopy(doc, localPath) else null
+                        if (deviceCopy == DeviceCopyOutcome.UNAVAILABLE) {
                             Logger.w(
                                 tag,
                                 "Not writing ${doc.relativePath} back: the record cannot " +
                                     "vouch for its device copy and that copy could not be " +
-                                    "read to set aside, so the mirror keeps the edit and " +
+                                    "set aside, so the mirror keeps the edit and " +
                                     "the next open tries again",
                             )
                             // The deferral this branch's comment describes, said
@@ -632,7 +644,7 @@ class SafSyncEngine(private val context: Context) {
                             // path that ends with the only copy inside the app.
                             announceLost(localPath)
                         } else {
-                            if (deviceChanged) setAside++
+                            if (deviceCopy == DeviceCopyOutcome.PRESERVED) setAside++
                             uploadsDone++
                             Logger.i(tag, "Writing back a newer mirror copy: ${doc.relativePath}")
                             writeLocalToSaf(localPath, doc.uri)
@@ -886,7 +898,7 @@ class SafSyncEngine(private val context: Context) {
 
     /**
      * Fetches the device copy of [doc] to `<name>.device-<device time>` beside
-     * [localPath], and answers whether it is there.
+     * [localPath], and answers what became of it.
      *
      * The counterpart of [setAsideDivergedMirror] for the direction it does not cover:
      * a save the watcher never delivered meeting a device edit made BEFORE it. The
@@ -907,18 +919,43 @@ class SafSyncEngine(private val context: Context) {
      * in the explorer beside the file it was set aside from. The same in-flight guard
      * as phase 2's own copies, and for the same reason: two syncs over one mirror write
      * one scratch path.
+     *
+     * The answer is three-valued because the callers ask two different questions of it.
+     * "May the mirror go over the device copy now" is yes for [DeviceCopyOutcome.PRESERVED]
+     * and for [DeviceCopyOutcome.IDENTICAL]; "is there a `.device-` file in the folder to
+     * account for" is yes only for the first. A Boolean answered the first, and the
+     * counter and the log line that read it as the second described files this had just
+     * deleted for being duplicates.
      */
-    private fun setAsideDeviceCopy(doc: DocumentInfo, localPath: File): Boolean {
+    private fun setAsideDeviceCopy(doc: DocumentInfo, localPath: File): DeviceCopyOutcome {
+        // The fetch below lands in `filesDir`, this app's own storage and the thing that
+        // runs out, so it obeys the ceiling phase 2's own copies obey. The repair branch
+        // that calls this sits ABOVE that gate and reaches a document of any size at all,
+        // including one the mirror could never have held; moving the gate up instead
+        // would skip the document, leaving the interrupted upload unrepaired and its
+        // journal line standing on every later open.
+        if (doc.size > MAX_FILE_SIZE) {
+            Logger.i(
+                tag,
+                "Not setting the device copy of ${doc.relativePath} aside: at " +
+                    "${doc.size / 1_000_000} MB it is larger than this app's own storage " +
+                    "will hold a copy of",
+            )
+            return DeviceCopyOutcome.UNAVAILABLE
+        }
         val preserved = File(
             localPath.parentFile,
             "${localPath.name}$DEVICE_COPY_SUFFIX${doc.lastModified}",
         )
-        if (!mirrorCopiesInFlight.add(preserved.absolutePath)) return false
+        if (!mirrorCopiesInFlight.add(preserved.absolutePath)) {
+            return DeviceCopyOutcome.UNAVAILABLE
+        }
         val fetched = try {
             copyDocumentToLocal(doc.uri, preserved, doc.lastModified)
         } finally {
             mirrorCopiesInFlight.remove(preserved.absolutePath)
         }
+        if (!fetched) return DeviceCopyOutcome.UNAVAILABLE
         // A changed time is not a changed file. This app's own delivered
         // write-back moves the device time and the record never learns the new
         // one, and a provider with coarse stamps (FAT32 at two seconds, cloud
@@ -928,19 +965,17 @@ class SafSyncEngine(private val context: Context) {
         // and a copy of them is not a set-aside but a duplicate that phase 2b
         // would put into the user's folder. Compared after the fetch, which is
         // the one provider read this costs either way.
-        if (fetched && sameBytes(localPath, preserved)) {
+        if (sameBytes(localPath, preserved)) {
             preserved.delete()
-            return true
+            return DeviceCopyOutcome.IDENTICAL
         }
-        if (fetched) {
-            Logger.i(
-                tag,
-                "Set the device copy of ${doc.relativePath} aside as ${preserved.name}: " +
-                    "it differs from the newer mirror copy replacing it and was written " +
-                    "since the last sync",
-            )
-        }
-        return fetched
+        Logger.i(
+            tag,
+            "Set the device copy of ${doc.relativePath} aside as ${preserved.name}: " +
+                "it differs from the newer mirror copy replacing it and was written " +
+                "since the last sync",
+        )
+        return DeviceCopyOutcome.PRESERVED
     }
 
     /**
@@ -1399,6 +1434,25 @@ class SafSyncEngine(private val context: Context) {
      * Symlinks are not followed: `walkTopDown` reports the link itself, and [isLink]
      * sends it down the not-a-plain-file branch, so a link out of the mirror can neither
      * be vouched for nor be walked through.
+     *
+     * The one file vouched for without the record's word is a [PARTIAL_SUFFIX] name,
+     * which is [copyDocumentToLocal] streaming a device document beside its destination
+     * before renaming it into place. A process death mid-copy leaves one behind, and
+     * nothing ever names it again once that document is renamed or deleted on the device:
+     * the record cannot carry it, [reconcileDeletions] only visits paths the record
+     * names, and every removal in `SafStorageManager` works on whole mirrors. So a single
+     * orphan used to answer false here for the life of the install, which meant the
+     * mirror could never be reclaimed and the user was told a half-written scratch file
+     * was work their device folder did not have. Its bytes are always a prefix of a
+     * device document, never anything only the mirror holds, so a mirror that is nothing
+     * but one is disposable.
+     *
+     * Vouched rather than deleted, and deliberately narrower than [isMachineTemporary].
+     * Deleting: this runs from a listing and from a launch pass, while the folder can be
+     * open and a copy can be streaming into exactly that name, and nothing here can tell
+     * a live scratch file from an abandoned one. Narrower: [isMachineTemporary] also
+     * covers `~` and `.tmp`, which belong to other writers, and one of those left in the
+     * mirror by a terminal is the user's own file that no sync ever put on the device.
      */
     internal fun holdsOnlyVouchedCopies(mirrorDir: File): Boolean {
         val lines = readSyncedRecord(File(mirrorDir.path + SYNCED_RECORD_SUFFIX))
@@ -1412,6 +1466,7 @@ class SafSyncEngine(private val context: Context) {
             mirrorDir.walkTopDown().onFail { _, _ -> unreadable = true }.all { file ->
                 if (isLink(file)) false
                 else if (!file.isFile) true
+                else if (file.name.endsWith(PARTIAL_SUFFIX)) true
                 else identityLine(file.toRelativeString(mirrorDir), file) in vouched
             } && !unreadable
         } catch (e: Exception) {
@@ -1548,8 +1603,16 @@ class SafSyncEngine(private val context: Context) {
             }
             // The folder being closed keeps the queue its jobs are in, and the folder opened
             // next gets an empty one, whether or not the drain below finishes in time.
+            //
+            // Abandoned from birth, because nothing will ever poll this one: only
+            // [startWatching] starts a worker and it always installs a session of its own
+            // first. That is not bookkeeping for its own sake. [DirectoryObserver.onEvent]
+            // tests [isWatching] and [handleMirrorEvent] reads the session two
+            // instructions later, and a stop completing in between hands the event this
+            // object; without the flag its offer is silent, so a save that reaches no
+            // device is reported by nothing at all.
             val closing = session
-            session = WatchSession()
+            session = WatchSession().apply { abandoned = true }
             closing.running = false
 
             // Wake the thread out of its sleep, then wait for it to drain remaining writes.
@@ -1730,7 +1793,13 @@ class SafSyncEngine(private val context: Context) {
                     val relativePath = if (parentRelPath.isEmpty()) name else "$parentRelPath/$name"
                     val docUri = DocumentsContract.buildDocumentUriUsingTree(treeUri, docId)
 
-                    // Skip hidden files and common large directories
+                    // Directories only, and only the auto-generated names in
+                    // [SKIP_DIRECTORIES]: a file is never skipped here, whatever it is
+                    // called. Filtering hidden names is the tempting addition and is the
+                    // rule [shouldWriteBack] had to shed, because it kept `.vscode/`,
+                    // `.gitignore` and `.editorconfig` off the device silently. Note the
+                    // set holds `.env` as a DIRECTORY name, so a `.env` file is mirrored
+                    // and a `.env` directory is not.
                     if (shouldSkip(name, isDir)) continue
 
                     // Cache the docId so write-back resolves this path without
@@ -3105,6 +3174,13 @@ class SafSyncEngine(private val context: Context) {
         // same object for the whole event: two threads polling one queue is what the
         // session split exists to prevent, and this offers into a queue exactly one
         // worker was ever started for.
+        //
+        // Reading at entry does not make the window disappear, only smaller: the liveness
+        // test is [DirectoryObserver.onEvent]'s, two instructions earlier, and a stop
+        // completing between the two hands this the session it installed, which no worker
+        // will ever poll. That session is [WatchSession.abandoned] from birth so this one
+        // is reported like any other undelivered save, rather than being the only silent
+        // one left.
         val target = session
         // Nothing here touches the cache's label. An event whose tree the cache does not
         // speak for is one that was still inside its provider round trips when the
@@ -4420,6 +4496,33 @@ internal enum class SyncType {
 }
 
 /**
+ * What became of a device document that a newer mirror copy is about to replace.
+ *
+ * See [SafSyncEngine.setAsideDeviceCopy] for why the two callers need three answers
+ * rather than a Boolean.
+ */
+internal enum class DeviceCopyOutcome {
+    /** A `.device-<time>` file is beside the mirror copy, and phase 2b may put it across. */
+    PRESERVED,
+
+    /**
+     * Both sides held the same bytes, so the fetched copy was deleted again.
+     *
+     * The ordinary end of a delivered write-back rather than an exotic case: the record
+     * never learns the time that write left on the device, and a provider with coarse
+     * stamps reports one below the mirror's, so every reopen after a save arrives here.
+     */
+    IDENTICAL,
+
+    /**
+     * The device copy could not be brought over, so writing over it would lose it: the
+     * document would not open, the copy failed, another sync is already fetching it, or
+     * it is larger than [SafSyncEngine.MAX_FILE_SIZE].
+     */
+    UNAVAILABLE,
+}
+
+/**
  * What [SafSyncEngine.uploadPlan] found under a directory, and whether the cap stopped
  * the walk short of the tree.
  *
@@ -4490,6 +4593,11 @@ internal class WatchSession {
      * own count cannot see that one: on an ordinary folder switch the idle drain exits in
      * microseconds, so the queue is counted and cleared while the event is still inside
      * the provider, and the offer that follows is what has to say so.
+     *
+     * True from birth for the session [SafSyncEngine.stopWatching] installs, which is the
+     * one no worker is ever started for. An event that read [SafSyncEngine.isWatching]
+     * before that stop and the session after it is handed exactly that object, and its
+     * save is as undelivered as the one above.
      */
     @Volatile var abandoned = false
 

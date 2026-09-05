@@ -209,6 +209,59 @@ class SafMirrorReclamationTest {
     }
 
     /**
+     * The copy the sync writes beside its destination and renames into place, left where
+     * it fell by a process death mid-copy.
+     *
+     * Nothing names that file again once the document it was fetching is renamed or
+     * deleted on the device: no record can carry it, the deletion pass visits only paths
+     * a record names, and every removal here works on whole mirrors. So one orphan
+     * answered the vouching walk false for the life of the install, and the user was told
+     * a half-written scratch file was work their device folder did not have, on a mirror
+     * they could then only remove through the forced path that says the same thing.
+     */
+    @Test
+    fun `a mirror holding this app's own abandoned scratch file is reclaimed`() {
+        val (staleDir, _) = mirrorFor(revokedUri)
+        mirrorFor(liveUri)
+        File(staleDir, "src/video.mp4" + SafSyncEngine.PARTIAL_SUFFIX)
+            .writeText("as far as the copy got before the process died")
+        every { resolver.persistedUriPermissions } returns listOf(permissionFor(liveUri))
+
+        val removed = manager.reclaimRevokedMirrorsSync()
+
+        assertFalse(
+            staleDir.exists(),
+            "a mirror the device folder holds every byte of was kept for good over this " +
+                "app's own half-written copy of one of those bytes",
+        )
+        assertTrue(removed > 0)
+    }
+
+    /**
+     * How narrow that exemption has to be, in the case that must not be swept into it.
+     *
+     * `.tmp` and `~` are temporary to the writer that made them and nothing else, and
+     * the write-back declines both names, so a file a terminal left in the mirror under
+     * one is on no device folder anywhere. It is the user's only copy, and reclaiming
+     * over it would be the deletion the walk exists to refuse.
+     */
+    @Test
+    fun `a mirror holding a temporary file of the user's own is kept`() {
+        val (staleDir, _) = mirrorFor(revokedUri)
+        mirrorFor(liveUri)
+        File(staleDir, "src/notes.tmp").writeText("half an hour of typing, on this device only")
+        every { resolver.persistedUriPermissions } returns listOf(permissionFor(liveUri))
+
+        val removed = manager.reclaimRevokedMirrorsSync()
+
+        assertTrue(
+            staleDir.isDirectory,
+            "a file that exists nowhere but the mirror was deleted on a launch-time thread",
+        )
+        assertEquals(0, removed, "nothing should have been reclaimed in this pass")
+    }
+
+    /**
      * The record's own scratch file outlives everything else when a write is
      * interrupted between it and the rename.
      *

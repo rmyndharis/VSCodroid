@@ -44,7 +44,10 @@ import kotlin.concurrent.thread
  * residue is stated rather than claimed closed: a stop landing between the observer's
  * liveness check and the capture two instructions later still hands over the orphan.
  * Closing that needs the capture to move into the observer and be passed in, which
- * changes the signature every test in this package calls.
+ * changes the signature every test in this package calls. What that residue no longer
+ * does is happen in silence: the session a stop installs is abandoned from birth, so an
+ * offer into it is reported like any other save a drain did not take. The delivery stays
+ * open; the telling does not.
  *
  * The offer that arrives once every drain has ended is not silent either. The stop's own
  * count cannot reach that one: it reads the queue and clears it while the event is still
@@ -54,7 +57,8 @@ import kotlin.concurrent.thread
  * (`target.queue.offer` to `session.queue.offer`). The first case goes red on both
  * assertions and in opposite directions, the closing queue empty and the newly opened one
  * holding the save, which is what shows it is measuring the handoff rather than merely
- * that a job exists. Deleting the count and its log line reddens the second case.
+ * that a job exists. Deleting the count and its log line reddens the second case, and
+ * giving `stopWatching` a plain `WatchSession()` to install reddens the fourth alone.
  */
 class SafWatchHandoffTest {
 
@@ -246,6 +250,42 @@ class SafWatchHandoffTest {
             emitted.any { it.contains("Write-back of notes.txt arrived after the drain ended") },
             "the save reached no device, nothing will retry it, and no line says so: " +
                 "$emitted",
+        )
+    }
+
+    /**
+     * The window reading at entry narrows and does not close, made visible.
+     *
+     * The liveness test is the observer's, two instructions before the capture, so a stop
+     * completing between the two hands the event the session installed for the folder
+     * opened next. Nothing polls that one: only `startWatching` starts a worker, and it
+     * installs a session of its own first. The save is as undelivered as any other that
+     * misses a drain, and it used to be the only one of them that said nothing, because
+     * the fresh session carried no `abandoned` flag and the stop's own count had already
+     * been taken.
+     *
+     * Driven by stopping first and handling the event after, which is the state that race
+     * ends in. The interleaving itself cannot be produced here: constructing a real
+     * `DirectoryObserver` runs a static initializer that reaches native code.
+     */
+    @Test
+    fun `a save handed the session nothing will ever drain says so`() {
+        File(mirror, "notes.txt").writeText("a save mid-flight")
+        engine.stopWatching()
+        val orphaned = engine.session
+        release.countDown()
+
+        engine.handleMirrorEvent(FileObserver.MODIFY, File(mirror, "notes.txt"), mirror, treeUri)
+
+        assertEquals(
+            1, orphaned.queue.size,
+            "setup failed: the save went somewhere other than the session the stop left " +
+                "current, so this case is not measuring that session at all",
+        )
+        assertTrue(
+            emitted.any { it.contains("Write-back of notes.txt arrived after the drain ended") },
+            "the save landed in a queue with no worker and no successor, and nothing " +
+                "said so: $emitted",
         )
     }
 }
