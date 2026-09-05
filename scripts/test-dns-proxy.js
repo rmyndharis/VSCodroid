@@ -248,6 +248,51 @@ async function main() {
     const wrongToken = await proxiedGet(proxyPort, `http://127.0.0.1:${originPort}/`, 'vscodroid:not-the-token');
     assert.strictEqual(wrongToken.status, 407, 'a wrong token was accepted');
 
+    // The plain 407 has to close the connection, and for a different reason
+    // than the CONNECT one below: the request body is never read, so the socket
+    // stays in Node's request phase, where the header sweep no longer reaches it
+    // and only requestTimeout's 300 s default is left. Complete headers, a
+    // declared body and one byte every couple of seconds then hold a slot for as
+    // long as the peer likes, out of a cap of 128 shared with git, npm and the
+    // gallery. Sending nothing after the headers is not the case that matters:
+    // keepAliveTimeout collects that one at 6 s either way.
+    const heldOpen = await new Promise((resolve, reject) => {
+        const t0 = process.hrtime.bigint();
+        const socket = net.connect(proxyPort, '127.0.0.1', () => {
+            socket.write(
+                `POST http://127.0.0.1:${originPort}/ HTTP/1.1\r\nHost: 127.0.0.1:${originPort}\r\n` +
+                    'Content-Length: 1000000\r\n\r\n',
+            );
+            // Inside the 5 s keep-alive window, so each byte resets the only
+            // timer that would otherwise reclaim the socket.
+            const dribble = setInterval(() => !socket.destroyed && socket.write('x'), 500);
+            socket.on('close', () => clearInterval(dribble));
+        });
+        let received = '';
+        socket.on('data', (chunk) => (received += chunk));
+        socket.on('error', reject);
+        socket.on('close', () =>
+            resolve({ received, ms: Number(process.hrtime.bigint() - t0) / 1e6 }));
+        // A wall-clock timer, not socket.setTimeout: that one measures
+        // inactivity, and the dribble above is activity, so it would never fire
+        // in exactly the case this is here to catch.
+        setTimeout(() => {
+            socket.destroy();
+            resolve({ received, ms: Infinity });
+        }, 4000).unref();
+    });
+    assert.match(heldOpen.received, /^HTTP\/1\.1 407 /, `the dribbling peer was not challenged: ${heldOpen.received}`);
+    assert.match(
+        heldOpen.received,
+        /Connection: close/i,
+        `the plain 407 omits "Connection: close": ${heldOpen.received}`,
+    );
+    assert.ok(
+        heldOpen.ms < 1000,
+        `an unauthenticated peer still held its connection ${heldOpen.ms} ms after the 407, so ` +
+            'it can hold one of 128 slots indefinitely by dribbling a body nothing reads',
+    );
+
     const authenticated = await proxiedGet(proxyPort, `http://127.0.0.1:${originPort}/`, goodCredentials);
     assert.strictEqual(authenticated.status, 200, 'a correct token was rejected');
 
@@ -610,6 +655,48 @@ async function main() {
     // If either abort had killed the proxy, this would not answer.
     const stillAlive = await proxiedGet(proxyPort, `http://127.0.0.1:${originPort}/`, goodCredentials);
     assert.strictEqual(stillAlive.status, 200, 'the proxy died after a client aborted mid-transfer');
+
+    // --- an origin that dies mid-body ------------------------------------
+    // The other half of the same abort: the client behaves and the origin goes
+    // away, which on a mobile network is the ordinary case. Node raises that on
+    // the response object, not on the request the plain leg's error handler
+    // watches, so it has to be caught there and it has to tear the client leg
+    // down rather than finish it. Both wrong answers are quiet: with no handler
+    // the pipe never reaches 'end' and the client waits forever, and with end()
+    // the terminating chunk goes out and a half-downloaded tarball reads as a
+    // complete 200.
+    const dyingOrigin = net.createServer((sock) =>
+        sock.once('data', () => {
+            sock.write('HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nSHORT\r\n');
+            setTimeout(() => sock.destroy(), 50);
+        }));
+    const dyingPort = await listen(dyingOrigin);
+    const truncated = await new Promise((resolve) => {
+        const req = http.request({
+            host: '127.0.0.1', port: proxyPort, path: `http://127.0.0.1:${dyingPort}/x`, agent: false,
+            headers: { 'proxy-authorization': `Basic ${Buffer.from(goodCredentials).toString('base64')}` },
+        }, (res) => {
+            let body = '';
+            res.on('data', (chunk) => (body += chunk));
+            res.on('end', () => resolve({ outcome: 'end', body, complete: res.complete }));
+            res.on('error', (err) => resolve({ outcome: `error:${err.code || err.message}` }));
+        });
+        req.on('error', (err) => resolve({ outcome: `error:${err.code || err.message}` }));
+        req.end();
+        setTimeout(() => {
+            req.destroy();
+            resolve({ outcome: 'hung' });
+        }, 4000).unref();
+    });
+    dyingOrigin.close();
+    assert.ok(
+        truncated.outcome.startsWith('error:'),
+        truncated.outcome === 'hung'
+            ? 'an origin that died mid-body left the client waiting with no error and no end, ' +
+                'holding both legs for as long as the client is willing to wait'
+            : `a truncated body was framed as a complete response (complete=${truncated.complete}, ` +
+                `body=${JSON.stringify(truncated.body)}), so a half-downloaded file reads as whole`,
+    );
 
     // --- a rejected CONNECT must not pin a descriptor ---------------------
     // The response text is identical whether or not the socket is released, so
