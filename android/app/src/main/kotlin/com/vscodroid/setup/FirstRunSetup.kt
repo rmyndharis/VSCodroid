@@ -2268,14 +2268,28 @@ claude() {
             Environment.getGitPath(context),
             Environment.getClaudeLauncherPath(context),
         )
-        // Once per upgrade, between the two, and only for a device that has an
-        // older build's document: the preferences this app used to write are
-        // taken back out here, and re-running the prune on every launch would
-        // mean re-reading a document that no longer holds any of them.
-        // `getPreviousVersionCode` is written at the end of a completed setup,
-        // so a run that dies before that point prunes again on the next launch,
-        // which is the direction to fail in.
-        val pruned = if (getPreviousVersionCode() < MOVED_DEFAULTS_VERSION_CODE) {
+        // Once per install, between the two: the preferences this app used to
+        // write are taken back out here, and re-reading a document that no
+        // longer holds any of them is work with no outcome.
+        //
+        // The signal is a durable flag, NOT a versionCode comparison, and the
+        // difference is the whole point. The gate was
+        // `getPreviousVersionCode() < MOVED_DEFAULTS_VERSION_CODE` with that
+        // constant at 14, which is one-shot only for as long as someone
+        // remembers to ship versionCode 14. The app is at 13, so the comparison
+        // was true on EVERY launch and the prune was permanent rather than
+        // one-shot -- and a permanent prune is this change's own defect
+        // inverted. `Machine/settings.json` is what the Settings editor's
+        // Remote tab writes to, so a user who set one of the sixteen pairs
+        // there had it deleted again on the next launch, silently, for ever.
+        // Bumping versionCode instead would have been worse: `isFirstRun` gates
+        // on it too, so it costs every existing install a full re-extraction.
+        //
+        // Recorded only after the write below succeeds, so a run that dies
+        // first prunes again on the next launch, which is the direction to fail
+        // in. That is what the versionCode form got right and is kept.
+        val shouldPrune = !prefs.getBoolean(KEY_MOVED_DEFAULTS_PRUNED, false)
+        val pruned = if (shouldPrune) {
             pruneMovedDefaults(refreshed ?: current, isCompactScreen())
         } else {
             null
@@ -2283,7 +2297,14 @@ claude() {
         val updated = settingsWithLayoutDefaults(pruned ?: refreshed ?: current, isCompactScreen())
             ?: pruned
             ?: refreshed
-            ?: return
+            ?: run {
+                // Nothing to write at all, which for a run that pruned means the
+                // document was already free of them. That is this migration's
+                // definition of done, and not recording it here is what would
+                // leave the pass running on every launch for ever.
+                if (shouldPrune) markMovedDefaultsPruned()
+                return
+            }
 
         // Atomic because this file is the user's, not ours -- it carries their
         // editor preferences, and this runs at every launch. writeText truncates
@@ -2294,7 +2315,19 @@ claude() {
             Logger.w(tag, "Could not refresh managed paths; settings.json is unchanged")
             return
         }
+        if (shouldPrune) markMovedDefaultsPruned()
         Logger.i(tag, "Refreshed managed paths in settings.json")
+    }
+
+    /**
+     * Records that the app's old machine-settings preferences have been taken out.
+     *
+     * `apply`, not the `commit` [markSetupComplete] argues for: what a lost write
+     * costs there is a repeated 810 MiB unpack, and what it costs here is one more
+     * regex pass over a small file on the next launch, which finds nothing.
+     */
+    private fun markMovedDefaultsPruned() {
+        prefs.edit().putBoolean(KEY_MOVED_DEFAULTS_PRUNED, true).apply()
     }
 
     /**
@@ -3810,18 +3843,19 @@ claude() {
         private const val PIVOT_VERSION_CODE = 11
 
         /**
-         * The release that stopped writing preferences into the machine
-         * settings file, and the one-shot gate for taking the old ones out.
+         * That [pruneMovedDefaults] has already taken the app's old preferences
+         * out of the machine settings file on this install.
          *
-         * A device upgrading from below this runs [pruneMovedDefaults] once;
-         * above it there is nothing to prune, and re-reading the document on
-         * every launch to prove that is work with no outcome. Unlike
-         * [PIVOT_VERSION_CODE], raising this to match a later release is
-         * harmless in itself, but it would run the prune again on devices that
-         * have already been through it, which can only find lines the user has
-         * since chosen to write.
+         * A flag rather than a versionCode boundary, unlike [PIVOT_VERSION_CODE],
+         * and the two are not the same shape of question. That one names a fixed
+         * point in this project's history and can be compared against because the
+         * history cannot change. This one asks "has this device been through the
+         * pass yet", which no release number answers: expressed as
+         * `previousVersionCode < 14` it was true on every launch while the app
+         * sat at versionCode 13, so the pass meant to run once ran for ever, and
+         * could only find lines the user had since chosen to write.
          */
-        private const val MOVED_DEFAULTS_VERSION_CODE = 14
+        private const val KEY_MOVED_DEFAULTS_PRUNED = "moved_defaults_pruned"
     }
 }
 
