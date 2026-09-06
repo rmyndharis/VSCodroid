@@ -14,15 +14,22 @@ import org.junit.jupiter.api.Test
  * path missing from it means the save truncates whatever the device holds.
  *
  * The set is therefore a contract, not a cache, and the contract is "the device
- * holds a document this sync did not read". Phase 2 has five branches that end
- * that way, and for a long time only three of them said so. The two that did not
- * were the refusals over a device copy that could not be set aside, which are
- * precisely the branches whose own comment reads "Writing anyway would be the
- * loss this guard exists to prevent": they protected the document for exactly as
- * long as the sync ran, and the first save afterwards did what they refused.
+ * holds a document this sync did not read". Phase 2 has six branches that end
+ * that way, and for a long time only three of them said so. Two of the missing
+ * ones were the refusals over a device copy that could not be set aside, which
+ * are precisely the branches whose own comment reads "Writing anyway would be
+ * the loss this guard exists to prevent": they protected the document for
+ * exactly as long as the sync ran, and the first save afterwards did what they
+ * refused.
+ *
+ * The sixth was the loser of a race for the copy, which the count below is what
+ * found: two syncs of one mirror meet at a claim held in the companion object,
+ * and the one that steps aside has its own `unfetched`, so it alone can arm its
+ * own guard. It is also routinely the survivor, since the claim belongs to the
+ * engine of the activity being destroyed.
  *
  * Counted rather than named, because what matters is that no branch is left out;
- * a case naming one line would pass while a sixth arrived unrecorded.
+ * a case naming one line would pass while a seventh arrived unrecorded.
  */
 class UnreadDocumentGuardTest {
 
@@ -77,9 +84,9 @@ class UnreadDocumentGuardTest {
     }
 
     /**
-     * Five branches end with the device holding something this sync did not read.
-     * The count is the assertion: naming lines would pass while a sixth arrived
-     * unrecorded, which is exactly how the two refusals came to be missing.
+     * Six branches end with the device holding something this sync did not read.
+     * The count is the assertion: naming lines would pass while a seventh arrived
+     * unrecorded, which is exactly how the three that were missing went unnoticed.
      */
     @Test
     fun `every branch that declines to read records it`() {
@@ -87,10 +94,11 @@ class UnreadDocumentGuardTest {
             .findAll(engine()).count()
 
         assertEquals(
-            5, adds,
-            "phase 2 has five branches that leave a device document unread: the confine " +
-                "refusal, the size skip, a failed copy, and the two refusals over a " +
-                "device copy that could not be set aside. Found $adds recording it",
+            6, adds,
+            "phase 2 has six branches that leave a device document unread: the confine " +
+                "refusal, the size skip, a failed copy, the two refusals over a device " +
+                "copy that could not be set aside, and the sync that lost the copy to " +
+                "another engine. Found $adds recording it",
         )
     }
 }

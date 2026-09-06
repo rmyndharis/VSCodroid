@@ -76,6 +76,57 @@ class ExtraKeyRowPopupTest {
     }
 
     @Test
+    fun `a configuration change closes the popup before deciding it changed nothing`() {
+        val lines = code()
+        val start = lines.indexOfFirst { it.contains("override fun onConfigurationChanged(") }
+        assertTrue(start >= 0, "onConfigurationChanged is no longer where this test looks")
+
+        val body = lines.drop(start).take(12)
+        val dismiss = body.indexOfFirst { it.contains("longPressPopup?.dismiss()") }
+        val earlyReturn = body.indexOfFirst { it.contains("if (repacked == pages) return") }
+
+        // The control. Both landmarks have to be in the window this reads, or a
+        // renamed guard would leave the case passing on an empty comparison.
+        assertTrue(dismiss >= 0, "the config-change path no longer dismisses the popup at all")
+        assertTrue(
+            earlyReturn >= 0,
+            "the repack guard is no longer where this test looks, so the ordering below is " +
+                "being asserted about nothing",
+        )
+
+        assertTrue(
+            dismiss < earlyReturn,
+            "the popup is dismissed only after the repack guard has decided the pages did " +
+                "not change, and on a rotation they never do: smallestScreenWidthDp is the " +
+                "smaller dimension by definition, so turning the phone over always takes " +
+                "that return and leaves the alternates floating over the new layout",
+        )
+    }
+
+    @Test
+    fun `the popup goes down with the keyboard`() {
+        val lines = code()
+        val start = lines.indexOfFirst { it.contains("visibility = if (imeVisible)") }
+        assertTrue(
+            start >= 0,
+            "the row no longer drives its visibility from the IME insets, so this case is " +
+                "reading nothing",
+        )
+
+        val body = lines.drop(start).take(8).joinToString("\n")
+        assertTrue(
+            body.contains("resetModifiersIfNeeded()"),
+            "the hidden-IME branch is no longer where this test looks. It reads:\n$body",
+        )
+        assertTrue(
+            body.contains("longPressPopup?.dismiss()"),
+            "the row goes GONE with the keyboard and leaves the alternates window standing " +
+                "over the editor, with no key under it and nothing to say what it belongs " +
+                "to. It reads:\n$body",
+        )
+    }
+
+    @Test
     fun `a row leaving its window takes the popup with it`() {
         val lines = code()
         val start = lines.indexOfFirst { it.contains("override fun onDetachedFromWindow()") }

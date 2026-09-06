@@ -152,6 +152,17 @@ class SafSyncEngine(private val context: Context) {
      *
      * Absolute paths and scoped per mirror in [initialSync], next to [unfetched] and for
      * the same reason: one engine serves every folder in turn.
+     *
+     * "One notice per path" is therefore per ENGINE, not per device, and the
+     * difference is reachable: an activity recreated mid-open leaves two engines
+     * over one mirror, both of them announcing through a lambda that closes over
+     * the application context, so one file can be announced twice. That is left
+     * as it is deliberately. Moving the set to the companion object, the shape
+     * [mirrorCopiesInFlight] and its siblings use, would let the engine whose
+     * notice the manager's own per-activity throttle swallowed spend the other
+     * engine's budget, and the failure would be silence about a save that is not
+     * reaching the device folder. A duplicate of the same sentence is the cheaper
+     * way to be wrong, and two is not the wall this set exists to stop.
      */
     private val refusalsAnnounced = ConcurrentHashMap.newKeySet<String>()
 
@@ -712,10 +723,34 @@ class SafSyncEngine(private val context: Context) {
                 // the other, whose remaining bytes then landed inside the finished
                 // mirror file that [recordIdentity] had already vouched for.
                 if (!mirrorCopiesInFlight.add(localPath.absolutePath)) {
+                    // Armed for the same reason every other refusal in this loop
+                    // arms it: THIS sync did not read the device document, which
+                    // is the whole of what the set means. Leaving it to the other
+                    // sync is right for the copy and says nothing about the guard,
+                    // and the two engines do not share one: the claim above is in
+                    // the companion object precisely because two engines meet
+                    // over one mirror, while [unfetched] is per engine.
+                    //
+                    // Which engine is left holding the folder makes it worse, not
+                    // academic. The routine way two syncs meet here is an activity
+                    // recreated mid-open: the claim belongs to the engine of the
+                    // activity being destroyed, so the winner is the one going
+                    // away and the LOSER is the engine whose watcher goes on
+                    // serving saves. A copy the winner never finished then leaves
+                    // the mirror holding a stub, and the first save writes it over
+                    // the device document with "wt", which truncates at open.
+                    //
+                    // It can only add refusals, never a write, and a refusal here
+                    // is a deferral the next open clears: [initialSync] scrubs the
+                    // mirror's prefix out of the set before phase 2. The cost when
+                    // the winner did finish is one save deferred to the next open
+                    // of that folder; the cost of not arming it is the document.
+                    unfetched.add(localPath.absolutePath)
                     Logger.w(
                         tag,
                         "Another sync of this folder is already copying " +
-                            "${doc.relativePath}; leaving it to that one",
+                            "${doc.relativePath}; leaving it to that one, and not " +
+                            "vouching for a device copy this sync never read",
                     )
                     filesDone++
                     onProgress(filesDone, totalFiles)
@@ -3991,8 +4026,11 @@ class SafSyncEngine(private val context: Context) {
          * network or MTP provider has no timeout, so waiting would trade a race for an
          * unbounded stall of a folder open behind a dialog with `setCancelable(false)`.
          * What the loser gives up is one copy of a document the winner is already
-         * copying, and it records nothing for that path, which is the direction that
-         * costs disk rather than work.
+         * copying, and it vouches for nothing at that path, which is the direction
+         * that costs disk rather than work. It does record the path as one it did
+         * not read: this set is shared between the two engines and `unfetched` is
+         * not, so the loser is the only thing that can arm its own write-back
+         * guard, and the loser is routinely the engine that outlives the winner.
          */
         private val mirrorCopiesInFlight = ConcurrentHashMap.newKeySet<String>()
 

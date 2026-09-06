@@ -16,9 +16,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - VSCodroid's own commands, settings and the Get Started walkthrough are translated into the same thirteen languages as the editor.
 - The user guide covers installing an extension from a VSIX file, and what running and debugging does and does not do on the device.
 - The user guide explains why a Python package carrying compiled code cannot be installed, `pygame` among them, why `turtle` and `tkinter` are absent, and how to put a drawing on screen without either.
+- The user guide covers the two Python surprises that read as broken installs: a command installed by `pip` that will not start, and a named time zone that raises.
 
 ### Fixed
 
+- **Serve on Network** finds a dev server bound to the phone's own address. A server started as `vite --host 192.168.1.50` was reported as not running at all, in the list and when the port was typed in, although it was already answering other devices.
+- Python reaches HTTPS sites. The bundled interpreter loaded no certificates at all, so any script using `urllib`, `requests` or `ssl` failed to verify every site it tried. A certificate authority you installed on the device also reaches `pip` now, so a private package index behind one works.
+- Holding Ctrl or Alt on the key row and typing a capital letter sends the chord you asked for. The capital lost its Shift on the way, so Ctrl+Shift+P opened Quick Open instead of the Command Palette, and every other Ctrl+Shift shortcut reached the wrong command.
+- The alternates that appear when you hold a key on the key row go away with it. Turning the phone over left them floating over the keyboard, and letting the keyboard go left them over the editor, until you tapped somewhere else.
+- A sign-in you finish while the editor is restarting now says so instead of hanging. The callback was handed to the loading page, which cannot receive one.
+- A device folder opened twice at once no longer risks the file the second open skipped. Where two syncs of one folder met, the one that stepped aside kept no record that it had not read the document, so a later save could overwrite it.
+- The key row notices again when the page takes a modifier it was holding, after a reply that never arrives. One lost answer used to stop it asking for the rest of the session.
+- A file downloaded through the app's proxy is no longer reported as complete when the site it came from died halfway. The transfer either finished or hung with no error at all, depending on how the site framed it.
 - A device folder you waited for is no longer lost when the server dies while it is being copied. The page the app puts up to carry the new folder could be stopped by the editor's own "changes you made may not be saved" prompt, because the app had not said the navigation was its own doing; cancelling it left the old folder open and the new one forgotten after minutes of copying.
 - A folder opened after the editor's page has crashed several times comes back with its Android features working. The editor could be loaded over a rebuilt page whose bridge had not been restored, so Open Folder from Device, the toolchain screen, Open in Browser and every download quietly did nothing, with nothing on screen to say why.
 - The editor no longer offers to uninstall VSCodroid's own extensions. Removing one took the device folder picker, the toolchain screen and the storage tools with it, nothing in the editor could put it back, and the only way out was clearing app data.

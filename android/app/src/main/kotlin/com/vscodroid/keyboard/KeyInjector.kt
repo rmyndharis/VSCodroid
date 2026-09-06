@@ -340,6 +340,29 @@ class KeyInjector(
                         code = /[a-zA-Z]/.test(ch) ? 'Key' + upper :
                                /[0-9]/.test(ch) ? 'Digit' + ch : '';
                         keyCode = upper.charCodeAt(0);
+                        // A capital is a shifted key, and the table above says so
+                        // for punctuation and cannot for letters: it carries no
+                        // letters at all, so `def` is null here and shiftKey kept
+                        // whatever the ROW's Shift said, which for a capital typed
+                        // on the soft keyboard is false.
+                        //
+                        // What that costs is the chord. Measured on an API 37
+                        // emulator against the shipped build: latch Ctrl on the
+                        // row, type a capital P, and the page receives
+                        // {key:"P", code:"KeyP", ctrl:true, shift:false} and opens
+                        // Quick Open, "Search files by name". The same event with
+                        // shift true opens the Command Palette, "Type the name of
+                        // a command to run". So Ctrl+Shift+anything was
+                        // unreachable from this row by the one route a phone
+                        // offers for it, and it failed by doing something else
+                        // plausible rather than nothing.
+                        //
+                        // [A-Z] and not `ch !== ch.toLowerCase()`: a capital
+                        // outside ASCII gets no `code` two lines up, so there is
+                        // no chord for a modifier to belong to, and claiming
+                        // Shift for it would describe a US layout that has no such
+                        // key.
+                        if (/[A-Z]/.test(ch)) shiftKey = true;
                     }
 
                     init = {

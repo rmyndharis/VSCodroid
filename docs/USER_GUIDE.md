@@ -483,9 +483,11 @@ Plain `http://` is the answer for a local preview: cleartext is permitted here p
 because that is what dev servers speak. Installing your own CA through Android Settings
 does not help for a page, and this is the one place where it makes a difference which
 part of the app is asking. Pages are rendered by the system WebView, which trusts the
-device's system roots and nothing else. git does read a CA you installed, because the
-app builds git's certificate bundle from both halves of the device trust store. So the
-same certificate can clone fine in the terminal and still be refused in a preview tab.
+device's system roots and nothing else. The terminal does read a CA you installed,
+because the app builds a certificate bundle from both halves of the device trust store
+and hands it to git, to Python and to everything else there that speaks TLS. So the same
+certificate can clone or `pip install` fine in the terminal and still be refused in a
+preview tab.
 
 #### Opening in the device's browser instead
 
@@ -739,6 +741,62 @@ PNG or an SVG in the workspace acts as a display you can watch while you edit.
 Python's own `zlib` is enough to write a PNG with no packages at all. For
 anything interactive, serve it: `python3 -m http.server` and open the address, as
 in [Dev Server Preview](#dev-server-preview) above.
+
+### Python Command-Line Tools
+
+Some packages install a command as well as a module: `pytest`, `black`, `httpie`,
+`cowsay`. The install succeeds and the command still does not run.
+
+```
+$ pip install cowsay
+$ cowsay -t hi
+bash: /data/.../usr/bin/cowsay: /data/.../usr/bin/python3: bad interpreter: Permission denied
+```
+
+The command pip writes is a short text file starting with `#!` and the path to
+the interpreter. Android does not let an app run a program out of its own
+storage, which is why VSCodroid's own tools live in a directory the system does
+allow, and a file pip writes has nowhere else to go. The message names `python3`,
+so it reads as a broken Python; Python is fine, and the interpreter it names runs
+perfectly when you call it yourself. It is the one-line launcher that cannot
+start.
+
+Run the module instead. Every one of these packages is importable, which is what
+the command was starting anyway:
+
+```bash
+python3 -m pytest
+python3 -m black .
+python3 -m cowsay -t hi
+```
+
+`pip` itself is the same shape and is already handled: `pip` and `pip3` are set up
+as shell functions that call `python3 -m pip`, so they work in the terminal
+without anything on your part. A build task that runs outside a shell does not see
+those functions, so write `python3 -m pip` in `tasks.json` and in any script.
+
+### Time Zones In Python
+
+A named time zone raises instead of resolving:
+
+```python
+>>> from zoneinfo import ZoneInfo
+>>> ZoneInfo("Asia/Jakarta")
+zoneinfo._common.ZoneInfoNotFoundError: 'No time zone found with key Asia/Jakarta'
+```
+
+`zoneinfo` reads the operating system's time zone database, from
+`/usr/share/zoneinfo` and three sibling paths. Android keeps its own database
+somewhere else entirely and ships none of those, so the lookup finds nothing.
+
+Install the database as a package and it works from then on, including for
+`pandas`, `croniter` and anything else that asks `zoneinfo` for a zone:
+
+```bash
+pip install tzdata
+```
+
+`datetime.now()`, `time.time()` and UTC never needed this. It is named zones only.
 
 ### Packages With Prebuilt Binaries
 
@@ -1010,10 +1068,15 @@ If `npm install` fails with errors:
 - **Unsupported platform errors** come from a package whose prebuilt binaries have no Android build, so there is nothing to install (see [Known Limitations](#packages-with-prebuilt-binaries)).
 - **Network timeout** -- check your internet connection. npm uses `--prefer-offline` by default, so cached packages install without network.
 
+### Python: Installed, and Then Something Fails
+
+- **`bad interpreter: Permission denied`** after installing a package that brings a command with it (`pytest`, `black`, `httpie`). Run it as a module instead: `python3 -m pytest`. See [Python Command-Line Tools](#python-command-line-tools) for why the message names `python3` when Python is not the problem.
+- **`ZoneInfoNotFoundError`** from `zoneinfo`, `pandas` or anything that resolves a named time zone. `pip install tzdata` and it works from then on; see [Time Zones In Python](#time-zones-in-python).
+
 ### Git Push/Pull Fails
 
 - **Permission denied (publickey)** -- generate an SSH key with `ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519` in the terminal and add it to your GitHub/GitLab account. The `-f` is required; see [Generating an SSH Key](#generating-an-ssh-key) for why.
-- **SSL certificate error** -- the CA bundle git uses is built from your device's own trust store: the system roots, plus any certificate authority you installed yourself through Android Settings, under the CA-certificate flow in the device's security settings. So a private or corporate CA does work for git, from the next time you open the app -- the bundle is rebuilt at launch, not while the app is running. If you would rather not install a CA on the device, an SSH remote (`git@`) instead of `https://` is still the shortest route to an internal host. Two things that bundle does not reach: npm, which has its own trust store, and pages loaded inside the editor, which use the system roots only.
+- **SSL certificate error** -- the CA bundle the terminal uses is built from your device's own trust store: the system roots, plus any certificate authority you installed yourself through Android Settings, under the CA-certificate flow in the device's security settings. git and Python are both given it, so a private or corporate CA works for `git clone` and for `pip install` alike, from the next time you open the app -- the bundle is rebuilt at launch, not while the app is running. If you would rather not install a CA on the device, an SSH remote (`git@`) instead of `https://` is still the shortest route to an internal host. Two things that bundle does not reach: npm, which has its own trust store, and pages loaded inside the editor, which use the system roots only.
 
 ### App Uses Too Much Storage
 

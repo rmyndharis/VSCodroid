@@ -131,6 +131,68 @@ class KeyInjectorShiftTest {
         )
     }
 
+    /**
+     * The branch the listener takes for a character the table does not carry,
+     * which is every letter.
+     *
+     * Sliced by its own `} else {` rather than searched for across the script:
+     * the branch above it assigns the same three variables from the table, so a
+     * whole-script search for an assignment to `shiftKey` is satisfied by that
+     * copy while this one leaves it alone.
+     */
+    private fun letterBranch(): String {
+        KeyInjector(webView).setupModifierInterceptor()
+        val installed = script.captured
+        val marker = "var upper = ch.toUpperCase();"
+        val start = installed.indexOf(marker)
+        assertTrue(
+            start >= 0,
+            "the listener no longer derives a key from the character itself, so this test " +
+                "is reading nothing and its verdict is worth nothing. It reads:\n$installed",
+        )
+        // The closing brace on a line of its own, found by shape rather than by
+        // a counted indent: the script is trimIndent'ed on its way out, so the
+        // column it sits in is a property of the Kotlin file around it and not of
+        // the JS. Nothing inside this branch closes a block, so the first one is
+        // the branch's own.
+        val end = Regex("\\n\\s*\\}").find(installed, start)
+        assertTrue(end != null, "the branch is never closed")
+        return installed.substring(start, end!!.range.first)
+    }
+
+    @Test
+    fun `a capital typed on the soft keyboard carries Shift`() {
+        // The one route a phone has to Ctrl+Shift+letter: latch Ctrl on the row,
+        // then use the soft keyboard's own Shift for the letter. The table this
+        // branch falls back from carries no letters, so nothing else can say the
+        // character was shifted, and a chord that loses it is not a chord that
+        // does nothing. Measured on an API 37 emulator: Ctrl with a capital P
+        // arrived as {key:"P", code:"KeyP", ctrl:true, shift:false} and opened
+        // Quick Open; the same event with shift true opens the Command Palette.
+        val branch = letterBranch()
+
+        assertTrue(
+            branch.contains("shiftKey = true"),
+            "a capital reaches the page as an unshifted keystroke, so Ctrl with a capital " +
+                "resolves to the unshifted chord: Ctrl+Shift+P opens Quick Open instead of " +
+                "the Command Palette. It reads: $branch",
+        )
+    }
+
+    @Test
+    fun `a lowercase letter is not given a Shift it never had`() {
+        // The other half, and the reason the test above is not satisfied by
+        // forcing the flag on: an ordinary letter typed with Ctrl latched has to
+        // stay the unshifted chord, or Ctrl+c becomes Ctrl+Shift+C.
+        val branch = letterBranch()
+
+        assertTrue(
+            branch.contains("/[A-Z]/"),
+            "the branch decides Shift from something other than the character being an " +
+                "upper-case letter, so it cannot tell `p` from `P`. It reads: $branch",
+        )
+    }
+
     @Test
     fun `a character that needs Shift is sent with Shift held`() {
         // `{` rather than a letter: a letter is unshifted, so it would pass

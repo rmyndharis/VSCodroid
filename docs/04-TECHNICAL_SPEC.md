@@ -351,6 +351,15 @@ val env = mapOf(
     "GIT_SSH_COMMAND"         to "${nativeLibDir}/libssh.so -F ${filesDir}/home/.ssh/config",
     "GIT_SSL_CAPATH"          to "<system trust store>",
     "GIT_SSL_CAINFO"          to "${filesDir}/usr/etc/tls/cert.pem",   // curl needs the bundle, not the dir
+    "SSL_CERT_FILE"           to "${filesDir}/usr/etc/tls/cert.pem",   // and so does everything else: Android
+                                                                       // names its store files with the pre-1.0
+                                                                       // OpenSSL hash, so the dir below is a
+                                                                       // store OpenSSL 3 cannot look anything up in
+    "REQUESTS_CA_BUNDLE"      to "${filesDir}/usr/etc/tls/cert.pem",   // the name pip reads; it verifies
+                                                                       // against its own vendored certifi and
+                                                                       // never looks at SSL_CERT_FILE. Set only
+                                                                       // when the bundle exists: requests treats
+                                                                       // one it cannot open as fatal
     "SSL_CERT_DIR"            to "<system trust store>",
     "NPM_CONFIG_PREFIX"       to "${filesDir}/usr",
     "NPM_CONFIG_CACHE"        to "${cacheDir}/npm-cache",

@@ -263,7 +263,33 @@ function start(log) {
                 // one here.
                 req.on('error', () => {});
                 res.on('error', () => {});
-                res.writeHead(407, { 'Proxy-Authenticate': CHALLENGE }).end();
+                // "Connection: close" is what keeps an unauthenticated peer
+                // inside the bound HEADER_PHASE_MS exists to impose. That sweep
+                // watches the header phase only, and a peer that finishes its
+                // headers steps out of its reach: the request body is never read
+                // here, so the connection sits in Node's request phase, where the
+                // only bound left is requestTimeout at its 300 s default.
+                //
+                // Measured against the shipped file, on the same socket that
+                // sends complete headers and then dribbles one body byte every
+                // 2 s: with keep-alive it was still holding its slot at 30 s and
+                // the timer never advanced, because each byte resets it; with
+                // this header it is gone in 3 ms. A peer that sends nothing after
+                // the headers was already closed at 6 s (keepAliveTimeout plus
+                // Node's 1 s buffer), so the header is not what bounds that one --
+                // it is the dribble, where the difference is a slot held for as
+                // long as the peer cares to hold it against 128 of them being the
+                // whole cap.
+                //
+                // A challenge-response client is unaffected: it opens a fresh
+                // connection for the retry, which on loopback costs nothing. This
+                // is not the CONNECT leg's reason for the same header, where the
+                // FIN is already sent by hand and the header is what stops git
+                // retrying into a dead socket.
+                res.writeHead(407, {
+                    'Proxy-Authenticate': CHALLENGE,
+                    Connection: 'close',
+                }).end();
                 return;
             }
             // Addressed to this proxy, so they stop here. See HOP_BY_HOP_HEADERS.
@@ -351,6 +377,30 @@ function start(log) {
                     // middle by a timer meant for one that never started.
                     upstream.setTimeout(0);
                     res.writeHead(upstreamRes.statusCode || 502, upstreamRes.headers);
+                    // An origin that dies part-way through its body raises the
+                    // failure HERE, on the response, and not on the request that
+                    // the handler below watches. Measured on node v22.23.2
+                    // against an origin that writes a header and destroys the
+                    // socket 50 ms later: the client sees `res:aborted`,
+                    // `res:error(ECONNRESET)`, `res:close` and the request object
+                    // gets only `close`. With nothing listening here, pipe never
+                    // reaches 'end', so `res` is never finished and the client
+                    // waits forever -- both legs held, no timeout left in the
+                    // response phase to cut it. npm and git hang rather than
+                    // retry.
+                    //
+                    // destroy(), not end(). Chunked is the framing at issue: on
+                    // a truncated chunked body end() writes the terminating
+                    // chunk, and the client reads a complete 200 carrying half a
+                    // tarball (measured: complete=true, body "SHORT" of a longer
+                    // stream). destroy() sends no terminator, so it surfaces as
+                    // ECONNRESET, which is what it is. Under Content-Length the
+                    // two agree, because Node refuses to under-deliver a declared
+                    // length and resets either way.
+                    upstreamRes.on('error', (err) => {
+                        log('warn', `dns-proxy: ${target.hostname} died mid-response: ${reason(err)}`);
+                        res.destroy();
+                    });
                     upstreamRes.pipe(res);
                 },
             );
@@ -362,9 +412,16 @@ function start(log) {
                 // relayed; writeHead would then throw ERR_HTTP_HEADERS_SENT,
                 // and an uncaught throw here takes this process down, and this
                 // process is now the editor server.
-                if (!res.headersSent) {
-                    res.writeHead(502);
+                //
+                // Past the headers there is no status left to send and no honest
+                // way to finish the body, so the connection goes down instead --
+                // same reason as the response-side handler above, and stated
+                // once there.
+                if (res.headersSent) {
+                    res.destroy();
+                    return;
                 }
+                res.writeHead(502);
                 res.end();
             });
             // A client that vanishes mid-transfer must tear down the upstream
@@ -407,9 +464,10 @@ function start(log) {
                 // Measured: adding this one header is what makes git work, and
                 // Content-Length: 0 in its place does not.
                 //
-                // The plain-HTTP 407 above needs no equivalent: it goes through
-                // Node's own response framing, which keeps that connection
-                // alive for the retry.
+                // The plain-HTTP 407 above carries the same header for an
+                // unrelated reason, spelled out there: Node frames that response
+                // itself and would keep the connection alive, which is what let
+                // an unauthenticated peer hold a slot indefinitely.
                 closeWith(
                     clientSocket,
                     `HTTP/1.1 407 Proxy Authentication Required\r\n` +
