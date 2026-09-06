@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.3.0] - 2026-09-06
+
 ### Added
 
 - A device folder holding one `.code-workspace` now opens as that workspace. Android's picker can only hand back a folder, so a workspace on device storage was reachable only by finding the file in the explorer and opening it from there.
@@ -20,6 +22,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- A device folder the app could not fully read is no longer deleted from your device with everything in it. Where a folder refuses to list one of its subdirectories, the editor shows that subdirectory empty; deleting it from the terminal deleted the real one on the device, taking every file the app had never managed to read.
+- A sign-in can only be completed by the page the editor opened for it. Any app on the device, and any page in any browser, could answer a sign-in that was in flight: the app accepted a callback naming a sign-in it had started, and what named one was a number counted from one. A forged answer reached the extension that was signing you in and took the real answer with it, so the sign-in hung. Each sign-in now carries a secret only the editor's own page is given.
+- A certificate authority you turn off in the device's trusted credentials is no longer trusted in the terminal. `git`, `python`, `pip` and `curl` went on accepting certificates issued under a root the rest of the phone had stopped accepting, because the bundle was built from the certificate files on the device rather than from the list the system actually trusts.
+- A request through the app's proxy that a site answers by switching protocols fails instead of hanging for ever. Nothing was written back and nothing timed out, so whatever made the request waited with no answer and no error, holding a connection open at each end.
+- A header carrying a byte outside plain ASCII reaches the site unchanged over a websocket. It was re-encoded on the way out, so a cookie or a signed value could arrive altered and the connection was refused with nothing to say a proxy had touched it.
+- A toolchain the Play Store refuses to send now says so and moves on. The refusal was never reported, so the row sat on its last message for the rest of the session and every toolchain queued behind it was never even asked for.
+- Stop really stops the server when it is pressed while the app is taking over one that was already running. The server was left running with nothing tracking it, and nothing afterwards could reach it.
+- An editor that cannot start because the system refused the app its foreground service now offers the Retry page, instead of a loading screen that never changes and a launcher icon that does nothing.
+- VSCodroid's own extensions come back if an older version let you uninstall one. The device folder picker, the toolchain screen and the editor defaults the app contributes all travel with those extensions, and once one was removed nothing put it back.
 - **Serve on Network** finds a dev server bound to the phone's own address. A server started as `vite --host 192.168.1.50` was reported as not running at all, in the list and when the port was typed in, although it was already answering other devices.
 - Python reaches HTTPS sites. The bundled interpreter loaded no certificates at all, so anything relying on OpenSSL's default trust failed to verify every site it tried: `ssl`, `urllib` and the scripts you write yourself. `pip` and `requests` were unaffected, each verifying against a certificate bundle vendored inside it. A certificate authority you installed on the device also reaches `pip` now, so a private package index behind one works.
 - Holding Ctrl or Alt on the key row and typing a capital letter sends the chord you asked for. The capital lost its Shift on the way, so Ctrl+Shift+P opened Quick Open instead of the Command Palette, and every other Ctrl+Shift shortcut reached the wrong command.
@@ -37,7 +48,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The phone screen keeps more of itself for the editor: breadcrumbs, sticky scroll and the layout buttons are off by default, and the tabs, status bar, side bar headings and file lists are a size a phone can read. All of them can be turned back on in Settings.
 - Extensions that fetch data over the network work again, and those requests are no longer sent in the clear. Every request inside the app passes through a local proxy that ignored the address's scheme, so an `https` address went out as plain `http` on port 80: servers answered with a redirect back to the secure address instead of the data, and whatever the request carried travelled unencrypted.
 - A file you create in a device folder no longer multiplies. Where the folder's provider stored it under a different name, because of a character it will not keep or a name already taken, the app's own copy kept the name it had asked for. Every later open then fetched the stored name as a second file and uploaded the original again as a third, one more on every open. The app's copy now takes the name the folder actually gave it.
-- `python3 -m venv` works when it is run from inside an environment that is already active. It stopped part-way, while installing pip, and reported nothing but a child process's exit status, leaving an environment with no pip in it. The note venv writes of where Python lives pointed at the active environment, which holds no standard library of its own.
+- `python3 -m venv` creates an environment with pip in it. The wheel pip is installed from was not bundled at all, so every environment stopped part-way and reported nothing but a child process's exit status. A second fault hit environments created from inside an already-active one: the note venv writes of where Python lives pointed at the active environment, which holds no standard library of its own.
 - The keyboard tips no longer offer a pair of shortcuts for changing font size that this build does not have, and name the two settings that do it instead.
 - Running and debugging a file works on the device. A launch configuration started a session, put the debug toolbar up and then never ran the program, with nothing on screen to say why. The editor built its terminal command around `/usr/bin/env`, which Android does not have, and behind that the debug adapter started its own helper processes with an environment too small for this device's Node to start under.
 - A file you changed on the device is no longer overwritten when the app reopens the folder after an upload was cut short. The app took its own record of the unfinished write as proof that nothing else had touched the file, and replaced it. The check now reads both copies rather than trusting the size the folder provider reports, so a document the interrupted write had emptied is recognised instead of leaving a spare copy of the file in your folder.
@@ -941,7 +952,8 @@ This release represents the cumulative work across milestones M0 through M5, bri
 - Health check polling for server readiness
 - Android intent handling for "Open with VSCodroid"
 
-[Unreleased]: https://github.com/rmyndharis/VSCodroid/compare/v1.2.0...HEAD
+[Unreleased]: https://github.com/rmyndharis/VSCodroid/compare/v1.3.0...HEAD
+[1.3.0]: https://github.com/rmyndharis/VSCodroid/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/rmyndharis/VSCodroid/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/rmyndharis/VSCodroid/compare/v1.0.0...v1.1.0
 [1.0.0]: https://github.com/rmyndharis/VSCodroid/compare/v0.2.9...v1.0.0
