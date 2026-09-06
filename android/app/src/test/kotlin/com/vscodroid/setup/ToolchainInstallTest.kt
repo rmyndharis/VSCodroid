@@ -4,8 +4,11 @@ import android.content.Context
 import android.content.pm.InstallSourceInfo
 import android.content.pm.PackageManager
 import android.os.StatFs
+import com.google.android.gms.tasks.OnFailureListener
+import com.google.android.gms.tasks.Task
 import com.google.android.play.core.assetpacks.AssetPackManager
 import com.google.android.play.core.assetpacks.AssetPackManagerFactory
+import com.google.android.play.core.assetpacks.AssetPackStates
 import com.google.android.play.core.assetpacks.model.AssetPackStatus
 import com.vscodroid.util.Logger
 import io.mockk.Runs
@@ -171,6 +174,37 @@ class ToolchainInstallTest {
         // The HTTP branch reports PENDING synchronously, before it queues anything,
         // so an empty list here is what distinguishes the two routes.
         assertEquals(emptyList<Int>(), statuses(), "the HTTP branch ran on a Play install")
+    }
+
+    /**
+     * A fetch Play refuses outright delivers no `AssetPackState` at all, so the
+     * state listener never runs for this pack. The Task was the only place that
+     * refusal was ever reported, and it was discarded: the card sat on its last
+     * status for the rest of the session, every pack queued behind it was never
+     * requested, and nothing reached the log.
+     *
+     * NEGATIVE CONTROL: drop the `addOnFailureListener` from the fetch in
+     * `ToolchainManager.install` and this fails with an empty status list.
+     */
+    @Test
+    fun `a fetch Play refuses is reported instead of leaving the queue stalled`() {
+        installedBy("com.android.vending")
+        val refusal = IllegalStateException("Play refused this fetch")
+        every { packManager.fetch(listOf("toolchain_java")) } returns mockk(relaxed = true) {
+            every { addOnFailureListener(any<OnFailureListener>()) } answers {
+                firstArg<OnFailureListener>().onFailure(refusal)
+                self as Task<AssetPackStates>
+            }
+        }
+
+        manager().install("toolchain_java")
+
+        assertEquals(
+            listOf(AssetPackStatus.FAILED),
+            statuses(),
+            "a fetch Play refused was never reported, so the toolchain screen keeps " +
+                "its last status and the queue behind it never moves",
+        )
     }
 
     /**

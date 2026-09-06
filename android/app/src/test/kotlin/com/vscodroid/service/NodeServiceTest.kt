@@ -60,18 +60,84 @@ class RestartBudgetTest {
     }
 
     /**
-     * The first readiness of a run, where nothing has answered yet.
+     * A run whose server never became ready, where the question is asked anyway.
      *
-     * The parked value is far below zero rather than zero because the clock is
-     * time since boot: an app started seconds after boot would otherwise be
-     * compared against a number smaller than the window and refuse to refill,
-     * spending a budget it had never used.
+     * The parked value is read at exactly one place, the death of a server, and
+     * it has to answer "not long enough" there. Parked in the past instead, which
+     * is where it sat while readiness rather than death asked the question, every
+     * crash of a server that never answered at all would hand out a fresh budget:
+     * the five attempts could never be spent and the terminal state would be
+     * unreachable for precisely the run that cannot get a server up.
      */
     @Test
-    fun `the first readiness of a run always counts as recovery`() {
+    fun `a server that was never ready is not credited with having lasted`() {
+        assertFalse(
+            readinessIsRecovery(now = 5_000L, lastReadyAt = NEVER_READY_AT),
+            "a run that never had a ready server refilled the retry budget on a crash",
+        )
+        // And the halving is the part that keeps that true for a real clock
+        // reading rather than only for a small one. `elapsedRealtime` counts from
+        // boot, so the value has to stay above anything a device can reach while
+        // leaving the subtraction room not to overflow; a hundred years of uptime
+        // is the far side of that.
+        assertFalse(
+            readinessIsRecovery(now = 100L * 365 * 24 * 60 * 60 * 1000, lastReadyAt = NEVER_READY_AT),
+            "the parked value is reachable by a clock that has been running a long time",
+        )
+    }
+
+    /**
+     * The instants the service actually produces, rather than two chosen numbers.
+     *
+     * The predicate above is fed by [NodeService] and the numbers it is fed are
+     * the whole defect. Judged at the next readiness, the difference is the dead
+     * server's uptime PLUS everything the service does between the two: the
+     * backoff, which reaches [restartBackoffMs] of the last attempt, and the
+     * start that follows it. On a phone whose memory killer takes the server
+     * twenty seconds after each start, those gaps grow to sixty seconds by the
+     * fifth attempt and the budget refills before it can be spent, so the Retry
+     * page is never offered and the workbench reloads every half minute for as
+     * long as the app is open.
+     *
+     * Judged at the death, which is what [ReadinessRefillSiteTest] pins, none of
+     * that waiting is in the measurement and every one of these attempts spends
+     * an attempt.
+     */
+    @Test
+    fun `the instants a crash loop really produces never refill the budget`() {
+        val uptimeMs = 20_000L
+        // What the service spends getting the next server up: the poll allows
+        // READY_POLL_TIMEOUT_MS and a loaded device uses a good part of it.
+        val startLatencyMs = 8_000L
+
+        var readyAt = 0L
+        for (attempt in 1..MAX_RESTARTS) {
+            assertFalse(
+                readinessIsRecovery(now = readyAt + uptimeMs, lastReadyAt = readyAt),
+                "attempt $attempt: a server that lasted ${uptimeMs}ms was credited with " +
+                    "recovering, so the budget can never be spent",
+            )
+            readyAt = readyAt + uptimeMs + restartBackoffMs(attempt) + startLatencyMs
+        }
+
+        // The same run measured the wrong way, which is the reason this test
+        // names real instants instead of a pair of literals: the last of those
+        // gaps clears the window on its own, with forty of its sixty seconds
+        // spent on a server that did not exist.
+        val gapAcrossTheLastRestart = uptimeMs + restartBackoffMs(MAX_RESTARTS) + startLatencyMs
         assertTrue(
-            readinessIsRecovery(now = 5_000L, lastReadyAt = Long.MIN_VALUE / 2),
-            "the first ready server of a run did not refill the retry budget",
+            readinessIsRecovery(now = gapAcrossTheLastRestart, lastReadyAt = 0L),
+            "the gap between two readiness announcements no longer reaches the window, so " +
+                "this case has stopped telling the two quantities apart",
+        )
+
+        // And the contrast, on the same clock: a server that held for five
+        // minutes and then died has recovered from whatever came before it, and
+        // its death is the moment that says so.
+        val heldFor = 5 * 60_000L
+        assertTrue(
+            readinessIsRecovery(now = readyAt + heldFor, lastReadyAt = readyAt),
+            "a server that lasted ${heldFor}ms was not credited with recovering",
         )
     }
 
@@ -955,9 +1021,12 @@ class NoticeGateKeyTest {
     fun `an episode ends everywhere the retry budget is refreshed`() {
         // The key substitution, pinned as the invariant that makes the key right
         // rather than as the name of a field. Every point that hands out a fresh
-        // budget is a point a fresh failure deserves to be heard: the server came
-        // up, the user stopped it, or the budget ran out. Keying on runId missed
-        // the first of those, because a run does not end when a server comes up.
+        // budget is a point a fresh failure deserves to be heard: a server that
+        // had lasted died, the user stopped it, or the budget ran out. Keying on
+        // runId missed the deaths, because a run does not end when its server
+        // does. Readiness clears the throttle without the budget, which is the
+        // one direction this invariant does not cover and
+        // [ReadinessRefillSiteTest] does.
         val lines = codeLines()
 
         val budget = lines.filter { (_, l) ->
@@ -972,8 +1041,8 @@ class NoticeGateKeyTest {
         val ends = lines.filter { (_, l) -> l.contains("endFailureEpisode()") }
         assertEquals(
             4, ends.size,
-            "expected the declaration plus its three callers -- readiness, stop, and " +
-                "the terminal state:\n" + report(ends),
+            "expected the declaration plus its three callers -- the death of a server " +
+                "that lasted, stop, and the terminal state:\n" + report(ends),
         )
     }
 
@@ -987,6 +1056,124 @@ class NoticeGateKeyTest {
                 "failed, a process that died before answering, and one that could never " +
                 "bind. A failure that speaks on every attempt is the defect, and so is " +
                 "one that never speaks:\n" + report(reported),
+        )
+    }
+}
+
+/**
+ * That the retry budget is refilled where a server's uptime is knowable.
+ *
+ * How long a server lasted is a quantity at exactly one instant: the one it dies
+ * at. Asked on the readiness that follows instead, what gets measured is that
+ * uptime plus everything the service did in between, the backoff and then the
+ * start poll, which on the last attempt is thirty-two seconds and up to thirty
+ * more with no server in them at all. A phone whose memory killer takes the
+ * server twenty seconds after each start therefore cleared the count on the
+ * fifth attempt, [MAX_RESTARTS] was never reached, the terminal state was
+ * unreachable, the Retry page was never offered, and the workbench reloaded
+ * every half minute for as long as the app stayed open.
+ *
+ * The arithmetic is in [RestartBudgetTest] and the two are only worth anything
+ * together: the predicate is right for either set of instants, and which set it
+ * is handed is invisible from inside it.
+ *
+ * Source-reading, and the weaker layer for the reason its neighbours give:
+ * `announceReady` and `handleServerCrash` are private on a `Service`, and this
+ * suite can build neither a `Service` nor its main dispatcher.
+ */
+class ReadinessRefillSiteTest {
+
+    private val nodeService = File("src/main/kotlin/com/vscodroid/service/NodeService.kt")
+
+    private fun codeLines(): List<IndexedValue<String>> {
+        check(nodeService.isFile) {
+            "NodeService.kt not found at ${nodeService.absolutePath} -- this test would " +
+                "otherwise pass by looking at nothing"
+        }
+        return nodeService.readLines().withIndex().filterNot { (_, line) ->
+            val t = line.trimStart()
+            t.startsWith("//") || t.startsWith("*") || t.startsWith("/*")
+        }
+    }
+
+    private fun report(hits: List<IndexedValue<String>>) =
+        hits.joinToString("\n") { (i, l) -> "  NodeService.kt:${i + 1}: ${l.trim()}" }
+
+    /**
+     * One function's body, located by brace depth from its declaration, because
+     * the name of the enclosing function is on none of the lines this looks for.
+     *
+     * Depth is counted over the comment-free lines for the reason [codeLines]
+     * exists: each of these two functions is named in the prose around the other,
+     * so a scan over raw text would read a paragraph as a call and a brace inside
+     * a comment would widen the window without bounding anything.
+     */
+    private fun bodyOf(declaration: String): List<IndexedValue<String>> {
+        val lines = codeLines()
+        val start = lines.indexOfFirst { (_, l) -> l.contains(declaration) }
+        assertTrue(start >= 0, "`$declaration` is gone; this guard names a method")
+        val body = mutableListOf<IndexedValue<String>>()
+        var depth = 0
+        var entered = false
+        for (line in lines.drop(start)) {
+            depth += line.value.count { it == '{' } - line.value.count { it == '}' }
+            if (depth > 0) entered = true
+            body += line
+            if (entered && depth <= 0) break
+        }
+        return body
+    }
+
+    @Test
+    fun `the budget is refilled at the death and not at the readiness`() {
+        val crash = bodyOf("private suspend fun handleServerCrash(")
+        assertTrue(
+            crash.any { (_, l) -> l.contains("readinessIsRecovery(") },
+            "nothing in handleServerCrash judges how long the dead server had been " +
+                "ready, so a server that ran for hours spends an attempt of the same " +
+                "budget as one that ran for seconds",
+        )
+
+        val refill = crash.indexOfFirst { (_, l) -> l.contains("endFailureEpisode()") }
+        assertTrue(refill >= 0, "the crash path judges an uptime and then refills nothing")
+        // And before the retry, which is the call that reads the count: a refill
+        // on the far side of it lands on a decision already made, so the death
+        // that earned the fresh budget still spends the last attempt of the old
+        // one and the give-up it triggers is a whole episode early.
+        val retry = crash.indexOfFirst { (_, l) -> l.contains("retryOrGiveUp()") }
+        assertTrue(retry >= 0, "handleServerCrash no longer hands the death to retryOrGiveUp")
+        assertTrue(
+            refill < retry,
+            "the budget is refilled after the retry decision, which is too late to " +
+                "affect it:\n" + report(crash.slice(minOf(retry, refill)..maxOf(retry, refill))),
+        )
+
+        val ready = bodyOf("private fun announceReady()")
+        val judged = ready.filter { (_, l) ->
+            l.contains("readinessIsRecovery(") || l.contains("endFailureEpisode()")
+        }
+        assertTrue(
+            judged.isEmpty(),
+            "announceReady judges recovery again, and the only interval it can measure " +
+                "is the gap between two announcements, which is the previous server's " +
+                "uptime plus the backoff and the start poll that followed its death:\n" +
+                report(judged),
+        )
+    }
+
+    @Test
+    fun `a readiness still ends the message episode`() {
+        // The half that must not move with the budget. The throttle exists so
+        // that one failure episode produces one toast rather than six, and a
+        // server coming up ends that episode whatever its uptime turns out to be.
+        // Left set until some later death happens to refill the budget, the first
+        // failure of every subsequent episode in the same run is silent, and a
+        // run can last days.
+        val ready = bodyOf("private fun announceReady()")
+        assertTrue(
+            ready.any { (_, l) -> l.contains("failureRaised = false") },
+            "announceReady no longer clears the failure throttle, so the next failure " +
+                "of this run reaches nobody",
         )
     }
 }
@@ -1548,6 +1735,79 @@ class LivenessQuestionCallSiteTest {
             codeLines().any { (_, l) -> l.contains("processManager.heapOverrideIgnored()") },
             "and the card must derive it rather than remember it, or a value the user " +
                 "has since repaired keeps being reported as ignored",
+        )
+    }
+}
+
+/**
+ * That a refused foreground promotion is said out loud somewhere.
+ *
+ * `promoteToForeground` catches the throw and answers false, so
+ * `startForegroundService` at the activity's call site never throws and the
+ * catch around it never runs. Nothing was promoted either, so there is no
+ * notification and therefore no Stop control. Left silent, the activity's bind
+ * reads no notice, port 0 and not ready, decides to wait, and the loading page
+ * stays up with nothing on it and nothing to clear it: the activity is
+ * `singleTask`, so a launcher tap reaches `onNewIntent`, which only relays a
+ * sign-in callback.
+ *
+ * A source scan for the same reason [ReadinessRefillSiteTest] is one: the arm
+ * lives in `onStartCommand` on a `Service`, and both things it has to do are
+ * calls rather than values a unit test can read back.
+ */
+class StandDownIsAnnouncedTest {
+
+    private val nodeService = File("src/main/kotlin/com/vscodroid/service/NodeService.kt")
+
+    /**
+     * The STAND_DOWN arm, from its label to the `}` that closes it, over lines
+     * with the comments taken out. The prose inside this arm names both calls it
+     * is required to make, so a raw scan would find them in the explanation and
+     * pass over an arm that makes neither.
+     */
+    private fun standDownArm(): List<String> {
+        check(nodeService.isFile) {
+            "NodeService.kt not found at ${nodeService.absolutePath} -- this test would " +
+                "otherwise pass by looking at nothing"
+        }
+        val lines = nodeService.readLines().filterNot { line ->
+            val t = line.trimStart()
+            t.startsWith("//") || t.startsWith("*") || t.startsWith("/*")
+        }
+        val start = lines.indexOfFirst { it.contains("StartCommand.STAND_DOWN ->") }
+        assertTrue(start >= 0, "the STAND_DOWN arm is gone; this guard names it")
+        val arm = mutableListOf<String>()
+        var depth = 0
+        var entered = false
+        for (line in lines.drop(start)) {
+            depth += line.count { it == '{' } - line.count { it == '}' }
+            if (depth > 0) entered = true
+            arm += line
+            if (entered && depth <= 0) break
+        }
+        return arm
+    }
+
+    @Test
+    fun `a refused promotion records a terminal notice`() {
+        val arm = standDownArm()
+        assertTrue(
+            arm.any { it.contains("reportStartupNotice(") && it.contains("terminal = true") },
+            "standing down writes no terminal notice, so an activity that binds after it " +
+                "reads nothing, decides to wait, and leaves the user on the loading page " +
+                "with no control and no way back:\n" + arm.joinToString("\n"),
+        )
+    }
+
+    @Test
+    fun `a refused promotion tells a client that is already bound`() {
+        val arm = standDownArm()
+        assertTrue(
+            arm.any { it.contains("onServerGaveUp") },
+            "standing down raises no callback, so a client already bound is never told. " +
+                "The notice alone does not cover it: lastStartupNotice is read inside " +
+                "setupServiceCallbacks, which runs once per bind, and the retry path " +
+                "starts the service again without rebinding:\n" + arm.joinToString("\n"),
         )
     }
 }

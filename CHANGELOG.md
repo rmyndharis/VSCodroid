@@ -21,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - **Serve on Network** finds a dev server bound to the phone's own address. A server started as `vite --host 192.168.1.50` was reported as not running at all, in the list and when the port was typed in, although it was already answering other devices.
-- Python reaches HTTPS sites. The bundled interpreter loaded no certificates at all, so any script using `urllib`, `requests` or `ssl` failed to verify every site it tried. A certificate authority you installed on the device also reaches `pip` now, so a private package index behind one works.
+- Python reaches HTTPS sites. The bundled interpreter loaded no certificates at all, so anything relying on OpenSSL's default trust failed to verify every site it tried: `ssl`, `urllib` and the scripts you write yourself. `pip` and `requests` were unaffected, each verifying against a certificate bundle vendored inside it. A certificate authority you installed on the device also reaches `pip` now, so a private package index behind one works.
 - Holding Ctrl or Alt on the key row and typing a capital letter sends the chord you asked for. The capital lost its Shift on the way, so Ctrl+Shift+P opened Quick Open instead of the Command Palette, and every other Ctrl+Shift shortcut reached the wrong command.
 - The alternates that appear when you hold a key on the key row go away with it. Turning the phone over left them floating over the keyboard, and letting the keyboard go left them over the editor, until you tapped somewhere else.
 - A sign-in you finish while the editor is restarting now says so instead of hanging. The callback was handed to the loading page, which cannot receive one.

@@ -162,13 +162,17 @@ class SafUnfetchedDocumentTest {
      * under it, with `root` as the tree's own. Every file reads as the same short
      * contents, and only ones under [SafSyncEngine.MAX_FILE_SIZE] are ever read.
      */
-    private fun deviceTree(tree: Map<String, List<Entry>>) {
+    private fun deviceTree(tree: Map<String, List<Entry>>, unenumerable: Set<String> = emptySet()) {
         every { DocumentsContract.buildChildDocumentsUriUsingTree(any(), any()) } answers {
             val parent = secondArg<String>()
             mockk<Uri>(relaxed = true).also { every { it.toString() } returns "children:$parent" }
         }
         every { resolver.query(any(), any(), any(), any(), any()) } answers {
             val parent = firstArg<Uri>().toString().removePrefix("children:")
+            // A parent the provider answers for and then will not list: a cloud or SMB
+            // provider momentarily offline, or an MTP bridge hiccup. The walk carries
+            // on from it, which is what leaves the directory in the mirror empty.
+            if (parent in unenumerable) throw IllegalStateException("cannot list $parent")
             cursorOver(tree[parent].orEmpty())
         }
         every { resolver.openInputStream(any()) } answers {
@@ -274,6 +278,38 @@ class SafUnfetchedDocumentTest {
 
         verify(exactly = 1) { DocumentsContract.deleteDocument(any(), uris.getValue("doc:docs")) }
         assertTrue(kept.isEmpty(), "a delete that went through was announced as kept: $kept")
+    }
+
+    /**
+     * The same loss as a skipped directory, with no name to recognise it by. The
+     * provider answered for `docs` itself and then refused to list what is under it,
+     * so the walk carried on and the mirror holds an empty `docs` while the device
+     * holds its documents. A skipped name is filtered out by [SafSyncEngine.shouldWriteBack]
+     * before the guard ever runs; this one has an ordinary name and reaches it, so the
+     * guard is the only thing standing between `rm -r docs` and the device's subtree.
+     */
+    @Test
+    fun `a directory whose enumeration failed is kept on the device`() {
+        val kept = mutableListOf<String>()
+        engine.onKeptOnDevice = { file, _ -> kept.add(file.name) }
+        deviceTree(
+            mapOf(
+                "root" to listOf(Entry("docs", isDirectory = true)),
+                "doc:docs" to listOf(Entry("notes.md")),
+            ),
+            unenumerable = setOf("doc:docs"),
+        )
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+
+        deleteDirectory("docs")
+
+        verify(exactly = 0) { DocumentsContract.deleteDocument(any(), any()) }
+        assertEquals(
+            listOf("docs"),
+            kept,
+            "a directory the sync could not read was deleted from the device, taking " +
+                "documents the mirror never held",
+        )
     }
 
     /** The unread document sits two levels down; the ancestor is still what holds it. */
@@ -567,6 +603,60 @@ class SafUnfetchedDocumentTest {
             DocumentsContract.deleteDocument(any(), uris.getValue("doc:notes.md"))
         }
         assertTrue(kept.isEmpty(), "notes.md was kept for a document named notes.md.bak: $kept")
+    }
+
+    /**
+     * The device folder was emptied from another app, so the enumeration comes back
+     * with nothing and [SafSyncEngine.reconcileDeletions] leaves the mirror standing.
+     * Deleting one of those entries in the editor resolves to no document, which is not
+     * a refusal: nothing on the device declined anything, and the notice's two clauses
+     * are both false. It would tell the user the file comes back on the next open, when
+     * the next enumeration is still empty, and send them to a file manager to delete a
+     * file that is not there.
+     */
+    @Test
+    fun `deleting a mirror entry the device never held is not announced as a refusal`() {
+        val refused = mutableListOf<String>()
+        engine.onDeleteRefused = { refused.add(it.name) }
+        deviceTree(mapOf("root" to emptyList()))
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+
+        File(mirror, "notes.md").writeText("only ever in the mirror")
+        deliver(FileObserver.DELETE, "notes.md")
+
+        assertTrue(
+            refused.isEmpty(),
+            "a deletion the device had nothing to refuse was reported as refused, with " +
+                "instructions to go and delete a file that is not there: $refused",
+        )
+    }
+
+    /**
+     * The control for the case above, and the guarantee it must not cost. A provider
+     * that cannot answer at all is not a provider that answered "gone": the document
+     * may well still be there, so the warning still has to be said.
+     */
+    @Test
+    fun `a delete is still announced when the device cannot say whether it holds the file`() {
+        val refused = mutableListOf<String>()
+        engine.onDeleteRefused = { refused.add(it.name) }
+        // Nothing is walked, so nothing is cached and the delete has to resolve the
+        // path live. The folder then stops answering, so the resolution comes back
+        // empty for a reason that is not absence.
+        deviceTree(mapOf("root" to emptyList()))
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+
+        File(mirror, "notes.md").writeText("saved in the editor")
+        every { resolver.query(any(), any(), any(), any(), any()) } throws
+            IllegalStateException("the provider stopped answering")
+        deliver(FileObserver.DELETE, "notes.md")
+
+        assertEquals(
+            listOf("notes.md"),
+            refused,
+            "a delete the device may still be holding went unannounced, so the file " +
+                "stays on the device with nothing on screen saying so",
+        )
     }
 
     /**

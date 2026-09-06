@@ -97,10 +97,20 @@ object EditorLocale {
             // a Traditional editor, legibly and with nothing on screen to
             // explain it. The mirror case reads correctly by accident, since
             // `zh-Hant-*` is caught by the script before the region is consulted.
+            //
+            // The region is the subtag directly after the language and never the
+            // last one, because a tag is not always two subtags long: Android
+            // carries a Regional preference as a `-u-` Unicode extension on the
+            // default locale, so a Taiwanese phone reports `zh-TW-u-fw-mon` and
+            // reading the last subtag found "mon" there, resolved Simplified and
+            // handed that user an entirely Simplified workbench, extension
+            // manifests included. Taking the first subtag of the rest is exact
+            // for `zh-CN` and `zh-TW`, empty for a bare `zh`, and indifferent to
+            // however many extension, variant or private-use subtags trail behind.
             val traditional = when {
                 rest.startsWith("hans") -> false
                 rest.startsWith("hant") -> true
-                else -> rest.substringAfterLast('-') in TRADITIONAL_CHINESE
+                else -> rest.substringBefore('-') in TRADITIONAL_CHINESE
             }
             val bundle = if (traditional) "zh-hant" else "zh-hans"
             return bundle.takeIf { it in available }

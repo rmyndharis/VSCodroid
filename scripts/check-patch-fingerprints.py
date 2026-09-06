@@ -133,10 +133,19 @@ def introduced_by(pattern, patch_path):
     sufficient -- the same text could coincidentally exist elsewhere in the tree --
     so it catches the mistake actually made (picking a pattern from surrounding
     code) rather than proving the pattern unique.
+
+    The scan reads the diff, not the file. A prose header that quotes the line it
+    is explaining, which is the ordinary way to explain one, puts that line above
+    the diff still carrying its leading `+`, and reading the whole file let it
+    answer for the patch: the fingerprint would then be proven against text git
+    apply never looks at, which is the one thing this exists to refuse. A patch
+    carrying no diff at all is already refused by patch_hashes, and by this
+    returning False for every non-empty pattern, so the empty fallback cannot
+    turn a broken split into a pass.
     """
     added = "".join(
         line[1:]
-        for line in patch_path.read_text(errors="ignore").splitlines()
+        for line in (diff_body(patch_path) or "").splitlines()
         if line.startswith("+") and not line.startswith("+++")
     )
     return squashed(pattern) in squashed(added)
@@ -394,6 +403,31 @@ def self_test():
     with tempfile.TemporaryDirectory() as tmp:
         tree = pathlib.Path(tmp) / "tree"
         tree.mkdir()
+
+        # A header that quotes the line its diff adds, which is how a header
+        # explains what a patch does. The quoted line starts with `+` and is in
+        # no hunk, so a scan reading the whole patch file accepts it as
+        # introduced and the fingerprint ends up proven against text git apply
+        # never reads. The second call is the negative control: a scan that had
+        # stopped finding anything at all would satisfy the first one alone.
+        quoting = pathlib.Path(tmp) / "0000-header-quotes-its-own-diff.patch"
+        quoting.write_text(
+            "Subject: [PATCH] self-test\n\n"
+            "The line it adds is:\n\n"
+            "+only-in-the-prose\n\n"
+            "diff --git a/self-test b/self-test\n"
+            "--- a/self-test\n+++ b/self-test\n"
+            "@@ -1 +1 @@\n-nothing\n+only-in-the-diff\n"
+        )
+        if (introduced_by("only-in-the-prose", quoting)
+                or not introduced_by("only-in-the-diff", quoting)):
+            print("  FAIL   self-test: a fingerprint is provable against the prose "
+                  "above a diff, so introduced_by is reading the patch file rather "
+                  "than the diff in it")
+            return 1
+        print("  ok     self-test: a pattern that appears only in a patch's prose "
+              "header does not count as introduced, and one in its diff does")
+
         for stray in strays + (None,):
             src = pathlib.Path(tmp) / ("stray" if stray else "clean")
             src.mkdir()

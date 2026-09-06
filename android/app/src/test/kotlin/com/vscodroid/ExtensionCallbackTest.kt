@@ -1018,16 +1018,26 @@ class NavigationTokenLoggingTest {
         //
         // What still has to be proven is that `leaks` answering empty means
         // "nothing logs one" rather than "the reader can no longer see one". So
-        // the control moves to the reader: the names the workbench URL flows
-        // into must still be recognised.
+        // the control moves to the reader: the name the workbench URL flows into
+        // must still be recognised.
+        //
+        // Named, not counted. `taintedNames` carries the device-folder seed as
+        // well, and four names in this file are written with the type `Uri`
+        // (`syncingFolder`, `destination`, `uri`, `failed`), so the set is
+        // non-empty with every token seed deleted: an `isNotEmpty` control
+        // reports a reader that has gone entirely blind to the token as healthy.
+        // Asking for the one name this file binds the tokened URL to is what
+        // makes the token seeds answer for themselves.
         val tainted = LogTaint.taintedNames(source())
 
         assertTrue(
-            tainted.isNotEmpty(),
-            "LogTaint no longer recognises any token-bearing name in MainActivity, so " +
-                "the case above is passing by looking at nothing. Either the seeds stopped " +
-                "matching where the URL is built, or the declaration reader broke: check " +
-                "`workbenchUrl(` and `getConnectionToken(` against URI_NAME's patterns",
+            "url" in tainted,
+            "LogTaint no longer recognises `url`, which is what MainActivity binds the " +
+                "tokened address to in `val url = workbenchUrl(port, folderPath, token)`, " +
+                "so the case above is passing by looking at nothing. Either the seeds " +
+                "stopped matching where the URL is built, or the declaration reader broke: " +
+                "check `workbenchUrl(` and `getConnectionToken(` against that line. " +
+                "Names seen: $tainted",
         )
     }
 

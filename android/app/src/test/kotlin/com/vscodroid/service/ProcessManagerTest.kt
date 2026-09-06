@@ -2367,6 +2367,54 @@ class AdoptionTest {
     }
 
     @Test
+    fun `a stop that lands while the port is being adopted ends the server instead`() {
+        // The counterpart of `a stop that lands while the server is spawning takes
+        // the process with it`, on the branch that has no Process for the stop to
+        // find, and the interleaving is not an exotic one. With the activity gone
+        // nothing is bound, so the service keeps serving; the server crashes,
+        // NodeService restarts it on Dispatchers.IO, an orphan of the previous run
+        // still holds the port, and the start parks inside the adoption round trip
+        // for a second of connect plus a second of read while the notification's
+        // Stop action runs stopServer() on the main thread.
+        //
+        // That stop reads `adopted` as false for the whole of the window, so it
+        // reaps nothing and returns; the branch then cleared isShuttingDown and
+        // marked the server adopted milliseconds later, undoing the stop after
+        // stopSelf() had already been called. What the user was left with is the
+        // state adoption exists to end: an untracked editor server holding the port,
+        // and the adoption watch polling it for the life of the process.
+        //
+        // Fired from the serving thread, between the request being read and the
+        // answer being written, so the stop is inside the round trip by
+        // construction rather than by timing.
+        val killed = mutableListOf<Int>()
+        manager.killRecordedProcess = { killed += it }
+        val holder = serving(200)
+        recordEditorServer(pid = 4242, port = holder.port)
+        holder.beforeAnswer = { manager.stopServer() }
+
+        assertFalse(
+            manager.startServer(),
+            "a start that adopted into a stop reported success, so the caller is told " +
+                "the stop left it a server to serve",
+        )
+        assertFalse(
+            manager.isAdopted(),
+            "a stop must not be undone by the adoption it landed inside",
+        )
+        assertTrue(
+            manager.isShuttingDownField,
+            "clearing the flag the stop set makes the next exit read as a clean one, " +
+                "so nothing recovers from it",
+        )
+        assertEquals(
+            listOf(4242), killed,
+            "the stop asked for the server to be gone, and the orphan it could not see " +
+                "is the only thing left holding the port",
+        )
+    }
+
+    @Test
     fun `the first start in a process adopts the server still holding the remembered port`() {
         // The launch adoption exists for, and the one it could not reach. Every
         // case above puts the port into the field by hand, which is what a RESTART

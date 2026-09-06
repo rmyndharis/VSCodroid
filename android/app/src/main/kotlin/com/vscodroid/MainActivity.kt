@@ -32,6 +32,7 @@ import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
 import java.io.File
+import java.security.MessageDigest
 import java.io.OutputStream
 import java.lang.ref.WeakReference
 import java.util.concurrent.CountDownLatch
@@ -886,6 +887,21 @@ class MainActivity : AppCompatActivity() {
             // READ_LOGS on a developer device. No toast either: a message here
             // would be one an outside caller could raise at will.
             Logger.w(tag, "Ignoring a sign-in callback that no sign-in was waiting for")
+            return
+        }
+        // Everything checked so far is guessable from outside. The id is a counter
+        // the workbench starts at one for each page, this filter is exported and
+        // BROWSABLE, and the window below is ten minutes, so proving that this app
+        // armed this id proves nothing about who is answering it.
+        //
+        // The secret the editor server bound into its own callback page this run is
+        // what closes that. It is served from the server's origin, which no other
+        // origin can read, and it is recorded inside the app sandbox. Refused in
+        // the same silence as the branch above and before the window is consulted,
+        // so a forged callback can neither raise a message nor spend the arming the
+        // user's real callback still needs.
+        if (!callbackCarriesOurSecret(uri)) {
+            Logger.w(tag, "Ignoring a sign-in callback that did not come from the editor's own page")
             return
         }
         if (!authCallbackIsExpected(armedAt, SystemClock.elapsedRealtime(), AUTH_TAB_WINDOW_MILLIS)) {
@@ -2940,21 +2956,56 @@ class MainActivity : AppCompatActivity() {
      * because a `beforeunload` only reaches that callback when the workbench has
      * vetoed leaving, and a veto means there is work it cannot yet recover.
      *
-     * A timestamp rather than a flag nobody clears: the callback runs
-     * synchronously inside the load it belongs to, so a few seconds is generous,
-     * and an expiry means a navigation that never happened cannot leave the
-     * answer armed for a page-initiated one minutes later.
+     * Consumed by the first answer it satisfies, not merely aged out. The
+     * callback runs synchronously inside the load [markAppNavigation] precedes
+     * and is raised once for it, so one mark answers for exactly one
+     * `beforeunload`; anything after that is a second navigation and has to
+     * prove itself. The expiry stays as the backstop for a mark whose load
+     * never produced a callback at all, so a navigation that did not happen
+     * cannot leave the answer armed indefinitely.
+     *
+     * Leaving it armed for the whole window was silently answering a
+     * page-initiated veto: the workbench only vetoes when it holds work it
+     * cannot yet recover, so a mark still standing when the user tapped
+     * something the workbench navigates itself discarded whatever had not
+     * reached a backup.
      */
-    @Volatile
-    private var lastAppNavigation = 0L
+    /**
+     * Whether this callback carries the secret `server.js` bound into the editor's
+     * own callback page for this run.
+     *
+     * The file is inside the app sandbox, so its absence means our own binding did
+     * not happen, never that a caller withheld anything; [callbackSecretMatches]
+     * is what turns that into the older, weaker matching rather than into a
+     * refusal of every sign-in.
+     */
+    private fun callbackCarriesOurSecret(uri: Uri): Boolean {
+        val expected = try {
+            val note = File(Environment.getServerDir(this), AUTH_CALLBACK_NONCE_FILE)
+            if (note.isFile) note.readText().trim() else null
+        } catch (e: Exception) {
+            Logger.w(tag, "Could not read the sign-in callback secret: ${e.message}")
+            null
+        }
+        if (expected.isNullOrEmpty()) {
+            Logger.w(
+                tag,
+                "The editor server bound no sign-in secret this run; matching the " +
+                    "callback by request id alone",
+            )
+        }
+        return callbackSecretMatches(callbackNonce(uri.getQueryParameter("data")), expected)
+    }
+
+    private val appNavigation = AppNavigationMark(APP_NAVIGATION_WINDOW_MS)
 
     /** Marks the navigation about to be started as this app's own. */
     private fun markAppNavigation() {
-        lastAppNavigation = SystemClock.elapsedRealtime()
+        appNavigation.mark(SystemClock.elapsedRealtime())
     }
 
     private fun navigationIsOurs(): Boolean =
-        SystemClock.elapsedRealtime() - lastAppNavigation < APP_NAVIGATION_WINDOW_MS
+        appNavigation.consume(SystemClock.elapsedRealtime())
 
     /**
      * The remembered workspace, when reopening it is still the right thing.
@@ -4381,11 +4432,27 @@ class MainActivity : AppCompatActivity() {
          *
          * The `beforeunload` callback runs inside the load it belongs to, so
          * this only has to cover the moment between asking the WebView to go and
-         * the page answering. Generous rather than tight, because being late
-         * here costs one dialog the user did not need, while being early costs
-         * a dialog they did.
+         * the page answering. It is a backstop, not the guard: the mark is
+         * consumed by the answer it satisfies, so the window only ever bounds a
+         * mark whose load produced no callback.
+         *
+         * Tight rather than generous, and the costs are not symmetric. Expiring
+         * too early costs one dialog the user did not need. Staying armed too
+         * long answers a veto the workbench raised because it holds unsaved
+         * work, and that costs the work.
          */
         private const val APP_NAVIGATION_WINDOW_MS = 10_000L
+
+        /**
+         * Where `server.js` records the secret it bound into `callback.html`.
+         *
+         * Beside `editor-server.pid` in the server directory, which is inside the
+         * app sandbox, so nothing else on the device can read it or write it. The
+         * name is shared with `server.js` by convention only; changing it there
+         * without changing it here turns every sign-in back into the matching this
+         * file did before the secret existed.
+         */
+        internal const val AUTH_CALLBACK_NONCE_FILE = "auth-callback.nonce"
 
         /** The preferences file `PortFinder` and `SplashActivity` already use. */
         private const val WORKSPACE_PREFS = "vscodroid"
@@ -4574,6 +4641,50 @@ internal fun callbackRequestId(data: String?): String? {
     } catch (e: JSONException) {
         null
     }
+}
+
+/**
+ * The per-run secret a callback payload carries, if it carries one.
+ *
+ * Written into `callback.html` by `server.js` at every start and read back from
+ * the payload here. Null covers a payload this cannot read, one with no `nonce`,
+ * and one whose `nonce` is not a string, which are the shapes an outside caller
+ * produces and all deserve the same answer.
+ */
+internal fun callbackNonce(data: String?): String? {
+    if (data.isNullOrEmpty()) return null
+    return try {
+        // `opt` and a cast rather than `optString`, which answers for a value
+        // that is not a string by rendering it: a nested object comes back as
+        // its own JSON text, non-empty and therefore a candidate. It could never
+        // match the recorded secret, so nothing turns on it, but this payload is
+        // attacker-shaped by construction and every reading of it here refuses
+        // the shapes it is not for rather than coercing them.
+        (JSONObject(data).opt("nonce") as? String)?.ifEmpty { null }
+    } catch (e: JSONException) {
+        null
+    }
+}
+
+/**
+ * Whether a callback payload proves it came from the editor's own callback page.
+ *
+ * [expected] is what `server.js` recorded for this run, or null when it recorded
+ * nothing. Null means the server could not bind the page, not that a caller
+ * failed a check, so it answers true and leaves the matching where it was before
+ * the binding existed: a server whose page this app cannot rewrite must not cost
+ * the user their ability to sign in at all.
+ *
+ * Compared with [MessageDigest.isEqual] rather than `==`, which is the
+ * comparison this codebase uses for a secret elsewhere and costs nothing here.
+ */
+internal fun callbackSecretMatches(offered: String?, expected: String?): Boolean {
+    if (expected.isNullOrEmpty()) return true
+    if (offered.isNullOrEmpty()) return false
+    return MessageDigest.isEqual(
+        offered.toByteArray(Charsets.UTF_8),
+        expected.toByteArray(Charsets.UTF_8),
+    )
 }
 
 /**
@@ -5252,4 +5363,42 @@ internal fun treeUriLabel(lastPathSegment: String?): String {
     val segment = lastPathSegment.orEmpty()
     val tail = segment.substringAfterLast('/').substringAfterLast(':')
     return tail.ifBlank { segment }
+}
+
+/**
+ * The record of a navigation this app started, good for one answer.
+ *
+ * [VSCodroidWebChromeClient.onJsBeforeUnload] answers a `beforeunload` for the
+ * user only when this says the navigation is the app's own. A `beforeunload`
+ * reaches that callback only when the workbench vetoed leaving, and it vetoes
+ * only while it holds work it has not yet written a backup of, so a wrong "yes"
+ * here throws that work away with nothing on screen.
+ *
+ * One answer per mark, because the callback is raised once for the load
+ * [mark] precedes: a mark left standing for the rest of a window answered for
+ * whatever the page decided to do next, which is the case the veto exists for.
+ * The window survives only as the backstop for a mark whose load never produced
+ * a callback at all.
+ *
+ * Its own class because [MainActivity] cannot be constructed in a unit test,
+ * and a rule whose failure costs unsaved work should not be the one part with
+ * no check on it.
+ */
+internal class AppNavigationMark(private val windowMs: Long) {
+
+    @Volatile
+    private var markedAt = 0L
+
+    /** Says the navigation about to be started is this app's own. */
+    fun mark(now: Long) {
+        markedAt = now
+    }
+
+    /** True at most once per [mark], and only inside the window. */
+    fun consume(now: Long): Boolean {
+        val marked = markedAt
+        if (marked == 0L || now - marked >= windowMs) return false
+        markedAt = 0L
+        return true
+    }
 }

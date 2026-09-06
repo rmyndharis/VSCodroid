@@ -698,6 +698,54 @@ async function main() {
                 `body=${JSON.stringify(truncated.body)}), so a half-downloaded file reads as whole`,
     );
 
+    // --- an origin that switches protocols nobody asked for ---------------
+    // A 101 does not reach the response callback at all. Node routes an upgrade
+    // response to the request's own 'upgrade' event, and when nothing listens
+    // for that it destroys the socket without raising anything: measured on node
+    // v22.23.2 against an origin that answers an ordinary GET with a 101, the
+    // request object gets 'close' and no 'error', so the leg's error handler
+    // never runs either. Both wrong answers are silent, and the one that was
+    // shipped is the quieter: `res` is neither written nor ended, so the client
+    // waits with no status and no error while a socket stays held at each end,
+    // and the setup bound cannot collect them because destroying a socket takes
+    // its timer with it.
+    //
+    // A plain GET on purpose. A client that asks to upgrade is served by the
+    // upgrade leg further down; this is the origin volunteering a switch the
+    // client never requested, which is the case no handler was watching.
+    const switchingOrigin = net.createServer((sock) => {
+        sock.on('error', () => {});
+        sock.once('data', () =>
+            sock.write('HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n'));
+    });
+    const switchingPort = await listen(switchingOrigin);
+    const beforeSwitch = logLines.length;
+    const switched = await Promise.race([
+        proxiedGet(proxyPort, `http://127.0.0.1:${switchingPort}/`, goodCredentials),
+        // The unanswered leg has no bound left on it, so an assertion that
+        // simply waits for the status is a hang for whoever runs this rather
+        // than a failure with a name. Unref'd, so it cannot hold the process
+        // open once the real answer wins the race.
+        new Promise((resolve) => {
+            setTimeout(() => resolve({ status: 'nothing at all within 2000 ms' }), 2000).unref();
+        }),
+    ]);
+    switchingOrigin.close();
+    assert.strictEqual(
+        switched.status, 502,
+        `an origin that answered a plain GET with 101 got the client ${switched.status}; ` +
+            'Node destroys that socket without an error, so the leg answers nothing at all and ' +
+            'both descriptors stay held for as long as the client is willing to wait',
+    );
+    // Silencing it would satisfy the assertion above just as well, and a 502
+    // with nothing behind it is indistinguishable from a refused dial.
+    assert.match(
+        logLines.slice(beforeSwitch).join('\n'),
+        /switched protocols/,
+        `an origin that switched protocols uninvited said nothing: ` +
+            `${logLines.slice(beforeSwitch).join('\n') || '(nothing logged)'}`,
+    );
+
     // --- a rejected CONNECT must not pin a descriptor ---------------------
     // The response text is identical whether or not the socket is released, so
     // this is the one case in the file that has to be asserted by counting.
@@ -766,12 +814,19 @@ async function main() {
     const wsPort = await listen(wsOrigin);
     const upgraded = await new Promise((resolve) => {
         const socket = net.connect(proxyPort, '127.0.0.1', () => {
-            socket.write(
+            // Sent as latin1, which is the encoding a header block is bytes in.
+            // The cookie below carries 0xE9, and with the default encoding this
+            // client would put two bytes on the wire for it, so the byte
+            // assertion after the handshake would be measuring the harness
+            // rather than the proxy.
+            socket.write(Buffer.from(
                 `GET http://127.0.0.1:${wsPort}/socket HTTP/1.1\r\nHost: 127.0.0.1:${wsPort}\r\n` +
                     `Upgrade: websocket\r\nConnection: Upgrade\r\n` +
+                    `Cookie: session=\xe9\r\n` +
                     `Proxy-Connection: Keep-Alive\r\n` +
                     `Proxy-Authorization: Basic ${Buffer.from(goodCredentials).toString('base64')}\r\n\r\n`,
-            );
+                'latin1',
+            ));
         });
         let received = '';
         socket.on('data', (chunk) => {
@@ -809,6 +864,22 @@ async function main() {
             `the upgrade leg forwarded ${header} to the origin: ${JSON.stringify(wsSeen)}`,
         );
     }
+
+    // And the head has to reach the origin as the bytes the client sent. This
+    // leg rebuilds it out of rawHeaders, which Node hands back as latin1: one
+    // char per byte, so 0xE9 is U+00E9. Written back with the default encoding
+    // that char becomes the two bytes 0xC3 0xA9, and a cookie, a
+    // Sec-WebSocket-Protocol or any signed value carrying a byte above 0x7F
+    // arrives altered. The handshake is then rejected by the origin with
+    // nothing anywhere naming a proxy. Asserted at the byte because both
+    // spellings print identically, and read back through latin1 for the same
+    // reason it is written that way.
+    assert.strictEqual(
+        Buffer.from(wsSeen.cookie || '', 'latin1').toString('hex'),
+        Buffer.from('session=\xe9', 'latin1').toString('hex'),
+        `the upgrade leg re-encoded the request head: the origin read Cookie as ` +
+            `${JSON.stringify(Buffer.from(wsSeen.cookie || '', 'latin1').toString('hex'))}`,
+    );
 
     // And the credential still stops at the proxy on this leg too.
     const anonymousUpgrade = await rawExchange(

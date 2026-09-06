@@ -24,29 +24,40 @@ import java.security.cert.X509Certificate
 import java.util.Base64
 
 /**
- * Pins what [FirstRunSetup.setupGitCaBundle] puts in git's certificate bundle,
- * and, more sharply, when it agrees to look again.
+ * Pins what [FirstRunSetup.setupGitCaBundle] puts in the terminal's certificate
+ * bundle, and, more sharply, when it agrees to look again.
  *
- * The bundle used to be system roots only, rebuilt whenever the system store's
- * directory was newer than the file. Folding in the CAs the device owner
- * installed for themselves breaks that test, because installing a CA through
- * Settings writes into a store of its own and leaves the system directory's
- * mtime exactly where it was. So the launch after an install is precisely a
- * launch on which the cheap check says "fresh" and the answer is wrong, and a
- * naive implementation builds the right bundle once and then never again. That
- * failure is silent in both directions -- the user sees the app ignore a
- * certificate they installed, and nothing anywhere says why -- which is what
- * `installing a CA rebuilds a bundle the mtime check calls fresh` exists to
- * catch.
+ * The bundle is the device's own trust store, not a copy of the certificate
+ * directory underneath it, and those are two different answers. A root the
+ * device owner turned off in Settings > Trusted credentials leaves the
+ * platform's merged store, so every other app on the phone stops trusting it,
+ * and its file stays in the certificate directory exactly where it was. A bundle
+ * concatenated from that directory therefore went on trusting a root the owner
+ * had distrusted. It used to matter only for git; SSL_CERT_FILE and
+ * REQUESTS_CA_BUNDLE now put the same file in front of python, pip and curl.
  *
- * The whole method had no unit test before this, so the system half is pinned
- * here too: without it the new cases would be measuring one unmeasured thing
- * against another.
+ * So where the store answers, it is the whole bundle and the certificate
+ * directory is not read at all, which is what `a root the store stops answering
+ * with leaves the bundle` measures. Where the store answers with nothing (a
+ * provider that threw, a device that has none) the directory is concatenated as
+ * before, because a bundle that honours a removal is worth less than a bundle
+ * that exists: this runs inside SplashActivity's per-launch repair block, and
+ * what it writes is the file every HTTPS client in the terminal reads.
  *
- * Certificates are supplied through the [FirstRunSetup.userTrustedCertificates]
+ * Freshness is two conditions and neither is redundant. The certificate
+ * directory's mtime is the cheap one, and it is blind to both halves of what
+ * this measures: installing a CA through Settings and turning a root off both
+ * write into a store of their own and leave that mtime where it was. The
+ * fingerprint over the whole store is the condition that notices, and without it
+ * the right bundle is built on some early launch and then never again. That
+ * failure is silent in both directions: the user sees the terminal ignore a
+ * certificate they installed, or go on trusting one they removed, and nothing
+ * anywhere says why.
+ *
+ * Certificates are supplied through the [FirstRunSetup.deviceTrustedCertificates]
  * seam. `AndroidCAStore` does not exist on a JVM, so there is no version of
  * these tests that reaches the real provider; what the seam's own body does is
- * measured on device instead, through the user-CA count this method logs.
+ * measured on device instead, through the certificate count this method logs.
  */
 class UserCaBundleTest {
 
@@ -61,6 +72,17 @@ class UserCaBundleTest {
 
     /** A file of the shape Android's trust store holds: PEM, one root per file. */
     private val systemPem = "-----BEGIN CERTIFICATE-----\nc3lzdGVtcm9vdA==\n-----END CERTIFICATE-----\n"
+
+    /**
+     * The same root as [systemPem], in the form the store answers with.
+     *
+     * The encoder base64s a certificate's bytes, so one whose encoding is the
+     * ASCII of "systemroot" comes out carrying the body [systemPem] carries.
+     * That is what lets a case have the store answer with a root whose file is
+     * sitting in the certificate directory at the same time, which is the
+     * arrangement the whole change turns on.
+     */
+    private val systemRoot = certificateOf("systemroot".toByteArray())
 
     @BeforeEach
     fun setUp() {
@@ -80,22 +102,29 @@ class UserCaBundleTest {
     @AfterEach
     fun tearDown() = unmockkObject(Logger)
 
-    /** [FirstRunSetup] wired to the fixture store, with [certs] as the user half. */
+    /** [FirstRunSetup] wired to the fixture directory, with [certs] as the store. */
     private fun setupWith(certs: () -> List<Certificate>): FirstRunSetup =
         FirstRunSetup(context).apply {
             systemCaCertificateDirs = listOf(systemCaDir.path)
-            userTrustedCertificates = certs
+            deviceTrustedCertificates = certs
         }
 
+    /**
+     * The store answers with the root every device has, plus [certs].
+     *
+     * The merged store holds both halves, so a case that supplied only its own
+     * certificates would be measuring a device that trusts nothing else, which
+     * is not a device.
+     */
     private fun buildWith(vararg certs: Certificate) =
-        setupWith { certs.toList() }.setupGitCaBundle()
+        setupWith { listOf(systemRoot) + certs }.setupGitCaBundle()
 
     /**
      * Makes the cheap freshness test say "fresh".
      *
-     * This is the state every launch after the first is in, and the state an
-     * install through Settings does not disturb, so it is the state the user-CA
-     * cases have to start from to be measuring anything.
+     * This is the state every launch after the first is in, and the state
+     * neither installing a CA nor turning a root off disturbs, so it is the
+     * state the store cases have to start from to be measuring anything.
      */
     private fun makeMtimeLookFresh() {
         assertTrue(bundle.isFile, "no bundle to age; the harness is wrong")
@@ -105,23 +134,67 @@ class UserCaBundleTest {
 
     private fun bundleText() = bundle.readText()
 
-    // -- the system half, which had no test at all before this --
+    /** How many times [body] occurs in the bundle. */
+    private fun countIn(body: String) = bundleText().split(body).size - 1
+
+    // -- the merged store is the bundle --
 
     @Test
-    fun `the bundle carries every file in the system store`() {
-        File(systemCaDir, "e5f6a7b8.0").writeText("-----BEGIN CERTIFICATE-----\nc2Vjb25k\n-----END CERTIFICATE-----\n")
+    fun `every certificate the store answers with reaches the bundle, exactly once`() {
+        // Exactly once rather than merely present, and that is the whole point of
+        // counting: the certificate directory holds the same root under
+        // a1b2c3d4.0, so a bundle that concatenated the directory as well as the
+        // store would contain every body asserted here and still be wrong.
+        buildWith(certificateOf(byteArrayOf(1, 2, 3, 4)), certificateOf(byteArrayOf(5, 6)))
 
-        buildWith()
+        assertEquals(
+            1,
+            countIn("c3lzdGVtcm9vdA=="),
+            "the system root the store answered with is missing from the bundle, or in it " +
+                "twice because the certificate directory was copied in as well",
+        )
+        assertEquals(1, countIn("AQIDBA=="), "a certificate the store answered with is not in the bundle")
+        assertEquals(1, countIn("BQY="), "a certificate the store answered with is not in the bundle")
+    }
 
-        assertTrue(systemPem in bundleText(), "the first system root is missing from the bundle")
-        assertTrue("c2Vjb25k" in bundleText(), "the second system root is missing from the bundle")
+    /**
+     * The case the change exists for.
+     *
+     * Turning a root off in Settings > Trusted credentials drops it from the
+     * platform's store and leaves its file in the certificate directory, so a
+     * bundle built by copying that directory keeps trusting a root its owner
+     * distrusted and every other app on the phone has already dropped. The mtime
+     * is made to look fresh first because that is the honest arrangement: a
+     * removal does not move it, so the fingerprint over the whole store is the
+     * only thing that can notice.
+     */
+    @Test
+    fun `a root the store stops answering with leaves the bundle`() {
+        val stillTrusted = certificateOf(byteArrayOf(4, 4, 4))
+        buildWith(stillTrusted)
+        makeMtimeLookFresh()
+        assertTrue(
+            File(systemCaDir, "a1b2c3d4.0").isFile,
+            "the removed root's file is gone from the certificate directory; the harness is wrong",
+        )
+
+        setupWith { listOf(stillTrusted) }.setupGitCaBundle()
+
+        assertFalse(
+            "c3lzdGVtcm9vdA==" in bundleText(),
+            "a root the owner turned off is still trusted by everything this bundle feeds, " +
+                "which is git, python, pip and curl. Its file is still in the certificate " +
+                "directory and only the store knows it was distrusted, so a bundle built from " +
+                "that directory cannot honour the removal",
+        )
+        assertTrue("BAQE" in bundleText(), "the rebuild dropped the roots that are still trusted")
     }
 
     @Test
     fun `an unchanged store is not rebuilt`() {
         // The control for every "was rebuilt" assertion below. Without it they
         // would all also hold for a method that rebuilt unconditionally, which
-        // would put a 143-file concatenation on the main thread of every launch.
+        // would rewrite the whole bundle on the main thread of every launch.
         buildWith()
         makeMtimeLookFresh()
         bundle.writeText("sentinel")
@@ -132,8 +205,9 @@ class UserCaBundleTest {
     }
 
     @Test
-    fun `a store that grew a certificate is rebuilt`() {
-        // The other half of that control: the mtime test still has to work.
+    fun `a certificate directory newer than the bundle forces a rebuild`() {
+        // The other half of that control: the mtime test still has to work. It is
+        // the only signal a system update moving the roots underneath us gives.
         buildWith()
         bundle.writeText("sentinel")
         assertTrue(bundle.setLastModified(1_000_000_000_000L), "could not age the bundle")
@@ -144,31 +218,15 @@ class UserCaBundleTest {
         assertTrue(systemPem in bundleText(), "a store newer than the bundle did not force a rebuild")
     }
 
-    // -- the user half --
-
-    @Test
-    fun `a user CA reaches the bundle, after the system roots`() {
-        buildWith(certificateOf(byteArrayOf(1, 2, 3, 4)))
-
-        val text = bundleText()
-        assertTrue(systemPem in text, "the system roots were dropped when a user CA was folded in")
-        assertTrue("AQIDBA==" in text, "the user CA is not in the bundle git reads")
-        assertTrue(
-            text.indexOf(systemPem) < text.indexOf("AQIDBA=="),
-            "the user CA was written before the system roots; the bundle is a concatenation " +
-                "and appending is what keeps the system half byte-identical to the store",
-        )
-    }
-
     /**
-     * The case the whole change turns on.
+     * The other direction of the same blindness.
      *
      * A CA installed through Settings does not touch the mtime of the system
-     * certificate directory, so the check that guarded this method before sees
-     * a bundle newer than the store and returns. Anything that reads only that
-     * clause builds the right bundle on some earlier launch and then ignores
-     * every certificate the owner installs afterwards, for the life of the
-     * install, with nothing on screen or in the log to say so.
+     * certificate directory, so the check that guarded this method before sees a
+     * bundle newer than the store and returns. Anything reading only that clause
+     * builds the right bundle on some earlier launch and then ignores every
+     * certificate the owner installs afterwards, for the life of the install,
+     * with nothing on screen or in the log to say so.
      */
     @Test
     fun `installing a CA rebuilds a bundle the mtime check calls fresh`() {
@@ -196,7 +254,7 @@ class UserCaBundleTest {
             "a CA the owner removed is still trusted by git; the bundle is rewritten rather " +
                 "than appended to, and the fingerprint has to notice a shrinking store too",
         )
-        assertTrue(systemPem in bundleText(), "the rebuild lost the system roots")
+        assertTrue(systemPem in bundleText(), "the rebuild lost the rest of the store")
     }
 
     /**
@@ -248,7 +306,7 @@ class UserCaBundleTest {
         buildWith(certificateOf(byteArrayOf(7, 7, 7)), certificateOf(null))
 
         assertTrue("BwcH" in bundleText(), "a readable certificate was dropped along with a broken one")
-        assertTrue(systemPem in bundleText(), "the system roots were dropped over one broken certificate")
+        assertTrue(systemPem in bundleText(), "the rest of the store was dropped over one broken certificate")
     }
 
     /**
@@ -256,16 +314,51 @@ class UserCaBundleTest {
      *
      * This runs from SplashActivity's per-launch repair block, ahead of the
      * symlink and settings repairs, so an exception escaping here costs work
-     * that matters more than this does. On a device where the provider is
-     * missing or refuses to load, the answer has to be the bundle as it was
-     * before any of this existed.
+     * that matters more than this does. And the bundle is now what git, python,
+     * pip and curl all read, so a device whose provider is missing or refuses to
+     * load has to end up with the bundle as it was before any of this existed:
+     * the certificate directory, concatenated, which cannot see a root the owner
+     * removed but does keep HTTPS working at all. That is the trade, and it is
+     * the right way round.
+     *
+     * Both ways of answering with nothing, because they arrive by different
+     * doors: a provider that throws is caught inside the seam's caller, and an
+     * empty list is a store that loaded and held nothing usable. Only the first
+     * of the two was measured before.
      */
     @Test
-    fun `a trust store that cannot be read leaves the system-only bundle`() {
-        setupWith { throw java.security.KeyStoreException("no such provider") }.setupGitCaBundle()
+    fun `a store that answers with nothing falls back to the certificate directory`() {
+        // Two files, because the fallback has to carry the whole directory: this
+        // is the one path on which what the platform ships is copied through
+        // rather than encoded here, and a bundle holding some roots and not the
+        // rest fails against whichever hosts fall on the wrong side of the cut.
+        val secondPem = "-----BEGIN CERTIFICATE-----\nc2Vjb25k\n-----END CERTIFICATE-----\n"
+        File(systemCaDir, "e5f6a7b8.0").writeText(secondPem)
 
-        assertTrue(bundle.isFile, "the bundle was not written at all")
-        assertEquals(systemPem, bundleText(), "the bundle is not the system-only one")
+        fun assertFallsBack(how: String, store: () -> List<Certificate>) {
+            // Cleared first, or a later pass is answered by the freshness check
+            // rather than by the fallback: a store that answers with nothing
+            // fingerprints to the same hash whichever way it emptied, so a
+            // surviving bundle would satisfy the assertion without the method
+            // having built anything.
+            bundle.parentFile?.deleteRecursively()
+            assertFalse(bundle.exists(), "could not clear the bundle between passes; the harness is wrong")
+
+            setupWith(store).setupGitCaBundle()
+
+            assertTrue(bundle.isFile, "$how left no bundle at all")
+            assertEquals(
+                systemPem + secondPem,
+                bundleText(),
+                "$how left the terminal without the system roots, so HTTPS fails everywhere " +
+                    "the bundle is read: git, python, pip and curl",
+            )
+        }
+
+        assertFallsBack("a provider that cannot be loaded") {
+            throw java.security.KeyStoreException("no such provider")
+        }
+        assertFallsBack("a device with no such store") { emptyList() }
     }
 
     /**
@@ -319,22 +412,24 @@ class UserCaBundleTest {
     // -- the armour itself --
 
     /**
-     * The user half is the only part of the bundle this app encodes; the system
-     * files are copied through byte for byte. So the line wrapping, the header
-     * and footer and the trailing newline are this app's to get right, and the
-     * thing that decides whether it did is a certificate parser rather than a
-     * regular expression of ours. A real self-signed certificate goes in and has
-     * to come back out of the bundle.
+     * Every byte of the normal bundle is now encoded by this app rather than
+     * copied through from a file, so the line wrapping, the header and footer
+     * and the trailing newline are all this app's to get right. The thing that
+     * decides whether it did is a certificate parser rather than a regular
+     * expression of ours: a real self-signed certificate goes in and has to come
+     * back out of the bundle.
+     *
+     * The store answers with that certificate alone, so nothing here depends on
+     * where the sort puts it.
      */
     @Test
     fun `what the bundle carries parses back as the certificate that went in`() {
         val real = realCertificate()
 
-        buildWith(real)
+        setupWith { listOf(real) }.setupGitCaBundle()
 
-        val pem = bundleText().substringAfter(systemPem)
         val parsed = CertificateFactory.getInstance("X.509")
-            .generateCertificate(pem.byteInputStream()) as X509Certificate
+            .generateCertificate(bundleText().byteInputStream()) as X509Certificate
         assertEquals(
             (real as X509Certificate).subjectX500Principal,
             parsed.subjectX500Principal,
@@ -348,19 +443,18 @@ class UserCaBundleTest {
      * Java's certificate factory accepts an unbroken run of base64 quite
      * happily, so a parser is the wrong instrument for this one: measured, an
      * unwrapped encoder passes that test. What reads the bundle in production is
-     * a line-oriented C parser inside a libcurl this suite cannot reach, and
-     * every other entry in the file is a system root copied through byte for
-     * byte at 64 columns. The user half being the one stretch of the file with a
-     * different shape is a difference with no upside and one that costs an
-     * argument to avoid, so it is pinned rather than left to a reader to
-     * rediscover.
+     * a line-oriented C parser inside a libcurl this suite cannot reach, and the
+     * fallback path copies the platform's own root files through byte for byte
+     * at 64 columns. The bundle this app encodes having a different shape from
+     * the bundle it falls back to is a difference with no upside and one that
+     * costs an argument to avoid, so it is pinned rather than left to a reader
+     * to rediscover.
      */
     @Test
-    fun `the user half is wrapped like every other entry in the bundle`() {
-        buildWith(realCertificate())
+    fun `the bundle is wrapped like the root files it stands in for`() {
+        setupWith { listOf(realCertificate()) }.setupGitCaBundle()
 
-        val body = bundleText().substringAfter(systemPem)
-            .lines().filter { it.isNotBlank() && !it.startsWith("-----") }
+        val body = bundleText().lines().filter { it.isNotBlank() && !it.startsWith("-----") }
         assertTrue(body.size > 1, "the certificate was emitted as one unbroken run of base64")
         assertTrue(
             body.all { it.length <= 64 },
@@ -375,7 +469,8 @@ class UserCaBundleTest {
      * Only `getEncoded` is reached: [FirstRunSetup] turns each entry straight
      * into PEM and never asks a certificate anything else. Supplying the bytes
      * directly is what lets a re-issue be expressed as two certificates that
-     * differ in nothing a shortcut would compare.
+     * differ in nothing a shortcut would compare, and what lets a fixture
+     * certificate carry the same body as a file in the certificate directory.
      */
     private fun certificateOf(der: ByteArray?): Certificate = object : Certificate("X.509") {
         override fun getEncoded(): ByteArray =

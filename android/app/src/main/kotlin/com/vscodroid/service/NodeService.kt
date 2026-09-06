@@ -80,13 +80,12 @@ class NodeService : Service() {
     /**
      * When the server last reported ready, on [SystemClock.elapsedRealtime].
      *
-     * Half of Long.MIN_VALUE rather than 0 or the real minimum: the first
-     * readiness of a run has to refill the budget, and subtracting from 0 would
-     * compare against however long the device has been awake, which on an app
-     * started seconds after boot is a smaller number than the window. Halved so
-     * the subtraction cannot overflow.
+     * Written on every readiness and read at exactly one place, [handleServerCrash],
+     * because how long a server lasted is a quantity only at the moment it stops
+     * lasting. See [NEVER_READY_AT] for why a run with no readiness behind it
+     * parks this in the future rather than in the past.
      */
-    private var lastReadyAt = Long.MIN_VALUE / 2
+    private var lastReadyAt = NEVER_READY_AT
     private var isServiceRunning = false
     private var launchJob: Job? = null
 
@@ -129,8 +128,12 @@ class NodeService : Service() {
      * successful start, every later failure in that run was silent, and a run can
      * last days.
      *
-     * Cleared by [endFailureEpisode], at each of the three points an episode is
-     * over: the server became ready, the user stopped it, or the budget ran out.
+     * Cleared by [announceReady] when a server comes up, and by
+     * [endFailureEpisode] at each of the three points a whole episode is over: a
+     * server that had lasted died, the user stopped it, or the budget ran out.
+     * The first of those is the message half alone, because a server coming up
+     * answers the failure before it without having lasted long enough yet to earn
+     * a retry budget back.
      */
     private var failureRaised = false
 
@@ -236,6 +239,29 @@ class NodeService : Service() {
             }
 
             StartCommand.STAND_DOWN -> {
+                // Said out loud, where every other terminal outcome is said.
+                // Nothing was promoted, so there is no notification and therefore
+                // no Stop control, and the activity that asked for this start is
+                // sitting on the loading page: [startAndBindService] catches only
+                // a throw from `startForegroundService`, and a promotion refused
+                // inside the service is not one. Left silent, `bindDecision` reads
+                // no notice, port 0 and not ready, answers Wait, and the page
+                // stays up with no control on it. Nothing clears it either: the
+                // activity is `singleTask`, so relaunching from the launcher
+                // reaches `onNewIntent`, which only relays a sign-in callback.
+                //
+                // Both halves, because they cover different arrivals and neither
+                // is sufficient. The notice is what a client binding AFTER this
+                // reads, and [lastStartupNotice] has exactly one reader, inside
+                // `setupServiceCallbacks`, which runs once per bind; the callback
+                // is what reaches a client already bound, which is the case on the
+                // retry path, where the service is started again without
+                // rebinding and the notice is therefore never read.
+                //
+                // `stopServingRecoverably` is not reusable here: it calls
+                // `startForeground`, which is the call that just failed.
+                reportStartupNotice(getString(R.string.error_server_start), terminal = true)
+                onServerGaveUp?.invoke()
                 stopSelf()
                 START_NOT_STICKY
             }
@@ -297,12 +323,13 @@ class NodeService : Service() {
      * nothing.
      *
      * A notice rather than a failure, which the name and the strings both have
-     * to keep saying. Two of the three messages that reach here are terminal
-     * (a start that could not spawn, and a restart budget spent), and the third
-     * is `status_server_slow_start`, said while the server is still being waited
-     * for and may still come up. Reading them all as failures is what makes a
-     * slow start indistinguishable from a dead one to everything downstream,
-     * which is the thing this whole path exists to avoid.
+     * to keep saying. Most of what reaches here is terminal (a start that could
+     * not spawn, a restart budget spent, a foreground promotion refused), and
+     * the rest is not: `status_server_slow_start` is said while the server is
+     * still being waited for and may still come up. Reading them all as failures
+     * is what makes a slow start indistinguishable from a dead one to everything
+     * downstream, which is the thing this whole path exists to avoid, and the
+     * `terminal` flag rather than the count is what tells them apart.
      *
      * Exists because [onServerError] is a callback and a callback can be raised
      * at a moment when nobody is listening. A start that outlives the activity
@@ -310,9 +337,9 @@ class NodeService : Service() {
      * bind then finds a service that is not ready and waits, with nothing said.
      *
      * Read on the main thread by a newly bound client and written on the main
-     * thread by [launchServer], [awaitLateReadiness] and [enterTerminalState],
-     * so it needs no synchronisation of its own: the same confinement
-     * [restartCount] and [launchJob] rely on.
+     * thread by [launchServer], [awaitLateReadiness], [enterTerminalState] and
+     * the STAND_DOWN arm of [onStartCommand], so it needs no synchronisation of
+     * its own: the same confinement [restartCount] and [launchJob] rely on.
      *
      * Cleared whenever a start begins and whenever one succeeds, so a reader
      * that finds something here is looking at the current attempt.
@@ -485,8 +512,9 @@ class NodeService : Service() {
      * [awaitLateReadiness], whose loop is bounded by whether a server of ours is
      * still there and whose sleep runs to [LATE_READY_SLOW_POLL_MS]; when the new
      * attempt produces one, that answer turns true again and the old loop simply
-     * carries on against it. It is then free to call [announceReady] -- resetting the restart
-     * budget and firing `onServerReady` for an attempt it is not watching -- and
+     * carries on against it. It is then free to call [announceReady] -- clearing
+     * the failure throttle and firing `onServerReady` for an attempt it is not
+     * watching, and moving the instant the next death is judged against -- and
      * free to post `status_server_slow_start` at its own ninety-second mark, over
      * a notice the new attempt had just cleared. `MainActivity` returns without
      * loading when it finds a notice, so that last one shows the user a healthy
@@ -732,23 +760,26 @@ class NodeService : Service() {
 
     /** Records a ready server and tells whoever is listening. */
     private fun announceReady() {
-        // Recovery succeeded, and only then. Future crashes get a fresh retry
-        // budget, and a failure after this point is a new episode that has to be
-        // heard even though an earlier one in the same run already spoke.
-        //
-        // Conditional because an unconditional refill spends nothing: a server
-        // the system kills seconds after it binds would set the count back to
-        // zero on every attempt, so it could never reach [MAX_RESTARTS] and
-        // [enterTerminalState] could never run. See [READY_STABLE_MS].
-        //
-        // Read before the comparison and assigned after it, so the first
-        // readiness of a run always refills: [endFailureEpisode] parks the
-        // instant far enough back that the difference clears the window.
-        val now = SystemClock.elapsedRealtime()
-        if (readinessIsRecovery(now, lastReadyAt)) {
-            endFailureEpisode()
-        }
-        lastReadyAt = now
+        // The instant this server became ready, and deliberately not the retry
+        // budget with it. What earns a fresh budget is a server that LASTED, and
+        // the difference between two readiness announcements is not that: it is
+        // the previous server's uptime PLUS the backoff and the whole start poll
+        // that followed its death, up to sixty-two seconds during which no server
+        // existed at all. Judging recovery here therefore credited a device that
+        // kills the server twenty seconds after every start with having recovered
+        // by the fifth attempt, so the count never reached [MAX_RESTARTS],
+        // [enterTerminalState] was unreachable, and the workbench reloaded every
+        // half minute for as long as the app stayed open. The judgement lives in
+        // [handleServerCrash], where the uptime is a knowable number; this is only
+        // the reading it is judged against. See [READY_STABLE_MS].
+        lastReadyAt = SystemClock.elapsedRealtime()
+        // The message half of an episode does end here, and unconditionally,
+        // which is the half that is not about the budget. Whatever failure was
+        // raised before this server came up has been answered by it coming up, so
+        // the next failure is a new one and has to be heard. Leaving the throttle
+        // set until some later death happens to refill the budget would silence
+        // the first failure of every later episode in the same run.
+        failureRaised = false
         startupNotice = null
         Logger.i(tag, "Server is ready on port ${processManager.port}")
         // Unconditional, and that is the fix for what the guarded version got
@@ -904,17 +935,20 @@ class NodeService : Service() {
      *
      * The two always move together, which is why they are one function rather
      * than a pair repeated three times. Every place that refreshes the budget is
-     * also a place a fresh failure deserves to be heard (the server came up, the
-     * user stopped it, or the budget ran out), and an earlier draft refreshed the
-     * budget at all three and the message key at none of them.
+     * also a place a fresh failure deserves to be heard (a server that had lasted
+     * died, the user stopped it, or the budget ran out), and an earlier draft
+     * refreshed the budget at all three and the message key at none of them.
+     * [announceReady] clears the message half on its own, because a server coming
+     * up answers the failure that preceded it without yet having lasted long
+     * enough to earn anything back.
      */
     private fun endFailureEpisode() {
         restartCount = 0
         failureRaised = false
-        // Parked with the budget, so the next readiness after a stop or a
-        // recoverable shutdown is judged as the first one of a new run rather
-        // than against whenever the last server happened to answer.
-        lastReadyAt = Long.MIN_VALUE / 2
+        // Parked with the budget: whatever server this run had is gone, so there
+        // is no uptime left for the next death to be judged against, and a run
+        // that never gets one must not be credited with an uptime it never had.
+        lastReadyAt = NEVER_READY_AT
     }
 
     /**
@@ -957,14 +991,33 @@ class NodeService : Service() {
             return
         }
 
+        // A server that held for [READY_STABLE_MS] before dying recovered from
+        // whatever episode preceded it, so the death that ends it opens a fresh
+        // budget rather than spending the last of an old one. Judged here because
+        // this is the only moment its uptime exists as a number: everything after
+        // it, the backoff and then the start poll, is time with no server in it,
+        // and folding that waiting into the measurement is what let a server that
+        // lasted twenty seconds pass for one that lasted a minute.
+        //
+        // Not in [retryOrGiveUp], for the same reason [chargeHeapOverride] is not
+        // there either: two paths reach it for one death, and only this one is fed
+        // by a server that ever ran. A start that produced nothing has no uptime
+        // to credit, and [NEVER_READY_AT] is what makes it answer so.
+        if (readinessIsRecovery(SystemClock.elapsedRealtime(), lastReadyAt)) {
+            endFailureEpisode()
+        }
         Logger.w(tag, "Server crashed (exit=$exitCode), restart #${restartCount + 1}")
         chargeHeapOverride(exitCode)
         // The decision and the waiting both live in [retryOrGiveUp], shared with
-        // the start path. Recomputing `crashAction` there costs nothing and reads
-        // the same values. The charge above now suspends, so the two reads are no
-        // longer separated by non-suspending statements alone; what keeps them
-        // reading the same values is that both fields are confined to this
-        // dispatcher and the charge resumes on it before returning.
+        // the start path. Recomputing `crashAction` there costs nothing, and it
+        // is what lets the refill above count: the `action` read at the top of
+        // this function answers only the IGNORE question, which the budget does
+        // not enter into, while the decision that spends an attempt is taken
+        // after a server that lasted has been credited. The charge above
+        // suspends, so the two reads are not separated by non-suspending
+        // statements alone; what keeps them on one thread is that both fields are
+        // confined to this dispatcher and the charge resumes on it before
+        // returning.
         retryOrGiveUp()
     }
 
@@ -1350,14 +1403,35 @@ internal const val MAX_BACKOFF_SHIFT = 4
 internal const val READY_STABLE_MS = 60_000L
 
 /**
- * Whether a server reporting ready has recovered from anything.
+ * What the last-ready instant holds while this run has never had a ready server.
  *
- * Pure, and separate from [NodeService.announceReady] for the reason
+ * In the future rather than in the past, and that direction is the whole of it.
+ * The one question asked of that instant is how long the server that just died
+ * had been ready, so a run with no readiness behind it has to answer "not long
+ * enough". Parked in the past, which is where it sat while readiness itself
+ * asked the question, every crash of a server that never answered would hand out
+ * a fresh budget, and the terminal state would be unreachable for exactly the
+ * run that cannot get a server up at all.
+ *
+ * Half of Long.MAX_VALUE so that subtracting it from a clock reading cannot
+ * overflow.
+ */
+internal const val NEVER_READY_AT = Long.MAX_VALUE / 2
+
+/**
+ * Whether the server that has been ready since [lastReadyAt] lasted long enough
+ * for its readiness to count as a recovery.
+ *
+ * Pure, and separate from [NodeService.handleServerCrash] for the reason
  * [crashAction] and [hasRestartBudget] are: the decision is the part worth
  * pinning, and the caller around it needs a Service to exist.
  *
- * [lastReadyAt] is parked far below zero between runs, so the first readiness
- * of a run always answers true without that having to be a special case here.
+ * The quantity matters as much as the comparison. `now` is the instant the
+ * server DIED, not the instant the next one answered: the gap between two
+ * readiness announcements also contains the backoff and the start poll between
+ * them, which is time with no server in it. [NEVER_READY_AT] is far in the
+ * future, so a run whose server never became ready answers false here without
+ * that having to be a special case.
  */
 internal fun readinessIsRecovery(
     now: Long,

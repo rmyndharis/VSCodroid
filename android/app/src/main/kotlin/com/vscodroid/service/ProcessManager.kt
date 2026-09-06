@@ -551,6 +551,30 @@ class ProcessManager(private val context: Context) {
             // taken, see there for what a note alone lets through, and why the
             // two questions are not interchangeable.
             Logger.i(tag, "Port $_port already served by a server of ours; adopting it")
+            // The same window the spawn below guards, on the branch that has no
+            // Process to destroy, and the decision above is where it opens.
+            // [recordedServerIsServing] spends a second of connect and a second of
+            // read against the port, and [stopServer] runs on the main thread: a
+            // Stop pressed inside that round trip reads `adopted` as false, so it
+            // reaps nothing and returns, and the assignments below would then clear
+            // the flag that stop had just set and record the orphan as this
+            // instance's server. What the user is left with is exactly the state
+            // adoption exists to end, now with the service gone: an editor server
+            // holding the port that nothing is tracking, and the poll
+            // [startAdoptionWatch] would have started over it, both outliving the
+            // stop that was supposed to take them.
+            //
+            // Ended rather than merely declined, for the reason [stopServer]'s own
+            // adopted branch gives: the note names the pid, and a stop is the user
+            // asking for the server to be gone rather than for it to be left
+            // untracked. Placed before every assignment below, because a return
+            // taken after any of them would publish state describing a server this
+            // start is not going to serve.
+            if (isShuttingDown) {
+                Logger.i(tag, "A stop landed while the server was being adopted; ending it instead")
+                reapRecordedEditorServer("a stop landed while it was being adopted")
+                return false
+            }
             // Nothing is warned about here, and that is a change rather than an
             // omission. An adopted server is by construction one whose bootstrap
             // is gone, and while the DNS proxy was bound by that bootstrap the
@@ -566,7 +590,6 @@ class ProcessManager(private val context: Context) {
             // warning back here.
             adopted = true
             clearReadiness()
-            isShuttingDown = false
             // Nothing was spawned, so the flag describes nothing. Cleared rather
             // than left, because it survives in this instance across attempts and
             // a value left over from a previous one is not about this server.

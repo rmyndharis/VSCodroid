@@ -207,18 +207,30 @@ class SettingsPathsTest {
             // binary. Every other document here gives bash a path of its own, so
             // the lazy span stops before the fence ever matters -- measured: with
             // one profile, widening the fence left all 24 cases green.
-            val result = refreshManagedPaths(before, shell, git, wrapper)
+            //
+            // Null is "nothing needed changing", which is what a correct fence
+            // answers for this document: every managed value in it is already
+            // current, and bash has no path to move. So the document the user is
+            // left with is the one that went in, and reading it that way is what
+            // makes the two assertions below run at all. Guarded by `if (result
+            // != null)` they were skipped in the only state the code is in when
+            // it is right, and the case reduced to whether the call throws.
+            val result = refreshManagedPaths(before, shell, git, wrapper) ?: before
 
-            if (result != null) {
-                assertTrue(
-                    result.contains(""""path": "$zsh""""),
-                    "the zsh profile's path was rewritten:\n$result",
-                )
-                assertTrue(
-                    !result.contains(""""zsh": {\n        "path": "$shell""""),
-                    "bash's binary was written into the zsh profile:\n$result",
-                )
-            }
+            assertTrue(
+                result.contains(""""path": "$zsh""""),
+                "the zsh profile's path was rewritten:\n$result",
+            )
+            // Asked as a shape rather than as a literal. This was written as one
+            // raw string spanning the two lines, `"zsh": {` and its `"path"`,
+            // with the break between them spelled `\n`; a raw string has no
+            // escapes, so it searched for a backslash followed by an `n` and the
+            // assertion could not fail whatever the rewrite had done.
+            assertTrue(
+                !Regex(""""zsh"\s*:\s*\{[^}]*"path"\s*:\s*"${Regex.escape(shell)}"""")
+                    .containsMatchIn(result),
+                "bash's binary was written into the zsh profile:\n$result",
+            )
         }
 
         // bash has a stale path but no args, so the path rewrite fires -- which

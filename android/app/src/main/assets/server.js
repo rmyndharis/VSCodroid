@@ -7,6 +7,7 @@
 const path = require('path');
 const fs = require('fs');
 const os = require('os');
+const crypto = require('crypto');
 
 // Parse command-line arguments
 const args = {};
@@ -21,6 +22,33 @@ const LOG_LEVEL = args.log || 'info';
 
 const SERVER_DIR = path.dirname(__filename);
 const REH_DIR = path.join(SERVER_DIR, 'vscode-reh');
+
+// The payload `callback.html` hands to the Android side, as it is built before a
+// nonce is bound into it and as it is built afterwards. Both shapes are matched so
+// the rewrite below is idempotent across restarts: on the second start the page on
+// disk already carries the previous run's nonce, and a pattern that only knew the
+// pristine form would silently stop binding. The nonce alternative is anchored to
+// hex so it cannot run past the object it belongs to.
+const CALLBACK_PAYLOAD = /JSON\.stringify\(\{ id: id, uri: uri(?:, nonce: '[0-9a-f]*')? \}\)/;
+
+/**
+ * Replaces a file in one step, the way the product.json rewrite below does.
+ *
+ * This process is killed as a matter of routine, by the OOM killer and by
+ * Android's phantom-process limit, so an in-place write interrupted partway
+ * leaves a truncated file. rename(2) lands either side of a kill and never
+ * inside it, and a write that cannot finish leaves the existing file untouched.
+ */
+function writeThroughRename(target, contents, mode) {
+    const tmp = `${target}.${process.pid}.tmp`;
+    try {
+        fs.writeFileSync(tmp, contents, mode === undefined ? undefined : { mode });
+        fs.renameSync(tmp, target);
+    } catch (e) {
+        try { fs.unlinkSync(tmp); } catch { /* nothing was written */ }
+        throw e;
+    }
+}
 
 // How long the editor server gets to answer a SIGTERM before it is SIGKILLed.
 // Bounded from outside: ProcessManager force-kills this process a second after
@@ -166,6 +194,53 @@ if (!fs.existsSync(rehEntryPoint)) {
             log('error', 'A truncated product.json is repaired by the asset extraction that ' +
                 'runs on the next app update, or by clearing app data.');
         }
+    }
+
+    // Bind the sign-in callback to a secret only this server's own page can know.
+    //
+    // The `vscodroid://callback` intent-filter is exported and BROWSABLE, so any
+    // app on the device and any page in any browser can fire it. Everything the
+    // Android side could check before this was guessable: the request id is a
+    // counter the workbench starts at one per page, and the window around it is
+    // ten minutes. A page that knew a sign-in was in flight could therefore forge
+    // the callback, hand the signing-in extension an OAuth code of its choosing
+    // with the confirmation prompt suppressed, and take the pending id with it so
+    // the user's real callback was dropped.
+    //
+    // `callback.html` is served from this server's own origin, so no other origin
+    // can read what is written into it. The nonce goes into the intent payload the
+    // page builds and into a file inside the app sandbox; the Android side accepts
+    // a callback only when the two match.
+    //
+    // Rewritten on every start, like product.json above and through the same
+    // temporary file and rename: the value has to be new for each run, and the
+    // pattern matches the page whether it is pristine or still carries the
+    // previous run's nonce.
+    //
+    // The nonce file is removed first and written last, so no window exists in
+    // which the page carries a secret the Android side cannot check. If any of
+    // this fails there is simply no file, and the Android side falls back to the
+    // matching it did before, which is what keeps a page this cannot rewrite from
+    // costing the user their ability to sign in at all.
+    const callbackHtmlPath = path.join(REH_DIR, 'out/vs/code/browser/workbench/callback.html');
+    const noncePath = path.join(SERVER_DIR, 'auth-callback.nonce');
+    try { fs.unlinkSync(noncePath); } catch { /* nothing to clear */ }
+    try {
+        const html = fs.readFileSync(callbackHtmlPath, 'utf8');
+        if (!CALLBACK_PAYLOAD.test(html)) {
+            throw new Error('the callback page does not build the payload this binds to');
+        }
+        const nonce = crypto.randomBytes(32).toString('hex');
+        const bound = html.replace(
+            CALLBACK_PAYLOAD,
+            `JSON.stringify({ id: id, uri: uri, nonce: '${nonce}' })`
+        );
+        writeThroughRename(callbackHtmlPath, bound);
+        writeThroughRename(noncePath, nonce, 0o600);
+        log('info', 'Sign-in callbacks bound to this run');
+    } catch (e) {
+        log('error', `Could not bind the sign-in callback: ${e.message}`);
+        log('error', 'Sign-in still works, but a callback is matched by request id alone.');
     }
 
     // Build server arguments.

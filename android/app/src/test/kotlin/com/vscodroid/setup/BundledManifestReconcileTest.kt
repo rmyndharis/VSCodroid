@@ -31,6 +31,9 @@ class BundledManifestReconcileTest {
     private val safBridge = "vscodroid.vscodroid-saf-bridge"
     private val serveNetwork = "vscodroid.vscodroid-serve-network"
 
+    /** A marketplace extension this app bundles, which the user may remove for good. */
+    private val python = "ms-python.python"
+
     @Test
     fun `an extension bundled for the first time is listed`() {
         val add = bundledIdsToRelist(
@@ -43,16 +46,65 @@ class BundledManifestReconcileTest {
             "an identifier this app has never bundled cannot have been uninstalled")
     }
 
+    /**
+     * The rule's real subject: a marketplace extension this app happens to bundle.
+     * Removing one is an ordinary preference, and bringing it back on every update
+     * would override that choice for ever.
+     */
     @Test
-    fun `an extension the user uninstalled stays uninstalled`() {
+    fun `a fetched extension the user uninstalled stays uninstalled`() {
+        val add = bundledIdsToRelist(
+            bundledIds = listOf(welcome, python),
+            keptIds = setOf(welcome),
+            droppedIds = emptySet(),
+            previouslyBundledIds = setOf(welcome, python),
+        )
+        assertTrue(add.isEmpty(),
+            "the Python extension was bundled before and has no entry, so the user " +
+                "removed it and it must not come back on every update")
+    }
+
+    /**
+     * VSCodroid's own extensions are not a removable preference. They carry the
+     * device folder picker, the toolchain screen and the editor defaults the app
+     * contributes, so a removed one takes those with it and nothing inside the
+     * editor can put it back.
+     *
+     * Releases before `isBuiltin` was written let the editor offer Uninstall, and
+     * `isBuiltin` only refuses the next one; it cannot relist a copy already gone.
+     * Meanwhile `bundledDirsToExtract` exempts this same prefix, so the directory
+     * returned on every update and sat there unlisted and unloaded. The visible
+     * cost is the editor defaults: the pass that removes the app's old overrides
+     * commits once and for all, while the contributed defaults meant to replace
+     * them never load, so word wrap, the minimap and the sash size all revert with
+     * no route back short of clearing app data.
+     */
+    @Test
+    fun `one of this app's own extensions is relisted even after it was removed`() {
         val add = bundledIdsToRelist(
             bundledIds = listOf(welcome, safBridge),
-            keptIds = setOf(welcome),
+            keptIds = emptySet(),
             droppedIds = emptySet(),
             previouslyBundledIds = setOf(welcome, safBridge),
         )
+        assertEquals(listOf(welcome, safBridge), add,
+            "an extension of this app's own, removed under an older release, was left " +
+                "unlisted, so its contributed defaults never load and the screens it " +
+                "carries stay unreachable")
+    }
+
+    /** Even ours does not gain a second entry while it still has a live one. */
+    @Test
+    fun `one of this app's own extensions is not duplicated over a live entry`() {
+        val add = bundledIdsToRelist(
+            bundledIds = listOf(welcome),
+            keptIds = setOf(welcome),
+            droppedIds = emptySet(),
+            previouslyBundledIds = setOf(welcome),
+        )
         assertTrue(add.isEmpty(),
-            "saf-bridge was bundled before and has no entry, so the user removed it")
+            "keptIds must still win for this app's own extensions, or a user's own " +
+                "newer install of the same id is shadowed by the bundled copy")
     }
 
     @Test

@@ -337,6 +337,33 @@ def main(tree):
               "readiness in ProcessManager waits for that line and no spawned "
               "start would ever be reported ready; update SERVER_LISTENING_LINE")
 
+    # server.js binds a per-run secret into callback.html at every start, by
+    # rewriting the payload the page hands to the Android side, and MainActivity
+    # refuses a sign-in callback that does not carry it. That is the only thing
+    # standing between the exported vscodroid://callback filter and a forged
+    # OAuth callback, because the request id it used to be matched on is a
+    # counter the workbench starts at one.
+    #
+    # The rewrite is a pattern match, so a callback.html whose payload is built
+    # differently binds nothing, and the failure is silent by design: the Android
+    # side falls back to the older matching rather than refusing every sign-in.
+    # That fallback is right at runtime and wrong at build time, which is why the
+    # question is asked here. Keep this string in step with CALLBACK_PAYLOAD in
+    # assets/server.js.
+    callback_payload = "JSON.stringify({ id: id, uri: uri })"
+    callback_html = tree / "out/vs/code/browser/workbench/callback.html"
+    try:
+        builds_payload = callback_payload in callback_html.read_text(errors="replace")
+    except OSError as e:
+        builds_payload = False
+        check(False, "out/vs/code/browser/workbench/callback.html is readable", str(e))
+    else:
+        check(builds_payload,
+              "callback.html builds the payload server.js binds a secret into",
+              "server.js could not bind a per-run secret, so MainActivity would "
+              "accept any forged sign-in callback naming an armed request id; "
+              "update CALLBACK_PAYLOAD in assets/server.js to match the page")
+
     # The Mobile CSS block is appended to the packaged workbench.css at server
     # build time, and on 2026-08-15 its content changed (the Accounts/Manage
     # hide was removed) while the idempotency marker stayed the same. The
