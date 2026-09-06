@@ -183,12 +183,10 @@ class ToolchainInterruptedInstallTest {
         )
         assertFalse(binary.canExecute(), "the fixture starts from the wrong state")
 
-        manager().repairInstalledToolchains()
+        val manager = manager()
+        manager.repairInstalledToolchains()
+        awaitLaunchPass(manager)
 
-        val deadline = System.currentTimeMillis() + 10_000
-        while (!binary.canExecute() && System.currentTimeMillis() < deadline) {
-            Thread.sleep(20)
-        }
         assertTrue(
             binary.canExecute(),
             "the interpreter of a toolchain the record calls installed has no execute " +
@@ -197,6 +195,16 @@ class ToolchainInterruptedInstallTest {
         assertTrue(
             File(tree, "bin/payload").exists(),
             "the tree of a toolchain the record still names was deleted",
+        )
+        // The barrier's own control, and the reason it is asserted rather than
+        // trusted: the last step of the pass is the one that used to outlive the
+        // case, and waiting for any earlier effect leaves it writing into a
+        // directory JUnit is deleting. Failing here is deterministic; the flake
+        // it replaces was not, and took the whole suite with it when it landed.
+        assertTrue(
+            File(filesDir, "home/.vscodroid/toolchain-env.sh").exists(),
+            "the pass had not reached regenerateDerivedFiles when this case ended, so it " +
+                "is still writing into the @TempDir that is about to be deleted",
         )
     }
 
@@ -311,19 +319,18 @@ class ToolchainInterruptedInstallTest {
      * in that block cannot take it out.
      *
      * `repairInstalledToolchains` hands the work to `ioExecutor`, so this waits
-     * for the effect instead of for the call.
+     * for the pass rather than for the call. See [awaitLaunchPass] for why it is
+     * the whole pass and not the one effect.
      */
     @Test
     fun `the launch repair pass reclaims an interrupted install`() {
         plantMarker("toolchain_java", """{"name":"java","installRoot":"usr/opt/java"}""")
         val tree = plantTree("usr/opt/java")
 
-        manager().repairInstalledToolchains()
+        val manager = manager()
+        manager.repairInstalledToolchains()
+        awaitLaunchPass(manager)
 
-        val deadline = System.currentTimeMillis() + 10_000
-        while (tree.exists() && System.currentTimeMillis() < deadline) {
-            Thread.sleep(20)
-        }
         assertFalse(
             tree.exists(),
             "the launch repair never reclaimed the interrupted install, so the pass " +
