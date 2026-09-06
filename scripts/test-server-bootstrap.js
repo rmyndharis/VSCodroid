@@ -458,15 +458,85 @@ async function stoppingTakesTheEditorServerWithIt() {
     }
 }
 
+// The workbench page is given the trusted-domain list, exactly once, and a page
+// that does not carry the element it extends is reported rather than thrown.
+//
+// The page is where this has to land. product.json beside it is read by the
+// bootstrap's own process and never by the browser: the product the workbench
+// consults is inlined into its bundle at build time, so the list that decides
+// whether a link opens without a confirmation reaches the editor only through the
+// construction options in this page.
+{
+    const pageDir = ['vscode-reh', 'out', 'vs', 'code', 'browser', 'workbench'];
+    const anchor =
+        '<meta id="vscode-workbench-web-configuration" data-settings="{{WORKBENCH_WEB_CONFIGURATION}}">';
+    const page = (head) => [
+        '<!DOCTYPE html>', '<html>', '\t<head>', `\t\t${head}`, '\t</head>', '</html>', '',
+    ].join('\n');
+
+    const dir = fixture(UPSTREAM);
+    const pagePath = path.join(dir, ...pageDir, 'workbench.html');
+    fs.mkdirSync(path.dirname(pagePath), { recursive: true });
+    fs.writeFileSync(pagePath, page(anchor));
+
+    const run = boot(dir);
+    assert.strictEqual(run.status, 0, `a tree carrying a workbench page should boot cleanly:\n${run.output}`);
+
+    const once = fs.readFileSync(pagePath, 'utf8');
+    assert.ok(once.includes('additionalTrustedDomains'), 'the page was not given a trusted-domain list');
+    assert.ok(once.includes('https://github.com'), 'github.com did not reach the page');
+    // A BARE <script>. The server hashes exactly that shape out of the page it has
+    // just built and puts the hashes in the CSP it serves with it, so a tag that
+    // carries any attribute is a script the page's own policy then refuses to run.
+    assert.ok(/\n\t\t<script>\n/.test(once), 'the injected script is not the bare form the CSP hashing matches');
+    // And it has to parse. The script is assembled from string fragments in
+    // server.js, where nothing else would notice a missing bracket until a device
+    // silently stopped applying the list.
+    const body = once.match(/<script>\n([\s\S]*?)\n\t\t<\/script>/);
+    assert.ok(body, 'the injected script could not be located to check');
+    new Function(body[1]); // eslint-disable-line no-new-func -- a parse check, never run
+
+    const twice = boot(dir);
+    assert.strictEqual(twice.status, 0, `a second start should boot cleanly:\n${twice.output}`);
+    assert.strictEqual(
+        fs.readFileSync(pagePath, 'utf8'),
+        once,
+        'a second start stacked another copy of the script into the page',
+    );
+
+    const strays = fs.readdirSync(path.dirname(pagePath)).filter((n) => n !== 'workbench.html');
+    assert.deepStrictEqual(strays, [], `the rewrite left files behind: ${strays.join(', ')}`);
+    fs.rmSync(dir, { recursive: true, force: true });
+}
+
+// A page missing the element costs a log line, not a start. The bootstrap is
+// restarted by the watchdog, so a throw here would be a crash loop.
+{
+    const dir = fixture(UPSTREAM);
+    const pagePath = path.join(dir, 'vscode-reh', 'out', 'vs', 'code', 'browser', 'workbench', 'workbench.html');
+    fs.mkdirSync(path.dirname(pagePath), { recursive: true });
+    fs.writeFileSync(pagePath, '<!DOCTYPE html>\n<html></html>\n');
+
+    const run = boot(dir);
+    assert.strictEqual(run.status, 0, `a page without the element should still boot:\n${run.output}`);
+    assert.ok(
+        /Could not widen the trusted link domains/.test(run.output),
+        `a page this cannot extend should be named:\n${run.output}`,
+    );
+    fs.rmSync(dir, { recursive: true, force: true });
+}
+
 preloadRidesAsOneToken()
     .then(proxySurvivesTheBootstrap)
     .then(stoppingTakesTheEditorServerWithIt)
     .then(() => {
         console.log(
             'ok -- product.json survives a truncated file and an unwritable directory, a missing ' +
-                'server tree is a failed start rather than a healthy one, a proxy that does not ' +
-                'parse costs only DNS, the preload rides as one token, the DNS proxy outlives ' +
-                'the bootstrap, and a stop takes the editor server with it',
+                'server tree is a failed start rather than a healthy one, the workbench page is ' +
+                'given the trusted-domain list once and a page without the element it extends is ' +
+                'reported rather than thrown, a proxy that does not parse costs only DNS, the ' +
+                'preload rides as one token, the DNS proxy outlives the bootstrap, and a stop ' +
+                'takes the editor server with it',
         );
     })
     .catch((err) => {

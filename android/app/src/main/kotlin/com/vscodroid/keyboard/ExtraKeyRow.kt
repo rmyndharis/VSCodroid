@@ -25,6 +25,44 @@ import com.vscodroid.util.Logger
  */
 private const val DOT_SIZE_DP = 8
 
+/**
+ * Height of the swipeable key pages, which is the larger half of what this row
+ * costs the page below it. Named because [ExtraKeyRow.rowHeightPx] has to agree
+ * with the layout parameter it is derived from.
+ */
+private const val PAGER_HEIGHT_DP = 56
+
+/**
+ * How much page has to survive this row before it is allowed to take any.
+ *
+ * The row takes its height OUT of the WebView rather than covering it, which is
+ * the whole point of the vertical layout it sits in, and until now it took that
+ * height whatever was left. On a landscape phone there is nothing left to take:
+ * measured on an API 36 emulator at 1080x2424, density 2.625, the keyboard's own
+ * inset is 662px of a 1080px window and the status bar another 137px, so with this
+ * row's 197px the page was handed 84px, about 32dp. The title bar and the status
+ * bar overlapped and no line of the file showed at all, so the row was offering
+ * keys for an editor nobody could see.
+ *
+ * This is a threshold for taking, NOT a promise of what is left. Landscape on a
+ * phone gives the page 107dp once the row stands down, which is still cramped:
+ * the keyboard alone is 61% of that window and nothing here can change it. What
+ * the number says is that a row costing 75dp is not worth paying for out of a
+ * page that would then hold less than a title bar, a tab strip and a line. Above
+ * the threshold nothing changes at all, which is every phone in portrait and every
+ * tablet in either orientation.
+ *
+ * Suppressing the row rather than shrinking it, because there is no shrink worth
+ * having. The pages are already at [MIN_TOUCH_TARGET_DP], the accessibility floor
+ * every key is sized against, so the only height that could be given back without
+ * going under it is the page-indicator band, about 19dp against a shortfall near
+ * 90. What suppression costs is real and is not softened here: Tab, Escape, the
+ * modifiers, the arrows and every bracket go with it, and in a terminal that
+ * includes Ctrl+C. It buys the only thing that makes any of them useful, which is
+ * being able to see what they did.
+ */
+private const val MIN_PAGE_HEIGHT_DP = 120
+
 class ExtraKeyRow @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null,
@@ -254,7 +292,7 @@ class ExtraKeyRow @JvmOverloads constructor(
 
         // ViewPager2 for swipeable key pages
         viewPager = ViewPager2(context).apply {
-            layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, dpToPx(56))
+            layoutParams = LayoutParams(LayoutParams.MATCH_PARENT, dpToPx(PAGER_HEIGHT_DP))
             offscreenPageLimit = 1
         }
         addView(viewPager)
@@ -297,6 +335,37 @@ class ExtraKeyRow @JvmOverloads constructor(
         setupPageChangeCallback()
     }
 
+    /**
+     * What this row costs the page, decided before it has ever been measured.
+     *
+     * The inset listener has to know the cost while the row is still GONE, when
+     * its measured height is zero, so this is derived from the same three figures
+     * the views above are built from rather than read back off them. The band's
+     * floor is [android.view.View.getMinimumHeight] rather than a literal because
+     * the badge grows with the user's font scale, which is exactly why the floor
+     * is derived from paint metrics up there.
+     *
+     * Pinned against the real measurement by
+     * `KeyRowAccessibilityInstrumentedTest.latchingAModifierDoesNotChangeTheHeightOfTheRow`,
+     * so this copy cannot drift from the row it is describing without a test
+     * saying so.
+     */
+    val rowHeightPx: Int =
+        dpToPx(PAGER_HEIGHT_DP) + dotContainer.minimumHeight + dpToPx(2) + dpToPx(4)
+
+    /**
+     * Whether the row has stood down because the page had no height to spare.
+     *
+     * Latched for as long as the keyboard is up, rather than recomputed per
+     * dispatch. Insets are re-dispatched on every change in the keyboard's own
+     * height, and a phone landscape sits far enough below [MIN_PAGE_HEIGHT_DP]
+     * that no ordinary change crosses back over it; but an emoji panel or a voice
+     * panel can move the boundary, and a row appearing and disappearing under a
+     * user's thumb would relayout the workbench and resize every PTY with it each
+     * time. That is the same cost the band floor above exists to prevent.
+     */
+    private var suppressedForHeight = false
+
     fun setupWithRootView(rootView: View) {
         ViewCompat.setOnApplyWindowInsetsListener(rootView) { v, insets ->
             // The display cutout is its own inset type, not part of systemBars().
@@ -317,8 +386,27 @@ class ExtraKeyRow @JvmOverloads constructor(
             val bottomInset = maxOf(bars.bottom, ime.bottom)
             v.setPadding(bars.left, bars.top, bars.right, bottomInset)
 
-            visibility = if (imeVisible) View.VISIBLE else View.GONE
+            // What the page would be left with if this row took its height too.
+            //
+            // The window's own height, not the root view's: this runs during the
+            // inset dispatch, before the traversal that would give the view a
+            // height for this configuration, so reading the view here would answer
+            // for the previous one. `displayMetrics` is window-scoped and is
+            // already updated, which is the same source `dpToPx` resolves against
+            // and the same one `pages` is packed from a few lines up.
+            val pageHeightPx =
+                resources.displayMetrics.heightPixels - bars.top - bottomInset - rowHeightPx
             if (!imeVisible) {
+                suppressedForHeight = false
+            } else if (pageHeightPx < dpToPx(MIN_PAGE_HEIGHT_DP)) {
+                suppressedForHeight = true
+            }
+            val showRow = imeVisible && !suppressedForHeight
+
+            visibility = if (showRow) View.VISIBLE else View.GONE
+            // Standing down for height leaves through the same door the keyboard
+            // going away already used, and needs everything that is done there.
+            if (!showRow) {
                 // The popup is a window of its own and the row going GONE does
                 // not take it with it: nothing here is its parent. Measured on an
                 // API 37 emulator, long press `{}`, then let the keyboard go: the
@@ -339,7 +427,11 @@ class ExtraKeyRow @JvmOverloads constructor(
                 longPressPopup = null
                 resetModifiersIfNeeded()
             }
-            Logger.d(tag, "IME visible=$imeVisible, bottomInset=$bottomInset")
+            Logger.d(
+                tag,
+                "IME visible=$imeVisible, bottomInset=$bottomInset, " +
+                    "pageHeight=${pageHeightPx}px, row=${if (showRow) "shown" else "hidden"}"
+            )
             insets
         }
     }

@@ -319,6 +319,7 @@ checkouts differed.
 | `test-process-monitor.js` | Points a scan at a fixture `/proc` and checks the snapshot: that the language servers that ship are recognised, that an unrelated user process carrying a server's name in its path is not, and that the count includes the process the monitor runs inside | exit status |
 | `test-platform-fix.js` | Runs the platform override under a faked `process.platform` and checks it engages for node-gyp and for nothing that merely mentions it in a path or an argument | exit status |
 | `test-server-bootstrap.js` | Boots the server bootstrap against a fixture tree and checks the `product.json` rewrite: overrides applied, a truncated file named rather than thrown, an unwritable directory leaving the existing file intact | exit status |
+| `test-xdg-open.js` | Runs the browser opener against a stand-in for the editor's CLI socket and checks it sends the `openExternal` message that handler actually reads, and that it refuses an address the handler would have skipped in silence while still answering 200 | exit status |
 | `test-process-monitor-extension.js` | Drives the process monitor extension against two snapshots that differ in every count and checks its notifications read the same either way. A notification cannot be edited once open, so any number baked into one freezes while the status bar beside it keeps moving | exit status |
 | `test-bridge-relay.js` | Extracts the bridge relay from the Kotlin raw string it lives in and runs it against a stub bridge, driving the real bundled extension, so what is asserted is the message a user is shown. Nothing else reads that script: it is neither compiled nor linted, so a bridge change can be reverted with every suite green. Also refuses a command an extension sends that the relay has no branch for, whose only symptom is a five-second timeout naming neither the command nor the cause | exit status |
 | `test-download-capture.js` | Exercises the download-capture script, which is JavaScript inside a Kotlin raw string handed to `evaluateJavascript`, so nothing compiles or lints it and no Kotlin test reaches past the bridge methods it calls. What it pins is the deferred `revokeObjectURL`: the workbench revokes a `blob:` URL on the next task, and choosing a destination takes seconds, so without the deferral every save finds nothing to write while the Kotlin suite, lint and the build all stay green | exit status |
@@ -866,7 +867,7 @@ override silently removes it from the running product.
 
 ### JavaScript / Node.js
 
-- `assets/server.js`, `assets/process-monitor.js`, `assets/platform-fix.js`, `assets/dns-proxy.js` and the four `assets/extensions/vscodroid.*` trees are hand-written JavaScript (not minified) and are the only parts of `assets/` in git. Keep them readable.
+- `assets/server.js`, `assets/process-monitor.js`, `assets/platform-fix.js`, `assets/dns-proxy.js`, `assets/xdg-open.js` and the four `assets/extensions/vscodroid.*` trees are hand-written JavaScript (not minified) and are the only parts of `assets/` in git. Keep them readable.
 - Use `const`/`let`, not `var`.
 - No TypeScript -- these run directly on the bundled Node.js.
 

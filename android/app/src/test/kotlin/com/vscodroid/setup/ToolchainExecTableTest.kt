@@ -91,6 +91,17 @@ class ToolchainExecTableTest {
     private fun tableLines() = execTable.readText().lines().filter { it.isNotEmpty() }
 
     /**
+     * The table without the row the app owns rather than a toolchain.
+     *
+     * `xdg-open` is written into every table, on a device with no toolchain
+     * installed included, because a browser opener is not a toolchain's to
+     * provide. The cases below are each about one toolchain's own rows and say so
+     * by reading this; the base row has its own case, which is where a change to
+     * it should fail.
+     */
+    private fun toolchainLines() = tableLines().filterNot { it.startsWith("xdg-open\t") }
+
+    /**
      * The trampoline gets no working directory it can trust and no shell to
      * expand anything, so the row has to name the payload outright. The env file
      * writes `$PREFIX/../usr/...` for its own reader, and copying that spelling
@@ -108,7 +119,7 @@ class ToolchainExecTableTest {
 
         assertEquals(
             listOf("ruby\t${filesDir.absolutePath}/usr/opt/ruby/bin/ruby"),
-            tableLines(),
+            toolchainLines(),
             "the trampoline cannot resolve this row, so `ruby` from a task or a " +
                 "make recipe still fails:\n" + execTable.readText(),
         )
@@ -198,7 +209,7 @@ class ToolchainExecTableTest {
 
         regenerate()
 
-        val (envRows, commandRows) = tableLines().partition { it.startsWith("\t") }
+        val (envRows, commandRows) = toolchainLines().partition { it.startsWith("\t") }
         assertEquals(1, envRows.size, "expected one environment row:\n" + execTable.readText())
         assertEquals(
             listOf("ruby\t${filesDir.absolutePath}/usr/bin/ruby"), commandRows,
@@ -321,17 +332,22 @@ class ToolchainExecTableTest {
 
         assertEquals(
             emptyList<String>(),
-            tableLines(),
+            toolchainLines(),
             "a row was written for a binary that is not on disk",
         )
     }
 
     /**
-     * With nothing installed the table goes, rather than being left as the last
-     * record of a toolchain the user has removed.
+     * With nothing installed a removed toolchain's rows go, and the row the app
+     * owns stays.
+     *
+     * The table used to be deleted outright here, which was right while every row
+     * in it belonged to a toolchain. It no longer is: `xdg-open` is what a Node
+     * browser helper spawns, it has to be reachable on a device that has never
+     * installed a toolchain, and that is most devices.
      */
     @Test
-    fun `an empty record removes the table`() {
+    fun `an empty record removes a toolchain's rows and keeps the app's own`() {
         elf("usr/opt/ruby/bin/ruby")
         stateFile.writeText(
             """[{"name":"ruby","installRoot":"usr/opt/ruby",""" +
@@ -339,10 +355,50 @@ class ToolchainExecTableTest {
         )
         regenerate()
         assertTrue(execTable.isFile, "the table was never written, so this proves nothing")
+        assertTrue(toolchainLines().isNotEmpty(), "control: the toolchain never got a row")
 
         stateFile.writeText("[]")
         regenerate()
 
-        assertFalse(execTable.exists(), "the table outlived the last toolchain")
+        assertEquals(
+            emptyList<String>(),
+            toolchainLines(),
+            "a removed toolchain's rows outlived it",
+        )
+        assertTrue(
+            execTable.isFile,
+            "the table went with the last toolchain and took the browser opener with it",
+        )
+    }
+
+    /**
+     * The row the app owns, which no toolchain provides and every device needs.
+     *
+     * Node's browser helpers spawn the literal command `xdg-open`, so the name is
+     * not ours to choose. The interpreter form is: the payload is JavaScript under
+     * `filesDir`, which SELinux will not execve, so the row names `libnode.so` in
+     * `nativeLibraryDir` and hands it the script.
+     */
+    @Test
+    fun `the browser opener gets a row on a device with no toolchain`() {
+        stateFile.writeText("[]")
+
+        regenerate()
+
+        val fields = tableLines().single().split("\t")
+        assertEquals(
+            3, fields.size,
+            "the row is not the interpreter form, so the trampoline would try to execve a " +
+                "JavaScript file:\n" + execTable.readText(),
+        )
+        assertEquals("xdg-open", fields[0], "the command is not the name Node helpers spawn")
+        assertTrue(
+            fields[1].endsWith("/libnode.so"),
+            "the interpreter is not the bundled Node, so nothing can run the payload: ${fields[1]}",
+        )
+        assertEquals(
+            "${filesDir.absolutePath}/server/xdg-open.js", fields[2],
+            "the row does not name the opener FirstRunSetup extracts",
+        )
     }
 }

@@ -2919,11 +2919,9 @@ class ToolchainManager(private val context: Context) {
             Logger.w(tag, "toolchains.json is unreadable; keeping the exec table as it stands")
             return
         }
-        if (installed.length() == 0) {
-            if (execTable.exists()) execTable.delete()
-            refreshTrampolineLinks(emptySet())
-            return
-        }
+        // No early return for an empty record any more. The table is no longer
+        // only about toolchains: the row this app owns below has to exist on a
+        // device that has never installed one, which is most devices.
 
         // Insertion-ordered so the file is stable between runs: a table that
         // reordered itself on every launch would make every diff of it
@@ -2995,6 +2993,24 @@ class ToolchainManager(private val context: Context) {
                 }
             }
         }
+
+        // The one row this app owns rather than a toolchain. `putIfAbsent`, and
+        // after the loop, so a toolchain shipping its own `xdg-open` keeps the
+        // name: rows are keyed by command and the toolchain's went in first, and
+        // an opener that came with a toolchain knows more about it than this does.
+        //
+        // Node's browser helpers spawn the literal command `xdg-open` on Android,
+        // and nothing on PATH answered to it, so a preview server could only print
+        // that it had given up. The interpreter form is used rather than a plain
+        // path because the program is a JavaScript file under `filesDir`, which
+        // SELinux will not `execve`; naming `libnode.so` in `nativeLibraryDir` as
+        // its interpreter is the same shape the script wrappers above use, and the
+        // reason this launch pass has to rewrite the table at all is that Android
+        // hands out a new `nativeLibraryDir` on every reinstall.
+        rows.putIfAbsent(
+            "xdg-open",
+            "xdg-open\t${Environment.getNodePath(context)}\t$filesDir/server/xdg-open.js",
+        )
 
         val body = (envRows.values + rows.values).joinToString("\n", postfix = "\n")
         execTable.parentFile?.mkdirs()

@@ -296,6 +296,7 @@ jobs:
           node scripts/test-download-capture.js
           node scripts/test-serve-network.js
           node scripts/test-welcome.js
+          node scripts/test-xdg-open.js
 
       - name: Run lint
         working-directory: android

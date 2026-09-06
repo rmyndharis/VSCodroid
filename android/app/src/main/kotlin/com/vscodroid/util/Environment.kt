@@ -66,9 +66,12 @@ object Environment {
         // Behind nativeLibDir, because that is where bash, node, git and rg
         // live as real executables and no toolchain may shadow them.
         //
-        // Absent for anyone who has installed no toolchain: the generator only
-        // creates it when there is something to put in it, and a PATH entry that
-        // does not exist costs one failed lookup per command.
+        // Present on every device, which it was not until `xdg-open` moved in.
+        // The generator used to create this directory only when a toolchain had
+        // put something in it, so on a device with none the entry named nothing
+        // and cost one failed lookup per command. It now always carries at least
+        // the browser opener, which is a command the editor needs whether or not
+        // a toolchain was ever installed.
         val basePath = "$nativeLibDir:${getTrampolineBinDir(context)}:$filesDir/usr/bin"
         val path = if (extraPath != null)
             "$basePath:$extraPath:/system/bin"

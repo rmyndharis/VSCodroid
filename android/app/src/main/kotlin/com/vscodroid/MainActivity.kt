@@ -3132,6 +3132,8 @@ class MainActivity : AppCompatActivity() {
         injectKeyboardGuard()
         // Fix #7: Override window.open() to route through AndroidBridge
         injectWindowOpenOverride()
+        // Answers a paste out of Android's clipboard, which the WebView will not
+        injectClipboardReadFallback()
         // Keeps a downloaded blob readable long enough to be saved, and names it
         injectDownloadCapture()
         // Open in Browser, SSH keys and About are contributed by the bundled bridge
@@ -3516,6 +3518,33 @@ class MainActivity : AppCompatActivity() {
                     // there because that strip is already far wider than 12px, but
                     // narrow it and this rule starts deciding its width.
                     '  .slider { min-width: 12px !important; }',
+                    // A modal dialog is 480px wide on a 411px phone, and the
+                    // overflow is not shared: `.monaco-dialog-modal-block` centres
+                    // the box, so 34.5px hangs off each side and the left half is
+                    // simply unreachable. `min-width` beats `max-width` in CSS, so
+                    // the `max-width:90vw` sitting beside it in the same rule never
+                    // binds and cannot.
+                    //
+                    // Which button is lost is not luck. `rearrangeButtons` takes
+                    // its Linux branch here, because the WebView's user agent says
+                    // Linux, and that branch puts the PRIMARY action last in DOM
+                    // order against a right-aligned row: the affirmative button is
+                    // the one off the screen. On the external-link prompt that is
+                    // "Open", which is the whole point of the dialog, and on the
+                    // GitHub device-code sign-in it is the only way forward.
+                    //
+                    // `min()` rather than 0, so nothing changes where there is room:
+                    // a tablet keeps the 480px this reads as the designed width, and
+                    // only a viewport narrower than that is clamped to fit.
+                    '  .monaco-dialog-box { min-width: min(480px, 90vw) !important; }',
+                    // Clamping the box alone still loses buttons: the row is
+                    // `white-space:nowrap` with `overflow:hidden`, so four actions
+                    // that no longer fit are clipped rather than moved. Wrapping is
+                    // what makes the narrower box actually show them, and the 67px
+                    // indent that aligns them under the message is worth more as
+                    // width on a phone than as alignment.
+                    '  .monaco-dialog-box > .dialog-buttons-row > .dialog-buttons { flex-wrap: wrap !important; }',
+                    '  .monaco-dialog-box:not(.align-vertical) > .dialog-buttons-row > .dialog-buttons { margin-left: 0 !important; }',
                     '  .quick-input-list .monaco-list-row { min-height: 36px !important; }',
                     // The chrome's own text, which no setting in this build can reach.
                     // `editor.fontSize` governs the editor and nothing else; the
@@ -3608,6 +3637,89 @@ class MainActivity : AppCompatActivity() {
                     }
                     return orig.apply(window, arguments);
                 };
+            })();
+            """.trimIndent(),
+            null
+        )
+    }
+
+    /**
+     * Answers the workbench's clipboard READ out of Android's clipboard.
+     *
+     * Copy works and paste does not, and the asymmetry is the WebView's: it
+     * grants the page `clipboard-write` and refuses `clipboard-read`. There is
+     * no site-permission UI in a WebView to grant it in, and
+     * `WebChromeClient.onPermissionRequest` has no clipboard resource to grant
+     * even if there were, so nothing the user can do makes the read succeed.
+     *
+     * What the workbench does with the rejection is the visible half. Its one
+     * `IClipboardService.readText` catches it and raises a STICKY notification
+     * telling the user to grant a permission that does not exist here, and the
+     * promise only settles when they dismiss it, resolving the empty string. So
+     * every paste costs a modal that cannot be acted on and pastes nothing.
+     *
+     * [ClipboardBridge.readFromClipboard] has been able to answer this the whole
+     * time. It is token-validated, it declines to open a `content://` URI through
+     * our own ContentResolver, and it is unit-tested. It simply had no caller in
+     * the page: the only hits outside the built tree were the bridge itself and
+     * its test. This is that caller.
+     *
+     * On the prototype rather than on `navigator.clipboard`, because the call
+     * site resolves the method off the ACTIVE window's navigator on every paste
+     * rather than capturing it once, and the prototype is what every one of those
+     * lookups ends at. The instance is patched instead only where the interface
+     * global is missing, which is not this WebView but costs two lines to be sure
+     * of.
+     *
+     * Injected after load, which is soon enough and provably so: nothing captures
+     * `readText` at bundle-evaluation time. The one thing read that early is a
+     * capability probe that tests the method for truthiness to decide whether to
+     * register the terminal's paste command, and a wrapper is still a function,
+     * so the probe answers the same either way.
+     *
+     * The original is tried FIRST and this only answers its rejection. A WebView
+     * that one day grants the permission then keeps its own answer, and the
+     * fallback costs a rejected promise per paste until it does.
+     *
+     * A null answer is the empty string, not an error: the bridge returns null
+     * for a clipboard holding no text, and pasting nothing is the correct outcome
+     * there. A missing bridge or a missing token rethrows instead, so a genuine
+     * failure still reaches the user as the error it is rather than as a paste
+     * that silently did nothing.
+     *
+     * Fixes the editor, the terminal, the command palette and every extension's
+     * `vscode.env.clipboard.readText()` at once: all of them are that one service.
+     */
+    private fun injectClipboardReadFallback() {
+        webView?.evaluateJavascript(
+            """
+            (function() {
+                if (window.__vscodroidClipboardPatched) return;
+                function fallback(reason) {
+                    var t = (window.__vscodroid || {}).authToken;
+                    if (!t || typeof AndroidBridge === 'undefined') { throw reason; }
+                    var text = AndroidBridge.readFromClipboard(t);
+                    return (text === null || text === undefined) ? '' : text;
+                }
+                function wrap(orig) {
+                    return function() {
+                        var self = this, args = arguments;
+                        try {
+                            return Promise.resolve(orig.apply(self, args)).catch(fallback);
+                        } catch (e) {
+                            return Promise.reject(e).catch(fallback);
+                        }
+                    };
+                }
+                var proto = window.Clipboard && window.Clipboard.prototype;
+                if (proto && typeof proto.readText === 'function') {
+                    proto.readText = wrap(proto.readText);
+                } else if (navigator.clipboard && typeof navigator.clipboard.readText === 'function') {
+                    navigator.clipboard.readText = wrap(navigator.clipboard.readText.bind(navigator.clipboard));
+                } else {
+                    return;
+                }
+                window.__vscodroidClipboardPatched = true;
             })();
             """.trimIndent(),
             null

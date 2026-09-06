@@ -397,6 +397,11 @@ still does not reach is an absolute-path invocation such as `$JAVA_HOME/bin/java
 forking its own helper by absolute path (the JDK's `lib/jspawnhelper`), and direct execution of a
 shebang script under `filesDir`, whose own inode is refused before its interpreter is consulted.
 
+The table is no longer only about toolchains. One row is the app's own: `xdg-open`, the literal
+command every Node browser helper spawns, mapped through `libnode.so` onto `assets/xdg-open.js`.
+That is why the generator now writes a table and a `tcbin` on a device with no toolchain installed,
+where it used to delete both.
+
 ---
 
 ## 3. Server Bootstrap

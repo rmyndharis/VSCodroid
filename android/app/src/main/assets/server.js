@@ -31,6 +31,26 @@ const REH_DIR = path.join(SERVER_DIR, 'vscode-reh');
 // hex so it cannot run past the object it belongs to.
 const CALLBACK_PAYLOAD = /JSON\.stringify\(\{ id: id, uri: uri(?:, nonce: '[0-9a-f]*')? \}\)/;
 
+// Which external addresses open without the "Do you want VSCodroid to open the
+// external website?" confirmation.
+//
+// github.com is not a convenience. The GitHub sign-in this build can run is the
+// device-code flow, and it ends in env.openExternal("https://github.com/login/device"),
+// so without this entry the one screen between a user and a signed-in editor is a
+// confirmation dialog. Everything else the workbench opens keeps the prompt.
+//
+// Loopback is deliberately absent. The matcher answers for localhost, *.localhost,
+// 127.0.0.1 and [::1] on any port before it ever consults this list, so a dev-server
+// preview already opens without a prompt and an entry here would only look like it
+// was doing the work.
+//
+// Written with the scheme, so a bare host cannot also match plain http.
+const TRUSTED_LINK_DOMAINS = ['https://open-vsx.org', 'https://github.com'];
+
+// What says the workbench page has already been given the list above, so a second
+// start does not stack a second copy of the same script into it.
+const TRUSTED_DOMAINS_MARKER = 'vscodroid-trusted-domains';
+
 /**
  * Replaces a file in one step, the way the product.json rewrite below does.
  *
@@ -72,7 +92,7 @@ const productOverrides = {
         controlUrl: '',
         nlsBaseUrl: ''
     },
-    linkProtectionTrustedDomains: ['https://open-vsx.org'],
+    linkProtectionTrustedDomains: TRUSTED_LINK_DOMAINS,
     telemetryOptIn: false,
     enableTelemetry: false,
     // Where the page is told to fetch its translated interface strings.
@@ -243,6 +263,75 @@ if (!fs.existsSync(rehEntryPoint)) {
         log('error', 'Sign-in still works, but a callback is matched by request id alone.');
     }
 
+    // Give the page the trusted-domain list, which the product.json rewrite above
+    // cannot reach.
+    //
+    // That rewrite reaches THIS process's IProductService and stops there. The page
+    // never reads the file: the product object is inlined into the workbench bundle
+    // at build time, and the only product the server hands the page at runtime is a
+    // three-key object that does not carry this list. So what the confirmation
+    // dialog consults is branding/product.json as it stood at the last server build,
+    // and widening it there alone would reach a device only after a ~30 minute
+    // rebuild and a new server release.
+    //
+    // The workbench adds `additionalTrustedDomains` from its web construction
+    // options to whatever the product lists, and those options are JSON in a meta
+    // element of a page this server rebuilds FROM A TEMPLATE ON EVERY REQUEST. So a
+    // script added to that template arrives with an ordinary app update, where
+    // editing the bundle would not: /static is served `max-age=31536000` with no
+    // ETag and no Last-Modified under a URL that does not change between runs, so a
+    // WebView that has loaded this build once would keep its cached bundle for a
+    // year and never see the edit. The document carries no caching headers at all.
+    //
+    // Safe against the page's own policy without touching it: the server hashes
+    // every bare <script> in the HTML it has just built and puts those hashes into
+    // the Content-Security-Policy it sends with it, so a script inserted here is
+    // covered by construction. It must stay a bare <script> for that to hold.
+    //
+    // branding/product.json carries the same list for the next server build. After
+    // it, this adds entries the page already has, which is a no-op by the membership
+    // test below rather than by luck.
+    //
+    // Guarded on the file existing rather than reporting its absence: a tree with
+    // no workbench page is not a tree this could fix, and a missing server tree is
+    // already a failed start above and a build-time gate in verify-server-tree.py.
+    const workbenchHtmlPath = path.join(REH_DIR, 'out/vs/code/browser/workbench/workbench.html');
+    try {
+        const html = fs.existsSync(workbenchHtmlPath) ? fs.readFileSync(workbenchHtmlPath, 'utf8') : null;
+        if (html !== null && !html.includes(TRUSTED_DOMAINS_MARKER)) {
+            const anchor =
+                '<meta id="vscode-workbench-web-configuration" data-settings="{{WORKBENCH_WEB_CONFIGURATION}}">';
+            if (!html.includes(anchor)) {
+                throw new Error('the workbench page does not carry the configuration element this extends');
+            }
+            const script = [
+                '',
+                '\t\t<script>',
+                `\t\t\t/* ${TRUSTED_DOMAINS_MARKER} */`,
+                '\t\t\t(function () {',
+                "\t\t\t\tvar el = document.getElementById('vscode-workbench-web-configuration');",
+                '\t\t\t\tif (!el) { return; }',
+                '\t\t\t\ttry {',
+                "\t\t\t\t\tvar settings = JSON.parse(el.getAttribute('data-settings'));",
+                '\t\t\t\t\tvar trusted = settings.additionalTrustedDomains || [];',
+                `\t\t\t\t\tvar wanted = ${JSON.stringify(TRUSTED_LINK_DOMAINS)};`,
+                '\t\t\t\t\tfor (var i = 0; i < wanted.length; i++) {',
+                '\t\t\t\t\t\tif (trusted.indexOf(wanted[i]) === -1) { trusted.push(wanted[i]); }',
+                '\t\t\t\t\t}',
+                '\t\t\t\t\tsettings.additionalTrustedDomains = trusted;',
+                "\t\t\t\t\tel.setAttribute('data-settings', JSON.stringify(settings));",
+                '\t\t\t\t} catch (e) { /* a broken configuration is the workbench own report to make */ }',
+                '\t\t\t})();',
+                '\t\t</script>',
+            ].join('\n');
+            writeThroughRename(workbenchHtmlPath, html.replace(anchor, () => anchor + script));
+            log('info', 'Trusted link domains given to the workbench page');
+        }
+    } catch (e) {
+        log('error', `Could not widen the trusted link domains: ${e.message}`);
+        log('error', 'External links still open, behind the confirmation dialog.');
+    }
+
     // Build server arguments.
     //
     // No connection-token flag of any kind, and that absence is the security
@@ -263,6 +352,17 @@ if (!fs.existsSync(rehEntryPoint)) {
         '--host', HOST,
         '--port', String(PORT),
         '--accept-server-license-terms',
+        // Stops the server pointing BROWSER at a script that cannot run.
+        //
+        // Without the flag the extension host is handed
+        // BROWSER=<appRoot>/bin/helpers/browser.sh, and every Node helper that
+        // opens a browser prefers $BROWSER over anything else. That script is a
+        // shebang file under filesDir, which SELinux refuses to execve, and it
+        // execs a `$ROOT/node` the packaged tree does not carry, so it could never
+        // have worked. Leaving it set means the helpers stop at a dead end instead
+        // of falling through to `xdg-open`, which is the name this build now
+        // answers to through the execution trampoline.
+        '--without-browser-env-var',
         // Without this every folder opens in Restricted Mode, which blocks most
         // extensions from activating.
         //
