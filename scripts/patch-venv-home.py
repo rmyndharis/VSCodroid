@@ -126,6 +126,18 @@ def patch(path):
 
 def files_under(target):
     """The venv modules to consider, whether given a file or a tree."""
+    # A target that is not there is a broken tree, not a tree with nothing to
+    # do, and both modes have to say so. download-python.sh names one file and
+    # would otherwise print nothing and exit 0 for a Python whose venv module
+    # moved or never arrived, shipping an interpreter where `python3 -m venv`
+    # fails with "No module named venv". The Gradle gate cannot cover for that,
+    # because what arms it is the very file that is missing.
+    if not os.path.exists(target):
+        raise SystemExit(
+            f'{target}: no such file or directory. The bundled Python was '
+            'assembled without its venv module, so nothing was rewritten and '
+            'nothing on device can create an environment.'
+        )
     if os.path.isfile(target):
         return [target]
     found = []
@@ -155,7 +167,7 @@ def _decide(dirname, base_prefix):
 
 
 def self_test():
-    """The three layouts the guard has to tell apart."""
+    """The three layouts the guard has to tell apart, and a target that is absent."""
     stdlib = 'python%d.%d' % sys.version_info[:2]
     with tempfile.TemporaryDirectory() as root:
         base = os.path.join(root, 'usr')
@@ -183,8 +195,22 @@ def self_test():
         # No base prefix to fall back to: better to leave it than to invent one.
         empty = os.path.join(root, 'nowhere')
         assert _decide(native, empty) == native, 'the guard invented a home'
+
+        # A target that is not there is refused in both modes. The write mode is
+        # the one download-python.sh runs, and a silent exit 0 there ships a
+        # Python with no venv module at all, which the Gradle gate cannot notice
+        # because the file it tests to arm itself is the missing one.
+        missing = os.path.join(root, 'absent', 'venv', '__init__.py')
+        for mode in ([], ['--check']):
+            refused = False
+            try:
+                main(mode + [missing])
+            except SystemExit:
+                refused = True
+            assert refused, 'a target that does not exist was accepted'
     print('ok -- venv home decided correctly for an installation, a bare '
-          'directory, an active environment and a missing base prefix')
+          'directory, an active environment and a missing base prefix, and a '
+          'target that does not exist refused in both modes')
 
 
 def main(argv):

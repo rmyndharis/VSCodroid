@@ -1887,6 +1887,18 @@ class SafSyncEngine(private val context: Context) {
 
                     if (isDir && !walkTree(treeUri, docId, relativePath, result, skipped)) {
                         complete = false
+                        // Recorded for the same reason a skipped directory is, and it
+                        // is the same loss: the children could not be enumerated, so
+                        // none of them becomes a DocumentInfo, none reaches phase 2,
+                        // and none reaches an `unfetched.add`. Without this the DELETE
+                        // guard proves "the device holds the only copy" from a set that
+                        // cannot contain them and lets deleteDocument take the whole
+                        // directory on the device, including documents the mirror never
+                        // held. Unlike a skipped name, nothing filters this one out
+                        // earlier: [shouldWriteBack] drops SKIP_DIRECTORIES by name,
+                        // and a directory whose enumeration merely failed has an
+                        // ordinary one.
+                        skipped.add(relativePath)
                     }
                 }
             } ?: return false  // the provider refused to answer at all
@@ -3189,13 +3201,26 @@ class SafSyncEngine(private val context: Context) {
                 }
             }
             SyncType.DELETE -> {
-                // A null uri is the same outcome as a refusal, and deliberately
-                // shares the branch: [findChildDocId] folds a failed provider
-                // query into the null it returns for genuine absence, so "could
-                // not be resolved" and "is not there" arrive here as one answer,
-                // and both leave the device holding what the editor no longer
-                // shows.
-                if (job.safDocUri == null || !deleteFromSaf(job.safDocUri)) {
+                // A null uri is NOT the same outcome as a refusal, though it used to
+                // share the branch: [findChildDocId] folds a failed provider query into
+                // the null it returns for genuine absence, so "could not be resolved"
+                // and "is not there" arrive here as one answer. Only the first leaves
+                // the device holding what the editor no longer shows; for the second
+                // both clauses of the notice are false, and it tells the user to go and
+                // delete a file that is not there.
+                //
+                // [providerHolds] is the three-valued form of the same question and is
+                // what the DELETE guard above already uses. Announce unless the device
+                // positively answers "gone": a provider that cannot answer is still
+                // treated as holding, so a transient failure keeps the warning it used
+                // to give.
+                val refused = if (job.safDocUri == null) {
+                    job.safTreeUri != null &&
+                        providerHolds(job.safTreeUri, job.relativePath) != false
+                } else {
+                    !deleteFromSaf(job.safDocUri)
+                }
+                if (refused) {
                     announceDeleteRefused(File(job.localPath))
                 }
                 // Both cleanups below run whatever the device folder decided.
@@ -3517,8 +3542,10 @@ class SafSyncEngine(private val context: Context) {
         // mirror entry that was never the document, and the document on the device is
         // the only copy of itself.
         //
-        // Matched by prefix for a directory, since a directory holds what is under it
-        // and [unfetched] holds files only, and by exact path for a file, since its own
+        // Matched by prefix and by its own path for a directory, since a directory
+        // holds what is under it and [unfetched] carries a file for each document this
+        // sync did not read plus the directory itself where it read none of them, and
+        // by exact path for a file, since its own
         // path is the only one that names it. The separator is appended so `docs` does
         // not answer for `docs2`, and any depth below counts; on the file side
         // exactness is what stops an unread `notes.md.bak` from keeping `notes.md`.
@@ -3544,7 +3571,13 @@ class SafSyncEngine(private val context: Context) {
         if (type == SyncType.DELETE) {
             val holdsUnread = if (isDirectory) {
                 val below = localFile.absolutePath + File.separator
-                unfetched.any { it.startsWith(below) }
+                // Its own path as well as the prefix. A directory is recorded by its
+                // own mirror path when this sync did not read what is under it, either
+                // because the name is skipped or because enumerating it failed, and
+                // the prefix test alone cannot match that entry: `below` carries a
+                // trailing separator the entry does not have. Deleting the directory
+                // itself is exactly the case those entries exist to refuse.
+                localFile.absolutePath in unfetched || unfetched.any { it.startsWith(below) }
             } else {
                 localFile.absolutePath in unfetched
             }

@@ -424,6 +424,33 @@ function start(log) {
                 res.writeHead(502);
                 res.end();
             });
+            // A 101 never reaches the response callback above. Node routes an
+            // upgrade response to this event and to nothing else, and when
+            // nothing is listening for it the runtime destroys the socket
+            // without raising a failure anywhere: measured on node v22.23.2
+            // against an origin that answers an ordinary GET with a 101, the
+            // request object gets 'close' and no 'error', so the handler above
+            // never runs either. `res` was then neither written nor ended and
+            // the client waited with no status and no error at all, holding one
+            // socket at each end for as long as it cared to wait, with nothing
+            // logged. The setup bound cannot collect that: destroying a socket
+            // takes its timer with it.
+            //
+            // The socket is ours to close once this fires, because listening is
+            // what stops the runtime closing it. Nothing here speaks whatever
+            // protocol the origin switched to, and the client asked for none,
+            // so the leg reports the origin as failed by the same rule the
+            // handler above follows, headersSent branch included.
+            upstream.on('upgrade', (_upstreamRes, socket) => {
+                socket.destroy();
+                log('warn', `dns-proxy: ${target.hostname} switched protocols on a request that did not ask`);
+                if (res.headersSent) {
+                    res.destroy();
+                    return;
+                }
+                res.writeHead(502);
+                res.end();
+            });
             // A client that vanishes mid-transfer must tear down the upstream
             // leg, not surface as an unhandled 'error' -- same contract as the
             // CONNECT handler below.
@@ -623,7 +650,16 @@ function start(log) {
                     if (HOP_BY_HOP_HEADERS.includes(req.rawHeaders[i].toLowerCase())) continue;
                     lines.push(`${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}`);
                 }
-                upstream.write(`${lines.join('\r\n')}\r\n\r\n`);
+                // latin1, which is the encoding a header block is bytes in and
+                // the one Node used to hand these lines back: a header byte
+                // above 0x7F arrives here as one char, and the default encoding
+                // would put it back on the wire as the two bytes of its UTF-8
+                // form. A cookie, a Sec-WebSocket-Protocol or any signed value
+                // carrying such a byte then reached the origin altered, and the
+                // handshake it fails is one with nothing in it naming a proxy.
+                // The plain leg never had this: it hands its headers to
+                // http.request, which encodes them itself.
+                upstream.write(Buffer.from(`${lines.join('\r\n')}\r\n\r\n`, 'latin1'));
                 if (head && head.length) {
                     upstream.write(head);
                 }

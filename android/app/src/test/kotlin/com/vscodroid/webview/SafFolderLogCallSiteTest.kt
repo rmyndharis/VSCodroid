@@ -50,8 +50,20 @@ class SafFolderLogCallSiteTest {
 
     private val source = SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt")
 
+    /**
+     * `openSafFolder` from its signature line, not from its opening brace.
+     *
+     * [SourceScan.body] starts at the brace, and the `uri: Uri` that makes a tree
+     * URI a source to `LogTaint` is written in the signature above it. Handed the
+     * body alone the reader has nothing to seed from, taints no name, and answers
+     * empty to every question, which is indistinguishable from a body that logs
+     * nothing.
+     */
     private val opened by lazy {
-        SourceScan.withoutComments(SourceScan.body(source, "private fun openSafFolder("))
+        val declaration = "private fun openSafFolder("
+        val body = SourceScan.body(source, declaration)
+        val start = source.indexOf(declaration)
+        SourceScan.withoutComments(source.substring(start, source.indexOf('{', start)) + body)
     }
 
     @Test
@@ -86,11 +98,13 @@ class SafFolderLogCallSiteTest {
         // through `reducedLogs` ties this control to the same machinery, so the
         // two fail together or not at all.
         //
-        // File-scoped, not body-scoped, because that is the scope the reader
-        // works in. MainActivity has exactly one reduced log statement today, the
-        // one at the top of openSafFolder, and `the body being checked was
+        // Scoped to the body this is about, and that scope is the whole of the
+        // control. Read off the file, it cannot fail for the deletion it names:
+        // MainActivity has a second reduced statement, the `urlLogLabel(url)`
+        // line in navigateToFolder, so the file goes on answering yes with the
+        // statement at the top of openSafFolder gone. `the body being checked was
         // actually found` is what still says openSafFolder is the right site.
-        val reduced = LogTaint.reducedLogs(source.lines())
+        val reduced = LogTaint.reducedLogs(opened.lines())
 
         assertTrue(reduced.isNotEmpty()) {
             "nothing in openSafFolder says which folder is being opened, so a bug report " +
@@ -98,8 +112,7 @@ class SafFolderLogCallSiteTest {
                 "folder by the digest the rest of the app already calls it by, not " +
                 "deleting the statement. Found:\n" +
                 opened.lines().filter { it.contains("Logger.") }
-                    .joinToString("\n") { "  ${it.trim()}" } +
-                "\nReduced statements in the whole file: " + reduced
+                    .joinToString("\n") { "  ${it.trim()}" }
         }
     }
 

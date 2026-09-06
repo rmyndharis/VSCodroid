@@ -645,6 +645,7 @@ flowchart TD
   P --> P15["0015 menubar: stay open when only the keyboard resized"]
   P --> P16["0016 sidebar: sash travel on narrow viewports"]
   P --> P17["0017 menus: ignore a pan that started in a submenu"]
+  P --> P18["0018 debug terminal: build the command without /usr/bin/env"]
 ```
 
 Five of these are load-bearing in ways their titles understate:

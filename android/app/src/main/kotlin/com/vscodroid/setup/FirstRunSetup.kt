@@ -1018,7 +1018,15 @@ class FirstRunSetup(
      * would see the app ignore it for ever with nothing to indicate why. The
      * fingerprint covers the certificates' own bytes rather than their aliases
      * because a Conscrypt alias is a hash of the subject, so a CA re-issued
-     * under the same name keeps the alias it had.
+     * under the same name keeps the alias it had. It now covers the system half
+     * as well, which is what lets a root the owner turned off rebuild the bundle:
+     * turning one off writes into a store of its own and leaves the certificate
+     * directory's mtime alone, exactly as installing one does.
+     *
+     * Built from the platform's merged store rather than from the certificate
+     * directory plus the owner's additions. See [deviceTrustedCertificates] for
+     * why: the directory keeps the file for a root the owner has distrusted, so
+     * copying it kept trusting what the rest of the phone no longer does.
      */
     fun setupGitCaBundle() {
         val caDir = systemCaCertificateDirs
@@ -1027,8 +1035,8 @@ class FirstRunSetup(
 
         val bundle = File(context.filesDir, "usr/etc/tls/cert.pem")
         val marker = File(context.filesDir, "usr/etc/tls/.user-ca-fingerprint")
-        val userPems = userCertificatePems()
-        val fingerprint = sha256HexOf(userPems.joinToString(""))
+        val storePems = deviceCertificatePems()
+        val fingerprint = sha256HexOf(storePems.joinToString(""))
 
         if (bundle.exists() && bundle.length() > 0 &&
             bundle.lastModified() >= caDir.lastModified() &&
@@ -1049,11 +1057,30 @@ class FirstRunSetup(
             // the wrong side of the cut, with nothing to suggest the file is the
             // problem. An interrupted write now leaves the previous bundle, or
             // no bundle at all, and either one gets rebuilt next time.
+            // The merged store when it answered, the directory when it did not.
+            //
+            // The store is the platform's own view and is the only one of the two
+            // that reflects a root the owner turned off, so where it answers it is
+            // the whole bundle and the directory is not read at all. Where it
+            // answers with nothing -- a provider that threw, a device without it --
+            // the directory is the fallback that keeps HTTPS working at all, which
+            // is worth more than honouring a removal. That is the same trade the
+            // freshness check above makes, and the reason caDir is still resolved
+            // before any of this: its mtime remains the cheap signal that the
+            // system half moved.
             val written = writeAtomically(bundle) { out ->
-                for (cert in certs) {
-                    if (cert.isFile) cert.inputStream().use { it.copyTo(out) }
+                if (storePems.isNotEmpty()) {
+                    for (pem in storePems) out.write(pem.toByteArray())
+                } else {
+                    Logger.w(
+                        tag,
+                        "The device CA store answered with nothing; falling back to " +
+                            "${caDir.path}, which cannot see a root the owner removed",
+                    )
+                    for (cert in certs) {
+                        if (cert.isFile) cert.inputStream().use { it.copyTo(out) }
+                    }
                 }
-                for (pem in userPems) out.write(pem.toByteArray())
             }
             if (!written) {
                 Logger.e(tag, "Could not write the CA bundle; the previous one is unchanged")
@@ -1072,8 +1099,12 @@ class FirstRunSetup(
             }
             Logger.i(
                 tag,
-                "CA bundle: ${certs.size} certificates from ${caDir.path}, " +
-                    "and ${userPems.size} user-installed CA(s)",
+                if (storePems.isNotEmpty()) {
+                    "CA bundle: ${storePems.size} certificates from the device trust store"
+                } else {
+                    "CA bundle: ${certs.size} certificates from ${caDir.path}, " +
+                        "with no device trust store to read"
+                },
             )
         } catch (e: Exception) {
             Logger.e(tag, "Failed to build CA bundle", e)
@@ -1118,9 +1149,9 @@ class FirstRunSetup(
      * there, rather than weakening the fingerprint until the store's changes go
      * unnoticed again.
      */
-    private fun userCertificatePems(): List<String> =
-        runCatching { userTrustedCertificates() }
-            .onFailure { Logger.w(tag, "Could not read the user CA store: ${it.message}") }
+    private fun deviceCertificatePems(): List<String> =
+        runCatching { deviceTrustedCertificates() }
+            .onFailure { Logger.w(tag, "Could not read the device CA store: ${it.message}") }
             .getOrDefault(emptyList())
             .mapNotNull { cert -> runCatching { pemOf(cert) }.getOrNull() }
             .sorted()
@@ -1146,22 +1177,34 @@ class FirstRunSetup(
      *
      * `AndroidCAStore` is the platform's own merged view of both halves, and it
      * is used here rather than the directories underneath it because it is the
-     * documented API and carries no path this app has to keep up to date.
-     * Conscrypt names its entries `system:<hash>.<n>` and `user:<hash>.<n>`, so
-     * the prefix is what separates the owner's own CAs from the roots that
-     * shipped with the device. Measured on an API 33 emulator from inside this
-     * app's process, with one CA installed through Settings: 126 aliases, of
-     * which exactly one began `user:`.
+     * documented API, carries no path this app has to keep up to date, and is
+     * the same view the platform's own trust manager reads. Conscrypt names its
+     * entries `system:<hash>.<n>` and `user:<hash>.<n>`. Measured on an API 33
+     * emulator from inside this app's process, with one CA installed through
+     * Settings: 126 aliases, of which exactly one began `user:`.
+     *
+     * Every alias, not only the `user:` half, and that is the point rather than
+     * a widening. A root the device owner has turned off in Settings > Trusted
+     * credentials leaves this store, and it does not leave
+     * [systemCaCertificateDirs], which still holds the file. Filtering to
+     * `user:` and copying that directory for the rest meant the bundle kept
+     * trusting a root the owner had distrusted, and every other app on the phone
+     * had stopped. That mattered less when only git read the bundle; SSL_CERT_FILE
+     * and REQUESTS_CA_BUNDLE now put it in front of python, pip and curl too.
+     *
+     * The removal is recorded in `/data/misc/user/0/cacerts-removed`, which this
+     * app cannot subtract for itself: the path is hardcoded, carries a user id,
+     * and moved into an APEX on Android 14. Reading the merged store is how the
+     * platform answers the same question, so it is what is asked.
      *
      * A `var` for the same reason as [systemCaCertificateDirs], and more
      * sharply: the provider does not exist on a JVM at all, so every test of
      * the bundle builder replaces this.
      */
-    internal var userTrustedCertificates: () -> List<Certificate> = {
+    internal var deviceTrustedCertificates: () -> List<Certificate> = {
         val store = KeyStore.getInstance("AndroidCAStore")
         store.load(null)
         store.aliases().toList()
-            .filter { it.startsWith("user:") }
             .mapNotNull { alias -> runCatching { store.getCertificate(alias) }.getOrNull() }
     }
 
@@ -5042,6 +5085,24 @@ internal fun bundledIdsToRelist(
         // Its entry was just dropped because the directory it named is gone --
         // an upgrade swapping 1.0.0 for 1.3.0 does exactly this.
         id in droppedIds -> true
+        // Ours, always, and this is the half that used to disagree with itself.
+        // The rule below exists so a downloaded extension the user deliberately
+        // removed does not come back on every update, and that promise is about
+        // marketplace copies. [bundledDirsToExtract] already exempts this prefix
+        // from exactly the same rule, so the directory returned on every update
+        // and then sat unlisted and unloaded, which is the state the comment in
+        // [manifestEntryFor] describes.
+        //
+        // These are not a removable preference: they carry the device folder
+        // picker, the toolchain screen and the editor defaults this app
+        // contributes, so a removed one takes those with it and nothing inside
+        // the editor can put it back. The removal that reached here was possible
+        // on releases that wrote no `isBuiltin`, and `isBuiltin` only stops the
+        // next one; it cannot relist a copy already gone. Without this arm a user
+        // who removed the welcome extension keeps the prune of the app's old
+        // editor overrides, which commits once and for all, while the defaults
+        // that replaced them never load.
+        id.startsWith(OWN_EXTENSION_PREFIX) -> true
         // Never bundled before, so there was no copy for the user to remove.
         else -> id !in previouslyBundledIds
     }

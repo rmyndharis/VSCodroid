@@ -62,7 +62,10 @@ permissions:
 # that means unpublishing or deleting the release before the run, which takes it
 # out of `releases/latest` for the duration, and that is where every non-Play
 # install resolves its toolchain ZIPs. So it stays open deliberately: it needs a
-# tag to move, while the pointer is read on every sideloaded install.
+# tag to move, while the pointer is read on every sideloaded install. What
+# reaches it is narrower than it was: the version gate below refuses a tag
+# re-aimed at a different commit, so a second run is one re-pushed at the same
+# commit, which rebuilds the same tree.
 # `draft: true` is no shortcut to it either, because `finalizeRelease` returns
 # early when that input is set and the release would never be published at all.
 #
@@ -120,6 +123,14 @@ jobs:
         if: github.event_name == 'push'
         env:
           TAG: ${{ github.ref_name }}
+          # What the ref pointed at before this push and what it points at now.
+          # Every other check here compares this tree against OTHER tags, so none
+          # of them can see the tag itself being re-aimed: by the time the runner
+          # has the checkout, the tag is simply on this commit and git holds no
+          # record of where it used to be. The push event does, and reading it
+          # costs neither a token nor a call to the API.
+          TAG_WAS: ${{ github.event.before }}
+          TAG_NOW: ${{ github.event.after }}
         run: |
           # Through the environment and validated before use: the tag reaches a
           # git command below, and the workflow's v* filter is a match rule, not
@@ -127,6 +138,39 @@ jobs:
           case "$TAG" in
             v[0-9]*) ;;
             *) echo "::error::Refusing tag $TAG; expected vMAJOR.MINOR.PATCH"; exit 1 ;;
+          esac
+
+          # A tag that already existed and now names a different commit satisfies
+          # every check below, because all of them still describe the release that
+          # was cut from the old commit: versionName still matches the tag,
+          # versionCode still beats the version before it, and the three CHANGELOG
+          # rules were all satisfied when the tag was first taken. The run then
+          # rebuilds, re-signs and replaces the assets of a release that is
+          # already public, with a tree of everything merged since, still
+          # labelled the same versionName and versionCode.
+          # FirstRunSetup.setupIsStale compares
+          # exactly those two fields, so every device already on that version
+          # installs the new tree and skips extraction and migrations entirely.
+          #
+          # Forty zeros means the tag is new. TAG_WAS equal to TAG_NOW means it
+          # was re-pushed at the same commit, which rebuilds the same tree and is
+          # how a run cancelled or killed midway is retried. A push event
+          # carrying no `before` at all is allowed through rather than blocking a
+          # release on the shape of a payload.
+          #
+          # This is a guardrail and not a wall, deliberately: deleting the tag and
+          # pushing it again presents as a new tag and is allowed, which is the
+          # right way back when the earlier run never published anything. What it
+          # stops is the one-line accident, `git tag -f` followed by `git push
+          # -f`, which is indistinguishable from a normal release everywhere else.
+          case "$TAG_WAS" in
+            ""|0000000000000000000000000000000000000000|"$TAG_NOW") ;;
+            *) echo "::error::Tag $TAG pointed at $TAG_WAS and now points at $TAG_NOW." \
+                    "Re-aiming a tag republishes the assets of a release users already" \
+                    "have, under a versionName and versionCode that did not change, so" \
+                    "their next install skips setup. Cut a new version; if nothing was" \
+                    "published, delete the tag and push it again."
+               exit 1 ;;
           esac
 
           gradle_file=android/app/build.gradle.kts
@@ -161,11 +205,23 @@ jobs:
           fi
 
           # versionCode is what migrations threshold against; a repeat means a
-          # migration written for this release runs for nobody. --match keeps
-          # build-vscode-oss.yml's server-* tags out of "previous": those land on
-          # arbitrary commits, and comparing against one either fails a
-          # legitimate tag or lets a repeated versionCode through.
-          previous=$(git describe --tags --abbrev=0 --match 'v[0-9]*' "$TAG^" 2>/dev/null || echo "")
+          # migration written for this release runs for nobody. The 'v[0-9]*'
+          # filter keeps build-vscode-oss.yml's server-* tags out of "previous":
+          # those land on arbitrary commits, and comparing against one either
+          # fails a legitimate tag or lets a repeated versionCode through.
+          #
+          # The highest released version, not the nearest tag behind this commit.
+          # `git describe ... "$TAG^"` answered a question about ancestry, and a
+          # tag does not have to be cut on top of the last one: aim v1.3.0 at a
+          # branch taken before v1.2.0 and the nearest tag behind it is v1.1.0,
+          # so v1.2.0's versionCode is never compared against and the store gets
+          # a build it will refuse or a device gets one whose migrations do not
+          # run. Play requires versionCode to rise across every upload, not along
+          # one line of history, so the whole tag list is the right comparison.
+          # The tag being placed is excluded because it is already on this commit
+          # by the time the runner sees it, and comparing a tree against itself
+          # would fail every release.
+          previous=$(git tag --list 'v[0-9]*' --sort=-v:refname | grep -vFx "$TAG" | head -1 || true)
           if [ -n "$previous" ]; then
             previous_code=$(git show "$previous:$gradle_file" 2>/dev/null \
               | grep -m1 -E '^[[:space:]]*versionCode = ' | sed 's/[^0-9]*//g' || echo "")

@@ -7,6 +7,7 @@ import androidx.annotation.StringRes
 import com.vscodroid.BuildConfig
 import com.vscodroid.R
 import android.system.Os
+import com.google.android.play.core.assetpacks.AssetPackException
 import com.google.android.play.core.assetpacks.AssetPackManagerFactory
 import com.google.android.play.core.assetpacks.AssetPackState
 import com.google.android.play.core.assetpacks.AssetPackStateUpdateListener
@@ -563,7 +564,22 @@ class ToolchainManager(private val context: Context) {
         } else {
             // Ensure listener is registered before fetching
             registerListener()
+            // The Task is answered rather than discarded. A fetch Play refuses
+            // outright delivers no AssetPackState at all, so [handleDownloadState]
+            // never runs for this pack and the queue's downloadNext() is never
+            // reached: the row sits on its last status for the rest of the session,
+            // every pack queued behind it is never even requested, nothing is
+            // written to the log, and the only way out is Cancel.
+            //
+            // Routed through [fail] like every listener-delivered failure, so the
+            // card, the queue and the log all learn about it the same way. A
+            // duplicate terminal report costs nothing: the queue ignores one for a
+            // pack it has already moved past, and the card repaints.
             assetPackManager.fetch(listOf(info.packName))
+                .addOnFailureListener { e ->
+                    Logger.e(tag, "Play refused to fetch ${info.packName}: ${e.message}")
+                    fail(info.packName, playFetchFailure(e))
+                }
         }
     }
 
@@ -3988,6 +4004,22 @@ enum class ToolchainFailure(@param:StringRes val message: Int) {
  * has no constant for and fall through with the rest. Every code that lands in
  * INTERNAL is still in the log line beside this call, raw.
  */
+/**
+ * Why a Play fetch was refused before any state was ever delivered.
+ *
+ * [AssetPackException] carries the same error codes the state listener reports,
+ * so a refusal maps to the same message as the equivalent mid-download failure.
+ * Anything else is an exception the Play library does not classify, and INTERNAL
+ * is the honest answer: the alternative is telling a user to check their
+ * connection for something that was never a network problem.
+ *
+ * Separate from [toolchainFailureFor] because that one takes a code and this one
+ * takes a throwable, and the cast is the whole of the difference.
+ */
+internal fun playFetchFailure(e: Exception): ToolchainFailure =
+    (e as? AssetPackException)?.let { toolchainFailureFor(it.errorCode) }
+        ?: ToolchainFailure.INTERNAL
+
 internal fun toolchainFailureFor(errorCode: Int): ToolchainFailure = when (errorCode) {
     AssetPackErrorCode.NETWORK_ERROR -> ToolchainFailure.NETWORK
     AssetPackErrorCode.INSUFFICIENT_STORAGE -> ToolchainFailure.STORAGE

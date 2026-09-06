@@ -80,6 +80,17 @@ class EditorLocaleTest {
             "and the mirror case, which passed before only because the script arm " +
                 "happened to be tested first",
         )
+
+        // A tag is not always language plus region. Android puts a Regional
+        // preference on the default locale as a `-u-` Unicode extension, so these
+        // are what a phone whose owner set one actually reports, and reading the
+        // region as the LAST subtag saw "mon" and "hanidec" instead: Taiwan came
+        // up Simplified, workbench and extension manifests both.
+        assertEquals(
+            "zh-hant", resolve("zh-TW-u-fw-mon"),
+            "the region is the subtag after the language, not whatever trails the tag",
+        )
+        assertEquals("zh-hans", resolve("zh-CN-u-nu-hanidec"))
     }
 
     @Test

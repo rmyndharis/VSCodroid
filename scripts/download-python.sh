@@ -32,6 +32,12 @@ PYTHON_MAJOR_MINOR=$(echo "$PYTHON_FULL_VER" | grep -oE '^[0-9]+\.[0-9]+')
 REQUIRED_PACKAGES=(
     python
     python-pip
+    # The wheel `python3 -m venv` installs pip from. Termux splits it out of the
+    # python package and nothing depends on it, and resolution here expands no
+    # dependencies anyway, so it has to be named or it never arrives. Without it
+    # every venv create dies in the child that bootstraps pip. Architecture: all,
+    # so it needs no soname entry and no LIB_PACKAGES row.
+    python-ensurepip-wheels
     libffi
     libbz2
     liblzma
@@ -221,6 +227,50 @@ if [ ! -f "$PIP_DST/pip/__main__.py" ]; then
     exit 1
 fi
 echo "  pip installed to site-packages ($(du -sh "$PIP_DST/pip" | cut -f1))"
+
+# --- Step 6b: Place the wheel ensurepip installs pip from ---
+#
+# The pip placed above belongs to the base interpreter and does not cover for
+# this one. `python3 -m venv myenv` bootstraps pip into the new environment by
+# running ensurepip there, and ensurepip installs from a wheel, not from the
+# package in site-packages. Termux builds Python with an empty WHEEL_PKG_DIR, so
+# _find_wheel_pkg_dir_pip() returns None and the only path left is
+# ensurepip/_bundled/pip-<version>-py3-none-any.whl, which the python package
+# does not carry: the wheel lives in a package of its own that nothing depends
+# on. With that directory absent the copy raises FileNotFoundError inside the
+# child and the parent reports a bare non-zero exit status, leaving an
+# environment with no pip in it.
+#
+# Fatal for the same reason the pip placement above is: the failure would arrive
+# on a user's device, on the first thing a beginner does after creating an
+# environment, and it says nothing about what is missing.
+echo ""
+echo "Placing the ensurepip wheel..."
+WHEEL_SRC="extracted/python-ensurepip-wheels/data/data/com.termux/files/usr/lib/python${PYTHON_MAJOR_MINOR}/ensurepip/_bundled"
+WHEEL_DST="$STDLIB_DST/ensurepip/_bundled"
+if [ ! -d "$WHEEL_SRC" ]; then
+    echo "  ERROR: ensurepip wheels not found at $WHEEL_SRC" >&2
+    find "extracted/python-ensurepip-wheels" -name '*.whl' 2>/dev/null | head -3 >&2 || true
+    exit 1
+fi
+mkdir -p "$WHEEL_DST"
+cp "$WHEEL_SRC"/pip-*.whl "$WHEEL_DST/"
+
+# ensurepip spells that filename out of its own _PIP_VERSION rather than globbing
+# the directory, so a wheel whose version has drifted from the ensurepip beside
+# it is exactly as good as no wheel at all and fails on the device in the same
+# silent way. The two packages are versioned together upstream, which is what
+# makes a disagreement worth stopping the build for rather than working around.
+ENSUREPIP_VERSION="$(sed -n 's/^_PIP_VERSION = "\(.*\)"$/\1/p' "$STDLIB_DST/ensurepip/__init__.py")"
+EXPECTED_WHEEL="pip-${ENSUREPIP_VERSION}-py3-none-any.whl"
+if [ ! -f "$WHEEL_DST/$EXPECTED_WHEEL" ]; then
+    echo "  ERROR: ensurepip asks for $EXPECTED_WHEEL and the wheels package placed:" >&2
+    ls "$WHEEL_DST" >&2
+    echo "         An empty version in that name means _PIP_VERSION moved in" >&2
+    echo "         $STDLIB_DST/ensurepip/__init__.py and this read no longer finds it." >&2
+    exit 1
+fi
+echo "  $EXPECTED_WHEEL ($(du -sh "$WHEEL_DST/$EXPECTED_WHEEL" | cut -f1))"
 
 # --- Step 7: Place shared libraries in assets/usr/lib/ ---
 echo ""

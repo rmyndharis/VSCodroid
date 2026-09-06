@@ -35,6 +35,21 @@ class LaunchPassWaitTest {
     private companion object {
         /** The pass being started, at statement position rather than quoted. */
         val STARTS_PASS = Regex("""\n\s+\w+\.repairInstalledToolchains\(\)""")
+
+        /**
+         * A case's own declaration, at whatever depth it was written.
+         *
+         * Any indentation rather than the four spaces of a case sitting directly
+         * in its class: a case inside a `@Nested` class is written at eight and
+         * was never looked at, so it could start the pass without waiting and
+         * this file would say nothing. Every case that starts the pass today is
+         * written at four, which is why nothing here noticed.
+         *
+         * Widening it costs nothing downstream because the match is trimmed
+         * before [SourceScan.body] is handed it, and that lookup is by text
+         * rather than by offset, so the indentation dropped is not wanted again.
+         */
+        val DECLARES_CASE = Regex("""\n\s+(?:\w+ )*fun [`\w][^\n(]*\(""")
     }
 
     @Test
@@ -49,7 +64,7 @@ class LaunchPassWaitTest {
             .flatMap { file ->
                 val source = SourceScan.withoutComments(SourceScan.read(file.path))
                 if (!STARTS_PASS.containsMatchIn(source)) return@flatMap emptySequence()
-                Regex("""\n    (?:\w+ )*fun [`\w][^\n(]*\(""")
+                DECLARES_CASE
                     .findAll(source)
                     .map { it.value.trim() }
                     .distinct()
@@ -73,6 +88,46 @@ class LaunchPassWaitTest {
                     "writing into the @TempDir after the case returns, and JUnit's deletion " +
                     "of that directory then fails the whole task"
             }
+        }
+    }
+
+    // --- The scan itself, driven against a source whose answer is known. -----
+    //
+    // The case above derives its list from the suite, and every case in the
+    // suite that starts the pass is written directly in its class today. A scan
+    // that reads only that depth passes it while looking at one shape less than
+    // it claims, and goes on passing until someone puts a `@Nested` class around
+    // the next one, which is when the guard is wanted rather than before.
+    //
+    // Assembled from lines rather than written as a raw string, so the call it
+    // holds never begins a line of this file. [STARTS_PASS] reads a call at
+    // statement position and has no reason to care that it is inside a literal,
+    // which is the same trap the docstring names `LaunchRepairWiringTest` for:
+    // written the other way, this file becomes a case that starts the pass and
+    // never waits for it.
+    private val nestedCase = listOf(
+        "class Outer {",
+        "    @Nested",
+        "    inner class Inner {",
+        "        @Test",
+        "        fun `repairs on launch`() {",
+        "            manager.repairInstalledToolchains()",
+        "        }",
+        "    }",
+        "}",
+    ).joinToString("\n")
+
+    @Test
+    fun `a case inside a nested class is read as a case that starts the pass`() {
+        val found = DECLARES_CASE.findAll(nestedCase)
+            .map { it.value.trim() }
+            .filter { STARTS_PASS.containsMatchIn(SourceScan.body(nestedCase, it)) }
+            .toList()
+
+        assertTrue(found.isNotEmpty()) {
+            "a case written inside a @Nested class is not seen by the declaration scan, " +
+                "so it can start the launch pass without ever being asked whether it waits " +
+                "for the whole of it"
         }
     }
 }
