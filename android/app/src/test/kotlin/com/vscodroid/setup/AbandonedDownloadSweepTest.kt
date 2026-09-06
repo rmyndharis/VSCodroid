@@ -11,12 +11,12 @@ import io.mockk.mockkObject
 import io.mockk.mockkStatic
 import io.mockk.unmockkAll
 import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
-import java.util.concurrent.TimeUnit
 
 /**
  * The launch pass reclaims staging directories no download owns any more.
@@ -78,20 +78,19 @@ class AbandonedDownloadSweepTest {
         return dir
     }
 
-    /** Waits for the launch pass, which runs on the manager's io executor. */
-    private fun waitUntil(what: String, condition: () -> Boolean) {
-        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
-        while (!condition() && System.nanoTime() < deadline) Thread.sleep(20)
-        assertTrue(condition(), what)
-    }
 
     @Test
     fun `a staging directory left by a download that never finished is reclaimed`() {
         val old = abandoned("toolchain_java-1", 3 * ABANDONED_DOWNLOAD_AGE_MS)
 
-        ToolchainManager(context).repairInstalledToolchains()
+        val manager = ToolchainManager(context)
+        manager.repairInstalledToolchains()
+        awaitLaunchPass(manager)
 
-        waitUntil("the abandoned staging directory was never reclaimed: $old") { !old.exists() }
+        assertFalse(
+            old.exists(),
+            "the abandoned staging directory was never reclaimed: $old",
+        )
     }
 
     /**
@@ -105,9 +104,14 @@ class AbandonedDownloadSweepTest {
         val old = abandoned("toolchain_java-1", 3 * ABANDONED_DOWNLOAD_AGE_MS)
         val fresh = abandoned("toolchain_ruby-2", 0)
 
-        ToolchainManager(context).repairInstalledToolchains()
+        val manager = ToolchainManager(context)
+        manager.repairInstalledToolchains()
+        awaitLaunchPass(manager)
 
-        waitUntil("the sweep never ran, so the case below proves nothing") { !old.exists() }
+        assertFalse(
+            old.exists(),
+            "the sweep never ran, so the case below proves nothing",
+        )
         assertTrue(
             fresh.isDirectory && File(fresh, "toolchain_java.zip").isFile,
             "a staging directory a download could still be writing into was deleted",
