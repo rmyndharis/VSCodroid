@@ -102,11 +102,11 @@ SELFCHECK_WORKFLOWS = ("lint.yml", "release.yml")
 # runtime is the Termux nodejs-lts that build-native-addons.sh names in
 # NODE_VERSION, and the JavaScript under test (server.js, process-monitor.js,
 # dns-proxy.js and the bundled extensions) runs on nothing else, so a self-check
-# green on another major says nothing about the device: lint.yml ran the nine
+# green on another major says nothing about the device: lint.yml ran the ten
 # on 20 while every APK carried 24. The major only, for the reason
 # build-native-addons.sh compares majors: the patch level is Termux's to move.
 #
-# All three workflows that set up Node: lint.yml and release.yml run the nine
+# All three workflows that set up Node: lint.yml and release.yml run the ten
 # self-checks, and build.yml and release.yml run the download scripts and
 # build-native-addons.sh through npm, so one major across all of them.
 NODE_MAJOR_SOURCE = ROOT / "scripts/build-native-addons.sh"

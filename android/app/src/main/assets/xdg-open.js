@@ -51,6 +51,17 @@ if (!socketPath) {
 }
 
 const body = JSON.stringify({ type: 'openExternal', uris: args });
+
+// How long the editor gets to answer before this gives up.
+//
+// Every other failure here is an event: no socket, a stale one, a refused
+// connection. A socket that accepts and then never answers is not, and without
+// this the request waits for as long as the process lives. The caller is a
+// preview server's `open`, which spawns this and waits, so a hang there is a
+// build task that never finishes rather than a browser that did not open. The
+// editor answers in single-digit milliseconds when it answers at all.
+const REPLY_TIMEOUT_MS = 10000;
+
 const request = http.request(
     {
         socketPath,
@@ -72,4 +83,9 @@ const request = http.request(
     },
 );
 request.on('error', (err) => fail(err.message));
+request.setTimeout(REPLY_TIMEOUT_MS, () => {
+    // `destroy` makes the pending request emit 'error', which the handler above
+    // turns into the same one-line diagnostic every other failure produces.
+    request.destroy(new Error(`the editor did not answer in ${REPLY_TIMEOUT_MS}ms`));
+});
 request.end(body);

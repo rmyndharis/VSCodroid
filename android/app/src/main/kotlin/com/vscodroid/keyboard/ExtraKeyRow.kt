@@ -63,6 +63,16 @@ private const val PAGER_HEIGHT_DP = 56
  */
 private const val MIN_PAGE_HEIGHT_DP = 120
 
+/**
+ * The page height that clears [ExtraKeyRow.suppressedForHeight] again.
+ *
+ * Twice [MIN_PAGE_HEIGHT_DP], so nothing that merely nudges the boundary can
+ * toggle the row, and a portrait phone with the keyboard up is comfortably past
+ * it: measured on an API 36 emulator at 1080x2424, portrait with the keyboard
+ * up leaves the page 1202px, which is 458dp.
+ */
+private const val RELEASE_PAGE_HEIGHT_DP = MIN_PAGE_HEIGHT_DP * 2
+
 class ExtraKeyRow @JvmOverloads constructor(
     context: Context,
     attrs: AttributeSet? = null,
@@ -356,13 +366,25 @@ class ExtraKeyRow @JvmOverloads constructor(
     /**
      * Whether the row has stood down because the page had no height to spare.
      *
-     * Latched for as long as the keyboard is up, rather than recomputed per
-     * dispatch. Insets are re-dispatched on every change in the keyboard's own
-     * height, and a phone landscape sits far enough below [MIN_PAGE_HEIGHT_DP]
-     * that no ordinary change crosses back over it; but an emoji panel or a voice
-     * panel can move the boundary, and a row appearing and disappearing under a
-     * user's thumb would relayout the workbench and resize every PTY with it each
-     * time. That is the same cost the band floor above exists to prevent.
+     * Latched rather than recomputed per dispatch. Insets are re-dispatched on
+     * every change in the keyboard's own height, and an emoji panel or a voice
+     * panel moves the boundary; a row appearing and disappearing under a user's
+     * thumb would relayout the workbench and resize every PTY with it each time.
+     * That is the same cost the band floor above exists to prevent.
+     *
+     * It is released two ways, and the second is not redundant. The keyboard
+     * going away clears it outright. So does the page growing back past
+     * [RELEASE_PAGE_HEIGHT_DP], which is what a rotation back to portrait does
+     * while the keyboard stays up: without that, the row would stay gone for the
+     * rest of the typing session on a screen with room for it. Measured on an
+     * API 36 emulator, that rotation happens to take the keyboard down and back
+     * up, which clears the latch by the first route; but whether an IME does
+     * that is the IME's business and not something to depend on.
+     *
+     * The release threshold is deliberately far above the suppress threshold
+     * rather than equal to it. Equal thresholds oscillate: a panel that moves
+     * the page a pixel either side of the line would toggle the row on every
+     * inset dispatch, which is the cost this latch exists to avoid.
      */
     private var suppressedForHeight = false
 
@@ -400,6 +422,8 @@ class ExtraKeyRow @JvmOverloads constructor(
                 suppressedForHeight = false
             } else if (pageHeightPx < dpToPx(MIN_PAGE_HEIGHT_DP)) {
                 suppressedForHeight = true
+            } else if (pageHeightPx >= dpToPx(RELEASE_PAGE_HEIGHT_DP)) {
+                suppressedForHeight = false
             }
             val showRow = imeVisible && !suppressedForHeight
 

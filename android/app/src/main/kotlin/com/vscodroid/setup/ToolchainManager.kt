@@ -3090,7 +3090,15 @@ class ToolchainManager(private val context: Context) {
             // user never chose. These names come from a directory anyone can write
             // to, unlike the toolchain manifests the rows above are built from.
             if (name.any { it == '\t' || it == '\n' }) {
-                Logger.w(tag, "No row for a command whose name the table cannot carry")
+                // Named, with the separator made visible: a warning that a name was
+                // refused and does not say which one leaves a user with one missing
+                // command and no way to learn that, or why.
+                Logger.w(
+                    tag,
+                    "No row for '" + name.replace("\t", "\\t").replace("\n", "\\n") +
+                        "': a command name carrying a tab or a newline cannot be written " +
+                        "to the exec table, which splits a row on its tabs",
+                )
                 continue
             }
             val script = File(binDir, name)
@@ -3365,7 +3373,13 @@ class ToolchainManager(private val context: Context) {
                 //
                 // Cheap enough to do every time: it reads toolchains.json, formats a
                 // few dozen lines and writes them atomically. With no toolchains
-                // installed it deletes the file and returns.
+                // installed it still writes a table: the exec table stopped being
+                // only about toolchains when this app put its own `xdg-open` row
+                // and the rows for pip-installed commands into it, and most
+                // devices never install a toolchain. It used to delete the file
+                // in that case, and a reader tracing why `usr/libexec/tcbin`
+                // exists on such a device was told by this comment that it
+                // should not.
                 //
                 // It is also where the trampoline table and its symlinks are
                 // rebuilt, and they need this launch pass for a second reason of

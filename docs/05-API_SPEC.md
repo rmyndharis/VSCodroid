@@ -840,7 +840,7 @@ server.js
 ```
 
 What reaches the editor server is a different list. `server.js` reads `host`, `port`
-and `log` as its own **defaults** and rebuilds them, adds two flags nobody passed in,
+and `log` as its own **defaults** and rebuilds them, adds three flags nobody passed in,
 and then forwards a **whitelist of exactly four keys**:
 
 ```js

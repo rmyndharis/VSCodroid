@@ -364,6 +364,37 @@ def main(tree):
               "accept any forged sign-in callback naming an armed request id; "
               "update CALLBACK_PAYLOAD in assets/server.js to match the page")
 
+    # server.js appends its own <script> to workbench.html at every start, by
+    # matching the configuration element the page carries, and two things reach
+    # the editor only that way: the trusted-domain list that decides whether a
+    # link opens without a confirmation, and the extension recommendation that
+    # offers the Python formatter. Neither can travel in product.json, because
+    # the product the workbench consults is inlined into its bundle at build
+    # time and the one the server hands the page at runtime carries three keys.
+    #
+    # The match is a literal, so a page whose element is written differently is
+    # left untouched, and the failure is silent by design: the bootstrap logs and
+    # carries on rather than refusing to start over a page it did not recognise.
+    # That is right at runtime and wrong at build time, which is why the question
+    # is asked here, exactly as it is for callback.html above. Keep this string in
+    # step with the anchor in extendWorkbenchPage in assets/server.js.
+    workbench_anchor = (
+        '<meta id="vscode-workbench-web-configuration" '
+        'data-settings="{{WORKBENCH_WEB_CONFIGURATION}}">'
+    )
+    workbench_html = tree / "out/vs/code/browser/workbench/workbench.html"
+    try:
+        carries_anchor = workbench_anchor in workbench_html.read_text(errors="replace")
+    except OSError as e:
+        carries_anchor = False
+        check(False, "out/vs/code/browser/workbench/workbench.html is readable", str(e))
+    else:
+        check(carries_anchor,
+              "workbench.html carries the configuration element server.js extends",
+              "server.js could not add its script, so github.com would open behind a "
+              "confirmation dialog and no formatter would ever be recommended; update "
+              "the anchor in extendWorkbenchPage in assets/server.js to match the page")
+
     # The Mobile CSS block is appended to the packaged workbench.css at server
     # build time, and on 2026-08-15 its content changed (the Accounts/Manage
     # hide was removed) while the idempotency marker stayed the same. The
