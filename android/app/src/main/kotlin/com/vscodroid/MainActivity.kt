@@ -3130,6 +3130,8 @@ class MainActivity : AppCompatActivity() {
         injectTouchTargetCSS()
         // Keeps the soft keyboard down until the user aims at text
         injectKeyboardGuard()
+        // Keeps a context menu open while the keyboard is up, and Escape able to close it
+        injectTouchContextMenu()
         // Fix #7: Override window.open() to route through AndroidBridge
         injectWindowOpenOverride()
         // Answers a paste out of Android's clipboard, which the WebView will not
@@ -3455,6 +3457,150 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
+     * Keeps a context menu alive on a phone, and keeps Escape able to close it.
+     *
+     * With the keyboard up, a long press on a word opened the editor's menu and
+     * closed it again about 60ms later, which reads as a menu that flickers or
+     * never appears. Measured on an API 36 emulator with the menu's shadow root
+     * watched by a MutationObserver and `HTMLElement.prototype.focus` wrapped
+     * to record its caller: the menu is added, its action bar calls `focus()`,
+     * the editor loses focus, Android takes the keyboard down, the viewport
+     * grows from 458px to 845px, and the workbench answers that resize with
+     * `Workbench.layout` -> `ContextView.layout` -> `hide`. That `layout` hides
+     * any non-relayoutable context view on every layout unless the platform
+     * is iOS, and every context menu is non-relayoutable. `onHide` then focuses
+     * the editor again, the keyboard comes back, and the viewport shrinks to
+     * 458px: a full keyboard bounce for a menu the user never saw. The stack
+     * trace named each frame; this is not inferred from the order of events.
+     *
+     * Patch 0015 met the same chain on the menubar and excused Android from
+     * the menubar's own resize listener. `ContextView.layout` is a different
+     * listener and is not covered by it. It could be patched the same way,
+     * but a patched bundle does not reach an installed app: `/static` is served
+     * for a year under a URL keyed by the upstream commit, which a rebuild of
+     * the same VS Code version does not change, and nothing here clears the
+     * WebView cache. So the fix has to arrive with the app, which is here.
+     *
+     * The chain is broken at its first link. On a coarse pointer, a `focus()`
+     * call that would move focus OUT of an editing host and INTO a context
+     * view is ignored: the editor keeps focus, the keyboard stays where it
+     * is, no resize fires, and `ContextView.layout` never runs. Everything
+     * the menu does by pointer still works without focus, and all of it was
+     * measured: tapping an item runs it (Rename Symbol opened its box),
+     * tapping outside closes it, a submenu opens on tap, and a real long
+     * press with the keyboard up opened a 22-item menu that was still there
+     * 2.3 seconds later with the editor focused and the viewport unchanged.
+     *
+     * What focus was doing for the menu is keyboard handling, and one key
+     * matters on a phone: Escape, which the extra key row carries. A menu
+     * without focus never sees it, so a capture listener forwards Escape to
+     * an open menu's action bar when that bar does not hold focus, and stops
+     * the editor from seeing the same press, which is what the editor got
+     * before this change too (focus was in the menu). Arrow-key navigation
+     * inside a menu is the trade, and it is taken deliberately: it needs a
+     * hardware keyboard on a device that still reports `pointer: coarse`,
+     * which is a tablet with a Bluetooth keyboard, and that user can tap.
+     *
+     * The gate is the editing host, not the menu. Focus moving into a menu
+     * from anywhere else, the explorer say, moves no keyboard and is left
+     * alone, so a mouse-and-keyboard tablet loses nothing.
+     *
+     * The same shadow root is why the keybinding labels in that menu could not
+     * be styled from the page: the host is created with `:host { all: initial }`
+     * and copies only VS Code's own menu CSS into itself, so the stylesheet
+     * [injectTouchTargetCSS] installs never reaches it (measured:
+     * `#vscodroid-touch-css` absent from the root, its 40px floor not applied,
+     * the label `display: block`). A sheet adopted by the shadow root is the
+     * one channel in, and it is added as the root is created by wrapping
+     * `attachShadow` on the host the workbench names, plus once for a host
+     * that already exists, since this runs again after a folder switch. The
+     * rule mirrors the light-DOM one beside the context-view rules in
+     * [injectTouchTargetCSS], and `TouchContextMenuWiringTest` holds the two
+     * to the same text.
+     */
+    private fun injectTouchContextMenu() {
+        webView?.evaluateJavascript(
+            """
+            (function() {
+                if (window.__vscodroidTouchContextMenu) return;
+                window.__vscodroidTouchContextMenu = true;
+                var EDITING_HOST = '.native-edit-context, .monaco-editor textarea.inputarea, .xterm-helper-textarea';
+                var COARSE = '(pointer: coarse)';
+                // The rule reaches both kinds of menu: a light-DOM one through the
+                // page stylesheet, a shadow-DOM one through the adopted sheet below.
+                var KEYBINDING_RULE = '@media (pointer: coarse) { .monaco-menu .keybinding { display: none !important; } }';
+
+                // Inside a context view, whether it lives in the page or in the
+                // shadow root of the host the workbench names for it. `closest`
+                // does not cross a shadow boundary upward, so the host is tested
+                // by itself as well.
+                function inContextView(el) {
+                    if (!el || !el.closest) return false;
+                    if (el.classList && el.classList.contains('shadow-root-host')) return true;
+                    var root = el.getRootNode ? el.getRootNode() : null;
+                    var host = root && root.host;
+                    if (host && host.classList && host.classList.contains('shadow-root-host')) return true;
+                    return !!el.closest('.context-view');
+                }
+
+                var focus = HTMLElement.prototype.focus;
+                HTMLElement.prototype.focus = function() {
+                    var held = document.activeElement;
+                    if (held && held.matches && held.matches(EDITING_HOST) &&
+                        inContextView(this) && window.matchMedia(COARSE).matches) {
+                        return;
+                    }
+                    return focus.apply(this, arguments);
+                };
+
+                // Every open menu's action bar, across the page and the shadow hosts.
+                function actionBars() {
+                    var roots = [document];
+                    document.querySelectorAll('.shadow-root-host').forEach(function(h) {
+                        if (h.shadowRoot) roots.push(h.shadowRoot);
+                    });
+                    var bars = [];
+                    roots.forEach(function(r) {
+                        r.querySelectorAll('.context-view .monaco-menu .actions-container').forEach(function(b) { bars.push(b); });
+                    });
+                    return bars;
+                }
+                window.addEventListener('keydown', function(e) {
+                    if (e.key !== 'Escape') return;
+                    var bars = actionBars();
+                    for (var i = 0; i < bars.length; i++) {
+                        // A menu holding focus handles its own Escape.
+                        if (bars[i].contains(document.activeElement)) continue;
+                        e.stopImmediatePropagation();
+                        e.preventDefault();
+                        bars[i].dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
+                        return;
+                    }
+                }, true);
+
+                function adopt(root) {
+                    try {
+                        var sheet = new CSSStyleSheet();
+                        sheet.replaceSync(KEYBINDING_RULE);
+                        root.adoptedStyleSheets = root.adoptedStyleSheets.concat(sheet);
+                    } catch (e) { /* a WebView without constructable sheets keeps the labels */ }
+                }
+                var attachShadow = Element.prototype.attachShadow;
+                Element.prototype.attachShadow = function(init) {
+                    var root = attachShadow.call(this, init);
+                    if (this.classList && this.classList.contains('shadow-root-host')) adopt(root);
+                    return root;
+                };
+                document.querySelectorAll('.shadow-root-host').forEach(function(h) {
+                    if (h.shadowRoot) adopt(h.shadowRoot);
+                });
+            })();
+            """.trimIndent(),
+            null
+        )
+    }
+
+    /**
      * Fix #2: Injects CSS to enlarge touch targets when the pointer is a fingertip.
      * Targets WCAG 2.5.5 minimum 44×44px for primary actions, 36px for list items.
      *
@@ -3489,13 +3635,58 @@ class MainActivity : AppCompatActivity() {
                 s.textContent = [
                     '/* VSCodroid: Enlarged touch targets for touch input */',
                     '@media (pointer: coarse) {',
-                    '  .monaco-list-row { min-height: 36px !important; padding: 2px 0 !important; }',
-                    '  .tabs-container .tab { min-height: 40px !important; }',
+                    // NO height floor on a row, tab or status entry, deliberately.
+                    // Three used to be here and all three were measured on an API 36
+                    // emulator to make the thing they were meant to help worse.
+                    //
+                    // The workbench writes those heights from JavaScript, as inline
+                    // styles, and a stylesheet `min-height` clamps over an inline
+                    // `height` by the box model, so the element paints at the floor
+                    // while the layout around it keeps advancing at the number JS
+                    // chose. `!important` is not what does it and dropping it would
+                    // not have helped.
+                    //
+                    //   .monaco-list-row     floored 36, rows pitched 22  -> 14px overlap
+                    //   .tabs-container .tab floored 40, title area 35    -> 5px overflow
+                    //   .statusbar-item      floored 32, status bar 22    -> 10px clipped
+                    //
+                    // `ListView.updateItemInDOM` sets `top`, `height` and `lineHeight`
+                    // per row from the delegate's `getHeight()`, and nearly every
+                    // workbench delegate answers 22: the explorer, open editors,
+                    // contributed tree views, search results, terminal tabs, quick
+                    // pick entries and the select-box dropdown. So the floor did not
+                    // enlarge one row, it made each row cover the top 14px of the
+                    // next. Rows are absolutely positioned siblings inserted in index
+                    // order with no z-index, and the list hit-tests by walking
+                    // `event.target` up to a `data-index`, so in that band the LATER
+                    // row both paints and takes the tap: pressing the lower edge of a
+                    // filename opened the file beneath it. A floor meant to make
+                    // targets easier to hit was making them land on the wrong row.
+                    //
+                    // There is no supported way to raise a virtualized row from CSS.
+                    // The height is an `IListVirtualDelegate.getHeight()` return, no
+                    // setting in the bundle governs it, and only lists built with
+                    // `supportDynamicHeights` re-measure the DOM. Raising it for real
+                    // means patching the delegate constants before the Code - OSS
+                    // build, which is a server rebuild and a rebase on every bump.
+                    // Until someone wants that, an honest 22px row beats a 36px one
+                    // that eats its neighbour.
                     '  .activitybar .action-item { min-height: 44px !important; min-width: 44px !important; }',
                     '  .activitybar .action-label { min-height: 44px !important; }',
-                    '  .statusbar-item { min-height: 32px !important; padding: 0 8px !important; }',
+                    // Horizontal padding only. The status bar is a fixed 22px part
+                    // (`minimumHeight === maximumHeight`), so widening an entry is
+                    // real estate the layout actually has; making it taller is not.
+                    '  .statusbar-item { padding: 0 8px !important; }',
                     '  .context-view .action-item { min-height: 40px !important; }',
                     '  .context-view .action-label { padding: 6px 12px !important; }',
+                    // A chord beside a menu item is a promise a finger cannot keep.
+                    // The items run on a tap regardless (measured: Rename Symbol
+                    // opened its box from a touch with no focus in the menu), so
+                    // on a phone the label is width taken from a 411px viewport
+                    // to advertise a route the user does not have. The menus the
+                    // editor itself opens live in a shadow root this sheet cannot
+                    // reach; [injectTouchContextMenu] adopts the same rule there.
+                    '  .monaco-menu .keybinding { display: none !important; }',
                     // The three floors above are for buttons, and a menu separator
                     // is an .action-item too: it sits inside the activity bar when
                     // the compact menubar is open and inside .context-view for a
@@ -3545,7 +3736,6 @@ class MainActivity : AppCompatActivity() {
                     // width on a phone than as alignment.
                     '  .monaco-dialog-box > .dialog-buttons-row > .dialog-buttons { flex-wrap: wrap !important; }',
                     '  .monaco-dialog-box:not(.align-vertical) > .dialog-buttons-row > .dialog-buttons { margin-left: 0 !important; }',
-                    '  .quick-input-list .monaco-list-row { min-height: 36px !important; }',
                     // The chrome's own text, which no setting in this build can reach.
                     // `editor.fontSize` governs the editor and nothing else; the
                     // workbench styles itself from 622 literal `font-size` rules in

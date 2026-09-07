@@ -704,6 +704,31 @@ The status bar shows a phantom process count. This tells you how many background
 - An idle language server is not killed, by a timer or by hand: its extension restarts it within a second. Disabling the extension that starts it is what frees the slot; **VSCodroid: Show Process Tree** marks the idle ones.
 - Avoid leaving dev servers running in the background when not in use.
 
+### Touch Gestures
+
+The editor and the file tree answer the gestures a phone expects, but nothing
+on screen says so. These are the ones that work.
+
+In a file:
+
+- Tap to place the caret. **Double-tap** to select the word under your finger.
+- **Press and hold** for about a second, then lift, to open the menu: Cut, Copy,
+  Paste, Format Document, Rename Symbol, Go to Definition and the rest. Every
+  item runs on a tap.
+- There are no drag handles over code, because the editor draws its own
+  selection rather than the system's. To extend one, tap **shift** on the key
+  row and drag the trackpad.
+
+In the file tree:
+
+- Press and hold a file for about a second, then lift: Cut, Copy, Rename, Delete
+  and more.
+- **Paste appears when you hold the destination**: a folder, or the empty space
+  under the last file for the project root. Holding another file shows no Paste,
+  which is how VS Code behaves on a desktop as well.
+- So moving a file is: hold it, tap Cut, hold the folder you want it in, tap
+  Paste.
+
 ### Keyboard Tips for Touch
 
 - Connect a Bluetooth keyboard for the best experience with complex editing.
