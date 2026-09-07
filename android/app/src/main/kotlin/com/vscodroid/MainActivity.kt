@@ -3601,8 +3601,15 @@ class MainActivity : AppCompatActivity() {
                     if (e.key !== 'Escape') return;
                     var bars = actionBars();
                     for (var i = 0; i < bars.length; i++) {
-                        // A menu holding focus handles its own Escape.
-                        if (bars[i].contains(document.activeElement)) continue;
+                        // A menu holding focus handles its own Escape. Asked of the
+                        // menu's own root, because `document.activeElement` for a
+                        // shadow-DOM menu is the HOST, which the bar does not contain:
+                        // read from the document alone this never matched there, and a
+                        // menu that did hold focus was forwarded a key it was already
+                        // going to get.
+                        var menuRoot = bars[i].getRootNode();
+                        var focusedHere = menuRoot.activeElement || document.activeElement;
+                        if (bars[i].contains(focusedHere)) continue;
                         e.stopImmediatePropagation();
                         e.preventDefault();
                         var forwarded = new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true });
@@ -3781,10 +3788,12 @@ class MainActivity : AppCompatActivity() {
                     // Measured on an API 37 emulator through the DevTools protocol, at
                     // the 411 CSS px viewport a phone gives: a pane header was 11px, a
                     // status bar item 12px and a tab label 13px, against 16px of editor
-                    // text beside them. Each rule below stays under the min-height
-                    // already floored above (32px for a status bar item, 40px for a
-                    // tab, 36px for a list row), so nothing here can push text past the
-                    // row that holds it.
+                    // text beside them. Each rule below stays under the height the
+                    // workbench itself gives that element (a 22px status bar entry, a
+                    // 35px tab, a 22px list row), so nothing here can push text past
+                    // the row that holds it. Those were this project's own floors
+                    // until they were removed for desynchronising the layout; the
+                    // numbers are now the workbench's, which is why they are smaller.
                     //
                     // The activity bar badge is deliberately left at 9px: it is drawn
                     // as a circle sized to its own glyph, so growing the text there

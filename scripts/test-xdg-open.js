@@ -132,7 +132,13 @@ async function whatCannotBeOpenedIsRefusedRatherThanSent() {
         // The handler skips a non-http scheme and answers 200 anyway, so forwarding
         // one would exit 0 for an address that was never opened. Refused here, and
         // before the connection, so the editor is not asked at all.
-        for (const arg of ['file:///etc/passwd', '/home/user/index.html', 'vscodroid://callback']) {
+        // `http:evil` is the one that separates a scheme test from a prefix test.
+        // Written as `!/^http/i` the guard forwards it, and the editor does NOT
+        // skip it the way it skips a `file:` URI: `URI.parse('http:evil').scheme`
+        // is `http`, so it travels all the way to an opener that can do nothing
+        // with it. `https:` and `http:/` fail the same way for the same reason.
+        for (const arg of ['file:///etc/passwd', '/home/user/index.html', 'vscodroid://callback',
+            'http:evil', 'https:evil', 'http:/single-slash', 'javascript:alert(1)']) {
             const run = await open([arg], { socketPath: cli.socketPath });
             assert.notStrictEqual(run.status, 0, `${arg} was not refused`);
             assert.ok(
@@ -162,6 +168,18 @@ async function nothingToOpenWithIsNamed() {
 
     const deadSocket = await open(['https://example.com'], { socketPath: path.join(os.tmpdir(), 'no-such.sock') });
     assert.notStrictEqual(deadSocket.status, 0, 'a socket nothing is listening on reported success');
+    // The exit code alone passes for an unhandled 'error' as well, which is a Node
+    // stack trace rather than a diagnostic, and passes for a hang that the harness
+    // later kills. Both are the failures this path exists to avoid, so the one-line
+    // form is what is asserted.
+    assert.ok(
+        /^xdg-open: /m.test(deadSocket.output),
+        `a stale socket should fail with the one-line diagnostic, not a stack trace:\n${deadSocket.output}`,
+    );
+    assert.ok(
+        !/at Object\.|at process\./.test(deadSocket.output),
+        `a stale socket produced a stack trace:\n${deadSocket.output}`,
+    );
 }
 
 sendsTheMessageTheEditorAnswers()
