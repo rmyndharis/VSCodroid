@@ -544,7 +544,13 @@ class FirstRunSetup(
             if (!extracted) incomplete += "vscode-reh"
 
             reportProgress(context.getString(R.string.setup_step_bootstrap), 60)
-            for (script in listOf("server.js", "process-monitor.js", "platform-fix.js", "dns-proxy.js")) {
+            // xdg-open.js is not a bootstrap script and is never required by one:
+            // it is the program the execution trampoline runs for the command
+            // `xdg-open`, and it lands here because this is where the trampoline's
+            // table is told to look for it.
+            for (script in listOf(
+                "server.js", "process-monitor.js", "platform-fix.js", "dns-proxy.js", "xdg-open.js",
+            )) {
                 if (!extractAssetFile(script, "server/$script")) incomplete += script
             }
 

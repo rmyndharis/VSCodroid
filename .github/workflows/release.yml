@@ -414,6 +414,7 @@ jobs:
           node scripts/test-download-capture.js
           node scripts/test-serve-network.js
           node scripts/test-welcome.js
+          node scripts/test-xdg-open.js
 
       - name: Install system dependencies
         # See build.yml: the runner's baked apt index goes stale as Ubuntu drops

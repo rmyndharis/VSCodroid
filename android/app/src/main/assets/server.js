@@ -31,6 +31,57 @@ const REH_DIR = path.join(SERVER_DIR, 'vscode-reh');
 // hex so it cannot run past the object it belongs to.
 const CALLBACK_PAYLOAD = /JSON\.stringify\(\{ id: id, uri: uri(?:, nonce: '[0-9a-f]*')? \}\)/;
 
+// Which external addresses open without the "Do you want VSCodroid to open the
+// external website?" confirmation.
+//
+// github.com is not a convenience. The GitHub sign-in this build can run is the
+// device-code flow, and it ends in env.openExternal("https://github.com/login/device"),
+// so without this entry the one screen between a user and a signed-in editor is a
+// confirmation dialog. Everything else the workbench opens keeps the prompt.
+//
+// Loopback is deliberately absent. The matcher answers for localhost, *.localhost,
+// 127.0.0.1 and [::1] on any port before it ever consults this list, so a dev-server
+// preview already opens without a prompt and an entry here would only look like it
+// was doing the work.
+//
+// Written with the scheme, so a bare host cannot also match plain http.
+const TRUSTED_LINK_DOMAINS = ['https://open-vsx.org', 'https://github.com'];
+
+// What says the workbench page has already been given the list above, so a second
+// start does not stack a second copy of the same script into it.
+const TRUSTED_DOMAINS_MARKER = 'vscodroid-trusted-domains';
+
+// The extensions the editor offers to install, and the reason this list exists at
+// all rather than leaving people to search.
+//
+// Open VSX does not return ms-python.black-formatter for any text search, its own
+// /api/-/search included, so the Extensions view cannot surface it however the
+// query is phrased. Looking it up by identifier does return it, which is the route
+// a recommendation takes, so a recommendation reaches an extension a search cannot.
+// The one a search does return, mikoz.black-py, formats only once black has been
+// installed separately with pip and stays silent when it has not.
+//
+// `languages` rather than a `**/*.py` glob: it also catches a file the editor knows
+// is Python without the suffix saying so, and the workbench re-evaluates it when the
+// language of an open file changes. `whenNotInstalled` names the extension itself so
+// the offer stops once it is accepted, stated here rather than left to the
+// notification service's own filtering, which is not measured.
+const EXTENSION_RECOMMENDATIONS = {
+    'ms-python.black-formatter': {
+        onFileOpen: [
+            {
+                languages: ['python'],
+                important: true,
+                whenNotInstalled: ['ms-python.black-formatter'],
+            },
+        ],
+    },
+};
+
+// What says the page already carries the recommendations. Separate from the marker
+// above so either script can be added to a page that already has the other.
+const RECOMMENDATIONS_MARKER = 'vscodroid-extension-recommendations';
+
 /**
  * Replaces a file in one step, the way the product.json rewrite below does.
  *
@@ -48,6 +99,53 @@ function writeThroughRename(target, contents, mode) {
         try { fs.unlinkSync(tmp); } catch { /* nothing was written */ }
         throw e;
     }
+}
+
+/**
+ * Adds one script to the workbench page, once. Answers whether it added it.
+ *
+ * Everything the page needs that `product.json` cannot carry arrives this way, so
+ * the shape is shared rather than written out per caller. The caller supplies the
+ * lines that read and mutate `settings`; the wrapper around them, the marker that
+ * makes a second start a no-op, and the write are the same every time.
+ *
+ * The tag has to stay a BARE `<script>`: the server hashes exactly that shape out
+ * of the page it has just built and puts the hashes into the Content-Security-Policy
+ * it serves with it, so a tag carrying any attribute is one the page's own policy
+ * then refuses to run.
+ *
+ * A page that is not there is not a page this can fix, and a missing server tree is
+ * already a failed start and a build-time gate in verify-server-tree.py. A page that
+ * is there but carries no configuration element is a tree this does not understand,
+ * and that is worth reporting rather than passing over.
+ */
+function extendWorkbenchPage(pagePath, marker, lines) {
+    const html = fs.existsSync(pagePath) ? fs.readFileSync(pagePath, 'utf8') : null;
+    if (html === null || html.includes(marker)) {
+        return false;
+    }
+    const anchor =
+        '<meta id="vscode-workbench-web-configuration" data-settings="{{WORKBENCH_WEB_CONFIGURATION}}">';
+    if (!html.includes(anchor)) {
+        throw new Error('the workbench page does not carry the configuration element this extends');
+    }
+    const script = [
+        '',
+        '\t\t<script>',
+        `\t\t\t/* ${marker} */`,
+        '\t\t\t(function () {',
+        "\t\t\t\tvar el = document.getElementById('vscode-workbench-web-configuration');",
+        '\t\t\t\tif (!el) { return; }',
+        '\t\t\t\ttry {',
+        "\t\t\t\t\tvar settings = JSON.parse(el.getAttribute('data-settings'));",
+        ...lines,
+        "\t\t\t\t\tel.setAttribute('data-settings', JSON.stringify(settings));",
+        '\t\t\t\t} catch (e) { /* a broken configuration is the workbench own report to make */ }',
+        '\t\t\t})();',
+        '\t\t</script>',
+    ].join('\n');
+    writeThroughRename(pagePath, html.replace(anchor, () => anchor + script));
+    return true;
 }
 
 // How long the editor server gets to answer a SIGTERM before it is SIGKILLed.
@@ -72,7 +170,7 @@ const productOverrides = {
         controlUrl: '',
         nlsBaseUrl: ''
     },
-    linkProtectionTrustedDomains: ['https://open-vsx.org'],
+    linkProtectionTrustedDomains: TRUSTED_LINK_DOMAINS,
     telemetryOptIn: false,
     enableTelemetry: false,
     // Where the page is told to fetch its translated interface strings.
@@ -243,6 +341,83 @@ if (!fs.existsSync(rehEntryPoint)) {
         log('error', 'Sign-in still works, but a callback is matched by request id alone.');
     }
 
+    // Give the page the trusted-domain list, which the product.json rewrite above
+    // cannot reach.
+    //
+    // That rewrite reaches THIS process's IProductService and stops there. The page
+    // never reads the file: the product object is inlined into the workbench bundle
+    // at build time, and the only product the server hands the page at runtime is a
+    // three-key object that does not carry this list. So what the confirmation
+    // dialog consults is branding/product.json as it stood at the last server build,
+    // and widening it there alone would reach a device only after a ~30 minute
+    // rebuild and a new server release.
+    //
+    // The workbench adds `additionalTrustedDomains` from its web construction
+    // options to whatever the product lists, and those options are JSON in a meta
+    // element of a page this server rebuilds FROM A TEMPLATE ON EVERY REQUEST. So a
+    // script added to that template arrives with an ordinary app update, where
+    // editing the bundle would not: /static is served `max-age=31536000` with no
+    // ETag and no Last-Modified under a URL that does not change between runs, so a
+    // WebView that has loaded this build once would keep its cached bundle for a
+    // year and never see the edit. The document carries no caching headers at all.
+    //
+    // branding/product.json carries the same list for the next server build. After
+    // it, this adds entries the page already has, which is a no-op by the membership
+    // test below rather than by luck. How the script is inserted, and why it stays a
+    // bare <script>, is at [extendWorkbenchPage].
+    const workbenchHtmlPath = path.join(REH_DIR, 'out/vs/code/browser/workbench/workbench.html');
+    try {
+        const added = extendWorkbenchPage(workbenchHtmlPath, TRUSTED_DOMAINS_MARKER, [
+            '\t\t\t\t\tvar trusted = settings.additionalTrustedDomains || [];',
+            `\t\t\t\t\tvar wanted = ${JSON.stringify(TRUSTED_LINK_DOMAINS)};`,
+            '\t\t\t\t\tfor (var i = 0; i < wanted.length; i++) {',
+            '\t\t\t\t\t\tif (trusted.indexOf(wanted[i]) === -1) { trusted.push(wanted[i]); }',
+            '\t\t\t\t\t}',
+            '\t\t\t\t\tsettings.additionalTrustedDomains = trusted;',
+        ]);
+        if (added) {
+            log('info', 'Trusted link domains given to the workbench page');
+        }
+    } catch (e) {
+        log('error', `Could not widen the trusted link domains: ${e.message}`);
+        log('error', 'External links still open, behind the confirmation dialog.');
+    }
+
+    // Give the page the extension recommendations, which reach it the same way and
+    // for the same reason: the product the workbench consults is inlined into its
+    // bundle at build time, and the three-key product this server hands the page at
+    // runtime does not carry them.
+    //
+    // Merged under `productConfiguration` rather than set over it. The page deep
+    // merges that object into the inlined product, so an entry added here joins the
+    // built one instead of replacing it, and an identifier the page already carries
+    // is left alone by the membership test below.
+    //
+    // Deliberately NOT also in branding/product.json, where the trusted-domain list
+    // above does live. That list is read by this process too, through the
+    // product.json rewrite; recommendations are read only by the page, so a build-time
+    // copy would buy nothing and give the two places to drift. It would also have to
+    // be added to the locked product.json key set that build-vscode-oss.sh checks.
+    // The membership test still holds if a later build inlines them anyway.
+    try {
+        const added = extendWorkbenchPage(workbenchHtmlPath, RECOMMENDATIONS_MARKER, [
+            '\t\t\t\t\tvar product = settings.productConfiguration || {};',
+            '\t\t\t\t\tvar have = product.extensionRecommendations || {};',
+            `\t\t\t\t\tvar wanted = ${JSON.stringify(EXTENSION_RECOMMENDATIONS)};`,
+            '\t\t\t\t\tfor (var id in wanted) {',
+            '\t\t\t\t\t\tif (!Object.prototype.hasOwnProperty.call(have, id)) { have[id] = wanted[id]; }',
+            '\t\t\t\t\t}',
+            '\t\t\t\t\tproduct.extensionRecommendations = have;',
+            '\t\t\t\t\tsettings.productConfiguration = product;',
+        ]);
+        if (added) {
+            log('info', 'Extension recommendations given to the workbench page');
+        }
+    } catch (e) {
+        log('error', `Could not add the extension recommendations: ${e.message}`);
+        log('error', 'The editor still works; a formatter is just never suggested.');
+    }
+
     // Build server arguments.
     //
     // No connection-token flag of any kind, and that absence is the security
@@ -263,6 +438,17 @@ if (!fs.existsSync(rehEntryPoint)) {
         '--host', HOST,
         '--port', String(PORT),
         '--accept-server-license-terms',
+        // Stops the server pointing BROWSER at a script that cannot run.
+        //
+        // Without the flag the extension host is handed
+        // BROWSER=<appRoot>/bin/helpers/browser.sh, and every Node helper that
+        // opens a browser prefers $BROWSER over anything else. That script is a
+        // shebang file under filesDir, which SELinux refuses to execve, and it
+        // execs a `$ROOT/node` the packaged tree does not carry, so it could never
+        // have worked. Leaving it set means the helpers stop at a dead end instead
+        // of falling through to `xdg-open`, which is the name this build now
+        // answers to through the execution trampoline.
+        '--without-browser-env-var',
         // Without this every folder opens in Restricted Mode, which blocks most
         // extensions from activating.
         //

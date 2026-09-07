@@ -1,6 +1,8 @@
 package com.vscodroid.setup
 
 import android.content.Context
+import android.system.Os
+import android.system.StructStat
 import com.google.android.play.core.assetpacks.AssetPackManagerFactory
 import com.vscodroid.util.Logger
 import io.mockk.Runs
@@ -18,6 +20,9 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.Path
 
 /**
  * What `toolchain-exec.tsv` has to contain for a toolchain command to work when
@@ -45,6 +50,7 @@ class ToolchainExecTableTest {
     private lateinit var stateFile: File
     private lateinit var execTable: File
     private lateinit var envFile: File
+    private lateinit var nativeLibDir: File
 
     @BeforeEach
     fun setUp() {
@@ -60,8 +66,37 @@ class ToolchainExecTableTest {
         mockkStatic(AssetPackManagerFactory::class)
         every { AssetPackManagerFactory.getInstance(any()) } returns mockk(relaxed = true)
 
+        // Backed by the real filesystem, so a symlink in usr/bin is told apart
+        // from a script the way the generator tells them apart on a device.
+        mockkStatic(Os::class)
+        every { Os.lstat(any()) } answers {
+            val path = Path.of(firstArg<String>())
+            if (!Files.exists(path, LinkOption.NOFOLLOW_LINKS)) {
+                throw java.io.FileNotFoundException(path.toString())
+            }
+            mockk<StructStat>(relaxed = true)
+        }
+        every { Os.readlink(any()) } answers {
+            Files.readSymbolicLink(Path.of(firstArg<String>())).toString()
+        }
+        every { Os.symlink(any(), any()) } answers {
+            Files.createSymbolicLink(Path.of(secondArg<String>()), Path.of(firstArg<String>()))
+            Unit
+        }
+
         context = mockk(relaxed = true)
         every { context.filesDir } returns filesDir
+        // The only directory this app may execve from, and the one every
+        // interpreter row has to name. Real files, because the generator declines
+        // to write a row naming an interpreter that is not there.
+        nativeLibDir = File(filesDir, "nativeLib").apply { mkdirs() }
+        File(nativeLibDir, "libnode.so").writeText("elf")
+        File(nativeLibDir, "libpython.so").writeText("elf")
+        every { context.applicationInfo } answers {
+            android.content.pm.ApplicationInfo().apply {
+                nativeLibraryDir = this@ToolchainExecTableTest.nativeLibDir.absolutePath
+            }
+        }
 
         File(filesDir, "home/.vscodroid").mkdirs()
         stateFile = File(filesDir, "home/.vscodroid/toolchains.json")
@@ -91,6 +126,17 @@ class ToolchainExecTableTest {
     private fun tableLines() = execTable.readText().lines().filter { it.isNotEmpty() }
 
     /**
+     * The table without the row the app owns rather than a toolchain.
+     *
+     * `xdg-open` is written into every table, on a device with no toolchain
+     * installed included, because a browser opener is not a toolchain's to
+     * provide. The cases below are each about one toolchain's own rows and say so
+     * by reading this; the base row has its own case, which is where a change to
+     * it should fail.
+     */
+    private fun toolchainLines() = tableLines().filterNot { it.startsWith("xdg-open\t") }
+
+    /**
      * The trampoline gets no working directory it can trust and no shell to
      * expand anything, so the row has to name the payload outright. The env file
      * writes `$PREFIX/../usr/...` for its own reader, and copying that spelling
@@ -108,7 +154,7 @@ class ToolchainExecTableTest {
 
         assertEquals(
             listOf("ruby\t${filesDir.absolutePath}/usr/opt/ruby/bin/ruby"),
-            tableLines(),
+            toolchainLines(),
             "the trampoline cannot resolve this row, so `ruby` from a task or a " +
                 "make recipe still fails:\n" + execTable.readText(),
         )
@@ -198,7 +244,7 @@ class ToolchainExecTableTest {
 
         regenerate()
 
-        val (envRows, commandRows) = tableLines().partition { it.startsWith("\t") }
+        val (envRows, commandRows) = toolchainLines().partition { it.startsWith("\t") }
         assertEquals(1, envRows.size, "expected one environment row:\n" + execTable.readText())
         assertEquals(
             listOf("ruby\t${filesDir.absolutePath}/usr/bin/ruby"), commandRows,
@@ -321,17 +367,22 @@ class ToolchainExecTableTest {
 
         assertEquals(
             emptyList<String>(),
-            tableLines(),
+            toolchainLines(),
             "a row was written for a binary that is not on disk",
         )
     }
 
     /**
-     * With nothing installed the table goes, rather than being left as the last
-     * record of a toolchain the user has removed.
+     * With nothing installed a removed toolchain's rows go, and the row the app
+     * owns stays.
+     *
+     * The table used to be deleted outright here, which was right while every row
+     * in it belonged to a toolchain. It no longer is: `xdg-open` is what a Node
+     * browser helper spawns, it has to be reachable on a device that has never
+     * installed a toolchain, and that is most devices.
      */
     @Test
-    fun `an empty record removes the table`() {
+    fun `an empty record removes a toolchain's rows and keeps the app's own`() {
         elf("usr/opt/ruby/bin/ruby")
         stateFile.writeText(
             """[{"name":"ruby","installRoot":"usr/opt/ruby",""" +
@@ -339,10 +390,174 @@ class ToolchainExecTableTest {
         )
         regenerate()
         assertTrue(execTable.isFile, "the table was never written, so this proves nothing")
+        assertTrue(toolchainLines().isNotEmpty(), "control: the toolchain never got a row")
 
         stateFile.writeText("[]")
         regenerate()
 
-        assertFalse(execTable.exists(), "the table outlived the last toolchain")
+        assertEquals(
+            emptyList<String>(),
+            toolchainLines(),
+            "a removed toolchain's rows outlived it",
+        )
+        assertTrue(
+            execTable.isFile,
+            "the table went with the last toolchain and took the browser opener with it",
+        )
+    }
+
+    /**
+     * The row the app owns, which no toolchain provides and every device needs.
+     *
+     * Node's browser helpers spawn the literal command `xdg-open`, so the name is
+     * not ours to choose. The interpreter form is: the payload is JavaScript under
+     * `filesDir`, which SELinux will not execve, so the row names `libnode.so` in
+     * `nativeLibraryDir` and hands it the script.
+     */
+    @Test
+    fun `the browser opener gets a row on a device with no toolchain`() {
+        stateFile.writeText("[]")
+
+        regenerate()
+
+        val fields = tableLines().single().split("\t")
+        assertEquals(
+            3, fields.size,
+            "the row is not the interpreter form, so the trampoline would try to execve a " +
+                "JavaScript file:\n" + execTable.readText(),
+        )
+        assertEquals("xdg-open", fields[0], "the command is not the name Node helpers spawn")
+        assertTrue(
+            fields[1].endsWith("/libnode.so"),
+            "the interpreter is not the bundled Node, so nothing can run the payload: ${fields[1]}",
+        )
+        assertEquals(
+            "${filesDir.absolutePath}/server/xdg-open.js", fields[2],
+            "the row does not name the opener FirstRunSetup extracts",
+        )
+    }
+
+    /** A console script pip has written, and the two names beside it that are not. */
+    private fun pipBin() = File(filesDir, "usr/bin").apply { mkdirs() }
+
+    /**
+     * What `pip install black` leaves behind, and why it does not run without this.
+     *
+     * pip writes an executable `usr/bin/black` whose first line points at the
+     * interpreter, and that directory is already on PATH, so the command is found.
+     * Running it then fails: reaching the interpreter means execve on the script's
+     * own inode, and SELinux refuses that for anything under filesDir. Measured in
+     * the app's terminal as `bad interpreter: Permission denied`.
+     *
+     * The interpreter form has no such step. The trampoline starts because it lives
+     * in nativeLibraryDir, and it runs the bundled Python with the script as an
+     * argument, so nothing under filesDir is ever execve'd.
+     */
+    @Test
+    fun `a command pip installed gets a row that runs it through Python`() {
+        stateFile.writeText("[]")
+        File(pipBin(), "black").writeText("#!${filesDir.absolutePath}/usr/bin/python3\nprint(1)\n")
+
+        regenerate()
+
+        assertEquals(
+            listOf(
+                "black\t${nativeLibDir.absolutePath}/libpython.so" +
+                    "\t${filesDir.absolutePath}/usr/bin/black"
+            ),
+            tableLines().filter { it.startsWith("black\t") },
+            "nothing runs `black`, so a formatter that spawns it still reports it missing:\n" +
+                execTable.readText(),
+        )
+    }
+
+    /**
+     * The bundled tools in the same directory are symlinks onto ELFs that already
+     * run, and a row for one would send `bash` or `node` through Python.
+     */
+    @Test
+    fun `a bundled tool in the same directory gets no row`() {
+        stateFile.writeText("[]")
+        Files.createSymbolicLink(
+            File(pipBin(), "node").toPath(),
+            File(nativeLibDir, "libnode.so").toPath(),
+        )
+
+        regenerate()
+
+        assertEquals(
+            emptyList<String>(),
+            tableLines().filter { it.startsWith("node\t") },
+            "a bundled tool was given a row, which would run an ELF through Python",
+        )
+    }
+
+    /**
+     * Only a Python shebang. Handing anything else to Python turns a command that
+     * does not start into one that starts and does the wrong thing.
+     */
+    @Test
+    fun `a script naming another interpreter gets no row`() {
+        stateFile.writeText("[]")
+        File(pipBin(), "somesh").writeText("#!/bin/sh\necho hi\n")
+
+        regenerate()
+
+        assertEquals(
+            emptyList<String>(),
+            tableLines().filter { it.startsWith("somesh\t") },
+            "a shell script was routed through the Python interpreter",
+        )
+    }
+
+    /**
+     * A name that would tear the record gets no row.
+     *
+     * The trampoline splits a row on its tabs, so a tab in a command name would be
+     * read as the row's next field: a path the user never chose. The toolchain rows
+     * above come from a manifest this app ships, but anyone can write a file into
+     * `usr/bin`, so the name has to be checked here.
+     */
+    @Test
+    fun `a command name the table cannot carry gets no row`() {
+        stateFile.writeText("[]")
+        val torn = File(pipBin(), "bad\tname")
+        // Some filesystems refuse the character outright, which is the same outcome
+        // by another route and leaves nothing to assert about.
+        val staged = try {
+            torn.writeText("#!${filesDir.absolutePath}/usr/bin/python3\nprint(1)\n"); torn.isFile
+        } catch (_: Exception) {
+            false
+        }
+        org.junit.jupiter.api.Assumptions.assumeTrue(staged, "the filesystem would not stage the name")
+
+        regenerate()
+
+        assertFalse(
+            execTable.readText().contains("bad\tname"),
+            "a torn record reached the table:\n" + execTable.readText(),
+        )
+    }
+
+    /**
+     * A toolchain owns its own names. pip writing a script of the same name must
+     * not take a toolchain's command away from it.
+     */
+    @Test
+    fun `a toolchain keeps a name pip also installed`() {
+        elf("usr/opt/ruby/bin/black")
+        stateFile.writeText(
+            """[{"name":"ruby","installRoot":"usr/opt/ruby",""" +
+                """"binaries":["usr/opt/ruby/bin/black"]}]"""
+        )
+        File(pipBin(), "black").writeText("#!${filesDir.absolutePath}/usr/bin/python3\nprint(1)\n")
+
+        regenerate()
+
+        assertEquals(
+            listOf("black\t${filesDir.absolutePath}/usr/opt/ruby/bin/black"),
+            tableLines().filter { it.startsWith("black\t") },
+            "the pip script displaced the toolchain's own command",
+        )
     }
 }

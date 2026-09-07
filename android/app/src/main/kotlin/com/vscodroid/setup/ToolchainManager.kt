@@ -273,6 +273,16 @@ class ToolchainManager(private val context: Context) {
         private const val KEY_EXEC_REPAIRED = "execBitsChecked"
 
         /**
+         * How much of a file in `usr/bin` is read to find out what runs it.
+         *
+         * A `#!` line is the first thing in the file and a console script's is well
+         * under this, so the whole answer is always in the first read. Bounded
+         * because this runs over every name in that directory on every launch and
+         * nothing stops a user putting an enormous file there.
+         */
+        private const val SHEBANG_HEAD_BYTES = 256
+
+        /**
          * Serialises every read-modify-write cycle on `toolchains.json` and the
          * env file generated from it.
          *
@@ -2919,11 +2929,9 @@ class ToolchainManager(private val context: Context) {
             Logger.w(tag, "toolchains.json is unreadable; keeping the exec table as it stands")
             return
         }
-        if (installed.length() == 0) {
-            if (execTable.exists()) execTable.delete()
-            refreshTrampolineLinks(emptySet())
-            return
-        }
+        // No early return for an empty record any more. The table is no longer
+        // only about toolchains: the row this app owns below has to exist on a
+        // device that has never installed one, which is most devices.
 
         // Insertion-ordered so the file is stable between runs: a table that
         // reordered itself on every launch would make every diff of it
@@ -2996,6 +3004,25 @@ class ToolchainManager(private val context: Context) {
             }
         }
 
+        // The one row this app owns rather than a toolchain. `putIfAbsent`, and
+        // after the loop, so a toolchain shipping its own `xdg-open` keeps the
+        // name: rows are keyed by command and the toolchain's went in first, and
+        // an opener that came with a toolchain knows more about it than this does.
+        //
+        // Node's browser helpers spawn the literal command `xdg-open` on Android,
+        // and nothing on PATH answered to it, so a preview server could only print
+        // that it had given up. The interpreter form is used rather than a plain
+        // path because the program is a JavaScript file under `filesDir`, which
+        // SELinux will not `execve`; naming `libnode.so` in `nativeLibraryDir` as
+        // its interpreter is the same shape the script wrappers above use, and the
+        // reason this launch pass has to rewrite the table at all is that Android
+        // hands out a new `nativeLibraryDir` on every reinstall.
+        rows.putIfAbsent(
+            "xdg-open",
+            "xdg-open\t${Environment.getNodePath(context)}\t$filesDir/server/xdg-open.js",
+        )
+        addPipInstalledScriptRows(rows)
+
         val body = (envRows.values + rows.values).joinToString("\n", postfix = "\n")
         execTable.parentFile?.mkdirs()
         // Atomic for a reason of its own, not by imitation: a torn line is a
@@ -3009,6 +3036,100 @@ class ToolchainManager(private val context: Context) {
         refreshTrampolineLinks(rows.keys)
         Logger.i(tag, "Regenerated toolchain-exec.tsv (${rows.size} commands, " +
             "${envRows.size} variables)")
+    }
+
+    /**
+     * Gives every command `pip` has installed a row, so it can actually run.
+     *
+     * `pip install black` succeeds, reports success, and writes an executable
+     * `usr/bin/black` that is already on PATH, and then the command does not run:
+     *
+     *     bash: .../usr/bin/black: .../usr/bin/python3: bad interpreter: Permission denied
+     *
+     * Measured in the app's own terminal, which is the only place it can be
+     * measured: `run-as` runs in the `runas_app` SELinux domain rather than
+     * `untrusted_app`, and there the same command succeeds. A shebang script has
+     * to be `execve`d on its own inode to reach its interpreter, and the kernel
+     * refuses that for anything under `filesDir`. This is the same wall the npm
+     * and pip shell functions were written for, and those cover exactly two names
+     * and only for bash; a formatter extension spawning a command reaches neither.
+     *
+     * The interpreter form settles it: the trampoline is a real binary in
+     * `nativeLibraryDir`, so it starts, and it then runs the bundled Python ELF
+     * with the script as an argument. Nothing is `execve`d under `filesDir` at any
+     * point, which is why this works where the shebang does not.
+     *
+     * Only `usr/bin`, because that is where pip puts a console script when the
+     * interpreter's prefix is the one the app ships, and only regular files there:
+     * every other name in that directory is a symlink [FirstRunSetup.setupToolSymlinks]
+     * made onto an ELF that already runs.
+     *
+     * Only a Python shebang. A script naming some other interpreter is not one
+     * this can help, and handing it to Python would turn a command that does not
+     * start into one that starts and does the wrong thing.
+     *
+     * Rows already present win, so a toolchain's own command and the app's own
+     * `xdg-open` keep their meaning.
+     *
+     * The table is rewritten by the launch pass, so a command installed while the
+     * app is running becomes reachable on the next launch rather than at once.
+     * Worth knowing before reading a bug report that says a fresh `pip install`
+     * still is not found.
+     */
+    private fun addPipInstalledScriptRows(rows: LinkedHashMap<String, String>) {
+        val binDir = File(context.filesDir, "usr/bin")
+        val names = binDir.list() ?: return
+        val interpreter = "${context.applicationInfo.nativeLibraryDir}/libpython.so"
+        if (!File(interpreter).exists()) return
+
+        var added = 0
+        for (name in names.sorted()) {
+            if (name in rows) continue
+            // A tab or a newline in the name is a torn record: the trampoline
+            // splits a row on its tabs and would read what follows as a path the
+            // user never chose. These names come from a directory anyone can write
+            // to, unlike the toolchain manifests the rows above are built from.
+            if (name.any { it == '\t' || it == '\n' }) {
+                Logger.w(tag, "No row for a command whose name the table cannot carry")
+                continue
+            }
+            val script = File(binDir, name)
+            // readlink succeeds only for a symlink, which is how a bundled tool is
+            // told apart from a script without reaching for OsConstants.
+            val isSymlink = try {
+                Os.readlink(script.absolutePath); true
+            } catch (_: Exception) {
+                false
+            }
+            if (isSymlink || !script.isFile) continue
+            if (!namesPythonInShebang(script)) continue
+            rows[name] = "$name\t$interpreter\t${script.absolutePath}"
+            added++
+        }
+        if (added > 0) Logger.i(tag, "Exec table carries $added pip-installed commands")
+    }
+
+    /**
+     * Whether [script] starts with a `#!` line naming a Python interpreter.
+     *
+     * Reads a bounded head rather than the file: a console script is a few hundred
+     * bytes, but nothing stops a user putting something enormous in this directory,
+     * and this runs on every launch.
+     */
+    private fun namesPythonInShebang(script: File): Boolean = try {
+        script.inputStream().use { stream ->
+            val head = ByteArray(SHEBANG_HEAD_BYTES)
+            val read = stream.read(head)
+            if (read < 3) {
+                false
+            } else {
+                val first = String(head, 0, read, Charsets.ISO_8859_1).substringBefore('\n')
+                first.startsWith("#!") && first.contains("python")
+            }
+        }
+    } catch (e: Exception) {
+        Logger.d(tag, "Could not read ${script.name} to see what runs it: ${e.message}")
+        false
     }
 
     /**

@@ -106,14 +106,25 @@ class ExtraKeyRowPopupTest {
     @Test
     fun `the popup goes down with the keyboard`() {
         val lines = code()
-        val start = lines.indexOfFirst { it.contains("visibility = if (imeVisible)") }
+        val start = lines.indexOfFirst { it.contains("visibility = if (showRow)") }
         assertTrue(
             start >= 0,
             "the row no longer drives its visibility from the IME insets, so this case is " +
                 "reading nothing",
         )
 
-        val body = lines.drop(start).take(8).joinToString("\n")
+        // Bounded by the line that ends the listener's decision rather than by a
+        // line count. The branch below the anchor carries most of the reasoning
+        // that keeps it correct, so any window written as a number is a window a
+        // comment can push the code out of, silently.
+        val length = lines.drop(start).indexOfFirst { it.contains("Logger.d(") }
+        assertTrue(
+            length > 0,
+            "the listener no longer logs what it decided, so this case cannot tell where " +
+                "the decision it is reading ends",
+        )
+
+        val body = lines.drop(start).take(length).joinToString("\n")
         assertTrue(
             body.contains("resetModifiersIfNeeded()"),
             "the hidden-IME branch is no longer where this test looks. It reads:\n$body",

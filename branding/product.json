@@ -67,7 +67,8 @@
     "urlProtocol": "vscodroid",
     "quality": "stable",
     "linkProtectionTrustedDomains": [
-      "https://open-vsx.org"
+      "https://open-vsx.org",
+      "https://github.com"
     ],
     "telemetryOptIn": false,
     "enableTelemetry": false,

@@ -103,9 +103,30 @@ class ExtraKeyToggleStateTest {
                 "the field check below is not looking at a row that reads the shared store",
         )
 
+        // The one boolean this row is allowed to keep, named here because the KDoc
+        // above asks for exactly that rather than for the ban to be widened.
+        //
+        // `suppressedForHeight` is not modifier state and cannot drift the way a
+        // modifier can. Nothing paints it, the adapter never reads it, and the inset
+        // listener that owns it recomputes the decision from the window on every
+        // dispatch and clears the flag whenever the keyboard goes away. What it
+        // holds is that the row already stood down because the page had no height
+        // to spare, so the answer does not flip while the keyboard changes its own
+        // height under the user's thumb.
+        val notModifierState = setOf("suppressedForHeight")
+
+        // Control: an allowance for a field that no longer exists hides nothing and
+        // would quietly excuse the next boolean that took the same name.
+        assertTrue(
+            row.declaredFields.any { it.name in notModifierState },
+            "the exception named in this test is no longer a field on the row, so the " +
+                "allowance below should go with it",
+        )
+
         val ownState = row.declaredFields
             .filter { it.type == java.lang.Boolean.TYPE }
             .map { it.name }
+            .filterNot { it in notModifierState }
 
         assertEquals(
             emptyList<String>(), ownState,

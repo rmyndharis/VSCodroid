@@ -444,10 +444,12 @@ class KeyRowAccessibilityInstrumentedTest {
 
         var idle = 0
         var latched = 0
+        var derived = 0
         var ctrl: ExtraKeyButton? = null
         onMain {
             val row = ExtraKeyRow(context)
             idle = heightOf(row)
+            derived = row.rowHeightPx
             row.layout(0, 0, widthPx, idle)
             ctrl = findKey(row, "Ctrl")
             ctrl?.performAccessibilityAction(AccessibilityNodeInfo.ACTION_CLICK, null)
@@ -465,6 +467,16 @@ class KeyRowAccessibilityInstrumentedTest {
                 "WebView above it is resized every time one is pressed or spent",
             idle,
             latched,
+        )
+        // The inset listener decides whether the page can afford this row before the
+        // row has been measured, so it spends a derived figure rather than a real
+        // one. The two drifting apart is silent: the row would go on being shown
+        // where it does not fit, or stand down where it would have.
+        assertEquals(
+            "the height the page-height decision spends, ${derived}px, is not the height " +
+                "the row measures, ${idle}px",
+            idle,
+            derived,
         )
     }
 

@@ -186,9 +186,10 @@ class ToolchainTrampolineLinkTest {
         // rather than as "irb is gone" because this directory is on PATH, so the
         // refresher's own staging files have to leave with the uninstalled names.
         assertEquals(
-            listOf("ruby"),
+            listOf("ruby", "xdg-open"),
             tcBinDir.list()?.sorted(),
-            "the trampoline directory holds something other than the installed commands",
+            "the trampoline directory holds something other than the installed commands " +
+                "and the browser opener the app puts there itself",
         )
     }
 
@@ -203,6 +204,11 @@ class ToolchainTrampolineLinkTest {
      * the row survives, the link survives, and the command the user just removed
      * answers exit 127 from the trampoline instead of the shell's own
      * "command not found".
+     *
+     * What is left behind afterwards is the row the app owns rather than a
+     * toolchain. `xdg-open` is what a Node browser helper spawns and has to be
+     * reachable whether or not a toolchain was ever installed, so the table and
+     * this directory now survive the last uninstall carrying exactly that.
      */
     @Test
     fun `uninstall takes the rows and the links with it`() {
@@ -216,12 +222,14 @@ class ToolchainTrampolineLinkTest {
         uninstallSync.isAccessible = true
         uninstallSync.invoke(manager, "ruby")
 
-        assertFalse(
-            File(filesDir, "home/.vscodroid/toolchain-exec.tsv").exists(),
+        val table = File(filesDir, "home/.vscodroid/toolchain-exec.tsv")
+        assertEquals(
+            emptyList<String>(),
+            table.readText().lines().filter { it.isNotEmpty() && !it.startsWith("xdg-open\t") },
             "the table outlived the toolchain it describes",
         )
         assertEquals(
-            emptyList<String>(),
+            listOf("xdg-open"),
             tcBinDir.list()?.sorted().orEmpty(),
             "a removed toolchain's commands are still on PATH",
         )

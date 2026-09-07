@@ -105,6 +105,9 @@ function boot(dir) {
     return { ...result, output: `${result.stdout || ''}${result.stderr || ''}` };
 }
 
+// The formatter a marketplace search cannot surface; see EXTENSION_RECOMMENDATIONS.
+const BLACK_FORMATTER = 'ms-python.black-formatter';
+
 const UPSTREAM = JSON.stringify({ nameShort: 'Code - OSS', version: '1.133.0', quality: 'oss' }, null, 2);
 
 // 1. A valid file is rewritten with the overrides, and nothing is left beside it.
@@ -458,15 +461,128 @@ async function stoppingTakesTheEditorServerWithIt() {
     }
 }
 
+// The workbench page is given the trusted-domain list, exactly once, and a page
+// that does not carry the element it extends is reported rather than thrown.
+//
+// The page is where this has to land. product.json beside it is read by the
+// bootstrap's own process and never by the browser: the product the workbench
+// consults is inlined into its bundle at build time, so the list that decides
+// whether a link opens without a confirmation reaches the editor only through the
+// construction options in this page.
+{
+    const pageDir = ['vscode-reh', 'out', 'vs', 'code', 'browser', 'workbench'];
+    const anchor =
+        '<meta id="vscode-workbench-web-configuration" data-settings="{{WORKBENCH_WEB_CONFIGURATION}}">';
+    const page = (head) => [
+        '<!DOCTYPE html>', '<html>', '\t<head>', `\t\t${head}`, '\t</head>', '</html>', '',
+    ].join('\n');
+
+    const dir = fixture(UPSTREAM);
+    const pagePath = path.join(dir, ...pageDir, 'workbench.html');
+    fs.mkdirSync(path.dirname(pagePath), { recursive: true });
+    fs.writeFileSync(pagePath, page(anchor));
+
+    const run = boot(dir);
+    assert.strictEqual(run.status, 0, `a tree carrying a workbench page should boot cleanly:\n${run.output}`);
+
+    const once = fs.readFileSync(pagePath, 'utf8');
+    assert.ok(once.includes('additionalTrustedDomains'), 'the page was not given a trusted-domain list');
+    assert.ok(once.includes('https://github.com'), 'github.com did not reach the page');
+    // A BARE <script>. The server hashes exactly that shape out of the page it has
+    // just built and puts the hashes in the CSP it serves with it, so a tag that
+    // carries any attribute is a script the page's own policy then refuses to run.
+    assert.ok(/\n\t\t<script>\n/.test(once), 'the injected script is not the bare form the CSP hashing matches');
+    // And it has to parse. The script is assembled from string fragments in
+    // server.js, where nothing else would notice a missing bracket until a device
+    // silently stopped applying the list.
+    const bodies = [...once.matchAll(/<script>\n([\s\S]*?)\n\t\t<\/script>/g)].map((m) => m[1]);
+    assert.strictEqual(bodies.length, 2, `expected the two injected scripts, got ${bodies.length}`);
+    bodies.forEach((b) => new Function(b)); // eslint-disable-line no-new-func -- a parse check
+
+    // The page is also given the extension recommendations, and they have to land
+    // UNDER productConfiguration: the workbench deep merges that object into the
+    // product inlined in its bundle, and a recommendation written anywhere else in
+    // the settings is read by nothing.
+    assert.ok(once.includes(BLACK_FORMATTER), `${BLACK_FORMATTER} did not reach the page`);
+
+    // Run both scripts the way the page would, rather than trusting the text. A
+    // recommendation that parses but writes to the wrong key would pass a string
+    // check and reach a device suggesting nothing.
+    {
+        const settings = { additionalTrustedDomains: ['https://example.invalid'] };
+        const el = {
+            getAttribute: () => JSON.stringify(settings),
+            setAttribute: (_name, value) => Object.assign(settings, JSON.parse(value)),
+        };
+        const document = { getElementById: (id) => (id === 'vscode-workbench-web-configuration' ? el : null) };
+        bodies.forEach((b) => new Function('document', b)(document)); // eslint-disable-line no-new-func
+
+        assert.ok(
+            settings.additionalTrustedDomains.includes('https://example.invalid'),
+            'the trusted-domain script dropped a domain the page already carried',
+        );
+        assert.ok(
+            settings.additionalTrustedDomains.includes('https://github.com'),
+            'the trusted-domain script did not add github.com',
+        );
+        const recommended = settings.productConfiguration?.extensionRecommendations;
+        assert.ok(recommended, 'no extensionRecommendations under productConfiguration');
+        const entry = recommended[BLACK_FORMATTER];
+        assert.ok(entry, `${BLACK_FORMATTER} is not among the recommendations`);
+        // The shape the workbench actually reads: it keeps `onFileOpen` and then
+        // tests `languages`, so an entry without both is carried and never fires.
+        assert.ok(Array.isArray(entry.onFileOpen) && entry.onFileOpen.length, 'the entry carries no onFileOpen');
+        assert.ok(
+            entry.onFileOpen.every((c) => Array.isArray(c.languages) && c.languages.length),
+            'an onFileOpen condition names no language, so the workbench never matches it',
+        );
+        assert.ok(
+            entry.onFileOpen.some((c) => c.languages.includes('python')),
+            'nothing recommends the formatter for Python',
+        );
+    }
+
+    const twice = boot(dir);
+    assert.strictEqual(twice.status, 0, `a second start should boot cleanly:\n${twice.output}`);
+    assert.strictEqual(
+        fs.readFileSync(pagePath, 'utf8'),
+        once,
+        'a second start stacked another copy of the script into the page',
+    );
+
+    const strays = fs.readdirSync(path.dirname(pagePath)).filter((n) => n !== 'workbench.html');
+    assert.deepStrictEqual(strays, [], `the rewrite left files behind: ${strays.join(', ')}`);
+    fs.rmSync(dir, { recursive: true, force: true });
+}
+
+// A page missing the element costs a log line, not a start. The bootstrap is
+// restarted by the watchdog, so a throw here would be a crash loop.
+{
+    const dir = fixture(UPSTREAM);
+    const pagePath = path.join(dir, 'vscode-reh', 'out', 'vs', 'code', 'browser', 'workbench', 'workbench.html');
+    fs.mkdirSync(path.dirname(pagePath), { recursive: true });
+    fs.writeFileSync(pagePath, '<!DOCTYPE html>\n<html></html>\n');
+
+    const run = boot(dir);
+    assert.strictEqual(run.status, 0, `a page without the element should still boot:\n${run.output}`);
+    assert.ok(
+        /Could not widen the trusted link domains/.test(run.output),
+        `a page this cannot extend should be named:\n${run.output}`,
+    );
+    fs.rmSync(dir, { recursive: true, force: true });
+}
+
 preloadRidesAsOneToken()
     .then(proxySurvivesTheBootstrap)
     .then(stoppingTakesTheEditorServerWithIt)
     .then(() => {
         console.log(
             'ok -- product.json survives a truncated file and an unwritable directory, a missing ' +
-                'server tree is a failed start rather than a healthy one, a proxy that does not ' +
-                'parse costs only DNS, the preload rides as one token, the DNS proxy outlives ' +
-                'the bootstrap, and a stop takes the editor server with it',
+                'server tree is a failed start rather than a healthy one, the workbench page is ' +
+                'given the trusted-domain list once and a page without the element it extends is ' +
+                'reported rather than thrown, a proxy that does not parse costs only DNS, the ' +
+                'preload rides as one token, the DNS proxy outlives the bootstrap, and a stop ' +
+                'takes the editor server with it',
         );
     })
     .catch((err) => {
