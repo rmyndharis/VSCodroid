@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Lists no longer overlap their own rows. Every row in the explorer, the search results, the command palette and a settings dropdown was drawn 14px taller than the space it was given, so each one covered the top of the next: option labels in a dropdown stacked on each other, and tapping the lower edge of a filename opened the file below it.
+- Editor tabs and status bar entries fit their strips again. Both were drawn taller than the area holding them, by 5px and 10px.
+
 ### Added
 
 - Opening a Python file offers to install Black Formatter. It is the formatter that works without installing anything with pip, and no marketplace search returns it, so it could not be found by looking.

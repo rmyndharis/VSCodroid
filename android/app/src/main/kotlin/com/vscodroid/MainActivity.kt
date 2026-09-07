@@ -3489,11 +3489,48 @@ class MainActivity : AppCompatActivity() {
                 s.textContent = [
                     '/* VSCodroid: Enlarged touch targets for touch input */',
                     '@media (pointer: coarse) {',
-                    '  .monaco-list-row { min-height: 36px !important; padding: 2px 0 !important; }',
-                    '  .tabs-container .tab { min-height: 40px !important; }',
+                    // NO height floor on a row, tab or status entry, deliberately.
+                    // Three used to be here and all three were measured on an API 36
+                    // emulator to make the thing they were meant to help worse.
+                    //
+                    // The workbench writes those heights from JavaScript, as inline
+                    // styles, and a stylesheet `min-height` clamps over an inline
+                    // `height` by the box model, so the element paints at the floor
+                    // while the layout around it keeps advancing at the number JS
+                    // chose. `!important` is not what does it and dropping it would
+                    // not have helped.
+                    //
+                    //   .monaco-list-row     floored 36, rows pitched 22  -> 14px overlap
+                    //   .tabs-container .tab floored 40, title area 35    -> 5px overflow
+                    //   .statusbar-item      floored 32, status bar 22    -> 10px clipped
+                    //
+                    // `ListView.updateItemInDOM` sets `top`, `height` and `lineHeight`
+                    // per row from the delegate's `getHeight()`, and nearly every
+                    // workbench delegate answers 22: the explorer, open editors,
+                    // contributed tree views, search results, terminal tabs, quick
+                    // pick entries and the select-box dropdown. So the floor did not
+                    // enlarge one row, it made each row cover the top 14px of the
+                    // next. Rows are absolutely positioned siblings inserted in index
+                    // order with no z-index, and the list hit-tests by walking
+                    // `event.target` up to a `data-index`, so in that band the LATER
+                    // row both paints and takes the tap: pressing the lower edge of a
+                    // filename opened the file beneath it. A floor meant to make
+                    // targets easier to hit was making them land on the wrong row.
+                    //
+                    // There is no supported way to raise a virtualized row from CSS.
+                    // The height is an `IListVirtualDelegate.getHeight()` return, no
+                    // setting in the bundle governs it, and only lists built with
+                    // `supportDynamicHeights` re-measure the DOM. Raising it for real
+                    // means patching the delegate constants before the Code - OSS
+                    // build, which is a server rebuild and a rebase on every bump.
+                    // Until someone wants that, an honest 22px row beats a 36px one
+                    // that eats its neighbour.
                     '  .activitybar .action-item { min-height: 44px !important; min-width: 44px !important; }',
                     '  .activitybar .action-label { min-height: 44px !important; }',
-                    '  .statusbar-item { min-height: 32px !important; padding: 0 8px !important; }',
+                    // Horizontal padding only. The status bar is a fixed 22px part
+                    // (`minimumHeight === maximumHeight`), so widening an entry is
+                    // real estate the layout actually has; making it taller is not.
+                    '  .statusbar-item { padding: 0 8px !important; }',
                     '  .context-view .action-item { min-height: 40px !important; }',
                     '  .context-view .action-label { padding: 6px 12px !important; }',
                     // The three floors above are for buttons, and a menu separator
@@ -3545,7 +3582,6 @@ class MainActivity : AppCompatActivity() {
                     // width on a phone than as alignment.
                     '  .monaco-dialog-box > .dialog-buttons-row > .dialog-buttons { flex-wrap: wrap !important; }',
                     '  .monaco-dialog-box:not(.align-vertical) > .dialog-buttons-row > .dialog-buttons { margin-left: 0 !important; }',
-                    '  .quick-input-list .monaco-list-row { min-height: 36px !important; }',
                     // The chrome's own text, which no setting in this build can reach.
                     // `editor.fontSize` governs the editor and nothing else; the
                     // workbench styles itself from 622 literal `font-size` rules in
