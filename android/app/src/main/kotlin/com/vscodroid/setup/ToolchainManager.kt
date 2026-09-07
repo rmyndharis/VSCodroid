@@ -3085,6 +3085,14 @@ class ToolchainManager(private val context: Context) {
         var added = 0
         for (name in names.sorted()) {
             if (name in rows) continue
+            // A tab or a newline in the name is a torn record: the trampoline
+            // splits a row on its tabs and would read what follows as a path the
+            // user never chose. These names come from a directory anyone can write
+            // to, unlike the toolchain manifests the rows above are built from.
+            if (name.any { it == '\t' || it == '\n' }) {
+                Logger.w(tag, "No row for a command whose name the table cannot carry")
+                continue
+            }
             val script = File(binDir, name)
             // readlink succeeds only for a symlink, which is how a bundled tool is
             // told apart from a script without reaching for OsConstants.

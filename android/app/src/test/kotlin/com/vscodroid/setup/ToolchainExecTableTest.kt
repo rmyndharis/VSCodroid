@@ -511,6 +511,35 @@ class ToolchainExecTableTest {
     }
 
     /**
+     * A name that would tear the record gets no row.
+     *
+     * The trampoline splits a row on its tabs, so a tab in a command name would be
+     * read as the row's next field: a path the user never chose. The toolchain rows
+     * above come from a manifest this app ships, but anyone can write a file into
+     * `usr/bin`, so the name has to be checked here.
+     */
+    @Test
+    fun `a command name the table cannot carry gets no row`() {
+        stateFile.writeText("[]")
+        val torn = File(pipBin(), "bad\tname")
+        // Some filesystems refuse the character outright, which is the same outcome
+        // by another route and leaves nothing to assert about.
+        val staged = try {
+            torn.writeText("#!${filesDir.absolutePath}/usr/bin/python3\nprint(1)\n"); torn.isFile
+        } catch (_: Exception) {
+            false
+        }
+        org.junit.jupiter.api.Assumptions.assumeTrue(staged, "the filesystem would not stage the name")
+
+        regenerate()
+
+        assertFalse(
+            execTable.readText().contains("bad\tname"),
+            "a torn record reached the table:\n" + execTable.readText(),
+        )
+    }
+
+    /**
      * A toolchain owns its own names. pip writing a script of the same name must
      * not take a toolchain's command away from it.
      */
