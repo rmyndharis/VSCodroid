@@ -1,6 +1,8 @@
 package com.vscodroid.setup
 
 import android.content.Context
+import android.system.Os
+import android.system.StructStat
 import com.google.android.play.core.assetpacks.AssetPackManagerFactory
 import com.vscodroid.util.Logger
 import io.mockk.Runs
@@ -18,6 +20,9 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.Path
 
 /**
  * What `toolchain-exec.tsv` has to contain for a toolchain command to work when
@@ -45,6 +50,7 @@ class ToolchainExecTableTest {
     private lateinit var stateFile: File
     private lateinit var execTable: File
     private lateinit var envFile: File
+    private lateinit var nativeLibDir: File
 
     @BeforeEach
     fun setUp() {
@@ -60,8 +66,37 @@ class ToolchainExecTableTest {
         mockkStatic(AssetPackManagerFactory::class)
         every { AssetPackManagerFactory.getInstance(any()) } returns mockk(relaxed = true)
 
+        // Backed by the real filesystem, so a symlink in usr/bin is told apart
+        // from a script the way the generator tells them apart on a device.
+        mockkStatic(Os::class)
+        every { Os.lstat(any()) } answers {
+            val path = Path.of(firstArg<String>())
+            if (!Files.exists(path, LinkOption.NOFOLLOW_LINKS)) {
+                throw java.io.FileNotFoundException(path.toString())
+            }
+            mockk<StructStat>(relaxed = true)
+        }
+        every { Os.readlink(any()) } answers {
+            Files.readSymbolicLink(Path.of(firstArg<String>())).toString()
+        }
+        every { Os.symlink(any(), any()) } answers {
+            Files.createSymbolicLink(Path.of(secondArg<String>()), Path.of(firstArg<String>()))
+            Unit
+        }
+
         context = mockk(relaxed = true)
         every { context.filesDir } returns filesDir
+        // The only directory this app may execve from, and the one every
+        // interpreter row has to name. Real files, because the generator declines
+        // to write a row naming an interpreter that is not there.
+        nativeLibDir = File(filesDir, "nativeLib").apply { mkdirs() }
+        File(nativeLibDir, "libnode.so").writeText("elf")
+        File(nativeLibDir, "libpython.so").writeText("elf")
+        every { context.applicationInfo } answers {
+            android.content.pm.ApplicationInfo().apply {
+                nativeLibraryDir = this@ToolchainExecTableTest.nativeLibDir.absolutePath
+            }
+        }
 
         File(filesDir, "home/.vscodroid").mkdirs()
         stateFile = File(filesDir, "home/.vscodroid/toolchains.json")
@@ -399,6 +434,101 @@ class ToolchainExecTableTest {
         assertEquals(
             "${filesDir.absolutePath}/server/xdg-open.js", fields[2],
             "the row does not name the opener FirstRunSetup extracts",
+        )
+    }
+
+    /** A console script pip has written, and the two names beside it that are not. */
+    private fun pipBin() = File(filesDir, "usr/bin").apply { mkdirs() }
+
+    /**
+     * What `pip install black` leaves behind, and why it does not run without this.
+     *
+     * pip writes an executable `usr/bin/black` whose first line points at the
+     * interpreter, and that directory is already on PATH, so the command is found.
+     * Running it then fails: reaching the interpreter means execve on the script's
+     * own inode, and SELinux refuses that for anything under filesDir. Measured in
+     * the app's terminal as `bad interpreter: Permission denied`.
+     *
+     * The interpreter form has no such step. The trampoline starts because it lives
+     * in nativeLibraryDir, and it runs the bundled Python with the script as an
+     * argument, so nothing under filesDir is ever execve'd.
+     */
+    @Test
+    fun `a command pip installed gets a row that runs it through Python`() {
+        stateFile.writeText("[]")
+        File(pipBin(), "black").writeText("#!${filesDir.absolutePath}/usr/bin/python3\nprint(1)\n")
+
+        regenerate()
+
+        assertEquals(
+            listOf(
+                "black\t${nativeLibDir.absolutePath}/libpython.so" +
+                    "\t${filesDir.absolutePath}/usr/bin/black"
+            ),
+            tableLines().filter { it.startsWith("black\t") },
+            "nothing runs `black`, so a formatter that spawns it still reports it missing:\n" +
+                execTable.readText(),
+        )
+    }
+
+    /**
+     * The bundled tools in the same directory are symlinks onto ELFs that already
+     * run, and a row for one would send `bash` or `node` through Python.
+     */
+    @Test
+    fun `a bundled tool in the same directory gets no row`() {
+        stateFile.writeText("[]")
+        Files.createSymbolicLink(
+            File(pipBin(), "node").toPath(),
+            File(nativeLibDir, "libnode.so").toPath(),
+        )
+
+        regenerate()
+
+        assertEquals(
+            emptyList<String>(),
+            tableLines().filter { it.startsWith("node\t") },
+            "a bundled tool was given a row, which would run an ELF through Python",
+        )
+    }
+
+    /**
+     * Only a Python shebang. Handing anything else to Python turns a command that
+     * does not start into one that starts and does the wrong thing.
+     */
+    @Test
+    fun `a script naming another interpreter gets no row`() {
+        stateFile.writeText("[]")
+        File(pipBin(), "somesh").writeText("#!/bin/sh\necho hi\n")
+
+        regenerate()
+
+        assertEquals(
+            emptyList<String>(),
+            tableLines().filter { it.startsWith("somesh\t") },
+            "a shell script was routed through the Python interpreter",
+        )
+    }
+
+    /**
+     * A toolchain owns its own names. pip writing a script of the same name must
+     * not take a toolchain's command away from it.
+     */
+    @Test
+    fun `a toolchain keeps a name pip also installed`() {
+        elf("usr/opt/ruby/bin/black")
+        stateFile.writeText(
+            """[{"name":"ruby","installRoot":"usr/opt/ruby",""" +
+                """"binaries":["usr/opt/ruby/bin/black"]}]"""
+        )
+        File(pipBin(), "black").writeText("#!${filesDir.absolutePath}/usr/bin/python3\nprint(1)\n")
+
+        regenerate()
+
+        assertEquals(
+            listOf("black\t${filesDir.absolutePath}/usr/opt/ruby/bin/black"),
+            tableLines().filter { it.startsWith("black\t") },
+            "the pip script displaced the toolchain's own command",
         )
     }
 }

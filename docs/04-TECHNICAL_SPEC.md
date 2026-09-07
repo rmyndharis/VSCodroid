@@ -402,6 +402,14 @@ command every Node browser helper spawns, mapped through `libnode.so` onto `asse
 That is why the generator now writes a table and a `tcbin` on a device with no toolchain installed,
 where it used to delete both.
 
+The generator also scans `usr/bin` for regular files whose `#!` line names Python, which is what
+`pip install` writes for a package that ships a command, and gives each one an interpreter row onto
+`libpython.so`. Without it `pip install black` produced a `black` on PATH that answered
+`bad interpreter: Permission denied`, since reaching the interpreter through a shebang means
+`execve` on the script's own inode. Symlinks in that directory are skipped: those are the bundled
+tools, already pointing at ELFs that run. The rows are written by the launch pass, so a command
+installed while the app is running is reachable on the next launch.
+
 ---
 
 ## 3. Server Bootstrap

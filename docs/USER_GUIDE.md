@@ -745,7 +745,8 @@ in [Dev Server Preview](#dev-server-preview) above.
 ### Python Command-Line Tools
 
 Some packages install a command as well as a module: `pytest`, `black`, `httpie`,
-`cowsay`. The install succeeds and the command still does not run.
+`cowsay`. These work, with one delay worth knowing about: a command you have just
+installed starts working the next time you open VSCodroid, not straight away.
 
 ```
 $ pip install cowsay
@@ -753,16 +754,20 @@ $ cowsay -t hi
 bash: /data/.../usr/bin/cowsay: /data/.../usr/bin/python3: bad interpreter: Permission denied
 ```
 
-The command pip writes is a short text file starting with `#!` and the path to
-the interpreter. Android does not let an app run a program out of its own
-storage, which is why VSCodroid's own tools live in a directory the system does
-allow, and a file pip writes has nowhere else to go. The message names `python3`,
-so it reads as a broken Python; Python is fine, and the interpreter it names runs
-perfectly when you call it yourself. It is the one-line launcher that cannot
-start.
+Close VSCodroid, open it again, and the same line works.
 
-Run the module instead. Every one of these packages is importable, which is what
-the command was starting anyway:
+The delay comes from how the command is made to run at all. Android does not let
+an app run a program out of its own storage, and what pip writes is exactly that:
+a short text file starting with `#!` and the path to the interpreter. VSCodroid
+keeps a small table of what each command means and starts the interpreter itself,
+which is allowed. That table is rebuilt when the app starts, so a command
+installed while it is running is not in it yet, and until then you get the message
+above. It names `python3`, so it reads as a broken Python; Python is fine, and the
+interpreter it names runs perfectly when you call it yourself. It is the one-line
+launcher that cannot start.
+
+If you would rather not wait, run the module. It does the same thing and works the
+moment pip finishes:
 
 ```bash
 python3 -m pytest
@@ -1070,7 +1075,7 @@ If `npm install` fails with errors:
 
 ### Python: Installed, and Then Something Fails
 
-- **`bad interpreter: Permission denied`** after installing a package that brings a command with it (`pytest`, `black`, `httpie`). Run it as a module instead: `python3 -m pytest`. See [Python Command-Line Tools](#python-command-line-tools) for why the message names `python3` when Python is not the problem.
+- **`bad interpreter: Permission denied`** after installing a package that brings a command with it (`pytest`, `black`, `httpie`). Open VSCodroid again and the command works; to use it without waiting, run it as a module: `python3 -m pytest`. See [Python Command-Line Tools](#python-command-line-tools) for why the message names `python3` when Python is not the problem.
 - **`ZoneInfoNotFoundError`** from `zoneinfo`, `pandas` or anything that resolves a named time zone. `pip install tzdata` and it works from then on; see [Time Zones In Python](#time-zones-in-python).
 
 ### Git Push/Pull Fails
