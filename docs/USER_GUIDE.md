@@ -98,6 +98,12 @@ When the soft keyboard is visible, a row of extra keys appears above it. Swipe i
 left or right to change page; the dots underneath show how many pages there are
 and which one you are on.
 
+One exception, and it is deliberate: the row takes its height out of the page
+rather than covering it, so where the keyboard leaves almost nothing behind, the
+row stands down instead of taking the last of it. That is landscape on a phone,
+where the keyboard alone can be two thirds of the screen. Turn back to portrait,
+or put the keyboard away, and the row returns.
+
 How many there are depends on how wide your phone is. The row divides its width
 evenly among the keys on a page, so on a narrower screen it carries fewer keys per
 page and spreads them over more: five pages on a 411dp phone and wider, six at

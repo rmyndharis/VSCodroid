@@ -52,15 +52,23 @@ if (!socketPath) {
 
 const body = JSON.stringify({ type: 'openExternal', uris: args });
 
-// How long the editor gets to answer before this gives up.
+// NO REPLY TIMEOUT, and that is a correction rather than an omission.
 //
-// Every other failure here is an event: no socket, a stale one, a refused
-// connection. A socket that accepts and then never answers is not, and without
-// this the request waits for as long as the process lives. The caller is a
-// preview server's `open`, which spawns this and waits, so a hang there is a
-// build task that never finishes rather than a browser that did not open. The
-// editor answers in single-digit milliseconds when it answers at all.
-const REPLY_TIMEOUT_MS = 10000;
+// One was added here and taken out again the same day. The reasoning was that a
+// socket which accepts and then never answers is the one failure not covered by
+// an event, so a deadline would turn it into one. What that missed is what the
+// reply is waiting FOR. `server-main.js` answers this request with
+// `case "openExternal": s = await this.openExternal(i)` and only then `n(200, s)`,
+// and `openExternal` awaits `_remoteCLI.openExternal` for every URI. That command
+// puts the trusted-domain confirmation on screen for any address outside the
+// list in `assets/server.js`, and it does not resolve until the person taps Open.
+// A deadline of any length that a user might exceed therefore reports failure for
+// a link that is about to open, on the ordinary path rather than a rare one.
+//
+// The hang it was meant to catch needs a wedged extension host, which is rarer
+// and less costly than breaking every confirmed link. If it is ever worth
+// guarding, guard the CONNECT, which no human is waiting inside of, and leave the
+// reply alone.
 
 const request = http.request(
     {
@@ -83,9 +91,4 @@ const request = http.request(
     },
 );
 request.on('error', (err) => fail(err.message));
-request.setTimeout(REPLY_TIMEOUT_MS, () => {
-    // `destroy` makes the pending request emit 'error', which the handler above
-    // turns into the same one-line diagnostic every other failure produces.
-    request.destroy(new Error(`the editor did not answer in ${REPLY_TIMEOUT_MS}ms`));
-});
 request.end(body);

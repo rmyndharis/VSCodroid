@@ -3408,6 +3408,42 @@ class MainActivity : AppCompatActivity() {
                 }
                 document.addEventListener('pointerdown', function(e) {
                     var target = e.target;
+                    // A touch inside an open context menu decides nothing about the
+                    // keyboard, and letting it decide destroys the menu.
+                    //
+                    // The editor's menu is built in a shadow root whose host is a
+                    // CHILD OF THE EDITOR: `ContextView.setContainer` appends
+                    // `div.shadow-root-host` to the container it was given, and for
+                    // an editor menu that container is the editor's own DOM node.
+                    // A pointer event inside the shadow tree is retargeted to that
+                    // host, so `closest(TEXT)` below matches on the first parent and
+                    // reads a tap on a menu item as a tap on the file. Measured on an
+                    // API 36 emulator with the keyboard down: long press opens the
+                    // 29-item menu with the viewport at 845, then tapping an item
+                    // takes the viewport to 458 and the menu with it, because
+                    // letTheKeyboardUp() blurs and refocuses an editing host that is
+                    // still holding `inputmode="none"`.
+                    //
+                    // It reaches further than the items. The menu renders a
+                    // full-viewport `.context-view-block` to catch a dismissing tap,
+                    // so before this test EVERY point on the screen belonged to the
+                    // editor as far as the line below was concerned.
+                    //
+                    // An early return rather than falling through to the branch under
+                    // it: that branch clears `aimedAtText` and puts `inputmode="none"`
+                    // back on every editing host, which would take the keyboard away
+                    // from a menu opened while the user was typing. Nothing about the
+                    // keyboard should change because a menu was touched.
+                    //
+                    // Both shapes are covered. A shadow-DOM menu retargets to the host
+                    // itself, which carries the class; a light-DOM one (the explorer,
+                    // the terminal, the menubar) leaves the target inside
+                    // `.context-view`, and `closest` reaches it there.
+                    if (target && ((target.classList && target.classList.contains('shadow-root-host')) ||
+                        (target.closest && target.closest('.context-view')))) {
+                        pendingTap = null;
+                        return;
+                    }
                     if (target && target.closest && target.closest(TEXT)) {
                         // Undecided, and that is the point. Dragging inside the
                         // editor is how a phone scrolls a file, and it goes down
@@ -3600,7 +3636,11 @@ class MainActivity : AppCompatActivity() {
                     if (e.__vscodroidForwarded) return;
                     if (e.key !== 'Escape') return;
                     var bars = actionBars();
-                    for (var i = 0; i < bars.length; i++) {
+                    // Innermost first. Escape closes one level, so with a submenu open
+                    // it has to reach the submenu; forwarding to the outermost bar
+                    // instead took the whole stack down in one press, which is not what
+                    // the key means anywhere else.
+                    for (var i = bars.length - 1; i >= 0; i--) {
                         // A menu holding focus handles its own Escape. Asked of the
                         // menu's own root, because `document.activeElement` for a
                         // shadow-DOM menu is the HOST, which the bar does not contain:
@@ -3616,6 +3656,47 @@ class MainActivity : AppCompatActivity() {
                         forwarded.__vscodroidForwarded = true;
                         bars[i].dispatchEvent(forwarded);
                         return;
+                    }
+                }, true);
+
+                // Tapping outside an open menu closes it.
+                //
+                // The menu renders a full-viewport `.context-view-block` to catch a
+                // dismissing click, and on this WebView nothing closes the menu from
+                // it: measured with a real Android tap outside a 29-item menu, and
+                // again with a synthetic mouse press, the menu stayed open both
+                // times. It used to appear to work for the wrong reason. The tap was
+                // read as a tap on the file, the keyboard came up, the window
+                // resized, and the workbench hid every context view; the menu went
+                // away with the user's file half covered by a keyboard they had not
+                // asked for. Excluding those taps from the keyboard guard fixed that
+                // and left the dismissal with nothing behind it, so it is provided
+                // here rather than left to a side effect.
+                //
+                // Decided by geometry, not by containment: a touch anywhere inside a
+                // shadow-DOM menu retargets to the same host, so asking which node
+                // was hit cannot tell the inside of the menu from the outside. Every
+                // open menu is measured, and a point inside any of them is a menu
+                // interaction this leaves alone.
+                //
+                // Innermost first, so a submenu and its parent both close, which is
+                // what tapping away from the whole stack means.
+                window.addEventListener('pointerdown', function (e) {
+                    if (!window.matchMedia(COARSE).matches) return;
+                    if (!inContextView(e.target)) return;
+                    var bars = actionBars();
+                    if (!bars.length) return;
+                    for (var i = 0; i < bars.length; i++) {
+                        var r = bars[i].getBoundingClientRect();
+                        if (e.clientX >= r.left && e.clientX <= r.right &&
+                            e.clientY >= r.top && e.clientY <= r.bottom) {
+                            return;
+                        }
+                    }
+                    for (var j = bars.length - 1; j >= 0; j--) {
+                        var away = new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true });
+                        away.__vscodroidForwarded = true;
+                        bars[j].dispatchEvent(away);
                     }
                 }, true);
 

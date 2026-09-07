@@ -851,6 +851,11 @@ and then forwards a **whitelist of exactly four keys**:
 Added by `server.js` itself, not passed from Kotlin:
 
 - `--accept-server-license-terms`
+- `--without-browser-env-var`: without it the server exports `BROWSER` pointing at
+  `bin/helpers/browser.sh`, a shebang script under `filesDir` that SELinux will not
+  exec and that calls a `$ROOT/node` the packaged tree does not have. Node's browser
+  helpers prefer `$BROWSER` over `xdg-open`, so with it set they stop at a script that
+  cannot run; unset, they reach the `xdg-open` row the exec table provides.
 - `--disable-workspace-trust`: without it every folder opens in Restricted Mode and
   most extensions never activate. The `security.workspace.trust.enabled` setting
   cannot substitute: it is APPLICATION-scoped, and the WEB CLIENT takes only the
