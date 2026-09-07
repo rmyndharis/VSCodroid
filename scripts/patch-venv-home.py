@@ -34,6 +34,25 @@ The one a person hits is a venv created from inside an active venv.
 parent of that does hold a `lib/python3.X/`, containing nothing but
 `site-packages`. So `home` names a directory that looks right and is not.
 
+`-E` REACHES THE SAME SHAPE WITHOUT A VENV. The paragraph above is about how
+venv derives `home`, and there is a second route into that same wrong directory
+that venv has nothing to do with: `-E`, and `-I`, which implies it. getpath.py
+reads PYTHONHOME `if use_environment` only, so under `-E` the prefix is searched
+from `dirname(realpath(executable))`, which resolves the `usr/bin/python3`
+symlink into the native library directory and finds no standard library there.
+The interpreter then dies with `No module named 'encodings'` before running
+anything. `-s` alone is fine; `-E` is the trigger.
+
+Nothing that ships reaches it, which is why there is no code here for it. The
+standard library's call sites only propagate flags the parent already has
+(`subprocess._args_from_interpreter_flags`, `ensurepip` under
+`sys.flags.isolated`), and a parent that could not have started cannot pass them
+on; venv avoids `-I` deliberately for its own reason, quoted below; pip's `-I` is
+its own `--ignore-installed` option and not an interpreter flag; and the Python
+extension matches this exact message and retries without the flag. Recorded
+because a third-party tool that hardcodes `-E` would land here with nothing in
+the error naming the cause.
+
 WHY THE NOTE IS THE ONLY CHANNEL. PYTHONHOME, which `Environment.kt` exports,
 covers for all of this everywhere else. It cannot cover for it here:
 `_call_new_python` copies the environment and pops PYTHONHOME and PYTHONPATH

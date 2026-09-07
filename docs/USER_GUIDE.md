@@ -780,6 +780,38 @@ as shell functions that call `python3 -m pip`, so they work in the terminal
 without anything on your part. A build task that runs outside a shell does not see
 those functions, so write `python3 -m pip` in `tasks.json` and in any script.
 
+### The Python Formatter Is Not in Search Results
+
+Searching the Extensions view for `black` returns **Black** by `mikoz`, and not
+the extension most guides mean. That one does format Python, but only once you
+have installed black yourself:
+
+```bash
+pip install black
+```
+
+Until you do, `Format Document` does nothing at all. There is no error and no
+prompt; the status bar shows "Running black" and stays that way.
+
+The extension that works with no setup is `ms-python.black-formatter`, which
+carries its own copy of black. It is in the registry and installs normally, but
+it never comes back from a text search, so you have to ask for it by identifier.
+Type this into the Extensions search box:
+
+```
+@id:ms-python.black-formatter
+```
+
+That returns exactly one result, published by `ms-python`. Install it, accept the
+publisher prompt, and `Format Document` formats Python straight away, on a device
+where pip has installed nothing.
+
+`@id:` works for any extension a search does not surface. The identifier is the
+`publisher.name` pair shown on the extension's page in the registry.
+
+The shortcut for `Format Document` here is **Ctrl+Shift+I**, not the Shift+Alt+F
+used on the desktop.
+
 ### Time Zones In Python
 
 A named time zone raises instead of resolving:
@@ -1076,6 +1108,7 @@ If `npm install` fails with errors:
 ### Python: Installed, and Then Something Fails
 
 - **`bad interpreter: Permission denied`** after installing a package that brings a command with it (`pytest`, `black`, `httpie`). Open VSCodroid again and the command works; to use it without waiting, run it as a module: `python3 -m pytest`. See [Python Command-Line Tools](#python-command-line-tools) for why the message names `python3` when Python is not the problem.
+- **`Format Document` does nothing in a `.py` file** and the status bar sticks on "Running black". The extension a marketplace search finds needs black installed separately (`pip install black`) and says nothing when it is missing. See [The Python Formatter Is Not in Search Results](#the-python-formatter-is-not-in-search-results) for that, and for the formatter that needs no pip step.
 - **`ZoneInfoNotFoundError`** from `zoneinfo`, `pandas` or anything that resolves a named time zone. `pip install tzdata` and it works from then on; see [Time Zones In Python](#time-zones-in-python).
 
 ### Git Push/Pull Fails
