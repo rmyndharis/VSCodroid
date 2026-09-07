@@ -105,6 +105,9 @@ function boot(dir) {
     return { ...result, output: `${result.stdout || ''}${result.stderr || ''}` };
 }
 
+// The formatter a marketplace search cannot surface; see EXTENSION_RECOMMENDATIONS.
+const BLACK_FORMATTER = 'ms-python.black-formatter';
+
 const UPSTREAM = JSON.stringify({ nameShort: 'Code - OSS', version: '1.133.0', quality: 'oss' }, null, 2);
 
 // 1. A valid file is rewritten with the overrides, and nothing is left beside it.
@@ -492,9 +495,52 @@ async function stoppingTakesTheEditorServerWithIt() {
     // And it has to parse. The script is assembled from string fragments in
     // server.js, where nothing else would notice a missing bracket until a device
     // silently stopped applying the list.
-    const body = once.match(/<script>\n([\s\S]*?)\n\t\t<\/script>/);
-    assert.ok(body, 'the injected script could not be located to check');
-    new Function(body[1]); // eslint-disable-line no-new-func -- a parse check, never run
+    const bodies = [...once.matchAll(/<script>\n([\s\S]*?)\n\t\t<\/script>/g)].map((m) => m[1]);
+    assert.strictEqual(bodies.length, 2, `expected the two injected scripts, got ${bodies.length}`);
+    bodies.forEach((b) => new Function(b)); // eslint-disable-line no-new-func -- a parse check
+
+    // The page is also given the extension recommendations, and they have to land
+    // UNDER productConfiguration: the workbench deep merges that object into the
+    // product inlined in its bundle, and a recommendation written anywhere else in
+    // the settings is read by nothing.
+    assert.ok(once.includes(BLACK_FORMATTER), `${BLACK_FORMATTER} did not reach the page`);
+
+    // Run both scripts the way the page would, rather than trusting the text. A
+    // recommendation that parses but writes to the wrong key would pass a string
+    // check and reach a device suggesting nothing.
+    {
+        const settings = { additionalTrustedDomains: ['https://example.invalid'] };
+        const el = {
+            getAttribute: () => JSON.stringify(settings),
+            setAttribute: (_name, value) => Object.assign(settings, JSON.parse(value)),
+        };
+        const document = { getElementById: (id) => (id === 'vscode-workbench-web-configuration' ? el : null) };
+        bodies.forEach((b) => new Function('document', b)(document)); // eslint-disable-line no-new-func
+
+        assert.ok(
+            settings.additionalTrustedDomains.includes('https://example.invalid'),
+            'the trusted-domain script dropped a domain the page already carried',
+        );
+        assert.ok(
+            settings.additionalTrustedDomains.includes('https://github.com'),
+            'the trusted-domain script did not add github.com',
+        );
+        const recommended = settings.productConfiguration?.extensionRecommendations;
+        assert.ok(recommended, 'no extensionRecommendations under productConfiguration');
+        const entry = recommended[BLACK_FORMATTER];
+        assert.ok(entry, `${BLACK_FORMATTER} is not among the recommendations`);
+        // The shape the workbench actually reads: it keeps `onFileOpen` and then
+        // tests `languages`, so an entry without both is carried and never fires.
+        assert.ok(Array.isArray(entry.onFileOpen) && entry.onFileOpen.length, 'the entry carries no onFileOpen');
+        assert.ok(
+            entry.onFileOpen.every((c) => Array.isArray(c.languages) && c.languages.length),
+            'an onFileOpen condition names no language, so the workbench never matches it',
+        );
+        assert.ok(
+            entry.onFileOpen.some((c) => c.languages.includes('python')),
+            'nothing recommends the formatter for Python',
+        );
+    }
 
     const twice = boot(dir);
     assert.strictEqual(twice.status, 0, `a second start should boot cleanly:\n${twice.output}`);

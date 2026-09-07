@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Opening a Python file offers to install Black Formatter. It is the formatter that works without installing anything with pip, and no marketplace search returns it, so it could not be found by looking.
+
 ### Fixed
 
 - Paste works again, in the editor, the terminal, the Command Palette and anything an extension pastes into. Copying put text on the device clipboard and pasting it back raised "Unable to read from the browser's clipboard", asking for a permission a WebView has no way to grant.
