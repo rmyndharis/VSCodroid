@@ -17,8 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Editor tabs and status bar entries fit their strips again. Both were drawn taller than the area holding them, by 5px and 10px.
 - A long press opens a menu that stays open while the keyboard is up. The menu took focus from the text, the keyboard went down, and the workbench answered the resize by closing the menu about 60ms after it appeared, so it read as flickering or dead. Esc on the key row still closes it.
 - Menus no longer list keyboard shortcuts beside their items on a touch screen. The items run on a tap; the chord was width taken from a phone to advertise a key it does not have.
-- A long press with the keyboard down opens its menu instead of raising the keyboard. The press was read as a tap, so the keyboard came up, the window resized, and the workbench closed the menu that the press had just opened.
-- Esc on the key row closes a terminal or explorer menu again. The key was forwarded to a menu that did not hold focus, and the forwarded press was picked up by the same forwarder, so it never arrived.
+- A long press opens the editor menu whether the keyboard is up or down, and using it leaves the keyboard where it was. Tapping an item runs it, a submenu opens, Esc closes one level and tapping away closes the menu.
 - Paste works again, in the editor, the terminal, the Command Palette and anything an extension pastes into. Copying put text on the device clipboard and pasting it back raised "Unable to read from the browser's clipboard", asking for a permission a WebView has no way to grant.
 - Signing in to GitHub no longer goes through a confirmation dialog first. The sign-in ends by opening github.com, and every address outside the extension marketplace was treated as untrusted.
 - A confirmation dialog fits a phone screen. It was drawn wider than the screen and centred, so the button that proceeds hung off the right edge with a letter of it showing.

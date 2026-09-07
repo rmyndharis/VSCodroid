@@ -67,6 +67,36 @@ class TouchContextMenuWiringTest {
     }
 
     @Test
+    fun `the keyboard guard ignores a touch that landed in a context menu`() {
+        val guard = body("private fun injectKeyboardGuard(")
+        // The editor's menu is built in a shadow root whose host is a child of the
+        // editor, so a touch inside it retargets to a node that matches the guard's
+        // own TEXT selector. Without this test the guard reads a tap on a menu item
+        // as a tap on the file, raises the keyboard, and the resize takes the menu:
+        // measured on an API 36 emulator as viewport 845 to 458 with the menu gone.
+        assertTrue(
+            guard.contains("shadow-root-host") && guard.contains(".context-view"),
+            "injectKeyboardGuard no longer excludes a touch inside a context view, so " +
+                "tapping a menu item raises the keyboard and the resize closes the menu " +
+                "before the item can be used. A submenu becomes unreachable entirely.",
+        )
+        // It has to leave the keyboard state alone, not reset it: the branch below
+        // the exclusion clears aimedAtText and re-applies inputmode="none", which
+        // would take the keyboard away from a menu opened while the user was typing.
+        val exclusion = guard.substringAfter("shadow-root-host").substringBefore("closest(TEXT)")
+        assertTrue(
+            exclusion.contains("return"),
+            "the context-view exclusion falls through instead of returning, so a touch " +
+                "in a menu still resets the keyboard state it was meant to leave alone",
+        )
+        assertTrue(
+            !exclusion.contains("aimedAtText"),
+            "the context-view exclusion changes aimedAtText; a touch in a menu must " +
+                "decide nothing about the keyboard in either direction",
+        )
+    }
+
+    @Test
     fun `escape still reaches a menu that does not hold focus`() {
         val script = body("private fun injectTouchContextMenu(")
         assertTrue(
@@ -74,6 +104,27 @@ class TouchContextMenuWiringTest {
             "the Escape forwarder is gone. A menu that never took focus never sees Escape, so " +
                 "the key-row Esc button stops closing menus, which is the one keyboard route a " +
                 "phone has.",
+        )
+    }
+
+    @Test
+    fun `tapping away from a menu closes it`() {
+        val script = body("private fun injectTouchContextMenu(")
+        // The menu's own full-viewport dismiss layer closes nothing on this WebView,
+        // measured with a real Android tap and again with a synthetic mouse press.
+        // It only ever appeared to work because the tap was read as a tap on the file
+        // and the keyboard that came up resized the window out from under the menu.
+        // With that excluded from the keyboard guard, this is the dismissal.
+        assertTrue(
+            script.contains("getBoundingClientRect") && script.contains("clientX"),
+            "the tap-away dismissal is gone or no longer decides by geometry. Containment " +
+                "cannot decide it: every touch inside a shadow-DOM menu retargets to the " +
+                "same host, so the inside and the outside of the menu look identical.",
+        )
+        assertTrue(
+            script.contains("bars.length - 1"),
+            "the dismissal no longer walks the menus innermost first, so tapping away " +
+                "from a submenu leaves its parent open",
         )
     }
 

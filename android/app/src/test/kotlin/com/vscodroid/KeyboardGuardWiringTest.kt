@@ -84,6 +84,25 @@ class KeyboardGuardWiringTest {
      * pointerup branch was written. The three names below are that branch.
      */
     @Test
+    fun `a long press is not a tap`() {
+        val guard = SourceScan.body(mainActivity(), "private fun injectKeyboardGuard(")
+        assertTrue(
+            guard.contains("LONG_PRESS_MS"),
+            "the guard no longer measures how long the finger was down, so a long press is " +
+                "read as a tap again: the keyboard comes up, the window resizes, and the " +
+                "workbench closes the menu the press had just opened. Measured on an API 36 " +
+                "emulator as pointerup at t+985ms, the editor's gesture at t+995ms, the " +
+                "resize at t+1621ms, and no menu.",
+        )
+        assertTrue(
+            guard.contains("e.timeStamp"),
+            "the duration is no longer read from the events themselves. Both timestamps have " +
+                "to come from the same clock; a wall-clock read here would compare two " +
+                "different origins.",
+        )
+    }
+
+    @Test
     fun `a scroll is not a tap`() {
         val source = mainActivity()
 
