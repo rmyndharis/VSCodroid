@@ -3365,7 +3365,13 @@ class ToolchainManager(private val context: Context) {
                 //
                 // Cheap enough to do every time: it reads toolchains.json, formats a
                 // few dozen lines and writes them atomically. With no toolchains
-                // installed it deletes the file and returns.
+                // installed it still writes a table: the exec table stopped being
+                // only about toolchains when this app put its own `xdg-open` row
+                // and the rows for pip-installed commands into it, and most
+                // devices never install a toolchain. It used to delete the file
+                // in that case, and a reader tracing why `usr/libexec/tcbin`
+                // exists on such a device was told by this comment that it
+                // should not.
                 //
                 // It is also where the trampoline table and its symlinks are
                 // rebuilt, and they need this launch pass for a second reason of

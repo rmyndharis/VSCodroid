@@ -3357,6 +3357,23 @@ class MainActivity : AppCompatActivity() {
                 // Chromium's own touch slop is 8; this is looser because the
                 // target is a line of code rather than a button.
                 var TAP_SLOP = 12;
+                // Longer than this and the finger was not tapping, whatever it
+                // travelled. A press that reaches the editor's own hold gesture
+                // opens a context menu instead, and raising the keyboard for it
+                // destroys that menu: focus returns to the editing host, Android
+                // resizes the window, and the workbench answers the resize by
+                // hiding every context view. Measured on an API 36 emulator with
+                // the keyboard down: pointerup at t+985ms, the editor's
+                // `-monaco-gesturecontextmenu` at t+995ms, the window resize at
+                // t+1621ms, and no menu on screen afterwards.
+                //
+                // 500 rather than the 700 the editor's own gesture waits for.
+                // The gesture fires before the finger lifts, so a real long
+                // press is always past 700 by the time this runs, and the margin
+                // costs only that a deliberately slow tap between 500 and 700ms
+                // leaves the keyboard down. That is a second tap, against a menu
+                // that could not be opened at all.
+                var LONG_PRESS_MS = 500;
                 function apply(element) {
                     if (aimedAtText) element.removeAttribute('inputmode');
                     else if (element.getAttribute('inputmode') !== 'none') element.setAttribute('inputmode', 'none');
@@ -3399,7 +3416,7 @@ class MainActivity : AppCompatActivity() {
                         // the complaint this guard exists for, reached by
                         // another route. Measured on a file opened with the
                         // keyboard down, before this branch was written.
-                        pendingTap = { id: e.pointerId, x: e.clientX, y: e.clientY };
+                        pendingTap = { id: e.pointerId, x: e.clientX, y: e.clientY, at: e.timeStamp };
                         return;
                     }
                     pendingTap = null;
@@ -3414,9 +3431,14 @@ class MainActivity : AppCompatActivity() {
                     if (!pendingTap || pendingTap.id !== e.pointerId) return;
                     var travelled = Math.abs(e.clientX - pendingTap.x) +
                         Math.abs(e.clientY - pendingTap.y);
+                    var held = e.timeStamp - pendingTap.at;
                     pendingTap = null;
                     // A scroll leaves the keyboard where it was, which is down.
                     if (travelled > TAP_SLOP) return;
+                    // So does a long press, which asked for a menu and not a
+                    // keyboard. Both event timestamps come from the same clock,
+                    // so this is a duration and not a wall-clock read.
+                    if (held >= LONG_PRESS_MS) return;
                     letTheKeyboardUp();
                 }, true);
                 document.addEventListener('pointercancel', function(e) {
@@ -3566,6 +3588,16 @@ class MainActivity : AppCompatActivity() {
                     return bars;
                 }
                 window.addEventListener('keydown', function(e) {
+                    // Our own forward, on its way down to the menu. A menu in the
+                    // LIGHT DOM is an ordinary node of this document, so the event
+                    // dispatched below passes this same capture listener before it
+                    // reaches the bar; focus has not moved, so without this the
+                    // handler would forward it again, and again, until the stack
+                    // gave out. The key would never arrive either way. A shadow-DOM
+                    // menu never showed it: the synthetic event is not `composed`,
+                    // so it does not leave the shadow tree, which is why the editor
+                    // menu closed correctly while the terminal's did not.
+                    if (e.__vscodroidForwarded) return;
                     if (e.key !== 'Escape') return;
                     var bars = actionBars();
                     for (var i = 0; i < bars.length; i++) {
@@ -3573,7 +3605,9 @@ class MainActivity : AppCompatActivity() {
                         if (bars[i].contains(document.activeElement)) continue;
                         e.stopImmediatePropagation();
                         e.preventDefault();
-                        bars[i].dispatchEvent(new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true }));
+                        var forwarded = new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true });
+                        forwarded.__vscodroidForwarded = true;
+                        bars[i].dispatchEvent(forwarded);
                         return;
                     }
                 }, true);

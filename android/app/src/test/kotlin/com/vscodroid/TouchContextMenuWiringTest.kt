@@ -14,7 +14,7 @@ import java.io.File
  *
  * Source-level, like [KeyboardGuardWiringTest], and with the same ceiling: it
  * holds the selectors to the names the shipped workbench uses today and cannot
- * notice a VS Code bump renaming them. The device rows KB-22 and KB-23 in
+ * notice a VS Code bump renaming them. The device rows KB-26 and KB-27 in
  * `docs/DEVICE_TEST_CHECKLIST.md` are what catch that.
  */
 class TouchContextMenuWiringTest {
