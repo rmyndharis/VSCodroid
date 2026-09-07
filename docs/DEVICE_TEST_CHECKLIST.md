@@ -261,7 +261,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 |----------|-------|------|------|------|
 | Device Matrix | 4 | | | |
 | Android Versions | 4 | | | |
-| Keyboard Input | 25 | | | |
+| Keyboard Input | 27 | | | |
 | Screen & Orientation | 10 | | | |
 | Editor Operations | 14 | | | |
 | Extensions | 6 | | | |
@@ -272,7 +272,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | Terminal & Tools | 11 | | | |
 | SAF & Files | 16 | | | |
 | Display Language | 6 | | | |
-| **Total** | **125** | | | |
+| **Total** | **127** | | | |
 
 **Overall Result**: [ ] PASS / [ ] FAIL
 
