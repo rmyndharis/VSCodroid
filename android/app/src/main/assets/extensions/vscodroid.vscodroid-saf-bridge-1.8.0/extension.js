@@ -523,11 +523,13 @@ function activate(context) {
                 const hidden = (await sendBridgeCommand('toggleExtraKeyRow')) === true;
                 // The row only ever shows above the soft keyboard, and running a
                 // command usually takes that keyboard down, so "shown" has nothing
-                // to point at yet. Say when it will appear instead.
+                // to point at yet. Say when it will appear instead, and no more than
+                // that: the row still stands down where the keyboard leaves the page
+                // no height, which is a phone in landscape.
                 vscode.window.showInformationMessage(
                     hidden
                         ? 'Extra key row hidden. Run "VSCodroid: Toggle Extra Key Row" again to bring it back.'
-                        : 'Extra key row shown. It appears above the keyboard while you type.'
+                        : 'Extra key row shown. It appears above the keyboard while you type, when the screen has room for it.'
                 );
             } catch (/** @type {*} */ err) {
                 vscode.window.showErrorMessage(`Could not toggle the extra key row: ${err.message}`);

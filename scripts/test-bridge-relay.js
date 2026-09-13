@@ -177,6 +177,11 @@ const listCalls = [];
 const reclaimCalls = [];
 const breakdownCalls = [];
 
+// The key row toggle answers on the caller's thread with the state it has just
+// saved, true meaning hidden.
+let toggleAnswer = false;
+const toggleCalls = [];
+
 const AndroidBridge = {
     openExternalUrl(url, token) {
         bridgeCalls.push({ url, token });
@@ -193,6 +198,10 @@ const AndroidBridge = {
     getStorageBreakdown(token, replyId) {
         breakdownCalls.push({ token, replyId });
         return breakdownAnswer;
+    },
+    toggleExtraKeyRow(token) {
+        toggleCalls.push({ token });
+        return toggleAnswer;
     },
 };
 
@@ -232,8 +241,8 @@ Module._load = function (request) {
  * Every command a bundled extension sends must have a branch in the relay.
  *
  * The severity word is not the only string crossing this boundary. The relay
- * dispatches twelve command names, written once in a Kotlin raw string; the
- * bundled extensions send nine of them, written again in JavaScript. Nothing
+ * dispatches its command names, written once in a Kotlin raw string, and the
+ * bundled extensions send most of them, written again in JavaScript. Nothing
  * compared the two sets. A name that matches no branch is not
  * an error anywhere -- the relay's `if/else if` chain simply ends, no reply is
  * posted, and the extension's promise rejects five seconds later with a timeout
@@ -747,6 +756,35 @@ async function main() {
         'the Total row does not say how much of itself the rows below account for. They add ' +
         'to 1.0 GB of a 3.0 GB total, and a person out of disk adds them up: any claim that ' +
         'the rows come to the total is one this breakdown does not support. Saw: ' + totalSaid,
+    );
+
+    // The extension picks its sentence from the toggle's answer alone. A relay
+    // branch that posts no data, or an inverted test in the extension, still
+    // flips the row on the Kotlin side while telling the user the opposite.
+    const toggleKeyRow = commands.get('vscodroid.toggleExtraKeyRow');
+    assert.ok(toggleKeyRow, 'the bundled extension no longer registers vscodroid.toggleExtraKeyRow');
+
+    async function toggleTo(answer) {
+        shown.info.length = 0; shown.error.length = 0; toggleCalls.length = 0;
+        toggleAnswer = answer;
+        await toggleKeyRow();
+        return { info: [...shown.info], error: [...shown.error], calls: [...toggleCalls] };
+    }
+
+    const hid = await toggleTo(true);
+    assert.deepStrictEqual(
+        hid.calls, [{ token: 'test-token' }],
+        'the relay did not hand the session token to toggleExtraKeyRow: ' + JSON.stringify(hid.calls),
+    );
+    assert.ok(
+        hid.error.length === 0 && hid.info.length === 1 && hid.info[0].startsWith('Extra key row hidden'),
+        'a toggle that hid the row did not say so: ' + JSON.stringify(hid),
+    );
+    const restored = await toggleTo(false);
+    assert.ok(
+        restored.error.length === 0 && restored.info.length === 1 &&
+            restored.info[0].startsWith('Extra key row shown'),
+        'a toggle that brought the row back did not say so: ' + JSON.stringify(restored),
     );
 
     const unused = coverage.unused.length

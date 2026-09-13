@@ -2583,8 +2583,11 @@ class MainActivity : AppCompatActivity() {
                 // fix that made a close survive an editor crash only covered the
                 // paths that still had the URL in hand.
                 //
-                // Inside the IO hop because the first read of a preferences file
-                // is disk work; `MainThreadWatch` is what notices when it is not.
+                // Inside the IO hop because the remembered path is stat'd and the
+                // fallback creates the projects directory, which is disk work;
+                // `MainThreadWatch` is what notices when it is not. The preferences
+                // file itself is already loaded by now: `setupExtraKeyRow` reads it
+                // in `onCreate`.
                 val folder = if (workspaceWasClosed()) null else rememberedWorkspaceFolder()
                     ?: FirstRunSetup(this@MainActivity).ensureProjectsDir()
                 connectionToken to folder
@@ -4297,9 +4300,11 @@ class MainActivity : AppCompatActivity() {
      *  - `generateSshKey` never overwrites a pair, and `clearCaches` deletes only
      *    regenerable caches. Neither loses the user's own work.
      *  - `toggleExtraKeyRow` persists a choice rather than showing a surface, so
-     *    any caller can hide the row. What bounds it is that the change is
-     *    visible, loses nothing, and is undone by the same command from the
-     *    remote indicator.
+     *    any caller can hide the row, silently while the keyboard is down, and
+     *    hide it again after the user brings it back, since every reply is seen
+     *    by every listener. That is accepted on the first bullet's terms: such a
+     *    caller already has a terminal. What it costs is a convenience, not the
+     *    user's work, and the user can always run the command again.
      *  - `openExternalUrl` is the one command that reaches outside the app at all,
      *    and it is the one that was narrowed: see `AndroidBridge.openExternalUrl`,
      *    which now refuses this app's own `vscodroid://callback`.

@@ -93,4 +93,19 @@ class SafBridgeManifestTest {
                 "does not have to already know about; found $commands",
         )
     }
+
+    @Test
+    fun `the remote indicator menu keeps a way back to a hidden key row`() {
+        val entries = manifest().getJSONObject("contributes")
+            .getJSONObject("menus")
+            .getJSONArray("statusBar/remoteIndicator")
+        val commands = (0 until entries.length())
+            .map { entries.getJSONObject(it).getString("command") }
+        assertTrue(
+            "vscodroid.toggleExtraKeyRow" in commands,
+            "with the row hidden and no hardware keyboard, Ctrl+Shift+P cannot be typed, " +
+                "so a tap on the remote indicator is the discoverable way to bring the row " +
+                "back; found $commands",
+        )
+    }
 }

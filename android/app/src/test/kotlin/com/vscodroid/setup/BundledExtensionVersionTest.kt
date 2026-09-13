@@ -33,12 +33,15 @@ import java.io.File
  * fetched extension regenerates inside its own directory.
  *
  * What a same-named edit still does not deliver is the editor's re-read of
- * `package.json`. Its scan of the extensions directory is keyed on that
- * directory's own timestamp, and writing a file two levels down does not move
- * it while adding and removing a directory does. So the bump is the delivery
- * mechanism for a change to a manifest, which is the only kind that needs one,
- * and half a bump, the name moved or the manifest moved but not both, is what
- * this file refuses.
+ * `package.json`. The server caches its scan of the user extensions under the
+ * modification time of `extensions.json` (with the product version, date and
+ * commit), not of anything inside an extension's directory, so rewriting a
+ * manifest in place leaves the cached scan standing. A new directory name is
+ * what moves it: the superseded directory is swept and
+ * `reconcileExtensionsManifest` rewrites `extensions.json` to list the new one.
+ * So the bump is the delivery mechanism for a change to a manifest, which is
+ * the only kind that needs one, and half a bump, the name moved or the manifest
+ * moved but not both, is what this file refuses.
  *
  * Deliberately not a check that the version was bumped *this* change: there is
  * no baseline in the tree to compare against, and a rule demanding a bump on

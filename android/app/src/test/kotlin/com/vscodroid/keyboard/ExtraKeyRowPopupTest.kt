@@ -1,5 +1,6 @@
 package com.vscodroid.keyboard
 
+import com.vscodroid.SourceScan
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.io.File
@@ -163,15 +164,24 @@ class ExtraKeyRowPopupTest {
     /**
      * Hiding the row on the user's say-so leaves by the keyboard's door.
      *
-     * The case above pins what that branch does; this pins that a hidden row
-     * reaches it. A setter that wrote `visibility` itself would hide the row with
-     * the alternates still open and a latched Ctrl still armed in the page, so the
-     * next letter typed on the soft keyboard would go out as a chord.
+     * The case above pins that the dismiss and the reset follow the visibility
+     * write; this pins that they are the body of `if (!showRow)` and that a
+     * hidden row reaches that branch. A gate on `imeVisible` alone, or a setter
+     * that wrote `visibility` itself, would hide the row with the alternates still
+     * open and a latched Ctrl still armed in the page, so the next letter typed on
+     * the soft keyboard would go out as a chord.
+     *
+     * Read through [SourceScan] rather than [code], so a trailing comment cannot
+     * satisfy a check and the setter is read to its closing brace rather than for
+     * a fixed number of lines.
      */
     @Test
     fun `a row the user hides goes down the way the keyboard takes it`() {
-        val lines = code()
-        val decision = lines.singleOrNull { it.contains("val showRow =") }
+        val source = SourceScan.withoutComments(
+            SourceScan.read("src/main/kotlin/com/vscodroid/keyboard/ExtraKeyRow.kt"),
+        )
+        val listener = SourceScan.body(source, "fun setupWithRootView(")
+        val decision = listener.lines().singleOrNull { it.contains("val showRow =") }
         assertTrue(
             decision != null,
             "the listener no longer makes one showRow decision, so this case is reading nothing",
@@ -182,9 +192,14 @@ class ExtraKeyRowPopupTest {
                 "clears the modifiers. It reads:\n$decision",
         )
 
-        val start = lines.indexOfFirst { it.contains("var hiddenByUser") }
-        assertTrue(start >= 0, "hiddenByUser is no longer where this test looks")
-        val setter = lines.drop(start).take(6).joinToString("\n")
+        val hiding = SourceScan.body(listener, "if (!showRow)")
+        assertTrue(
+            hiding.contains("longPressPopup?.dismiss()") && hiding.contains("resetModifiersIfNeeded()"),
+            "the branch the showRow decision gates no longer dismisses the popup and clears the " +
+                "modifiers, so a row hidden by that decision leaves both behind. It reads:\n$hiding",
+        )
+
+        val setter = SourceScan.body(source, "var hiddenByUser")
         assertTrue(
             setter.contains("requestApplyInsets(this)"),
             "the setter no longer asks the listener to decide again, so hiding waits for " +
@@ -194,6 +209,35 @@ class ExtraKeyRowPopupTest {
             !setter.contains("visibility"),
             "the setter changes visibility itself, bypassing the branch that dismisses the " +
                 "popup and clears a latched modifier. It reads:\n$setter",
+        )
+    }
+
+    /**
+     * A row the user hid stays hidden across a restart.
+     *
+     * `MainActivity` owns the record: the bridge callback flips and writes one
+     * preference, and the row is set from that same preference when the activity
+     * is built. The thread hop in the callback is pinned elsewhere, by
+     * `BridgeCallbackThreadHopTest`; this pins that both ends name the one key.
+     */
+    @Test
+    fun `a hidden row is restored from the preference the toggle writes`() {
+        val activity = SourceScan.withoutComments(
+            SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt"),
+        )
+        val setup = SourceScan.body(activity, "private fun setupExtraKeyRow(")
+        assertTrue(
+            setup.contains("hiddenByUser = workspacePrefs.getBoolean(KEY_EXTRA_KEY_ROW_HIDDEN, false)"),
+            "the row is no longer set from the saved choice when the activity is built, so a " +
+                "row the user hid comes back on every launch. It reads:\n$setup",
+        )
+        val toggle = SourceScan.body(activity, "onToggleExtraKeyRow = ")
+        assertTrue(
+            toggle.contains("!workspacePrefs.getBoolean(KEY_EXTRA_KEY_ROW_HIDDEN, false)") &&
+                toggle.contains("putBoolean(KEY_EXTRA_KEY_ROW_HIDDEN, hidden)") &&
+                toggle.contains("hiddenByUser = hidden"),
+            "the toggle no longer flips, saves and applies the same preference the launch " +
+                "reads. It reads:\n$toggle",
         )
     }
 }
