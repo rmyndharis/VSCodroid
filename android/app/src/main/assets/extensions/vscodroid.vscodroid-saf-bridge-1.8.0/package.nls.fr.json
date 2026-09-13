@@ -10,5 +10,6 @@
   "command.manageDeviceFolders": "VSCodroid: Gérer le stockage des dossiers de l'appareil",
   "command.clearCaches": "VSCodroid: Vider les caches",
   "command.manageToolchains": "VSCodroid: Gérer les chaînes d'outils",
+  "command.toggleExtraKeyRow": "VSCodroid: Afficher ou masquer la rangée de touches supplémentaires",
   "command.about": "VSCodroid: À propos"
 }

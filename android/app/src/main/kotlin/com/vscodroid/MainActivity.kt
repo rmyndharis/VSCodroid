@@ -358,12 +358,14 @@ class MainActivity : AppCompatActivity() {
     private var openWorkspaceRoot: String? = null
 
     /**
-     * Where the last open workspace is remembered, resolved once.
+     * Where the last open workspace and the key row's hidden state are
+     * remembered, resolved once.
      *
-     * The same file `PortFinder` and `SplashActivity` use, under a key of its
+     * The same file `PortFinder` and `SplashActivity` use, under keys of its
      * own. Lazy because the first `getSharedPreferences` for a file reads it off
-     * disk on the calling thread, and there is no reason to pay that on a launch
-     * that never opens a folder.
+     * disk on the calling thread; [setupExtraKeyRow] now reads it on every
+     * launch, and a launch through `SplashActivity` has already loaded the file
+     * into this process by then.
      */
     private val workspacePrefs by lazy { getSharedPreferences(WORKSPACE_PREFS, MODE_PRIVATE) }
 
@@ -2081,6 +2083,9 @@ class MainActivity : AppCompatActivity() {
     private fun setupExtraKeyRow() {
         extraKeyRow = findViewById(R.id.extraKeyRow)
         extraKeyRow?.setupWithRootView(findViewById(R.id.webViewContainer))
+        // Before the first inset dispatch, so a row the user hid never flashes up
+        // with the first keyboard of the session.
+        extraKeyRow?.hiddenByUser = workspacePrefs.getBoolean(KEY_EXTRA_KEY_ROW_HIDDEN, false)
     }
 
     /**
@@ -2644,7 +2649,7 @@ class MainActivity : AppCompatActivity() {
             // thread, never the UI thread, addJavascriptInterface says so in
             // as many words. So each one that touches a View, a Dialog or a Toast
             // has to hop, and the hop belongs here rather than inside the
-            // handlers: these five are the whole boundary, and a reader checking
+            // handlers: these six are the whole boundary, and a reader checking
             // whether the rule holds can see all of them at once.
             //
             // onShowAbout was the only one wrapped. openRecentFolder is the one
@@ -2659,8 +2664,19 @@ class MainActivity : AppCompatActivity() {
             onOpenFolderPicker = { runOnUiThread { openFolderPicker() } },
             onOpenRecentFolder = { uri -> runOnUiThread { openRecentSafFolder(uri) } },
             onShowAbout = { runOnUiThread { showAboutDialog() } },
+            // The preference is the record and is flipped here, on the bridge
+            // thread, which runs one call at a time, so two quick toggles each read
+            // the other's write; apply() updates the in-memory copy before it
+            // returns. Only the view is hopped, and the answer is the value just
+            // written rather than the view's field, which belongs to the UI thread.
+            onToggleExtraKeyRow = {
+                val hidden = !workspacePrefs.getBoolean(KEY_EXTRA_KEY_ROW_HIDDEN, false)
+                workspacePrefs.edit { putBoolean(KEY_EXTRA_KEY_ROW_HIDDEN, hidden) }
+                runOnUiThread { extraKeyRow?.hiddenByUser = hidden }
+                hidden
+            },
             safManager = safManager,
-            // Not hopped to the UI thread, unlike the five above. These three
+            // Not hopped to the UI thread, unlike the six above. These three
             // carry a download's bytes, and the coordinator guards its own
             // state precisely so they can be answered on the thread they
             // arrive on: posting them would reorder chunks against each other
@@ -4280,6 +4296,10 @@ class MainActivity : AppCompatActivity() {
      *    and none of them changes anything on its own. They stay.
      *  - `generateSshKey` never overwrites a pair, and `clearCaches` deletes only
      *    regenerable caches. Neither loses the user's own work.
+     *  - `toggleExtraKeyRow` persists a choice rather than showing a surface, so
+     *    any caller can hide the row. What bounds it is that the change is
+     *    visible, loses nothing, and is undone by the same command from the
+     *    remote indicator.
      *  - `openExternalUrl` is the one command that reaches outside the app at all,
      *    and it is the one that was narrowed: see `AndroidBridge.openExternalUrl`,
      *    which now refuses this app's own `vscodroid://callback`.
@@ -4357,6 +4377,9 @@ class MainActivity : AppCompatActivity() {
                         } else if (d.cmd === 'showAboutDialog') {
                             AndroidBridge.showAboutDialog(token);
                             ch.postMessage({id: d.id, ok: true});
+                        } else if (d.cmd === 'toggleExtraKeyRow') {
+                            result = AndroidBridge.toggleExtraKeyRow(token);
+                            ch.postMessage({id: d.id, ok: true, data: result});
                         } else if (d.cmd === 'openExternalUrl') {
                             // The only branch here whose bridge method can decline. Every
                             // other one either returns data or cannot fail in a way the
@@ -4885,6 +4908,9 @@ class MainActivity : AppCompatActivity() {
 
         /** The workspace to reopen when there is no page left to read one from. */
         private const val KEY_LAST_FOLDER = "last_workspace_folder"
+
+        /** Whether the user has hidden the Extra Key Row. Absent means shown. */
+        private const val KEY_EXTRA_KEY_ROW_HIDDEN = "extra_key_row_hidden"
 
         /**
          * What [KEY_LAST_FOLDER] holds once the user has closed the folder.

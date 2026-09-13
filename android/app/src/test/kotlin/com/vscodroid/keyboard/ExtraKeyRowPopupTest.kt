@@ -159,4 +159,41 @@ class ExtraKeyRowPopupTest {
                 "view it is anchored to. It reads:\n$body",
         )
     }
+
+    /**
+     * Hiding the row on the user's say-so leaves by the keyboard's door.
+     *
+     * The case above pins what that branch does; this pins that a hidden row
+     * reaches it. A setter that wrote `visibility` itself would hide the row with
+     * the alternates still open and a latched Ctrl still armed in the page, so the
+     * next letter typed on the soft keyboard would go out as a chord.
+     */
+    @Test
+    fun `a row the user hides goes down the way the keyboard takes it`() {
+        val lines = code()
+        val decision = lines.singleOrNull { it.contains("val showRow =") }
+        assertTrue(
+            decision != null,
+            "the listener no longer makes one showRow decision, so this case is reading nothing",
+        )
+        assertTrue(
+            decision!!.contains("!hiddenByUser"),
+            "the user's choice is no longer part of the decision that dismisses the popup and " +
+                "clears the modifiers. It reads:\n$decision",
+        )
+
+        val start = lines.indexOfFirst { it.contains("var hiddenByUser") }
+        assertTrue(start >= 0, "hiddenByUser is no longer where this test looks")
+        val setter = lines.drop(start).take(6).joinToString("\n")
+        assertTrue(
+            setter.contains("requestApplyInsets(this)"),
+            "the setter no longer asks the listener to decide again, so hiding waits for " +
+                "the next keyboard change. It reads:\n$setter",
+        )
+        assertTrue(
+            !setter.contains("visibility"),
+            "the setter changes visibility itself, bypassing the branch that dismisses the " +
+                "popup and clears a latched modifier. It reads:\n$setter",
+        )
+    }
 }

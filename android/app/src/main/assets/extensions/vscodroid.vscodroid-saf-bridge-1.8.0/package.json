@@ -2,7 +2,7 @@
   "name": "vscodroid-saf-bridge",
   "displayName": "%displayName%",
   "description": "%description%",
-  "version": "1.7.0",
+  "version": "1.8.0",
   "publisher": "vscodroid",
   "engines": {
     "vscode": "^1.96.0"
@@ -53,6 +53,10 @@
         "title": "%command.manageToolchains%"
       },
       {
+        "command": "vscodroid.toggleExtraKeyRow",
+        "title": "%command.toggleExtraKeyRow%"
+      },
+      {
         "command": "vscodroid.about",
         "title": "%command.about%"
       }
@@ -62,6 +66,10 @@
         {
           "command": "vscodroid.openRecentFolder",
           "group": "remote_10_vscodroid_folder"
+        },
+        {
+          "command": "vscodroid.toggleExtraKeyRow",
+          "group": "remote_20_vscodroid_keys"
         },
         {
           "command": "vscodroid.about",

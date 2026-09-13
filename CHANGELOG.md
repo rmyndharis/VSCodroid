@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - Opening a Python file offers to install Black Formatter. It is the formatter that works without installing anything with pip, and no marketplace search returns it, so it could not be found by looking.
+- **VSCodroid: Toggle Extra Key Row**, in the Command Palette and the remote indicator menu, hides the extra key row until it is run again, for typing on a hardware keyboard.
 
 ### Fixed
 

@@ -447,6 +447,8 @@ class AndroidBridge(
     private val onOpenFolderPicker: () -> Unit = {},
     private val onOpenRecentFolder: (Uri) -> Unit = {},
     private val onShowAbout: () -> Unit = {},
+    /** Flips and persists whether the Extra Key Row is hidden, answering the new state. */
+    private val onToggleExtraKeyRow: () -> Boolean = { false },
     private val safManager: SafStorageManager? = null,
     private val onDownloadNamed: (url: String, fileName: String) -> Unit = { _, _ -> },
     private val onDownloadChunk: (requestId: String, base64: String) -> Boolean = { _, _ -> false },
@@ -1236,6 +1238,23 @@ class AndroidBridge(
     fun showAboutDialog(authToken: String) {
         if (!security.validateToken(authToken)) return
         onShowAbout()
+    }
+
+    // -- Extra Key Row --
+
+    /**
+     * Hides the Extra Key Row if it is shown, shows it if it is hidden, and
+     * keeps the choice across restarts.
+     *
+     * @return true when the row is now hidden. A refused token answers false,
+     *   which reads as "shown" while nothing changed; the relay takes the token
+     *   from the page this object is bound to, so a refusal there is a page that
+     *   is not this app's.
+     */
+    @JavascriptInterface
+    fun toggleExtraKeyRow(authToken: String): Boolean {
+        if (!security.validateToken(authToken)) return false
+        return onToggleExtraKeyRow()
     }
 
     // -- SSH Key Management --

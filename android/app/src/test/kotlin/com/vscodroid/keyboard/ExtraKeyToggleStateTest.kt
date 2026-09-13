@@ -103,7 +103,7 @@ class ExtraKeyToggleStateTest {
                 "the field check below is not looking at a row that reads the shared store",
         )
 
-        // The one boolean this row is allowed to keep, named here because the KDoc
+        // The two booleans this row is allowed to keep, named here because the KDoc
         // above asks for exactly that rather than for the ban to be widened.
         //
         // `suppressedForHeight` is not modifier state and cannot drift the way a
@@ -113,12 +113,18 @@ class ExtraKeyToggleStateTest {
         // holds is that the row already stood down because the page had no height
         // to spare, so the answer does not flip while the keyboard changes its own
         // height under the user's thumb.
-        val notModifierState = setOf("suppressedForHeight")
+        //
+        // `hiddenByUser` cannot drift either. It is written only by `MainActivity`,
+        // from the stored preference at startup and after persisting a toggle, and
+        // read only by the same inset listener. Nothing paints it and nothing sends
+        // it anywhere.
+        val notModifierState = setOf("suppressedForHeight", "hiddenByUser")
 
         // Control: an allowance for a field that no longer exists hides nothing and
-        // would quietly excuse the next boolean that took the same name.
+        // would quietly excuse the next boolean that took the same name. Every name,
+        // because with two an `any` stops noticing a stale allowance for either.
         assertTrue(
-            row.declaredFields.any { it.name in notModifierState },
+            notModifierState.all { name -> row.declaredFields.any { it.name == name } },
             "the exception named in this test is no longer a field on the row, so the " +
                 "allowance below should go with it",
         )

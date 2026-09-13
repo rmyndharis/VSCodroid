@@ -10,5 +10,6 @@
   "command.manageDeviceFolders": "VSCodroid: Speicher der Geräteordner verwalten",
   "command.clearCaches": "VSCodroid: Zwischenspeicher leeren",
   "command.manageToolchains": "VSCodroid: Toolchains verwalten",
+  "command.toggleExtraKeyRow": "VSCodroid: Zusatztastenleiste ein- oder ausblenden",
   "command.about": "VSCodroid: Info"
 }

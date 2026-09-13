@@ -36,7 +36,7 @@ wv.addJavascriptInterface(bridge, "AndroidBridge")
 ```
 
 The injected name is `AndroidBridge` and that part was always right. The construction
-was not: `AndroidBridge(this)` does not compile. The real constructor takes sixteen
+was not: `AndroidBridge(this)` does not compile. The real constructor takes seventeen
 parameters, five of them required:
 
 ```kotlin
@@ -44,7 +44,8 @@ AndroidBridge(
     context, security, clipboard,          // required
     onBackPressed, onMinimize,             // required callbacks
     onOpenFolderPicker = {}, onOpenRecentFolder = {},
-    onShowAbout = {}, safManager = null,   // defaulted
+    onShowAbout = {}, onToggleExtraKeyRow = { false },
+    safManager = null,                     // defaulted
     onDownloadNamed = { _, _ -> }, onDownloadChunk = { _, _ -> false },
     onDownloadComplete = { _, _ -> },
     onListMirrors = { "[]" }, onReclaimMirror = { _, _ -> "..." },
@@ -84,7 +85,7 @@ is why `listSshKeys` no longer answers with a key's comment and why a forced
    (`SecurityManager.generateToken`, in `bridge/`, not a `security/` package).
    `MainActivity.injectBridgeToken()` writes it to `window.__vscodroid.authToken`
    after the page loads.
-2. **Every method, not a chosen subset**: all 33 `@JavascriptInterface` methods take the
+2. **Every method, not a chosen subset**: all 34 `@JavascriptInterface` methods take the
    token and validate it before doing anything, returning without acting on refusal
    (§2.4 records the six whose refusal value is not an empty one).
    `BridgeTokenUniformityTest` enumerates them by reflection and fails the build
@@ -169,8 +170,8 @@ The OAuth pair described a flow this app does not implement; see §2.5.
 Exposed via `@JavascriptInterface`:
 
 Every method takes the session token and validates it before doing anything; a call
-with a token that does not match is refused before the method acts. Twenty-seven of
-the thirty-three then return an empty value: `false`, `null`, `""`, `"{}"`, `"[]"`,
+with a token that does not match is refused before the method acts. Twenty-eight of
+the thirty-four then return an empty value: `false`, `null`, `""`, `"{}"`, `"[]"`,
 `0`, or nothing. **Six do not, and each is truthy on refusal.**
 `generateSshKey` returns `{"success":false,"error":"unauthorized"}`, so a caller
 testing `if (!result)` reads a refusal as success; test its `success` field.
@@ -183,17 +184,18 @@ reversed and a truthiness test reads backwards in the other direction. Read the 
 added without the check, so this holds for the class rather than for the list below.
 
 **Registered is not the same as reachable, and the difference decides what an extension
-can do.** All 33 methods below live on the `AndroidBridge` object injected into the
+can do.** All 34 methods below live on the `AndroidBridge` object injected into the
 workbench page, so anything running in that page's own realm can call them directly. An
 extension cannot: it runs in the web extension host, which does not see objects added by
 `addJavascriptInterface`. Extensions reach the bridge over the BroadcastChannel relay
 that `MainActivity.injectBridgeRelay` opens, and that relay dispatches a hand-written
-list of **14** command names. Grep `d.cmd ===` in `MainActivity.kt` for the current set:
+list of **15** command names. Grep `d.cmd ===` in `MainActivity.kt` for the current set:
 
 > `clearCaches`, `generateBugReport`, `generateSshKey`, `getRecentFolders`,
 > `getSshPublicKey`, `getStorageBreakdown`, `listSafMirrors`, `listSshKeys`,
 > `openExternalUrl`, `openFolderPicker`, `openRecentFolder`,
-> `openToolchainSettings`, `reclaimSafMirror`, `showAboutDialog`
+> `openToolchainSettings`, `reclaimSafMirror`, `showAboutDialog`,
+> `toggleExtraKeyRow`
 
 A method absent from that list is unreachable from any extension however correctly it is
 registered, which is why the toolchain install, removal and cancel calls have no callers.
@@ -767,6 +769,18 @@ fun showAboutDialog(authToken: String)
 // Shows the native About dialog with version info, licenses, and links
 ```
 
+#### Extra Key Row
+
+```kotlin
+@JavascriptInterface
+fun toggleExtraKeyRow(authToken: String): Boolean
+// Hides the Extra Key Row if it is shown, shows it if it is hidden, and keeps the
+// choice across restarts. Returns true when the row is now hidden; false when the
+// token is refused, which reads as "shown". Reachable over the relay as
+// `toggleExtraKeyRow`; the bundled saf-bridge extension sends it from
+// VSCodroid: Toggle Extra Key Row.
+```
+
 ---
 
 ## 3. (B) VS Code Remote Protocol
@@ -1060,7 +1074,7 @@ flowchart TD
   T --> T3["ms-python.python"]
   T --> T4["dbaeumer.vscode-eslint"]
   T --> T5["bradlc.vscode-tailwindcss"]
-  O --> O1["vscodroid.vscodroid-saf-bridge (the 10 VSCodroid: commands)"]
+  O --> O1["vscodroid.vscodroid-saf-bridge (the 11 VSCodroid: commands)"]
   O --> O2["vscodroid.vscodroid-welcome (Get Started walkthrough)"]
   O --> O3["vscodroid.vscodroid-process-monitor"]
   O --> O4["vscodroid.vscodroid-serve-network (dev-server preview)"]

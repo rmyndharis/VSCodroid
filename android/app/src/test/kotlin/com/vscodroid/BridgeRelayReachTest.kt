@@ -14,11 +14,11 @@ import org.junit.jupiter.api.Test
  * it has ("The web worker extension host is started in a same-origin iframe!" in
  * `out/vs/code/browser/workbench/workbench.js`). A `BroadcastChannel` is scoped by origin, so
  * every web extension installed from Open VSX shares this one, can post any of
- * the fourteen commands, and can read every answer posted back. The session token
+ * the fifteen commands, and can read every answer posted back. The session token
  * the relay reads out of `window.__vscodroid` is no barrier: it lives on that same
  * origin, so anything able to post is able to read it.
  *
- * Most of the fourteen are fine under that reading, and the reasons are recorded
+ * Most of the fifteen are fine under that reading, and the reasons are recorded
  * beside `MainActivity.injectBridgeRelay` rather than repeated here. What this
  * file pins is the three places where the answer was "not as it stands":
  *
@@ -97,7 +97,7 @@ class BridgeRelayReachTest {
     /**
      * The system folder chooser is opened only because somebody asked for it.
      *
-     * `openRecentFolder` is one of the fourteen relay commands and the URI travels
+     * `openRecentFolder` is one of the fifteen relay commands and the URI travels
      * with the call, so a caller could pass one this app holds no grant for and
      * reach the fallback that opened the picker. The user then saw a document-tree
      * chooser they never asked for, from an app they trust, and picking a folder

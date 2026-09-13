@@ -104,6 +104,11 @@ row stands down instead of taking the last of it. That is landscape on a phone,
 where the keyboard alone can be two thirds of the screen. Turn back to portrait,
 or put the keyboard away, and the row returns.
 
+To hide the row altogether, for example while typing on a hardware keyboard, tap
+the remote indicator at the left end of the status bar and choose
+**VSCodroid: Toggle Extra Key Row**, or run it from the Command Palette. The row
+stays hidden, across restarts, until you run the command again.
+
 How many there are depends on how wide your phone is. The row divides its width
 evenly among the keys on a page, so on a narrower screen it carries fewer keys per
 page and spreads them over more: five pages on a 411dp phone and wider, six at

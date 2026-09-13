@@ -10,5 +10,6 @@
   "command.manageDeviceFolders": "VSCodroid: 기기 폴더 저장 공간 관리",
   "command.clearCaches": "VSCodroid: 캐시 지우기",
   "command.manageToolchains": "VSCodroid: 툴체인 관리",
+  "command.toggleExtraKeyRow": "VSCodroid: 추가 키 행 표시 전환",
   "command.about": "VSCodroid: 정보"
 }

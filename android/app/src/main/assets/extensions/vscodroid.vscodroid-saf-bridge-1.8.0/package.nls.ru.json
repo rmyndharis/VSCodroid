@@ -10,5 +10,6 @@
   "command.manageDeviceFolders": "VSCodroid: Управление памятью папок устройства",
   "command.clearCaches": "VSCodroid: Очистить кэши",
   "command.manageToolchains": "VSCodroid: Наборы инструментов",
+  "command.toggleExtraKeyRow": "VSCodroid: Показать или скрыть ряд дополнительных клавиш",
   "command.about": "VSCodroid: О приложении"
 }

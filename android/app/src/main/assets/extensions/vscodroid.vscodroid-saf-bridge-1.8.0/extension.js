@@ -20,6 +20,7 @@
  * - vscodroid.manageDeviceFolders  : Lists the local copies of device folders and removes one
  * - vscodroid.clearCaches          : Deletes cached data, reports bytes freed
  * - vscodroid.manageToolchains     : Opens the Android Toolchains screen
+ * - vscodroid.toggleExtraKeyRow    : Hides or shows the key row above the keyboard
  * - vscodroid.about                : Opens the Android About dialog
  */
 
@@ -508,6 +509,32 @@ function activate(context) {
         }
     );
 
+    // -- Extra Key Row --
+
+    // A hardware keyboard carries every key the row offers, and the row takes its
+    // height out of the editor whenever the soft keyboard is up, which some
+    // keyboard apps keep up beside a hardware one. Listed on the remote indicator
+    // as well as the palette: with the row hidden and no hardware keyboard, the
+    // palette's Ctrl+Shift+P cannot be typed, and the way back has to be a tap.
+    const toggleKeyRowCmd = vscode.commands.registerCommand(
+        'vscodroid.toggleExtraKeyRow',
+        async () => {
+            try {
+                const hidden = (await sendBridgeCommand('toggleExtraKeyRow')) === true;
+                // The row only ever shows above the soft keyboard, and running a
+                // command usually takes that keyboard down, so "shown" has nothing
+                // to point at yet. Say when it will appear instead.
+                vscode.window.showInformationMessage(
+                    hidden
+                        ? 'Extra key row hidden. Run "VSCodroid: Toggle Extra Key Row" again to bring it back.'
+                        : 'Extra key row shown. It appears above the keyboard while you type.'
+                );
+            } catch (/** @type {*} */ err) {
+                vscode.window.showErrorMessage(`Could not toggle the extra key row: ${err.message}`);
+            }
+        }
+    );
+
     // -- About --
 
     const aboutCmd = vscode.commands.registerCommand('vscodroid.about', async () => {
@@ -528,6 +555,7 @@ function activate(context) {
         manageDeviceFoldersCmd,
         clearCachesCmd,
         toolchainsCmd,
+        toggleKeyRowCmd,
         aboutCmd
     );
 }

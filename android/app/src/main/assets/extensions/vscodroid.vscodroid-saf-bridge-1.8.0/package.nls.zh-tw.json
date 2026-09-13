@@ -10,5 +10,6 @@
   "command.manageDeviceFolders": "VSCodroid: 管理裝置資料夾的儲存空間",
   "command.clearCaches": "VSCodroid: 清除快取",
   "command.manageToolchains": "VSCodroid: 管理工具鏈",
+  "command.toggleExtraKeyRow": "VSCodroid: 切換額外按鍵列",
   "command.about": "VSCodroid: 關於"
 }

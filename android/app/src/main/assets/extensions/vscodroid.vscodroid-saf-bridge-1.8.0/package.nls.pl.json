@@ -10,5 +10,6 @@
   "command.manageDeviceFolders": "VSCodroid: Zarządzaj pamięcią folderów urządzenia",
   "command.clearCaches": "VSCodroid: Wyczyść pamięci podręczne",
   "command.manageToolchains": "VSCodroid: Zarządzaj narzędziami",
+  "command.toggleExtraKeyRow": "VSCodroid: Pokaż lub ukryj rząd dodatkowych klawiszy",
   "command.about": "VSCodroid: Informacje"
 }

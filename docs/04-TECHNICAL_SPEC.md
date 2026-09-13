@@ -621,14 +621,14 @@ warning rather than a debug line so the case is visible in a release build.
 
 ### 5.3 Visibility Control
 
-```kotlin
-// Detect keyboard using WindowInsetsCompat
-ViewCompat.setOnApplyWindowInsetsListener(rootView) { _, insets ->
-    val imeVisible = insets.isVisible(WindowInsetsCompat.Type.ime())
-    extraKeyRow.visibility = if (imeVisible) View.VISIBLE else View.GONE
-    insets
-}
-```
+The row decides whether to show in one place, the inset listener installed by
+`ExtraKeyRow.setupWithRootView`, and shows only when all three hold: the soft keyboard
+is visible, the page has height to spare (`suppressedForHeight`), and the user has not
+hidden it (`hiddenByUser`, which `MainActivity` persists under `extra_key_row_hidden`
+and flips through **VSCodroid: Toggle Extra Key Row**). Any new reason to hide it
+belongs in that decision rather than in a direct write to `visibility`, because the
+branch that hides it also dismisses the long-press popup and clears a latched
+modifier. No snippet is reproduced here, for the reason 5.2 gives.
 
 ---
 

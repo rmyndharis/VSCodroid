@@ -388,6 +388,29 @@ class ExtraKeyRow @JvmOverloads constructor(
      */
     private var suppressedForHeight = false
 
+    /**
+     * Whether the user has turned the row off, with VSCodroid: Toggle Extra Key Row.
+     *
+     * For typing on a hardware keyboard, which carries every key the row offers,
+     * while the soft keyboard stays up beside it: some keyboard apps keep a
+     * toolbar or the whole keyboard showing, and the row then takes its height out
+     * of the editor for nothing. Persisted by `MainActivity`, which is the only
+     * writer.
+     *
+     * The setter decides nothing itself. It asks for a fresh inset dispatch, and
+     * the listener below folds this into the one decision it already makes, so
+     * hiding leaves through the same branch the keyboard going away does: the
+     * alternates window is dismissed and a latched modifier is cleared on the page
+     * as well as on the row. Writing `visibility` here would skip both, and the
+     * next letter typed on the soft keyboard would go out as a chord.
+     */
+    var hiddenByUser = false
+        set(value) {
+            if (field == value) return
+            field = value
+            ViewCompat.requestApplyInsets(this)
+        }
+
     fun setupWithRootView(rootView: View) {
         ViewCompat.setOnApplyWindowInsetsListener(rootView) { v, insets ->
             // The display cutout is its own inset type, not part of systemBars().
@@ -425,7 +448,7 @@ class ExtraKeyRow @JvmOverloads constructor(
             } else if (pageHeightPx >= dpToPx(RELEASE_PAGE_HEIGHT_DP)) {
                 suppressedForHeight = false
             }
-            val showRow = imeVisible && !suppressedForHeight
+            val showRow = imeVisible && !suppressedForHeight && !hiddenByUser
 
             visibility = if (showRow) View.VISIBLE else View.GONE
             // Standing down for height leaves through the same door the keyboard
