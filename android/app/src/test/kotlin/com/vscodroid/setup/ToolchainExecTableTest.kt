@@ -352,6 +352,45 @@ class ToolchainExecTableTest {
     }
 
     /**
+     * The same damage must not freeze what does not come from the record. The
+     * app's own rows name nativeLibraryDir, which a reinstall moves, so a table
+     * kept whole over an unreadable state would name the old directory for good.
+     */
+    @Test
+    fun `a state file that cannot be parsed still rebuilds the rows the app owns`() {
+        elf("usr/opt/ruby/bin/ruby")
+        stateFile.writeText(
+            """[{"name":"ruby","installRoot":"usr/opt/ruby",""" +
+                """"binaries":["usr/opt/ruby/bin/ruby"],"env":{"RUBYLIB":"x"}}]"""
+        )
+        regenerate()
+        // What an earlier install left: its own rows, plus an opener naming a
+        // library directory this install no longer has.
+        execTable.writeText(
+            execTable.readText().lines().filterNot { it.startsWith("xdg-open\t") }
+                .joinToString("\n") + "xdg-open\t/data/app/old/lib/arm64/libnode.so\t/x.js\n"
+        )
+        stateFile.writeText("""[{"name":"ruby","installRoot":"usr/op""")
+
+        regenerate()
+
+        val lines = tableLines()
+        assertTrue(
+            lines.contains("ruby\t${filesDir.absolutePath}/usr/opt/ruby/bin/ruby"),
+            "the toolchain's row was lost over an unreadable state:\n" + execTable.readText(),
+        )
+        assertTrue(lines.contains("\tRUBYLIB\tx"), "the toolchain's environment row was lost")
+        assertFalse(
+            execTable.readText().contains("/data/app/old/"),
+            "a row naming the previous install's library directory survived:\n" + execTable.readText(),
+        )
+        assertTrue(
+            lines.any { it.startsWith("xdg-open\t${nativeLibDir.absolutePath}/libnode.so") },
+            "the app's own opener was not rebuilt:\n" + execTable.readText(),
+        )
+    }
+
+    /**
      * A manifest naming a binary that is not on disk, a partial extraction, or a
      * file an uninstall took, gets no row. A row for it would be a command that
      * exists on PATH and always fails, which is worse than one that is not there.

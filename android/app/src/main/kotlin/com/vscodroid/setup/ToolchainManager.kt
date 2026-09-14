@@ -2925,16 +2925,7 @@ class ToolchainManager(private val context: Context) {
      * describes a set of toolchains that never existed.
      */
     private fun regenerateExecTableLocked() {
-        val installed = readableState()
-        if (installed == null) {
-            // Damage is not absence, exactly as in [regenerateEnvFileLocked].
-            // Deleting the table over a state file this could not parse would
-            // take every toolchain command off PATH on every launch, while the
-            // payload it names is still on disk and still runnable through the
-            // table that was last written correctly.
-            Logger.w(tag, "toolchains.json is unreadable; keeping the exec table as it stands")
-            return
-        }
+        val readable = readableState()
         // No early return for an empty record any more. The table is no longer
         // only about toolchains: the row this app owns below has to exist on a
         // device that has never installed one, which is most devices.
@@ -2950,6 +2941,28 @@ class ToolchainManager(private val context: Context) {
         // Keyed by variable, so a later toolchain wins a collision: the same
         // outcome sourcing the env file top to bottom gives a redefined export.
         val envRows = LinkedHashMap<String, String>()
+        if (readable == null) {
+            // Damage is not absence, exactly as in [regenerateEnvFileLocked].
+            // Deleting the table over a state file this could not parse would
+            // take every toolchain command off PATH on every launch, while the
+            // payload it names is still on disk and still runnable. So the rows
+            // the last good pass wrote are carried, when every path they name is
+            // still there. Nothing more than that: returning here instead, as this
+            // once did, also froze the rows below that name nativeLibraryDir and
+            // the links into it, which the next app update moves, so xdg-open and
+            // every pip command stopped starting on such a device for good.
+            Logger.w(tag, "toolchains.json is unreadable; carrying the previous toolchain rows")
+            execTable.takeIf { it.isFile }?.readLines()?.forEach { line ->
+                val fields = line.split('\t')
+                if (fields.size < 2) return@forEach
+                if (fields[0].isEmpty()) {
+                    envRows[fields[1]] = line
+                } else if (fields.drop(1).all { it.startsWith("$filesDir/") && File(it).exists() }) {
+                    rows[fields[0]] = line
+                }
+            }
+        }
+        val installed = readable ?: JSONArray()
         for (i in 0 until installed.length()) {
             val tc = installed.optJSONObject(i) ?: continue
             val name = tc.optString("name", "unknown")
