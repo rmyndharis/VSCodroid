@@ -1103,7 +1103,14 @@ class MainActivity : AppCompatActivity() {
      * Called from [AndroidBridge.openFolderPicker] via JS bridge.
      */
     fun openFolderPicker() {
-        folderPickerLauncher.launch(null)
+        // Guarded like the file chooser: a device with DocumentsUI disabled throws
+        // here on the main thread, and an uncaught throw ends the process with the
+        // server in it.
+        try {
+            folderPickerLauncher.launch(null)
+        } catch (e: ActivityNotFoundException) {
+            Logger.w(tag, "No document tree picker on this device", e)
+        }
     }
 
     /**
@@ -4683,7 +4690,7 @@ class MainActivity : AppCompatActivity() {
             .setPositiveButton(getString(R.string.dialog_ok), null)
             .setNeutralButton(getString(R.string.about_licenses)) { _, _ -> showLicensesDialog() }
             .setNegativeButton(getString(R.string.about_privacy_policy)) { _, _ ->
-                startActivity(Intent(Intent.ACTION_VIEW, "https://rmyndharis.github.io/VSCodroid/privacy-policy.html".toUri()))
+                openInBrowser("https://rmyndharis.github.io/VSCodroid/privacy-policy.html")
             }
             .show()
     }
@@ -4713,9 +4720,22 @@ class MainActivity : AppCompatActivity() {
                 showLicenseTextsDialog()
             }
             .setNeutralButton(getString(R.string.licenses_source_code)) { _, _ ->
-                startActivity(Intent(Intent.ACTION_VIEW, "https://github.com/rmyndharis/VSCodroid".toUri()))
+                openInBrowser("https://github.com/rmyndharis/VSCodroid")
             }
             .show()
+    }
+
+    /**
+     * Opens a page of ours in the browser, and says so when nothing can. With no
+     * browser enabled the launch throws on the main thread, and an uncaught throw
+     * takes the process down with the server and the open session in it.
+     */
+    private fun openInBrowser(url: String) {
+        try {
+            startActivity(Intent(Intent.ACTION_VIEW, url.toUri()))
+        } catch (_: ActivityNotFoundException) {
+            Toast.makeText(this, R.string.open_url_no_handler, Toast.LENGTH_LONG).show()
+        }
     }
 
     /**
