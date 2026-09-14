@@ -799,7 +799,10 @@ class ToolchainManager(private val context: Context) {
         if (installRoot.isNotEmpty()) {
             val dir = File(context.filesDir, installRoot)
             if (dir.exists()) {
-                dir.deleteRecursively()
+                // Link-aware, not File.deleteRecursively, which follows a directory
+                // link: `ln -s ~/projects/mygem/lib/mygem` into Ruby's load path is an
+                // ordinary thing to do, and removing Ruby then emptied the project.
+                StorageManager.deleteRecursive(dir)
                 Logger.d(tag, "Deleted install root: $installRoot")
             }
         }
@@ -1662,7 +1665,10 @@ class ToolchainManager(private val context: Context) {
         }
         val dir = File(context.filesDir, installRoot)
         if (!dir.exists()) return
-        if (dir.deleteRecursively()) {
+        // Link-aware for the reason uninstallLocked gives. It reports bytes rather
+        // than success, so what is left on disk is the answer.
+        StorageManager.deleteRecursive(dir)
+        if (!dir.exists()) {
             Logger.i(tag, "Reclaimed the partial $name tree under $installRoot")
         } else {
             Logger.w(tag, "Could not fully reclaim the partial $name tree under $installRoot")

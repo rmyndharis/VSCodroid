@@ -164,4 +164,30 @@ class ToolchainUninstallLibsTest {
         assertTrue(File(libDir, shared).exists(), "$shared was deleted on a null listing")
         assertTrue(File(libDir, ownOnly).exists(), "$ownOnly was deleted on a null listing")
     }
+
+    /**
+     * A directory link the user made inside the install root is unlinked, not walked.
+     * File.deleteRecursively follows one, so removing Ruby emptied a project linked into
+     * its load path before unlinking the link.
+     */
+    @Test
+    fun `a directory linked into the install root keeps its files`() {
+        every { assets.list("usr/lib") } returns emptyArray()
+        val project = File(filesDir, "home/projects/mygem/lib/mygem").apply { mkdirs() }
+        File(project, "mygem.rb").writeText("module Mygem; end")
+        val root = File(filesDir, "usr/lib/ruby/3.4.0").apply { mkdirs() }
+        java.nio.file.Files.createSymbolicLink(File(root, "mygem").toPath(), project.toPath())
+        File(filesDir, "home/.vscodroid/toolchains.json").writeText(
+            """[{"name":"ruby","installRoot":"usr/lib/ruby","libs":[]}]"""
+        )
+
+        uninstallSync("ruby")
+
+        assertFalse(File(filesDir, "usr/lib/ruby").exists(), "the install root was not removed")
+        assertTrue(
+            File(project, "mygem.rb").exists(),
+            "removing the toolchain deleted a file outside its install root through a link",
+        )
+    }
+
 }
