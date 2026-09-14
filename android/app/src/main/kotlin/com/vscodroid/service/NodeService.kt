@@ -139,8 +139,11 @@ class NodeService : Service() {
 
     private var startupNotice: StartupNotice? = null
 
-    /** Invoked when the server is healthy and accepting connections. */
-    var onServerReady: ((port: Int) -> Unit)? = null
+    /**
+     * Invoked when the server is healthy and accepting connections. `sameServer` is
+     * [ProcessManager.continuesAnnouncedServer], read at the announcement.
+     */
+    var onServerReady: ((port: Int, sameServer: Boolean) -> Unit)? = null
 
     /** Invoked when the server fails to start or exceeds restart attempts. */
     var onServerError: ((message: String) -> Unit)? = null
@@ -797,7 +800,9 @@ class NodeService : Service() {
         // the card instead, where it lasts as long as the condition does rather
         // than for a toast.
         refreshNotification()
-        onServerReady?.invoke(processManager.port)
+        val sameServer = processManager.continuesAnnouncedServer()
+        processManager.markReadyAnnounced()
+        onServerReady?.invoke(processManager.port, sameServer)
     }
 
     /**

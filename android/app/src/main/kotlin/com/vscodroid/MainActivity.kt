@@ -2248,7 +2248,7 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun setupServiceCallbacks() {
-        nodeService?.onServerReady = { port ->
+        nodeService?.onServerReady = { port, sameServer ->
             // Recorded whatever the page says, so the reload the crash page
             // offers has a port to load when the user does ask.
             serverPort = port
@@ -2259,6 +2259,11 @@ class MainActivity : AppCompatActivity() {
                 // one more turn; see rendererCrashLoopShown.
                 if (rendererCrashLoopShown) {
                     Logger.i(tag, "Server ready again; the renderer-crash page stays up until asked")
+                } else if (sameServer && isWorkbenchUrl(webView?.url, port)) {
+                    // Only the bootstrap died, and the page is still connected to
+                    // the editor server that was adopted back. A reload would
+                    // restart the extension host for nothing.
+                    Logger.i(tag, "Adopted the server the page is connected to; not reloading")
                 } else {
                     loadVSCode(port)
                 }

@@ -2367,6 +2367,43 @@ class AdoptionTest {
     }
 
     @Test
+    fun `adopting the server readiness was announced for is recognised as that server`() {
+        // What MainActivity reads to leave a connected page alone. A bootstrap killed
+        // on its own leaves its child serving the page, and the restart adopts that
+        // child; reloading then restarts the extension host for a connection that
+        // never broke. But a restart can also adopt a child the page never saw, when
+        // a second bootstrap died before it was announced, and that page's server is
+        // gone, so only the pid readiness was announced for may skip the reload.
+        val holder = serving(200)
+        recordEditorServer(pid = 4242, port = holder.port)
+        manager.markReadyAnnounced()
+
+        assertTrue(manager.startServer(), "adopting is a successful start")
+        assertTrue(
+            manager.continuesAnnouncedServer(),
+            "the survivor of the announced server was not recognised, so the page " +
+                "connected to it is reloaded anyway",
+        )
+    }
+
+    @Test
+    fun `adopting a child the page never saw is not taken for the page's own server`() {
+        val holder = serving(200)
+        recordEditorServer(pid = 4242, port = holder.port)
+        manager.markReadyAnnounced()
+        // A restart spawned a second bootstrap, which forked 4343 and died before
+        // its server was announced.
+        recordEditorServer(pid = 4343, port = holder.port)
+
+        assertTrue(manager.startServer(), "adopting is a successful start")
+        assertFalse(
+            manager.continuesAnnouncedServer(),
+            "a child the page never connected to was taken for the page's own server, " +
+                "which would leave the page on a server that is gone",
+        )
+    }
+
+    @Test
     fun `a stop that lands while the port is being adopted ends the server instead`() {
         // The counterpart of `a stop that lands while the server is spawning takes
         // the process with it`, on the branch that has no Process for the stop to

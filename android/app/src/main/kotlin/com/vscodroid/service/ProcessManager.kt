@@ -312,6 +312,43 @@ class ProcessManager(private val context: Context) {
      */
     fun isAdopted(): Boolean = adopted
 
+    /** The editor server pid the note named when readiness was last announced, 0 before. */
+    @Volatile
+    private var announcedEditorPid = 0
+
+    /** Whether the last adoption found the editor server [announcedEditorPid] names. */
+    @Volatile
+    private var adoptedAnnouncedServer = false
+
+    /**
+     * Records which editor server readiness is being announced for. `NodeService`
+     * calls it on every announcement, spawned or adopted, so the next adoption can
+     * tell a survivor of the page's own server from some other child.
+     */
+    fun markReadyAnnounced() {
+        announcedEditorPid = recordedEditorPid()
+    }
+
+    /**
+     * Whether the server now ready is the very editor server readiness was last
+     * announced for, reached again by adopting it after its bootstrap died.
+     *
+     * The page loaded against that server is still connected to it: a SIGKILLed
+     * `server.js` takes nothing of its child with it. Reloading there restarts the
+     * extension host and drops what has not been backed up, for a connection that
+     * never broke. A different pid, which is an adopted child of a restart the page
+     * never saw, answers false, because the page's own server is gone.
+     */
+    fun continuesAnnouncedServer(): Boolean = adopted && adoptedAnnouncedServer
+
+    /** The pid the bootstrap's note names, or 0 when there is no readable note. */
+    private fun recordedEditorPid(): Int = try {
+        val note = File(Environment.getServerDir(context), EDITOR_PID_FILE)
+        if (note.isFile) JSONObject(note.readText()).optInt("pid", 0) else 0
+    } catch (_: Exception) {
+        0
+    }
+
     /**
      * Whether a server of ours is still there, spawned or adopted.
      *
@@ -590,6 +627,7 @@ class ProcessManager(private val context: Context) {
             // carries a working one. Read those two files before putting any
             // warning back here.
             adopted = true
+            adoptedAnnouncedServer = recordedEditorPid().let { it > 0 && it == announcedEditorPid }
             clearReadiness()
             // Nothing was spawned, so the flag describes nothing. Cleared rather
             // than left, because it survives in this instance across attempts and

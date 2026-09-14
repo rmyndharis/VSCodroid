@@ -162,7 +162,9 @@ consumer: `MainActivity` installs one, rather than the workbench providing it.
 
 There is no `onServerReady`, `onServerRestarting`, `onOAuthCallback` or
 `onOAuthError` on this object. Server readiness is a Kotlin-side callback on
-`NodeService`; the page learns about it by being navigated, not by being called.
+`NodeService`; the page learns about it by being navigated, not by being called,
+and is left alone when the server ready again is the editor server it is still
+connected to (`ProcessManager.continuesAnnouncedServer`).
 The OAuth pair described a flow this app does not implement; see §2.5.
 
 ### 2.4 JavaScript → Kotlin Methods

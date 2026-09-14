@@ -123,6 +123,7 @@
 | BG-6 | Return after screen off | Lock screen, wait 2min, unlock | App resumes without crash | | |
 | BG-7 | An adopted session keeps its network | `adb shell ps -A \| grep libnode` shows two processes; **`kill -9` the parent** (the lower PID, the one the other lists as its PPID), then relaunch the app. It must be SIGKILL: the bootstrap handles SIGTERM and kills its child on the way out, so a plain `kill` leaves nothing to adopt. `ps` shows `libnode` rather than `server.js` because that is argv[0] | Editor loads against the surviving server, the notification reads "Local development server active" with no warning beside it, and the session reaches the network: the marketplace lists extensions and `npm view express` prints a version | | |
 | BG-8 | A server that will not come back says so | With the editor open, `adb shell kill -9` the `libnode` process repeatedly until the notification reads "Server crashed repeatedly" | The page stops reading "Starting server..." and states that the server could not be restarted, that files are safe, and offers **Try again**. Tapping it returns to the loading page and starts a new attempt; nothing requires force-stopping the app | | |
+| BG-9 | A bootstrap killed under an open editor does not reload it | With a file edited and a terminal running `sleep 600`, `kill -9` the parent `libnode` as in BG-7 and keep the app in the foreground | Within a few seconds logcat shows `adopting it` and `Adopted the server the page is connected to; not reloading`; the page does not reload, the edit and the terminal are still there | | |
 
 BG-7 proves where the DNS proxy lives. An adopted server outlived the bootstrap
 that forked it, and the proxy that lets musl-built programs resolve names is
@@ -265,14 +266,14 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | Screen & Orientation | 10 | | | |
 | Editor Operations | 14 | | | |
 | Extensions | 6 | | | |
-| Background/Foreground | 8 | | | |
+| Background/Foreground | 9 | | | |
 | Low Memory & Stress | 4 | | | |
 | Performance | 10 | | | |
 | Toolchains | 7 | | | |
 | Terminal & Tools | 11 | | | |
 | SAF & Files | 16 | | | |
 | Display Language | 6 | | | |
-| **Total** | **127** | | | |
+| **Total** | **128** | | | |
 
 **Overall Result**: [ ] PASS / [ ] FAIL
 
