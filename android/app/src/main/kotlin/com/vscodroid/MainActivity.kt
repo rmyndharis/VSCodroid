@@ -904,8 +904,11 @@ class MainActivity : AppCompatActivity() {
         // armed this id proves nothing about who is answering it.
         //
         // The secret the editor server bound into its own callback page this run is
-        // what closes that. It is served from the server's origin, which no other
-        // origin can read, and it is recorded inside the app sandbox. Refused in
+        // what closes that for a web page. It is served from the server's origin,
+        // which no other browser origin can read, and it is recorded inside the app
+        // sandbox. It does not close it for another app on the device, which can
+        // fetch `/callback` over loopback without the connection token; see the
+        // binding in server.js. Refused in
         // the same silence as the branch above and before the window is consulted,
         // so a forged callback can neither raise a message nor spend the arming the
         // user's real callback still needs.

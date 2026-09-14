@@ -309,10 +309,14 @@ if (!fs.existsSync(rehEntryPoint)) {
     // with the confirmation prompt suppressed, and take the pending id with it so
     // the user's real callback was dropped.
     //
-    // `callback.html` is served from this server's own origin, so no other origin
-    // can read what is written into it. The nonce goes into the intent payload the
-    // page builds and into a file inside the app sandbox; the Android side accepts
-    // a callback only when the two match.
+    // `callback.html` is served from this server's own origin, so no page in a
+    // browser on another origin can read what is written into it. An app on the
+    // device can: patch 0012 answers `/callback` before the connection-token check,
+    // and a plain GET over loopback from another uid returns the page with this
+    // run's nonce in it (measured on an API 33 emulator). So the binding keeps out
+    // web pages, not other installed apps. The nonce goes into the intent payload
+    // the page builds and into a file inside the app sandbox; the Android side
+    // accepts a callback only when the two match.
     //
     // Rewritten on every start, like product.json above and through the same
     // temporary file and rename: the value has to be new for each run, and the
@@ -381,9 +385,13 @@ if (!fs.existsSync(rehEntryPoint)) {
     // year and never see the edit. The document carries no caching headers at all.
     //
     // branding/product.json carries the same list for the next server build. After
-    // it, this adds entries the page already has, which is a no-op by the membership
-    // test below rather than by luck. How the script is inserted, and why it stays a
-    // bare <script>, is at [extendWorkbenchPage].
+    // it, this still adds both entries: the membership test below sees only
+    // `additionalTrustedDomains`, which the server never sets, and the workbench
+    // appends that list to the inlined one without removing repeats. A repeated
+    // entry matches the same addresses, so it is harmless, and the script can go
+    // once a server release carrying the branding list is the oldest one shipped.
+    // How the script is inserted, and why it stays a bare <script>, is at
+    // [extendWorkbenchPage].
     const workbenchHtmlPath = path.join(REH_DIR, 'out/vs/code/browser/workbench/workbench.html');
     try {
         const added = extendWorkbenchPage(workbenchHtmlPath, TRUSTED_DOMAINS_MARKER, [
@@ -417,7 +425,9 @@ if (!fs.existsSync(rehEntryPoint)) {
     // product.json rewrite; recommendations are read only by the page, so a build-time
     // copy would buy nothing and give the two places to drift. It would also have to
     // be added to the locked product.json key set that build-vscode-oss.sh checks.
-    // The membership test still holds if a later build inlines them anyway.
+    // A later build that inlined them anyway would not be seen by the membership
+    // test, which reads only the page's settings; the deep merge would then write
+    // the same entry over itself, which changes nothing.
     try {
         const added = extendWorkbenchPage(workbenchHtmlPath, RECOMMENDATIONS_MARKER, [
             '\t\t\t\t\tvar product = settings.productConfiguration || {};',
