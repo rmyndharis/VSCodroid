@@ -68,8 +68,12 @@ echo "=== Building native addons for Android ARM64 (Bionic) ==="
 
 # --- Toolchain -------------------------------------------------------------
 
-if [ -n "${ANDROID_NDK_HOME:-}" ]; then
-    NDK_DIR="$ANDROID_NDK_HOME"
+# ANDROID_NDK_ROOT as well, the way build-glibc-shim.sh, build-exec-trampoline.sh
+# and build-claude-shim.sh take it and setup.sh accepts it: one variable honoured
+# there and not here built the addons with a different NDK from the shims, or
+# failed here after every download setup.sh had let through.
+if [ -n "${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT:-}}" ]; then
+    NDK_DIR="${ANDROID_NDK_HOME:-$ANDROID_NDK_ROOT}"
 elif [ -n "${ANDROID_HOME:-}" ] && [ -d "$ANDROID_HOME/ndk" ]; then
     NDK_DIR="$(ls -d "$ANDROID_HOME/ndk/"* 2>/dev/null | sort -V | tail -1)"
 elif [ -d "$HOME/Library/Android/sdk/ndk" ]; then
