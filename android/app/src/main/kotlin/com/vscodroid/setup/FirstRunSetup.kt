@@ -580,6 +580,7 @@ class FirstRunSetup(
             // and leaves both. Here the runtime is already in place, so this is
             // only the cleanup half.
             reconcilePythonRuntimeLocked()
+            if (isUpgrade) pruneDroppedBuiltInExtensions()
 
             reportProgress(context.getString(R.string.setup_step_git), 82)
             setupGitCore()
@@ -3695,6 +3696,35 @@ claude() {
      * flight cannot outlive the run: the skip it licenses is only ever for a
      * retry of an attempt that did not finish.
      */
+    /**
+     * Removes the built-in extensions an upgrade's server tree no longer carries.
+     *
+     * Extraction merges and never removes, and the server loads built-in extensions
+     * by listing `server/vscode-reh/extensions`, so an extension a VS Code bump drops
+     * or renames stayed on upgraded devices and loaded beside its replacement, with
+     * both contributing the same views and editors. Upstream has renamed one before
+     * (image-preview became media-preview).
+     *
+     * Only top-level directories, and only against a listing that could be read: an
+     * empty or unreadable listing removes nothing. Nothing but extraction writes a
+     * top-level entry there; the Copilot aliases go inside `extensions/copilot`, and
+     * extensions a user installs live under `--extensions-dir`.
+     */
+    private fun pruneDroppedBuiltInExtensions() {
+        val bundled = try {
+            context.assets.list("vscode-reh/extensions")?.toSet()
+        } catch (e: IOException) {
+            null
+        }
+        if (bundled.isNullOrEmpty()) return
+        File(context.filesDir, "server/vscode-reh/extensions").listFiles()
+            ?.filter { it.name !in bundled }
+            ?.forEach {
+                Logger.i(tag, "Removing built-in extension ${it.name}, which this build no longer ships")
+                StorageManager.deleteRecursive(it)
+            }
+    }
+
     private fun markSetupComplete() {
         prefs.edit(commit = true) {
             putString(KEY_VERSION, getCurrentVersion())
