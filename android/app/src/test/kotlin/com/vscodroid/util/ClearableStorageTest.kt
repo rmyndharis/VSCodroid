@@ -144,7 +144,7 @@ class ClearableStorageTest {
 
     /**
      * And the directory a download is still using is left alone, which is why
-     * this is not one more line beside the other four. Each transfer writes its
+     * this is not one more line beside the others. Each transfer writes its
      * archive, expands it and copies out of it in a directory of its own;
      * removing that under a running download fails the transfer, and can leave
      * the copy into `usr/` reading a tree being deleted beneath it. The storage

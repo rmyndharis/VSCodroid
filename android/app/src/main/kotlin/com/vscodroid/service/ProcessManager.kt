@@ -6,6 +6,7 @@ import com.vscodroid.util.Environment
 import com.vscodroid.util.Logger
 import com.vscodroid.util.PortFinder
 import com.vscodroid.util.ServerLog
+import com.vscodroid.util.StorageManager
 import kotlinx.coroutines.delay
 import org.json.JSONObject
 import java.io.BufferedReader
@@ -830,6 +831,7 @@ class ProcessManager(private val context: Context) {
             Logger.w(tag, "Could not create TMPDIR at ${tmpDir.path}; " +
                 "the server may fail on temporary files")
         }
+        StorageManager.pruneTemporaryBytecode(context)
 
         val nodePath = Environment.getNodePath(context)
         val serverScript = Environment.getServerScript(context)

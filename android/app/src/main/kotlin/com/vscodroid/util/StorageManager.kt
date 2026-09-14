@@ -18,7 +18,7 @@ import android.annotation.SuppressLint
  * - User data (settings, state, logs)
  * - Tools (usr/: bash, git, python, npm, etc.)
  * - Projects (the default workspace, wherever this install keeps it)
- * - Cache (npm-cache, tmp, crash-logs, toolchain staging directories)
+ * - Cache (npm-cache, tmp, crash-logs, Python bytecode, toolchain staging directories)
  */
 // UsableSpace: this reports what is free, which is what the storage screen and
 // the extraction pre-flight both need. getAllocatableBytes would add space the
@@ -110,19 +110,19 @@ object StorageManager {
      * give back.
      */
     internal val CLEARABLE_CACHE_DIRS =
-        listOf("npm-cache", "tmp", "crash-logs", "toolchain-download")
+        listOf("npm-cache", "tmp", "crash-logs", "toolchain-download", "pycache")
 
     /**
-     * Clears caches: npm-cache, tmp dir, crash logs, VS Code logs, and the
-     * toolchain staging directories no download is using.
+     * Clears caches: npm-cache, tmp dir, crash logs, Python bytecode, VS Code
+     * logs, and the toolchain staging directories no download is using.
      * Returns the number of bytes freed.
      *
      * The cache directories below are spelled out rather than looped over
      * [CLEARABLE_CACHE_DIRS], because each is emptied differently: `tmp` is
-     * recreated because the runtime needs it, and the toolchain staging tree keeps
-     * whatever a running download owns. They are still the same four, and
-     * `ClearableStorageTest` fails if the row starts counting one this does not
-     * reach.
+     * recreated because the runtime needs it, `pycache` is not because Python
+     * recreates it, and the toolchain staging tree keeps whatever a running
+     * download owns. They are the same five, and `ClearableStorageTest`
+     * fails if the row starts counting one this does not reach.
      */
     fun clearCaches(context: Context): Long {
         var freed = 0L
@@ -130,6 +130,14 @@ object StorageManager {
         // npm cache
         val npmCache = File(context.cacheDir, "npm-cache")
         freed += deleteRecursive(npmCache)
+
+        // Python bytecode. PYTHONPYCACHEPREFIX in [Environment] points the
+        // interpreter here, so this is the whole of what it writes; the next
+        // import of each module pays its compile again and nothing is lost.
+        // It is also the remedy for a `.pyc` left with an intact header and a
+        // damaged body by a crash or power loss mid-write (CPython does not
+        // fsync), which raises out of the import rather than recompiling.
+        freed += deleteRecursive(File(context.cacheDir, "pycache"))
 
         // tmp dir
         val tmpDir = File(context.cacheDir, "tmp")
@@ -150,6 +158,25 @@ object StorageManager {
 
         Logger.i(TAG, "Caches cleared: ${formatSize(freed)} freed")
         return freed
+    }
+
+    /**
+     * Removes the bytecode of Python sources that lived under the cache directory.
+     *
+     * The bytecode prefix mirrors each source's absolute path and nothing prunes
+     * it, so a source tree that is gone leaves its bytecode behind. Under
+     * `cacheDir` that happens by construction: every `pip install` that builds
+     * from source imports its build backend from a fresh `pip-build-env-*` under
+     * TMPDIR, which pip deletes afterwards, and the `.pyc` of that import would
+     * otherwise stay, at a path that never repeats. Called on every server start;
+     * a build still running loses nothing but a recompile.
+     *
+     * Bytecode of a deleted venv or a discarded folder mirror is not reached
+     * here, and [clearCaches] frees it with the rest.
+     */
+    fun pruneTemporaryBytecode(context: Context): Long {
+        val mirrored = File(File(context.cacheDir, "pycache"), context.cacheDir.absolutePath.trimStart('/'))
+        return deleteRecursive(mirrored)
     }
 
     /**

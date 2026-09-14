@@ -412,7 +412,8 @@ fun getStorageBreakdown(authToken: String, replyId: String): String
 
 @JavascriptInterface
 fun clearCaches(authToken: String, replyId: String): String
-// Clears npm-cache, tmp dir, crash logs, VS Code logs
+// Clears npm-cache, tmp dir, crash logs, Python bytecode, VS Code logs, and
+// toolchain staging directories no download is using
 // ANSWERS BY replyId. Returns "" once the deletion has started; anything else is
 // a refusal decided before it started.
 // Posted against replyId: the number of bytes freed, as decimal text. Parse it;

@@ -127,7 +127,29 @@ object Environment {
             "LANG" to "en_US.UTF-8",
             "PREFIX" to "$filesDir/usr",
             "PYTHONHOME" to "$filesDir/usr",
-            "PYTHONDONTWRITEBYTECODE" to "1",
+            // Where Python may write bytecode, instead of the
+            // PYTHONDONTWRITEBYTECODE=1 that stood here and taxed every import.
+            //
+            // The shipped tree carries no `.pyc`: download-python.sh strips
+            // `__pycache__` from the stdlib and from pip. With writing refused as
+            // well, every import re-parsed source on every run. Measured in the
+            // app's terminal on an API 33 emulator, five runs averaged, refused
+            // against a warm cache: `python3 -c pass` 20ms to 13ms, a
+            // four-module stdlib import 90ms to 27ms, `python3 -m pip --version`
+            // 328ms to 97ms. pip, the language server and the Jupyter kernel are
+            // all Python and all paid it.
+            //
+            // A prefix rather than bytecode written in place, which would land in
+            // the extracted asset tree and beside the user's own sources. Under
+            // cacheDir it is out of both, and Android may reclaim it, which costs
+            // one slow run. It does grow: the prefix mirrors every source path and
+            // is never pruned by Python, so [StorageManager.pruneTemporaryBytecode]
+            // drops what temporary build trees left, and
+            // [StorageManager.clearCaches] deletes the whole directory by name.
+            // pip records a package's bytecode here too, outside a venv's prefix,
+            // so `pip uninstall` in a venv lists those files as ones it will not
+            // remove; they go with the cache.
+            "PYTHONPYCACHEPREFIX" to "$cacheDir/pycache",
             "GIT_EXEC_PATH" to "$filesDir/usr/lib/git-core",
             "GIT_TEMPLATE_DIR" to "$filesDir/usr/share/git-core/templates",
             "GIT_SSH_COMMAND" to "$nativeLibDir/libssh.so -F $homeDir/.ssh/config",

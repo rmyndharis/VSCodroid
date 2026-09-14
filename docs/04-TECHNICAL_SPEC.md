@@ -354,7 +354,7 @@ val env = mapOf(
     "LANG"                    to "en_US.UTF-8",
     "PREFIX"                  to "${filesDir}/usr",
     "PYTHONHOME"              to "${filesDir}/usr",
-    "PYTHONDONTWRITEBYTECODE" to "1",
+    "PYTHONPYCACHEPREFIX"     to "${cacheDir}/pycache",
     "GIT_EXEC_PATH"           to "${filesDir}/usr/lib/git-core",
     "GIT_TEMPLATE_DIR"        to "${filesDir}/usr/share/git-core/templates",
     "GIT_SSH_COMMAND"         to "${nativeLibDir}/libssh.so -F ${filesDir}/home/.ssh/config",
