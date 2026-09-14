@@ -9,7 +9,8 @@ The wheels are left in --dist (.build/wheelhouse by default), which is what gets
 uploaded to the release the page links to. A prerelease, so it can never become
 `releases/latest`, which the toolchain downloads resolve:
 
-    gh release create <release-tag> --prerelease --title ... .build/wheelhouse/*.whl
+    gh release create <release-tag> --prerelease --title ... \
+        .build/wheelhouse/*.whl .build/wheelhouse/*-THIRD-PARTY-NOTICES.txt
 
 docs/10-RELEASE_PLAN.md section 8.3 is the whole order.
 
@@ -49,6 +50,12 @@ deterministic, so its `sha256` is pinned like any other. The .deb itself is
 checked against Termux's signed index, as every other Termux package in this
 repository is, and the pool keeps only a package's current revision: once
 Termux rebuilds it, the entry has to be re-pinned to the new file.
+
+An entry can also carry `notices`, for a wheel that compiles in third-party code
+whose licence notices it does not carry. The wheel is never repacked to add
+them, since that would change the bytes the digest pins; the notices are taken
+from the project's own source distribution on PyPI, checked against a pinned
+digest, and published beside the wheel as one text file the page links to.
 """
 
 import argparse
@@ -96,8 +103,11 @@ VENDOR_DIR_SUFFIXES = ("-libs", ".libs")
 # travel. The rule here is only the negative one: refuse a wheel that carries no
 # notice file at all, because then re-hosting it byte for byte would not carry
 # one either. It does not prove the notices are complete. A wheel that links a
-# library statically can omit that library's notice, which is how lxml, with
-# GNU libiconv inside it, came to be held back; wheelhouse.json records it.
+# library statically can omit that library's notice, so completeness is checked
+# by hand before pinning, against the licence files the same version's PyPI
+# wheel carries. A gap that its source distribution can fill goes into the
+# entry's `notices`, which is how pandas is mirrored; one it cannot fill keeps
+# the package out, which is how lxml, with GNU libiconv inside it, was held back.
 LICENCE_MARKERS = ("-licenses/", ".dist-info/licenses/", ".dist-info/LICENSE")
 
 # Where a Termux Python package installs, inside its data.tar.
@@ -268,6 +278,33 @@ def repack_termux_deb(deb, name, version, python_version, dest):
             archive.writestr(info, files[rel])
 
 
+def notices_filename(name, version):
+    return f"{normalised(name)}-{version}-THIRD-PARTY-NOTICES.txt"
+
+
+def build_notices(sdist, name, version, paths, dest):
+    """One text file holding the licence files `paths` names in a source tarball.
+
+    Each path is a file, or a directory ending in `/` whose files are all taken,
+    relative to the tarball's single top-level directory. Sorted and headed by
+    path, so the same tarball gives the same bytes and the pinned digest holds.
+    """
+    found = {}
+    with tarfile.open(sdist) as tar:
+        for member in tar.getmembers():
+            if not member.isfile() or "/" not in member.name:
+                continue
+            rel = member.name.split("/", 1)[1]
+            if any(rel == p or (p.endswith("/") and rel.startswith(p)) for p in paths):
+                found[rel] = tar.extractfile(member).read().decode("utf-8")
+    missing = [p for p in paths if not any(rel == p or (p.endswith("/") and rel.startswith(p)) for rel in found)]
+    if missing:
+        sys.exit(f"FAIL {sdist.name} has nothing at {', '.join(missing)}, so the notices would be incomplete")
+    parts = [f"Third-party notices for {name} {version}, from {sdist.name}.\n"]
+    parts += [f"\n==> {rel} <==\n{found[rel].rstrip()}\n" for rel in sorted(found)]
+    dest.write_text("".join(parts), encoding="utf-8")
+
+
 def vendor_dirs(unpacked):
     return [p for p in unpacked.iterdir()
             if p.is_dir() and p.name.endswith(VENDOR_DIR_SUFFIXES)]
@@ -357,12 +394,20 @@ def page(entries, release_tag):
     """
     base = f"https://github.com/rmyndharis/VSCodroid/releases/download/{release_tag}"
     rows = []
-    for entry in entries:
-        url = f"{base}/{entry['filename']}"
+    # A notices file is linked beside its wheel, with a digest like any other
+    # link. pip skips a link that is not a distribution, measured with pip 26 on
+    # a device: the wheel beside it still installs and nothing is logged at -v.
+    links = []
+    for e in entries:
+        links.append((e["filename"], e["sha256"]))
+        if e.get("notices"):
+            links.append((e["notices"], e["notices-sha256"]))
+    for filename, digest in links:
+        url = f"{base}/{filename}"
         parsed = urllib.parse.urlparse(url)
         if not parsed.scheme or not parsed.netloc:
             sys.exit(f"FAIL {url} is not absolute, so pip would resolve it against the wrong host")
-        rows.append(f'    <a href="{url}#sha256={entry["sha256"]}">{entry["filename"]}</a><br>')
+        rows.append(f'    <a href="{url}#sha256={digest}">{filename}</a><br>')
     return (
         "<!DOCTYPE html>\n<html><head><meta charset=\"utf-8\">\n"
         "<title>VSCodroid wheelhouse</title></head>\n<body>\n"
@@ -413,16 +458,16 @@ def build(args, manifest, declared, tag, out, work):
     staged.mkdir()
     dirty = False
 
-    def pin(package, key, actual, what):
+    def pin(record, key, actual, what):
         nonlocal dirty
-        recorded = package.get(key)
+        recorded = record.get(key)
         if not recorded:
             if not args.record:
                 sys.exit(
-                    f"FAIL {package['name']} has no {key}. Re-run with --record to pin {actual}, "
-                    f"after satisfying yourself the {what} is the one you meant."
+                    f"FAIL {package['name']} has no {key} for its {what}. Re-run with --record to pin "
+                    f"{actual}, after satisfying yourself the {what} is the one you meant."
                 )
-            package[key] = actual
+            record[key] = actual
             dirty = True
             print(f"  recorded {key} {actual}")
         elif recorded != actual:
@@ -471,7 +516,18 @@ def build(args, manifest, declared, tag, out, work):
         yank = "not yanked" if check_not_yanked(name, version) else "yank status unknown"
         print(f"  ok     {checked} shared objects, licence present, {yank}")
 
-        entries.append({"filename": filename, "url": url, "sha256": package["sha256"]})
+        entry = {"filename": filename, "url": url, "sha256": package["sha256"]}
+        notices = package.get("notices")
+        if notices:
+            sdist = work / notices["url"].rsplit("/", 1)[-1]
+            download(notices["url"], sdist)
+            pin(notices, "source-sha256", digest_of(sdist), "source distribution the notices come from")
+            text = staged / notices_filename(name, version)
+            build_notices(sdist, name, version, notices["paths"], text)
+            pin(notices, "sha256", digest_of(text), "notices file")
+            entry.update({"notices": text.name, "notices-sha256": notices["sha256"]})
+            print(f"  ok     third-party notices from {sdist.name}")
+        entries.append(entry)
 
     if args.check:
         print(f"\n{len(entries)} wheels verified; nothing written (--check)")
@@ -482,15 +538,16 @@ def build(args, manifest, declared, tag, out, work):
         print(f"\nUpdated {MANIFEST.relative_to(REPO)}")
 
     args.dist.mkdir(parents=True, exist_ok=True)
-    for stale in args.dist.glob("*.whl"):
-        stale.unlink()
-    for wheel in staged.glob("*.whl"):
-        shutil.move(str(wheel), str(args.dist / wheel.name))
+    for pattern in ("*.whl", "*-THIRD-PARTY-NOTICES.txt"):
+        for stale in args.dist.glob(pattern):
+            stale.unlink()
+        for built in staged.glob(pattern):
+            shutil.move(str(built), str(args.dist / built.name))
 
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(page(entries, manifest["release-tag"]), encoding="utf-8")
     print(f"\nWrote {out.relative_to(REPO)} listing {len(entries)} wheels")
-    print(f"The wheels are in {args.dist}; upload them to the {manifest['release-tag']} release.")
+    print(f"The wheels and notices are in {args.dist}; upload them to the {manifest['release-tag']} release.")
     print("The page must be served as text/html, which GitHub Pages does.")
     return 0
 

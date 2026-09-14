@@ -38,6 +38,11 @@
     "libxslt statically and carries only lxml's own notices, so re-hosting it would",
     "redistribute an LGPL library with neither its licence nor an offer of source.",
     "",
+    "pandas compiles in UltraJSON, klib and other vendored code whose licences ask",
+    "for their notices, and its wheel carries only pandas' own. Unlike lxml's, those",
+    "notices are all in pandas' source distribution, so `notices` names it and the",
+    "paths to take, and build-wheelhouse.py publishes them beside the wheel.",
+    "",
     "The page for this manifest is docs/site/wheels/<python-version>/wheels.html.",
     "When python-version moves, the previous version's page stays: devices still on",
     "the older APK read it."
@@ -55,7 +60,16 @@
       "name": "pandas",
       "version": "3.0.5",
       "url": "https://github.com/tur-pypi-dists/python3.14-pandas/releases/download/v3.0.5/pandas-3.0.5-cp314-cp314-android_24_arm64_v8a.whl",
-      "sha256": "69792181ef8992d54fc8ff17fad4e56ce08d784a5b53638242ef882cf14d23d0"
+      "sha256": "69792181ef8992d54fc8ff17fad4e56ce08d784a5b53638242ef882cf14d23d0",
+      "notices": {
+        "url": "https://files.pythonhosted.org/packages/be/4f/5f3422a2afec5ffc46308b79e53291365a93748b498ac2e58bead0197916/pandas-3.0.5.tar.gz",
+        "paths": [
+          "LICENSE",
+          "LICENSES/"
+        ],
+        "source-sha256": "dca3734d6ab7c906e6730f0788b0a1dbb9f2467731f9711f77995c8e9d62d712",
+        "sha256": "399626e6cc0f619b5517edfa298242828bdf7df577dc977d6fdb3eeb7dc54753"
+      }
     },
     {
       "name": "pydantic-core",

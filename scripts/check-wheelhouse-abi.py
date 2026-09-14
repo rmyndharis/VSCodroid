@@ -52,6 +52,13 @@ def page_problems(manifest, declared):
         else:
             filename = url.rsplit("/", 1)[-1]
         expected.add((f"{RELEASES}/{manifest.get('release-tag')}/{filename}", package.get("sha256")))
+        notices = package.get("notices")
+        if notices:
+            name = re.sub(r"[-_.]+", "_", package["name"]).lower()
+            expected.add((
+                f"{RELEASES}/{manifest.get('release-tag')}/{name}-{package['version']}-THIRD-PARTY-NOTICES.txt",
+                notices.get("sha256"),
+            ))
     listed = set()
     problems = []
     for link in re.findall(r'href="([^"]*)"', page.read_text(encoding="utf-8")):
@@ -65,7 +72,8 @@ def page_problems(manifest, declared):
                  for href, digest in sorted(listed - expected)]
     problems += [f"the page does not list {href} ({(digest or 'no digest')[:12]})"
                  for href, digest in sorted(expected - listed)]
-    problems += [f"{href} is not tagged {tag}" for href, _ in sorted(listed) if tag not in href]
+    problems += [f"{href} is not tagged {tag}" for href, _ in sorted(listed)
+                 if href.endswith(".whl") and tag not in href]
     return problems
 
 

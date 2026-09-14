@@ -588,6 +588,17 @@ The weakest point in our reading is the `ripgrep` substitution, because a binary
 
 ---
 
+## Mirrored Python Wheels
+
+`pip` on the device is pointed at a page listing prebuilt Android wheels that VSCodroid re-hosts, unmodified, on the `wheels-<python-version>-<n>` prereleases of this repository. `wheelhouse.json` pins each one and records where it came from. They are not bundled in the APK; pip downloads one only when a user installs that package.
+
+| Wheel | Built by | Licence | Notices |
+|---|---|---|---|
+| numpy 2.5.0 | Termux User Repository | BSD-3-Clause, with OpenBLAS and LAPACK (BSD-3-Clause) | Inside the wheel |
+| pandas 3.0.5 | Termux User Repository | BSD-3-Clause, with vendored UltraJSON, klib, pyperclip and others | pandas' own inside the wheel; the vendored components' in `pandas-3.0.5-THIRD-PARTY-NOTICES.txt` beside it on the release, taken from pandas' source distribution |
+| pydantic-core 2.41.5 | Termux User Repository | MIT, with statically linked Rust crates | Inside the wheel, as upstream ships it: its licence and a CycloneDX SBOM |
+| psutil 7.2.2 | Termux (`python-psutil`), repacked into a wheel | BSD-3-Clause | Inside the wheel |
+
 ## Termux Project Attribution
 
 Many of the command-line tools bundled with VSCodroid (Node.js, Python, Bash, Git, tmux, Make, OpenSSH, and their dependencies) are built from recipes and patches maintained by the **Termux** project.
@@ -758,4 +769,4 @@ For questions about licenses, trademarks, or legal notices:
 
 ---
 
-_This document was last updated on September 14, 2026._
+_This document was last updated on September 15, 2026._
