@@ -117,4 +117,46 @@ class PythonBytecodeEnvTest {
         assertFalse(temporary.exists(), "bytecode of a deleted build tree was left behind")
         assertTrue(kept.exists(), "the standard library's bytecode was pruned with it")
     }
+
+    /**
+     * pip realpaths its build directories, so their bytecode is filed under the
+     * canonical spelling of the cache directory, which in the app process is
+     * `/data/data` behind the `/data/user/0` the context reports. Modelled here
+     * with a symlinked cache directory.
+     */
+    @Test
+    fun `bytecode filed under the canonical cache path is pruned too`() {
+        val real = File(filesDir, "real-cache").apply { mkdirs() }
+        val link = File(filesDir, "linked-cache")
+        java.nio.file.Files.createSymbolicLink(link.toPath(), real.toPath())
+        every { context.cacheDir } returns link
+        val prefix = File(link, "pycache")
+        val canonical = File(prefix, "${real.canonicalPath.trimStart('/')}/tmp/pip-build-env-y/x.cpython-314.pyc")
+        canonical.parentFile!!.mkdirs()
+        canonical.writeBytes(ByteArray(64))
+
+        StorageManager.pruneTemporaryBytecode(context)
+
+        assertFalse(canonical.exists(), "bytecode under the canonical cache path was left behind")
+    }
+
+    @Test
+    fun `pip's cache is under the cache directory and cleared with it`() {
+        val env = Environment.buildProcessEnvironment(context, 1234)
+        assertEquals("${cacheDir.absolutePath}/pip", env["PIP_CACHE_DIR"], "pip keeps its cache under files again")
+        assertTrue("pip" in StorageManager.CLEARABLE_CACHE_DIRS)
+
+        val wheel = File(cacheDir, "pip/wheels/ab/numpy.whl")
+        wheel.parentFile!!.mkdirs()
+        wheel.writeBytes(ByteArray(2048))
+        val legacy = File(filesDir, "home/.cache/pip/http-v2/a")
+        legacy.parentFile!!.mkdirs()
+        legacy.writeBytes(ByteArray(16))
+
+        StorageManager.clearCaches(context)
+        StorageManager.removeLegacyPipCache(context)
+
+        assertFalse(wheel.exists(), "Clear Caches left pip's cache behind")
+        assertFalse(legacy.exists(), "the cache pip kept under files before is still there")
+    }
 }

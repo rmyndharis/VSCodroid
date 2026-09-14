@@ -18,7 +18,7 @@ import android.annotation.SuppressLint
  * - User data (settings, state, logs)
  * - Tools (usr/: bash, git, python, npm, etc.)
  * - Projects (the default workspace, wherever this install keeps it)
- * - Cache (npm-cache, tmp, crash-logs, Python bytecode, toolchain staging directories)
+ * - Cache (npm-cache, pip, tmp, crash-logs, Python bytecode, toolchain staging directories)
  */
 // UsableSpace: this reports what is free, which is what the storage screen and
 // the extraction pre-flight both need. getAllocatableBytes would add space the
@@ -110,10 +110,10 @@ object StorageManager {
      * give back.
      */
     internal val CLEARABLE_CACHE_DIRS =
-        listOf("npm-cache", "tmp", "crash-logs", "toolchain-download", "pycache")
+        listOf("npm-cache", "tmp", "crash-logs", "toolchain-download", "pycache", "pip")
 
     /**
-     * Clears caches: npm-cache, tmp dir, crash logs, Python bytecode, VS Code
+     * Clears caches: npm-cache, pip's cache, tmp dir, crash logs, Python bytecode, VS Code
      * logs, and the toolchain staging directories no download is using.
      * Returns the number of bytes freed.
      *
@@ -121,7 +121,7 @@ object StorageManager {
      * [CLEARABLE_CACHE_DIRS], because each is emptied differently: `tmp` is
      * recreated because the runtime needs it, `pycache` is not because Python
      * recreates it, and the toolchain staging tree keeps whatever a running
-     * download owns. They are the same five, and `ClearableStorageTest`
+     * download owns. They are the same six, and `ClearableStorageTest`
      * fails if the row starts counting one this does not reach.
      */
     fun clearCaches(context: Context): Long {
@@ -130,6 +130,10 @@ object StorageManager {
         // npm cache
         val npmCache = File(context.cacheDir, "npm-cache")
         freed += deleteRecursive(npmCache)
+
+        // pip's download and wheel cache, which PIP_CACHE_DIR in [Environment]
+        // points here. Every wheel it holds can be fetched again.
+        freed += deleteRecursive(File(context.cacheDir, "pip"))
 
         // Python bytecode. PYTHONPYCACHEPREFIX in [Environment] points the
         // interpreter here, so this is the whole of what it writes; the next
@@ -171,13 +175,31 @@ object StorageManager {
      * otherwise stay, at a path that never repeats. Called on every server start;
      * a build still running loses nothing but a recompile.
      *
+     * Both spellings of the cache directory are pruned. pip realpaths its
+     * temporary directories, and in the app process `/data/user/0` resolves to
+     * `/data/data`, so a build's bytecode is filed under the canonical path while
+     * [Context.getCacheDir] reports the other one. Measured on an API 33
+     * emulator: the prefix held `data/data/<package>/...`.
+     *
      * Bytecode of a deleted venv or a discarded folder mirror is not reached
      * here, and [clearCaches] frees it with the rest.
      */
     fun pruneTemporaryBytecode(context: Context): Long {
-        val mirrored = File(File(context.cacheDir, "pycache"), context.cacheDir.absolutePath.trimStart('/'))
-        return deleteRecursive(mirrored)
+        val prefix = File(context.cacheDir, "pycache")
+        val cache = context.cacheDir
+        return listOfNotNull(cache.absolutePath, runCatching { cache.canonicalPath }.getOrNull())
+            .distinct()
+            .sumOf { deleteRecursive(File(prefix, it.trimStart('/'))) }
     }
+
+    /**
+     * Removes the pip cache from where pip kept it before PIP_CACHE_DIR moved it
+     * under the cache directory: `~/.cache/pip`, in files, which no storage row
+     * counts and Android cannot reclaim. Called on every server start; once it
+     * is gone this costs one failed lookup.
+     */
+    fun removeLegacyPipCache(context: Context): Long =
+        deleteRecursive(File(context.filesDir, "home/.cache/pip"))
 
     /**
      * Removes the toolchain staging directories no download is using, and reports

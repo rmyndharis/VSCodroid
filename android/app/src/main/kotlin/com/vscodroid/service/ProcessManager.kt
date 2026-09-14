@@ -832,6 +832,7 @@ class ProcessManager(private val context: Context) {
                 "the server may fail on temporary files")
         }
         StorageManager.pruneTemporaryBytecode(context)
+        StorageManager.removeLegacyPipCache(context)
 
         val nodePath = Environment.getNodePath(context)
         val serverScript = Environment.getServerScript(context)

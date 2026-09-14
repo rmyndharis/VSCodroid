@@ -372,6 +372,7 @@ val env = mapOf(
     "SSL_CERT_DIR"            to "<system trust store>",
     "NPM_CONFIG_PREFIX"       to "${filesDir}/usr",
     "NPM_CONFIG_CACHE"        to "${cacheDir}/npm-cache",
+    "PIP_CACHE_DIR"           to "${cacheDir}/pip",
     "PROJECTS_DIR"            to "<projects dir>",
     "USE_BUILTIN_RIPGREP"     to "0",                 // falsy sends the Claude CLI to rg on PATH
     "ZEROMQ_PREBUILD"         to "${filesDir}/usr/lib/node-addons/zeromq",  // the Jupyter extension's

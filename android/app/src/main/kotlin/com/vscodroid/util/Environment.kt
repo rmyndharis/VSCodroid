@@ -193,6 +193,10 @@ object Environment {
             "SSL_CERT_DIR" to getSystemCaCertsPath(),
             "NPM_CONFIG_PREFIX" to "$filesDir/usr",
             "NPM_CONFIG_CACHE" to "$cacheDir/npm-cache",
+            // Beside npm's, for the same reason: a cache Clear Caches can empty and
+            // Android can reclaim. Unset, pip keeps downloaded wheels in
+            // ~/.cache/pip, under files, where neither reaches them.
+            "PIP_CACHE_DIR" to "$cacheDir/pip",
             "PROJECTS_DIR" to getProjectsDir(context),
             // The Claude Code CLI otherwise looks for a ripgrep under its own
             // vendor/<arch>-<platform>/, a directory that cannot exist here,
