@@ -128,6 +128,28 @@ class MirrorLookupTest {
     }
 
     /**
+     * The other answer the lookup gives a mirror: none, because the folder fell off
+     * the recent list and its grant was released while Open Recent still lists it.
+     * Returning in silence served that copy read-write with nothing syncing it.
+     */
+    @Test
+    fun `a mirror the workbench opened without a grant is said on screen`() {
+        val source = File("src/main/kotlin/com/vscodroid/MainActivity.kt")
+        check(source.isFile) { "MainActivity.kt not found at ${source.absolutePath}" }
+        val text = source.readText()
+        val start = text.indexOf("private fun adoptWorkbenchFolder(")
+        assertTrue(start >= 0, "adoptWorkbenchFolder was renamed or removed")
+        val body = text.substring(start, text.indexOf("\n    }\n", start))
+        val miss = body.substringAfter("if (folder == null)", "").substringBefore("return@launch")
+        assertTrue(
+            body.contains("mirrorNameFor(") && miss.contains("mirror != null") &&
+                miss.contains("saf_permission_expired"),
+            "a mirror with no grant is returned from in silence again, so its edits stay " +
+                "in the copy and nothing says the folder is no longer connected",
+        )
+    }
+
+    /**
      * The recent list is trimmed and the grants are not, which left every folder
      * past the tenth holding a permission for ever. The reclaim pass judges a
      * mirror by whether a permission is still persisted, so those mirrors could

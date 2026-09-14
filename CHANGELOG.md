@@ -36,6 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Paste works again, in the editor, the terminal, the Command Palette and anything an extension pastes into. Copying put text on the device clipboard and pasting it back raised "Unable to read from the browser's clipboard", asking for a permission a WebView has no way to grant.
 - Signing in to GitHub no longer goes through a confirmation dialog first. The sign-in ends by opening github.com, and every address outside the extension marketplace was treated as untrusted.
 - The editor is not reloaded when Android ends only the process that started its server. The server kept running and the page was still connected, but the reload restarted extensions and could drop an edit made a moment before.
+- Opening a device folder from Open Recent after it dropped off the recent folders list says the permission expired. It opened a copy that nothing synced back to the device.
 - A browser sign-in returns only to VSCodroid. Another installed app declaring the same callback link could be offered the result in a chooser.
 - A confirmation dialog fits a phone screen. It was drawn wider than the screen and centred, so the button that proceeds hung off the right edge with a letter of it showing.
 - The editor keeps a usable height in landscape with the keyboard up. The extra key row took the last of the space the keyboard left, so the file being renamed and the line being typed were both off screen.

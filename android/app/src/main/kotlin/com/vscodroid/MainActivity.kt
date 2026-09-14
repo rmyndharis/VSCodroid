@@ -262,6 +262,12 @@ class MainActivity : AppCompatActivity() {
     private var syncingFolder: Uri? = null
 
     /**
+     * The mirror [adoptWorkbenchFolder] last said has no grant, so the second of the
+     * two page loads a folder switch produces does not say it again. Main thread only.
+     */
+    private var ungrantedMirrorNoticed: String? = null
+
+    /**
      * Held for the whole of one device folder open, from stopping the previous
      * watcher to starting the next, failure handling included.
      *
@@ -1089,9 +1095,10 @@ class MainActivity : AppCompatActivity() {
      * grant later lapsed, the launch reclaim deleted the mirror and the work with
      * it, having never existed anywhere the user could see.
      *
-     * Reopening through the picker did not rescue those edits either: the sync
-     * keeps a mirror copy that is newer and moves on without uploading it, and
-     * writes only enter the upload journal from a write-back, so nothing retried.
+     * A mirror whose folder has no grant any more cannot be adopted: the workbench
+     * still lists it in Open Recent after the recent list drops it and releases the
+     * grant. That one is said on screen instead, since edits there stay in the copy
+     * until the folder is picked again, which syncs it and uploads the newer files.
      *
      * Three things are checked before acting, and each excludes a different way
      * of doing this twice: a path that is not under any mirror is an ordinary
@@ -1106,7 +1113,22 @@ class MainActivity : AppCompatActivity() {
             // workspace is a mirror reaches it with the workbench already drawn.
             val folder = withContext(Dispatchers.IO) {
                 safManager.folderForOpenedPath(folderPath)
-            } ?: return@launch
+            }
+            val mirror = SafStorageManager.mirrorNameFor(
+                folderPath, Environment.getSafMirrorsDir(this@MainActivity),
+            )
+            if (folder == null) {
+                if (mirror != null && mirror != ungrantedMirrorNoticed) {
+                    Logger.w(
+                        tag,
+                        "The workbench opened device folder copy $mirror, which has no grant; nothing syncs it",
+                    )
+                    Toast.makeText(this@MainActivity, R.string.saf_permission_expired, Toast.LENGTH_LONG).show()
+                }
+                ungrantedMirrorNoticed = mirror
+                return@launch
+            }
+            ungrantedMirrorNoticed = null
             // Back on the main thread, which is where both of these are written:
             // the coroutine resumes on Dispatchers.Main.immediate, and a second
             // page load cannot interleave between the resume and openSafFolder's
