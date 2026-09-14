@@ -78,10 +78,15 @@ object Environment {
         else
             "$basePath:/system/bin"
 
-        // Preload script that selectively fixes process.platform ("android" → "linux")
-        // for npm/node-gyp only. Build tools like Rollup/esbuild see real "android" platform.
-        // Loaded in Node.js processes via NODE_OPTIONS but only activates with opt-in env var.
-        // The extension host does not see NODE_OPTIONS; server.js passes it in execArgv.
+        // Preload that corrects two platform checks on Android, and nothing else.
+        // process.platform reads "linux" only when the npm/npx functions opt in with
+        // VSCODROID_PLATFORM_FIX=1 or node's entry script is node-gyp, so
+        // Rollup/esbuild still see "android". os.platform() reads "linux" only inside
+        // the Jupyter extension's bundle, with no opt-in, so its pidtree can signal a
+        // kernel's children. VS Code deletes NODE_OPTIONS from the extension host's
+        // environment: server.js passes the preload in the editor server's execArgv,
+        // which the extension host and the Node children it forks inherit, and
+        // BASH_ENV puts NODE_OPTIONS back for a shell the extension host starts.
         val platformFixPath = "$filesDir/server/platform-fix.js"
         val nodeOptions = "--require=$platformFixPath"
 

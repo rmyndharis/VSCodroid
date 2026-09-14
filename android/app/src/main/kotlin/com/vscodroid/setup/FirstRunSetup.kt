@@ -2062,7 +2062,23 @@ class FirstRunSetup(
      */
     fun createBashEnvFile() {
         val envFile = File(Environment.getBashEnvPath(context))
-        val content = BASH_ENV_HEADER + npmBashFunctions() + claudeBashFunction() +
+        // platform-fix.js reaches a shell through NODE_OPTIONS, and VS Code deletes
+        // NODE_OPTIONS from the extension host's environment. A bash the extension
+        // host starts, the Claude Code panel's Bash tool among them, would then run
+        // npm() with no preload to read VSCODROID_PLATFORM_FIX, so a package whose
+        // install script rejects android fails there and works in a terminal. Put
+        // back once here, for every non-interactive shell and the node processes
+        // under it; a terminal's shell already carries it and is left alone.
+        val platformFix = "${context.filesDir.absolutePath}/server/platform-fix.js"
+        val preload = """
+
+# The Node preload, when VS Code's extension host started this shell without it.
+case " ${'$'}{NODE_OPTIONS-} " in
+    *"/server/platform-fix.js"*) ;;
+    *) export NODE_OPTIONS="--require=$platformFix${'$'}{NODE_OPTIONS:+ ${'$'}NODE_OPTIONS}" ;;
+esac
+"""
+        val content = BASH_ENV_HEADER + preload + npmBashFunctions() + claudeBashFunction() +
             pipBashFunctions() + """
 
 # On-demand toolchain env vars (Go, Ruby, Java, etc.)
