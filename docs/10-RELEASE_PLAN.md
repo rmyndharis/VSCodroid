@@ -501,7 +501,40 @@ holds whatever was compiled last.
   built from the same download in the same job, so the two channels cannot ship different
   toolchain versions for one app version.
 
-### 8.3 Future: F-Droid
+### 8.3 The Python Wheelhouse
+
+`pip` on the device is pointed at `https://rmyndharis.github.io/VSCodroid/wheels/<minor>/wheels.html`,
+where `<minor>` is the bundled interpreter's (`wheelhouseUrl` in `FirstRunSetup.kt`, written into
+`~/.pip/pip.conf` on every launch). That page links to wheels attached to a release of their own,
+`release-tag` in `wheelhouse.json`. It is published as a **prerelease** and must stay one: toolchain
+ZIPs resolve through `releases/latest`, and `--latest=false` alone does not protect that pointer.
+GitHub re-picks `latest` among non-draft, non-prerelease releases whenever the release holding it is
+withdrawn, which is what `build-vscode-oss.yml` records happening to the server release.
+
+Changing the wheelhouse is done by hand, in this order, so that the page never links to an asset
+that does not exist yet:
+
+```bash
+# 1. Edit wheelhouse.json: the entries, and release-tag to the next unused wheels-<minor>-<n>.
+python3 scripts/build-wheelhouse.py            # verifies, keeps wheels in .build/wheelhouse, writes the page
+gh release create <release-tag> --prerelease --title "Python wheelhouse <release-tag>" \
+  --notes "..." .build/wheelhouse/*.whl         # the release-tag the page names
+# 2. Merge wheelhouse.json and docs/site/wheels/<minor>/wheels.html; pages.yml publishes the page.
+```
+
+A new release tag rather than new assets on an old one: the page carries each wheel's digest, and a
+device that fetched the previous page must keep finding the files it names. The page is served by
+GitHub Pages because pip reads a find-links page only as `text/html`, and release assets are served
+as `application/octet-stream`. `check-wheelhouse-abi.py` fails a build whose page and manifest
+disagree.
+
+When the bundled Python moves to a new minor, the manifest is re-pinned for it and a page is written
+beside the old one, never over it: every device still on an older APK keeps reading the page for its
+own interpreter. psutil comes from Termux's `python-psutil` package, whose pool keeps only the
+current revision, so a rebuild after Termux has moved on fails until that entry is re-pinned to the
+new file; the wheel already on the release is unaffected.
+
+### 8.4 Future: F-Droid
 
 - Open-source app repository
 - Requires reproducible builds

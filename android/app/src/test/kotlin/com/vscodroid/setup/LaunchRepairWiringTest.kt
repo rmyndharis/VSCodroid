@@ -88,6 +88,12 @@ class LaunchRepairWiringTest {
         "ensurePromptFix",
         "ensureStartupDirGuard",
         "createBashEnvFile",
+        // Unordered with respect to its neighbours: pip.conf is its own file in
+        // its own format and shares nothing with the shell writers. It is here
+        // rather than at first run because that is what lets a changed
+        // wheelhouse URL reach a device already installed, on the next launch,
+        // with no re-extraction.
+        "ensurePipConfig",
         "updateSettingsNativeLibPaths",
         "ensureProjectsDir",
         // Behind ensureProjectsDir, and that pair is the second ordered one in

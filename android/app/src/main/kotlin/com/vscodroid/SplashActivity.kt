@@ -120,6 +120,10 @@ class SplashActivity : AppCompatActivity() {
         // three above rather than inside them: it writes its own file whole, so
         // it neither needs a .bashrc to exist nor leaves anything behind in one.
         repair("the non-interactive shell env") { setup.createBashEnvFile() }
+        // Beside the shell writers rather than inside them: pip.conf is its own
+        // file with its own format, and it has to be reconciled every launch so a
+        // changed wheelhouse URL reaches a device already installed.
+        repair("the pip configuration") { setup.ensurePipConfig() }
         repair("the native library paths in settings.json") { setup.updateSettingsNativeLibPaths() }
         // Beside the other idempotent repairs, for the same reason they are
         // here: it can disappear between launches. This one because it is

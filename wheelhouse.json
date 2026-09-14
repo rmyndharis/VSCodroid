@@ -1,0 +1,74 @@
+{
+  "_comment": [
+    "The wheels VSCodroid mirrors, so that pip install of a package with a compiled",
+    "part can succeed on a device that has no compiler and cannot run one.",
+    "",
+    "Every entry is a prebuilt Android wheel built by the Termux User Repository,",
+    "not by us. `url` records where it came from so the provenance chain is",
+    "auditable; `sha256` is what pip enforces once the wheel is mirrored into our",
+    "own release.",
+    "",
+    "psutil is the exception, because nobody publishes an Android wheel of it. Its",
+    "`url` is Termux's own python-psutil package, built for the same interpreter.",
+    "build-wheelhouse.py checks that .deb against Termux's signed index before",
+    "pinning `source-sha256`, and repacks its files into a wheel without changing",
+    "them. ipykernel requires psutil, so without it the Jupyter extension cannot",
+    "install a kernel. Termux's pool keeps only a package's current revision, so",
+    "when Termux rebuilds python-psutil the entry has to be re-pinned; the wheel",
+    "already on the release stays where it is.",
+    "",
+    "Changing a version is a reviewed diff to this file, deliberately:",
+    "there is no scheduled job that moves them, because for these names PyPI has no",
+    "compatible wheel at any version, so whatever is pinned here is what users get",
+    "until someone edits it.",
+    "",
+    "python-version must match the interpreter the APK carries. That version is",
+    "auto-detected from the Termux index by scripts/download-python.sh and can move",
+    "without anyone deciding, which would invalidate every wheel here at once;",
+    "scripts/check-wheelhouse-abi.py is the gate that makes that a build failure",
+    "rather than a user's pip install finding no candidate weeks later.",
+    "",
+    "Held back deliberately: scipy and scikit-learn. scipy's wheel carries",
+    "libandroid-complex-math with LOAD segments aligned to 0x1000 where Android 16",
+    "needs 0x4000, so scipy.special would fail to import on 16 KB-page devices and",
+    "work everywhere else. scripts/build-wheelhouse.py refuses it, and will keep",
+    "refusing it until upstream rebuilds, which is how it gets back in.",
+    "",
+    "Also held back: lxml. Its wheel links GNU libiconv (LGPL-2.1), libxml2 and",
+    "libxslt statically and carries only lxml's own notices, so re-hosting it would",
+    "redistribute an LGPL library with neither its licence nor an offer of source.",
+    "",
+    "The page for this manifest is docs/site/wheels/<python-version>/wheels.html.",
+    "When python-version moves, the previous version's page stays: devices still on",
+    "the older APK read it."
+  ],
+  "python-version": "3.14",
+  "release-tag": "wheels-3.14-1",
+  "packages": [
+    {
+      "name": "numpy",
+      "version": "2.5.0",
+      "url": "https://github.com/tur-pypi-dists/python3.14-numpy/releases/download/v2.5.0/numpy-2.5.0-cp314-cp314-android_24_arm64_v8a.whl",
+      "sha256": "d65d0db66f5bb31974dccf27983d3de411e0276210c55f263b05db0300c12a28"
+    },
+    {
+      "name": "pandas",
+      "version": "3.0.5",
+      "url": "https://github.com/tur-pypi-dists/python3.14-pandas/releases/download/v3.0.5/pandas-3.0.5-cp314-cp314-android_24_arm64_v8a.whl",
+      "sha256": "69792181ef8992d54fc8ff17fad4e56ce08d784a5b53638242ef882cf14d23d0"
+    },
+    {
+      "name": "pydantic-core",
+      "version": "2.41.5",
+      "url": "https://github.com/tur-pypi-dists/python3.14-pydantic_core/releases/download/v2.41.5/pydantic_core-2.41.5-cp314-cp314-android_24_arm64_v8a.whl",
+      "sha256": "d0c5cb28d67faa63feac017db84a838a0d9e45134dbd180a5d34562466638dc8"
+    },
+    {
+      "name": "psutil",
+      "version": "7.2.2",
+      "url": "https://mirror.mwt.me/termux/main/pool/main/p/python-psutil/python-psutil_7.2.2-2_aarch64.deb",
+      "source-sha256": "61147cf1b656b58e61f0293d25ecde85ca1a20b25f8d57338d424b649cddbef0",
+      "sha256": "489f05c321aa0eaa81165b22116c92f22eae4391661f147ea2996765cf9dbbde"
+    }
+  ]
+}

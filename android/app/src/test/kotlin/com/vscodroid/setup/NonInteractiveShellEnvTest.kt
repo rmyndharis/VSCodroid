@@ -314,6 +314,55 @@ class NonInteractiveShellEnvTest {
         assertEquals(listOf("status=0"), ok, "a successful npm said something: $ok")
     }
 
+    /**
+     * A failed `pip install` names the cause once, and wrapping pip changes
+     * nothing a script or a task sees: the exit status survives, and other
+     * subcommands, or a success, say nothing. Options before the subcommand
+     * still count as an install.
+     */
+    @Test
+    fun `a failed pip install gets one note, once, and keeps its status`() {
+        val bash = File("/bin/bash")
+        assumeTrue(bash.canExecute(), "no /bin/bash on this host to ask")
+
+        FirstRunSetup(context).createBashEnvFile()
+        val cwd = File(filesDir, "workspace").apply { mkdirs() }
+
+        val listing = runBash(cwd, bashEnvFile().path, "python3() { return 3; }\npip list; echo \"list=\$?\"")
+        assertEquals(listOf("list=3"), listing, "a failed pip list was given the install note: $listing")
+
+        val out = runBash(
+            cwd,
+            bashEnvFile().path,
+            """
+            python3() { return 3; }
+            pip install a; echo "first=${'$'}?"
+            pip3 install b; echo "second=${'$'}?"
+            """.trimIndent(),
+        )
+        assertEquals(
+            1, out.count { it.startsWith("vscodroid: if that failed while building a package") },
+            "the cause was not named exactly once per shell: $out",
+        )
+        assertEquals(
+            listOf("first=3", "second=3"), out.filter { it.startsWith("first=") || it.startsWith("second=") },
+            "wrapping pip changed the exit status a script or a task sees: $out",
+        )
+
+        // On stderr: stdout inside ${'$'}(...) belongs to whatever captures it.
+        val captured = runBash(cwd, bashEnvFile().path, "python3() { return 3; }\nx=${'$'}(pip install a)\nprintf 'captured=[%s]\\n' \"${'$'}x\"")
+        assertTrue(captured.contains("captured=[]"), "the note went into a command substitution: $captured")
+
+        val optionFirst = runBash(cwd, bashEnvFile().path, "python3() { return 3; }\npip -q install a")
+        assertEquals(
+            1, optionFirst.count { it.startsWith("vscodroid: if that failed while building a package") },
+            "an install with an option before the subcommand said nothing: $optionFirst",
+        )
+
+        val ok = runBash(cwd, bashEnvFile().path, "python3() { return 0; }\npip install a; echo \"status=\$?\"")
+        assertEquals(listOf("status=0"), ok, "a successful pip said something: $ok")
+    }
+
     /** Non-empty lines of stdout+stderr from `bash -c $script`, run in [cwd]. */
     private fun runBash(cwd: File, bashEnv: String?, script: String): List<String> {
         val builder = ProcessBuilder("/bin/bash", "-c", script)

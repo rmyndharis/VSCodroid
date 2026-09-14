@@ -561,6 +561,13 @@ jobs:
       - name: Check every shipped library is attributed
         run: python3 scripts/check-library-attribution.py
 
+      # The wheels pip is offered are pinned for one Python minor version, and
+      # the interpreter is resolved from the Termux index at build time, so a
+      # bump can arrive without anyone deciding. Here rather than in lint.yml
+      # because it reads the asset tree, which lint.yml stubs.
+      - name: Check the wheelhouse matches the bundled Python
+        run: python3 scripts/check-wheelhouse-abi.py
+
       - name: Verify assets
         run: |
           echo "=== Assets ==="

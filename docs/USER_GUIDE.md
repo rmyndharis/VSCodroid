@@ -364,16 +364,9 @@ Extensions that use webview panels (such as theme configurators, documentation v
 
 ### Jupyter Notebooks
 
-The Jupyter extension (`ms-toolsai.jupyter`) installs from the Extensions view like any other. It reaches a notebook kernel through a messaging add-on it carries only in builds for desktop systems, so VSCodroid supplies an Android build of that add-on. With `ipykernel` installed in a Python virtual environment, open a `.ipynb` file, choose **Select Kernel**, then **Python Environments...**, and pick that environment: cells run in it.
+The Jupyter extension (`ms-toolsai.jupyter`) installs from the Extensions view like any other. It reaches a notebook kernel through a messaging add-on it carries only in builds for desktop systems, so VSCodroid supplies an Android build of that add-on.
 
-Installing `ipykernel` with pip does not complete yet. It requires `psutil`, which publishes no Android build, so pip tries to build it from source and stops with:
-
-```
-platform android is not supported
-ERROR: Failed to build 'psutil' when getting requirements to build wheel
-```
-
-That is the situation described in [Python Packages Written in C](#python-packages-written-in-c). The `psutil-android` package on PyPI does not get past it, because pip does not count it as `psutil`.
+Notebooks run in a Python virtual environment. Create one in the terminal with `python3 -m venv .venv`, open a `.ipynb` file, choose **Select Kernel**, then **Python Environments...**, and pick that environment. If it does not have `ipykernel` yet, the extension installs it when the first cell runs, which takes about half a minute and needs a network connection. `ipykernel` depends on `psutil`, which PyPI has no Android build of; pip takes it from the prebuilt packages described in [Python Packages Written in C](#python-packages-written-in-c).
 
 If the extension offers to install `jupyter` and `notebook`, decline: that is a Jupyter server, whose dependencies cannot be built here and whose commands Android will not run from the app's storage.
 
@@ -771,17 +764,40 @@ Packages that require C/C++ compilation (node-gyp) fail on VSCodroid because the
 
 ### Python Packages Written in C
 
-`pip` is bundled and installs anything written in pure Python. What it cannot
-install is a package with a compiled part, and for the same two reasons, in the
-order pip hits them.
+`pip` is bundled and installs anything written in pure Python. A package with a
+compiled part is different, for two reasons, in the order pip hits them.
 
-There is no wheel to download. This interpreter reports its platform as
+There is often no wheel to download. This interpreter reports its platform as
 `android-24-arm64_v8a`, which is what it is, and PyPI carries no Android wheels
-for the popular compiled packages: `pygame`, `numpy`, `matplotlib`, `Pillow` and
-`scipy` all publish Linux, macOS and Windows builds only. Pip then falls back to
-building from source, and there is no C compiler on the device, so that fails
-too. The error you see names the missing build tool rather than either of these,
-which is why it reads as something you could install your way out of.
+for most compiled packages. Pip then falls back to building from source, and
+there is no C compiler on the device, so that fails too. The error you see names
+the missing build tool rather than either of these, which is why it reads as
+something you could install your way out of.
+
+VSCodroid points pip at prebuilt Android builds of a few of them, so these
+install like any other package:
+
+- `numpy` 2.5.0
+- `pandas` 3.0.5
+- `pydantic-core` 2.41.5, which is what `pydantic` 2.12 needs. The newest
+  `pydantic` wants a later one, so install it as `pip install "pydantic<2.13"`.
+- `psutil` 7.2.2, which `ipykernel` needs for Jupyter notebooks
+
+Each is available at that version only. `lxml`, `pygame`, `matplotlib`, `Pillow`
+and `scipy` still cannot be installed.
+
+The setting lives in `~/.pip/pip.conf`, which VSCodroid rewrites on every launch.
+Put your own pip settings in `~/.config/pip/pip.conf` instead: pip reads it
+afterwards, and any key there overrides the one VSCodroid wrote. Two effects of
+VSCodroid's setting are worth knowing:
+
+- pip prefers the newest release of any package that has a ready-made build over
+  a newer one it would have to build from source, for every package and not only
+  the ones above. `pip install name==<version>` asks for a specific release.
+- pip reads the page listing those builds on every install, and without a
+  network it retries for a few seconds per package before carrying on. To switch
+  it off, for example when installing from local files, put `find-links =` with
+  nothing after it under `[global]` in `~/.config/pip/pip.conf`.
 
 `turtle` and `tkinter` are not included at all. Tk draws into a desktop window,
 and this app has no window to give it.

@@ -293,6 +293,100 @@ class BashrcAtomicityTest {
         assertTrue(written.contains("alias ll="), "the append lost what was already there")
     }
 
+    /**
+     * The pip block repeated the defect the npm block had already fixed, and
+     * this is what ends it.
+     *
+     * `pip()` was its own guard, so every device that has ever run a release
+     * carrying the pair matched it and no later launch could change a word. The
+     * block now carries the one line that says why a package with a compiled
+     * part cannot install here, and the devices that need that sentence are
+     * exactly the ones the old guard excluded.
+     *
+     * This is also the only channel that reaches a phone already in someone's
+     * hands: `createNpmWrappers` runs from the unconditional per-launch repair,
+     * not behind `isFirstRun`, so the file is reconciled on the next launch
+     * after an app update with no re-extraction.
+     */
+    @Test
+    fun `an install that already has the old pip wrappers still gets the current block`() {
+        bundleNpm()
+        bashrc.appendText(V1_3_0_PIP_BLOCK)
+
+        FirstRunSetup(context).createNpmWrappers()
+
+        val written = bashrc.readText()
+        assertTrue(
+            written.contains("__vscodroid_pip_note()"),
+            "an install with the older pip wrappers never receives a change to them, so the " +
+                "line explaining why a compiled package cannot install here reaches nobody",
+        )
+        assertTrue(
+            written.lastIndexOf("pip()") > written.indexOf("pip() { python3 -m pip"),
+            "the current pip definition does not come last, so the older one is what bash runs",
+        )
+        assertTrue(written.contains("alias ll="), "the append lost what was already there")
+    }
+
+    /** What v1.3.0 appended to `.bashrc`, byte for byte. */
+    private val V1_3_0_PIP_BLOCK = """
+
+# pip/pip3: shell functions. pip is installed as a library, not as a program:
+# its console script is a #! text file under filesDir, which SELinux refuses to
+# execute. The module form is the same pip and always has been.
+pip() { python3 -m pip "${'$'}@"; }
+pip3() { python3 -m pip "${'$'}@"; }
+"""
+
+    /**
+     * The shape a user customising v1.3.0's wrapper most naturally writes: their
+     * own definition below it, since bash takes the last one. The count of the
+     * app's blocks is what tells the two apart.
+     */
+    @Test
+    fun `a pip function the user added below the old wrapper is not overridden`() {
+        bundleNpm()
+        bashrc.appendText(V1_3_0_PIP_BLOCK + "pip() { python3 -m pip --user \"${'$'}@\"; }\n")
+
+        FirstRunSetup(context).createNpmWrappers()
+
+        assertFalse(bashrc.readText().contains("__vscodroid_pip_note()"), "the user's pip() was overridden")
+    }
+
+    /**
+     * The block this release writes has to stay replaceable by the next one, or
+     * the marker bought nothing. Its own `pip()` must not read as the user's.
+     */
+    @Test
+    fun `a later pip block still replaces the one this release wrote`() {
+        bundleNpm()
+        FirstRunSetup(context).createNpmWrappers()
+        // What a later release sees: this block, under a marker it no longer uses.
+        bashrc.writeText(bashrc.readText().replace("__vscodroid_pip_note()", "__vscodroid_pip_note_v1()"))
+
+        FirstRunSetup(context).createNpmWrappers()
+
+        assertTrue(bashrc.readText().contains("__vscodroid_pip_note()"), "the app's own block froze the next one out")
+    }
+
+    /**
+     * A `pip()` that is not one this app wrote is the user's. Before the app
+     * shipped a wrapper, `pip` was "command not found" and writing one was the
+     * obvious fix; appending the current block after it would replace it,
+     * because bash takes the last definition.
+     */
+    @Test
+    fun `a pip function the user wrote is not overridden`() {
+        bundleNpm()
+        bashrc.appendText("\npip() { python3 -m pip --user \"$@\"; }\n")
+
+        FirstRunSetup(context).createNpmWrappers()
+
+        val written = bashrc.readText()
+        assertFalse(written.contains("__vscodroid_pip_note()"), "the user's pip() was overridden")
+        assertTrue(written.contains("--user"), "the user's pip() was lost")
+    }
+
     /** Once it is there, a second launch must not append it again. */
     @Test
     fun `the block is not appended twice`() {

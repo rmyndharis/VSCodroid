@@ -1,7 +1,7 @@
 # VSCodroid Privacy Policy
 
 **Effective Date: February 13, 2026**
-**Last Updated: September 6, 2026**
+**Last Updated: September 14, 2026**
 
 ## Summary
 
@@ -89,6 +89,8 @@ VSCodroid does not collect any data during either process.
 
 When you run commands like `npm install` or `pip install` in the terminal, those package managers connect to their respective registries (npmjs.com, pypi.org, etc.) to download packages. This is standard developer tooling behavior and is entirely under your control.
 
+`pip` is also pointed at a page this project publishes on GitHub Pages, one per Python version (for the Python this app bundles, https://rmyndharis.github.io/VSCodroid/wheels/3.14/wheels.html), which lists prebuilt Android builds of a few packages that PyPI has none of, such as `numpy` and `psutil`. pip reads that page when it looks for a package to install, including when the Jupyter extension installs `ipykernel`, and downloads a listed package from this project's GitHub Releases. Nothing from your files or code is sent. Like every request pip makes, including those to pypi.org, GitHub receives your device's IP address and pip's User-Agent, which names the Python version, the operating system and kernel release, and the processor architecture; GitHub's privacy policy applies to them. How to turn this off is in the user guide, under Python Packages Written in C.
+
 ### SSH Connections (User-Initiated)
 
 If you use the bundled SSH client to connect to remote servers, those connections are initiated by you and go directly to the server you specify. VSCodroid does not proxy, monitor, or log SSH connections.
@@ -141,7 +143,7 @@ VSCodroid itself includes no third-party analytics, advertising, or tracking SDK
 
 - **GitHub Copilot Chat**: Bundled with the app and configured as the editor's chat provider. It has no account and offers you no chat until you sign in to GitHub, but it is not dormant before that: it starts with the editor and its model backend runs while you are signed out. Whether that backend sends anything before you sign in is not something we have established. Once you have signed in and used it, what you ask and the code it attaches as context go to GitHub, under GitHub's terms and privacy statement. It can be disabled from the Extensions view, but not uninstalled, because it ships as a built-in.
 - **Google Play Asset Delivery**: Used solely for downloading optional language toolchain packs on Play Store installs. This is a Google Play Store feature and is governed by Google's privacy policy.
-- **GitHub Releases**: Used solely for downloading those same toolchain packs on installs that did not come from the Play Store. Governed by GitHub's privacy policy.
+- **GitHub Releases and GitHub Pages**: Used for downloading those same toolchain packs on installs that did not come from the Play Store, and for the prebuilt Python packages `pip` is pointed at (see **Package Installation**). Governed by GitHub's privacy policy.
 
 Extensions you install from Open VSX are third-party software. Each extension may have its own privacy practices. We recommend reviewing extension descriptions and privacy information before installing them.
 

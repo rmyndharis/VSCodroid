@@ -1667,8 +1667,15 @@ class FirstRunSetup(
             // Its own guard, for the reason the claude block states: every
             // install that predates this already carries npm() and claude(), so
             // sharing either guard would skip pip on exactly the devices that
-            // need it added.
-            if (!content.contains("pip()")) {
+            // need it added. [pipBlockMarker] and not `pip()`, for the reason
+            // [npmBlockMarker] is not `npm()`: this block had frozen once
+            // already. Every block this app has written opens with
+            // [PIP_BLOCK_HEADER] and defines one `pip()`, so a `pip()` beyond
+            // that count is the user's, and appending after it would replace
+            // it, since bash takes the last definition.
+            val ourPipBlocks = PIP_BLOCK_HEADER.toRegex(RegexOption.LITERAL).findAll(content).count()
+            val theirOwnPip = PIP_DEFINITION.findAll(content).count() > ourPipBlocks
+            if (!content.contains(pipBlockMarker) && !theirOwnPip) {
                 additions.append(pipBashFunctions())
                 added += "pip/pip3"
             }
@@ -2277,12 +2284,149 @@ __vscodroid_symlink_note() {
      */
     private fun pipBashFunctions(): String = """
 
-# pip/pip3: shell functions. pip is installed as a library, not as a program:
+$PIP_BLOCK_HEADER pip is installed as a library, not as a program:
 # its console script is a #! text file under filesDir, which SELinux refuses to
 # execute. The module form is the same pip and always has been.
-pip() { python3 -m pip "${'$'}@"; }
-pip3() { python3 -m pip "${'$'}@"; }
+pip() {
+    python3 -m pip "${'$'}@"
+    # Captured before anything else runs, and handed back below, so wrapping the
+    # command cannot change what a script or a task sees.
+    local __pip_status=${'$'}?
+    [ ${'$'}__pip_status -eq 0 ] || __vscodroid_pip_note "${'$'}@"
+    return ${'$'}__pip_status
+}
+pip3() { pip "${'$'}@"; }
+
+# A short note on the cause when an install fails for the reason this device
+# cannot fix.
+# There is no compiler here and none can run: SELinux refuses execve on anything
+# under filesDir, which is where a build would put its tools, so `pip install`
+# of a package with a compiled part walks to cmake and dies on EACCES with an
+# error that names cmake and not the device.
+#
+# Deliberately hedged rather than probed. npm's note asks the directory whether
+# it can hold a symbolic link before speaking, and there is no equally cheap
+# question here: pip fails for a typo, a network drop and a missing build alike,
+# and the only honest discriminator is the text the user just read. So this says
+# "if that was a build" and stays true either way. Narrowed to `install`, so a
+# mistyped `pip list` says nothing, and once per shell, because it is a property
+# of the device rather than of the command. On stderr, because BASH_ENV is read
+# by the shell behind every ${'$'}(...) and stdout there belongs to the substitution.
+#
+# "Once per shell" has the ceiling the npm note has: a pipeline runs pip in a
+# subshell, so the flag is set where it cannot be seen again and a session that
+# only ever pipes pip can be told twice. Measured: two plain `pip install` runs
+# print it once, two piped runs print it once each. Not worth a state file.
+__vscodroid_pip_note() {
+    # The subcommand is the first word that is not an option: `pip -q install x`.
+    local __arg
+    for __arg in "${'$'}@"; do
+        case "${'$'}__arg" in
+            -*) ;;
+            install) break ;;
+            *) return 0 ;;
+        esac
+    done
+    [ "${'$'}__arg" = install ] || return 0
+    [ -n "${'$'}{__VSCODROID_PIP_NOTED-}" ] && return 0
+    __VSCODROID_PIP_NOTED=1
+    echo "vscodroid: if that failed while building a package, this device has no C" >&2
+    echo "vscodroid: compiler and cannot run one, so a package with no ready-made" >&2
+    echo "vscodroid: Android build cannot be installed. Pure Python ones can." >&2
+    echo "vscodroid: https://rmyndharis.github.io/VSCodroid/guide.html#python-packages-written-in-c" >&2
+}
 """
+
+    /**
+     * Points pip at the wheels this project mirrors, and at nothing else.
+     *
+     * The device's interpreter accepts `cp314-cp314-android_24_arm64_v8a` and
+     * PyPI publishes almost nothing for it, so `pip install pandas` falls back
+     * to the sdist and dies at cmake: there is no compiler here and SELinux
+     * refuses to execve one from filesDir. The wheels exist, prebuilt, and
+     * `wheelhouse.json` names the ones we mirror; this is the line that makes
+     * pip look at them.
+     *
+     * `prefer-binary` earns its place even when the mirror is empty: it makes
+     * the resolver stop at the newest version that HAS a usable wheel rather
+     * than chasing the newest version into an sdist and the same wall. It is
+     * deliberately not `--only-binary=:all:`, which is the tempting blunt
+     * version and is wrong: a pure-Python sdist builds fine here, because that
+     * build runs python and python lives in nativeLibraryDir where execve is
+     * allowed. The cost to accept: for a package whose newest release is
+     * sdist-only, a user silently gets an older version, and `pip install
+     * pkg==<version>` is the answer.
+     *
+     * Written to pip's legacy per-user file, `~/.pip/pip.conf`, and not to
+     * `~/.config/pip/pip.conf`. pip reads both and lets the second override the
+     * first key by key, and `pip config set` writes the second, so anything a
+     * user configures wins over this without the app ever editing their file.
+     * Merging keys into that file instead would have to survive a user's own
+     * `[global]` header, which pip refuses to see twice, and would replace a
+     * `find-links` they set on every launch. The legacy path is also
+     * `expanduser("~")` rather than a platformdirs lookup, so it is the same
+     * file whatever environment pip runs in.
+     *
+     * Owned only while it carries [PIP_CONF_HEADER] or is blank: a
+     * `~/.pip/pip.conf` a user wrote themselves, or one that cannot be read, is
+     * left alone, and pip then simply reads theirs. Rewritten on every launch
+     * otherwise, so a changed URL reaches a device already in someone's hands
+     * without re-extraction. An APK with no Python writes nothing.
+     */
+    fun ensurePipConfig() {
+        val runtime = pythonRuntimeInAssets() ?: return
+        val minor = runtime.removePrefix("libpython").removeSuffix(".so")
+        val conf = File(context.filesDir, "home/.pip/pip.conf")
+        val content = pipConfigContent(minor)
+        val existing = if (conf.exists()) {
+            // A file that cannot be read may be the user's, and is left alone.
+            runCatching { conf.readText() }.getOrElse {
+                Logger.w(tag, "Could not read ${conf.path}; leaving it alone")
+                return
+            }
+        } else {
+            null
+        }
+        if (existing == content) return
+        // Blank is ours: it is what a first write cut short by power loss leaves,
+        // as zero bytes or, on f2fs, as NULs.
+        val blank = existing != null && existing.all { it == '\u0000' || it.isWhitespace() }
+        if (existing != null && !blank && !existing.startsWith(PIP_CONF_HEADER)) {
+            Logger.i(tag, "Left ${conf.path} alone: it was not written by this app")
+            return
+        }
+        conf.parentFile?.mkdirs()
+        if (writeAtomically(conf) { it.write(content.toByteArray()) }) {
+            Logger.i(tag, "Pointed pip at the wheelhouse")
+        } else {
+            Logger.w(tag, "Could not write pip.conf; pip keeps whatever it had")
+        }
+    }
+
+    /**
+     * The marker [createNpmWrappers] guards the pip block on.
+     *
+     * `pip()` was the guard and could not stay one, for the reason
+     * [npmBlockMarker] records: every install that already has the pair matches
+     * it, so the block froze at whatever the release which first wrote the file
+     * happened to say, and no later launch could ever change it. Keyed on the
+     * newest thing in the block instead, which leaves a `.bashrc` written by an
+     * older release carrying two `pip` definitions. bash takes the last one, so
+     * the new one runs.
+     *
+     * This is the only channel that reaches a device already in someone's hands:
+     * [createNpmWrappers] runs from the unconditional per-launch repair block
+     * rather than behind [isFirstRun], so the file is reconciled on the next
+     * launch after an app update, with no re-extraction and nothing moving in
+     * the storage pre-flight.
+     */
+    private val pipBlockMarker = "__vscodroid_pip_note()"
+
+    /** The comment every pip block this app has written opens with, v1.3.0's included. */
+    private val PIP_BLOCK_HEADER = "# pip/pip3: shell functions."
+
+    /** A `pip()` definition at the start of a line, whoever wrote it. */
+    private val PIP_DEFINITION = Regex("""(?m)^\s*pip\(\)""")
 
     /**
      * `claude` in the terminal, which the extension's own login screen suggests.
@@ -5503,3 +5647,39 @@ private fun rootBraceIndex(content: String): Int {
     }
     return -1
 }
+
+/**
+ * The page pip is pointed at for prebuilt Android wheels, one per Python minor.
+ *
+ * A GitHub Pages URL and deliberately not a release asset: GitHub serves every
+ * release asset as `application/octet-stream`, and pip accepts only `text/html`
+ * and the two Simple-API types, skipping anything else with a warning and
+ * carrying on. The install would then succeed from PyPI, without the mirror,
+ * and nothing would look wrong. The wheels themselves ARE release assets; this
+ * page links to them.
+ *
+ * Keyed by the interpreter's minor version, because one page serves every APK
+ * in circulation: when the bundled Python moves from 3.14 to 3.15, the 3.15
+ * page is added beside the 3.14 one, and a device that has not updated keeps
+ * reading wheels its interpreter can install.
+ *
+ * The release tag is baked into the links on that page rather than into this
+ * URL, so a new wheelhouse release is published by regenerating the page, not
+ * by shipping a new APK. That release is a prerelease, and must stay one:
+ * `ToolchainRegistry` resolves `releases/latest` for the Ruby and Java ZIPs,
+ * and GitHub moves `latest` onto the newest non-prerelease whenever the release
+ * holding it is withdrawn, whatever `make_latest` said when it was created.
+ */
+internal fun wheelhouseUrl(pythonMinor: String) =
+    "https://rmyndharis.github.io/VSCodroid/wheels/$pythonMinor/wheels.html"
+
+/** First line of the pip.conf this app owns; a file without it is the user's. */
+internal const val PIP_CONF_HEADER = "# Written by VSCodroid on every launch."
+
+internal fun pipConfigContent(pythonMinor: String): String = """$PIP_CONF_HEADER
+# Your own settings belong in ~/.config/pip/pip.conf, which pip reads after this
+# file and which overrides any key set here.
+[global]
+find-links = ${wheelhouseUrl(pythonMinor)}
+prefer-binary = true
+"""

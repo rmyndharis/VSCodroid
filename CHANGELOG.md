@@ -11,7 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Opening a Python file offers to install Black Formatter. It is the formatter that works without installing anything with pip, and no marketplace search returns it, so it could not be found by looking.
 - **VSCodroid: Toggle Extra Key Row**, in the Command Palette and the remote indicator menu, hides the extra key row until it is run again, for typing on a hardware keyboard.
-- The Jupyter extension runs notebook cells on a Python environment that has `ipykernel`, instead of offering a Jupyter server install that cannot succeed; installing `ipykernel` with pip still stops at `psutil`.
+- Jupyter notebooks run. The Jupyter extension reaches a kernel in a Python virtual environment and installs `ipykernel` into it, instead of offering a Jupyter server install that cannot succeed.
+- `pip install` of `numpy`, `pandas`, `pydantic-core` and `psutil` succeeds, from prebuilt Android builds pip is now pointed at. `pydantic` installs as `pydantic<2.13`.
+- pip prefers a package's newest release with a ready-made build over a newer one it would have to compile.
+- A `pip install` that fails in the terminal ends with a short note that packages needing a compiler cannot be built on the device.
 - Building from source needs CMake, and `./scripts/setup.sh` reports it missing before the downloads. `REQUIRE_NDK=0` skips that check too.
 
 ### Fixed
