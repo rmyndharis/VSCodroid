@@ -1127,7 +1127,7 @@ val verifyBundledBinaries = tasks.register<Exec>("verifyBundledBinaries") {
 val requiredJniLibs = listOf(
     "libbash.so",
     // Both halves of what starts the Claude Code CLI. Missing, the extension
-    // spawns a path that is not there; and a launcher whose LD_PRELOAD names a
+    // spawns a path that is not there; and a launcher whose --preload names a
     // shim that is not there fails in musl's loader before the CLI runs at all.
     "libclaude-launch.so",
     "libexec-trampoline.so",

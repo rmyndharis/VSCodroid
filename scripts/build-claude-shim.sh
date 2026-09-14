@@ -11,8 +11,8 @@ set -euo pipefail
 # from:
 #
 #   libseccomp-shim.so   preloaded into the CLI; answers the refused syscall
-#   libclaude-launch.so  what claudeCode.claudeProcessWrapper names; puts the
-#                        shim in LD_PRELOAD and execs musl's loader
+#   libclaude-launch.so  what claudeCode.claudeProcessWrapper names; execs musl's
+#                        loader with --preload=<shim>, so no child inherits it
 #
 # The wall being worked around: an app may make only the system calls bionic
 # exposes in SYSCALLS.TXT, and epoll_pwait2 (441) is there from android15 and

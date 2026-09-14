@@ -533,15 +533,16 @@ object Environment {
      * here directly. It cannot be any more: the CLI's runtime calls
      * `epoll_pwait2`, which bionic exposes only from android15, and on android13
      * and android14 an app making it is killed rather than refused. The shim
-     * that answers that call has to be in `LD_PRELOAD` before the loader starts
-     * the binary, and a setting holds a path rather than an environment, so a
-     * launcher sits in between and sets it. See `scripts/claude-launch.c`.
+     * that answers that call has to be loaded before the binary runs, and a
+     * setting holds a path rather than a loader option, so a launcher sits in
+     * between and passes it as the loader's `--preload=`. See
+     * `scripts/claude-launch.c`.
      *
-     * Deliberately not set in the server's own environment. Every child would
-     * inherit it, and most of them are Bionic rather than musl; the shim
+     * Deliberately never in LD_PRELOAD, here or in the launcher. The shim
      * interposes `sigaction` against musl's structure layout, which is not
-     * Bionic's, so a Node process that picked it up would translate signal
-     * dispositions wrongly. It belongs to this one process tree.
+     * Bionic's, and every child inherits an environment variable: the CLI's own
+     * bash, node and git would load it and abort with stack corruption, which
+     * was measured. It belongs to the CLI's process alone.
      */
     fun getClaudeLauncherPath(context: Context): String =
         "${context.applicationInfo.nativeLibraryDir}/libclaude-launch.so"

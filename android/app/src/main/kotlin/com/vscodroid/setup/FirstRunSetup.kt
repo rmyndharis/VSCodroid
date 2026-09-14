@@ -2456,8 +2456,8 @@ __vscodroid_pip_note() {
     private fun claudeBashFunction(): String = """
 
 # claude: the CLI the Claude Code extension brings with it. Started through
-# libclaude-launch.so, which puts the seccomp shim into LD_PRELOAD and then execs
-# musl's loader: the CLI is a musl binary under filesDir, which SELinux will not
+# libclaude-launch.so, which execs musl's loader with the seccomp shim as its
+# --preload option: the CLI is a musl binary under filesDir, which SELinux will not
 # execve but will let a loader map, and its runtime calls a syscall Android does
 # not allow before android15 (see the message below). Both are found on PATH,
 # which already includes nativeLibraryDir.

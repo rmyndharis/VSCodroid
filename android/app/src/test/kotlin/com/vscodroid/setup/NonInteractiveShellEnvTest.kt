@@ -128,8 +128,8 @@ class NonInteractiveShellEnvTest {
      * CLI four months older behaves identically, so it follows the platform and
      * not the extension version.
      *
-     * `libclaude-launch.so` is what answers it, by putting `libseccomp-shim.so`
-     * into LD_PRELOAD before exec'ing musl's loader. Calling that loader directly
+     * `libclaude-launch.so` is what answers it, by exec'ing musl's loader with
+     * `--preload=` naming `libseccomp-shim.so`. Calling that loader directly
      * here, which is what this line used to do and is the obvious shape, starts
      * the CLI without the shim and puts the kill straight back. Pinned because
      * nothing else in a terminal run would say so: the failure surfaces as bash's

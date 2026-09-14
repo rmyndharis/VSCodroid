@@ -3,16 +3,21 @@
 // `claudeCode.claudeProcessWrapper` names one executable and the extension hands
 // it the CLI as the first argument, which is musl's loader's own calling
 // convention -- that is why the loader could be named there directly. It cannot
-// be named directly any more, because the CLI needs `LD_PRELOAD` pointing at
-// libseccomp-shim.so before the loader starts it, and a setting holds a path
-// rather than an environment. So this sits in between: it puts the shim in the
-// environment and execs the loader with the arguments it was given.
+// be named directly any more, because the CLI needs libseccomp-shim.so loaded
+// before its own code runs, and a setting holds a path rather than a loader
+// option. So this sits in between and execs the loader as
+// `libldmusl.so --preload=<shim> <cli> <args...>`.
 //
-// Why not set LD_PRELOAD once, in the server's environment: every child of the
-// server would inherit it, and most of them are Bionic rather than musl. The
-// shim interposes `sigaction` against musl's structure layout, which is not
-// Bionic's, so a Node process that picked it up would translate signal
-// dispositions wrongly. It belongs to this one process tree and no other.
+// On the loader's command line and never in LD_PRELOAD. The shim interposes
+// `sigaction` against musl's structure layout, which is not Bionic's, and an
+// environment variable is inherited by every process the CLI starts: bash for
+// its Bash tool, node and npx for MCP servers, git. Bionic's linker honours
+// LD_PRELOAD too, so each of those loaded the shim and wrote a 152-byte musl
+// structure into a 32-byte Bionic one. Measured on an API 33 emulator: a Bionic
+// bash and node started under a launcher-started musl process both aborted with
+// "stack corruption detected", and started the same way under `--preload=`
+// both ran, with the shim still mapped in the musl process. The option loads it
+// into this one process and nothing below it.
 //
 // Everything is resolved from this program's own directory, which is
 // `nativeLibraryDir`: the loader and the shim are installed beside it, and that
@@ -57,31 +62,31 @@ int main(int argc, char **argv) {
         return 1;
     }
 
-    // Appended rather than assigned, so a preload the caller set for its own
-    // reasons is kept. The shim goes last; order does not matter to the loader,
-    // and keeping the caller's first leaves their intent visible in the value.
+    // One argument, `--preload=<list>`, so the path is never read as the program
+    // to run. The option replaces LD_PRELOAD in musl's loader rather than adding
+    // to it, so a preload the caller set is carried into the list, ahead of the
+    // shim, and the variable itself is left in the environment as it arrived.
     const char *existing = getenv("LD_PRELOAD");
     char preload[PATH_MAX * 2];
-    if (existing && *existing) {
-        snprintf(preload, sizeof(preload), "%s:%s", existing, shim);
-    } else {
-        snprintf(preload, sizeof(preload), "%s", shim);
-    }
-    if (setenv("LD_PRELOAD", preload, 1) != 0) {
-        fprintf(stderr, "claude-launch: cannot set LD_PRELOAD: %s\n", strerror(errno));
+    int len = existing && *existing
+        ? snprintf(preload, sizeof(preload), "--preload=%s:%s", existing, shim)
+        : snprintf(preload, sizeof(preload), "--preload=%s", shim);
+    if (len < 0 || len >= (int)sizeof(preload)) {
+        fprintf(stderr, "claude-launch: preload list too long\n");
         return 1;
     }
 
-    // loader, then everything this was called with from argv[1] on, which is the
-    // CLI path followed by its own arguments.
-    char **next = calloc((size_t)argc + 1, sizeof(char *));
+    // loader, the preload option, then everything this was called with from
+    // argv[1] on, which is the CLI path followed by its own arguments.
+    char **next = calloc((size_t)argc + 2, sizeof(char *));
     if (!next) {
         fprintf(stderr, "claude-launch: out of memory\n");
         return 1;
     }
     next[0] = loader;
-    for (int i = 1; i < argc; i++) next[i] = argv[i];
-    next[argc] = NULL;
+    next[1] = preload;
+    for (int i = 1; i < argc; i++) next[i + 1] = argv[i];
+    next[argc + 1] = NULL;
 
     execv(loader, next);
     fprintf(stderr, "claude-launch: cannot run %s: %s\n", loader, strerror(errno));

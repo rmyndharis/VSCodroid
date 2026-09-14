@@ -29,8 +29,8 @@ import java.io.File
  * so on those releases it died before doing anything, and the extension showed
  * "Claude Code process terminated by signal SIGSYS" with nothing else to go on.
  *
- * `libclaude-launch.so` is what answers that: it puts `libseccomp-shim.so` into
- * LD_PRELOAD and then execs musl's loader, and the shim emulates the one refused
+ * `libclaude-launch.so` is what answers that: it execs musl's loader with
+ * `--preload=` naming `libseccomp-shim.so`, and the shim emulates the one refused
  * call with `epoll_pwait`. Naming musl's loader here instead is the obvious
  * shape, is what this key held before, and starts the same CLI with no shim at
  * all -- which is the failure above, back in full, on every device below Android
