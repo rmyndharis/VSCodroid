@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Interrupting a Jupyter kernel also interrupts the processes it started, including ones an earlier cell left running, and restarting or closing the kernel ends them instead of leaving them behind.
 - Lists no longer overlap their own rows. Every row in the explorer, the search results, the command palette and a settings dropdown was drawn 14px taller than the space it was given, so each one covered the top of the next: option labels in a dropdown stacked on each other, and tapping the lower edge of a filename opened the file below it.
 - Editor tabs and status bar entries fit their strips again. Both were drawn taller than the area holding them, by 5px and 10px.
 - A long press opens a menu that stays open while the keyboard is up. The menu took focus from the text, the keyboard went down, and the workbench answered the resize by closing the menu about 60ms after it appeared, so it read as flickering or dead. Esc on the key row still closes it.

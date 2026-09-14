@@ -176,7 +176,7 @@ VSCodroid/
 │   │   │   │   ├── vscode-reh/           # VS Code Server (Remote Extension Host), downloaded
 │   │   │   │   ├── server.js             # Node.js server bootstrap
 │   │   │   │   ├── process-monitor.js    # Phantom process monitor
-│   │   │   │   ├── platform-fix.js       # Selective platform override for npm
+│   │   │   │   ├── platform-fix.js       # Selective platform override for npm and the Jupyter extension
 │   │   │   │   ├── dns-proxy.js          # Loopback HTTP/CONNECT proxy giving musl DNS;
 │   │   │   │   │                         #   `--require`d into the editor server, not the bootstrap
 │   │   │   │   ├── usr/                  # Shared libraries, Python stdlib, npm; downloaded
@@ -320,7 +320,7 @@ checkouts differed.
 | `build-wheelhouse.py` | Run by hand when the wheelhouse changes, never by CI. Fetches every wheel `wheelhouse.json` pins and checks its sha256, that it carries a licence file, every shared object through `verify-android-elf.py`, and PyPI's yank status. The one Termux `.deb` entry (psutil) is checked against Termux's signed index and repacked into a wheel. Writes the find-links page for the manifest's Python minor. `docs/10-RELEASE_PLAN.md` section 8.3 is the publishing order | `.build/wheelhouse/*.whl`, `docs/site/wheels/<minor>/wheels.html` |
 | `test-dns-proxy.js` | Exercises the loopback DNS proxy's Basic-auth contract. Loopback on Android is not isolated per app, so that token is what stands between the proxy and every other app on the device | exit status |
 | `test-process-monitor.js` | Points a scan at a fixture `/proc` and checks the snapshot: that the language servers that ship are recognised, that an unrelated user process carrying a server's name in its path is not, and that the count includes the process the monitor runs inside | exit status |
-| `test-platform-fix.js` | Runs the platform override under a faked `process.platform` and checks it engages for node-gyp and for nothing that merely mentions it in a path or an argument | exit status |
+| `test-platform-fix.js` | Runs the platform override under a faked `process.platform` and checks it engages for node-gyp and for nothing that merely mentions it in a path or an argument, and that only the Jupyter extension's bundle, including inside a worker, is told `os.platform()` is linux | exit status |
 | `test-server-bootstrap.js` | Boots the server bootstrap against a fixture tree and checks the `product.json` rewrite: overrides applied, a truncated file named rather than thrown, an unwritable directory leaving the existing file intact | exit status |
 | `test-xdg-open.js` | Runs the browser opener against a stand-in for the editor's CLI socket and checks it sends the `openExternal` message that handler actually reads, and that it refuses an address the handler would have skipped in silence while still answering 200 | exit status |
 | `test-process-monitor-extension.js` | Drives the process monitor extension against two snapshots that differ in every count and checks its notifications read the same either way. A notification cannot be edited once open, so any number baked into one freezes while the status bar beside it keeps moving | exit status |

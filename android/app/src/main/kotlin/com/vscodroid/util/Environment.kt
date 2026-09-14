@@ -80,7 +80,8 @@ object Environment {
 
         // Preload script that selectively fixes process.platform ("android" → "linux")
         // for npm/node-gyp only. Build tools like Rollup/esbuild see real "android" platform.
-        // Loaded in all Node.js processes via NODE_OPTIONS but only activates with opt-in env var.
+        // Loaded in Node.js processes via NODE_OPTIONS but only activates with opt-in env var.
+        // The extension host does not see NODE_OPTIONS; server.js passes it in execArgv.
         val platformFixPath = "$filesDir/server/platform-fix.js"
         val nodeOptions = "--require=$platformFixPath"
 
