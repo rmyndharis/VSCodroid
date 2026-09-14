@@ -531,7 +531,8 @@ class SplashActivity : AppCompatActivity() {
         //
         // Here rather than in onCreate, and the difference is minutes on the one
         // launch that matters. This copies up to 155 MB into the same `usr/` the
-        // first run unpacks 805 MB into, and the two space pre-flights cannot see
+        // first run unpacks the asset tree into (BuildConfig.EXTRACTED_ASSET_BYTES,
+        // which moves with every pin), and the two space pre-flights cannot see
         // each other: setup measures usableSpace before extracting, the install
         // measures it before copying, and neither reserves for the other, so both
         // can pass and one then meets ENOSPC. The extraction survives that, it
