@@ -1674,7 +1674,8 @@ class FirstRunSetup(
             // that count is the user's, and appending after it would replace
             // it, since bash takes the last definition.
             val ourPipBlocks = PIP_BLOCK_HEADER.toRegex(RegexOption.LITERAL).findAll(content).count()
-            val theirOwnPip = PIP_DEFINITION.findAll(content).count() > ourPipBlocks
+            val theirOwnPip = PIP_DEFINITION.findAll(content).count() > ourPipBlocks ||
+                PIP3_DEFINITION.findAll(content).count() > ourPipBlocks
             if (!content.contains(pipBlockMarker) && !theirOwnPip) {
                 additions.append(pipBashFunctions())
                 added += "pip/pip3"
@@ -2441,8 +2442,16 @@ __vscodroid_pip_note() {
     /** The comment every pip block this app has written opens with, v1.3.0's included. */
     private val PIP_BLOCK_HEADER = "# pip/pip3: shell functions."
 
-    /** A `pip()` definition at the start of a line, whoever wrote it. */
-    private val PIP_DEFINITION = Regex("""(?m)^\s*pip\(\)""")
+    /**
+     * A `pip` definition at the start of a line, whoever wrote it, in every spelling
+     * bash accepts: `pip()`, `pip ()`, `function pip {` and `function pip()`. Only
+     * `pip()` was matched, so a v1.3.0 user's `function pip { ... }` below the old
+     * block counted as nothing and the new block was appended after it, replacing it.
+     */
+    private val PIP_DEFINITION = Regex("""(?m)^\s*(?:function\s+pip(?=[\s({]|$)|pip\s*\(\s*\))""")
+
+    /** The same for `pip3`, which every pip block this app writes also defines. */
+    private val PIP3_DEFINITION = Regex("""(?m)^\s*(?:function\s+pip3(?=[\s({]|$)|pip3\s*\(\s*\))""")
 
     /**
      * `claude` in the terminal, which the extension's own login screen suggests.

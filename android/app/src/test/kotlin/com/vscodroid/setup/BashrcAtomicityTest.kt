@@ -354,6 +354,31 @@ pip3() { python3 -m pip "${'$'}@"; }
     }
 
     /**
+     * The other spellings bash accepts for the same definition, and a `pip3` of the
+     * user's, which the new block would replace just the same.
+     */
+    @Test
+    fun `a pip function the user spelled another way is not overridden`() {
+        listOf(
+            "function pip { python3 -m pip --user \"${'$'}@\"; }",
+            "pip () { python3 -m pip --user \"${'$'}@\"; }",
+            "function pip() { python3 -m pip --user \"${'$'}@\"; }",
+            "pip3() { python3 -m pip --user \"${'$'}@\"; }",
+        ).forEach { definition ->
+            bashrc.delete()
+            bundleNpm()
+            bashrc.appendText(V1_3_0_PIP_BLOCK + definition + "\n")
+
+            FirstRunSetup(context).createNpmWrappers()
+
+            assertFalse(
+                bashrc.readText().contains("__vscodroid_pip_note()"),
+                "the user's `$definition` was overridden",
+            )
+        }
+    }
+
+    /**
      * The block this release writes has to stay replaceable by the next one, or
      * the marker bought nothing. Its own `pip()` must not read as the user's.
      */
