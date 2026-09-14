@@ -67,7 +67,7 @@ What that leaves, none of it tried here:
   never a serious option, and it is the only thing these runners can offer.
 
 One item from the old estimate is worth keeping, because it stays true and is
-cheap: `build.yml`'s asset cache key is `assets-${{ hashFiles(...) }}` with no
+cheap: `build.yml`'s asset cache key is `assets-${{ env.NDK_VERSION }}-${{ hashFiles(...) }}` with no
 `runner.os` in it, so any future non-Linux job would restore a tree built on
 Linux and save its own forward under the same key. Verified by reading the
 workflow. Another item from that estimate was wrong and is worth recording as
