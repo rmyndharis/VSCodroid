@@ -404,6 +404,18 @@ class ExtraKeyRow @JvmOverloads constructor(
      * as well as on the row. Writing `visibility` here would skip both, and the
      * next letter typed on the soft keyboard would go out as a chord.
      */
+    /**
+     * Whether the soft keyboard was up at the last inset dispatch, or null before
+     * the first. The page reads it: the touch menu script keeps focus in the editor
+     * only while the keyboard is up, because that is when moving it resizes the
+     * window.
+     */
+    var imeVisible: Boolean? = null
+        private set
+
+    /** Called on the main thread when [imeVisible] changes. */
+    var onImeVisibilityChanged: ((Boolean) -> Unit)? = null
+
     var hiddenByUser = false
         set(value) {
             if (field == value) return
@@ -449,6 +461,10 @@ class ExtraKeyRow @JvmOverloads constructor(
                 suppressedForHeight = false
             }
             val showRow = imeVisible && !suppressedForHeight && !hiddenByUser
+            if (this.imeVisible != imeVisible) {
+                this.imeVisible = imeVisible
+                onImeVisibilityChanged?.invoke(imeVisible)
+            }
 
             visibility = if (showRow) View.VISIBLE else View.GONE
             // Standing down for height leaves through the same door the keyboard
