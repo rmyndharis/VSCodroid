@@ -854,7 +854,7 @@ python3 -m cowsay -t hi
 ```
 
 A command installed inside a virtual environment is the exception: it does not
-start at all, and reopening VSCodroid does not change that. pip writes it into
+start at all, and switching away and back does not change that. pip writes it into
 the environment's own `bin` directory, and VSCodroid fills its table only from
 `usr/bin`, where pip puts a command outside a virtual environment. With the
 environment active, run the module instead, for example `python -m pytest`.

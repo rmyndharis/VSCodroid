@@ -43,7 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The editor keeps a usable height in landscape with the keyboard up. The extra key row took the last of the space the keyboard left, so the file being renamed and the line being typed were both off screen.
 - An extension that opens a preview in your browser now opens one. Live Server and everything like it reported "Could not open the default browser" and left the address to be copied by hand.
 - Commands Claude Code runs start. Every `bash` and `node` process it launched aborted with "stack corruption detected", on every Android version.
-- A command installed with `pip` runs. `black`, `pytest`, `ruff`, `httpie` and anything else that brings a command with it installed successfully and then refused to start, because Android will not run a script out of the app's own storage. A command installed while the editor is open becomes available after switching away and back, in a new terminal.
+- A command `pip` installs outside a virtual environment runs, such as `black`, `pytest` or `httpie`. It installed and then refused to start. One installed while the editor is open works after switching away and back, in a new terminal.
 - A command installed with `gem install` runs, the same way. It installed and was then not found.
 
 ## [1.3.0] - 2026-09-06
