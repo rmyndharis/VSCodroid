@@ -27,7 +27,8 @@ UNRESOLVED `usr/bin/python3`, so the directory venv derives already has
 is a symlink to, `<nativeLibraryDir>/libpython.so`, and the derived directory is
 the native library directory instead, which holds no standard library. That
 second shape is what a `.so`-path invocation and `/proc/self/exe` fallbacks
-produce, and it is not the one a person hits.
+produce. The exec table starts pip-installed commands through the link rather
+than the `.so` for that reason, so it is not the one a person hits.
 
 The one a person hits is a venv created from inside an active venv.
 `sys._base_executable` is then the outer environment's own `bin`, and the

@@ -3068,6 +3068,15 @@ class ToolchainManager(private val context: Context) {
      * this can help, and handing it to Python would turn a command that does not
      * start into one that starts and does the wrong thing.
      *
+     * The interpreter named is the `usr/bin/python3` link, never the `.so` it points
+     * at. linker64 hands Python the path it was given as argv[0], and Python keeps
+     * that as `sys.executable`. Measured on an API 33 emulator: given the `.so`,
+     * `sys.executable` is a path under `nativeLibraryDir`, which moves on every
+     * update, so an environment `virtualenv` or `poetry` builds and a kernelspec
+     * `ipython kernel install` writes stop starting after the next one. Given the
+     * link, it is the same `usr/bin/python3` a terminal reports, and
+     * [FirstRunSetup.setupToolSymlinks] repoints that on every launch.
+     *
      * Rows already present win, so a toolchain's own command and the app's own
      * `xdg-open` keep their meaning.
      *
@@ -3079,7 +3088,7 @@ class ToolchainManager(private val context: Context) {
     private fun addPipInstalledScriptRows(rows: LinkedHashMap<String, String>) {
         val binDir = File(context.filesDir, "usr/bin")
         val names = binDir.list() ?: return
-        val interpreter = "${context.applicationInfo.nativeLibraryDir}/libpython.so"
+        val interpreter = File(binDir, "python3").absolutePath
         if (!File(interpreter).exists()) return
 
         var added = 0

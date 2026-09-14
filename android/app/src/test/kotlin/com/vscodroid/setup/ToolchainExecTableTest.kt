@@ -437,8 +437,19 @@ class ToolchainExecTableTest {
         )
     }
 
-    /** A console script pip has written, and the two names beside it that are not. */
-    private fun pipBin() = File(filesDir, "usr/bin").apply { mkdirs() }
+    /**
+     * The directory pip writes console scripts into, holding the `python3` link
+     * [FirstRunSetup.setupToolSymlinks] puts there. Without the link the generator
+     * writes no pip rows at all, and every case below that expects none would pass
+     * for that reason instead of its own.
+     */
+    private fun pipBin() = File(filesDir, "usr/bin").apply {
+        mkdirs()
+        val python = File(this, "python3").toPath()
+        if (!Files.exists(python, LinkOption.NOFOLLOW_LINKS)) {
+            Files.createSymbolicLink(python, File(nativeLibDir, "libpython.so").toPath())
+        }
+    }
 
     /**
      * What `pip install black` leaves behind, and why it does not run without this.
@@ -452,6 +463,10 @@ class ToolchainExecTableTest {
      * The interpreter form has no such step. The trampoline starts because it lives
      * in nativeLibraryDir, and it runs the bundled Python with the script as an
      * argument, so nothing under filesDir is ever execve'd.
+     *
+     * The interpreter is the `usr/bin/python3` link and not the `.so` behind it,
+     * because Python reports the path it was started by as `sys.executable`, and a
+     * path under nativeLibraryDir is one the next app update moves.
      */
     @Test
     fun `a command pip installed gets a row that runs it through Python`() {
@@ -462,7 +477,7 @@ class ToolchainExecTableTest {
 
         assertEquals(
             listOf(
-                "black\t${nativeLibDir.absolutePath}/libpython.so" +
+                "black\t${filesDir.absolutePath}/usr/bin/python3" +
                     "\t${filesDir.absolutePath}/usr/bin/black"
             ),
             tableLines().filter { it.startsWith("black\t") },

@@ -422,7 +422,8 @@ where it used to delete both.
 
 The generator also scans `usr/bin` for regular files whose `#!` line names Python, which is what
 `pip install` writes for a package that ships a command, and gives each one an interpreter row onto
-`libpython.so`. Without it `pip install black` produced a `black` on PATH that answered
+the `usr/bin/python3` link rather than the `libpython.so` behind it, so `sys.executable` is a path an
+app update does not move. Without it `pip install black` produced a `black` on PATH that answered
 `bad interpreter: Permission denied`, since reaching the interpreter through a shebang means
 `execve` on the script's own inode. Symlinks in that directory are skipped: those are the bundled
 tools, already pointing at ELFs that run. The rows are written by the launch pass, so a command
