@@ -385,6 +385,7 @@ val env = mapOf(
                                                                        // loads this build instead of its own
     "VSCODROID_PORT"          to port.toString(),
     "VSCODROID_VERSION"       to BuildConfig.VERSION_NAME,
+    "VSCODROID_PACKAGE"       to context.packageName,  // server.js pins the sign-in intent to it
 )
 ```
 

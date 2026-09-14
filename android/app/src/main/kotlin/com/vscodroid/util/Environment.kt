@@ -226,6 +226,9 @@ object Environment {
             "ZEROMQ_PREBUILD" to "$filesDir/usr/lib/node-addons/zeromq",
             "VSCODROID_PORT" to port.toString(),
             "VSCODROID_VERSION" to getVersionName(context),
+            // server.js pins the sign-in callback intent to it. packageName and
+            // not a literal, because a debug build carries the `.debug` suffix.
+            "VSCODROID_PACKAGE" to context.packageName,
         )
 
         // The name pip actually reads, and what makes a CA the device owner
