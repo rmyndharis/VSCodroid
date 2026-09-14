@@ -205,6 +205,7 @@ flowchart TD
 
 - **Android Studio** latest stable version with Android API 36 support.
 - **Android NDK** r27+ (for cross-compiling the native addons).
+- **CMake** (on PATH, or the Android SDK's `cmake` package; builds libzmq for the Jupyter extension's addon).
 - **Python** 3.x (used by the download and verification scripts).
 - **Git**.
 
@@ -228,8 +229,8 @@ adb install android/app/build/outputs/apk/debug/app-debug.apk
 > [!WARNING]
 > **The steps above build the Android shell only.** A runnable app also needs the server tree,
 > the Node runtime and the bundled tools, which the `scripts/download-*.sh` scripts fetch.
-> Only the two native addons are cross-compiled, by `scripts/build-native-addons.sh`, and that
-> needs the Android NDK. See [CONTRIBUTING.md](CONTRIBUTING.md) for the order to run them in.
+> Only the native Node addons are cross-compiled, by `scripts/build-native-addons.sh`, and that
+> needs the Android NDK and CMake. See [CONTRIBUTING.md](CONTRIBUTING.md) for the order to run them in.
 
 ## 📦 Size Estimates
 

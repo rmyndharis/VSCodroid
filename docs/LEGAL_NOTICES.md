@@ -175,6 +175,14 @@ Node.js includes V8 (BSD-3-Clause), libuv (MIT), OpenSSL (Apache-2.0), ICU (Unic
 - **License**: BSD-3-Clause (fork of node-sqlite3, Copyright (c) MapBox); SQLite itself is public domain
 - **Full license**: https://github.com/microsoft/vscode-node-sqlite3/blob/main/LICENSE
 
+### zeromq.js
+
+- **Project**: https://github.com/zeromq/zeromq.js, with https://github.com/zeromq/libzmq linked in statically
+- **Version**: zeromq.js `ZEROMQ_VERSION` and libzmq `LIBZMQ_REV` in `scripts/build-native-addons.sh`, the pair the Jupyter extension from Open VSX bundles; built for ARM64 Android, and shipped at `usr/lib/node-addons/zeromq` for that extension, which is not bundled
+- **License**: MIT License (zeromq.js); libzmq is GNU LGPL version 3 or later with a static linking exception, stated at the end of its `COPYING.LESSER`; node-addon-api, compiled in, is MIT
+- **Copyright**: Copyright (c) 2017-2019 Rolf Timmermans (zeromq.js); libzmq contributors as noted in its `AUTHORS` file; Copyright (c) 2017 Node.js API collaborators (node-addon-api)
+- **Full license**: shipped beside the addon: `LICENSE`, `libzmq-COPYING.LESSER`, `libzmq-AUTHORS` and `node-addon-api-LICENSE.md`
+
 ### @vscode/native-watchdog
 
 - **Project**: https://github.com/microsoft/node-native-watchdog
@@ -415,8 +423,9 @@ This is not every binary in the APK. Most of
 them are not below: they live deeper in the asset tree and are attributed by the
 sections above. CPython's extension modules under `usr/lib/python*/lib-dynload/`,
 pip's vendored launchers, the server tree's native addons and bundled tools under
-`assets/vscode-reh/`, the WebAssembly its editor services load, and the .NET
-assemblies its terminal integration carries. 183 files against the 53 listed
+`assets/vscode-reh/`, the zeromq.js addon under `assets/usr/lib/node-addons/`,
+the WebAssembly its editor services load, and the .NET
+assemblies its terminal integration carries. 184 files against the 53 listed
 below, measured on the tree that built this release, redistributed on identical
 terms. `usr/lib/git-core/` was in that list until its eight standalone helpers
 stopped being copied; what is left there is shell text and symlinks, and Git is
@@ -631,11 +640,19 @@ VSCodroid bundles binaries licensed under the GNU General Public License (GPL). 
 - **Zstandard** (GPL-2.0 as packaged by Termux; dual-licensed BSD-3-Clause upstream): Source available at https://github.com/termux/termux-packages (package: `zstd`), linked by Python's `zstd` module
 - **GMP** (LGPL-3.0): Source available at https://github.com/termux/termux-packages (package: `libgmp`). Shipped inside the Ruby toolchain pack, not the base app, so it reaches only devices where Ruby was installed
 - **OpenJDK 17** (GPL-2.0 with the Classpath Exception): Source available at https://github.com/termux/termux-packages (package: `openjdk-17`), built from https://github.com/openjdk/jdk17u. Shipped inside the Java toolchain pack, not the base app, so it reaches only devices where Java was installed. The Classpath Exception grants an additional permission and removes none of the obligations above.
+- **zeromq.js** (MIT; the libzmq linked into it is LGPL-3.0-or-later with libzmq's static linking exception): Source available at https://github.com/zeromq/libzmq/archive/20de92ac0a2b2b9a1869782a429df68f93c3625e.tar.gz and https://registry.npmjs.org/zeromq/-/zeromq-6.0.0-beta.16.tgz; the build options and compile command are `scripts/build-native-addons.sh` in this repository, which pins both by sha256. Shipped in the base app.
 
-Every entry after readline reaches the app as a dependency of something else
-rather than as a tool of its own, and each is dynamically linked and shipped as
-its own `.so`, so the LGPL's relinking condition is satisfied by replacing the
-file; the written offer in this section applies to all of them regardless.
+Every entry from readline to GMP reaches the app as a dependency of something
+else rather than as a tool of its own, and each is dynamically linked and
+shipped as its own `.so`, so the LGPL's relinking condition is satisfied by
+replacing the file. libzmq is the exception: it is linked statically into the
+zeromq.js addon, and what permits that is libzmq's own exception, which lets it
+be linked with an independent module and the result distributed under terms of
+the distributor's choice, provided each linked module's own licence is met,
+relieving LGPL-3.0 sections 4 and 5 and GPL-3.0 section 6. A modified libzmq
+must carry the same exception; the one here is configured with CMake options
+and not patched. The written offer in this section applies to all of them
+regardless.
 
 You may also request a copy of the source code by contacting us (see contact information below). Source code will be provided for a period of three years from the date of distribution of the corresponding binary, for a charge no more than the cost of physically performing the distribution.
 
@@ -650,9 +667,9 @@ The offer above is one obligation; a copy of the licence itself is the other. GP
 | GPL-2.0 | `licenses/COPYING.GPLv2` | Git, `git-remote-curl`, Zstandard, xz / liblzma, Java (OpenJDK) |
 | GPL-3.0 | `licenses/COPYING.GPLv3` | Bash, GNU Make, readline, gdbm, libiconv, xz / liblzma |
 | LGPL-2.1 | `licenses/COPYING.LGPLv2.1` | libiconv, xz / liblzma |
-| LGPL-3.0 | `licenses/COPYING.LGPLv3` | GMP (Ruby toolchain pack) |
+| LGPL-3.0 | `licenses/COPYING.LGPLv3` | GMP (Ruby toolchain pack), libzmq (inside zeromq.js) |
 
-The first three are the Free Software Foundation's texts as shipped in Termux's `liblzma` package, which is one of the packages this app redistributes. LGPL-3.0 is the FSF's own publication at https://www.gnu.org/licenses/lgpl-3.0.txt, because no package here carries it. All four are verbatim, and `NoticesTest` pins the sha256 of each: a licence text that has been reflowed, re-wrapped or truncated is no longer the licence, so none of them may be edited.
+The first three are the Free Software Foundation's texts as shipped in Termux's `liblzma` package, which is one of the packages this app redistributes. LGPL-3.0 is the FSF's own publication at https://www.gnu.org/licenses/lgpl-3.0.txt, because no Termux package here carries it; libzmq's copy, with its exception appended, also ships beside the zeromq.js addon. All four are verbatim, and `NoticesTest` pins the sha256 of each: a licence text that has been reflowed, re-wrapped or truncated is no longer the licence, so none of them may be edited.
 
 They reach the device through the same `bundleNotices` task as this document, and are read straight out of the APK at **About > Licenses > License Texts**. They sit behind that chooser rather than inside the notices body because 85 KiB of licence in front of the attribution and the source offer would bury the part a reader opened that screen for.
 
@@ -660,7 +677,7 @@ Java arrives in an on-demand pack rather than in the base app, and the text cove
 
 OpenJDK's own notice set travels inside the Java pack, at `usr/lib/jvm/java-17-openjdk/legal`, beside the binaries it describes: the GPLv2 text it ships, the Assembly Exception, the Classpath Exception statement, and the third-party notices for the Apache, MPL, W3C, Unicode, ICU, BSD and MIT components inside it. Those components are not listed individually here, for the same reason the toolchain trees are not: the notices upstream wrote are what discharge their terms, and they ship. `scripts/download-java.sh` refuses to build the pack without them, and refuses one in which they arrived as symbolic links, because neither an asset pack nor the release ZIP can carry a link.
 
-GMP is the other component that arrives in a pack rather than in the base app, and it is why LGPL-3.0 is in the table. LGPL-3.0 is drafted as additional permissions on top of GPL-3.0 and its section 4 asks for both documents, so the GPL-3.0 text already bundled for Bash and Make answers half of it and `COPYING.LGPLv3` answers the rest. The Ruby pack ships GMP's own copy of that text beside the library, at `usr/share/doc/libgmp/copyright`, but the pack has no licences screen: the base app's dialog is the only route a reader has to it.
+GMP is the other component that arrives in a pack rather than in the base app, and it is why LGPL-3.0 is in the table. The libzmq inside zeromq.js is listed there too, but its exception relieves section 4, so that copy goes beyond what libzmq requires, as does the `COPYING.LESSER` shipped beside the addon. LGPL-3.0 is drafted as additional permissions on top of GPL-3.0 and its section 4 asks for both documents, so the GPL-3.0 text already bundled for Bash and Make answers half of it and `COPYING.LGPLv3` answers the rest. The Ruby pack ships GMP's own copy of that text beside the library, at `usr/share/doc/libgmp/copyright`, but the pack has no licences screen: the base app's dialog is the only route a reader has to it.
 
 ---
 
@@ -741,4 +758,4 @@ For questions about licenses, trademarks, or legal notices:
 
 ---
 
-_This document was last updated on September 5, 2026._
+_This document was last updated on September 14, 2026._

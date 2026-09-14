@@ -283,7 +283,7 @@ flowchart TD
   PR["Pull request, and every push to main"] --> BUILD["build.yml: Build job (ubuntu-latest)"]
   BUILD --> B1["Fetch the Code - OSS server release built from MIT source"]
   BUILD --> B2["Fetch Node from Termux nodejs-lts, plus Termux tools, npm, Python, extensions, musl loader"]
-  BUILD --> B3["Build native addons (pty.node, watcher.node, vscode-sqlite3.node) and the glibc shim"]
+  BUILD --> B3["Build native addons (pty.node, watcher.node, vscode-sqlite3.node, zeromq.node) and the glibc shim"]
   BUILD --> B4["assembleDebug"]
 
   PR --> TEST["build.yml: Unit Tests job (ubuntu-latest)"]

@@ -24,6 +24,7 @@ Versions are deliberately not listed unless pinned in this repository: most comp
 | node-pty | MIT | https://github.com/microsoft/node-pty, native addon rebuilt for Android/Bionic |
 | @parcel/watcher | MIT | https://github.com/parcel-bundler/watcher, native addon rebuilt for Android/Bionic |
 | @vscode/sqlite3 | BSD-3-Clause (SQLite itself is public domain) | https://github.com/microsoft/vscode-node-sqlite3, native addon rebuilt for Android/Bionic |
+| zeromq.js | MIT; the libzmq linked into it statically is LGPL-3.0-or-later with libzmq's static linking exception; node-addon-api (MIT) is compiled in | https://github.com/zeromq/zeromq.js and https://github.com/zeromq/libzmq, native addon built for Android/Bionic for the Jupyter extension, which is not bundled. Source offer in `docs/LEGAL_NOTICES.md` |
 | @vscode/native-watchdog | MIT | https://github.com/microsoft/node-native-watchdog, bundled by the Code - OSS build |
 | @vscode/deviceid | MIT | https://github.com/microsoft/vscode-deviceid, bundled by the Code - OSS build |
 | @vscode/sandbox-runtime | Apache-2.0 | https://github.com/anthropic-experimental/sandbox-runtime, bundled by the Code - OSS build |

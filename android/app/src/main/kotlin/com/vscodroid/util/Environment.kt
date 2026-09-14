@@ -179,6 +179,19 @@ object Environment {
             // fails with no explanation. Falsy sends it to `rg` on PATH, which
             // is the Bionic build already bundled as libripgrep.so.
             "USE_BUILTIN_RIPGREP" to "0",
+            // Where the Jupyter extension from Open VSX finds a zeromq addon it
+            // can load. Its own prebuilds are for glibc and musl, so without this
+            // it cannot talk to a kernel directly and falls back to a Jupyter
+            // server that cannot be installed or started here. Its loader
+            // (@aminya/node-gyp-build) replaces a package's directory with
+            // process.env[<NAME>_PREBUILD] and takes build/Release/*.node from
+            // it. Under filesDir rather than in the extension's directory, which
+            // an extension update replaces; scripts/build-native-addons.sh
+            // builds it. Inherited by every process the server starts, terminals
+            // included, where it redirects any zeromq 5.x or 6.0.x a project loads,
+            // even one built from source; zeromq 6.1 and later load through
+            // cmake-ts and ignore it.
+            "ZEROMQ_PREBUILD" to "$filesDir/usr/lib/node-addons/zeromq",
             "VSCODROID_PORT" to port.toString(),
             "VSCODROID_VERSION" to getVersionName(context),
         )

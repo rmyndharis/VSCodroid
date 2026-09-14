@@ -33,6 +33,7 @@ This project follows the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.
 | macOS or Linux    | -                              | Windows is not supported for building        |
 | Android Studio    | Latest stable                  | With Android API 36 SDK                      |
 | Android NDK       | r27+                           | For cross-compiling native modules           |
+| CMake             | 3.x or 4.x                     | Builds libzmq for the zeromq addon. On PATH, or the Android SDK's `cmake` package |
 | JDK               | 17+                            | Required by Gradle                           |
 | Node.js           | 20 or newer                    | `setup.sh` refuses anything older. The Code - OSS server build does not use this one: it takes its Node from upstream's `.nvmrc` at the pinned commit |
 | Python            | 3.x                            | For node-gyp, and for every `scripts/*.py` the build and the Gradle verification tasks run |
@@ -62,8 +63,8 @@ This is the order CI uses, and the order matters: each step below notes why.
 
 ```bash
 # 0. Prerequisites. Checks node, git and python3, and exits on a missing
-#    ANDROID_NDK_HOME rather than letting steps 9 and 10 discover it after
-#    twenty minutes of downloading. REQUIRE_NDK=0 skips that one check.
+#    ANDROID_NDK_HOME or CMake rather than letting steps 9 and 10 discover it
+#    after twenty minutes of downloading. REQUIRE_NDK=0 skips those two checks.
 ./scripts/setup.sh
 
 # 1. Fetch the Code - OSS server tree built by the build-vscode-oss workflow.
@@ -101,7 +102,7 @@ python3 scripts/build-nls-bundles.py
 # 9. The Node runtime. After step 4, which places the libraries it links against
 ./scripts/download-node.sh
 
-# 10. Bionic native addons (requires NDK). After step 9, so the build can check
+# 10. Bionic native addons (requires NDK and CMake). After step 9, so the build can check
 #    each addon against the runtime it will load in.
 ./scripts/build-native-addons.sh
 
@@ -209,7 +210,7 @@ VSCodroid/
 │   ├── download-npm.sh               # Download npm from Node.js tarball
 │   ├── download-python.sh            # Download Python 3 from Termux
 │   ├── download-extensions.sh        # Download pre-bundled extensions
-│   ├── build-native-addons.sh        # Cross-compile node-pty + @parcel/watcher for Bionic
+│   ├── build-native-addons.sh        # Cross-compile the native Node addons for Bionic
 │   ├── download-ruby.sh              # Download Ruby toolchain
 │   ├── download-java.sh              # Download Java (OpenJDK 17) toolchain
 │   ├── build-all.sh                  # Run all download/build scripts
@@ -283,7 +284,7 @@ checkouts differed.
 | `download-python.sh` | Downloads Python + deps from Termux. The version is whatever the Termux index currently carries, detected at download time rather than pinned here | `jniLibs/arm64-v8a/`, `assets/usr/lib/python<major.minor>/` |
 | `download-extensions.sh` | Downloads marketplace extensions from Open VSX. Every entry must be pinned as `publisher.name@version#sha256`, and the resolved version must equal the pin: the cleanup sweep names each directory from the pin while the extraction names it from what Open VSX returned, so a difference makes the sweep delete the tree on every run. The digest is the one the VSIX must hash to, recorded here rather than fetched from the registry that also serves the bytes; the published `files.sha256` is still read, and a disagreement under a fixed version fails the build | `assets/extensions/` |
 | `download-musl-loader.sh` | Extracts musl's dynamic loader from the Alpine package. The Claude Code CLI ships as a musl binary and Android has no loader for it. The version comes from the branch index at download time rather than being pinned here, so the run records which one it installed. `ALPINE_BRANCH` must name a branch Alpine still supports: an unsupported one keeps serving a correctly signed index for years, so the signature check alone cannot notice. The index is also refused when it is more than 30 days old (`ALPINE_INDEX_MAX_AGE_DAYS`), read from the tar member time inside the signed bytes | `jniLibs/arm64-v8a/libldmusl.so`, `toolchains/musl/resolved-musl.tsv` |
-| `build-native-addons.sh` | Cross-compiles node-pty, `@parcel/watcher` and `@vscode/sqlite3` for Bionic using the NDK, with 16 KB page alignment. Checks each `.node` against the JavaScript version shipped beside it | `assets/vscode-reh/node_modules/*/build/Release/*.node` |
+| `build-native-addons.sh` | Cross-compiles node-pty, `@parcel/watcher` and `@vscode/sqlite3` for Bionic using the NDK, with 16 KB page alignment, and checks each `.node` against the JavaScript version shipped beside it. Also builds zeromq with a static libzmq (CMake) for the Jupyter extension users install from Open VSX, whose own builds are glibc and musl only; `ZEROMQ_PREBUILD` in `Environment.kt` points that extension at it | `assets/vscode-reh/node_modules/*/build/Release/*.node`, `assets/usr/lib/node-addons/zeromq/` |
 | `build-glibc-shim.sh` | Scans the packaged tree for addons built against glibc and generates versioned stub libraries so Bionic's loader accepts them. Run last: `download-termux-tools.sh` wipes the directory the stubs live in | `assets/usr/lib/libglibc-shim.so` and per-soname stubs |
 | `build-claude-shim.sh` | Cross-compiles two files with the NDK. `libseccomp-shim.so` is freestanding and is preloaded into the Claude Code CLI: it catches the SIGSYS Android raises for `epoll_pwait2`, which bionic exposes only from android15, and answers it with `epoll_pwait`, so the CLI runs on Android 13 and 14 instead of being killed. `libclaude-launch.so` is what `claudeCode.claudeProcessWrapper` names; it puts the shim into `LD_PRELOAD` and execs musl's loader, because a setting holds a path rather than an environment. The script refuses a shim that names any library, since one libc in a process that already has another is the failure it exists to avoid | `jniLibs/arm64-v8a/libseccomp-shim.so`, `jniLibs/arm64-v8a/libclaude-launch.so` |
 | `build-exec-trampoline.sh` | Cross-compiles `exec-trampoline.c` with the NDK, 16 KB-aligned, as `libexec-trampoline.so`. One symlink per toolchain command points at it from `usr/libexec/tcbin`, which sits ahead of `usr/bin` on PATH, so a bare-name lookup reaches a file the app may execute instead of a payload SELinux refuses. It reads `toolchain-exec.tsv` and hands the named binary to `/system/bin/linker64`. Without it a toolchain command works only from bash, since the loader indirection exists nowhere else | `jniLibs/arm64-v8a/libexec-trampoline.so` |

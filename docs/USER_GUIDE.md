@@ -362,6 +362,21 @@ these comes from the marketplace.
 
 Extensions that use webview panels (such as theme configurators, documentation viewers, and AI assistants) render correctly in VSCodroid.
 
+### Jupyter Notebooks
+
+The Jupyter extension (`ms-toolsai.jupyter`) installs from the Extensions view like any other. It reaches a notebook kernel through a messaging add-on it carries only in builds for desktop systems, so VSCodroid supplies an Android build of that add-on. With `ipykernel` installed in a Python virtual environment, open a `.ipynb` file, choose **Select Kernel**, then **Python Environments...**, and pick that environment: cells run in it.
+
+Installing `ipykernel` with pip does not complete yet. It requires `psutil`, which publishes no Android build, so pip tries to build it from source and stops with:
+
+```
+platform android is not supported
+ERROR: Failed to build 'psutil' when getting requirements to build wheel
+```
+
+That is the situation described in [Python Packages Written in C](#python-packages-written-in-c). The `psutil-android` package on PyPI does not get past it, because pip does not count it as `psutil`.
+
+If the extension offers to install `jupyter` and `notebook`, decline: that is a Jupyter server, whose dependencies cannot be built here and whose commands Android will not run from the app's storage.
+
 ### What Is Not Available
 
 Some extensions are exclusive to the Microsoft Marketplace and not published on Open VSX. Notable examples include Microsoft's C/C++ extension. For most cases, open-source alternatives exist on Open VSX. GitHub Copilot Chat is the exception that needs no marketplace: it ships bundled.

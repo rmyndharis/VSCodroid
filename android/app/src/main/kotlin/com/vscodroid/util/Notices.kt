@@ -50,6 +50,12 @@ object Notices {
      * both documents, so it is the supplement that was missing rather than the
      * whole obligation.
      *
+     * libzmq, linked statically into the base APK's zeromq addon, is LGPL-3.0
+     * too, and is listed under `NESTED_LIBRARIES` rather than
+     * `TOOLCHAIN_LIBRARIES`. Its static linking exception relieves section 4,
+     * and its own `COPYING.LESSER` ships beside the addon, so this text is
+     * more than it requires rather than what it depends on.
+     *
      * The licence column of the inventory in `docs/LEGAL_NOTICES.md`, and
      * `TOOLCHAIN_LIBRARIES` in `scripts/check-library-attribution.py`, are where
      * to re-derive this set when the bundled binaries change; that script fails

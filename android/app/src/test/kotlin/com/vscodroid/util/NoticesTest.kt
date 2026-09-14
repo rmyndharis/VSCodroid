@@ -262,7 +262,7 @@ class NoticesTest {
      *
      * Three of the four are the FSF texts as shipped in Termux's liblzma
      * package, which this APK redistributes; LGPL-3.0 is the FSF publication,
-     * because no package in the base APK carries a copy of it. Re-derive with:
+     * because no Termux package in the base APK carries a copy of it. Re-derive with:
      *   shasum -a 256 licenses/COPYING.*
      */
     private data class Verbatim(
@@ -291,10 +291,11 @@ class NoticesTest {
             "That's all there is to it!",
             "20e50fe7aae3e56378ebf0417d9de904f55a0e61e4df315333e632a4d3555d95"
         ),
-        // The one text here that no binary in the base APK needs. GMP is
-        // LGPL-3.0 and ships in the Ruby toolchain pack, which has no licence
-        // screen of its own, so this dialog is the only route to it on a device
-        // that installed Ruby. The FSF publication at
+        // GMP is LGPL-3.0 and ships in the Ruby toolchain pack, which has no
+        // licence screen of its own, so this dialog is the only route to it on a
+        // device that installed Ruby. The libzmq inside the base APK's zeromq
+        // addon is LGPL-3.0 too, with an exception relieving section 4 and its
+        // own copy beside it. The FSF publication at
         // https://www.gnu.org/licenses/lgpl-3.0.txt, byte for byte.
         "COPYING.LGPLv3" to Verbatim(
             "GNU Lesser General Public License v3.0",

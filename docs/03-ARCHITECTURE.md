@@ -467,7 +467,9 @@ Sizes move with every rebuild, so read them rather than a document:
 
 Native Node addons (`pty.node`, `watcher.node`, `vscode-sqlite3`) ship inside
 `assets/vscode-reh/node_modules`, not as `lib*.so` in `jniLibs`: SELinux refuses `execve` under the
-app data directory but still allows `dlopen`, so an addon loaded from `filesDir` works.
+app data directory but still allows `dlopen`, so an addon loaded from `filesDir` works. One more,
+`zeromq.node`, is for the Jupyter extension users install and ships at
+`assets/usr/lib/node-addons/zeromq`, found through `ZEROMQ_PREBUILD`.
 
 `ripgrep` is bundled as `libripgrep.so` in `jniLibs`. The Search service looks for it under
 `node_modules/@vscode/ripgrep/bin/rg`, so `FirstRunSetup.setupRipgrepVscodeSymlink()` creates that

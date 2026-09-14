@@ -65,7 +65,7 @@ jobs:
     # Assembles the asset tree, then ./gradlew assembleDebug.
     # Fetches the published Code - OSS server tarball with fetch-vscode-oss.sh,
     # takes Node, Python and the Termux tools with the download-*.sh scripts,
-    # and compiles the three native addons with build-native-addons.sh.
+    # and compiles the native addons with build-native-addons.sh.
     runs-on: ubuntu-latest
 
   test:             # "Unit Tests"
@@ -111,9 +111,9 @@ That matters for correctness, not just speed: on an `assets-` hit the fetch step
 check against the release never run, which is why `patches/`, `branding/` and
 `build-vscode-oss.sh` are in the key even though no step in this workflow reads them. They change
 the server tarball, which is republished under the same `server-<version>` tag, and the key is
-what stops a stale tree going into the APK. The steps that build the three native addons run
-unconditionally, so a change to `build-native-addons.sh` reaches the artifact whether or not the
-cache hits.
+what stops a stale tree going into the APK. The step that builds the native addons also runs only
+on an `assets-` miss, and `build-native-addons.sh` is in the key, so a change to it is what makes
+the cache miss.
 
 Gradle's own dependency and build caches are handled by `gradle/actions/setup-gradle`.
 

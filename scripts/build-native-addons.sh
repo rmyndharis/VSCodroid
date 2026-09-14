@@ -5,7 +5,9 @@ set -euo pipefail
 # .node files. Every build (ours or Microsoft's) ships these compiled against
 # glibc, and Android's loader cannot open them, so each one has to be replaced.
 # Three are recompiled here; @vscode/spdlog is replaced by a JavaScript
-# implementation instead, for the reason given at its stage at the bottom.
+# implementation instead, for the reason given at its stage at the bottom. One
+# more, zeromq, is built for an extension users install rather than for the
+# server tree; its stage says why it lives here anyway.
 #
 # Compiles by invoking NDK clang directly rather than going through node-gyp.
 # node-gyp's generator injects host-specific flags (on macOS, -arch) that NDK
@@ -14,13 +16,22 @@ set -euo pipefail
 #
 #   ./scripts/build-native-addons.sh              # into assets/vscode-reh
 #   OUTPUT_ROOT=/path/to/tree ./scripts/build-native-addons.sh
+#   OUTPUT_ROOT=/path/to/tree ZEROMQ_OUTPUT=/path/to/zeromq ./scripts/build-native-addons.sh
 #
-# Prerequisites: Android NDK r27+ (ANDROID_NDK_HOME, or the Android Studio SDK).
+# OUTPUT_ROOT moves the server addons only; zeromq still goes into this
+# checkout's assets/usr/lib/node-addons/zeromq unless ZEROMQ_OUTPUT moves it too.
+#
+# Prerequisites: Android NDK r27+ (ANDROID_NDK_HOME, or the Android Studio SDK),
+# and CMake (on PATH, or under the Android SDK's cmake/) for libzmq.
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
 WORK_DIR="${WORK_DIR:-$ROOT_DIR/.build/native-addons}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-$ROOT_DIR/android/app/src/main/assets/vscode-reh}"
+# Not derived from OUTPUT_ROOT: that is the server tree, which can be redirected
+# and which package-assets.sh replaces wholesale. This path is also the value of
+# ZEROMQ_PREBUILD in Environment.kt, relative to filesDir.
+ZEROMQ_OUTPUT="${ZEROMQ_OUTPUT:-$ROOT_DIR/android/app/src/main/assets/usr/lib/node-addons/zeromq}"
 
 # Must match remote/.npmrc `target` at the VS Code tag AND the bundled
 # libnode.so. A mismatch changes NODE_MODULE_VERSION and every addon here is
@@ -83,10 +94,27 @@ STRIP="$TOOLCHAIN/bin/llvm-strip"
 READELF="$TOOLCHAIN/bin/llvm-readelf"
 [ -x "$CXX" ] || { echo "ERROR: $CXX not found" >&2; exit 1; }
 
+# libzmq is the one dependency here with a CMake build. The runner has cmake on
+# PATH; an Android Studio install often has it only inside the SDK.
+CMAKE="$(command -v cmake || true)"
+if [ -z "$CMAKE" ]; then
+    for sdk in "${ANDROID_HOME:-}" "$HOME/Library/Android/sdk"; do
+        [ -n "$sdk" ] && [ -d "$sdk/cmake" ] || continue
+        CMAKE="$(ls -d "$sdk/cmake/"*/bin/cmake 2>/dev/null | sort -V | tail -1 || true)"
+        [ -n "$CMAKE" ] && break
+    done
+fi
+[ -n "$CMAKE" ] && [ -x "$CMAKE" ] || {
+    echo "ERROR: CMake not found. Install it, or add the Android SDK's cmake package." >&2
+    exit 1
+}
+
 echo "  NDK    : $NDK_DIR"
 echo "  target : $TARGET$API"
 echo "  node   : v$NODE_VERSION headers"
 echo "  output : $OUTPUT_ROOT"
+echo "  zeromq : $ZEROMQ_OUTPUT"
+echo "  cmake  : $CMAKE"
 
 # --- Node headers ----------------------------------------------------------
 
@@ -208,14 +236,14 @@ check_pair() {
 # pack_pinned <package> <version> <sha256> <dest.tgz>
 #   -> the registry tarball at <dest.tgz>, matching the digest this checkout states
 #
-# The three addons here, and the node-addon-api headers compiled into them,
+# The addons here, and the node-addon-api headers compiled into them,
 # were the only downloads in this repository with no digest this checkout
 # states. Everything else is anchored: the Node headers above, the Node tarball
 # in download-npm.sh, all five VSIXs in download-extensions.sh, and the Termux
 # and Alpine packages through a signed index. Each of those carries the same
 # reasoning, and it applies hardest here: these tarballs are C++ that gets
-# compiled into three `.node` files that ship in every APK, load into the
-# server process, and pass every ELF gate whatever they contain. `npm pack` and
+# compiled into `.node` files that ship in every APK, load into the server
+# or extension host process, and pass every ELF gate whatever they contain. `npm pack` and
 # `npm install` both check the tarball against the registry's own integrity
 # value, which proves the bytes arrived and nothing about whose bytes they are
 # -- the same "serve and certify" gap the comments above describe.
@@ -264,7 +292,7 @@ pack_pinned() {
 # range: floating inside one meant the addon's ABI could move without any
 # version in this repository changing. Pinned by digest as well as by version,
 # and fetched the way the addon itself is: it was `npm install`ed by version
-# alone, which left the one input compiled into all three addons anchored to
+# alone, which left the one input compiled into every addon anchored to
 # nothing this checkout states while the paragraph above claimed everything
 # was. Unpacked on every run rather than behind a napi.h guard, so a directory
 # left by that install is replaced by the verified tarball rather than kept.
@@ -443,6 +471,118 @@ mkdir -p "$(dirname "$SQLITE_OUT")"
 verify "$SQLITE_OUT" @vscode/sqlite3 || failed=1
 check_pair @vscode/sqlite3 "$SQLITE_VERSION" \
     "$OUTPUT_ROOT/node_modules/@vscode/sqlite3/package.json" || failed=1
+
+# zeromq: the messaging addon the Jupyter extension carries, built for an
+# extension this app does not bundle. ms-toolsai.jupyter from Open VSX ships
+# zeromq 6.0.0-beta.16 with prebuilds for glibc and musl only; under this Node
+# process.platform is "android", so its loader finds none, and the extension
+# falls back to starting a Jupyter server. That route asks to pip install
+# jupyter and notebook, which cannot build here, and the server it would start
+# cannot exec its console scripts from filesDir anyway. With this addon loaded
+# the extension talks to an ipykernel directly instead.
+#
+# Written outside the server tree. The JS that loads it lives in the
+# user-installed extension, so there is no package.json here to pair it with,
+# and an extension update would wipe anything written into the extension's own
+# directory. Environment.kt sets ZEROMQ_PREBUILD to this directory, and the
+# extension's loader (@aminya/node-gyp-build) takes the first *.node in its
+# build/Release. The version is the one that extension bundles: a Jupyter
+# release that moves to another zeromq needs this pin moved with it.
+#
+# libzmq is built from the revision zeromq.js pins for this version
+# (script/build.ts) and linked statically. At that revision it is LGPL-3.0 or
+# later with a static linking exception, which is at the end of COPYING.LESSER;
+# the notices are copied beside the addon for that reason. It is configured
+# with CMake options only and not patched; a patched libzmq would have to carry
+# the same exception. CURVE is off: Jupyter signs its messages with HMAC and
+# does not use it, and its allocator does not compile against NDK r30's libc++.
+echo ""
+echo "zeromq..."
+ZEROMQ_VERSION=6.0.0-beta.16
+# Taken the same way as PTY_SHA256, on 2026-09-14.
+ZEROMQ_SHA256=563de0cd82f1f32d0f8a2d8abb10609114a6fd445f5f62adb4e8f654c1861b22
+# zeromq declares ^5.0.0, so this is the top of that range.
+ZEROMQ_ADDON_API=5.1.0
+ZEROMQ_ADDON_API_SHA256=7634bafde54326a66b3feda30398211278343cd989db47451732eeb9d9854d19
+LIBZMQ_REV=20de92ac0a2b2b9a1869782a429df68f93c3625e
+# A GitHub-generated archive, and GitHub does not promise those are
+# byte-stable. A mismatch can therefore mean GitHub regenerated it rather than
+# that the source changed, but either way nothing is built from bytes that do
+# not match what this checkout states.
+LIBZMQ_SHA256=b78c20d3112c64713b9ec72df9e9bb553935e8a581e1d58cb82c670efb346b83
+ZEROMQ_SRC=$(fetch zeromq "$ZEROMQ_VERSION" "$ZEROMQ_SHA256" \
+    "$ZEROMQ_ADDON_API" "$ZEROMQ_ADDON_API_SHA256")
+
+LIBZMQ_TGZ="$WORK_DIR/src/libzmq-$LIBZMQ_REV.tar.gz"
+[ -f "$LIBZMQ_TGZ" ] || curl -fsSL --show-error \
+    "https://github.com/zeromq/libzmq/archive/$LIBZMQ_REV.tar.gz" -o "$LIBZMQ_TGZ"
+actual=$( (sha256sum "$LIBZMQ_TGZ" 2>/dev/null || shasum -a 256 "$LIBZMQ_TGZ") | cut -d' ' -f1)
+if [ "$actual" != "$LIBZMQ_SHA256" ]; then
+    rm -f "$LIBZMQ_TGZ"
+    echo "ERROR: libzmq at $LIBZMQ_REV does not match the digest this checkout states" >&2
+    echo "  expected: $LIBZMQ_SHA256" >&2
+    echo "  got     : $actual" >&2
+    exit 1
+fi
+
+# Unpacked, configured and built from scratch on every run. The CMake cache
+# records the toolchain file's absolute path, and CI and a local checkout use
+# different NDKs, so a reused build directory would build with the wrong one.
+LIBZMQ_SRC="$WORK_DIR/src/libzmq-$LIBZMQ_REV"
+LIBZMQ_BUILD="$WORK_DIR/libzmq-build"
+LIBZMQ_PREFIX="$WORK_DIR/libzmq-install"
+rm -rf "$LIBZMQ_SRC" "$LIBZMQ_BUILD" "$LIBZMQ_PREFIX"
+tar xzf "$LIBZMQ_TGZ" -C "$WORK_DIR/src"
+# CMAKE_POLICY_VERSION_MINIMUM because libzmq still declares a 2.8 minimum,
+# which CMake 4 refuses to configure; CMake 3.x ignores the variable.
+"$CMAKE" -S "$LIBZMQ_SRC" -B "$LIBZMQ_BUILD" \
+    -DCMAKE_TOOLCHAIN_FILE="$NDK_DIR/build/cmake/android.toolchain.cmake" \
+    -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM="android-$API" \
+    -DCMAKE_BUILD_TYPE=Release -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
+    -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
+    -DCMAKE_INSTALL_PREFIX="$LIBZMQ_PREFIX" -DCMAKE_INSTALL_LIBDIR=lib \
+    -DBUILD_STATIC=ON -DBUILD_SHARED=OFF -DBUILD_TESTS=OFF -DWITH_DOCS=OFF \
+    -DWITH_LIBSODIUM=OFF -DENABLE_CURVE=OFF -DENABLE_WS=OFF -DWITH_TLS=OFF \
+    -DENABLE_DRAFTS=OFF -DWITH_PERF_TOOL=OFF -DENABLE_CPACK=OFF \
+    > "$WORK_DIR/libzmq-configure.log" 2>&1 \
+    || { tail -n 30 "$WORK_DIR/libzmq-configure.log" >&2; echo "ERROR: libzmq configure failed" >&2; exit 1; }
+JOBS=$(getconf _NPROCESSORS_ONLN 2>/dev/null || echo 4)
+{ "$CMAKE" --build "$LIBZMQ_BUILD" --parallel "$JOBS" && "$CMAKE" --install "$LIBZMQ_BUILD"; } \
+    > "$WORK_DIR/libzmq-build.log" 2>&1 \
+    || { tail -n 30 "$WORK_DIR/libzmq-build.log" >&2; echo "ERROR: libzmq build failed" >&2; exit 1; }
+
+# The whole directory is replaced: the loader takes the first *.node it lists,
+# so a file left by an earlier run could be the one that loads.
+ZEROMQ_OUT="$ZEROMQ_OUTPUT/build/Release/zeromq.node"
+rm -rf "$ZEROMQ_OUTPUT"
+mkdir -p "$(dirname "$ZEROMQ_OUT")"
+# Flags are binding.gyp's Release configuration: C++ exceptions on, libzmq
+# static. libzmq.a is linked as an ordinary archive, never --whole-archive, so
+# only the objects the binding references come in.
+"$CXX" \
+    -shared -fPIC -std=c++17 -O2 -fexceptions \
+    -static-libstdc++ \
+    "${PAGE_SIZE_FLAGS[@]}" \
+    -DNAPI_CPP_EXCEPTIONS -DZMQ_STATIC \
+    -DNODE_GYP_MODULE_NAME=zeromq -DBUILDING_NODE_EXTENSION \
+    -I"$NODE_INCLUDE" \
+    -I"$ZEROMQ_SRC/node_modules/node-addon-api" \
+    -I"$LIBZMQ_PREFIX/include" \
+    -o "$ZEROMQ_OUT" \
+    "$ZEROMQ_SRC/src/context.cc" "$ZEROMQ_SRC/src/incoming_msg.cc" \
+    "$ZEROMQ_SRC/src/module.cc" "$ZEROMQ_SRC/src/observer.cc" \
+    "$ZEROMQ_SRC/src/outgoing_msg.cc" "$ZEROMQ_SRC/src/proxy.cc" \
+    "$ZEROMQ_SRC/src/socket.cc" \
+    "$LIBZMQ_PREFIX/lib/libzmq.a"
+"$STRIP" "$ZEROMQ_OUT"
+verify "$ZEROMQ_OUT" zeromq || failed=1
+# What the licences ask to travel with the binary: zeromq.js's MIT notice,
+# libzmq's LGPL text with its exception and the AUTHORS file its headers name,
+# and node-addon-api's MIT notice, since it is compiled in as well.
+cp "$ZEROMQ_SRC/LICENSE" "$ZEROMQ_OUTPUT/LICENSE"
+cp "$LIBZMQ_SRC/COPYING.LESSER" "$ZEROMQ_OUTPUT/libzmq-COPYING.LESSER"
+cp "$LIBZMQ_SRC/AUTHORS" "$ZEROMQ_OUTPUT/libzmq-AUTHORS"
+cp "$ZEROMQ_SRC/node_modules/node-addon-api/LICENSE.md" "$ZEROMQ_OUTPUT/node-addon-api-LICENSE.md"
 
 # @vscode/spdlog, the file logger, and the one addon here that is replaced
 # rather than rebuilt. Its published spdlog.node links libstdc++.so.6, which

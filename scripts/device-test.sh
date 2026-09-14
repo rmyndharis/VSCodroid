@@ -483,6 +483,14 @@ if $SELF_CHECK; then
             "no GIT_EXEC_PATH readable in Environment.kt; the git helper check would look in filesDir itself"
     fi
 
+    ZMQ_REL=$(derive_app_path ZEROMQ_PREBUILD)
+    if [ -n "$ZMQ_REL" ]; then
+        pass "zeromq prebuild path ($ZMQ_REL, from Environment.kt)"
+    else
+        fail "zeromq prebuild path" \
+            "no ZEROMQ_PREBUILD readable in Environment.kt; the zeromq addon check would look nowhere"
+    fi
+
     SHORTCUT_TARGET=$(derive_shortcut_target)
     if [ -n "$SHORTCUT_TARGET" ]; then
         pass "toolchain shortcut target ($SHORTCUT_TARGET, from SplashActivity.kt)"
@@ -1198,7 +1206,7 @@ else
 fi
 
 # ═══════════════════════════════════════════════════════════════════
-# TESTS 20-23: Runtime checks
+# TESTS 20-23b: Runtime checks
 # ═══════════════════════════════════════════════════════════════════
 printf "\n${BOLD}Phase 5: Runtime${RESET}\n"
 
@@ -1244,6 +1252,19 @@ if echo "$FILE_CHECK" | grep -q "EXISTS"; then
     $ADB shell "run-as $PKG rm $TEST_FILE" 2>/dev/null
 else
     fail "file_creation" "Could not create/verify file"
+fi
+
+# Test 23b: zeromq_prebuild
+# The Jupyter extension's zeromq addon, at the directory Environment.kt hands the
+# server. This says the file was extracted where the variable points. Whether the
+# app can load it is not a run-as question, since run-as is a different SELinux
+# domain from the app; that is answered by running a notebook cell in the app.
+ZMQ_REL=$(derive_app_path ZEROMQ_PREBUILD)
+ZMQ_CHECK=$($ADB shell "run-as $PKG sh -c 'test -f files/$ZMQ_REL/build/Release/zeromq.node && echo EXISTS'" 2>/dev/null)
+if [ -n "$ZMQ_REL" ] && echo "$ZMQ_CHECK" | grep -q "EXISTS"; then
+    pass "zeromq_prebuild"
+else
+    fail "zeromq_prebuild" "No zeromq.node under files/${ZMQ_REL:-<ZEROMQ_PREBUILD unreadable>}/build/Release"
 fi
 
 # ═══════════════════════════════════════════════════════════════════

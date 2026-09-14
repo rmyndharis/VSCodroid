@@ -58,6 +58,24 @@ else
     exit 1
 fi
 
+# Same reason, same escape hatch: build-native-addons.sh needs CMake for
+# libzmq, and looks for it on PATH and then in the Android SDK, as here.
+CMAKE="$(command -v cmake || true)"
+for sdk in "${ANDROID_HOME:-}" "$HOME/Library/Android/sdk"; do
+    [ -z "$CMAKE" ] && [ -n "$sdk" ] && [ -d "$sdk/cmake" ] || continue
+    CMAKE="$(ls -d "$sdk/cmake/"*/bin/cmake 2>/dev/null | sort -V | tail -1 || true)"
+done
+if [ -n "$CMAKE" ]; then
+    echo "  ✓ cmake $CMAKE"
+elif [ "${REQUIRE_NDK:-1}" = "0" ]; then
+    echo "  ⚠ cmake not found (needed to build the native addons)"
+else
+    echo "  ERROR: cmake not found on PATH or in the Android SDK." >&2
+    echo "         build-native-addons.sh needs it for libzmq. Install it, or" >&2
+    echo "         re-run with REQUIRE_NDK=0 to skip this check." >&2
+    exit 1
+fi
+
 cd "$ROOT_DIR"
 
 # Create required directories

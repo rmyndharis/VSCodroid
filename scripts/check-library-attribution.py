@@ -395,6 +395,11 @@ NESTED_LIBRARIES = {
     "vscode-reh/node_modules/@vscode/native-watchdog/*": ("@vscode/native-watchdog", "MIT"),
     "vscode-reh/node_modules/@vscode/sandbox-runtime/*": ("@vscode/sandbox-runtime", "Apache-2.0"),
     "vscode-reh/node_modules/@microsoft/mxc-sdk/*": ("@microsoft/mxc-sdk", "MIT"),
+    # Built by build-native-addons.sh for the Jupyter extension, outside the
+    # server tree. libzmq is linked into the same file statically, so its
+    # licence rides on it, the way Oniguruma's does on vscode-oniguruma below.
+    "usr/lib/node-addons/zeromq/*":
+        ("zeromq.js", "MIT, LGPL-3.0-or-later with libzmq's static linking exception"),
     # The npm addon, not the Termux C libraries. Different project, different
     # licence, confusingly similar name -- hence the qualifier, which has to
     # read the same way in both documents for the attribution check to find it.

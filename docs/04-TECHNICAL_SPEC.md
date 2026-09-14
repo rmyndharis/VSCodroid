@@ -61,7 +61,7 @@ line; bumping either means checking the other.
 It does **not** reach the server tree's own `.node` addons. Those are covered for
 architecture by `verify-server-tree.py` and for `DT_NEEDED` by
 `gen-glibc-forwarders.py --scan`, which the `verifyNativeAddons` Gradle task runs over
-`assets/vscode-reh` and `assets/extensions`; neither reads `p_align`. Every addon in the
+`assets/vscode-reh`, `assets/extensions` and `assets/usr/lib/node-addons`; neither reads `p_align`. Every addon in the
 tree is 16 KB-aligned today, so this is a gap in what is checked rather than in what
 ships. `CONTRIBUTING.md` lists the callers, and it is the honest list.
 
@@ -84,22 +84,31 @@ ships. `CONTRIBUTING.md` lists the callers, and it is the honest list.
 ### 1.4 Native Node Addons
 
 `scripts/build-native-addons.sh` is where cross-compilation actually happens. It builds the addons
-the server cannot run without, against Bionic, with the NDK:
+the server cannot run without, and zeromq for the Jupyter extension, against Bionic, with the NDK:
 
 ```bash
 # node-pty        -> node_modules/node-pty/build/Release/pty.node
 # @parcel/watcher -> node_modules/@parcel/watcher/build/Release/watcher.node
 # @vscode/sqlite3 -> node_modules/@vscode/sqlite3/build/Release/vscode-sqlite3.node
+# zeromq          -> assets/usr/lib/node-addons/zeromq/build/Release/zeromq.node (libzmq static)
 #
 # Linked with -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384
 # OUTPUT_ROOT defaults to android/app/src/main/assets/vscode-reh
 ```
 
-All three land inside the packaged `vscode-reh` tree, **not** in `jniLibs/`; `@vscode/spdlog` is replaced by a JavaScript implementation rather than recompiled. That works because SELinux
+The first three land inside the packaged `vscode-reh` tree, **not** in `jniLibs/`; `@vscode/spdlog` is replaced by a JavaScript implementation rather than recompiled. That works because SELinux
 denies `execve` under the app's data directory but not `dlopen`, so an addon is loadable from
-`filesDir` even though a binary there cannot be executed. Each addon's version is checked against
+`filesDir` even though a binary there cannot be executed. Each of those three is checked against
 the `package.json` the server was built with, since an addon compiled for a different Node ABI
 loads and then fails at the first call.
+
+`zeromq` is for the Jupyter extension users install from Open VSX, not for the server. That
+extension carries zeromq 6.0.0-beta.16 with glibc and musl prebuilds only, so without an Android
+build it cannot reach a kernel directly and falls back to a Jupyter server this environment cannot
+install or start. The addon sits outside the server tree, where an extension update cannot remove
+it, and `ZEROMQ_PREBUILD` (section 2.3) points the extension's loader at it. It is matched to the
+zeromq version that extension bundles rather than to any `package.json` in this build, so a Jupyter
+release that moves to another zeromq needs the pin in the script moved with it.
 
 ### 1.5 Code - OSS Build (server and web client)
 
@@ -327,8 +336,8 @@ flowchart TD
 ### 2.3 Environment Variables
 
 ```kotlin
-// Illustrative shape only. Environment.buildProcessEnvironment sets 28 keys plus whatever
-// getToolchainEnvironment() contributes; the list below names all 28 but abbreviates the values.
+// Illustrative shape only. Environment.buildProcessEnvironment sets the keys below plus whatever
+// getToolchainEnvironment() contributes; the list names every key but abbreviates the values.
 val env = mapOf(
     "HOME"                    to "${filesDir}/home",
     "TMPDIR"                  to "${cacheDir}/tmp",
@@ -365,6 +374,11 @@ val env = mapOf(
     "NPM_CONFIG_CACHE"        to "${cacheDir}/npm-cache",
     "PROJECTS_DIR"            to "<projects dir>",
     "USE_BUILTIN_RIPGREP"     to "0",                 // falsy sends the Claude CLI to rg on PATH
+    "ZEROMQ_PREBUILD"         to "${filesDir}/usr/lib/node-addons/zeromq",  // the Jupyter extension's
+                                                                       // zeromq loader reads it; every child of
+                                                                       // the server inherits it, terminals too,
+                                                                       // so a project's zeromq 5.x or 6.0.x
+                                                                       // loads this build instead of its own
     "VSCODROID_PORT"          to port.toString(),
     "VSCODROID_VERSION"       to BuildConfig.VERSION_NAME,
 )

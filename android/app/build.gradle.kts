@@ -31,9 +31,11 @@ fun signingProp(key: String, envVar: String, fallback: String = "") =
 // each one's sha256, because a licence text that has been edited is not the
 // licence.
 //
-// LGPL-3.0 is the one whose subject is not in the base APK. GMP is LGPL-3.0 and
-// ships inside the Ruby toolchain pack, which has no licence screen of its own,
-// so this dialog is the only route to a copy on a device that installed Ruby.
+// LGPL-3.0 covers GMP, which ships inside the Ruby toolchain pack and has no
+// licence screen of its own, so this dialog is the only route to a copy on a
+// device that installed Ruby. The libzmq linked into the zeromq addon in the
+// base APK is LGPL-3.0 too, but its static linking exception relieves section
+// 4, and its own copy of the text travels beside it.
 //
 // Not everything under licenses/ is copied here, and the two that are not are
 // deliberate: LICENSE.ICU and COPYRIGHT.musl are placed beside their binaries
@@ -825,12 +827,18 @@ val verifyNativeAddons = tasks.register<Exec>("verifyNativeAddons") {
     description = "Checks the packaged native addons were built for Bionic, not glibc."
 
     val entryPoint = file("src/main/assets/vscode-reh/out/server-main.js")
+    // Built by build-native-addons.sh for the Jupyter extension, which users
+    // install from Open VSX. Nothing in the server tree loads it, so no other
+    // gate notices when it is missing, and a tree without it packages green with
+    // notebooks failing on device. Environment.kt names the directory.
+    val zeromqAddon = file("src/main/assets/usr/lib/node-addons/zeromq/build/Release/zeromq.node")
 
     workingDir = rootProject.projectDir.parentFile
     commandLine(
         "python3", "scripts/gen-glibc-forwarders.py",
         "--scan", "android/app/src/main/assets/vscode-reh",
         "--scan", "android/app/src/main/assets/extensions",
+        "--scan", "android/app/src/main/assets/usr/lib/node-addons",
         "--verify-against", "android/app/src/main/assets/usr/lib",
     )
 
@@ -838,6 +846,13 @@ val verifyNativeAddons = tasks.register<Exec>("verifyNativeAddons") {
     // empty assets tree so Gradle can configure, and a tree that was never
     // downloaded has no addons to judge.
     onlyIf { entryPoint.isFile }
+
+    doFirst {
+        check(zeromqAddon.isFile) {
+            "$zeromqAddon is missing. Run scripts/build-native-addons.sh, which builds it " +
+                "for the Jupyter extension; without it that extension cannot start a kernel."
+        }
+    }
 
     failOnExit(
         "The packaged tree carries native addons that cannot load on Android.\n" +
