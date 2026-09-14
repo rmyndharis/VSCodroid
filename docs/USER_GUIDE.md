@@ -24,8 +24,8 @@ A practical guide to using VSCodroid -- the full VS Code IDE running natively on
 
 ### What Happens on First Open
 
-1. **Install**. Download from the [Play Store](#) or [GitHub Releases](https://github.com/rmyndharis/VSCodroid/releases). The core download is roughly 270 MB, and you need about 905 MB free for the extraction that follows.
-2. **Binary extraction** -- On first launch, VSCodroid extracts bundled tools (Node.js, Python, Git, Bash, and others) to internal storage. About 805 MB lands on disk, unpacked one file at a time behind a progress bar, so allow minutes rather than seconds on a slower device. The ~905 MB above is that payload plus the working room setup insists on before it will start. It happens on the first launch and again after every app update, because the extraction is keyed on the app version rather than on what is already unpacked. An update needs far less free space than a fresh install (the app credits what it already holds, so roughly 220 MB rather than 905 MB), but it does re-copy the files and it does take minutes. A first run that is interrupted and retried on the same version is the one case that does not start over: files already the right size are left alone.
+1. **Install**. Download from the [Play Store](#) or [GitHub Releases](https://github.com/rmyndharis/VSCodroid/releases). The core download is roughly 270 MB, and you need about 915 MB free for the extraction that follows.
+2. **Binary extraction** -- On first launch, VSCodroid extracts bundled tools (Node.js, Python, Git, Bash, and others) to internal storage. About 810 MB lands on disk, unpacked one file at a time behind a progress bar, so allow minutes rather than seconds on a slower device. The ~915 MB above is that payload plus the working room setup insists on before it will start. It happens on the first launch and again after every app update, because the extraction is keyed on the app version rather than on what is already unpacked. An update needs far less free space than a fresh install (the app credits what it already holds, so roughly 220 MB rather than 915 MB), but it does re-copy the files and it does take minutes. A first run that is interrupted and retried on the same version is the one case that does not start over: files already the right size are left alone.
 3. **Language Picker** -- A prompt asks "What do you code in?" with options for Ruby and Java. This is the only time you are *asked*, but not your only chance to choose: touch and hold the app icon and pick **Manage toolchains** to add or remove them later. Whatever you select downloads there on the setup screen, one at a time; a download that fails is skipped and the rest continue. Skip goes straight to the editor.
 4. **Ready** -- The VS Code editor loads with terminal, file explorer, and all bundled tools available immediately.
 
@@ -794,10 +794,14 @@ VSCodroid's setting are worth knowing:
 - pip prefers the newest release of any package that has a ready-made build over
   a newer one it would have to build from source, for every package and not only
   the ones above. `pip install name==<version>` asks for a specific release.
-- pip reads the page listing those builds on every install, and without a
-  network it retries for a few seconds per package before carrying on. To switch
-  it off, for example when installing from local files, put `find-links =` with
-  nothing after it under `[global]` in `~/.config/pip/pip.conf`.
+- pip reads the page listing those builds on every install, once for each package
+  it looks up. With no network at all that adds a few seconds per package before
+  pip carries on. On a network that blocks github.io without refusing the
+  connection, pip waits out its timeouts instead, about a minute and a half per
+  package, so an install that pulls in many packages can take far longer than
+  usual. To switch it off, for example on such a network or when installing from
+  local files, put `find-links =` with nothing after it under `[global]` in
+  `~/.config/pip/pip.conf`.
 
 `turtle` and `tkinter` are not included at all. Tk draws into a desktop window,
 and this app has no window to give it.
@@ -841,6 +845,12 @@ python3 -m pytest
 python3 -m black .
 python3 -m cowsay -t hi
 ```
+
+A command installed inside a virtual environment is the exception: it does not
+start at all, and reopening VSCodroid does not change that. pip writes it into
+the environment's own `bin` directory, and VSCodroid fills its table only from
+`usr/bin`, where pip puts a command outside a virtual environment. With the
+environment active, run the module instead, for example `python -m pytest`.
 
 `pip` itself is the same shape and is already handled: `pip` and `pip3` are set up
 as shell functions that call `python3 -m pip`, so they work in the terminal
@@ -1087,7 +1097,7 @@ VS Code's web client runs as a single window. You cannot open multiple VS Code w
 
 ### Storage
 
-Core installation extracts approximately 805 MB to internal storage. With both toolchains installed, expect around 996 MB. Setup needs about 905 MB free before it starts, which is more than it ends up occupying because extraction needs room to work. If it refuses, it asks for the shortfall it measured rather than the whole figure, so a device part of the way through is asked only for what is missing. Beyond it, keep a few hundred MB free for node_modules, build artifacts and caches.
+Core installation extracts approximately 810 MB to internal storage. With both toolchains installed, expect around 1,000 MB. Setup needs about 915 MB free before it starts, which is more than it ends up occupying because extraction needs room to work. If it refuses, it asks for the shortfall it measured rather than the whole figure, so a device part of the way through is asked only for what is missing. Beyond it, keep a few hundred MB free for node_modules, build artifacts and caches.
 
 ---
 
@@ -1173,7 +1183,7 @@ If `npm install` fails with errors:
 
 ### Python: Installed, and Then Something Fails
 
-- **`bad interpreter: Permission denied`** after installing a package that brings a command with it (`pytest`, `black`, `httpie`). Open VSCodroid again and the command works; to use it without waiting, run it as a module: `python3 -m pytest`. See [Python Command-Line Tools](#python-command-line-tools) for why the message names `python3` when Python is not the problem.
+- **`bad interpreter: Permission denied`** after installing a package that brings a command with it (`pytest`, `black`, `httpie`). Open VSCodroid again and the command works; to use it without waiting, run it as a module: `python3 -m pytest`. A command installed inside a virtual environment never starts, however often you reopen the app; run it as a module there too, for example `python -m pytest`. See [Python Command-Line Tools](#python-command-line-tools) for why the message names `python3` when Python is not the problem.
 - **`Format Document` does nothing in a `.py` file** and the status bar sticks on "Running black". That is the formatter a marketplace search finds, which needs black installed separately (`pip install black`) and says nothing when it is missing. Opening a Python file offers you one that needs no pip step; see [The Python Formatter Is Not in Search Results](#the-python-formatter-is-not-in-search-results).
 - **`ZoneInfoNotFoundError`** from `zoneinfo`, `pandas` or anything that resolves a named time zone. `pip install tzdata` and it works from then on; see [Time Zones In Python](#time-zones-in-python).
 

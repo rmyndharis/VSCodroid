@@ -63,7 +63,7 @@ This is the order CI uses, and the order matters: each step below notes why.
 
 ```bash
 # 0. Prerequisites. Checks node, git and python3, and exits on a missing
-#    ANDROID_NDK_HOME or CMake rather than letting steps 9 and 10 discover it
+#    ANDROID_NDK_HOME or CMake rather than letting steps 10 to 13 discover it
 #    after twenty minutes of downloading. REQUIRE_NDK=0 skips those two checks.
 ./scripts/setup.sh
 
@@ -106,19 +106,28 @@ python3 scripts/build-nls-bundles.py
 #    each addon against the runtime it will load in.
 ./scripts/build-native-addons.sh
 
-# 11. The glibc compatibility shim. Last, because step 4 wipes assets/usr/lib
-#     and the stubs it generates live there. Without it the prebuilt native
-#     addons fail to load at runtime.
+# 11. The glibc compatibility shim. After every step that writes assets/,
+#     because step 4 wipes assets/usr/lib and the stubs it generates live there.
+#     Without it the prebuilt native addons fail to load at runtime.
 ./scripts/build-glibc-shim.sh \
     --scan android/app/src/main/assets/vscode-reh \
     --scan android/app/src/main/assets/extensions
 
-# 12. (Optional) On-demand toolchains
+# 12. The execution trampoline (requires NDK). Without it a toolchain command
+#     starts only from bash. It writes only into jniLibs, so it is not bound
+#     by the ordering above.
+./scripts/build-exec-trampoline.sh
+
+# 13. The Claude Code launcher and seccomp shim (requires NDK). Without them the
+#     Claude Code CLI cannot start. Also writes only into jniLibs.
+./scripts/build-claude-shim.sh
+
+# 14. (Optional) On-demand toolchains
 ./scripts/download-ruby.sh
 ./scripts/download-java.sh
 ```
 
-Alternatively, run steps 0 to 10 and the APK build in one go:
+Alternatively, run steps 0 to 13 and the APK build in one go:
 
 ```bash
 ./scripts/build-all.sh
@@ -179,6 +188,7 @@ VSCodroid/
 │   │   │   │   ├── platform-fix.js       # Selective platform override for npm and the Jupyter extension
 │   │   │   │   ├── dns-proxy.js          # Loopback HTTP/CONNECT proxy giving musl DNS;
 │   │   │   │   │                         #   `--require`d into the editor server, not the bootstrap
+│   │   │   │   ├── xdg-open.js           # Browser opener the exec trampoline runs for `xdg-open`
 │   │   │   │   ├── usr/                  # Shared libraries, Python stdlib, npm; downloaded
 │   │   │   │   └── extensions/           # vscodroid.* in git, Open VSX ones downloaded
 │   │   │   ├── jniLibs/arm64-v8a/     # Native binaries (.so trick for exec permission)
@@ -277,7 +287,7 @@ checkouts differed.
 | `download-termux-tools.sh` | Downloads bash, git, tmux, make, openssh and every shared library the bundled binaries link against, including Node's | `jniLibs/arm64-v8a/`, `assets/usr/` |
 | `download-node.sh` | Installs Termux's `nodejs-lts` as `libnode.so`. Run after `download-termux-tools.sh`, which places the libraries it links against | `jniLibs/arm64-v8a/libnode.so` |
 | `patch-default-shell.py` | Repoints a bundled file's compiled-in default shell from Termux's own prefix, a directory inside another application that this one cannot read, to `/system/bin/sh`. Called by `download-node.sh` on `libnode.so`, by `download-termux-tools.sh` on git, git-remote-curl, tmux, make and ssh, by `download-python.sh` on the stdlib's `subprocess.py`, and by `download-ruby.sh` on `libruby.so`, the pty extension and `mkmf.rb`, each on the file it has just installed and before the ELF gate. Four spellings are handled. The two that sit inside an ELF keep the file's length, a C string constant padded with NULs and Node's JavaScript source padded with spaces; the two standalone text files have no fixed length and are rewritten plainly, which matters for `mkmf.rb` because its line is copied verbatim into every generated `Makefile` and a make variable keeps its trailing whitespace. Each call fails unless the path is there exactly once, so an upstream change stops the build rather than shipping a file whose shell nobody has established. A file that already names that shell is reported as such and left alone, so an already-placed one can be handed to it to find out where it stands. `--check <dir>` rewrites nothing and fails if any regular file under the directory, at any depth, still names Termux's prefix. That is how the `verifyBundledShellPaths` Gradle task answers for the whole of `jniLibs/` at packaging time, including binaries restored from a cache that no download step re-ran, and how `download-ruby.sh` and the `verifyRubyPackShellPaths` Gradle task answer for the whole Ruby asset pack rather than only the three files that script names | the file, rewritten in place; or exit status under `--check` |
-| `verify-android-elf.py` | Checks a binary can load on Android: aarch64, no unbundled dependency, 16 KB-aligned segments. Called by every script that installs a binary (the Termux, Node, Python, musl and toolchain downloads, the native-addon and shim builds, and `fetch-vscode-oss.sh` for ripgrep), each on the one file it just placed. `--dir` checks a whole directory instead, which is how the `verifyBundledBinaries` Gradle task re-examines all of `jniLibs/` at packaging time, including binaries restored from a cache that no download step re-ran | exit status |
+| `verify-android-elf.py` | Checks a binary can load on Android: aarch64, no unbundled dependency, 16 KB-aligned segments. Called by every script that installs a binary (the Termux, Node, Python, musl and toolchain downloads, the native-addon and shim builds, and `fetch-vscode-oss.sh` for ripgrep), each on the one file it just placed. `--dir` checks a whole directory instead, which is how the `verifyBundledBinaries` Gradle task re-examines all of `jniLibs/` at packaging time, including binaries restored from a cache that no download step re-ran. `--tree` checks alignment and PT_INTERP for every aarch64 ELF under a tree, which is how the `verifyPackagedAlignment` Gradle task covers all of `assets/` at packaging time | exit status |
 | `verify-termux-index.sh` | Checks the Termux package index against the repository's signed `InRelease` before any digest is read out of it, so the filenames and checksums the download scripts trust rest on a signature rather than on one host. Called by every script above and below that reads the index; needs `gpg`. A cached index that has fallen behind is refetched once rather than refused, since callers keep one for an hour and upstream publishes daily. The signed file also has to name the repository the caller is reading packages from, since one key signs all of Termux's. A run that accepts a downloaded `InRelease` keeps it beside the index it covers, and `TERMUX_OFFLINE=1` verifies against that stored copy instead of downloading one. The stored copy is re-checked in full, signature, pinned fingerprint, repository and age alike, and the refetch above is switched off, since it would replace the index while its signature stayed the stored one | exit status |
 | `lib/termux-packages.sh` | Sourced, never run. The index fetch, the signature check, package resolution and the per-`.deb` digest check, shared by the four scripts that take packages from Termux: `download-termux-tools.sh`, `download-python.sh`, `download-ruby.sh` and `download-java.sh`. Each of those carried its own copy, so a correction to any of it had to be made four times and was worth nothing until it had been. What a caller still owns is its package list, where the files go, and which of them are checked as ELF objects. ⚠️ `download-node.sh` deliberately keeps its own: it resolves one package and writes its record after the ELF gate rather than at resolve time | functions, no output of its own |
 | `download-npm.sh` | Extracts npm from Node.js linux-arm64 tarball | `assets/usr/lib/node_modules/npm/` |

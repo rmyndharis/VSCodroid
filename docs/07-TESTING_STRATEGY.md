@@ -131,10 +131,12 @@ test source.
 
 ### 3.2 Instrumented Tests
 
-Fifty tests across eleven classes, in `android/app/src/androidTest/`. They
+52 tests across eleven classes, in `android/app/src/androidTest/`. They
 need an `arm64-v8a` device or emulator, because the app ships that ABI alone.
 Counted from the sources (`grep -cE '^\s*@Test'` over the directory), because no
-run covers the whole set and none of it is scheduled.
+run covers the whole set and none of it is scheduled. Nothing holds this figure
+to the suite; `android/app/src/androidTest/README.md` states the total that
+`scripts/check-instrumented-inventory.py` does check.
 
 | Test | Description | Setup |
 |------|-------------|-------|

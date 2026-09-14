@@ -179,7 +179,7 @@ flowchart TD
 | Architecture | arm64-v8a                          |
 | WebView      | Chrome 105+                        |
 | RAM          | 4 GB recommended                   |
-| Storage      | ~905 MB free to install            |
+| Storage      | ~915 MB free to install            |
 
 ## 🚀 Getting Started
 
@@ -229,8 +229,9 @@ adb install android/app/build/outputs/apk/debug/app-debug.apk
 > [!WARNING]
 > **The steps above build the Android shell only.** A runnable app also needs the server tree,
 > the Node runtime and the bundled tools, which the `scripts/download-*.sh` scripts fetch.
-> Only the native Node addons are cross-compiled, by `scripts/build-native-addons.sh`, and that
-> needs the Android NDK and CMake. See [CONTRIBUTING.md](CONTRIBUTING.md) for the order to run them in.
+> Four scripts cross-compile with the Android NDK: `scripts/build-native-addons.sh` (which also
+> needs CMake), `scripts/build-glibc-shim.sh`, `scripts/build-exec-trampoline.sh` and
+> `scripts/build-claude-shim.sh`. See [CONTRIBUTING.md](CONTRIBUTING.md) for the order to run them in.
 
 ## 📦 Size Estimates
 
@@ -238,9 +239,9 @@ adb install android/app/build/outputs/apk/debug/app-debug.apk
 | -------------------------------------- | -------------------- |
 | Play Store download (core)             | ~270 MB              |
 | + Each toolchain (on-demand)           | 10-55 MB per language |
-| Free space required to install         | ~905 MB              |
-| Extracted to internal storage (core)   | ~805 MB              |
-| Extracted, plus both toolchains        | ~996 MB              |
+| Free space required to install         | ~915 MB              |
+| Extracted to internal storage (core)   | ~810 MB              |
+| Extracted, plus both toolchains        | ~1,000 MB            |
 | RAM usage (typical)                    | ~400-700 MB          |
 
 The install figure is larger than what the app ends up occupying because extraction

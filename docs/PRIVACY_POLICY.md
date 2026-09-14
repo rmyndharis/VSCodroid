@@ -1,13 +1,13 @@
 # VSCodroid Privacy Policy
 
 **Effective Date: February 13, 2026**
-**Last Updated: September 14, 2026**
+**Last Updated: September 15, 2026**
 
 ## Summary
 
 VSCodroid is a code editor that runs entirely on your Android device. **We** do not collect, transmit, or store any personal data, and there is no server of ours for anything to reach. Your code and files stay on your device unless you send them somewhere yourself, for example by pushing to a Git remote.
 
-Three exceptions to "nothing leaves the device", all under your control and none involving us. Android's own backup service copies your editor settings to your Google account if you have backup switched on (see **Android Backup** below). Anything you ask the app to fetch (an extension, a toolchain, an `npm install`) is a request you initiated, with one thing the editor does on its own: it checks Open VSX for newer versions of your installed extensions and installs them (see **Network Access**).
+Three exceptions to "nothing leaves the device", all under your control and none involving us. Android's own backup service copies your editor settings to your Google account if you have backup switched on (see **Android Backup** below). Anything you ask the app to fetch (an extension, a toolchain, an `npm install`) is a request you initiated, with two things the editor does on its own: it checks Open VSX for newer versions of your installed extensions and installs them, and when you open a Python file without Black Formatter installed it looks that extension up on Open VSX so it can suggest it (see **Network Access**).
 
 The third is different in kind and worth reading before you use it: the app bundles **GitHub Copilot Chat**, and once you sign in to GitHub and use it, what you ask it and the code it attaches as context go to GitHub. That is the one feature here that sends your own work to someone else. It has no account and no chat until you sign in, though it does load and run in the background from the moment the editor starts, and it can be switched off.
 
@@ -52,6 +52,8 @@ When you browse, search for, or install extensions, the app connects to **Open V
 
 Not every one of these connections is one you asked for, which is why this section is not headed "user-initiated" like the ones below it. The editor asks Open VSX for newer versions of the extensions you have installed when it starts and every 12 hours after that, whether or not you open the Extensions view, and it installs the updates it finds without asking. Both behaviours come from the editor and are on by default; you can turn them off in its settings, under `extensions.autoCheckUpdates` and `extensions.autoUpdate`. What goes out is the list of extensions to check, never anything from your files.
 
+The app also asks the editor to recommend the Black Formatter extension (`ms-python.black-formatter`) for Python files. When you open a Python file while that extension is not installed, the editor looks it up on Open VSX to show the suggestion. What goes out is that extension's identifier, never anything from your files. The setting `extensions.ignoreRecommendations` turns it off.
+
 ### Signing In to a Service From the Editor (User-Initiated)
 
 If an extension asks you to sign in (to GitHub, for example), the app hands that extension's authorisation URL to your device's browser, and the sign-in happens there rather than inside the app. VSCodroid never sees your password: it is typed into the provider's own page in the browser.
@@ -89,7 +91,7 @@ VSCodroid does not collect any data during either process.
 
 When you run commands like `npm install` or `pip install` in the terminal, those package managers connect to their respective registries (npmjs.com, pypi.org, etc.) to download packages. This is standard developer tooling behavior and is entirely under your control.
 
-`pip` is also pointed at a page this project publishes on GitHub Pages, one per Python version (for the Python this app bundles, https://rmyndharis.github.io/VSCodroid/wheels/3.14/wheels.html), which lists prebuilt Android builds of a few packages that PyPI has none of, such as `numpy` and `psutil`. pip reads that page when it looks for a package to install, including when the Jupyter extension installs `ipykernel`, and downloads a listed package from this project's GitHub Releases. Nothing from your files or code is sent. Like every request pip makes, including those to pypi.org, GitHub receives your device's IP address and pip's User-Agent, which names the Python version, the operating system and kernel release, and the processor architecture; GitHub's privacy policy applies to them. How to turn this off is in the user guide, under Python Packages Written in C.
+`pip` is also pointed at a page this project publishes on GitHub Pages, one per Python version (for the Python this app bundles, https://rmyndharis.github.io/VSCodroid/wheels/3.14/wheels.html), which lists prebuilt Android builds of a few packages that PyPI has none of, such as `numpy` and `psutil`. pip reads that page when it looks for a package to install, including when the Jupyter extension installs `ipykernel`, and downloads a listed package from this project's GitHub Releases. Nothing from your files or code is sent. Like every request pip makes, including those to pypi.org, GitHub receives your device's IP address and pip's User-Agent, which names the versions of pip, Python and OpenSSL, the Android version, and the processor architecture, plus the versions of setuptools and the Rust compiler when those are installed, and whether pip appears to be running on a continuous-integration service; GitHub's privacy policy applies to them. How to turn this off is in the user guide, under Python Packages Written in C.
 
 ### SSH Connections (User-Initiated)
 

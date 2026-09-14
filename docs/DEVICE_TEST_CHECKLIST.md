@@ -108,7 +108,7 @@
 | EX-2 | Install extension | Install any extension from search | Downloads, installs, shows in sidebar | | |
 | EX-3 | Extension webview | Open Claude Code or theme picker | Webview renders, interactive | | |
 | EX-4 | Persist across restart | Install extension, kill + relaunch app | Extension still installed and active | | |
-| EX-5 | Bundled extensions | Check Extensions sidebar after first run | Process Monitor, SAF bridge, Serve on Network, Welcome, Python, ESLint, Prettier and Tailwind visible; no icon theme is bundled, so file icons are VS Code's own until the user installs one | | |
+| EX-5 | Bundled extensions | Check Extensions sidebar after first run | Process Monitor, SAF bridge, Serve on Network, Welcome, Python, ESLint, Prettier and Tailwind visible; no third-party icon theme is bundled; file icons use the built-in Seti theme, and Minimal and VS Code Modern Icons are the other two built-in icon themes | | |
 | EX-6 | Uninstall extension | Uninstall a previously installed extension | Removed cleanly, no errors | | |
 
 ## 7. Background / Foreground

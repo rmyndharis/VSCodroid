@@ -92,9 +92,9 @@ concurrency:
   # cancellation instead of a verdict.
   cancel-in-progress: ${{ github.event_name == 'pull_request' || github.event_name == 'push' }}
 
-# Reading the checkout and writing an artifact is all this needs. build.yml and
-# lint.yml inherit the repository default instead; release.yml and pages.yml
-# declare theirs, and this follows those two.
+# Reading the checkout and writing an artifact is all this needs. Like every
+# other workflow here, this declares its scope rather than inheriting the
+# repository default.
 permissions:
   contents: read
 
