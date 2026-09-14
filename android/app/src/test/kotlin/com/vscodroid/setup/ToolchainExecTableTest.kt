@@ -575,4 +575,39 @@ class ToolchainExecTableTest {
             "the pip script displaced the toolchain's own command",
         )
     }
+
+    /**
+     * What `gem install rubocop` leaves behind: a Ruby-shebang script in
+     * `$GEM_HOME/bin`, which is on no PATH and cannot be execve'd, so the command
+     * reported success and was then not found. It gets a row through the Ruby the
+     * manifest ships, and a script there naming another interpreter does not.
+     */
+    @Test
+    fun `a command gem installed gets a row that runs it through Ruby`() {
+        elf("usr/bin/ruby")
+        stateFile.writeText(
+            """[{"name":"ruby","binaries":["usr/bin/ruby"],""" +
+                """"env":{"GEM_HOME":"${'$'}HOME/.gem/ruby"}}]"""
+        )
+        val gemBin = File(filesDir, "home/.gem/ruby/bin").apply { mkdirs() }
+        File(gemBin, "rubocop").writeText("#!${filesDir.absolutePath}/usr/bin/ruby\nload 'x'\n")
+        File(gemBin, "notruby").writeText("#!/bin/sh\necho hi\n")
+
+        regenerate()
+
+        assertEquals(
+            listOf(
+                "rubocop\t${filesDir.absolutePath}/usr/bin/ruby" +
+                    "\t${filesDir.absolutePath}/home/.gem/ruby/bin/rubocop"
+            ),
+            tableLines().filter { it.startsWith("rubocop\t") },
+            "nothing runs `rubocop`, so a gem's command is still not found:\n" + execTable.readText(),
+        )
+        assertEquals(
+            emptyList<String>(),
+            tableLines().filter { it.startsWith("notruby\t") },
+            "a shell script in the gem bin directory was routed through Ruby",
+        )
+    }
+
 }

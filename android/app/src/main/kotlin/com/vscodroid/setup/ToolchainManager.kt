@@ -2944,6 +2944,9 @@ class ToolchainManager(private val context: Context) {
         // unreadable, and this file is one of the first things to look at when
         // a command goes missing.
         val rows = LinkedHashMap<String, String>()
+        // Where `gem install` puts commands, with the Ruby that runs them, for
+        // [addInstalledScriptRows] after the loop.
+        var gemBin: Pair<File, String>? = null
         // Keyed by variable, so a later toolchain wins a collision: the same
         // outcome sourcing the env file top to bottom gives a redefined export.
         val envRows = LinkedHashMap<String, String>()
@@ -3008,6 +3011,12 @@ class ToolchainManager(private val context: Context) {
                     }
                 }
             }
+
+            val gemHome = env?.optString("GEM_HOME", "").orEmpty()
+            val ruby = elfPaths["ruby"]
+            if (gemHome.isNotEmpty() && ruby != null) {
+                gemBin = File(expandToolchainValue(gemHome), "bin") to ruby
+            }
         }
 
         // The one row this app owns rather than a toolchain. `putIfAbsent`, and
@@ -3027,7 +3036,9 @@ class ToolchainManager(private val context: Context) {
             "xdg-open",
             "xdg-open\t${Environment.getNodePath(context)}\t$filesDir/server/xdg-open.js",
         )
-        addPipInstalledScriptRows(rows)
+        val binDir = File(context.filesDir, "usr/bin")
+        addInstalledScriptRows(rows, binDir, File(binDir, "python3").absolutePath, "python", "pip")
+        gemBin?.let { (dir, ruby) -> addInstalledScriptRows(rows, dir, ruby, "ruby", "gem") }
 
         val body = (envRows.values + rows.values).joinToString("\n", postfix = "\n")
         execTable.parentFile?.mkdirs()
@@ -3045,7 +3056,7 @@ class ToolchainManager(private val context: Context) {
     }
 
     /**
-     * Gives every command `pip` has installed a row, so it can actually run.
+     * Gives every command `pip` or `gem` has installed a row, so it can actually run.
      *
      * `pip install black` succeeds, reports success, and writes an executable
      * `usr/bin/black` that is already on PATH, and then the command does not run:
@@ -3065,14 +3076,17 @@ class ToolchainManager(private val context: Context) {
      * with the script as an argument. Nothing is `execve`d under `filesDir` at any
      * point, which is why this works where the shebang does not.
      *
-     * Only `usr/bin`, because that is where pip puts a console script when the
-     * interpreter's prefix is the one the app ships, and only regular files there:
+     * For pip, only `usr/bin`, because that is where pip puts a console script when
+     * the interpreter's prefix is the one the app ships, and only regular files there:
      * every other name in that directory is a symlink [FirstRunSetup.setupToolSymlinks]
-     * made onto an ELF that already runs.
+     * made onto an ELF that already runs. For gem, `$GEM_HOME/bin` from the Ruby
+     * manifest, which is where RubyGems writes a gem's executables when GEM_HOME is
+     * not its default directory, with a `#!` naming Ruby's ELF under `filesDir`: the
+     * same refusal, and on no PATH either.
      *
-     * Only a Python shebang. A script naming some other interpreter is not one
-     * this can help, and handing it to Python would turn a command that does not
-     * start into one that starts and does the wrong thing.
+     * Only a shebang naming [shebangWord]. A script naming some other interpreter is
+     * not one this can help, and handing it to Python or Ruby would turn a command
+     * that does not start into one that starts and does the wrong thing.
      *
      * The interpreter named is the `usr/bin/python3` link, never the `.so` it points
      * at. linker64 hands Python the path it was given as argv[0], and Python keeps
@@ -3092,10 +3106,14 @@ class ToolchainManager(private val context: Context) {
      * in a new terminal, rather than at once. Worth knowing before reading a bug
      * report that says a fresh `pip install` still is not found.
      */
-    private fun addPipInstalledScriptRows(rows: LinkedHashMap<String, String>) {
-        val binDir = File(context.filesDir, "usr/bin")
+    private fun addInstalledScriptRows(
+        rows: LinkedHashMap<String, String>,
+        binDir: File,
+        interpreter: String,
+        shebangWord: String,
+        installer: String,
+    ) {
         val names = binDir.list() ?: return
-        val interpreter = File(binDir, "python3").absolutePath
         if (!File(interpreter).exists()) return
 
         var added = 0
@@ -3126,21 +3144,21 @@ class ToolchainManager(private val context: Context) {
                 false
             }
             if (isSymlink || !script.isFile) continue
-            if (!namesPythonInShebang(script)) continue
+            if (!shebangNames(script, shebangWord)) continue
             rows[name] = "$name\t$interpreter\t${script.absolutePath}"
             added++
         }
-        if (added > 0) Logger.i(tag, "Exec table carries $added pip-installed commands")
+        if (added > 0) Logger.i(tag, "Exec table carries $added $installer-installed commands")
     }
 
     /**
-     * Whether [script] starts with a `#!` line naming a Python interpreter.
+     * Whether [script] starts with a `#!` line naming [word], an interpreter.
      *
      * Reads a bounded head rather than the file: a console script is a few hundred
      * bytes, but nothing stops a user putting something enormous in this directory,
      * and this runs on every launch.
      */
-    private fun namesPythonInShebang(script: File): Boolean = try {
+    private fun shebangNames(script: File, word: String): Boolean = try {
         script.inputStream().use { stream ->
             val head = ByteArray(SHEBANG_HEAD_BYTES)
             val read = stream.read(head)
@@ -3148,7 +3166,7 @@ class ToolchainManager(private val context: Context) {
                 false
             } else {
                 val first = String(head, 0, read, Charsets.ISO_8859_1).substringBefore('\n')
-                first.startsWith("#!") && first.contains("python")
+                first.startsWith("#!") && first.contains(word)
             }
         }
     } catch (e: Exception) {

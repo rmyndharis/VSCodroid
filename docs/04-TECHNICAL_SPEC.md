@@ -427,8 +427,10 @@ the `usr/bin/python3` link rather than the `libpython.so` behind it, so `sys.exe
 app update does not move. Without it `pip install black` produced a `black` on PATH that answered
 `bad interpreter: Permission denied`, since reaching the interpreter through a shebang means
 `execve` on the script's own inode. Symlinks in that directory are skipped: those are the bundled
-tools, already pointing at ELFs that run. The rows are written by the launch pass, so a command
-installed while the app is running is reachable on the next launch.
+tools, already pointing at ELFs that run. The same scan covers `$GEM_HOME/bin` from the Ruby
+manifest for Ruby-shebang files, which is where `gem install` writes a gem's commands. The rows are
+written by the launch pass and again whenever the editor returns to the foreground, so a command
+installed while the app is in front is reachable after switching away and back.
 
 ---
 

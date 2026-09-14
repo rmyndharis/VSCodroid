@@ -669,6 +669,10 @@ javac Main.java
 java Main
 ```
 
+A command a gem installs (`rubocop`, `rails`) starts working once you switch away from
+VSCodroid and back, in a new terminal, the same delay as a command pip installs; see
+[Python Command-Line Tools](#python-command-line-tools).
+
 ### Removing Toolchains
 
 Open the Toolchains screen by either route in [Installing After
