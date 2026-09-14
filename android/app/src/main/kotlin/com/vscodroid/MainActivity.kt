@@ -63,6 +63,7 @@ import com.vscodroid.keyboard.KeyInjector
 import com.vscodroid.service.NodeService
 import com.vscodroid.service.StartupNotice
 import com.vscodroid.setup.FirstRunSetup
+import com.vscodroid.setup.ToolchainManager
 import com.vscodroid.storage.SafFolderInfo
 import com.vscodroid.storage.SafStorageManager
 import com.vscodroid.util.Logger
@@ -1052,6 +1053,28 @@ class MainActivity : AppCompatActivity() {
     override fun onStart() {
         super.onStart()
         handleResumeFromBackground()
+        refreshToolchainCommands()
+    }
+
+    /**
+     * Rebuilds the exec table each time the editor comes to the foreground.
+     *
+     * A command `pip install` writes cannot run until the table has a row for it, and
+     * the table was rebuilt only by SplashActivity's launch pass. Leaving with Back or
+     * Home and tapping the icon brings this singleTask activity back without that
+     * pass, so "open VSCodroid again" left the command failing with `bad interpreter`
+     * until the task was swiped from Recents. Cheap: one listing of `usr/bin` and two
+     * small files written atomically, serialised with installs by the manager's lock.
+     */
+    private fun refreshToolchainCommands() {
+        val toolchains = ToolchainManager(applicationContext)
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                toolchains.regenerateDerivedFiles()
+            } catch (e: Exception) {
+                Logger.w(tag, "Could not refresh the toolchain commands: ${e.message}")
+            }
+        }
     }
 
     override fun onTrimMemory(level: Int) {

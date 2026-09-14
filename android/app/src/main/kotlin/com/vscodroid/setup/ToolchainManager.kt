@@ -3086,10 +3086,11 @@ class ToolchainManager(private val context: Context) {
      * Rows already present win, so a toolchain's own command and the app's own
      * `xdg-open` keep their meaning.
      *
-     * The table is rewritten by the launch pass, so a command installed while the
-     * app is running becomes reachable on the next launch rather than at once.
-     * Worth knowing before reading a bug report that says a fresh `pip install`
-     * still is not found.
+     * The table is rewritten by the launch pass and whenever the editor returns to
+     * the foreground (`MainActivity.refreshToolchainCommands`), so a command installed
+     * while the app is in front becomes reachable after switching away and back,
+     * in a new terminal, rather than at once. Worth knowing before reading a bug
+     * report that says a fresh `pip install` still is not found.
      */
     private fun addPipInstalledScriptRows(rows: LinkedHashMap<String, String>) {
         val binDir = File(context.filesDir, "usr/bin")
