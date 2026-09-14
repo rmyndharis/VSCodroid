@@ -3630,6 +3630,47 @@ class MainActivity : AppCompatActivity() {
                     return focus.apply(this, arguments);
                 };
 
+                // A tap on a menubar item is not also a tap on the menubar button.
+                //
+                // The menubar renders its menu, and every submenu, inside the button
+                // that opened it, and the workbench's touch gestures hand one tap
+                // event to every registered target that contains the finger's first
+                // touch, innermost first. The item's turn runs it, and the menubar's
+                // action runner closes the menu on `onWillRun`, synchronously, before
+                // the item's own action starts. The same tap then reaches the button,
+                // which reads a closed menu and opens it again: its own guard skips a
+                // tap from inside the menu only while the menu is still open. Measured
+                // on an API 33 emulator with a stack on each focus():
+                // `setUnfocusedState`, then `onMenuTriggered` from `onTouchEnd` 13ms
+                // later, then `showCustomMenu`.
+                //
+                // What that cost depends on the item. After `New Text File` the new
+                // editor takes focus and closes the reopened menu again. After an
+                // item that opens a quick pick, `File > New File...`, reopening the
+                // menu takes focus off the pick's box, and the pick, which closes on
+                // blur, is gone before it is seen; when it survives, the menu is left
+                // open behind it.
+                //
+                // Recognised by where the tap started, and on the event itself. By the
+                // button's turn the menu has been removed, so the item the tap started
+                // on is detached and no longer inside anything: measured, `isConnected`
+                // false and `closest` empty. The first turn still sees the menu whole,
+                // so that is where the tap is marked. Stopped in the capture phase at
+                // the document, before the button's own listener, which is the only
+                // phase that sees it: the event does not bubble. A tap on the button
+                // itself was never marked and passes.
+                document.addEventListener('-monaco-gesturetap', function(e) {
+                    var origin = e.initialTarget;
+                    if (origin && origin.closest && origin.closest('.menubar-menu-items-holder')) {
+                        e.__vscodroidMenuItemTap = true;
+                    }
+                    var target = e.target;
+                    if (e.__vscodroidMenuItemTap && target && target.classList &&
+                        target.classList.contains('menubar-menu-button')) {
+                        e.stopImmediatePropagation();
+                    }
+                }, true);
+
                 // Every open menu's action bar, across the page and the shadow hosts.
                 function actionBars() {
                     var roots = [document];

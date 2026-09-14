@@ -67,6 +67,34 @@ class TouchContextMenuWiringTest {
     }
 
     @Test
+    fun `a tap on a menubar item does not reach the menubar button`() {
+        val script = body("private fun injectTouchContextMenu(")
+        // The workbench delivers one tap to every gesture target containing the first
+        // touch. The menu lives inside its button, so the tap that runs an item then
+        // reopens the menu it closed, and after `File > New File...` that took focus
+        // off the quick pick, which closed. Measured on an API 33 emulator.
+        listOf(
+            "-monaco-gesturetap" to "the workbench's tap event; without it nothing is intercepted",
+            ".menubar-menu-items-holder" to "the menu and submenu container inside the button; " +
+                "without it every tap on the button is swallowed or none is",
+            "menubar-menu-button" to "the target whose listener reopens the menu",
+            "stopImmediatePropagation" to "what keeps the button's own listener from running",
+        ).forEach { (name, why) ->
+            assertTrue(script.contains(name), "injectTouchContextMenu no longer names `$name`: $why")
+        }
+        // Only this listener's own text: the next listener in the script also ends in
+        // `}, true)`, and a pattern allowed to run on reaches it. The event does not
+        // bubble, so outside the capture phase the listener never sees the button's turn.
+        val start = script.indexOf("'-monaco-gesturetap'")
+        val listener = script.substring(start, script.indexOf("addEventListener", start).let { if (it < 0) script.length else it })
+        assertTrue(
+            Regex("""\},\s*true\)""").containsMatchIn(listener),
+            "the tap listener is not in the capture phase; the event does not bubble, so it never " +
+                "sees the tap reach the menubar button and the menu reopens again",
+        )
+    }
+
+    @Test
     fun `the keyboard guard ignores a touch that landed in a context menu`() {
         val guard = body("private fun injectKeyboardGuard(")
         // The editor's menu is built in a shadow root whose host is a child of the
@@ -163,7 +191,15 @@ class TouchContextMenuWiringTest {
                 "scripts/package-assets.sh to check the selectors against the shipped bundle",
         )
         val bundle = workbench.readText()
-        listOf("shadow-root-host", "context-view", "actions-container", "native-edit-context")
+        listOf(
+            "shadow-root-host",
+            "context-view",
+            "actions-container",
+            "native-edit-context",
+            "menubar-menu-items-holder",
+            "menubar-menu-button",
+            "-monaco-gesturetap",
+        )
             .forEach { name ->
                 assertTrue(
                     bundle.contains(name),
