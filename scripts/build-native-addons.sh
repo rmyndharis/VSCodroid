@@ -313,9 +313,12 @@ fetch() {
     fi
     pack_pinned "$pkg" "$version" "$expected" "$tgz" || return 1
 
-    if [ ! -f "$dir/package.json" ]; then
-        ( cd "$dir" && tar xzf source.tgz --strip-components=1 )
-    fi
+    # Unpacked over a cleared directory on every run, keeping only the two
+    # tarballs pack_pinned re-hashes. Behind a package.json guard, an edited or
+    # half-extracted source file beside a verified tarball was compiled as it
+    # stood, which is the trust the paragraph above pack_pinned says this avoids.
+    find "$dir" -mindepth 1 -maxdepth 1 ! -name source.tgz ! -name node-addon-api.tgz -exec rm -rf {} +
+    ( cd "$dir" && tar xzf source.tgz --strip-components=1 )
 
     # node-addon-api supplies napi.h; nothing else is needed to link. Unpacked
     # under node_modules by hand rather than written into a package.json that
