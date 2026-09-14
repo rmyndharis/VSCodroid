@@ -32,6 +32,19 @@ class TouchContextMenuWiringTest {
     private fun body(declaration: String): String =
         SourceScan.body(mainActivity(), declaration)
 
+    /**
+     * One listener's own text, from [opener] to the next `addEventListener`. Several
+     * listeners in the script share names (Escape, `stopImmediatePropagation`,
+     * `bars.length - 1`), so a check over the whole script cannot fail when the
+     * listener it is about is deleted.
+     */
+    private fun listener(script: String, opener: String): String {
+        val start = script.indexOf(opener)
+        assertTrue(start >= 0, "`$opener` is gone from injectTouchContextMenu")
+        val end = script.indexOf("addEventListener", start + opener.length)
+        return script.substring(start, if (end < 0) script.length else end)
+    }
+
     @Test
     fun `the script is installed from the path every page load takes`() {
         val source = mainActivity()
@@ -64,6 +77,39 @@ class TouchContextMenuWiringTest {
         ).forEach { (name, why) ->
             assertTrue(script.contains(name), "injectTouchContextMenu no longer names `$name`: $why")
         }
+        val start = script.indexOf("HTMLElement.prototype.focus = function")
+        assertTrue(start >= 0, "the focus refusal is gone, so a long press with the keyboard up opens a menu that closes itself")
+        val refusal = script.substring(start, script.indexOf("};", start))
+        listOf(
+            "EDITING_HOST" to "the refusal no longer starts from an editing host",
+            "inMenu(this)" to "the refusal reaches beyond menus: an action widget or a select dropdown " +
+                "that closes on blur can then never lose focus, and a tap outside leaves it open",
+            "matchMedia(COARSE)" to "the refusal applies to a fine pointer",
+            "__vscodroidImeVisible !== false" to "the refusal applies with the keyboard down or a " +
+                "hardware keyboard in use, so Enter and arrows edit the file behind an open menu",
+            "return;" to "the refusal no longer refuses anything",
+        ).forEach { (name, why) -> assertTrue(refusal.contains(name), why) }
+        assertTrue(
+            script.contains("closest('.monaco-menu-container')"),
+            "inMenu no longer recognises a menu by the container the workbench's Menu marks",
+        )
+    }
+
+    @Test
+    fun `the page is told whether the soft keyboard is up`() {
+        val setup = body("private fun setupExtraKeyRow(")
+        assertTrue(
+            setup.contains("onImeVisibilityChanged") && setup.contains("__vscodroidImeVisible"),
+            "the keyboard's state no longer reaches the page, so the focus refusal cannot tell a " +
+                "soft keyboard it must protect from a hardware one it must not get in the way of",
+        )
+        val script = body("private fun injectTouchContextMenu(")
+        assertTrue(
+            script.contains("extraKeyRow?.imeVisible") &&
+                script.indexOf("__vscodroidImeVisible = reported") < script.indexOf("__vscodroidTouchContextMenu) return"),
+            "a new document does not start from the last reported keyboard state, or reads it " +
+                "only on the first injection",
+        )
     }
 
     @Test
@@ -78,15 +124,19 @@ class TouchContextMenuWiringTest {
             ".menubar-menu-items-holder" to "the menu and submenu container inside the button; " +
                 "without it every tap on the button is swallowed or none is",
             "menubar-menu-button" to "the target whose listener reopens the menu",
-            "stopImmediatePropagation" to "what keeps the button's own listener from running",
         ).forEach { (name, why) ->
             assertTrue(script.contains(name), "injectTouchContextMenu no longer names `$name`: $why")
         }
         // Only this listener's own text: the next listener in the script also ends in
         // `}, true)`, and a pattern allowed to run on reaches it. The event does not
         // bubble, so outside the capture phase the listener never sees the button's turn.
-        val start = script.indexOf("'-monaco-gesturetap'")
-        val listener = script.substring(start, script.indexOf("addEventListener", start).let { if (it < 0) script.length else it })
+        val listener = listener(script, "'-monaco-gesturetap'")
+        assertTrue(
+            listener.contains("stopImmediatePropagation") && listener.contains("__vscodroidMenuItemTap") &&
+                listener.contains(".menubar-menu-items-holder"),
+            "the tap listener no longer marks a tap from inside the menu and stops it at the button, " +
+                "so the button's own listener reopens the menu and a picker it opened closes",
+        )
         assertTrue(
             Regex("""\},\s*true\)""").containsMatchIn(listener),
             "the tap listener is not in the capture phase; the event does not bubble, so it never " +
@@ -127,9 +177,11 @@ class TouchContextMenuWiringTest {
     @Test
     fun `escape still reaches a menu that does not hold focus`() {
         val script = body("private fun injectTouchContextMenu(")
+        val forwarder = listener(script, "addEventListener('keydown'")
         assertTrue(
-            script.contains("'Escape'") && script.contains("stopImmediatePropagation"),
-            "the Escape forwarder is gone. A menu that never took focus never sees Escape, so " +
+            forwarder.contains("'Escape'") && forwarder.contains("stopImmediatePropagation") &&
+                forwarder.contains("dispatchEvent") && forwarder.contains("bars.length - 1"),
+            "the Escape forwarder is gone, or no longer reaches the innermost menu first. A menu that never took focus never sees Escape, so " +
                 "the key-row Esc button stops closing menus, which is the one keyboard route a " +
                 "phone has.",
         )
@@ -143,16 +195,32 @@ class TouchContextMenuWiringTest {
         // It only ever appeared to work because the tap was read as a tap on the file
         // and the keyboard that came up resized the window out from under the menu.
         // With that excluded from the keyboard guard, this is the dismissal.
+        // To the next function rather than the next listener: this one registers the
+        // click swallow inside itself.
+        val awayStart = script.indexOf("addEventListener('pointerdown'")
+        assertTrue(awayStart >= 0, "the tap-away dismissal is gone")
+        val away = script.substring(awayStart, script.indexOf("function adopt(", awayStart))
         assertTrue(
-            script.contains("getBoundingClientRect") && script.contains("clientX"),
+            away.contains("getBoundingClientRect") && away.contains("clientX"),
             "the tap-away dismissal is gone or no longer decides by geometry. Containment " +
                 "cannot decide it: every touch inside a shadow-DOM menu retargets to the " +
                 "same host, so the inside and the outside of the menu look identical.",
         )
         assertTrue(
-            script.contains("bars.length - 1"),
+            away.contains("bars.length - 1"),
             "the dismissal no longer walks the menus innermost first, so tapping away " +
                 "from a submenu leaves its parent open",
+        )
+        assertTrue(
+            away.contains("closest('.monaco-menu')"),
+            "the dismissal measures the action bar instead of the menu that clips it, so a tap " +
+                "just outside a scrolling menu counts as inside and closes nothing",
+        )
+        assertTrue(
+            away.contains("e.preventDefault()") && away.contains("addEventListener('click', swallow, true)") &&
+                away.contains("removeEventListener('click', swallow, true)"),
+            "the tap that closes a menu goes on to click whatever was under it: a file row opens, " +
+                "a status bar entry runs",
         )
     }
 

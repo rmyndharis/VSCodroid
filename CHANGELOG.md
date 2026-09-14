@@ -20,6 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Menu items that open a picker, such as File > New File..., open it on a tap instead of doing nothing, and a menu item no longer leaves the menu open behind what it opened.
+- Tapping outside a context menu closes it without also opening or running what was under the finger.
+- The chat model and mode pickers, Quick Fix and settings dropdowns close again when you tap outside them.
+- With a hardware keyboard, or with the on-screen keyboard down, an open context menu takes Enter and the arrow keys instead of the file behind it.
+- A dialog fits a narrow screen with a mouse or trackpad attached too.
 - Lists no longer overlap their own rows. Every row in the explorer, the search results, the command palette and a settings dropdown was drawn 14px taller than the space it was given, so each one covered the top of the next: option labels in a dropdown stacked on each other, and tapping the lower edge of a filename opened the file below it.
 - Editor tabs and status bar entries fit their strips again. Both were drawn taller than the area holding them, by 5px and 10px.
 - A long press opens a menu that stays open while the keyboard is up. The menu took focus from the text, the keyboard went down, and the workbench answered the resize by closing the menu about 60ms after it appeared, so it read as flickering or dead. Esc on the key row still closes it.

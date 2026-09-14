@@ -86,8 +86,12 @@ class KeyboardGuardWiringTest {
     @Test
     fun `a long press is not a tap`() {
         val guard = SourceScan.body(mainActivity(), "private fun injectKeyboardGuard(")
+        val up = guard.substring(guard.indexOf("addEventListener('pointerup'").also {
+            assertTrue(it >= 0, "the guard no longer decides on pointerup")
+        })
+        val check = Regex("""held\s*>=\s*LONG_PRESS_MS\s*\)\s*return""").find(up)
         assertTrue(
-            guard.contains("LONG_PRESS_MS"),
+            check != null && check.range.first < up.indexOf("letTheKeyboardUp()"),
             "the guard no longer measures how long the finger was down, so a long press is " +
                 "read as a tap again: the keyboard comes up, the window resizes, and the " +
                 "workbench closes the menu the press had just opened. Measured on an API 36 " +
@@ -95,7 +99,7 @@ class KeyboardGuardWiringTest {
                 "resize at t+1621ms, and no menu.",
         )
         assertTrue(
-            guard.contains("e.timeStamp"),
+            up.contains("e.timeStamp - pendingTap.at"),
             "the duration is no longer read from the events themselves. Both timestamps have " +
                 "to come from the same clock; a wall-clock read here would compare two " +
                 "different origins.",
