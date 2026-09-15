@@ -854,6 +854,24 @@ class MainActivity : AppCompatActivity() {
     private fun receiveCallbackIntent(intent: Intent?) {
         val uri = intent?.data ?: return
         if (!isExtensionCallback(uri.scheme, uri.host)) return
+        // Bounded before anything parses it. Android's org.json recurses once per
+        // nesting level with no depth cap of its own (platform sources, android-33
+        // JSONTokener: nextValue calls readArray calls nextValue), and a
+        // StackOverflowError is not a JSONException, so it leaves the readers
+        // below, leaves onNewIntent, and takes the process with it. This filter is
+        // exported and BROWSABLE, so anything on the device can deliver one.
+        //
+        // Measured on an API 33 emulator: 15,000 levels parsed and were refused
+        // normally, and `am` could not deliver more, so the depth that overflows
+        // was not reached from a shell. A real caller is not held to that limit,
+        // which is why the bound is here rather than a note saying it looked fine.
+        // A real callback is a few hundred bytes: 522 for a full GitHub round
+        // trip, so this leaves more than an order of magnitude of room.
+        val payload = uri.getQueryParameter("data")
+        if (payload != null && payload.length > MAX_CALLBACK_PAYLOAD_CHARS) {
+            Logger.w(tag, "Ignoring a sign-in callback whose payload is too large to be one")
+            return
+        }
         if (!workbenchLoaded) {
             // Ahead of the timing gate, and that ordering is the whole point.
             // This branch injects nothing; it explains. The case it exists for
@@ -5280,6 +5298,15 @@ internal fun callbackNonce(data: String?): String? {
 internal const val CALLBACK_NONCE_PARAM = "vscodroid-nonce"
 
 /**
+ * The longest `data` parameter [MainActivity.receiveCallbackIntent] will parse.
+ *
+ * Generous by design: the payload a real sign-in carries is a few hundred bytes,
+ * and the point of the bound is the shape no real one has, a deeply nested value
+ * that makes the platform's JSON reader recurse until the stack is gone.
+ */
+internal const val MAX_CALLBACK_PAYLOAD_CHARS = 8192
+
+/**
  * The secret in a callback query, read without `Uri`, which a plain JVM test
  * cannot build. Split on the two separators a query uses and compared whole, so
  * a parameter merely ending in the name (`x-vscodroid-nonce`) is not it.
@@ -5308,9 +5335,13 @@ internal fun callbackQueryWithoutNonce(query: String): String =
  * carried none. Null means this app never had a secret to match, not that a
  * caller withheld one, so it answers true and leaves the matching where it was
  * before the secret existed: an address whose callback URL this app could not
- * read must not cost the user their ability to sign in at all. A provider that
- * drops unknown parameters from the redirect it was given lands here too, and
- * the same reasoning covers it.
+ * read must not cost the user their ability to sign in at all.
+ *
+ * The other direction is deliberate and is not a fallback: a launch that DID
+ * carry a secret refuses a callback that arrives without one. A provider that
+ * drops unknown parameters from the redirect it was given therefore loses that
+ * sign-in, and the alternative is worse, since omitting a parameter is free for
+ * anything on the device that wants to answer a request id it guessed.
  *
  * Compared with [MessageDigest.isEqual] rather than `==`, which is the
  * comparison this codebase uses for a secret elsewhere and costs nothing here.
@@ -5351,11 +5382,19 @@ internal fun callbackUriJson(data: String?): String? {
     if (data.isNullOrEmpty()) return null
     return try {
         val uri = JSONObject(data).optJSONObject("uri") ?: return null
-        // The secret this app checked is taken back out before the address goes
+        // The parameter this app added is taken back out before the address goes
         // any further: the workbench hands it to the extension that started the
         // sign-in, and what that extension asked for is its own callback, not a
         // parameter this app and the browser arranged between themselves. A
         // query left empty by the removal is dropped rather than sent as "".
+        //
+        // Only the parameter, not every copy of the value. A provider that echoes
+        // the whole redirect back inside another parameter carries one with it:
+        // the bundled GitHub flow puts the callback URL in `state`, percent
+        // encoded, so the secret is in there too. Rewriting inside `state` is not
+        // an option, because that value is compared byte for byte by the flow
+        // that sent it. Nothing is gained by that copy: the extension holding it
+        // is the one whose sign-in this is.
         val query = uri.opt("query") as? String
         if (query != null && callbackNonceParam(query) != null) {
             val rest = callbackQueryWithoutNonce(query)

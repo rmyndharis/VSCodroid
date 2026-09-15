@@ -82,8 +82,9 @@ class AuthCallbackSecretTest {
     /**
      * An address this app opened without a secret in it is one it never had a
      * secret for. Refusing there would take sign-in away from a flow whose callback
-     * URL this app could not read, and from a provider that drops parameters it was
-     * not expecting, which is worse than the matching that shipped before.
+     * URL this app could not read, which is worse than the matching that shipped
+     * before. It is not the other way round: a launch that carried a secret and a
+     * callback that arrives without one is the case above, and it is refused.
      */
     @Test
     fun `an address that carried no secret falls back to the older matching`() {
@@ -132,9 +133,14 @@ class AuthCallbackSecretTest {
      * The secret is this app's business with the browser. What the workbench hands
      * the extension is the callback it asked for, so the parameter goes before the
      * address is relayed, and a query left empty by that goes with it.
+     *
+     * The parameter, not every copy of the value: a provider that echoes the whole
+     * redirect back inside another parameter, as the GitHub flow does with `state`,
+     * carries one this cannot remove without rewriting a value that flow compares
+     * byte for byte.
      */
     @Test
-    fun `the secret does not travel on to the extension`() {
+    fun `the parameter this app added does not travel on to the extension`() {
         val relayed = callbackUriJson(payload("code=abc&vscodroid-nonce=$ours"))
         assertEquals("code=abc", JSONObject(relayed!!).optString("query"))
         assertTrue(
