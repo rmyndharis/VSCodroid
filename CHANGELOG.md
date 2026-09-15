@@ -20,10 +20,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Menu items that open a picker, such as File > New File..., open it on a tap instead of doing nothing, and a menu item no longer leaves the menu open behind what it opened.
-- Tapping outside a context menu closes it without also opening or running what was under the finger.
-- The chat model and mode pickers, Quick Fix and settings dropdowns close again when you tap outside them.
-- With a hardware keyboard, or with the on-screen keyboard down, an open context menu takes Enter and the arrow keys instead of the file behind it.
-- A dialog fits a narrow screen with a mouse or trackpad attached too.
 - Interrupting a Jupyter kernel also interrupts the processes it started, including ones an earlier cell left running, and restarting or closing the kernel ends them instead of leaving them behind.
 - `npm install` run by an extension, such as Claude Code's Bash tool, gets the same platform override as in the terminal, so a package whose install script refuses Android installs there too.
 - Python, pip and the Jupyter kernel start faster: bytecode is cached, under the app's cache, so `python3 -m pip --version` takes about a third of the time it did.
@@ -46,6 +42,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Commands Claude Code runs start. Every `bash` and `node` process it launched aborted with "stack corruption detected", on every Android version.
 - A command `pip` installs outside a virtual environment runs, such as `black`, `pytest` or `httpie`. It installed and then refused to start. One installed while the editor is open works after switching away and back, in a new terminal.
 - A command installed with `gem install` runs, the same way. It installed and was then not found.
+- Claude Code keeps working on Android 13 and 14 when it asks the system for something the sandbox refuses. The refusal reached it as a value it never asked for, and the next call it depends on ended the process.
+- A sign-in callback too large to be one is ignored instead of taking the app down with it.
+- First run asks for the space the unpack really takes. The reserve did not cover what the filesystem itself spends on 22,600 files, so a device could pass the check and run out part-way through.
 
 ## [1.3.0] - 2026-09-06
 

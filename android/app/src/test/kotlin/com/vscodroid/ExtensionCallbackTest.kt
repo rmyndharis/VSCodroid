@@ -101,6 +101,32 @@ class AuthTabWindowTest {
     }
 
     @Test
+    fun `the secret handed in is the secret handed back, per request`() {
+        // The other half of a launch record, and the half with no behaviour of
+        // its own: the relay compares what a callback carries against what this
+        // returns, and a null answer means "matched by request id alone". So a
+        // record that lost the secret, or handed back a neighbour's, reads as a
+        // launch that never had one and every forged callback naming an armed id
+        // is accepted again.
+        val secret = "a".repeat(32)
+        AuthTabWindow.arm(listOf("900001"), secret, 100L)
+        AuthTabWindow.arm(listOf("900002"), null, 200L)
+
+        assertEquals(secret, AuthTabWindow.nonceFor("900001"))
+        assertNull(
+            AuthTabWindow.nonceFor("900002"),
+            "a launch whose address carried no secret reported one belonging to another",
+        )
+        assertNull(AuthTabWindow.nonceFor("900003"), "an id nobody launched reported a secret")
+
+        // Ids repeat, for the reason the readings above do, and the secret has to
+        // move forward with the reading: keeping the old one refuses the callback
+        // of the sign-in actually in flight.
+        AuthTabWindow.arm(listOf("900001"), "b".repeat(32), 300L)
+        assertEquals("b".repeat(32), AuthTabWindow.nonceFor("900001"))
+    }
+
+    @Test
     fun `an id nobody launched is not armed by a launch of another id`() {
         // The narrowing itself. One timestamp for the whole process answered yes
         // here, which is how opening a documentation link came to widen the
@@ -727,6 +753,78 @@ class AuthCallbackCallSiteTest {
             lookups >= 1,
             "the relay must look the callback's own request id up against the launches " +
                 "this app made; found $lookups",
+        )
+    }
+
+    /** The lines of `receiveCallbackIntent`, comments already dropped. */
+    private fun relayBody(): List<String> {
+        check(mainActivity.isFile) { "MainActivity.kt not found" }
+        val body = code(mainActivity)
+            .dropWhile { !it.contains("private fun receiveCallbackIntent(") }
+            .drop(1)
+            .takeWhile { it != "    }" }
+        check(body.isNotEmpty()) { "receiveCallbackIntent not found; this test is measuring nothing" }
+        return body
+    }
+
+    @Test
+    fun `the relay refuses a callback that did not carry this request's secret`() {
+        // Everything else the relay checks is guessable from outside: the id is a
+        // counter the workbench starts at one for each page, the window is ten
+        // minutes, and the filter is exported and BROWSABLE. The comparison
+        // against the secret that launch recorded is the only part that is not,
+        // and deleting it leaves every case in this suite green while any app on
+        // the device can answer a sign-in the user has in flight.
+        //
+        // Position matters as much as presence. Behind the timing gate, a forged
+        // callback still spends the arming the user's real callback needs and
+        // still raises the expiry message, which is what that gate's own branch
+        // is written to prevent.
+        val body = relayBody()
+
+        val match = body.indexOfFirst { it.contains("callbackSecretMatches(") }
+        val recorded = body.indexOfFirst { it.contains("AuthTabWindow.nonceFor(") }
+        val gate = body.indexOfFirst { it.contains("authCallbackIsExpected(") }
+
+        assertTrue(
+            match >= 0,
+            "the relay no longer compares the secret a callback carries, so a forged one " +
+                "naming an armed request id is accepted",
+        )
+        assertTrue(
+            recorded >= 0,
+            "the comparison is against nothing the launch recorded: matching a callback's " +
+                "secret with itself accepts every value",
+        )
+        assertTrue(gate >= 0, "the timing gate is gone")
+        assertTrue(
+            match < gate,
+            "the secret must be checked before the timing gate: past it, a forged callback " +
+                "consumes the launch record the user's own callback still needs and raises " +
+                "the expiry message in this app's name; found the check at $match and the " +
+                "gate at $gate",
+        )
+    }
+
+    @Test
+    fun `the callback payload is bounded before anything parses it`() {
+        // Android's org.json recurses once per nesting level with no depth cap,
+        // and a StackOverflowError is not a JSONException, so it leaves every
+        // reader below and takes the process with it. The bound is only a bound
+        // while it stands in front of the first parse.
+        val body = relayBody()
+
+        val bound = body.indexOfFirst { it.contains("MAX_CALLBACK_PAYLOAD_CHARS") }
+        val parsed = body.indexOfFirst {
+            it.contains("callbackRequestId(") || it.contains("callbackNonce(")
+        }
+
+        assertTrue(bound >= 0, "nothing bounds the payload this exported filter accepts")
+        assertTrue(parsed >= 0, "nothing reads the payload; this test is measuring nothing")
+        assertTrue(
+            bound < parsed,
+            "the payload must be bounded before it is parsed; found the bound at $bound and " +
+                "the first read at $parsed",
         )
     }
 

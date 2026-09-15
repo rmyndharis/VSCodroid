@@ -73,9 +73,19 @@ struct kernel_sigaction {
 /**
  * Answers one refused epoll_pwait2 and lets the thread carry on.
  *
- * Anything that is not epoll_pwait2 is left alone: the handler restores the
- * default disposition and returns, so the kill the platform intended still
- * happens for every other refused call rather than being swallowed here.
+ * Anything else refused is answered ENOSYS, which is the one reply a runtime
+ * probing for a syscall can fall back from, and the handler stays installed.
+ *
+ * What this replaces read better than it behaved: it put SIGSYS back to SIG_DFL
+ * and returned, on the belief that the refusal would be raised again and end the
+ * process the way the platform meant it to. It is not raised again. Read from
+ * the kernel sources rather than measured here: for SECCOMP_RET_TRAP,
+ * kernel/seccomp.c rolls the registers back, raises the signal and skips the
+ * call, and arm64's syscall_rollback is `regs[0] = orig_x0`, so the instruction
+ * is not retried and a bare return hands the caller its own first argument as
+ * the syscall's result. The disposition change also disarmed this handler for
+ * the rest of the process, so the next epoll_pwait2, the call this file exists
+ * for, would kill the process instead of being answered.
  */
 static void on_sigsys(int sig, siginfo_t *info, void *ctx) {
     (void)sig;
@@ -83,12 +93,10 @@ static void on_sigsys(int sig, siginfo_t *info, void *ctx) {
     unsigned long *regs = (unsigned long *)uc->uc_mcontext.regs;
 
     if (info->si_syscall != __NR_epoll_pwait2) {
-        // Not ours. Put SIGSYS back to its default and return, which re-raises
-        // it against the same instruction and ends the process the way the
-        // platform meant it to end.
-        struct kernel_sigaction dfl = { 0 };
-        dfl.handler = (void (*)(int, siginfo_t *, void *))0;  // SIG_DFL
-        sys6(SYS_rt_sigaction, SIGSYS, (long)&dfl, 0, 8, 0, 0);
+        // Not ours, and the call did not run. Answer it rather than leaving the
+        // caller with whatever the rollback left in x0, and leave the handler in
+        // place so the one call this file is for is still answered afterwards.
+        regs[0] = (unsigned long)-ENOSYS;
         return;
     }
 

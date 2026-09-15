@@ -51,6 +51,18 @@ def page_problems(manifest, declared):
             filename = f"{name}-{package['version']}-{tag}.whl"
         else:
             filename = url.rsplit("/", 1)[-1]
+            # The manifest's `version` is otherwise decoration for a mirrored
+            # wheel: the filename comes from the URL, the digest is taken of
+            # whatever that URL served, and nothing reads the wheel's own
+            # metadata. A version bumped here without the URL moving would leave
+            # the page, the release and this check all agreeing about a file that
+            # is the older wheel.
+            prefix = f"{re.sub(r'[-_.]+', '_', package['name']).lower()}-{package['version']}-"
+            if not filename.startswith(prefix):
+                problems.append(
+                    f"{filename} is not {package['name']} {package['version']}: the manifest's "
+                    "version does not name the wheel it pins"
+                )
         expected.add((f"{RELEASES}/{manifest.get('release-tag')}/{filename}", package.get("sha256")))
         notices = package.get("notices")
         if notices:

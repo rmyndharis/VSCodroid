@@ -511,47 +511,35 @@ object Environment {
         "${context.applicationInfo.nativeLibraryDir}/libgit.so"
 
     /**
-     * musl's loader, and the only way the Claude Code CLI starts here.
-     *
-     * The CLI is a musl binary the user's extension brings with it, sitting under
-     * filesDir where SELinux refuses execve() for targetSdk >= 29. It does allow
-     * map and execute, which is all a loader needs, so the loader is execve'd
-     * from nativeLibraryDir -- the one directory an app may execute from -- and
-     * mmaps the CLI out of filesDir itself.
-     *
-     * The glibc build the marketplace would otherwise serve cannot be loaded at
-     * all: its startup calls set_robust_list and rseq, and Android's app seccomp
-     * filter kills the process for either. Patch 0009 is what makes the
-     * marketplace hand over the musl build instead.
-     *
-     * This is no longer what `claudeCode.claudeProcessWrapper` names, though it
-     * was: see [getClaudeLauncherPath], which has to put the seccomp shim into
-     * the environment before the loader starts anything.
-     */
-    /**
      * What `claudeCode.claudeProcessWrapper` names, and what starts the CLI.
      *
-     * The extension hands the wrapper the CLI as its first argument, which is
-     * musl's loader's own calling convention, so the loader used to be named
-     * here directly. It cannot be any more: the CLI's runtime calls
-     * `epoll_pwait2`, which bionic exposes only from android15, and on android13
-     * and android14 an app making it is killed rather than refused. The shim
-     * that answers that call has to be loaded before the binary runs, and a
-     * setting holds a path rather than a loader option, so a launcher sits in
-     * between and passes it as the loader's `--preload=`. See
-     * `scripts/claude-launch.c`.
+     * The CLI is a musl binary the user's extension brings with it, sitting
+     * under filesDir where SELinux refuses execve() for targetSdk >= 29. It does
+     * allow map and execute, which is all a loader needs, so musl's loader
+     * (`libldmusl.so`, beside this) is execve'd from nativeLibraryDir -- the one
+     * directory an app may execute from -- and mmaps the CLI out of filesDir
+     * itself. The glibc build the marketplace would otherwise serve cannot be
+     * loaded at all: its startup calls set_robust_list and rseq, and Android's
+     * app seccomp filter kills the process for either. Patch 0009 is what makes
+     * the marketplace hand over the musl build instead.
      *
-     * Deliberately never in LD_PRELOAD, here or in the launcher. The shim
-     * interposes `sigaction` against musl's structure layout, which is not
-     * Bionic's, and every child inherits an environment variable: the CLI's own
-     * bash, node and git would load it and abort with stack corruption, which
-     * was measured. It belongs to the CLI's process alone.
+     * The extension hands the wrapper the CLI as its first argument, which is
+     * that loader's own calling convention, so the loader used to be named here
+     * directly. It cannot be any more: the CLI's runtime calls `epoll_pwait2`,
+     * which bionic exposes only from android15, and on android13 and android14
+     * an app making it is killed rather than refused. The shim that answers that
+     * call has to be loaded before the binary runs, and a setting holds a path
+     * rather than a loader option, so a launcher sits in between and passes it
+     * as the loader's `--preload=`. See `scripts/claude-launch.c`.
+     *
+     * On that option and deliberately never in LD_PRELOAD. The shim interposes
+     * `sigaction` against musl's structure layout, which is not Bionic's, and
+     * every child inherits an environment variable: the CLI's own bash, node and
+     * git would load it and abort with stack corruption, which was measured.
+     * `--preload=` loads it into the one process and nothing below it.
      */
     fun getClaudeLauncherPath(context: Context): String =
         "${context.applicationInfo.nativeLibraryDir}/libclaude-launch.so"
-
-    fun getMuslLoaderPath(context: Context): String =
-        "${context.applicationInfo.nativeLibraryDir}/libldmusl.so"
 
     private fun getSystemCaCertsPath(): String =
         // Android 14+ (APEX module), fallback to legacy path

@@ -3683,20 +3683,6 @@ claude() {
     }
 
     /**
-     * Records the setup that has just completed, and retires the attempt marker.
-     *
-     * commit(), not apply(). apply() returns before the write reaches disk, so a
-     * kill in the flush window left isFirstRun() true after a successful 810 MiB
-     * unpack and the next launch did all of it again. The window is milliseconds
-     * and SharedPreferences flushes at activity stop, so it is unlikely; what it
-     * costs when it lands is minutes, and this runs on Dispatchers.IO where the
-     * synchronous write costs nothing observable.
-     *
-     * [KEY_EXTRACTION_ATTEMPT] goes in the same edit, so the record of a run in
-     * flight cannot outlive the run: the skip it licenses is only ever for a
-     * retry of an attempt that did not finish.
-     */
-    /**
      * Removes the built-in extensions an upgrade's server tree no longer carries.
      *
      * Extraction merges and never removes, and the server loads built-in extensions
@@ -3705,10 +3691,13 @@ claude() {
      * both contributing the same views and editors. Upstream has renamed one before
      * (image-preview became media-preview).
      *
-     * Only top-level directories, and only against a listing that could be read: an
-     * empty or unreadable listing removes nothing. Nothing but extraction writes a
-     * top-level entry there; the Copilot aliases go inside `extensions/copilot`, and
-     * extensions a user installs live under `--extensions-dir`.
+     * Only top-level entries, and only against a listing that could be read: an
+     * empty or unreadable listing removes nothing. `listFiles()` returns files as
+     * well as directories, and both are removed, because what the server lists is
+     * the same set: an asset dropped between builds could be either. Nothing but
+     * extraction writes a top-level entry there; the Copilot aliases go inside
+     * `extensions/copilot`, and extensions a user installs live under
+     * `--extensions-dir`.
      */
     private fun pruneDroppedBuiltInExtensions() {
         val bundled = try {
@@ -3725,6 +3714,20 @@ claude() {
             }
     }
 
+    /**
+     * Records the setup that has just completed, and retires the attempt marker.
+     *
+     * commit(), not apply(). apply() returns before the write reaches disk, so a
+     * kill in the flush window left isFirstRun() true after a successful 810 MiB
+     * unpack and the next launch did all of it again. The window is milliseconds
+     * and SharedPreferences flushes at activity stop, so it is unlikely; what it
+     * costs when it lands is minutes, and this runs on Dispatchers.IO where the
+     * synchronous write costs nothing observable.
+     *
+     * [KEY_EXTRACTION_ATTEMPT] goes in the same edit, so the record of a run in
+     * flight cannot outlive the run: the skip it licenses is only ever for a
+     * retry of an attempt that did not finish.
+     */
     private fun markSetupComplete() {
         prefs.edit(commit = true) {
             putString(KEY_VERSION, getCurrentVersion())
@@ -3944,19 +3947,21 @@ claude() {
          * scales with the file COUNT, not with the total size, and the count has
          * been stable across pins while the size has not.
          *
-         * 96 MiB, raised from 64, because 64 did not cover what it names.
-         * Measured over the shipped tree: 23,494 files and 5,021 directories,
-         * 809.5 MiB of logical length and 872.8 MiB once each file is rounded to
-         * a 4 KiB block -- 63.2 MiB of rounding from the files alone, before the
-         * directories (a block each on ext4, about 19.6 MiB more) and before
-         * settings.json, .bashrc, the ssh defaults and the CA bundle this
-         * constant also claims. So the gate asked 873.5 MiB for an unpack that
-         * consumes about 892 on ext4, and it over-passed in the one direction its
-         * own doc names as the one to avoid: a device between those two figures
-         * passed the gate, ran for minutes and then met ENOSPC. f2fs with
-         * inline_data stores the 17,270 files under ~3.4 KiB inside the inode and
-         * lands near 821 MiB, so the shortfall was an ext4 story only, which is
-         * why it went unseen.
+         * 128 MiB, raised from 96, and 96 from 64, each time because the figure
+         * did not cover what it names. Measured over the tree in this checkout,
+         * counting the way BuildConfig.EXTRACTED_ASSET_BYTES counts (assets minus
+         * nls): 22,626 files, 5,102 directories, 774.0 MiB of logical length.
+         * Rounding every file to a 4 KiB block and charging a block per directory
+         * gives 854.0 MiB on ext4, which is 80.0 MiB of overhead, inside 96.
+         *
+         * f2fs is the one that was over-passing, and this constant's own doc had
+         * it backwards: inline_data does not make a small file free, because the
+         * node block holding it is itself a 4 KiB allocation charged against the
+         * free space the gate reads. So f2fs costs roughly ext4 plus a block per
+         * file that is not inlined: 879.1 MiB for the same tree, 105.0 MiB of
+         * overhead, which 96 did not cover. A device with between 870 and 879 MiB
+         * free therefore passed the gate, unpacked for minutes and met ENOSPC,
+         * which is the failure this constant exists to prevent.
          *
          * The same figure serves the upgrade path, which asks for far fewer bytes,
          * and that is not an oversight. Rounding on a rewrite is roughly neutral,
@@ -3966,7 +3971,7 @@ claude() {
          * other. One over-estimate covering another is worth more here than a
          * second constant nobody can measure either.
          */
-        private const val EXTRACTION_SLACK_BYTES = 96L * 1_048_576L
+        private const val EXTRACTION_SLACK_BYTES = 128L * 1_048_576L
 
         /**
          * How much the device was short the last time the pre-flight refused,

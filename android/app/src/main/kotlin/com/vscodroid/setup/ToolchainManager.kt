@@ -3020,6 +3020,16 @@ class ToolchainManager(private val context: Context) {
                 } else {
                     for (scriptName in scripts.keys()) {
                         val scriptPath = scripts.getString(scriptName)
+                        // Held to what the binary loop above already asks of an
+                        // ELF: a row naming a file that is not there is a command
+                        // on PATH that always fails, which reads as the toolchain
+                        // being broken rather than absent. `isFile` and not
+                        // `exists`, so a directory left where a script should be
+                        // is refused too.
+                        if (!File(context.filesDir, scriptPath).isFile) {
+                            Logger.w(tag, "No row for $name's $scriptName: $scriptPath is not on disk")
+                            continue
+                        }
                         rows[scriptName] = "$scriptName\t$interpreterPath\t$filesDir/$scriptPath"
                     }
                 }

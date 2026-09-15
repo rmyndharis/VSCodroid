@@ -179,7 +179,7 @@ flowchart TD
 | Architecture | arm64-v8a                          |
 | WebView      | Chrome 105+                        |
 | RAM          | 4 GB recommended                   |
-| Storage      | ~915 MB free to install            |
+| Storage      | ~946 MB free to install            |
 
 ## 🚀 Getting Started
 
@@ -239,8 +239,8 @@ adb install android/app/build/outputs/apk/debug/app-debug.apk
 | -------------------------------------- | -------------------- |
 | Play Store download (core)             | ~270 MB              |
 | + Each toolchain (on-demand)           | 10-55 MB per language |
-| Free space required to install         | ~915 MB              |
-| Extracted to internal storage (core)   | ~810 MB              |
+| Free space required to install         | ~946 MB              |
+| Extracted to internal storage (core)   | ~812 MB              |
 | Extracted, plus both toolchains        | ~1,000 MB            |
 | RAM usage (typical)                    | ~400-700 MB          |
 
@@ -260,9 +260,9 @@ These move with every VS Code bump. Re-measure rather than trusting them:
 # and the version that shipped here failed on Linux by printing a plausible 0 MB.
 # This sums the way the gate itself does, in app/build.gradle.kts: decimal MB,
 # which is the unit the app asks in, and `nls/` left out, because those bundles are
-# served to the page straight from the APK and are never unpacked. The 100.7 is
-# EXTRACTION_SLACK_BYTES, 96 MiB, in the same unit.
-python3 -c "import os; b='android/app/src/main/assets'; s={os.path.join(r,f):os.path.getsize(os.path.join(r,f)) for r,_,fs in os.walk(b) for f in fs}; n=os.path.join(b,'nls')+os.sep; t=sum(v for k,v in s.items() if not k.startswith(n)); print(f'{t/1e6:.0f} MB extracted, gate demands {t/1e6+100.7:.0f} MB')"
+# served to the page straight from the APK and are never unpacked. The 134.2 is
+# EXTRACTION_SLACK_BYTES, 128 MiB, in the same unit.
+python3 -c "import os; b='android/app/src/main/assets'; s={os.path.join(r,f):os.path.getsize(os.path.join(r,f)) for r,_,fs in os.walk(b) for f in fs}; n=os.path.join(b,'nls')+os.sep; t=sum(v for k,v in s.items() if not k.startswith(n)); print(f'{t/1e6:.0f} MB extracted, gate demands {t/1e6+134.2:.0f} MB')"
 ```
 
 ## 🤝 Contributing

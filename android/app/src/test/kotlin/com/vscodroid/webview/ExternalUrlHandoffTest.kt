@@ -8,6 +8,7 @@ import android.os.SystemClock
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import com.vscodroid.authCallbackIsExpected
+import com.vscodroid.callbackSecretMatches
 import com.vscodroid.bridge.AUTH_TAB_WINDOW_MILLIS
 import com.vscodroid.bridge.AuthTabWindow
 import com.vscodroid.util.Logger
@@ -91,6 +92,17 @@ class ExternalUrlHandoffTest {
 
         /** The id [SIGN_IN] carries. */
         const val SIGN_IN_REQUEST_ID = "909"
+
+        /**
+         * The secret the workbench minted for that request, as patch 0019 puts it
+         * in the callback URL: beside `vscode-reqid`, so it is encoded the same
+         * number of times and comes back in the query the provider redirects to.
+         */
+        const val SIGN_IN_SECRET = "652e5a9f8c1d4b07a3e6f95204c8b71d"
+        const val SIGN_IN_WITH_SECRET =
+            "https://github.com/login/oauth/authorize?client_id=abc" +
+                "&state=http%253A%252F%252F127.0.0.1%253A13337%252Fcallback" +
+                "%253Fvscode-reqid%253D909%2526vscodroid-nonce%253D$SIGN_IN_SECRET"
 
         /** A neighbouring id nothing here launched, and the one that must stay refused. */
         const val UNSOLICITED_REQUEST_ID = "910"
@@ -176,6 +188,18 @@ class ExternalUrlHandoffTest {
         val armedAt = AuthTabWindow.armedAt(requestId) ?: return false
         return authCallbackIsExpected(armedAt, LAUNCHED_AT, AUTH_TAB_WINDOW_MILLIS)
     }
+
+    /**
+     * The other half of that decision: whether a callback offering [offered]
+     * would be matched against what this hand-off recorded.
+     *
+     * Kept apart from [callbackWouldBeTaken] so the cases that predate the secret
+     * read the same as before. A null recorded secret answers true to everything,
+     * which is deliberate for an address this app could not read a secret out of,
+     * and is exactly why a hand-off that recorded none needs a case of its own.
+     */
+    private fun callbackSecretWouldMatch(requestId: String, offered: String?): Boolean =
+        callbackSecretMatches(offered, AuthTabWindow.nonceFor(requestId))
 
     /**
      * [AuthTabWindow] is an object and this suite runs in one JVM, so what these
@@ -434,6 +458,42 @@ class ExternalUrlHandoffTest {
             "only the request the address carried may be accepted. The callback filter is " +
                 "exported and BROWSABLE and the id is a small integer, so a hand-off that " +
                 "opened the relay to anything else opens it to whatever is on the device.",
+        )
+    }
+
+    /**
+     * The same hand-off records the secret the address carries, not only the ids.
+     *
+     * This is the route with no session token in front of it, and it is the one
+     * likely to be forgotten, since a launch that records no secret behaves
+     * exactly like a working one everywhere else: the id is armed, the window is
+     * open, and the callback is accepted. What it gives up is the only part of
+     * the decision an outside caller cannot guess, so every app on the device can
+     * answer the sign-in going out through here.
+     */
+    @Test
+    fun `the secret the sign-in address carries is recorded with the launch`() {
+        client.shouldOverrideUrlLoading(
+            view, request("https", "github.com", -1, SIGN_IN_WITH_SECRET)
+        )
+
+        assertTrue(
+            callbackWouldBeTaken(SIGN_IN_REQUEST_ID),
+            "the sign-in this hand-off carried was not armed at all",
+        )
+        assertTrue(
+            callbackSecretWouldMatch(SIGN_IN_REQUEST_ID, SIGN_IN_SECRET),
+            "the callback the provider redirects back, carrying the secret the workbench " +
+                "minted for this request, was refused: the sign-in hangs with nothing said",
+        )
+        assertFalse(
+            callbackSecretWouldMatch(SIGN_IN_REQUEST_ID, null),
+            "a callback that simply omitted the secret was accepted, which is the shape " +
+                "anything on the device can post through an exported BROWSABLE filter",
+        )
+        assertFalse(
+            callbackSecretWouldMatch(SIGN_IN_REQUEST_ID, "0".repeat(32)),
+            "a guessed secret was accepted",
         )
     }
 
