@@ -903,17 +903,20 @@ class MainActivity : AppCompatActivity() {
         // BROWSABLE, and the window below is ten minutes, so proving that this app
         // armed this id proves nothing about who is answering it.
         //
-        // The secret the editor server bound into its own callback page this run is
-        // what closes that for a web page. It is served from the server's origin,
-        // which no other browser origin can read, and it is recorded inside the app
-        // sandbox. It does not close it for another app on the device, which can
-        // fetch `/callback` over loopback without the connection token; see the
-        // binding in server.js. Refused in
-        // the same silence as the branch above and before the window is consulted,
-        // so a forged callback can neither raise a message nor spend the arming the
-        // user's real callback still needs.
-        if (!callbackCarriesOurSecret(uri)) {
-            Logger.w(tag, "Ignoring a sign-in callback that did not come from the editor's own page")
+        // The secret the workbench minted for this request is what closes that. It
+        // was read out of the address this app was asked to open (patch 0019 puts
+        // it in the callback URL beside `vscode-reqid`), it left the device with
+        // the provider, and it comes back in the query the browser is redirected
+        // to. Nothing serves it: the secret it replaces was bound into
+        // `callback.html`, which `/callback` hands to any app on the device over
+        // loopback without the connection token, measured on an API 33 emulator.
+        //
+        // Refused in the same silence as the branch above and before the window is
+        // consulted, so a forged callback can neither raise a message nor spend the
+        // arming the user's real callback still needs.
+        val offered = callbackNonce(uri.getQueryParameter("data"))
+        if (!callbackSecretMatches(offered, AuthTabWindow.nonceFor(requestId))) {
+            Logger.w(tag, "Ignoring a sign-in callback that did not carry this request's secret")
             return
         }
         if (!authCallbackIsExpected(armedAt, SystemClock.elapsedRealtime(), AUTH_TAB_WINDOW_MILLIS)) {
@@ -3054,33 +3057,6 @@ class MainActivity : AppCompatActivity() {
      * something the workbench navigates itself discarded whatever had not
      * reached a backup.
      */
-    /**
-     * Whether this callback carries the secret `server.js` bound into the editor's
-     * own callback page for this run.
-     *
-     * The file is inside the app sandbox, so its absence means our own binding did
-     * not happen, never that a caller withheld anything; [callbackSecretMatches]
-     * is what turns that into the older, weaker matching rather than into a
-     * refusal of every sign-in.
-     */
-    private fun callbackCarriesOurSecret(uri: Uri): Boolean {
-        val expected = try {
-            val note = File(Environment.getServerDir(this), AUTH_CALLBACK_NONCE_FILE)
-            if (note.isFile) note.readText().trim() else null
-        } catch (e: Exception) {
-            Logger.w(tag, "Could not read the sign-in callback secret: ${e.message}")
-            null
-        }
-        if (expected.isNullOrEmpty()) {
-            Logger.w(
-                tag,
-                "The editor server bound no sign-in secret this run; matching the " +
-                    "callback by request id alone",
-            )
-        }
-        return callbackSecretMatches(callbackNonce(uri.getQueryParameter("data")), expected)
-    }
-
     private val appNavigation = AppNavigationMark(APP_NAVIGATION_WINDOW_MS)
 
     /** Marks the navigation about to be started as this app's own. */
@@ -5088,17 +5064,6 @@ class MainActivity : AppCompatActivity() {
          */
         private const val APP_NAVIGATION_WINDOW_MS = 10_000L
 
-        /**
-         * Where `server.js` records the secret it bound into `callback.html`.
-         *
-         * Beside `editor-server.pid` in the server directory, which is inside the
-         * app sandbox, so nothing else on the device can read it or write it. The
-         * name is shared with `server.js` by convention only; changing it there
-         * without changing it here turns every sign-in back into the matching this
-         * file did before the secret existed.
-         */
-        internal const val AUTH_CALLBACK_NONCE_FILE = "auth-callback.nonce"
-
         /** The preferences file `PortFinder` and `SplashActivity` already use. */
         private const val WORKSPACE_PREFS = "vscodroid"
 
@@ -5292,36 +5257,60 @@ internal fun callbackRequestId(data: String?): String? {
 }
 
 /**
- * The per-run secret a callback payload carries, if it carries one.
+ * The secret a callback payload carries, if it carries one.
  *
- * Written into `callback.html` by `server.js` at every start and read back from
- * the payload here. Null covers a payload this cannot read, one with no `nonce`,
- * and one whose `nonce` is not a string, which are the shapes an outside caller
- * produces and all deserve the same answer.
+ * It rides in the query, because that is the one part of the callback the
+ * workbench minted and the provider handed back: patch 0019 puts
+ * `vscodroid-nonce` in the callback URL beside `vscode-reqid`, `callback.html`
+ * strips only the `vscode-` parameters, and what is left becomes `uri.query` in
+ * the payload. Null covers a payload this cannot read, one whose `uri` is not an
+ * object, one with no query and one whose query has no such parameter, which are
+ * the shapes an outside caller produces and all deserve the same answer.
  */
 internal fun callbackNonce(data: String?): String? {
-    if (data.isNullOrEmpty()) return null
-    return try {
-        // `opt` and a cast rather than `optString`, which answers for a value
-        // that is not a string by rendering it: a nested object comes back as
-        // its own JSON text, non-empty and therefore a candidate. It could never
-        // match the recorded secret, so nothing turns on it, but this payload is
-        // attacker-shaped by construction and every reading of it here refuses
-        // the shapes it is not for rather than coercing them.
-        (JSONObject(data).opt("nonce") as? String)?.ifEmpty { null }
+    val query = try {
+        (JSONObject(data ?: return null).optJSONObject("uri")?.opt("query") as? String)
     } catch (e: JSONException) {
         null
-    }
+    } ?: return null
+    return callbackNonceParam(query)
 }
 
+/** The name the workbench mints the per-request secret under. See patch 0019. */
+internal const val CALLBACK_NONCE_PARAM = "vscodroid-nonce"
+
 /**
- * Whether a callback payload proves it came from the editor's own callback page.
+ * The secret in a callback query, read without `Uri`, which a plain JVM test
+ * cannot build. Split on the two separators a query uses and compared whole, so
+ * a parameter merely ending in the name (`x-vscodroid-nonce`) is not it.
+ */
+internal fun callbackNonceParam(query: String): String? = query.split('&')
+    .firstOrNull { it.substringBefore('=') == CALLBACK_NONCE_PARAM }
+    ?.substringAfter('=', "")
+    ?.ifEmpty { null }
+
+/**
+ * The same query with the secret taken out, or null when it carried none.
  *
- * [expected] is what `server.js` recorded for this run, or null when it recorded
- * nothing. Null means the server could not bind the page, not that a caller
- * failed a check, so it answers true and leaves the matching where it was before
- * the binding existed: a server whose page this app cannot rewrite must not cost
- * the user their ability to sign in at all.
+ * The relay hands the address to the workbench, which hands it to the extension
+ * that started the sign-in, and the secret is this app's business with the
+ * browser rather than something an extension should be handed. Returns an empty
+ * string when the secret was the only parameter, which the caller drops.
+ */
+internal fun callbackQueryWithoutNonce(query: String): String =
+    query.split('&').filterNot { it.substringBefore('=') == CALLBACK_NONCE_PARAM }
+        .joinToString("&")
+
+/**
+ * Whether a callback proves it answers the launch this app made for it.
+ *
+ * [expected] is the secret the address this app opened carried, or null when it
+ * carried none. Null means this app never had a secret to match, not that a
+ * caller withheld one, so it answers true and leaves the matching where it was
+ * before the secret existed: an address whose callback URL this app could not
+ * read must not cost the user their ability to sign in at all. A provider that
+ * drops unknown parameters from the redirect it was given lands here too, and
+ * the same reasoning covers it.
  *
  * Compared with [MessageDigest.isEqual] rather than `==`, which is the
  * comparison this codebase uses for a secret elsewhere and costs nothing here.
@@ -5361,7 +5350,18 @@ internal fun callbackSecretMatches(offered: String?, expected: String?): Boolean
 internal fun callbackUriJson(data: String?): String? {
     if (data.isNullOrEmpty()) return null
     return try {
-        JSONObject(data).optJSONObject("uri")?.toString()
+        val uri = JSONObject(data).optJSONObject("uri") ?: return null
+        // The secret this app checked is taken back out before the address goes
+        // any further: the workbench hands it to the extension that started the
+        // sign-in, and what that extension asked for is its own callback, not a
+        // parameter this app and the browser arranged between themselves. A
+        // query left empty by the removal is dropped rather than sent as "".
+        val query = uri.opt("query") as? String
+        if (query != null && callbackNonceParam(query) != null) {
+            val rest = callbackQueryWithoutNonce(query)
+            if (rest.isEmpty()) uri.remove("query") else uri.put("query", rest)
+        }
+        uri.toString()
     } catch (e: JSONException) {
         null
     }

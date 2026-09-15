@@ -681,6 +681,7 @@ flowchart TD
   P --> P16["0016 sidebar: sash travel on narrow viewports"]
   P --> P17["0017 menus: ignore a pan that started in a submenu"]
   P --> P18["0018 debug terminal: build the command without /usr/bin/env"]
+  P --> P19["0019 callback URL carries a secret minted per request"]
 ```
 
 Five of these are load-bearing in ways their titles understate:

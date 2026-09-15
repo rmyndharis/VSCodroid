@@ -1,0 +1,51 @@
+Give every callback URL a secret of its own.
+
+The relay patch 0006 adds hands an extension sign-in back to the app through
+`vscodroid://callback`, whose filter is exported and BROWSABLE, and the request
+id it names is a counter the workbench restarts at one with every page. What
+told a real callback from a forged one was a per-run secret `server.js` wrote
+into `callback.html`, and that page is served by `/callback`, which patch 0012
+answers before the connection token check. Measured on an API 33 emulator: a
+plain `GET /callback` from another uid over loopback returns the page with the
+secret in it, so any installed app could read it and then fire the filter with
+an OAuth result of its own for a sign-in the user had in flight.
+
+So the secret is minted here instead, one per request, in the callback URL the
+extension receives from `asExternalUri` and uses as its redirect. It leaves the
+device with the provider and comes back in the query the browser is redirected
+to, which `callback.html` already hands to the app inside `uri`. Nothing serves
+it: the app compares what arrives with what it read out of the address it was
+asked to open, and `/callback` fetched by anything else carries no secret at
+all.
+
+What this does not cover, and cannot: the provider sees the redirect URL, so a
+provider that keeps it could answer for that one request. That party is the one
+the user is signing in to and the one the real callback comes from, and the
+value is spent when the sign-in completes.
+
+`crypto.getRandomValues` rather than `Math.random`, because this is a secret and
+the page already requires a secure context.
+
+diff --git a/src/vs/code/browser/workbench/workbench.ts b/src/vs/code/browser/workbench/workbench.ts
+index 1111111..2222222 100644
+--- a/src/vs/code/browser/workbench/workbench.ts
++++ b/src/vs/code/browser/workbench/workbench.ts
+@@ -319,6 +319,18 @@ class LocalStorageURLCallbackProvider extends Disposable implements IURLCallbackP
+ 	create(options: Partial<UriComponents> = {}): URI {
+ 		const id = ++LocalStorageURLCallbackProvider.REQUEST_ID;
+ 		const queryParams: string[] = [`vscode-reqid=${id}`];
++
++		// A secret this request alone carries, so the Android side can tell the
++		// browser's real callback from an intent any app on the device may fire.
++		// It rides out in the redirect the extension registers, comes back in the
++		// query, and reaches the app inside the payload callback.html builds. The
++		// secret it replaces was written into that page by the server, which
++		// answers /callback before the connection token check, so anything on the
++		// device could read it over loopback.
++		const nonce = Array.from(crypto.getRandomValues(new Uint8Array(16)))
++			.map(b => b.toString(16).padStart(2, '0'))
++			.join('');
++		queryParams.push(`vscodroid-nonce=${nonce}`);
+ 
+ 		for (const key of LocalStorageURLCallbackProvider.QUERY_KEYS) {
+ 			const value = options[key];

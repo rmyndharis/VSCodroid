@@ -337,19 +337,15 @@ def main(tree):
               "readiness in ProcessManager waits for that line and no spawned "
               "start would ever be reported ready; update SERVER_LISTENING_LINE")
 
-    # server.js binds a per-run secret into callback.html at every start, by
-    # rewriting the payload the page hands to the Android side, and MainActivity
-    # refuses a sign-in callback that does not carry it. That is the only thing
-    # standing between the exported vscodroid://callback filter and a forged
-    # OAuth callback, because the request id it used to be matched on is a
-    # counter the workbench starts at one.
-    #
-    # The rewrite is a pattern match, so a callback.html whose payload is built
-    # differently binds nothing, and the failure is silent by design: the Android
-    # side falls back to the older matching rather than refusing every sign-in.
-    # That fallback is right at runtime and wrong at build time, which is why the
-    # question is asked here. Keep this string in step with CALLBACK_PAYLOAD in
-    # assets/server.js.
+    # The callback page hands the address back to the Android side inside `uri`,
+    # and that is where the per-request secret rides: patch 0019 mints
+    # vscodroid-nonce into the callback URL, callback.html strips only the
+    # vscode- parameters, and what is left becomes uri.query. MainActivity
+    # refuses a sign-in callback whose query does not carry the secret the
+    # address it opened did. A page that handed over something other than `uri`
+    # would leave nothing to match on, and the Android side falls back to the
+    # older matching rather than refusing every sign-in -- right at runtime and
+    # wrong at build time, which is why the question is asked here.
     callback_payload = "JSON.stringify({ id: id, uri: uri })"
     callback_html = tree / "out/vs/code/browser/workbench/callback.html"
     try:
@@ -359,10 +355,10 @@ def main(tree):
         check(False, "out/vs/code/browser/workbench/callback.html is readable", str(e))
     else:
         check(builds_payload,
-              "callback.html builds the payload server.js binds a secret into",
-              "server.js could not bind a per-run secret, so MainActivity would "
-              "accept any forged sign-in callback naming an armed request id; "
-              "update CALLBACK_PAYLOAD in assets/server.js to match the page")
+              "callback.html hands the address back to the app",
+              "the page no longer relays `uri`, so the per-request secret in its "
+              "query never reaches MainActivity and any forged sign-in callback "
+              "naming an armed request id would be accepted")
 
     # server.js appends its own <script> to workbench.html at every start, by
     # matching the configuration element the page carries, and two things reach

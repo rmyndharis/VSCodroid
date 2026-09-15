@@ -583,10 +583,10 @@ async function stoppingTakesTheEditorServerWithIt() {
     fs.rmSync(dir, { recursive: true, force: true });
 }
 
-// The sign-in callback page is bound to this run and pinned to this app, and a
-// second start rebinds it rather than stacking a second nonce or package in. The
-// page line is the one patch 0006 writes, copied rather than read from the
-// packaged tree, which a checkout without the server does not have.
+// The sign-in callback page is pinned to this app, and a second start pins it
+// again rather than stacking another package into the address. The page line is
+// the one patch 0006 writes, copied rather than read from the packaged tree,
+// which a checkout without the server does not have.
 {
     const dir = fixture(UPSTREAM);
     const pagePath = path.join(dir, 'vscode-reh', 'out', 'vs', 'code', 'browser', 'workbench', 'callback.html');
@@ -606,7 +606,6 @@ async function stoppingTakesTheEditorServerWithIt() {
         });
         return { ...result, output: `${result.stdout || ''}${result.stderr || ''}` };
     };
-    const nonceOf = () => fs.readFileSync(path.join(dir, 'auth-callback.nonce'), 'utf8');
 
     const once = bootAs('com.vscodroid.debug');
     assert.strictEqual(once.status, 0, `a start with a callback page should boot cleanly:\n${once.output}`);
@@ -615,20 +614,23 @@ async function stoppingTakesTheEditorServerWithIt() {
         first.includes("#Intent;scheme=vscodroid;package=com.vscodroid.debug;end'"),
         `the callback intent is not pinned to the package, so any app declaring the scheme is offered the sign-in:\n${first}`,
     );
-    assert.ok(first.includes(`nonce: '${nonceOf()}'`), `the page does not carry the recorded nonce:\n${first}`);
+    // The per-run secret this page used to carry is gone: /callback is answered
+    // before the connection token check, so anything on the device could read it
+    // over loopback. What a callback proves now is minted per request by the
+    // workbench and arrives in the query, so nothing here writes into the page
+    // but the package.
+    assert.ok(!/nonce/i.test(first), `the callback page carries a secret again:\n${first}`);
 
     const twice = bootAs('com.vscodroid.debug');
     assert.strictEqual(twice.status, 0, `a second start should boot cleanly:\n${twice.output}`);
     const second = fs.readFileSync(pagePath, 'utf8');
     assert.strictEqual((second.match(/package=/g) || []).length, 1, `a second start stacked the package:\n${second}`);
-    assert.strictEqual((second.match(/nonce: /g) || []).length, 1, `a second start stacked the nonce:\n${second}`);
-    assert.ok(second.includes(`nonce: '${nonceOf()}'`), `the second start did not rebind the nonce:\n${second}`);
 
     // Something that is not a package name is never written into the address.
     const odd = bootAs("x;end'+alert(1)+'");
     assert.strictEqual(odd.status, 0, `a malformed package should not stop the start:\n${odd.output}`);
     assert.ok(!fs.readFileSync(pagePath, 'utf8').includes('alert'), 'a malformed package reached the page');
-    assert.match(odd.output, /was not pinned/, `an unpinned intent should be reported:\n${odd.output}`);
+    assert.match(odd.output, /Could not pin/, `an unpinned intent should be reported:\n${odd.output}`);
     fs.rmSync(dir, { recursive: true, force: true });
 }
 
@@ -640,7 +642,7 @@ preloadRidesAsOneToken()
             'ok -- product.json survives a truncated file and an unwritable directory, a missing ' +
                 'server tree is a failed start rather than a healthy one, the workbench page is ' +
                 'given the trusted-domain list once and a page without the element it extends is ' +
-                'reported rather than thrown, the sign-in callback is bound and pinned once per start, a proxy that does not parse costs only DNS, the ' +
+                'reported rather than thrown, the sign-in callback intent is pinned once per start, a proxy that does not parse costs only DNS, the ' +
                 'preload rides as one token, the DNS proxy outlives the bootstrap, and a stop ' +
                 'takes the editor server with it',
         );

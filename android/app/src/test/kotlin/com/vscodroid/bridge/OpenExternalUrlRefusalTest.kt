@@ -286,7 +286,7 @@ class OpenExternalUrlRefusalTest {
         )
 
         verifyOrder {
-            AuthTabWindow.arm(listOf(REMOTE_REQUEST_ID), armedAt)
+            AuthTabWindow.arm(listOf(REMOTE_REQUEST_ID), any(), armedAt)
             AuthTabWindow.disarm(listOf(REMOTE_REQUEST_ID))
         }
         assertNull(
@@ -335,7 +335,7 @@ class OpenExternalUrlRefusalTest {
             "the app's own callback was reported as opened, so the relay resolves the " +
                 "caller's promise for a launch that must not happen",
         )
-        verify(exactly = 0) { AuthTabWindow.arm(any(), any()) }
+        verify(exactly = 0) { AuthTabWindow.arm(any(), any(), any()) }
         verify(exactly = 0) { context.startActivity(any()) }
         assertNull(
             AuthTabWindow.armedAt(OWN_CALLBACK_REQUEST_ID),
@@ -361,7 +361,7 @@ class OpenExternalUrlRefusalTest {
             "https://code.visualstudio.com/docs", security.getSessionToken()
         )
 
-        verify(exactly = 1) { AuthTabWindow.arm(emptyList(), any()) }
+        verify(exactly = 1) { AuthTabWindow.arm(emptyList(), any(), any()) }
     }
 
     /*

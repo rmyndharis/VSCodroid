@@ -23,14 +23,6 @@ const LOG_LEVEL = args.log || 'info';
 const SERVER_DIR = path.dirname(__filename);
 const REH_DIR = path.join(SERVER_DIR, 'vscode-reh');
 
-// The payload `callback.html` hands to the Android side, as it is built before a
-// nonce is bound into it and as it is built afterwards. Both shapes are matched so
-// the rewrite below is idempotent across restarts: on the second start the page on
-// disk already carries the previous run's nonce, and a pattern that only knew the
-// pristine form would silently stop binding. The nonce alternative is anchored to
-// hex so it cannot run past the object it belongs to.
-const CALLBACK_PAYLOAD = /JSON\.stringify\(\{ id: id, uri: uri(?:, nonce: '[0-9a-f]*')? \}\)/;
-
 // The tail of the intent address the same page navigates to, with or without the
 // package a previous start pinned into it, for the same idempotence.
 const CALLBACK_INTENT = /#Intent;scheme=vscodroid;(?:package=[A-Za-z0-9._]+;)?end/;
@@ -298,70 +290,48 @@ if (!fs.existsSync(rehEntryPoint)) {
         }
     }
 
-    // Bind the sign-in callback to a secret only this server's own page can know.
+    // Pin the sign-in callback intent to this app's package.
     //
-    // The `vscodroid://callback` intent-filter is exported and BROWSABLE, so any
-    // app on the device and any page in any browser can fire it. Everything the
-    // Android side could check before this was guessable: the request id is a
-    // counter the workbench starts at one per page, and the window around it is
-    // ten minutes. A page that knew a sign-in was in flight could therefore forge
-    // the callback, hand the signing-in extension an OAuth code of its choosing
-    // with the confirmation prompt suppressed, and take the pending id with it so
-    // the user's real callback was dropped.
+    // The `vscodroid://callback` scheme is one any installed app can declare, and
+    // `callback.html` runs in the browser, so an unpinned intent resolves to every
+    // app declaring it and the browser shows a chooser: picking the wrong entry
+    // hands that app the provider's result. A debug and a release build installed
+    // side by side declare it twice with nothing malicious involved.
     //
-    // `callback.html` is served from this server's own origin, so no page in a
-    // browser on another origin can read what is written into it. An app on the
-    // device can: patch 0012 answers `/callback` before the connection-token check,
-    // and a plain GET over loopback from another uid returns the page with this
-    // run's nonce in it (measured on an API 33 emulator). So the binding keeps out
-    // web pages, not other installed apps. The nonce goes into the intent payload
-    // the page builds and into a file inside the app sandbox; the Android side
-    // accepts a callback only when the two match.
+    // VSCODROID_PACKAGE comes from Environment.kt, so a debug build pins its own
+    // `.debug` id. A missing or malformed value leaves the intent unpinned, which
+    // is how it always was.
+    //
+    // What proves a callback is the browser's and not some other app's is no
+    // longer written here. It used to be a per-run secret bound into this same
+    // page, and `/callback` is answered before the connection-token check (patch
+    // 0012), so a plain GET over loopback from another uid returned the page with
+    // that secret in it, measured on an API 33 emulator. The secret is minted per
+    // request by the workbench instead (patch 0019), travels out in the callback
+    // URL the extension redirects to and comes back in its query; nothing serves
+    // it.
     //
     // Rewritten on every start, like product.json above and through the same
-    // temporary file and rename: the value has to be new for each run, and the
-    // pattern matches the page whether it is pristine or still carries the
-    // previous run's nonce.
-    //
-    // The intent is pinned to this app's package in the same pass. The scheme is
-    // one any installed app can declare, and the page runs in the browser, so an
-    // unpinned intent resolves to every app declaring it and the browser shows a
-    // chooser: picking the wrong entry hands that app the provider's code and the
-    // nonce with it. A debug and a release build installed side by side declare it
-    // twice with nothing malicious involved. VSCODROID_PACKAGE comes from
-    // Environment.kt, so a debug build pins its own `.debug` id. A missing or
-    // malformed value leaves the intent unpinned, which is how it always was.
-    //
-    // The nonce file is removed first and written last, so no window exists in
-    // which the page carries a secret the Android side cannot check. If any of
-    // this fails there is simply no file, and the Android side falls back to the
-    // matching it did before, which is what keeps a page this cannot rewrite from
-    // costing the user their ability to sign in at all.
+    // temporary file and rename, and idempotent: the pattern matches the page
+    // whether it is pristine or already pinned.
     const callbackHtmlPath = path.join(REH_DIR, 'out/vs/code/browser/workbench/callback.html');
-    const noncePath = path.join(SERVER_DIR, 'auth-callback.nonce');
-    try { fs.unlinkSync(noncePath); } catch { /* nothing to clear */ }
     try {
         const html = fs.readFileSync(callbackHtmlPath, 'utf8');
-        if (!CALLBACK_PAYLOAD.test(html)) {
-            throw new Error('the callback page does not build the payload this binds to');
-        }
-        const nonce = crypto.randomBytes(32).toString('hex');
-        let bound = html.replace(
-            CALLBACK_PAYLOAD,
-            `JSON.stringify({ id: id, uri: uri, nonce: '${nonce}' })`
-        );
         const pkg = process.env.VSCODROID_PACKAGE || '';
-        if (/^[A-Za-z]\w*(\.[A-Za-z]\w*)+$/.test(pkg) && CALLBACK_INTENT.test(bound)) {
-            bound = bound.replace(CALLBACK_INTENT, `#Intent;scheme=vscodroid;package=${pkg};end`);
-        } else {
-            log('warn', 'VSCODROID_PACKAGE is missing or malformed; the sign-in callback intent was not pinned');
+        if (!/^[A-Za-z]\w*(\.[A-Za-z]\w*)+$/.test(pkg)) {
+            throw new Error('VSCODROID_PACKAGE is missing or malformed');
         }
-        writeThroughRename(callbackHtmlPath, bound);
-        writeThroughRename(noncePath, nonce, 0o600);
-        log('info', 'Sign-in callbacks bound to this run');
+        if (!CALLBACK_INTENT.test(html)) {
+            throw new Error('the callback page does not build the intent this pins');
+        }
+        writeThroughRename(
+            callbackHtmlPath,
+            html.replace(CALLBACK_INTENT, `#Intent;scheme=vscodroid;package=${pkg};end`)
+        );
+        log('info', 'Sign-in callback intent pinned to ' + pkg);
     } catch (e) {
-        log('error', `Could not bind the sign-in callback: ${e.message}`);
-        log('error', 'Sign-in still works, but a callback is matched by request id alone.');
+        log('error', `Could not pin the sign-in callback intent: ${e.message}`);
+        log('error', 'Sign-in still works; the intent may offer a chooser.');
     }
 
     // Give the page the trusted-domain list, which the product.json rewrite above

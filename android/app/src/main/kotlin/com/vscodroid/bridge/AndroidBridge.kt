@@ -117,6 +117,23 @@ private const val MAX_TRACKED_SIGN_INS = 32
 private val AUTH_REQUEST_ID = Regex("""vscode-reqid(?:=|%(?:25)*3[Dd])(\d+)""")
 
 /**
+ * The secret the workbench mints into the callback URL it hands an extension,
+ * read out of the address this app is asked to open.
+ *
+ * Patch 0019 pushes `vscodroid-nonce=<32 hex>` beside `vscode-reqid`, so it
+ * arrives here inside the provider's `redirect_uri` and comes back in the query
+ * the browser is redirected to. Encoding-tolerant for the reason
+ * [AUTH_REQUEST_ID] is: the callback URL is a parameter of the URL being opened,
+ * so it is percent-encoded once, and twice when the extension nests it again.
+ *
+ * One per address, not one per request id. The workbench mints a callback URL
+ * per request and an extension opens one of them at a time; an address carrying
+ * two would leave this reading the first, which is refused on arrival rather
+ * than accepted for the wrong launch.
+ */
+private val AUTH_CALLBACK_NONCE = Regex("""vscodroid-nonce(?:=|%(?:25)*3[Dd])([0-9a-f]{32})""")
+
+/**
  * How many request ids one address may record.
  *
  * A bound, not a policy, and it is the record above that needs it. `launches`
@@ -148,6 +165,10 @@ private const val MAX_AUTH_REQUEST_IDS = 8
 internal fun authRequestIdsIn(url: String): List<String> =
     AUTH_REQUEST_ID.findAll(url).map { it.groupValues[1] }
         .distinct().take(MAX_AUTH_REQUEST_IDS).toList()
+
+/** The callback secret [url] carries, or null when it carries none. */
+internal fun authCallbackNonceIn(url: String): String? =
+    AUTH_CALLBACK_NONCE.find(url)?.groupValues?.get(1)
 
 /**
  * Why [AndroidBridge.openExternalUrl] did not open anything.
@@ -331,8 +352,18 @@ private const val MAX_QUEUED_DISK_COMMANDS = 4
  */
 object AuthTabWindow {
 
-    private val launches = object : LinkedHashMap<String, Long>() {
-        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Long>): Boolean =
+    /**
+     * One browser launch: when it happened, and the secret the address carried.
+     *
+     * The secret is what a callback has to produce, and it is null when the
+     * address carried none. That is not a hole a caller can open: both arming
+     * sites take an address this app was asked to open, one behind the session
+     * token and the other behind a main-frame navigation of our own page.
+     */
+    internal data class Launch(val at: Long, val nonce: String?)
+
+    private val launches = object : LinkedHashMap<String, Launch>() {
+        override fun removeEldestEntry(eldest: MutableMap.MutableEntry<String, Launch>): Boolean =
             size > MAX_TRACKED_SIGN_INS
     }
 
@@ -357,7 +388,7 @@ object AuthTabWindow {
      *   waiting on in memory, so nothing is left that could still satisfy it.
      */
     @Synchronized
-    fun arm(requestIds: Collection<String>, nowMillis: Long): List<String> {
+    fun arm(requestIds: Collection<String>, nonce: String?, nowMillis: Long): List<String> {
         val armed = requestIds.distinct()
         armed.forEach {
             // Taken out before being put back, so a repeated id counts as the
@@ -365,7 +396,7 @@ object AuthTabWindow {
             // replaces. The cap below is documented to hold the most recent
             // launches, and a plain overwrite leaves insertion order untouched.
             launches.remove(it)
-            launches[it] = nowMillis
+            launches[it] = Launch(nowMillis, nonce)
         }
         return armed
     }
@@ -393,11 +424,19 @@ object AuthTabWindow {
 
     /** When this app launched a browser for [requestId], or null if it never did. */
     @Synchronized
-    fun armedAt(requestId: String): Long? = launches[requestId]
+    fun armedAt(requestId: String): Long? = launches[requestId]?.at
+
+    /**
+     * The secret the address armed for [requestId] carried, or null when that
+     * launch carried none and when there was no such launch. The caller has
+     * already established which of those it is by asking [armedAt].
+     */
+    @Synchronized
+    fun nonceFor(requestId: String): String? = launches[requestId]?.nonce
 
     /** Every launch reading held, for a caller asking whether any is still open. */
     @Synchronized
-    fun armedReadings(): List<Long> = launches.values.toList()
+    fun armedReadings(): List<Long> = launches.values.map { it.at }
 }
 
 /**
@@ -649,7 +688,9 @@ class AndroidBridge(
             // a browser opened. A documentation link carries none and so opens
             // nothing: it used to widen the callback window by ten minutes exactly
             // as a sign-in did.
-            armed = AuthTabWindow.arm(authRequestIdsIn(url), SystemClock.elapsedRealtime())
+            armed = AuthTabWindow.arm(
+                authRequestIdsIn(url), authCallbackNonceIn(url), SystemClock.elapsedRealtime(),
+            )
             // Use system browser for localhost URLs (dev server preview needs full browser),
             // Chrome Custom Tabs for https (keeps user in-app, handles OAuth redirects).
             if (uri.scheme == "https" && !isLocalhost) {

@@ -3,6 +3,7 @@ package com.vscodroid
 import android.net.Uri
 import com.vscodroid.bridge.AUTH_TAB_WINDOW_MILLIS
 import com.vscodroid.bridge.AuthTabWindow
+import com.vscodroid.bridge.authCallbackNonceIn
 import com.vscodroid.bridge.authRequestIdsIn
 import com.vscodroid.webview.redactToken
 import io.mockk.every
@@ -94,7 +95,7 @@ class AuthTabWindowTest {
 
     @Test
     fun `the reading handed in is the reading handed back`() {
-        AuthTabWindow.arm(listOf("900001"), 123_456L)
+        AuthTabWindow.arm(listOf("900001"), null, 123_456L)
 
         assertEquals(123_456L, AuthTabWindow.armedAt("900001"))
     }
@@ -104,15 +105,15 @@ class AuthTabWindowTest {
         // The narrowing itself. One timestamp for the whole process answered yes
         // here, which is how opening a documentation link came to widen the
         // window an unsolicited callback is accepted in.
-        AuthTabWindow.arm(listOf("900001"), 123_456L)
+        AuthTabWindow.arm(listOf("900001"), null, 123_456L)
 
         assertNull(AuthTabWindow.armedAt("900002"))
     }
 
     @Test
     fun `a second launch arms its own id and leaves the first alone`() {
-        AuthTabWindow.arm(listOf("900001"), 100L)
-        AuthTabWindow.arm(listOf("900002"), 200L)
+        AuthTabWindow.arm(listOf("900001"), null, 100L)
+        AuthTabWindow.arm(listOf("900002"), null, 200L)
 
         assertEquals(100L, AuthTabWindow.armedAt("900001"), "a later launch overwrote an earlier one")
         assertEquals(200L, AuthTabWindow.armedAt("900002"))
@@ -128,9 +129,9 @@ class AuthTabWindowTest {
         // that no longer exists decided the window for the sign-in in flight: the
         // callback came back in seconds and was refused, with a message telling
         // the user their sign-in had taken too long.
-        AuthTabWindow.arm(listOf("900001"), 1_000L)
+        AuthTabWindow.arm(listOf("900001"), null, 1_000L)
 
-        val armed = AuthTabWindow.arm(listOf("900001"), 9_000L)
+        val armed = AuthTabWindow.arm(listOf("900001"), null, 9_000L)
 
         assertEquals(
             9_000L, AuthTabWindow.armedAt("900001"),
@@ -150,9 +151,9 @@ class AuthTabWindowTest {
         // after a folder switch, a renderer recreation or the resume path -- the
         // workbench counter starts again, and the next sign-in is handed 900001
         // too. Its callback comes back thirty seconds later.
-        AuthTabWindow.arm(listOf("900001"), 1_000L)
+        AuthTabWindow.arm(listOf("900001"), null, 1_000L)
 
-        AuthTabWindow.arm(listOf("900001"), 1_201_000L)
+        AuthTabWindow.arm(listOf("900001"), null, 1_201_000L)
 
         val armedAt = AuthTabWindow.armedAt("900001")
         assertNotNull(armedAt, "the launch just made was not recorded at all")
@@ -166,9 +167,9 @@ class AuthTabWindowTest {
 
     @Test
     fun `a launch reports the ids it armed, and disarming takes back only those`() {
-        AuthTabWindow.arm(listOf("900001"), 100L)
+        AuthTabWindow.arm(listOf("900001"), null, 100L)
 
-        val added = AuthTabWindow.arm(listOf("900002", "900003"), 200L)
+        val added = AuthTabWindow.arm(listOf("900002", "900003"), null, 200L)
         assertEquals(listOf("900002", "900003"), added)
 
         AuthTabWindow.disarm(added)
@@ -185,8 +186,8 @@ class AuthTabWindowTest {
         // The resume path asks whether ANY sign-in is still able to come back, and
         // it can only ask that of the readings. An empty answer here would let the
         // forced reload discard the page a callback was about to land in.
-        AuthTabWindow.arm(listOf("900001"), 100L)
-        AuthTabWindow.arm(listOf("900002"), 200L)
+        AuthTabWindow.arm(listOf("900001"), null, 100L)
+        AuthTabWindow.arm(listOf("900002"), null, 200L)
 
         val readings = AuthTabWindow.armedReadings()
 
@@ -212,9 +213,9 @@ class AuthTabWindowTest {
         val crowd = (1..32).map { "9300$it" }
         val address = crowd.joinToString("&") { "vscode-reqid=$it" }
         try {
-            AuthTabWindow.arm(listOf("900001"), 1_000L)
+            AuthTabWindow.arm(listOf("900001"), null, 1_000L)
 
-            AuthTabWindow.arm(authRequestIdsIn(address), 2_000L)
+            AuthTabWindow.arm(authRequestIdsIn(address), null, 2_000L)
 
             assertEquals(
                 1_000L, AuthTabWindow.armedAt("900001"),
@@ -234,7 +235,7 @@ class AuthTabWindowTest {
         // process that stays alive for days.
         val many = (1..200).map { "9100$it" }
         try {
-            AuthTabWindow.arm(many, 500L)
+            AuthTabWindow.arm(many, null, 500L)
 
             assertNull(
                 AuthTabWindow.armedAt(many.first()),
@@ -301,6 +302,49 @@ class AuthRequestIdTest {
             authRequestIdsIn("https://login.example.com/authorize?redirect_uri=" +
                 "http%3A%2F%2F127.0.0.1%3A13337%2Fcallback%3Fvscode-reqid%3D11"),
         )
+    }
+
+    @Test
+    fun `the secret the workbench minted rides in the same addresses`() {
+        val secret = "0123456789abcdef0123456789abcdef"
+        // Plain, singly encoded and doubly encoded, which are the three shapes the
+        // id above already arrives in. A launch that read no secret from the
+        // address falls back to matching by id alone, so a pattern that missed one
+        // of these would silently reopen the hole this closes.
+        assertEquals(
+            secret,
+            authCallbackNonceIn(
+                "http://127.0.0.1:13337/callback?vscode-reqid=3&vscodroid-nonce=$secret",
+            ),
+        )
+        assertEquals(
+            secret,
+            authCallbackNonceIn(
+                "https://login.example.com/authorize?redirect_uri=" +
+                    "http%3A%2F%2F127.0.0.1%3A13337%2Fcallback%3Fvscode-reqid%3D11" +
+                    "%26vscodroid-nonce%3D$secret",
+            ),
+        )
+        assertEquals(
+            secret,
+            authCallbackNonceIn(
+                "https://github.com/login/oauth/authorize?client_id=abc&state=" +
+                    "http%253A%252F%252F127.0.0.1%253A13337%252Fcallback" +
+                    "%253Fvscode-reqid%253D7%2526vscodroid-nonce%253D$secret",
+            ),
+        )
+    }
+
+    @Test
+    fun `an address with no secret in it reads as none`() {
+        for (link in listOf(
+            "https://code.visualstudio.com/docs",
+            "http://127.0.0.1:13337/callback?vscode-reqid=3",
+            "http://127.0.0.1:13337/callback?vscode-reqid=3&vscodroid-nonce=",
+            "http://127.0.0.1:13337/callback?vscode-reqid=3&vscodroid-nonce=not-hex-at-all",
+        )) {
+            assertNull(authCallbackNonceIn(link), "read a secret out of: $link")
+        }
     }
 
     @Test
@@ -642,15 +686,31 @@ class AuthCallbackCallSiteTest {
         // a request id.
         check(bridge.isFile) { "AndroidBridge.kt not found" }
 
-        val arming = code(bridge).filter { it.contains("AuthTabWindow.arm(") }
+        val lines = code(bridge)
+        val sites = lines.indices.filter { lines[it].contains("AuthTabWindow.arm(") }
 
         assertEquals(
-            1, arming.size,
-            "expected exactly one arming site in AndroidBridge.kt, found: $arming",
+            1, sites.size,
+            "expected exactly one arming site in AndroidBridge.kt, found: " +
+                sites.map { lines[it] },
         )
+        // The call and its arguments, which a wrapped call spreads over several
+        // lines: reading the first line alone would report a call keyed on
+        // nothing as soon as the arguments moved down one.
+        val call = lines.drop(sites.single()).takeWhile { !it.contains(")") }
+            .plus(lines.drop(sites.single()).first { it.contains(")") })
+            .joinToString(" ")
         assertTrue(
-            arming.single().contains("authRequestIdsIn("),
-            "the arming must be keyed on the request ids in the address; found: ${arming.single()}",
+            call.contains("authRequestIdsIn("),
+            "the arming must be keyed on the request ids in the address; found: $call",
+        )
+        // And on the secret that address carries, which is what a callback has to
+        // produce. Armed without it, every callback naming an armed id is accepted
+        // again, which is what any app on the device could produce.
+        assertTrue(
+            call.contains("authCallbackNonceIn("),
+            "the launch records no secret, so a forged callback naming an armed " +
+                "request id is accepted; found: $call",
         )
     }
 

@@ -18,6 +18,7 @@ import android.webkit.WebResourceResponse
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import com.vscodroid.bridge.AuthTabWindow
+import com.vscodroid.bridge.authCallbackNonceIn
 import com.vscodroid.bridge.authRequestIdsIn
 import com.vscodroid.isExtensionCallback
 import com.vscodroid.util.EditorLocale
@@ -901,7 +902,9 @@ class VSCodroidWebViewClient(
             // window every external link is followed.
             if (request.isForMainFrame) {
                 armed = AuthTabWindow.arm(
-                    authRequestIdsIn(url.toString()), SystemClock.elapsedRealtime()
+                    authRequestIdsIn(url.toString()),
+                    authCallbackNonceIn(url.toString()),
+                    SystemClock.elapsedRealtime(),
                 )
             }
             view.context.startActivity(intent)

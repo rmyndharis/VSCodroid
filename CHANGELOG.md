@@ -38,6 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The editor is not reloaded when Android ends only the process that started its server. The server kept running and the page was still connected, but the reload restarted extensions and could drop an edit made a moment before.
 - Opening a device folder from Open Recent after it dropped off the recent folders list says the permission expired. It opened a copy that nothing synced back to the device.
 - Removing a toolchain no longer deletes files outside it through a folder you linked into its directory.
+- A sign-in finishing in the browser is accepted only for the request it answers. Another app on the device could read what marked a callback as genuine and answer one of its own.
 - A browser sign-in returns only to VSCodroid. Another installed app declaring the same callback link could be offered the result in a chooser.
 - A confirmation dialog fits a phone screen. It was drawn wider than the screen and centred, so the button that proceeds hung off the right edge with a letter of it showing.
 - The editor keeps a usable height in landscape with the keyboard up. The extra key row took the last of the space the keyboard left, so the file being renamed and the line being typed were both off screen.
