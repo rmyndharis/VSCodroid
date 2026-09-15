@@ -272,6 +272,10 @@ jobs:
 
       - name: Set up Android SDK
         uses: android-actions/setup-android@40fd30fb8d7440372e1316f5d1809ec01dcd3699 # v4.0.1
+        with:
+          # The action's default also asks for `tools`, which Google's SDK
+          # repository no longer lists, so sdkmanager exits 1 and the job stops.
+          packages: platform-tools
 
       - name: Set up NDK
         run: |
