@@ -159,4 +159,49 @@ class PythonBytecodeEnvTest {
         assertFalse(wheel.exists(), "Clear Caches left pip's cache behind")
         assertFalse(legacy.exists(), "the cache pip kept under files before is still there")
     }
+
+    /**
+     * Both sweeps run on every server start, which is the only thing that runs
+     * them: nothing else prunes a bytecode prefix whose source is gone, and the
+     * pip cache under `files` is invisible to the storage screen and to Android.
+     *
+     * Each is a call with no return value anyone reads, so removing one is
+     * invisible to every case above: they call the functions themselves. Asserted
+     * on the source, the way `ServerReadinessCallSiteTest` does, because
+     * `startServer` spawns a process and cannot run in a plain JVM test.
+     */
+    @Test
+    fun `both sweeps are run on every server start`() {
+        val source = File("src/main/kotlin/com/vscodroid/service/ProcessManager.kt")
+        check(source.isFile) { "ProcessManager.kt not found at ${source.absolutePath}" }
+
+        // Comments dropped: both names are discussed in prose in that file.
+        val lines = source.readLines().filterNot {
+            val t = it.trimStart()
+            t.startsWith("//") || t.startsWith("*") || t.startsWith("/*")
+        }
+        val start = lines.indexOfFirst { it.contains("fun startServer(") }
+        check(start >= 0) { "startServer not found in ProcessManager.kt" }
+        // By brace depth, so the slice is that function and not the rest of the
+        // file: a call moved into a neighbour would otherwise still be found.
+        val body = mutableListOf<String>()
+        var depth = 0
+        var opened = false
+        for (line in lines.drop(start)) {
+            body += line
+            depth += line.count { it == '{' } - line.count { it == '}' }
+            if (line.contains('{')) opened = true
+            if (opened && depth <= 0) break
+        }
+
+        listOf("StorageManager.pruneTemporaryBytecode(", "StorageManager.removeLegacyPipCache(")
+            .forEach { call ->
+                assertTrue(
+                    body.any { it.contains(call) },
+                    "`$call` is no longer run from startServer, so nothing runs it at all: " +
+                        "the bytecode of every temporary build tree and the pip cache under " +
+                        "files grow for good, where the user cannot reclaim either",
+                )
+            }
+    }
 }

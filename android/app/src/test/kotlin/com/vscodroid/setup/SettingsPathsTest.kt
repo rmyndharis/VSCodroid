@@ -661,10 +661,12 @@ class SettingsPathsTest {
             // Measured: deleting that alternative left all nine of these green,
             // while no real install would ever have its wrapper re-pointed.
             //
-            // Production writes this shape and only this shape --
-            // Environment.getMuslLoaderPath() returns
-            // "${nativeLibraryDir}/libldmusl.so" -- and nativeLibraryDir moves on
-            // every reinstall, which is the entire reason the value is rewritten.
+            // Production writes a nativeLibraryDir shape and only that:
+            // Environment.getClaudeLauncherPath() returns
+            // "${nativeLibraryDir}/libclaude-launch.so", and the loader named
+            // here is what installs before the launcher have. nativeLibraryDir
+            // moves on every reinstall, which is the entire reason the value is
+            // rewritten.
             val stale = settings(shell, git, args = "[]",
                 claudeWrapper = "$oldDir/libldmusl.so")
             val result = requireNotNull(refreshManagedPaths(stale, shell, git, wrapper)) {
