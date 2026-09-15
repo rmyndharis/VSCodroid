@@ -89,6 +89,76 @@ def present(path, label):
         return None
 
 
+# Where each branded file has to arrive, and which file it is. gulpfile.reh.ts
+# copies all of these across verbatim, so byte-identical is the right bar.
+BRANDED_ARTWORK = {
+    "resources/server/manifest.json": "server/manifest.json",
+    "resources/server/code-192.png": "server/code-192.png",
+    "resources/server/code-512.png": "server/code-512.png",
+    "resources/server/favicon.ico": "server/favicon.ico",
+    "out/vs/workbench/browser/media/code-icon.svg": "workbench/code-icon.svg",
+    "out/vs/workbench/browser/parts/editor/media/letterpress-dark.svg": "workbench/letterpress.svg",
+    "out/vs/workbench/browser/parts/editor/media/letterpress-hcDark.svg": "workbench/letterpress.svg",
+    "out/vs/workbench/browser/parts/editor/media/letterpress-hcLight.svg": "workbench/letterpress.svg",
+    "out/vs/workbench/browser/parts/editor/media/letterpress-light.svg": "workbench/letterpress.svg",
+    "out/vs/sessions/contrib/chat/browser/media/letterpress-sessions-dark.svg": "workbench/letterpress.svg",
+    "out/vs/sessions/contrib/chat/browser/media/letterpress-sessions-light.svg": "workbench/letterpress.svg",
+}
+
+
+def check_branded_artwork(tree):
+    """That the icons in this tree are the ones branding/ holds today.
+
+    build-vscode-oss.sh compares the same files against the same source, and that
+    comparison proves what one build produced. It cannot say anything about the
+    tree a later fetch unpacks: `branding/product.json` is checked there by
+    fetch-vscode-oss.sh, and the artwork was not checked anywhere on that side, so
+    editing an icon and shipping without re-running the server build left every
+    gate green and Microsoft's mark, or a stale one of ours, in the APK. This runs
+    in all three places the script does: the build, the fetch, and the Gradle
+    packaging gate.
+
+    The branding directory is resolved from this script's own location, which is
+    how it is reachable inside the build container too (/scripts and /branding are
+    mounted side by side). Absent, the check says so and stands down rather than
+    failing: a checkout without it is not a tree with the wrong artwork, and
+    ALLOW_UNADAPTED means the caller asked for an unbranded build on purpose.
+    """
+    branding = pathlib.Path(os.environ.get("BRANDING") or
+                            pathlib.Path(__file__).resolve().parent.parent / "branding")
+    if os.environ.get("ALLOW_UNADAPTED"):
+        print("  note    ALLOW_UNADAPTED is set: the branded artwork is not compared")
+        return
+    if not branding.is_dir():
+        print(f"  note    no branding directory at {branding}: the artwork is not compared")
+        return
+    missing = []
+    # This check's own verdict, not the script's: `failed` is global and a
+    # failure anywhere earlier would otherwise swallow this line.
+    mismatched = False
+    for packaged, ours in BRANDED_ARTWORK.items():
+        source = branding / ours
+        if not source.is_file():
+            missing.append(str(source))
+            continue
+        target = tree / packaged
+        try:
+            same = target.is_file() and target.read_bytes() == source.read_bytes()
+        except OSError as e:
+            check(False, f"{packaged} could be read", str(e))
+            continue
+        if not same:
+            mismatched = True
+            check(False, f"{packaged} is the file branding/{ours} holds",
+                  "this tree was built before that file changed, or built without it. "
+                  "Run the \"Build Code - OSS server\" workflow and fetch the result.")
+    if missing:
+        check(False, "branding/ holds every file the package takes verbatim",
+              "missing: " + ", ".join(missing))
+    elif not mismatched:
+        print(f"  ok      {len(BRANDED_ARTWORK)} branded files match branding/")
+
+
 def main(tree):
     for rel in REQUIRED:
         found = present(tree / rel, rel)
@@ -477,6 +547,8 @@ def main(tree):
     # presence for the same reason the paragraph above gives: this script never
     # sees patches/, so it cannot say WHICH patches, only that the tree names a
     # set. check-patch-fingerprints.py is where that claim is computed.
+    check_branded_artwork(tree)
+
     manifest = present(tree / "vscodroid-patches.json", "vscodroid-patches.json")
     if manifest:
         check(True, "the tree records which patches built it")
