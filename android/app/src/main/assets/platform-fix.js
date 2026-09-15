@@ -13,7 +13,10 @@
  * The env var is deleted after consuming so child processes (Rollup, Vite, etc.)
  * see the real "android" platform.
  *
- * Loaded via NODE_OPTIONS="--require=<path>/platform-fix.js" for all Node.js processes.
+ * Loaded via NODE_OPTIONS="--require=<path>/platform-fix.js" for Node.js processes,
+ * and through the editor server's execArgv for the workers it starts: VS Code
+ * deletes NODE_OPTIONS from the extension host's environment, and a worker does
+ * not run a preload it cannot see.
  */
 'use strict';
 
@@ -58,4 +61,31 @@ if (process.platform === 'android') {
       configurable: true
     });
   }
+
+  // The Jupyter extension bundles pidtree, which chooses its backend from
+  // os.platform() and throws for 'android'. The extension uses it to signal
+  // every process under a kernel, whichever cell started it: SIGINT on
+  // interrupt, SIGTERM on restart and shutdown. Without it, interrupting leaves
+  // them running and restarting orphans them to pid 1, where each still counts
+  // against Android's phantom process limit.
+  // pidtree's linux backend runs `ps -A -o ppid,pid`, which toybox answers.
+  //
+  // Only that one bundle is told 'linux', through its own copy of `os`, so the
+  // prebuild and binary choices every other extension makes from the platform
+  // stay on the truth. zeromq's loader is a separate file and is not matched.
+  var Module = require('module');
+  var realLoad = Module._load;
+  var JUPYTER_BUNDLE = /[\\/]ms-toolsai\.jupyter-[^\\/]+[\\/]dist[\\/]extension\.node\.js$/;
+  var jupyterOs = null;
+  Module._load = function (request, parent) {
+    if ((request === 'os' || request === 'node:os') && parent && JUPYTER_BUNDLE.test(parent.filename || '')) {
+      if (!jupyterOs) {
+        jupyterOs = Object.assign({}, realLoad.apply(this, arguments), {
+          platform: function () { return 'linux'; }
+        });
+      }
+      return jupyterOs;
+    }
+    return realLoad.apply(this, arguments);
+  };
 }

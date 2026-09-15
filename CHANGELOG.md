@@ -19,6 +19,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Menu items that open a picker, such as File > New File..., open it on a tap instead of doing nothing, and a menu item no longer leaves the menu open behind what it opened.
+- Tapping outside a context menu closes it without also opening or running what was under the finger.
+- The chat model and mode pickers, Quick Fix and settings dropdowns close again when you tap outside them.
+- With a hardware keyboard, or with the on-screen keyboard down, an open context menu takes Enter and the arrow keys instead of the file behind it.
+- A dialog fits a narrow screen with a mouse or trackpad attached too.
+- Interrupting a Jupyter kernel also interrupts the processes it started, including ones an earlier cell left running, and restarting or closing the kernel ends them instead of leaving them behind.
+- `npm install` run by an extension, such as Claude Code's Bash tool, gets the same platform override as in the terminal, so a package whose install script refuses Android installs there too.
 - Python, pip and the Jupyter kernel start faster: bytecode is cached, under the app's cache, so `python3 -m pip --version` takes about a third of the time it did.
 - pip keeps its download cache under the app's cache, where Clear Caches and Android can free it, instead of in the app's files.
 - Lists no longer overlap their own rows. Every row in the explorer, the search results, the command palette and a settings dropdown was drawn 14px taller than the space it was given, so each one covered the top of the next: option labels in a dropdown stacked on each other, and tapping the lower edge of a filename opened the file below it.

@@ -86,7 +86,7 @@ temporary directory, and is executed directly by `node`.
 | Component | What is covered | Script |
 |-----------|-------------|---------|
 | Server bootstrap | The `product.json` rewrite `server.js` performs on every start, including a SIGKILL landing inside the write | `scripts/test-server-bootstrap.js` |
-| Platform override | What `process.platform` reports in the server, every terminal command and every user script | `scripts/test-platform-fix.js` |
+| Platform override | What `process.platform` reports in the server, every terminal command and every user script, and what `os.platform()` reports to the Jupyter extension alone | `scripts/test-platform-fix.js` |
 | Process monitor | Process classification and the phantom count, against a fixture `/proc` tree | `scripts/test-process-monitor.js` |
 | Process monitor extension | The status bar entry and the notification it renders | `scripts/test-process-monitor-extension.js` |
 | DNS proxy | The Basic-auth token on the loopback proxy every musl DNS lookup goes through | `scripts/test-dns-proxy.js` |

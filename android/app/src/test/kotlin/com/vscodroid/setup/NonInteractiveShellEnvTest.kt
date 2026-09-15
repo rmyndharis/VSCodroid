@@ -363,6 +363,36 @@ class NonInteractiveShellEnvTest {
         assertEquals(listOf("status=0"), ok, "a successful pip said something: $ok")
     }
 
+    /**
+     * A shell the extension host starts has no NODE_OPTIONS, because VS Code
+     * deletes it from the extension host's environment, so npm() there ran node
+     * with no preload to act on VSCODROID_PLATFORM_FIX. BASH_ENV puts it back,
+     * once, and leaves a terminal's value alone.
+     */
+    @Test
+    fun `a shell without the node preload gets it back, and a terminal keeps its own`() {
+        val bash = File("/bin/bash")
+        assumeTrue(bash.canExecute(), "no /bin/bash on this host to ask")
+
+        FirstRunSetup(context).createBashEnvFile()
+        val cwd = File(filesDir, "workspace").apply { mkdirs() }
+        val fix = "${filesDir.absolutePath}/server/platform-fix.js"
+
+        val stripped = runBash(cwd, bashEnvFile().path, "unset NODE_OPTIONS; bash -c 'echo \"opts=[${'$'}NODE_OPTIONS]\"'")
+        assertEquals(listOf("opts=[--require=$fix]"), stripped.filter { it.startsWith("opts=") },
+            "a shell started without NODE_OPTIONS still has no preload: $stripped")
+
+        val kept = runBash(cwd, bashEnvFile().path,
+            "export NODE_OPTIONS='--require=$fix --max-old-space-size=64'; bash -c 'echo \"opts=[${'$'}NODE_OPTIONS]\"'")
+        assertEquals(listOf("opts=[--require=$fix --max-old-space-size=64]"), kept.filter { it.startsWith("opts=") },
+            "a shell that already had the preload got it twice or lost its options: $kept")
+
+        val other = runBash(cwd, bashEnvFile().path,
+            "export NODE_OPTIONS='--max-old-space-size=64'; bash -c 'echo \"opts=[${'$'}NODE_OPTIONS]\"'")
+        assertEquals(listOf("opts=[--require=$fix --max-old-space-size=64]"), other.filter { it.startsWith("opts=") },
+            "the preload replaced options the shell already had: $other")
+    }
+
     /** Non-empty lines of stdout+stderr from `bash -c $script`, run in [cwd]. */
     private fun runBash(cwd: File, bashEnv: String?, script: String): List<String> {
         val builder = ProcessBuilder("/bin/bash", "-c", script)

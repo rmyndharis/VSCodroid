@@ -31,6 +31,7 @@ const { spawn, spawnSync } = require('child_process');
 const ASSETS = path.resolve(__dirname, '../android/app/src/main/assets');
 const SERVER_JS = path.join(ASSETS, 'server.js');
 const DNS_PROXY_JS = path.join(ASSETS, 'dns-proxy.js');
+const PLATFORM_FIX_JS = path.join(ASSETS, 'platform-fix.js');
 const PROCESS_MANAGER = path.resolve(
     __dirname, '../android/app/src/main/kotlin/com/vscodroid/service/ProcessManager.kt',
 );
@@ -53,6 +54,9 @@ function fixture(productJson, { serverMain = 'process.exit(0);\n', dnsProxy = fa
     } else if (dnsProxy) {
         fs.copyFileSync(DNS_PROXY_JS, path.join(dir, 'dns-proxy.js'));
     }
+    // Always beside the bootstrap, as in the app, where NODE_OPTIONS preloads it
+    // and server.js hands it on to the editor server.
+    fs.copyFileSync(PLATFORM_FIX_JS, path.join(dir, 'platform-fix.js'));
     if (serverMain !== null) {
         fs.writeFileSync(path.join(dir, 'vscode-reh', 'out', 'server-main.js'), serverMain);
     }
@@ -288,6 +292,13 @@ async function preloadRidesAsOneToken() {
         assert.ok(
             !execArgv.includes('--require'),
             `a bare --require survives beside the joined form: ${JSON.stringify(execArgv)}`,
+        );
+        // The extension host inherits this execArgv; NODE_OPTIONS is deleted
+        // from its environment, so this is the only way platform-fix.js reaches it.
+        const fixArgs = execArgv.filter((arg) => arg.includes('platform-fix.js'));
+        assert.strictEqual(
+            fixArgs.length === 1 && fixArgs[0].startsWith('--require=') && fixArgs[0].endsWith('/platform-fix.js'), true,
+            `the editor server was not given platform-fix.js as one preload token: ${JSON.stringify(execArgv)}`,
         );
     } finally {
         if (childPid) { try { process.kill(childPid, 'SIGKILL'); } catch { /* already gone */ } }

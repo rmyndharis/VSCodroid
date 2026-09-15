@@ -437,7 +437,7 @@ The bootstrap script that Node.js executes:
 server.js responsibilities:
 1. Parse command-line arguments (port, host, extensions-dir, etc.)
 2. Set up VS Code product.json overrides
-3. Preload dns-proxy.js into the editor server it forks
+3. Preload dns-proxy.js into the editor server it forks, and pass platform-fix.js in its execArgv so the extension host, whose environment has no NODE_OPTIONS, loads it too
 4. Launch vscode-reh server entry point
 5. Configure Extension Host as worker_thread
 6. Spawn a shell per terminal through node-pty, on a real PTY

@@ -2086,6 +2086,11 @@ class MainActivity : AppCompatActivity() {
         // Before the first inset dispatch, so a row the user hid never flashes up
         // with the first keyboard of the session.
         extraKeyRow?.hiddenByUser = workspacePrefs.getBoolean(KEY_EXTRA_KEY_ROW_HIDDEN, false)
+        // The touch menu script refuses a menu focus only while the soft keyboard
+        // is up, which is the one state where moving focus resizes the window.
+        extraKeyRow?.onImeVisibilityChanged = { visible ->
+            webView?.evaluateJavascript("window.__vscodroidImeVisible = $visible;", null)
+        }
     }
 
     /**
@@ -3387,11 +3392,12 @@ class MainActivity : AppCompatActivity() {
                 // t+1621ms, and no menu on screen afterwards.
                 //
                 // 500 rather than the 700 the editor's own gesture waits for.
-                // The gesture fires before the finger lifts, so a real long
-                // press is always past 700 by the time this runs, and the margin
-                // costs only that a deliberately slow tap between 500 and 700ms
-                // leaves the keyboard down. That is a second tap, against a menu
-                // that could not be opened at all.
+                // The gesture decides on touchend, from the same lift this
+                // pointerup reports, and opens a menu only for a hold of at least
+                // 700, so any press it turns into a menu is already past 500 here.
+                // The margin costs only that a deliberately slow tap between 500
+                // and 700ms leaves the keyboard down. That is a second tap, against
+                // a menu that could not be opened at all.
                 var LONG_PRESS_MS = 500;
                 function apply(element) {
                     if (aimedAtText) element.removeAttribute('inputmode');
@@ -3558,25 +3564,34 @@ class MainActivity : AppCompatActivity() {
      * the same VS Code version does not change, and nothing here clears the
      * WebView cache. So the fix has to arrive with the app, which is here.
      *
-     * The chain is broken at its first link. On a coarse pointer, a `focus()`
-     * call that would move focus OUT of an editing host and INTO a context
-     * view is ignored: the editor keeps focus, the keyboard stays where it
-     * is, no resize fires, and `ContextView.layout` never runs. Everything
-     * the menu does by pointer still works without focus, and all of it was
-     * measured: tapping an item runs it (Rename Symbol opened its box),
-     * tapping outside closes it, a submenu opens on tap, and a real long
+     * The chain is broken at its first link. On a coarse pointer, while the
+     * soft keyboard is up, a `focus()` call that would move focus OUT of an
+     * editing host and INTO a context menu is ignored: the editor keeps focus,
+     * the keyboard stays where it is, no resize fires, and
+     * `ContextView.layout` never runs. What the menu does by pointer still
+     * works without focus, and it was measured: tapping an item runs it
+     * (Rename Symbol opened its box), a submenu opens on tap, and a real long
      * press with the keyboard up opened a 22-item menu that was still there
      * 2.3 seconds later with the editor focused and the viewport unchanged.
+     * Tapping outside does not close an unfocused menu on its own; the
+     * listener below provides that.
+     *
+     * Only menus. Other context views, the action widget behind the chat
+     * pickers and Quick Fix and the select dropdowns among them, are laid out
+     * again on a resize rather than hidden, and they close when they lose
+     * focus: refused focus, they could never lose it, and a tap outside left
+     * them open. And only while the soft keyboard is up, which is the only
+     * state in which moving focus changes the window: with it down, or with a
+     * hardware keyboard in its place, a menu takes focus as it always did and
+     * Enter and the arrow keys reach it rather than the file behind it.
+     * [ExtraKeyRow] reports the keyboard's state to the page.
      *
      * What focus was doing for the menu is keyboard handling, and one key
      * matters on a phone: Escape, which the extra key row carries. A menu
      * without focus never sees it, so a capture listener forwards Escape to
      * an open menu's action bar when that bar does not hold focus, and stops
      * the editor from seeing the same press, which is what the editor got
-     * before this change too (focus was in the menu). Arrow-key navigation
-     * inside a menu is the trade, and it is taken deliberately: it needs a
-     * hardware keyboard on a device that still reports `pointer: coarse`,
-     * which is a tablet with a Bluetooth keyboard, and that user can tap.
+     * before this change too (focus was in the menu).
      *
      * The gate is the editing host, not the menu. Focus moving into a menu
      * from anywhere else, the explorer say, moves no keyboard and is left
@@ -3590,7 +3605,11 @@ class MainActivity : AppCompatActivity() {
      * the label `display: block`). A sheet adopted by the shadow root is the
      * one channel in, and it is added as the root is created by wrapping
      * `attachShadow` on the host the workbench names, plus once for a host
-     * that already exists, since this runs again after a folder switch. The
+     * that already exists, because a menu opened before onPageFinished
+     * injected this script has already attached its shadow root through the
+     * unwrapped `attachShadow`. A folder switch is a new document with no
+     * hosts in it, and a second run in the same document returns at the
+     * `__vscodroidTouchContextMenu` guard. The
      * rule mirrors the light-DOM one beside the context-view rules in
      * [injectTouchTargetCSS], and `TouchContextMenuWiringTest` holds the two
      * to the same text.
@@ -3599,6 +3618,10 @@ class MainActivity : AppCompatActivity() {
         webView?.evaluateJavascript(
             """
             (function() {
+                // A new document starts without the keyboard's state; the last one
+                // reported is carried in. Unknown stays unset.
+                var reported = ${extraKeyRow?.imeVisible?.toString() ?: "undefined"};
+                if (reported !== undefined) window.__vscodroidImeVisible = reported;
                 if (window.__vscodroidTouchContextMenu) return;
                 window.__vscodroidTouchContextMenu = true;
                 var EDITING_HOST = '.native-edit-context, .monaco-editor textarea.inputarea, .xterm-helper-textarea';
@@ -3620,15 +3643,68 @@ class MainActivity : AppCompatActivity() {
                     return !!el.closest('.context-view');
                 }
 
+                // A context menu, which the workbench hides on a resize, as opposed
+                // to the other context views it lays out again. `closest` works
+                // inside the menu's shadow tree.
+                function inMenu(el) {
+                    if (!inContextView(el)) return false;
+                    if (el.classList && el.classList.contains('shadow-root-host')) return true;
+                    return !!el.closest('.monaco-menu-container');
+                }
+
                 var focus = HTMLElement.prototype.focus;
                 HTMLElement.prototype.focus = function() {
                     var held = document.activeElement;
+                    // `!== false`: until the keyboard's state has been reported,
+                    // refuse as before.
                     if (held && held.matches && held.matches(EDITING_HOST) &&
-                        inContextView(this) && window.matchMedia(COARSE).matches) {
+                        window.__vscodroidImeVisible !== false &&
+                        inMenu(this) && window.matchMedia(COARSE).matches) {
                         return;
                     }
                     return focus.apply(this, arguments);
                 };
+
+                // A tap on a menubar item is not also a tap on the menubar button.
+                //
+                // The menubar renders its menu, and every submenu, inside the button
+                // that opened it, and the workbench's touch gestures hand one tap
+                // event to every registered target that contains the finger's first
+                // touch, innermost first. The item's turn runs it, and the menubar's
+                // action runner closes the menu on `onWillRun`, synchronously, before
+                // the item's own action starts. The same tap then reaches the button,
+                // which reads a closed menu and opens it again: its own guard skips a
+                // tap from inside the menu only while the menu is still open. Measured
+                // on an API 33 emulator with a stack on each focus():
+                // `setUnfocusedState`, then `onMenuTriggered` from `onTouchEnd` 13ms
+                // later, then `showCustomMenu`.
+                //
+                // What that cost depends on the item. After `New Text File` the new
+                // editor takes focus and closes the reopened menu again. After an
+                // item that opens a quick pick, `File > New File...`, reopening the
+                // menu takes focus off the pick's box, and the pick, which closes on
+                // blur, is gone before it is seen; when it survives, the menu is left
+                // open behind it.
+                //
+                // Recognised by where the tap started, and on the event itself. By the
+                // button's turn the menu has been removed, so the item the tap started
+                // on is detached and no longer inside anything: measured, `isConnected`
+                // false and `closest` empty. The first turn still sees the menu whole,
+                // so that is where the tap is marked. Stopped in the capture phase at
+                // the document, before the button's own listener, which is the only
+                // phase that sees it: the event does not bubble. A tap on the button
+                // itself was never marked and passes.
+                document.addEventListener('-monaco-gesturetap', function(e) {
+                    var origin = e.initialTarget;
+                    if (origin && origin.closest && origin.closest('.menubar-menu-items-holder')) {
+                        e.__vscodroidMenuItemTap = true;
+                    }
+                    var target = e.target;
+                    if (e.__vscodroidMenuItemTap && target && target.classList &&
+                        target.classList.contains('menubar-menu-button')) {
+                        e.stopImmediatePropagation();
+                    }
+                }, true);
 
                 // Every open menu's action bar, across the page and the shadow hosts.
                 function actionBars() {
@@ -3698,20 +3774,55 @@ class MainActivity : AppCompatActivity() {
                 // open menu is measured, and a point inside any of them is a menu
                 // interaction this leaves alone.
                 //
+                // Measured on the menu, not its action bar. A menu taller than the
+                // space it has scrolls inside `.monaco-menu`, which clips a bar laid
+                // out at its full height, so the bar's rectangle reaches past the
+                // visible menu and a tap just outside it counted as inside.
+                //
                 // Innermost first, so a submenu and its parent both close, which is
                 // what tapping away from the whole stack means.
+                //
+                // The tap that closes the menu does nothing else. Closing it removes
+                // the full-viewport block the tap landed on, synchronously, so the
+                // touch events that follow go to a detached node and the click this
+                // tap still produces is hit-tested again on whatever lies underneath:
+                // measured in Chromium, the row under the block received mousedown,
+                // mouseup and click. A file row would open, a status bar entry would
+                // run. So the pointerdown is cancelled, which drops the compatibility
+                // mouse events, and the one click that follows the same finger's lift
+                // is swallowed; a drag or a long press produces none, so the swallow
+                // is dropped shortly after the lift either way.
                 window.addEventListener('pointerdown', function (e) {
                     if (!window.matchMedia(COARSE).matches) return;
                     if (!inContextView(e.target)) return;
                     var bars = actionBars();
                     if (!bars.length) return;
                     for (var i = 0; i < bars.length; i++) {
-                        var r = bars[i].getBoundingClientRect();
+                        var r = (bars[i].closest('.monaco-menu') || bars[i]).getBoundingClientRect();
                         if (e.clientX >= r.left && e.clientX <= r.right &&
                             e.clientY >= r.top && e.clientY <= r.bottom) {
                             return;
                         }
                     }
+                    e.preventDefault();
+                    var pointer = e.pointerId;
+                    var swallow = function (c) {
+                        c.stopImmediatePropagation();
+                        c.preventDefault();
+                        done();
+                    };
+                    var lifted = function (u) {
+                        if (u.pointerId !== pointer) return;
+                        setTimeout(done, 400);
+                    };
+                    var done = function () {
+                        window.removeEventListener('click', swallow, true);
+                        window.removeEventListener('pointerup', lifted, true);
+                        window.removeEventListener('pointercancel', lifted, true);
+                    };
+                    window.addEventListener('click', swallow, true);
+                    window.addEventListener('pointerup', lifted, true);
+                    window.addEventListener('pointercancel', lifted, true);
                     for (var j = bars.length - 1; j >= 0; j--) {
                         var away = new KeyboardEvent('keydown', { key: 'Escape', code: 'Escape', keyCode: 27, bubbles: true });
                         away.__vscodroidForwarded = true;
@@ -3850,33 +3961,6 @@ class MainActivity : AppCompatActivity() {
                     // there because that strip is already far wider than 12px, but
                     // narrow it and this rule starts deciding its width.
                     '  .slider { min-width: 12px !important; }',
-                    // A modal dialog is 480px wide on a 411px phone, and the
-                    // overflow is not shared: `.monaco-dialog-modal-block` centres
-                    // the box, so 34.5px hangs off each side and the left half is
-                    // simply unreachable. `min-width` beats `max-width` in CSS, so
-                    // the `max-width:90vw` sitting beside it in the same rule never
-                    // binds and cannot.
-                    //
-                    // Which button is lost is not luck. `rearrangeButtons` takes
-                    // its Linux branch here, because the WebView's user agent says
-                    // Linux, and that branch puts the PRIMARY action last in DOM
-                    // order against a right-aligned row: the affirmative button is
-                    // the one off the screen. On the external-link prompt that is
-                    // "Open", which is the whole point of the dialog, and on the
-                    // GitHub device-code sign-in it is the only way forward.
-                    //
-                    // `min()` rather than 0, so nothing changes where there is room:
-                    // a tablet keeps the 480px this reads as the designed width, and
-                    // only a viewport narrower than that is clamped to fit.
-                    '  .monaco-dialog-box { min-width: min(480px, 90vw) !important; }',
-                    // Clamping the box alone still loses buttons: the row is
-                    // `white-space:nowrap` with `overflow:hidden`, so four actions
-                    // that no longer fit are clipped rather than moved. Wrapping is
-                    // what makes the narrower box actually show them, and the 67px
-                    // indent that aligns them under the message is worth more as
-                    // width on a phone than as alignment.
-                    '  .monaco-dialog-box > .dialog-buttons-row > .dialog-buttons { flex-wrap: wrap !important; }',
-                    '  .monaco-dialog-box:not(.align-vertical) > .dialog-buttons-row > .dialog-buttons { margin-left: 0 !important; }',
                     // The chrome's own text, which no setting in this build can reach.
                     // `editor.fontSize` governs the editor and nothing else; the
                     // workbench styles itself from 622 literal `font-size` rules in
@@ -3902,6 +3986,40 @@ class MainActivity : AppCompatActivity() {
                     '  .part.statusbar .statusbar-item { font-size: 13px !important; }',
                     '  .tabs-container .tab .label-name { font-size: 14px !important; }',
                     '  .monaco-list-row { font-size: 13px !important; }',
+                    '}',
+                    // Gated on width, not on the pointer: what goes wrong here is a
+                    // 480px box in a narrower viewport, and a phone with a mouse or a
+                    // trackpad attached answers `pointer: fine` with the same screen.
+                    // 533px is where 90vw reaches 480px, above which nothing changes.
+                    //
+                    // A modal dialog is 480px wide on a 411px phone, and the
+                    // overflow is not shared: `.monaco-dialog-modal-block` centres
+                    // the box, so 34.5px hangs off each side and the left half is
+                    // simply unreachable. `min-width` beats `max-width` in CSS, so
+                    // the `max-width:90vw` sitting beside it in the same rule never
+                    // binds and cannot.
+                    //
+                    // Which button is lost is not luck. `rearrangeButtons` takes
+                    // its Linux branch here, because the WebView's user agent says
+                    // Linux, and that branch puts the PRIMARY action last in DOM
+                    // order against a right-aligned row: the affirmative button is
+                    // the one off the screen. On the external-link prompt that is
+                    // "Open", which is the whole point of the dialog, and on the
+                    // GitHub device-code sign-in it is the only way forward.
+                    //
+                    // `min()` rather than 0, so nothing changes where there is room:
+                    // a tablet keeps the 480px this reads as the designed width, and
+                    // only a viewport narrower than that is clamped to fit.
+                    '@media (max-width: 533px) {',
+                    '  .monaco-dialog-box { min-width: min(480px, 90vw) !important; }',
+                    // Clamping the box alone still loses buttons: the row is
+                    // `white-space:nowrap` with `overflow:hidden`, so four actions
+                    // that no longer fit are clipped rather than moved. Wrapping is
+                    // what makes the narrower box actually show them, and the 67px
+                    // indent that aligns them under the message is worth more as
+                    // width on a phone than as alignment.
+                    '  .monaco-dialog-box > .dialog-buttons-row > .dialog-buttons { flex-wrap: wrap !important; }',
+                    '  .monaco-dialog-box:not(.align-vertical) > .dialog-buttons-row > .dialog-buttons { margin-left: 0 !important; }',
                     '}'
                 ].join('\n');
                 document.head.appendChild(s);

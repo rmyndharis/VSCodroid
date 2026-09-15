@@ -545,6 +545,16 @@ if (!fs.existsSync(rehEntryPoint)) {
             'musl clients will not resolve names');
     }
 
+    // platform-fix.js is in NODE_OPTIONS, which is how this process and the
+    // server get it, but VS Code deletes NODE_OPTIONS from the extension host's
+    // environment before starting it. The extension host takes the server's
+    // execArgv instead, so the preload rides there as well; it is what lets the
+    // Jupyter extension signal the processes its kernels started. Not loaded
+    // here first the way dns-proxy.js is: NODE_OPTIONS already preloaded this
+    // same file into this process, so one that does not load has stopped the
+    // app before this line runs.
+    execArgv.push(`--require=${path.join(SERVER_DIR, 'platform-fix.js')}`);
+
     const server = fork(serverArgs[0], serverArgs.slice(1), {
         env: childEnv,
         execArgv,
