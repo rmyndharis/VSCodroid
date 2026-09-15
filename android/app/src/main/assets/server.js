@@ -315,6 +315,11 @@ if (!fs.existsSync(rehEntryPoint)) {
     // temporary file and rename, and idempotent: the pattern matches the page
     // whether it is pristine or already pinned.
     const callbackHtmlPath = path.join(REH_DIR, 'out/vs/code/browser/workbench/callback.html');
+    // An upgrade from a build that bound a secret into the page leaves that
+    // secret on disk, where nothing reads it any more. Removed here rather than
+    // left: it is the value those builds accepted a callback on, and an install
+    // that keeps it keeps a live secret for a mechanism that is gone.
+    try { fs.unlinkSync(path.join(SERVER_DIR, 'auth-callback.nonce')); } catch { /* already gone */ }
     try {
         const html = fs.readFileSync(callbackHtmlPath, 'utf8');
         const pkg = process.env.VSCODROID_PACKAGE || '';
