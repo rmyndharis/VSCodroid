@@ -52,7 +52,7 @@
           </a>
         </div>
         <p class="hero-note">
-          Android 13 or newer, 64-bit. Around 915 MB free space for the first
+          Android 13 or newer, 64-bit. Around 946 MB free space for the first
           launch, and much less for each update.
         </p>
       </div>
@@ -233,15 +233,18 @@
           <p>
             Packages that build native code at install time, anything reaching
             for node-gyp, will not install. Pure JavaScript and pure Python
-            packages are fine.
+            packages are fine, and pip is pointed at prebuilt Android builds of
+            NumPy, pandas, pydantic-core and psutil, so those install too.
           </p>
         </li>
         <li class="feature">
-          <h3>Toolchains run through the shell</h3>
+          <h3>Tools start indirectly</h3>
           <p>
-            Android refuses to execute files in an app's private storage, so
-            installed tools are reached through shell functions. Typing them, or
-            running them from a task, works.
+            Android refuses to execute files in an app's private storage, so a
+            toolchain's commands are reached through a small launcher on PATH.
+            Typing them, running them from a task and extensions spawning them
+            all work; <code>pip</code> and <code>npm</code> are shell functions,
+            so a task has to spell those as <code>python3 -m pip</code>.
           </p>
         </li>
         <li class="feature">

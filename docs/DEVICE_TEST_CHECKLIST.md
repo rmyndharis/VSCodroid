@@ -110,6 +110,7 @@
 | EX-4 | Persist across restart | Install extension, kill + relaunch app | Extension still installed and active | | |
 | EX-5 | Bundled extensions | Check Extensions sidebar after first run | Process Monitor, SAF bridge, Serve on Network, Welcome, Python, ESLint, Prettier and Tailwind visible; no third-party icon theme is bundled; file icons use the built-in Seti theme, and Minimal and VS Code Modern Icons are the other two built-in icon themes | | |
 | EX-6 | Uninstall extension | Uninstall a previously installed extension | Removed cleanly, no errors | | |
+| EX-7 | Jupyter notebook | Install **Jupyter** from Open VSX, `python3 -m venv .venv` in the terminal, open a `.ipynb`, **Select Kernel** > **Python Environments...** > that environment, run a cell printing something, then run a cell starting a subprocess (`import subprocess; subprocess.run(['sleep','600'])`) and press Interrupt | `ipykernel` installs into the environment (about half a minute, needs the network), the cell prints, and the interrupt ends both the cell and the `sleep` it started rather than leaving it behind. The kernel talks over the bundled zeromq addon, so a kernel that never becomes ready is that addon, not the extension | | |
 
 ## 7. Background / Foreground
 
@@ -149,7 +150,7 @@ fresh.
 
 | ID | Metric | Steps | Target | Actual | Pass/Fail | Notes |
 |----|--------|-------|--------|--------|-----------|-------|
-| PF-1 | Cold start (first run) | Time from tap to editor visible. Record the number rather than pass/fail: no target has ever been measured, and extraction unpacks about 767 MiB across 22,307 files one at a time | Progress advances throughout and the editor opens; write the elapsed time in Notes | | | |
+| PF-1 | Cold start (first run) | Time from tap to editor visible. Record the number rather than pass/fail: no target has ever been measured, and extraction unpacks about 774 MiB across 22,626 files one at a time | Progress advances throughout and the editor opens; write the elapsed time in Notes | | | |
 | PF-2 | Cold start (subsequent) | Kill app, re-launch, time to editor | <5s | | | |
 | PF-3 | Warm start | Home → return to app | <2s | | | |
 | PF-4 | Memory (idle) | Open app, check `dumpsys meminfo` | <400MB | | | |
@@ -206,6 +207,8 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | TT-9 | ripgrep | `rg "pattern" .` | Search results shown | | |
 | TT-10 | VS Code Search | Use Search sidebar (Ctrl+Shift+F) | Results appear, file navigation works | | |
 | TT-11 | Commands outside the terminal | `bash -c 'type -t npm; type -t npx'`, then a `"type": "shell"` task running `npm -v` | Each reports `function`, and the task prints a version rather than "command not found". `sh -c 'type npm'` still fails, which is the boundary, not a regression: `npm` exists only as a bash function. A toolchain command is not bound by that boundary any more and TC-9 covers it | | |
+| TT-12 | Python packages with a compiled part | `pip install numpy pandas psutil`, then `python3 -c "import numpy, pandas, psutil; print(numpy.__version__, pandas.__version__, psutil.__version__)"` | All three install without building anything and the versions print: they come from the prebuilt Android builds pip is pointed at, not from PyPI, which has no Android wheel for any of them. A `Preparing metadata` step that runs a compiler and fails means `~/.pip/pip.conf` did not get the extra index | | |
+| TT-13 | A command pip installed runs by name | `pip install cowsay`, press Home and return to the app, then in a terminal `hash -r; cowsay -t hi` | The cow prints. The command is reached through the same launcher as a toolchain's: the table that names it is rebuilt when the editor returns to the foreground, so a `command not found` before switching away is expected and one after it is the failure | | |
 
 ## 12. SAF & External Files
 
@@ -265,15 +268,15 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | Keyboard Input | 27 | | | |
 | Screen & Orientation | 10 | | | |
 | Editor Operations | 14 | | | |
-| Extensions | 6 | | | |
+| Extensions | 7 | | | |
 | Background/Foreground | 9 | | | |
 | Low Memory & Stress | 4 | | | |
 | Performance | 10 | | | |
 | Toolchains | 7 | | | |
-| Terminal & Tools | 11 | | | |
+| Terminal & Tools | 13 | | | |
 | SAF & Files | 16 | | | |
 | Display Language | 6 | | | |
-| **Total** | **128** | | | |
+| **Total** | **131** | | | |
 
 **Overall Result**: [ ] PASS / [ ] FAIL
 
