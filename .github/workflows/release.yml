@@ -85,6 +85,12 @@ jobs:
     # Two Gradle release builds plus ~360 MB of toolchain downloads. Raised
     # before the first tag rather than after one times out at 90%.
     timeout-minutes: 90
+    env:
+      # The addons, the glibc shim, the trampoline and the Claude shim in a
+      # release are compiled with this one. build.yml pins the same version, and
+      # check-build-steps.py fails the two drifting apart: an APK built against
+      # another NDK is a different binary from the one every gate ran over.
+      NDK_VERSION: "27.2.12479018"
 
     steps:
       - name: Checkout
@@ -279,8 +285,8 @@ jobs:
 
       - name: Set up NDK
         run: |
-          sdkmanager "ndk;27.2.12479018" --channel=0
-          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/27.2.12479018" >> "$GITHUB_ENV"
+          sdkmanager "ndk;${NDK_VERSION}" --channel=0
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
 
       - name: Set up Node.js
         uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0

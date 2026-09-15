@@ -3,7 +3,7 @@
 
     check-build-steps.py
 
-Six assertions, all about scripts nobody notices are missing until an app is
+Seven assertions, all about scripts nobody notices are missing until an app is
 built without them, or shipped without them having run:
 
   * every shell script a workflow runs is mentioned in CONTRIBUTING.md, so
@@ -22,6 +22,9 @@ built without them, or shipped without them having run:
   * lint.yml runs them on the Node major the APK ships, the one
     build-native-addons.sh pairs the addons against, so a self-check green on
     a runner is a self-check green on the device's runtime;
+  * build.yml and release.yml set up the same NDK, so the native pieces a
+    release ships are built by the compiler every pull request was measured
+    against;
   * every scripts/check-*.py is invoked by something -- a workflow, a build
     script or the Gradle build. Not "by both workflows", which is right for the
     self-checks and wrong here: two of the no-argument checkers deliberately run
@@ -113,6 +116,18 @@ NODE_MAJOR_SOURCE = ROOT / "scripts/build-native-addons.sh"
 NODE_MAJOR_WORKFLOWS = ("lint.yml", "build.yml", "release.yml")
 SHIPPED_NODE = re.compile(r'^NODE_VERSION="\$\{NODE_VERSION:-(\d+)\.', re.M)
 PINNED_NODE = re.compile(r'node-version:\s*"?(\d+)')
+
+# The NDK is pinned in two workflows and nothing paired them. build.yml compiles
+# the addons, the glibc shim, the trampoline and the Claude shim on a pull
+# request; release.yml compiles them again for the APK and AAB that get signed.
+# A version bumped in one file alone ships binaries no gate ever ran over, and
+# both builds stay green, because each is internally consistent.
+#
+# Every literal version in the file, whether it is the job's `env:` pin or a
+# version written into `sdkmanager "ndk;..."` directly, so a second literal added
+# beside the pin is caught in the same file rather than only across the two.
+NDK_WORKFLOWS = ("build.yml", "release.yml")
+PINNED_NDK = re.compile(r'(?:NDK_VERSION:\s*"?|ndk[;/])(\d[\w.]*)')
 
 
 class Unreadable(Exception):
@@ -366,6 +381,24 @@ def _main() -> int:
             failed = True
         else:
             print(f"  ok     {wf_name} sets up Node {shipped.group(1)}, the major that ships")
+
+    pinned_ndk = {}
+    for wf_name in NDK_WORKFLOWS:
+        found = set(PINNED_NDK.findall(executable_lines(WORKFLOWS / wf_name)))
+        if not found:
+            print(f"  FAIL   {wf_name} pins no NDK version; the pattern stopped matching, "
+                  "so this rule was about to pass by reading nothing")
+            return 1
+        pinned_ndk[wf_name] = found
+    versions = set().union(*pinned_ndk.values())
+    if len(versions) != 1:
+        print("  FAIL   the NDK version differs between workflows: "
+              + "; ".join(f"{k} pins {', '.join(sorted(v))}" for k, v in sorted(pinned_ndk.items()))
+              + ". A release compiled by another NDK than the one every pull request "
+                "was measured against ships binaries no gate ran over.")
+        failed = True
+    else:
+        print(f"  ok     {' and '.join(NDK_WORKFLOWS)} both set up NDK {versions.pop()}")
 
     checkers = {p.name for p in (ROOT / "scripts").glob("check-*.py")}
     if not checkers:
