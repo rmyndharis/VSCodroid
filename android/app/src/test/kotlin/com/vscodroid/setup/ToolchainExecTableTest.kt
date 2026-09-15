@@ -477,6 +477,39 @@ class ToolchainExecTableTest {
     }
 
     /**
+     * The other end of that path, which lives in another file.
+     *
+     * `xdg-open.js` is not a bootstrap script: nothing requires it, and the only
+     * thing that names it is the row above. So it rides in the bootstrap list
+     * purely because the row expects it at `server/`, and dropping it from that
+     * list as "not a bootstrap script" leaves a table pointing at a file nothing
+     * puts there. The symptom is a link in the editor that opens nothing, with
+     * every case here still green.
+     */
+    @Test
+    fun `the opener the row names is a file setup extracts`() {
+        val setup = File("src/main/kotlin/com/vscodroid/setup/FirstRunSetup.kt")
+        check(setup.isFile) { "FirstRunSetup.kt not found at ${setup.absolutePath}" }
+
+        // Comments dropped: the reason it is in that list is written above it.
+        val code = setup.readLines().filterNot {
+            val t = it.trimStart()
+            t.startsWith("//") || t.startsWith("*") || t.startsWith("/*")
+        }
+
+        assertTrue(
+            code.any { it.contains("\"xdg-open.js\"") },
+            "FirstRunSetup no longer extracts xdg-open.js, so the row above names a file " +
+                "that is never written and every external link opens nothing",
+        )
+        assertTrue(
+            code.any { it.contains("""extractAssetFile(script, "server/${'$'}script")""") },
+            "the bootstrap scripts no longer land in server/, which is where the row above " +
+                "and every require() in server.js look for them",
+        )
+    }
+
+    /**
      * The directory pip writes console scripts into, holding the `python3` link
      * [FirstRunSetup.setupToolSymlinks] puts there. Without the link the generator
      * writes no pip rows at all, and every case below that expects none would pass
@@ -532,10 +565,15 @@ class ToolchainExecTableTest {
     @Test
     fun `a bundled tool in the same directory gets no row`() {
         stateFile.writeText("[]")
-        Files.createSymbolicLink(
-            File(pipBin(), "node").toPath(),
-            File(nativeLibDir, "libnode.so").toPath(),
-        )
+        // The target is written as a Python script, which a bundled tool never
+        // is, so that the link is the only term left able to refuse this row. An
+        // ELF is refused twice over, by the link test and by the shebang, and a
+        // case using one stayed green with the link test deleted: the shebang
+        // answered it, and every symlink in usr/bin pointing at a script would
+        // have been given a row that runs it through Python.
+        val target = File(nativeLibDir, "libnode-with-a-shebang.so")
+        target.writeText("#!${filesDir.absolutePath}/usr/bin/python3\nprint(1)\n")
+        Files.createSymbolicLink(File(pipBin(), "node").toPath(), target.toPath())
 
         regenerate()
 
