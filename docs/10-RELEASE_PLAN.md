@@ -111,7 +111,10 @@ That matters for correctness, not just speed: on an `assets-` hit the fetch step
 check against the release never run, which is why `patches/`, `branding/` and
 `build-vscode-oss.sh` are in the key even though no step in this workflow reads them. They change
 the server tarball, which is republished under the same `server-<version>` tag, and the key is
-what stops a stale tree going into the APK. The step that builds the native addons also runs only
+what makes the fetch run again. The key alone does not stop a stale tree: a miss downloads whatever
+the release holds, and `fetch-vscode-oss.sh` is what refuses a tree older than `patches/`
+(`check-patch-fingerprints.py`) or `branding/product.json` (its Branding stage). A server
+republished with no change to any key input is not refetched by `build.yml` until one changes. The step that builds the native addons also runs only
 on an `assets-` miss, and `build-native-addons.sh` is in the key, so a change to it is what makes
 the cache miss.
 

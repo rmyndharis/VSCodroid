@@ -372,10 +372,58 @@ EOF
 fi
 
 echo
+echo "=== Branding ==="
+# branding/product.json is applied by build-vscode-oss.sh before gulp runs, so a
+# tree built before a change to it carries the old values under the same
+# filename, version, commit and patch fingerprints, and every other gate here
+# passes. The cache keys in build.yml and release.yml include branding/**, which
+# only makes this fetch run again: it downloads the same stale release.
+#
+# Measured when this was added: server-1.133.0, published 2026-09-05, still had
+# linkProtectionTrustedDomains without https://github.com, which the overlay
+# gained two days later. server.js set the same list at runtime, so nothing
+# showed; a `remove` entry for a Microsoft service URL would have shipped
+# unapplied the same way. So the overlay is applied to a copy of the tree's
+# product.json exactly as build-vscode-oss.sh applies it, and any difference
+# fails the fetch.
+if ! python3 - "$ROOT_DIR/branding/product.json" "$DEST/product.json" <<'BRANDING'; then
+import json
+import sys
+
+overlay = json.load(open(sys.argv[1], encoding="utf-8"))
+product = json.load(open(sys.argv[2], encoding="utf-8"))
+
+# `set` first and `remove` filtered by it, in the order build-vscode-oss.sh
+# applies them: it removes, then updates, so a key named in both ends up
+# present, and reading this as a failed removal would refuse a correct tree.
+wanted = overlay.get("set", {})
+bad = [f"set {key}" for key, value in wanted.items() if product.get(key) != value]
+bad += [f"remove {key}" for key in overlay.get("remove", []) if key in product and key not in wanted]
+for entry in bad:
+    print(f"  FAIL    product.json does not reflect branding/product.json: {entry}")
+if not bad:
+    print(f"  ok      {len(overlay.get('set', {}))} set and {len(overlay.get('remove', []))} removed keys match")
+sys.exit(1 if bad else 0)
+BRANDING
+    cat >&2 <<EOF
+
+  This server tree was built before the current branding/product.json.
+
+  Run the "Build Code - OSS server" workflow, then remove
+
+      $TARBALL
+
+  so the republished release is fetched instead of this cache.
+EOF
+    exit 1
+fi
+
+echo
 echo "=== Verify ==="
 # The same script the build ran on its own output. Running it again here is not
-# redundant: the tarball may predate a branding or patch change, and this is the
-# last point before the tree is copied into the APK.
+# redundant: the tarball may predate a change to that script, and this is the
+# last point before the tree is copied into the APK. It checks the tree's shape,
+# not its branding values or patches; the stages either side of it do that.
 python3 "$ROOT_DIR/scripts/verify-server-tree.py" "$DEST"
 
 echo

@@ -113,7 +113,10 @@ jobs:
       # republished under the same server-<version> name when they change. On an
       # assets cache hit the fetch step - and its digest check against the
       # release - never runs, so this key is the only thing standing between a
-      # republished server and a stale cached tree going into the APK.
+      # republished server and a stale cached tree going into the APK. A miss only
+      # makes the fetch run again; fetch-vscode-oss.sh is what refuses a tarball
+      # older than patches/ or branding/. A server republished with no change to
+      # any of these inputs is not refetched until one of them changes.
       #
       # Which makes "every" a rule rather than a description: a script that edits
       # the packaged tree belongs here the day it is written. patch-js-debug-env.py
