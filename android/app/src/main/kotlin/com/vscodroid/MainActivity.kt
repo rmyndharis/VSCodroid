@@ -3989,7 +3989,9 @@ class MainActivity : AppCompatActivity() {
      *   at once, which raises the keyboard, and the loop starts over.
      * - The Explorer reveals the row once, when the edit starts, before the
      *   keyboard exists, and never again. Chromium's own scroll of a focused
-     *   field into view is thrown back by the list.
+     *   field into view is thrown back by the Explorer's list, which, like most
+     *   lists, does not set `scrollToActiveElement`. The Settings tree and the
+     *   chat list set it and apply that scroll instead.
      *
      * So the row's place is read in the capture phase, before the workbench's own
      * resize listener lays out and takes the row down, and the list is scrolled
@@ -4000,25 +4002,47 @@ class MainActivity : AppCompatActivity() {
      * through the touch-scroll event the list listens for, which sets its scroll
      * position the way a finger would.
      *
+     * What is brought into view is the bottom of the input box, not of the row.
+     * In the Explorer the box is as tall as its row, so the two agree. A Settings
+     * row holds a whole setting, and a list setting grows by a line per entry,
+     * so the row can be taller than the list with the box near its top; lining
+     * up the row's bottom scrolled that box out above the list, and nothing
+     * scrolls it back while it keeps focus.
+     *
      * The scroll overshoots by one row on purpose. The Explorer cancels an edit
      * when a scroll leaves the edited row outside the list's visible height, and
      * that height is the list's own figure, not the element height read here;
      * landing exactly on the bottom edge, a pixel short would silently cancel
-     * New File rather than leave the row barely hidden. The margin is capped at
-     * the row's own top: in a list shorter than two rows, as in landscape with
-     * the keyboard up, or for a Settings row several times taller, a full row
-     * would push the row's top out of view and cancel the edit the same way.
-     * Near the end of the tree the list clamps the scroll, which leaves the row
-     * in view anyway.
+     * New File rather than leave the row barely hidden. That visible height
+     * starts below a tree's sticky headers, which are whole rows of the folders
+     * above, as many as fit in 40% of the list. So the margin is capped at the
+     * row's own top that many rows down: in a list shorter than two rows, a full
+     * row would push the row's top out of view, and in a list 55 to 65 pixels
+     * tall, the one band where a header fits and a full row of margin still
+     * leaves room, it would slide the row under that header, and either cancels
+     * the edit the same way. Neither arose in landscape with Gboard up on the
+     * emulator: the Explorer's list stayed 120 pixels tall there and the side
+     * bar clipped it. A header being pushed up by the end of its folder can
+     * reach further than whole rows, but only over rows of that folder, which
+     * end above where the edited row lands.
+     * The Settings tree has no cancel on scroll, but without the cap a Settings
+     * row taller than the list would be scrolled out entirely and taken down
+     * with its input. Near the end of the tree the list clamps the scroll, which
+     * leaves the row in view anyway.
      *
      * Aimed at any list row holding an input box, not at the Explorer's class
      * names: Ports, the debug watch list, breakpoints and terminal tabs build
-     * their inline edits the same way. The loop was traced for the Explorer
-     * only; whether those loop too has not been reproduced. The mechanism was
-     * read from the shipped workbench and `ListEditKeeperWiringTest` holds the
-     * names to it, but it has not been measured on a device. A workbench patch
-     * would not reach an installed app, for the reason [injectTouchContextMenu]
-     * gives.
+     * their inline edits the same way. The loop was reproduced for the Explorer
+     * only; whether those loop too has not been. Measured on an API 33 emulator
+     * with a 30-folder tree, before the box and the sticky headers were taken
+     * into account: New File on the 27th folder kept the keyboard up over 48
+     * samples in portrait and 76 in landscape, and Enter created the file in
+     * both. With them, in portrait: the same New File kept it up over 12 samples
+     * and created the file, and editing the first `files.exclude` pattern left
+     * its box on screen, where before it sat off the top of the page. The other
+     * lists were not run. `ListEditKeeperWiringTest` holds the names the script
+     * reads to the shipped workbench. A workbench patch would not reach an
+     * installed app, for the reason [injectTouchContextMenu] gives.
      */
     private fun injectListEditKeeper() {
         webView?.evaluateJavascript(
@@ -4028,21 +4052,26 @@ class MainActivity : AppCompatActivity() {
                 window.__vscodroidListEditKeeper = true;
                 window.addEventListener('resize', function() {
                     var input = document.activeElement;
-                    var row = input && input.closest && input.closest('.monaco-inputbox') && input.closest('.monaco-list-row');
+                    var box = input && input.closest && input.closest('.monaco-inputbox');
+                    var row = box && input.closest('.monaco-list-row');
                     var rows = row && row.parentNode;
                     if (!rows || !rows.classList.contains('monaco-list-rows')) return;
                     // Read now: by the frame the row may already be taken down.
                     var height = row.offsetHeight;
-                    var bottom = parseFloat(row.style.top) + height;
+                    var rowTop = parseFloat(row.style.top);
+                    var bottom = rowTop + box.getBoundingClientRect().bottom - row.getBoundingClientRect().top;
                     requestAnimationFrame(function() {
                         // The rows container is offset by minus the scroll position.
-                        var hidden = bottom + parseFloat(rows.style.top) - rows.parentNode.clientHeight;
+                        var viewHeight = rows.parentNode.clientHeight;
+                        var hidden = bottom + parseFloat(rows.style.top) - viewHeight;
                         if (!(hidden > 0)) return;
-                        // A row's margin, but never past the row's own top.
-                        var top = bottom - height + parseFloat(rows.style.top);
+                        // A row's margin, but never past the row's own top or under
+                        // the whole rows sticky headers may take.
+                        var top = rowTop + parseFloat(rows.style.top);
+                        var sticky = Math.floor(0.4 * viewHeight / height) * height;
                         var scroll = new CustomEvent('-monaco-gesturechange', { cancelable: true });
                         scroll.translationX = 0;
-                        scroll.translationY = -Math.max(hidden, Math.min(hidden + height, top));
+                        scroll.translationY = -Math.max(hidden, Math.min(hidden + height, top - sticky));
                         rows.dispatchEvent(scroll);
                     });
                 }, true);

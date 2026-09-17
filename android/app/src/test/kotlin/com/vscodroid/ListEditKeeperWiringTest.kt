@@ -54,10 +54,18 @@ class ListEditKeeperWiringTest {
             "requestAnimationFrame" to "the scroll has to run after the workbench's layout and " +
                 "before the frame is drawn; run at once, the list has no room to scroll yet",
             "'-monaco-gesturechange'" to "the touch-scroll event ListView listens for; a native " +
-                "scroll of the list is thrown away",
-            "Math.min(hidden + height, top)" to "the extra row of margin, capped at the row's " +
-                "top; scrolled exactly to the bottom edge a pixel short cancels the edit, and a " +
-                "full row in a short list pushes the row's top out and cancels it too",
+                "scroll of the Explorer's list is thrown away",
+            "box.getBoundingClientRect().bottom - row.getBoundingClientRect().top" to "how far " +
+                "down the row the input box ends; a Settings row can be taller than the list, " +
+                "and lining the row's bottom up with the list's scrolls a box near its top out " +
+                "of view above",
+            "Math.floor(0.4 * viewHeight / height) * height" to "the whole rows a tree's sticky " +
+                "headers may cover, at most 40% of the list; the Explorer cancels an edit whose " +
+                "row lands under them",
+            "Math.min(hidden + height, top - sticky)" to "the extra row of margin, capped at the " +
+                "row's top below the sticky headers; scrolled exactly to the bottom edge a pixel " +
+                "short cancels the edit, and a full row in a short list pushes the row's top out " +
+                "or under a header and cancels it too",
         ).forEach { (name, why) ->
             assertTrue(script.contains(name), "injectListEditKeeper no longer names `$name`: $why")
         }
@@ -85,6 +93,12 @@ class ListEditKeeperWiringTest {
             "tryGetRelativeTop(l.stat)===null&&await l.data.onFinish(\"\",!1)" to
                 "the Explorer's cancel-on-scroll changed; the margin the script scrolls by was " +
                 "chosen against this check, so measure it again",
+            "this.view.getRelativeTop(e,t?.position??this.stickyScrollController?.height)" to
+                "a tree no longer counts its sticky headers as covering a row, so the cap below " +
+                "them may be moving the row further than needed",
+            "this.maxWidgetViewRatio=.4" to
+                "the sticky headers' share of the list changed from the 40% the script keeps the " +
+                "edited row below",
         ).forEach { (name, why) ->
             assertTrue(bundle.contains(name), "the packaged workbench no longer contains `$name`: $why")
         }
