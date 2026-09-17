@@ -317,7 +317,7 @@ class BashrcAtomicityTest {
 
         val written = bashrc.readText()
         assertTrue(
-            written.contains("__vscodroid_pip_note()"),
+            written.contains("__vscodroid_pip_explain()"),
             "an install with the older pip wrappers never receives a change to them, so the " +
                 "line explaining why a compiled package cannot install here reaches nobody",
         )
@@ -339,6 +339,45 @@ pip3() { python3 -m pip "${'$'}@"; }
 """
 
     /**
+     * The block that came after v1.3.0's noted any failed install, typo included,
+     * and was keyed on that note's name, so a device carrying it matched the
+     * guard and would never be given the note that reads what pip reported.
+     */
+    @Test
+    fun `an install that has the note on any failure gets the one that reads the error`() {
+        bundleNpm()
+        bashrc.appendText(ANY_FAILURE_PIP_BLOCK)
+
+        FirstRunSetup(context).createNpmWrappers()
+
+        val written = bashrc.readText()
+        assertTrue(
+            written.contains("__vscodroid_pip_explain()"),
+            "an install with the previous pip block keeps telling a missing package it failed to build",
+        )
+        assertTrue(
+            written.lastIndexOf("pip() {") > written.indexOf("__vscodroid_pip_note()"),
+            "the current pip definition does not come last, so the older one is what bash runs",
+        )
+    }
+
+    /** The shape of that block: its header, one `pip()`, one `pip3()` and the note. */
+    private val ANY_FAILURE_PIP_BLOCK = """
+
+# pip/pip3: shell functions. pip is installed as a library, not as a program:
+pip() {
+    python3 -m pip "${'$'}@"
+    local __pip_status=${'$'}?
+    [ ${'$'}__pip_status -eq 0 ] || __vscodroid_pip_note "${'$'}@"
+    return ${'$'}__pip_status
+}
+pip3() { pip "${'$'}@"; }
+__vscodroid_pip_note() {
+    echo "vscodroid: if that failed while building a package, this device has no C" >&2
+}
+"""
+
+    /**
      * The shape a user customising v1.3.0's wrapper most naturally writes: their
      * own definition below it, since bash takes the last one. The count of the
      * app's blocks is what tells the two apart.
@@ -350,7 +389,7 @@ pip3() { python3 -m pip "${'$'}@"; }
 
         FirstRunSetup(context).createNpmWrappers()
 
-        assertFalse(bashrc.readText().contains("__vscodroid_pip_note()"), "the user's pip() was overridden")
+        assertFalse(bashrc.readText().contains("__vscodroid_pip_explain()"), "the user's pip() was overridden")
     }
 
     /**
@@ -372,7 +411,7 @@ pip3() { python3 -m pip "${'$'}@"; }
             FirstRunSetup(context).createNpmWrappers()
 
             assertFalse(
-                bashrc.readText().contains("__vscodroid_pip_note()"),
+                bashrc.readText().contains("__vscodroid_pip_explain()"),
                 "the user's `$definition` was overridden",
             )
         }
@@ -387,11 +426,11 @@ pip3() { python3 -m pip "${'$'}@"; }
         bundleNpm()
         FirstRunSetup(context).createNpmWrappers()
         // What a later release sees: this block, under a marker it no longer uses.
-        bashrc.writeText(bashrc.readText().replace("__vscodroid_pip_note()", "__vscodroid_pip_note_v1()"))
+        bashrc.writeText(bashrc.readText().replace("__vscodroid_pip_explain()", "__vscodroid_pip_explain_v1()"))
 
         FirstRunSetup(context).createNpmWrappers()
 
-        assertTrue(bashrc.readText().contains("__vscodroid_pip_note()"), "the app's own block froze the next one out")
+        assertTrue(bashrc.readText().contains("__vscodroid_pip_explain()"), "the app's own block froze the next one out")
     }
 
     /**
@@ -408,7 +447,7 @@ pip3() { python3 -m pip "${'$'}@"; }
         FirstRunSetup(context).createNpmWrappers()
 
         val written = bashrc.readText()
-        assertFalse(written.contains("__vscodroid_pip_note()"), "the user's pip() was overridden")
+        assertFalse(written.contains("__vscodroid_pip_explain()"), "the user's pip() was overridden")
         assertTrue(written.contains("--user"), "the user's pip() was lost")
     }
 

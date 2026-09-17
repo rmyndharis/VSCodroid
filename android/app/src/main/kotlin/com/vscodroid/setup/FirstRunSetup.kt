@@ -2305,12 +2305,37 @@ __vscodroid_symlink_note() {
 $PIP_BLOCK_HEADER pip is installed as a library, not as a program:
 # its console script is a #! text file under filesDir, which SELinux refuses to
 # execute. The module form is the same pip and always has been.
+#
+# Started through a few lines of Python rather than `python3 -m pip`, so that
+# what pip reported can be read once it exits. A handler on the "pip" logger
+# copies every ERROR record, with the context a pip diagnostic carries, to a
+# file for this one run; the note below reads it and the terminal shows exactly
+# what it would have. The context matters: a build dependency that failed and
+# one that was never found share the same top-level line.
+# pip's own --log, or PIP_LOG, is the obvious channel and is not used. It lowers
+# pip's root logger to DEBUG, pip then counts a build's output as already shown,
+# and the error box that held the build's traceback reads "No available output.".
+# -P because -c puts the working directory first on sys.path: a logging.py or a
+# runpy.py in the user's folder would replace the module imported here before
+# pip's __main__ drops that entry, and pip would not start at all.
 pip() {
-    python3 -m pip "${'$'}@"
-    # Captured before anything else runs, and handed back below, so wrapping the
-    # command cannot change what a script or a task sees.
-    local __pip_status=${'$'}?
-    [ ${'$'}__pip_status -eq 0 ] || __vscodroid_pip_note "${'$'}@"
+    local __pip_errors="${'$'}{TMPDIR:-/tmp}/vscodroid-pip.${'$'}{BASHPID:-${'$'}${'$'}}.log"
+    # Recorded through ||, which errexit ignores, so under set -e a failed install
+    # still removes its file and still returns pip's own status.
+    local __pip_status=0
+    python3 -P -c 'import logging, runpy, sys
+class Errors(logging.StreamHandler):
+    def format(self, record):
+        return record.getMessage() + "".join(str(getattr(a, "context", "")) for a in record.args or ())
+try:
+    errors = Errors(open(sys.argv.pop(1), "w"))
+    errors.setLevel(logging.ERROR)
+    logging.getLogger("pip").addHandler(errors)
+except OSError:
+    pass
+runpy.run_module("pip", run_name="__main__", alter_sys=True)' "${'$'}__pip_errors" "${'$'}@" || __pip_status=${'$'}?
+    __vscodroid_pip_explain "${'$'}__pip_status" "${'$'}__pip_errors" "${'$'}@"
+    rm -f "${'$'}__pip_errors"
     return ${'$'}__pip_status
 }
 pip3() { pip "${'$'}@"; }
@@ -2322,35 +2347,51 @@ pip3() { pip "${'$'}@"; }
 # of a package with a compiled part walks to cmake and dies on EACCES with an
 # error that names cmake and not the device.
 #
-# Deliberately hedged rather than probed. npm's note asks the directory whether
-# it can hold a symbolic link before speaking, and there is no equally cheap
-# question here: pip fails for a typo, a network drop and a missing build alike,
-# and the only honest discriminator is the text the user just read. So this says
-# "if that was a build" and stays true either way. Narrowed to `install`, so a
-# mistyped `pip list` says nothing, and once per shell, because it is a property
-# of the device rather than of the command. On stderr, because BASH_ENV is read
-# by the shell behind every ${'$'}(...) and stdout there belongs to the substitution.
+# The exit status cannot say which failure it was: pip returns 1 for a typo, a
+# network drop and a failed build alike. The records pip() kept can, so the note
+# speaks only when they name a build: a wheel, a metadata step (spaced at the top
+# level, hyphenated in a build dependency's output) or the requirements hook.
+# Not "Failed to build" alone, which pip also says for a failed git clone and
+# for a build dependency that was never found. Still hedged, because a build
+# can fail for a reason other than C. Once per shell, and spent only when it
+# speaks, because it is a property of the device rather than of the command.
+#
+# tkinter and turtle are keyed on the name instead, and a success hears it too:
+# `tkinter` is not on PyPI, and `tk` is an unrelated package that installs.
+#
+# Narrowed to `install`, so a mistyped `pip list` says nothing. On stderr,
+# because BASH_ENV is read by the shell behind every ${'$'}(...) and stdout there
+# belongs to the substitution.
 #
 # "Once per shell" has the ceiling the npm note has: a pipeline runs pip in a
 # subshell, so the flag is set where it cannot be seen again and a session that
 # only ever pipes pip can be told twice. Measured: two plain `pip install` runs
 # print it once, two piped runs print it once each. Not worth a state file.
-__vscodroid_pip_note() {
+__vscodroid_pip_explain() {
+    local __status=${'$'}1 __errors=${'$'}2 __arg __command= __tk=
+    shift 2
     # The subcommand is the first word that is not an option: `pip -q install x`.
-    local __arg
     for __arg in "${'$'}@"; do
         case "${'$'}__arg" in
             -*) ;;
-            install) break ;;
-            *) return 0 ;;
+            *)  if [ -z "${'$'}__command" ]; then __command=${'$'}__arg
+                else case "${'$'}__arg" in [Tt]kinter|[Tt]k|turtle) __tk=1 ;; esac
+                fi ;;
         esac
     done
-    [ "${'$'}__arg" = install ] || return 0
+    [ "${'$'}__command" = install ] || return 0
+    if [ -n "${'$'}__tk" ]; then
+        echo "vscodroid: tkinter and turtle are not included, and pip cannot add them;" >&2
+        echo "vscodroid: 'tk' on PyPI is an unrelated package." >&2
+        echo "vscodroid: https://rmyndharis.github.io/VSCodroid/guide.html#python-packages-written-in-c" >&2
+    fi
+    [ "${'$'}__status" -eq 0 ] && return 0
     [ -n "${'$'}{__VSCODROID_PIP_NOTED-}" ] && return 0
+    grep -qE 'Failed building |metadata.generation.failed| when getting requirements to build' "${'$'}__errors" 2>/dev/null || return 0
     __VSCODROID_PIP_NOTED=1
-    echo "vscodroid: if that failed while building a package, this device has no C" >&2
-    echo "vscodroid: compiler and cannot run one, so a package with no ready-made" >&2
-    echo "vscodroid: Android build cannot be installed. Pure Python ones can." >&2
+    echo "vscodroid: a package failed to build. If it has a part written in C, it cannot" >&2
+    echo "vscodroid: be built here: this device has no C compiler and cannot run one." >&2
+    echo "vscodroid: Pure Python packages install." >&2
     echo "vscodroid: https://rmyndharis.github.io/VSCodroid/guide.html#python-packages-written-in-c" >&2
 }
 """
@@ -2438,7 +2479,7 @@ __vscodroid_pip_note() {
      * launch after an app update, with no re-extraction and nothing moving in
      * the storage pre-flight.
      */
-    private val pipBlockMarker = "__vscodroid_pip_note()"
+    private val pipBlockMarker = "__vscodroid_pip_explain()"
 
     /** The comment every pip block this app has written opens with, v1.3.0's included. */
     private val PIP_BLOCK_HEADER = "# pip/pip3: shell functions."

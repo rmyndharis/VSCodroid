@@ -315,52 +315,144 @@ class NonInteractiveShellEnvTest {
     }
 
     /**
-     * A failed `pip install` names the cause once, and wrapping pip changes
+     * `python3` as pip() calls it, standing in for pip: it writes `ERRORS` to
+     * the file the wrapper names after the code, where the real shim sends pip's
+     * error records, and fails. `-P` has to come first, or a `logging.py` in the
+     * user's folder replaces the module the shim imports and pip never starts.
+     */
+    private val failingPip = """
+        export TMPDIR="${'$'}PWD/t"; mkdir -p "${'$'}TMPDIR"
+        python3() { [ "${'$'}1" = -P ] || echo NO_SAFE_PATH; printf '%s\n' "${'$'}ERRORS" > "${'$'}4"; return 3; }
+    """.trimIndent() + "\n"
+
+    private val buildNote = "vscodroid: a package failed to build"
+
+    /**
+     * A failed `pip install` names the cause once, and only when pip reported a
+     * build. The status cannot tell: pip exits 1 for a missing package and a
+     * failed build alike, so a typo used to take the note and the build that
+     * failed next in the same terminal was told nothing. Wrapping pip changes
      * nothing a script or a task sees: the exit status survives, and other
      * subcommands, or a success, say nothing. Options before the subcommand
      * still count as an install.
      */
     @Test
-    fun `a failed pip install gets one note, once, and keeps its status`() {
+    fun `a pip install that fails to build gets one note, once, and keeps its status`() {
         val bash = File("/bin/bash")
         assumeTrue(bash.canExecute(), "no /bin/bash on this host to ask")
 
         FirstRunSetup(context).createBashEnvFile()
         val cwd = File(filesDir, "workspace").apply { mkdirs() }
 
-        val listing = runBash(cwd, bashEnvFile().path, "python3() { return 3; }\npip list; echo \"list=\$?\"")
-        assertEquals(listOf("list=3"), listing, "a failed pip list was given the install note: $listing")
-
         val out = runBash(
             cwd,
             bashEnvFile().path,
-            """
-            python3() { return 3; }
-            pip install a; echo "first=${'$'}?"
-            pip3 install b; echo "second=${'$'}?"
+            failingPip + """
+            ERRORS='ERROR: No matching distribution found for nosuch'
+            pip install nosuch; echo "missing=${'$'}?"
+            echo ---
+            ERRORS='error: metadata-generation-failed'
+            pip install matplotlib; echo "first=${'$'}?"
+            ERRORS='ERROR: Failed building wheel for cmake'
+            pip3 install cmake; echo "second=${'$'}?"
+            echo "leftover=[${'$'}(ls -A "${'$'}TMPDIR")]"
             """.trimIndent(),
         )
+        assertFalse(out.contains("NO_SAFE_PATH"), "pip runs without -P, so the folder's own files come first: $out")
+        assertFalse(
+            out.takeWhile { it != "---" }.any { it.startsWith("vscodroid:") },
+            "a package that does not exist was told it failed to build: $out",
+        )
         assertEquals(
-            1, out.count { it.startsWith("vscodroid: if that failed while building a package") },
+            1, out.dropWhile { it != "---" }.count { it.startsWith(buildNote) },
             "the cause was not named exactly once per shell: $out",
         )
         assertEquals(
-            listOf("first=3", "second=3"), out.filter { it.startsWith("first=") || it.startsWith("second=") },
+            listOf("missing=3", "first=3", "second=3"),
+            out.filter { it.matches(Regex("""\w+=\d+""")) },
             "wrapping pip changed the exit status a script or a task sees: $out",
         )
+        assertTrue(out.contains("leftover=[]"), "the errors file was left in TMPDIR: $out")
+
+        // What pip prints for a build, in every form the note answers, and the
+        // failures that read like one and are not: a build dependency that does
+        // not exist, and a clone that failed.
+        mapOf(
+            "ERROR: Failed building wheel for cmake" to true,
+            "metadata generation failed" to true,
+            "error: metadata-generation-failed" to true,
+            "ERROR: Failed to build 'x' when getting requirements to build wheel" to true,
+            "ERROR: Failed to build 'x' when installing build dependencies: No matching distribution found for y" to false,
+            "ERROR: Failed to build 'x' when git clone --filter=blob:none --quiet file:///nope" to false,
+        ).forEach { (errors, isBuild) ->
+            val one = runBash(cwd, bashEnvFile().path, failingPip + "ERRORS=\"$errors\"\npip install x")
+            assertEquals(if (isBuild) 1 else 0, one.count { it.startsWith(buildNote) }, "for `$errors`: $one")
+        }
+
+        val listing = runBash(cwd, bashEnvFile().path, failingPip + "ERRORS='Failed building wheel for a'\npip list; echo \"list=\$?\"")
+        assertEquals(listOf("list=3"), listing, "a failed pip list was given the install note: $listing")
 
         // On stderr: stdout inside ${'$'}(...) belongs to whatever captures it.
-        val captured = runBash(cwd, bashEnvFile().path, "python3() { return 3; }\nx=${'$'}(pip install a)\nprintf 'captured=[%s]\\n' \"${'$'}x\"")
+        val captured = runBash(cwd, bashEnvFile().path, failingPip + "ERRORS='Failed building wheel for a'\nx=${'$'}(pip install a)\nprintf 'captured=[%s]\\n' \"${'$'}x\"")
         assertTrue(captured.contains("captured=[]"), "the note went into a command substitution: $captured")
+        assertEquals(1, captured.count { it.startsWith(buildNote) }, "the note was lost with stdout: $captured")
 
-        val optionFirst = runBash(cwd, bashEnvFile().path, "python3() { return 3; }\npip -q install a")
+        val optionFirst = runBash(cwd, bashEnvFile().path, failingPip + "ERRORS='Failed building wheel for a'\npip -q install a")
         assertEquals(
-            1, optionFirst.count { it.startsWith("vscodroid: if that failed while building a package") },
+            1, optionFirst.count { it.startsWith(buildNote) },
             "an install with an option before the subcommand said nothing: $optionFirst",
         )
 
         val ok = runBash(cwd, bashEnvFile().path, "python3() { return 0; }\npip install a; echo \"status=\$?\"")
         assertEquals(listOf("status=0"), ok, "a successful pip said something: $ok")
+
+        // A script under set -e stops at a failed pip with pip's own status, and
+        // the errors file does not stay behind.
+        val errexit = runBash(
+            cwd, bashEnvFile().path,
+            failingPip + "ERRORS='Failed building wheel for a'\n(set -e; pip install a; echo unreachable); " +
+                "echo \"sub=\$?\"; echo \"leftover=[\$(ls -A \"\$TMPDIR\")]\"",
+        )
+        assertTrue(errexit.contains("sub=3"), "set -e did not stop with pip's status: $errexit")
+        assertFalse(errexit.contains("unreachable"), "set -e carried on past a failed pip: $errexit")
+        assertTrue(errexit.contains("leftover=[]"), "a failed pip under set -e left its file: $errexit")
+    }
+
+    /**
+     * tkinter and turtle are not in this Python, and pip gives no hint of it:
+     * `tkinter` is not on PyPI, and `tk` is, as an unrelated package that
+     * installs cleanly. So this note is keyed on the name, success included,
+     * and never borrows the build note.
+     */
+    @Test
+    fun `asking pip for tkinter says it is not included, whatever pip returns`() {
+        val bash = File("/bin/bash")
+        assumeTrue(bash.canExecute(), "no /bin/bash on this host to ask")
+
+        FirstRunSetup(context).createBashEnvFile()
+        val cwd = File(filesDir, "workspace").apply { mkdirs() }
+
+        val out = runBash(
+            cwd,
+            bashEnvFile().path,
+            failingPip + """
+            ERRORS='ERROR: No matching distribution found for tkinter'
+            pip install tkinter; echo "tkinter=${'$'}?"
+            python3() { return 0; }
+            pip install tk; echo "tk=${'$'}?"
+            pip show tk; echo "show=${'$'}?"
+            """.trimIndent(),
+        )
+        assertEquals(
+            2, out.count { it.startsWith("vscodroid: tkinter") },
+            "an install of tkinter or tk was not told they are not included, or `pip show` was: $out",
+        )
+        assertFalse(out.any { it.startsWith(buildNote) }, "a missing tkinter was told it failed to build: $out")
+        assertEquals(
+            listOf("tkinter=3", "tk=0", "show=0"),
+            out.filter { it.matches(Regex("""\w+=\d+""")) },
+            "wrapping pip changed the exit status a script or a task sees: $out",
+        )
     }
 
     /**
