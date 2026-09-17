@@ -1,5 +1,6 @@
 package com.vscodroid
 
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Test
@@ -8,8 +9,9 @@ import java.io.File
 /**
  * That the script turning a soft keyboard's composing Enter into one the
  * workbench recognises is installed where every page load passes, leaves the
- * editor, the terminal and a CJK conversion alone, and still matches how the
- * shipped workbench reads a key.
+ * editor, the terminal and a Chinese or Japanese conversion alone, ends the
+ * composition before the replacement, and still matches how the shipped
+ * workbench reads a key and filters a picker.
  *
  * Source-level, like [ListEditKeeperWiringTest], with the same ceiling: it cannot
  * see whether Gboard's Enter commits a rename on a device, only that the script
@@ -50,10 +52,8 @@ class ComposingEnterWiringTest {
                 "without it every Enter is replaced",
             "'compositionupdate'" to "the composed text is what tells a CJK conversion from a " +
                 "word; without it Enter can no longer confirm a conversion",
-            "'compositionend'" to "a finished composition has to stop counting, or a CJK word " +
-                "typed earlier keeps blocking Enter",
             "\\p{Script=Han}" to "Chinese and Japanese kanji compositions confirm on Enter",
-            "\\p{Script=Hangul}" to "a Korean composition confirms on Enter",
+            "\\p{Script=Hiragana}" to "a Japanese kana composition confirms its conversion on Enter",
             ".monaco-editor" to "the editor takes Enter through its own edit context and " +
                 "already handles it",
             ".xterm" to "the terminal takes Enter through its helper textarea and already " +
@@ -65,6 +65,26 @@ class ComposingEnterWiringTest {
         ).forEach { (name, why) ->
             assertTrue(script.contains(name), "injectComposingEnter no longer names `$name`: $why")
         }
+        assertFalse(
+            script.contains("\\p{Script=Hangul}"),
+            "a Hangul composition is excluded again. Its syllable is already the input's value " +
+                "and Enter has nothing to confirm, so the exclusion only costs a Korean user " +
+                "a second Enter.",
+        )
+        assertTrue(
+            Regex("""addEventListener\('compositionend',\s*function\(\)\s*\{\s*composing\s*=\s*''""")
+                .containsMatchIn(script),
+            "injectComposingEnter no longer resets the composed text on compositionend: a " +
+                "finished composition has to stop counting, or a CJK word typed earlier keeps " +
+                "blocking Enter",
+        )
+        assertTrue(
+            Regex("""dispatchEvent\(new CompositionEvent\('compositionend',\s*\{\s*data:\s*composing[\s\S]*dispatchEvent\(enter\)""")
+                .containsMatchIn(script),
+            "the composition is no longer ended, with the composed text, before the replacement " +
+                "Enter. A filterable picker filters only on compositionend, so Enter accepts the " +
+                "row that was focused before the word was typed.",
+        )
         assertTrue(
             Regex("""Object\.defineProperty\(enter,\s*'keyCode'""").containsMatchIn(script),
             "the replacement no longer carries keyCode 13, and the workbench maps a key from " +
@@ -111,8 +131,16 @@ class ComposingEnterWiringTest {
             "id:\"quickInput.accept\",primary:3" to
                 "Quick Open no longer accepts through an Enter keybinding, so check what the " +
                 "replacement has to reach",
+            "_applyOrUpdateFilter(){if(!this._delegate.onFilter){this._applyFilter();return}" to
+                "a picker's filter may no longer apply before the replacement Enter arrives",
         ).forEach { (name, why) ->
             assertTrue(bundle.contains(name), "the packaged workbench no longer contains `$name`: $why")
         }
+        assertTrue(
+            Regex("""\(this\._filterInput,"compositionend",\(\)=>\{this\._imeSessionInProgress=!1,\w+\(\)\}\)""")
+                .containsMatchIn(bundle),
+            "the action list's filter no longer catches up on compositionend, so ending the " +
+                "composition before the replacement Enter may not filter the picker",
+        )
     }
 }

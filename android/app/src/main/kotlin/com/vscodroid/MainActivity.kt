@@ -4077,21 +4077,47 @@ class MainActivity : AppCompatActivity() {
      * is the obvious shape and swallows a newline, because a multi-line setting
      * is a textarea whose Enter no handler inserts.
      *
+     * A `compositionend` carrying the composed word is dispatched on the element
+     * just before the replacement. The key arrives inside the composition, and a
+     * widget that holds its work back until the composition ends would otherwise
+     * act on stale state: the action list's filter box, which the chat model
+     * picker and the Run and Debug configuration dropdown open focused, filters
+     * only on `compositionend` and keeps list focus on the checked or first row
+     * until then, so Enter accepted that row and not the one typed. It filters
+     * synchronously unless the picker supplies an `onFilter` delegate; one that
+     * does can still accept a row from the list before the filter.
+     *
      * Not the editor and not the terminal. Both take Enter through an edit path
      * of their own, the editor's edit context and xterm's helper textarea, and
      * handle it correctly today. The editor exclusion is its whole element, so
      * the find and rename boxes the editor renders inside itself are left as
      * they were.
      *
-     * Not a CJK conversion. When the composition holds Chinese, Japanese or
-     * Korean script, Enter is left to confirm it, as it does on a desktop. The
-     * ceiling is what that test can see: a Pinyin composition is Latin letters
-     * until a candidate is picked, so Enter there submits the raw letters.
+     * Not a Chinese or Japanese conversion. When the composition holds Han,
+     * kana or Bopomofo, Enter is left to confirm it, as it does on a desktop.
+     * Measured on the same emulator with Gboard's Japanese romaji layout in an
+     * Explorer rename: the first Enter arrives composing and confirms the
+     * conversion, the composition ends, and a second Enter commits. The ceiling
+     * is what that test can see: a Pinyin composition is Latin letters until a
+     * candidate is picked, so Enter there submits the raw letters.
      *
-     * The mechanism was read from the shipped workbench, and
-     * `ComposingEnterWiringTest` holds the script and the bundle to it, but it
-     * has not been measured on a device yet. A workbench patch would not reach an
-     * installed app, for the reason [injectTouchContextMenu] gives.
+     * Hangul is replaced like a Latin word. A Korean syllable has no conversion
+     * step; it is already the input's value, so a composing Enter has nothing to
+     * confirm. Measured with Gboard's Korean 2-Bulsik layout in an Explorer
+     * rename while Hangul was excluded: the first Enter arrived composing and
+     * did nothing, the composition then ended, and only a second Enter
+     * committed. Replaced, one Enter commits the name.
+     *
+     * The replacement was measured on the same emulator with real taps on
+     * Gboard 12.4, the version its system image ships: Rename commits a Latin
+     * word on one Enter, Quick Open opens the file and closes, the editor takes
+     * exactly one newline, and `Gam` then Enter in the Run and Debug
+     * configuration dropdown selects Gamma, where before the `compositionend`
+     * it kept Alpha. Gboard 18.1 types Latin letters into these boxes without a
+     * composition, so there the script is not reached for them. A multi-line
+     * setting was not run. `ComposingEnterWiringTest` holds the script and the
+     * bundle to it. A workbench patch would not reach an installed app, for the
+     * reason [injectTouchContextMenu] gives.
      */
     private fun injectComposingEnter() {
         webView?.evaluateJavascript(
@@ -4105,13 +4131,14 @@ class MainActivity : AppCompatActivity() {
                 window.addEventListener('compositionstart', track, true);
                 window.addEventListener('compositionupdate', track, true);
                 window.addEventListener('compositionend', function() { composing = ''; }, true);
-                var CONVERSION = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Bopomofo}]/u;
+                var CONVERSION = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Bopomofo}]/u;
                 window.addEventListener('keydown', function(e) {
                     if (e.key !== 'Enter' || !e.isComposing || CONVERSION.test(composing)) return;
                     var target = e.target;
                     if (!target || (target.tagName !== 'INPUT' && target.tagName !== 'TEXTAREA')) return;
                     if (target.closest('.monaco-editor, .xterm')) return;
                     e.stopImmediatePropagation();
+                    target.dispatchEvent(new CompositionEvent('compositionend', { data: composing, bubbles: true }));
                     var enter = new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true });
                     Object.defineProperty(enter, 'keyCode', { value: 13 });
                     Object.defineProperty(enter, 'which', { value: 13 });
