@@ -137,6 +137,54 @@ class KeyboardGuardWiringTest {
         )
     }
 
+    /**
+     * That the set of composing editors follows the page, in both directions.
+     *
+     * A host left in the set after its composition is over is one the guard
+     * never lets the keyboard up for again, because apply() skips it. Chromium
+     * ends an EditContext composition on an empty commit without dispatching
+     * compositionend (`EditContext::CommitText` sends it only for non-empty
+     * text), so compositionend cannot be the only way out. Losing focus is the
+     * reliable one: Blink finishes the composition of the element it takes focus
+     * from, and of the page when the page loses focus.
+     *
+     * The other direction is the user typing. A tap outside text that leaves
+     * focus in a composing editor clears `aimedAtText` while the keyboard stays
+     * up, and the next time the workbench refocuses that editor the guard takes
+     * the keyboard away in the middle of typing. A new composition in the focused
+     * editor, with the keyboard not held down, is the user aiming at text.
+     */
+    @Test
+    fun `the composing state ends with focus and a new word is aiming at text`() {
+        val guard = SourceScan.body(mainActivity(), "private fun injectKeyboardGuard(")
+
+        val focusout = guard.indexOf("addEventListener('focusout'")
+        assertTrue(
+            focusout >= 0 &&
+                guard.substring(focusout, guard.indexOf(", true)", focusout)).contains("composing.delete("),
+            "the guard no longer drops an editor from the composing set when it loses focus, " +
+                "so an editor whose composition ended without compositionend is skipped by " +
+                "apply() for good, and tapping its text never raises the keyboard again.",
+        )
+
+        val started = SourceScan.body(guard, "function composeStarted(element)")
+        for (name in listOf("composing.add(element)", "document.activeElement", "'none'", "aimedAtText = true")) {
+            assertTrue(
+                started.contains(name),
+                "composeStarted no longer contains `$name`: a new word typed into the focused " +
+                    "editor has to both mark it composing and count as aiming at text, and only " +
+                    "while the keyboard is not being held down.",
+            )
+        }
+        val listeners = Regex("""addEventListener\('compositionstart'""").findAll(guard).count()
+        val routed = Regex("""addEventListener\('compositionstart'[^;]*composeStarted\(""").findAll(guard).count()
+        assertTrue(
+            listeners > 0 && listeners == routed,
+            "$routed of $listeners compositionstart listeners go through composeStarted, so a " +
+                "composition seen by the others does not count as the user typing.",
+        )
+    }
+
     @Test
     fun `a scroll is not a tap`() {
         val source = mainActivity()

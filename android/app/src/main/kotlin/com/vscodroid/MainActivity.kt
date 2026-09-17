@@ -3384,8 +3384,10 @@ class MainActivity : AppCompatActivity() {
      * guard aimed at `textarea.inputarea`, matched nothing at all, and still
      * appeared to work because the keyboard happened not to rise in the one
      * case that was tried. Monaco also keeps a `textarea.ime-text-area` around,
-     * which is not the focus target; both selectors are kept so that a version
-     * bump away from EditContext does not silently disarm this.
+     * which is not the focus target. The selector keeps `textarea.inputarea`
+     * beside `.native-edit-context` because the same workbench still builds
+     * that textarea as the editing host when `editor.editContext` is false or
+     * the WebView has no EditContext.
      *
      * The mechanism is `inputmode="none"`, which tells Chromium to leave the
      * keyboard alone for an element that still takes key events, so a hardware
@@ -3408,6 +3410,11 @@ class MainActivity : AppCompatActivity() {
      *   up over half the screen on every scroll. The element usually already has
      *   focus by then, so no focus event follows; hence the same blur and
      *   refocus, inside the gesture, which is what raises the keyboard.
+     *
+     * `inputmode` is never changed on a host still composing a word, because
+     * that writes the word in again; such a host is left for a later focus or
+     * touch. The focus handler never meets one, since a host's composition is
+     * finished when it loses focus.
      *
      * Measured on an API 37 emulator at 411dp, `dumpsys input_method` beside a
      * screenshot each time. Tapping the Explorer icon: was `mInputShown=true`,
@@ -3497,21 +3504,40 @@ class MainActivity : AppCompatActivity() {
                 // The editor composes through EditContext, whose composition
                 // events fire on `element.editContext` and never reach the
                 // document, measured with listeners on both. The document ones
-                // cover a textarea host, should a later workbench go back to one.
+                // cover the `textarea.inputarea` host this same workbench builds
+                // when `editor.editContext` is false or the WebView has no
+                // EditContext.
                 var composing = new WeakSet();
                 var watched = new WeakSet();
+                // A word started in the focused host while the keyboard is not
+                // held down is the user typing. Without this, a tap outside text
+                // that leaves focus in a composing host clears aimedAtText while
+                // the keyboard stays up, and the next refocus of that host takes
+                // the keyboard away mid-typing.
+                function composeStarted(element) {
+                    composing.add(element);
+                    if (element === document.activeElement && element.getAttribute('inputmode') !== 'none') aimedAtText = true;
+                }
                 function watch(element) {
                     var context = element.editContext;
                     if (!context || watched.has(context)) return;
                     watched.add(context);
-                    context.addEventListener('compositionstart', function() { composing.add(element); });
+                    context.addEventListener('compositionstart', function() { composeStarted(element); });
                     context.addEventListener('compositionend', function() { composing.delete(element); });
                 }
                 document.addEventListener('compositionstart', function(e) {
-                    if (e.target && e.target.matches && e.target.matches(EDITING_HOST)) composing.add(e.target);
+                    if (e.target && e.target.matches && e.target.matches(EDITING_HOST)) composeStarted(e.target);
                 }, true);
                 document.addEventListener('compositionend', function(e) {
                     if (e.target) composing.delete(e.target);
+                }, true);
+                // An empty commit ends an EditContext composition without a
+                // compositionend, and a host left in the set is one apply()
+                // never lets the keyboard up for again. Losing focus is the
+                // reliable end: Blink finishes the composition of the element
+                // it takes focus from, and of the page when the page loses it.
+                document.addEventListener('focusout', function(e) {
+                    composing.delete(e.target);
                 }, true);
                 function apply(element) {
                     watch(element);
