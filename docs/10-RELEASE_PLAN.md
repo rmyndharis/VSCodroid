@@ -476,9 +476,8 @@ holds whatever was compiled last.
 
 | Channel | Purpose |
 |---------|---------|
-| GitHub Issues | Bug reports, feature requests |
+| GitHub Issues | Bug reports, feature requests, questions |
 | Play Store reviews | User feedback, rating management |
-| GitHub Discussions | Community Q&A |
 
 ---
 

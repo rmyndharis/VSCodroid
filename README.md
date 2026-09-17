@@ -127,7 +127,7 @@ If you are **ready to learn**, you should be able to **start today**.
 - **Mobile-Optimized**: Extra Key Row (Ctrl, Alt, Tab, Esc, F1-F12, symbols, cursor trackpad), touch-friendly UI, clipboard bridge.
 - **SSH Out of the Box**: Bundled OpenSSH client and `ssh-keygen`, preconfigured with sane defaults (ed25519, keepalive, `accept-new`).
 - **Language Picker**: Select your languages; Ruby and Java install on demand, via Play Asset Delivery on Play installs, or direct download on sideloaded installs.
-- **Dev Server Preview**: Preview a running dev server in an editor tab beside your code, or hand it to the device's browser.
+- **Dev Server Preview**: Preview a running dev server in an editor tab beside your code, or hand it to the device's browser. See [Dev Server Preview](docs/USER_GUIDE.md#dev-server-preview) in the user guide for the steps.
 
 ## 📸 Screenshots
 
@@ -331,7 +331,6 @@ That licence does not extend to the third-party components VSCodroid downloads o
 ---
 
 <p align="center">
-  <a href="https://github.com/rmyndharis/VSCodroid/discussions">💬 Discussions</a> •
   <a href="https://github.com/rmyndharis/VSCodroid/issues">🐛 Issues</a> •
   <a href="https://github.com/rmyndharis/VSCodroid/releases">📦 Releases</a>
 </p>

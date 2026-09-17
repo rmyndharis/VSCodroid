@@ -986,8 +986,7 @@ Use the [Feature Request template](https://github.com/rmyndharis/VSCodroid/issue
 
 ## Questions?
 
-- [Discussions](https://github.com/rmyndharis/VSCodroid/discussions) -- for questions and general discussion
-- [Issues](https://github.com/rmyndharis/VSCodroid/issues) -- for bugs and feature requests
+- [Issues](https://github.com/rmyndharis/VSCodroid/issues) -- for questions, bugs and feature requests
 
 ---
 
