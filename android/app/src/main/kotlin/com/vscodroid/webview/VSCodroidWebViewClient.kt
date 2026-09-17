@@ -807,8 +807,13 @@ class VSCodroidWebViewClient(
         // file from `/vscode-remote-resource` in place of the editor, where it
         // decrypted the stored secrets and read the bridge token, and the app
         // stayed on that page until it was force-stopped. Subframes are not
-        // gated: the webview host frames live on this origin under the static
-        // path. Not logged with the path, which is the page's to choose.
+        // gated: the web worker extension host runs in a same-origin iframe
+        // under the static path (`webWorkerExtensionHostIframe.html`, as the
+        // product carries no `webEndpointUrlTemplate`). Extension webviews are
+        // not that frame: their documents keep their `*.vscode-cdn.net` origin
+        // even though the interception serves their bytes from this server, so
+        // this test never matches them. Not logged with the path, which is the
+        // page's to choose.
         if (request.isForMainFrame && isLocalhost(url) && !isWorkbenchPath(url.path)) {
             Logger.d(tag, "Refused to load a server path other than the workbench as the page")
             return true

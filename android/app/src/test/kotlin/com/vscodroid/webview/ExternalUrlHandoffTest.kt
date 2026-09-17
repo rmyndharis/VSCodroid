@@ -329,8 +329,8 @@ class ExternalUrlHandoffTest {
      * its sealed secrets open with, and the bridge token. Measured on an
      * emulator: one tap on a link in a Markdown preview replaced the editor with
      * such a page, which decrypted the stored secrets and read the token. A
-     * subframe is left alone: the webview host frames live on this origin under
-     * the static path.
+     * subframe is left alone: the web worker extension host iframe is a
+     * same-origin frame under the static path.
      */
     @Test
     fun `another page on the workbench origin is not loaded as the page`() {

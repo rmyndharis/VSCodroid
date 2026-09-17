@@ -194,7 +194,9 @@ to: patch 0005 disables the service worker upstream uses to scope each webview t
   main-frame load of any path but `/` on the workbench port, but by then the workbench has run
   `beforeunload` and stopped its extension host, which left the editor half dead. `isWorkbenchUrl`,
   which decides who is given the token, requires the same path. Subframes are not gated, because
-  the webview host frames live on this origin under the static path.
+  the web extension host runs in a same-origin iframe under the static path (see the web extension
+  host entry below). Extension webview documents are on `*.vscode-cdn.net` and keep that origin
+  although the interception serves their bytes locally, so this rule never reaches them.
 - **Resources are answered to the origin that asked, never with `*`.** The response carries
   `Access-Control-Allow-Origin: <the requesting origin>` and `Vary: Origin`. A request with no
   `Origin` gets no such header: those are the no-cors subresource loads (`<img>`, `<link>`,
