@@ -402,6 +402,13 @@ class NonInteractiveShellEnvTest {
             1, optionFirst.count { it.startsWith(buildNote) },
             "an install with an option before the subcommand said nothing: $optionFirst",
         )
+        // The word after an option that takes a value is that value, not the
+        // subcommand: pip runs `pip --cache-dir c install a` as an install.
+        val valueFirst = runBash(cwd, bashEnvFile().path, failingPip + "ERRORS='Failed building wheel for a'\npip --cache-dir c install a")
+        assertEquals(
+            1, valueFirst.count { it.startsWith(buildNote) },
+            "an option's value before the subcommand was taken for the subcommand: $valueFirst",
+        )
 
         val ok = runBash(cwd, bashEnvFile().path, "python3() { return 0; }\npip install a; echo \"status=\$?\"")
         assertEquals(listOf("status=0"), ok, "a successful pip said something: $ok")
@@ -422,8 +429,8 @@ class NonInteractiveShellEnvTest {
      * pip() starts pip the way `python3 -m pip` does, so a venv made with
      * `--without-pip` answers with the one line `-m` prints. `run_module` raised
      * the same ImportError as a five-line traceback, through the shim's own
-     * frames. Measured against a real interpreter rather than here: no python3
-     * runs in this suite, and the stub above stands in for all of it.
+     * frames. Measured against a real interpreter rather than here, where pip
+     * is always a stand-in and so is never missing.
      */
     @Test
     fun `pip starts the module the way python3 -m pip does`() {
@@ -472,6 +479,91 @@ class NonInteractiveShellEnvTest {
             out.filter { it.matches(Regex("""\w+=\d+""")) },
             "wrapping pip changed the exit status a script or a task sees: $out",
         )
+
+        // A value given to an option is not a package: `-t tk` is a folder and
+        // `-r tk` a requirements file. The same names after a flag that takes no
+        // value, among other packages, or after a general option's value are.
+        val values = runBash(
+            cwd,
+            bashEnvFile().path,
+            """
+            python3() { return 0; }
+            pip install -t tk six; pip install -r tk; pip install --prefix tk six
+            pip install --root turtle six; pip install -f tk six; pip install -e tk
+            pip install -C tk six; pip install --target=tk six
+            echo ---
+            pip install -U tk; pip install six -t dir tkinter; pip --timeout 60 install turtle
+            """.trimIndent(),
+        )
+        assertFalse(
+            values.takeWhile { it != "---" }.any { it.startsWith("vscodroid: tkinter") },
+            "an option's value was read as a package name: $values",
+        )
+        assertEquals(
+            3, values.dropWhile { it != "---" }.count { it.startsWith("vscodroid: tkinter") },
+            "skipping option values also skipped a package, or the subcommand: $values",
+        )
+    }
+
+    /**
+     * The shim's Python, run by a real interpreter; every other pip test here
+     * replaces python3 with a function. pip is a stand-in that logs one error
+     * the way pip's modules do and fails.
+     *
+     * The errors file is best-effort, and a write to it can fail after it is
+     * open, as on a full disk; a file size limit does the same here without
+     * touching the pipe the output goes to. logging answers a failed write by
+     * printing "--- Logging error ---" and a traceback for every record, ahead
+     * of pip's own message, where `python3 -m pip` prints only its own.
+     */
+    @Test
+    fun `an errors file that cannot be written costs the note and prints nothing`() {
+        val bash = File("/bin/bash")
+        assumeTrue(bash.canExecute(), "no /bin/bash on this host to ask")
+        val python = runBash(
+            filesDir,
+            null,
+            """
+            for p in python3 python3.14 python3.13 python3.12 python3.11; do
+                p=${'$'}(command -v ${'$'}p) && "${'$'}p" -c 'import sys; sys.exit(sys.version_info < (3, 11))' && echo "python=${'$'}p" && break
+            done
+            true
+            """.trimIndent(),
+        ).firstOrNull { it.startsWith("python=") }?.removePrefix("python=")
+        assumeTrue(python != null, "no Python 3.11 or later on this host, and the shim runs with -P")
+
+        FirstRunSetup(context).createBashEnvFile()
+        val cwd = File(filesDir, "workspace").apply { mkdirs() }
+        File(filesDir, "fake/pip").apply { mkdirs() }.let {
+            File(it, "__init__.py").writeText("")
+            File(it, "__main__.py").writeText(
+                "import logging, sys\n" +
+                    "logging.getLogger(\"pip.x\").error(\"Failed building wheel for %s\", \"a\")\n" +
+                    "sys.exit(1)\n",
+            )
+        }
+
+        val out = runBash(
+            cwd,
+            bashEnvFile().path,
+            """
+            export TMPDIR="${'$'}PWD/t" PYTHONPATH='${filesDir.path}/fake'; mkdir -p "${'$'}TMPDIR"
+            python3() { '$python' "${'$'}@"; }
+            (ulimit -f 0; pip install a; echo "full=${'$'}?")
+            echo ---
+            pip install a; echo "written=${'$'}?"
+            """.trimIndent(),
+        )
+        assertEquals(
+            listOf("full=1"), out.takeWhile { it != "---" },
+            "a write the errors file could not take printed more than pip did, or lost its status: $out",
+        )
+        val written = out.dropWhile { it != "---" }
+        assertEquals(
+            1, written.count { it.startsWith(buildNote) },
+            "the shim did not record pip's error, so the run above proves nothing: $written",
+        )
+        assertTrue(written.contains("written=1"), "pip's status was lost: $written")
     }
 
     /**

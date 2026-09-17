@@ -2312,6 +2312,10 @@ $PIP_BLOCK_HEADER pip is installed as a library, not as a program:
 # file for this one run; the note below reads it and the terminal shows exactly
 # what it would have. The context matters: a build dependency that failed and
 # one that was never found share the same top-level line.
+# A write the file cannot take once it is open, as on a full disk, is dropped:
+# the file only feeds the note, and logging's default handleError prints a
+# traceback per record ahead of pip's own message. Overridden on this handler,
+# not through logging.raiseExceptions, which would silence pip's handlers too.
 # pip's own --log, or PIP_LOG, is the obvious channel and is not used. It lowers
 # pip's root logger to DEBUG, pip then counts a build's output as already shown,
 # and the error box that held the build's traceback reads "No available output.".
@@ -2330,6 +2334,8 @@ pip() {
 class Errors(logging.StreamHandler):
     def format(self, record):
         return record.getMessage() + "".join(str(getattr(a, "context", "")) for a in record.args or ())
+    def handleError(self, record):
+        pass
 try:
     errors = Errors(open(sys.argv.pop(1), "w"))
     errors.setLevel(logging.ERROR)
@@ -2371,11 +2377,28 @@ pip3() { pip "${'$'}@"; }
 # only ever pipes pip can be told twice. Measured: two plain `pip install` runs
 # print it once, two piped runs print it once each. Not worth a state file.
 __vscodroid_pip_explain() {
-    local __status=${'$'}1 __errors=${'$'}2 __arg __command= __tk=
+    local __status=${'$'}1 __errors=${'$'}2 __arg __command= __tk= __value=
     shift 2
     # The subcommand is the first word that is not an option: `pip -q install x`.
+    # Nor is the word after an option that takes its value separately, before
+    # the subcommand or after it, so neither `pip --cache-dir c install x` nor
+    # `pip install -t tk x` is misread. The list is pip 26.2.1's value options,
+    # general and install. An abbreviated (`--tar`) or clustered (`-Ut`)
+    # spelling is not recognised; at worst a note is lost or shown when it
+    # should not be, and pip's own result never changes.
     for __arg in "${'$'}@"; do
+        if [ -n "${'$'}__value" ]; then __value=; continue; fi
         case "${'$'}__arg" in
+            -[rcetCif]|--python|--log|--log-file|--local-log|--keyring-provider|--proxy|\
+            --retries|--timeout|--default-timeout|--exists-action|--trusted-host|--cert|\
+            --client-cert|--cache-dir|--use-feature|--use-deprecated|--resume-retries|\
+            --requirement|--constraint|--build-constraint|--requirements-from-script|\
+            --editable|--target|--platform|--python-version|--implementation|--abi|\
+            --root|--prefix|--src|--source|--source-dir|--source-directory|\
+            --upgrade-strategy|--config-settings|--progress-bar|--root-user-action|\
+            --report|--group|--all-releases|--only-final|--no-binary|--only-binary|\
+            --index-url|--pypi-url|--extra-index-url|--refresh-package|--find-links|\
+            --uploaded-prior-to) __value=1 ;;
             -*) ;;
             *)  if [ -z "${'$'}__command" ]; then __command=${'$'}__arg
                 else case "${'$'}__arg" in [Tt]kinter|[Tt]k|turtle) __tk=1 ;; esac
