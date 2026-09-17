@@ -2318,6 +2318,9 @@ $PIP_BLOCK_HEADER pip is installed as a library, not as a program:
 # -P because -c puts the working directory first on sys.path: a logging.py or a
 # runpy.py in the user's folder would replace the module imported here before
 # pip's __main__ drops that entry, and pip would not start at all.
+# _run_module_as_main is the function -m itself calls, so a venv made without
+# pip gets the one line -m prints; run_module raised the same error as a
+# traceback through these lines.
 pip() {
     local __pip_errors="${'$'}{TMPDIR:-/tmp}/vscodroid-pip.${'$'}{BASHPID:-${'$'}${'$'}}.log"
     # Recorded through ||, which errexit ignores, so under set -e a failed install
@@ -2333,7 +2336,7 @@ try:
     logging.getLogger("pip").addHandler(errors)
 except OSError:
     pass
-runpy.run_module("pip", run_name="__main__", alter_sys=True)' "${'$'}__pip_errors" "${'$'}@" || __pip_status=${'$'}?
+runpy._run_module_as_main("pip")' "${'$'}__pip_errors" "${'$'}@" || __pip_status=${'$'}?
     __vscodroid_pip_explain "${'$'}__pip_status" "${'$'}__pip_errors" "${'$'}@"
     rm -f "${'$'}__pip_errors"
     return ${'$'}__pip_status

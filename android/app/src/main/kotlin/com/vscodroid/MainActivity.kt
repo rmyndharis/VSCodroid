@@ -3216,6 +3216,8 @@ class MainActivity : AppCompatActivity() {
         injectTouchContextMenu()
         // Keeps an inline list edit (New File, Rename) in view when the keyboard rises
         injectListEditKeeper()
+        // Makes Enter on the soft keyboard commit an inline edit or a Quick Open pick
+        injectComposingEnter()
         // Fix #7: Override window.open() to route through AndroidBridge
         injectWindowOpenOverride()
         // Answers a paste out of Android's clipboard, which the WebView will not
@@ -3484,7 +3486,36 @@ class MainActivity : AppCompatActivity() {
                 // and 700ms leaves the keyboard down. That is a second tap, against
                 // a menu that could not be opened at all.
                 var LONG_PRESS_MS = 500;
+                // Editing hosts holding a word the on-screen keyboard is still
+                // composing. Chromium answers a changed `inputmode` on the
+                // focused element by restarting input, which writes the composed
+                // word in again, reversed and several times over: measured on an
+                // API 33 emulator with Gboard, `xyz` then a tap on the Search icon
+                // left `xyzzyxzyxzyx` in the file. So a composing host is left as
+                // it is; the next focus it takes is answered by the handler below.
+                //
+                // The editor composes through EditContext, whose composition
+                // events fire on `element.editContext` and never reach the
+                // document, measured with listeners on both. The document ones
+                // cover a textarea host, should a later workbench go back to one.
+                var composing = new WeakSet();
+                var watched = new WeakSet();
+                function watch(element) {
+                    var context = element.editContext;
+                    if (!context || watched.has(context)) return;
+                    watched.add(context);
+                    context.addEventListener('compositionstart', function() { composing.add(element); });
+                    context.addEventListener('compositionend', function() { composing.delete(element); });
+                }
+                document.addEventListener('compositionstart', function(e) {
+                    if (e.target && e.target.matches && e.target.matches(EDITING_HOST)) composing.add(e.target);
+                }, true);
+                document.addEventListener('compositionend', function(e) {
+                    if (e.target) composing.delete(e.target);
+                }, true);
                 function apply(element) {
+                    watch(element);
+                    if (composing.has(element)) return;
                     if (aimedAtText) element.removeAttribute('inputmode');
                     else if (element.getAttribute('inputmode') !== 'none') element.setAttribute('inputmode', 'none');
                 }
@@ -3603,6 +3634,9 @@ class MainActivity : AppCompatActivity() {
                 // moment after.
                 document.addEventListener('focusin', function(e) {
                     var target = e.target;
+                    // Watched on every focus, whatever else is decided here, so a
+                    // composition that starts after this is known to apply().
+                    if (target && target.matches && target.matches(EDITING_HOST)) watch(target);
                     if (reapplying) return;
                     // A touch on text is still in the air. Whether the keyboard
                     // may come up is the pointerup handler's to answer, and
@@ -4011,6 +4045,77 @@ class MainActivity : AppCompatActivity() {
                         scroll.translationY = -Math.max(hidden, Math.min(hidden + height, top));
                         rows.dispatchEvent(scroll);
                     });
+                }, true);
+            })();
+            """.trimIndent(),
+            null
+        )
+    }
+
+    /**
+     * Makes Enter on the soft keyboard reach the workbench as Enter while a word
+     * is still being composed.
+     *
+     * After a word is typed into a workbench input box, Gboard keeps it as an
+     * active composition, underlined, and its Enter key arrives as a keydown with
+     * `key` Enter, `keyCode` 13, an empty `code` and `isComposing` true, on every
+     * press. The workbench's `StandardKeyboardEvent` maps any composing keydown
+     * to KeyCode 114, the IME key, so no check for Enter matches it. Measured on
+     * an API 33 emulator with real Gboard taps: New File and Rename in the
+     * Explorer never committed, and Quick Open and the Command Palette never
+     * accepted. On a desktop that mapping is right, because a composing Enter
+     * there confirms an IME conversion; Gboard composes every Latin word too.
+     *
+     * So a composing Enter on an input or textarea is stopped at the window in
+     * the capture phase, before the input's own listeners and the keybinding
+     * service see it, and an Enter the workbench recognises is dispatched on the
+     * same element in its place. Its `keyCode` is defined on the event itself,
+     * because the workbench derives the key from `keyCode` and not from `key`.
+     * The input already holds the composed word, so its value is left alone.
+     * The real key's default follows the replacement's: it is cancelled only
+     * when a workbench handler cancelled the replacement. Cancelling it always
+     * is the obvious shape and swallows a newline, because a multi-line setting
+     * is a textarea whose Enter no handler inserts.
+     *
+     * Not the editor and not the terminal. Both take Enter through an edit path
+     * of their own, the editor's edit context and xterm's helper textarea, and
+     * handle it correctly today. The editor exclusion is its whole element, so
+     * the find and rename boxes the editor renders inside itself are left as
+     * they were.
+     *
+     * Not a CJK conversion. When the composition holds Chinese, Japanese or
+     * Korean script, Enter is left to confirm it, as it does on a desktop. The
+     * ceiling is what that test can see: a Pinyin composition is Latin letters
+     * until a candidate is picked, so Enter there submits the raw letters.
+     *
+     * The mechanism was read from the shipped workbench, and
+     * `ComposingEnterWiringTest` holds the script and the bundle to it, but it
+     * has not been measured on a device yet. A workbench patch would not reach an
+     * installed app, for the reason [injectTouchContextMenu] gives.
+     */
+    private fun injectComposingEnter() {
+        webView?.evaluateJavascript(
+            """
+            (function() {
+                if (window.__vscodroidComposingEnter) return;
+                window.__vscodroidComposingEnter = true;
+                // What the keyboard shows as composed, until the composition ends.
+                var composing = '';
+                function track(e) { composing = e.data || ''; }
+                window.addEventListener('compositionstart', track, true);
+                window.addEventListener('compositionupdate', track, true);
+                window.addEventListener('compositionend', function() { composing = ''; }, true);
+                var CONVERSION = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}\p{Script=Bopomofo}]/u;
+                window.addEventListener('keydown', function(e) {
+                    if (e.key !== 'Enter' || !e.isComposing || CONVERSION.test(composing)) return;
+                    var target = e.target;
+                    if (!target || (target.tagName !== 'INPUT' && target.tagName !== 'TEXTAREA')) return;
+                    if (target.closest('.monaco-editor, .xterm')) return;
+                    e.stopImmediatePropagation();
+                    var enter = new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true });
+                    Object.defineProperty(enter, 'keyCode', { value: 13 });
+                    Object.defineProperty(enter, 'which', { value: 13 });
+                    if (!target.dispatchEvent(enter)) e.preventDefault();
                 }, true);
             })();
             """.trimIndent(),
