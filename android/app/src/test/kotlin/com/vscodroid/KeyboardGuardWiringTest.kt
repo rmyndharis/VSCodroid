@@ -106,6 +106,37 @@ class KeyboardGuardWiringTest {
         )
     }
 
+    /**
+     * That the guard never touches `inputmode` on an editor that is composing.
+     *
+     * An on-screen keyboard keeps the word being typed as a composition, and
+     * Chromium answers a changed `inputmode` on the focused element by restarting
+     * input, which writes the composed word back in again, reversed and several
+     * times over. Measured on an API 33 emulator with Gboard: type `xyz`, tap the
+     * Search icon, and the file reads `xyzzyxzyxzyx`. The editor composes through
+     * EditContext, whose composition events fire on the element's `editContext`
+     * and never on the document, so that is where the guard has to listen.
+     */
+    @Test
+    fun `a composing editor keeps its word`() {
+        val guard = SourceScan.body(mainActivity(), "private fun injectKeyboardGuard(")
+        for (name in listOf("editContext", "'compositionstart'", "'compositionend'")) {
+            assertTrue(
+                guard.contains(name),
+                "the guard no longer names `$name`, so it cannot tell a composing editor " +
+                    "apart and flips inputmode under a word being typed, which duplicates it.",
+            )
+        }
+        val apply = SourceScan.body(guard, "function apply(element)")
+        val skip = apply.indexOf("composing")
+        assertTrue(
+            skip >= 0 && skip < apply.indexOf("inputmode"),
+            "apply() changes inputmode before asking whether the element is composing: a word " +
+                "typed on the on-screen keyboard is written in again when the user taps a " +
+                "toolbar.",
+        )
+    }
+
     @Test
     fun `a scroll is not a tap`() {
         val source = mainActivity()

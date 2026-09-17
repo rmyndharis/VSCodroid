@@ -3484,7 +3484,36 @@ class MainActivity : AppCompatActivity() {
                 // and 700ms leaves the keyboard down. That is a second tap, against
                 // a menu that could not be opened at all.
                 var LONG_PRESS_MS = 500;
+                // Editing hosts holding a word the on-screen keyboard is still
+                // composing. Chromium answers a changed `inputmode` on the
+                // focused element by restarting input, which writes the composed
+                // word in again, reversed and several times over: measured on an
+                // API 33 emulator with Gboard, `xyz` then a tap on the Search icon
+                // left `xyzzyxzyxzyx` in the file. So a composing host is left as
+                // it is; the next focus it takes is answered by the handler below.
+                //
+                // The editor composes through EditContext, whose composition
+                // events fire on `element.editContext` and never reach the
+                // document, measured with listeners on both. The document ones
+                // cover a textarea host, should a later workbench go back to one.
+                var composing = new WeakSet();
+                var watched = new WeakSet();
+                function watch(element) {
+                    var context = element.editContext;
+                    if (!context || watched.has(context)) return;
+                    watched.add(context);
+                    context.addEventListener('compositionstart', function() { composing.add(element); });
+                    context.addEventListener('compositionend', function() { composing.delete(element); });
+                }
+                document.addEventListener('compositionstart', function(e) {
+                    if (e.target && e.target.matches && e.target.matches(EDITING_HOST)) composing.add(e.target);
+                }, true);
+                document.addEventListener('compositionend', function(e) {
+                    if (e.target) composing.delete(e.target);
+                }, true);
                 function apply(element) {
+                    watch(element);
+                    if (composing.has(element)) return;
                     if (aimedAtText) element.removeAttribute('inputmode');
                     else if (element.getAttribute('inputmode') !== 'none') element.setAttribute('inputmode', 'none');
                 }
@@ -3603,6 +3632,9 @@ class MainActivity : AppCompatActivity() {
                 // moment after.
                 document.addEventListener('focusin', function(e) {
                     var target = e.target;
+                    // Watched on every focus, whatever else is decided here, so a
+                    // composition that starts after this is known to apply().
+                    if (target && target.matches && target.matches(EDITING_HOST)) watch(target);
                     if (reapplying) return;
                     // A touch on text is still in the air. Whether the keyboard
                     // may come up is the pointerup handler's to answer, and
