@@ -61,11 +61,15 @@ let executeCommand = () => Promise.resolve();
 // answers [AUTO_HIDE] until its owner opens Settings. Deleting the branch
 // outright left this file green.
 const settings = {};
-// The listener the extension registers for the active editor. Held rather than
-// dropped, because it is the whole of that feature: nothing else can reach it,
-// and a stub without a `window` at all is what turned this script red when the
-// listener was added.
-let activeEditorListener = null;
+// The listeners the extension registers on `window`, by event name. Held rather
+// than dropped, because they are the whole of that feature: nothing else can
+// reach them, and a stub without a `window` at all is what turned this script
+// red when the first of them was added.
+const listeners = {};
+const listen = (event) => (fn) => {
+    listeners[event] = fn;
+    return { dispose() { delete listeners[event]; } };
+};
 const ran = [];
 // Kept rather than discarded, the way scripts/test-process-monitor-extension.js
 // keeps them: the palette entry is a handler nothing else here can reach, and it
@@ -80,10 +84,9 @@ const vscodeStub = {
         },
     },
     window: {
-        onDidChangeActiveTextEditor: (fn) => {
-            activeEditorListener = fn;
-            return { dispose() { activeEditorListener = null; } };
-        },
+        onDidChangeActiveTextEditor: listen('onDidChangeActiveTextEditor'),
+        onDidOpenTerminal: listen('onDidOpenTerminal'),
+        onDidChangeActiveTerminal: listen('onDidChangeActiveTerminal'),
     },
     workspace: {
         getConfiguration: () => ({ get: (key) => settings[key] }),
@@ -107,21 +110,22 @@ process.on('unhandledRejection', (reason) => { escaped.push(String(reason)); });
  * Activates a fresh copy against a fresh HOME and returns what it recorded.
  *
  * `commandFor` decides what each executeCommand answers with, and the two layout
- * keys decide what the side bar does when a file is opened. `autoHide` defaults
- * to the value the manifest contributes, so a case that says nothing about the
- * layout measures a device nobody has expressed a preference on, which is the
- * state every device ships in.
+ * keys decide what the side bar does when `deliver`, an event name and the value
+ * its listener is handed, fires. `autoHide` defaults to the value the manifest
+ * contributes, so a case that says nothing about the layout measures a device
+ * nobody has expressed a preference on, which is the state every device ships
+ * in.
  */
 async function activate(home, commandFor, {
     autoHide = MANIFEST.contributes.configuration.properties[AUTO_HIDE].default,
     compact = false,
-    openAFile = false,
+    deliver = null,
 } = {}) {
     executeCommand = commandFor;
     settings['workbench.secondarySideBar.defaultVisibility'] = 'hidden';
     settings[AUTO_HIDE] = autoHide;
     settings[COMPACT] = compact;
-    activeEditorListener = null;
+    for (const event of Object.keys(listeners)) delete listeners[event];
     ran.length = 0;
     process.env.HOME = home;
     const workspaceState = new Map();
@@ -137,18 +141,18 @@ async function activate(home, commandFor, {
     // Past the delay, and past the microtask turn in which a rejection with no
     // listener is reported.
     await sleep(DELAY_MS + 400);
-    // Opening a file is the event the side bar closes on, and it has to be
-    // delivered while the extension is still active. Recorded separately from
-    // the walkthrough's own close, which has already happened by now, so a case
-    // can tell the two apart.
+    // The event the side bar closes on has to be delivered while the extension
+    // is still active. Recorded separately from the walkthrough's own close,
+    // which has already happened by now, so a case can tell the two apart.
     const beforeOpen = ran.length;
-    if (openAFile) {
+    if (deliver) {
+        const [event, value] = deliver;
         assert.ok(
-            activeEditorListener,
-            'the extension no longer listens for the active editor, so nothing closes the side ' +
-                'bar when a file is opened on a phone',
+            listeners[event],
+            `the extension no longer listens to ${event}, so nothing closes the side bar on a ` +
+                'phone when it fires',
         );
-        activeEditorListener({ document: { uri: 'file:///workspace/a.txt' } });
+        listeners[event](value);
         await sleep(50);
     }
     const afterOpen = ran.slice(beforeOpen);
@@ -160,6 +164,23 @@ async function activate(home, commandFor, {
         onOpen: afterOpen,
     };
 }
+
+// What a terminal the user can see looks like to a listener: `hideFromUser`
+// unset, as on one opened from the panel, the palette or a task.
+const A_TERMINAL = { name: 'bash', creationOptions: {} };
+
+// Every route to something on screen that the side bar leaves no room for, with
+// the value the workbench hands its listener. Each runs through the same cases
+// below, because each is a subscription of its own and can be dropped, or wired
+// past the check, on its own. A terminal is on the list because the panel will
+// not go below 300px: with the activity bar and the side bar beside it that is
+// 506 on a 411 screen, and the 95 that run off the right edge hold the terminal
+// tabs and most of the panel's buttons.
+const ROUTES = {
+    'opening a file': ['onDidChangeActiveTextEditor', { document: { uri: 'file:///workspace/a.txt' } }],
+    'opening a terminal': ['onDidOpenTerminal', A_TERMINAL],
+    'switching to a terminal': ['onDidChangeActiveTerminal', A_TERMINAL],
+};
 
 const REAL_HOME = process.env.HOME;
 const rejects = () => Promise.reject(new Error('no such command'));
@@ -251,68 +272,102 @@ async function main() {
                 `expressed a preference on gets a decision it never made: ${declared.default}`,
         );
 
-        // The side bar closing itself when a file is opened, which is the whole
-        // of the portrait layout fix on this side. Four cases, because two keys
-        // decide it and each of them can be wrong on its own: the app writes the
-        // device fact, the user writes the preference, and `auto` is what every
-        // device carries until someone opens Settings.
-        const phone = await activate(
-            fs.mkdtempSync(path.join(base, 'phone-')), resolves,
-            { compact: true, openAFile: true },
-        );
-        assert.ok(
-            phone.onOpen.includes('workbench.action.closeSidebar'),
-            'opening a file did not close the side bar on a phone with no preference set, which ' +
-                `is every phone until its user opens Settings: ${phone.onOpen}`,
-        );
+        // The side bar closing itself when something it leaves no room for comes
+        // on screen, which is the whole of the portrait layout fix on this side.
+        // The same cases for every route, because two keys decide it and each of
+        // them can be wrong on its own: the app writes the device fact, the user
+        // writes the preference, and `auto` is what every device carries until
+        // someone opens Settings.
+        for (const [route, deliver] of Object.entries(ROUTES)) {
+            const phone = await activate(
+                fs.mkdtempSync(path.join(base, 'phone-')), resolves,
+                { compact: true, deliver },
+            );
+            assert.ok(
+                phone.onOpen.includes('workbench.action.closeSidebar'),
+                `${route} did not close the side bar on a phone with no preference set, which ` +
+                    `is every phone until its user opens Settings: ${phone.onOpen}`,
+            );
 
-        const tablet = await activate(
-            fs.mkdtempSync(path.join(base, 'tablet-')), resolves,
-            { compact: false, openAFile: true },
+            const tablet = await activate(
+                fs.mkdtempSync(path.join(base, 'tablet-')), resolves,
+                { compact: false, deliver },
+            );
+            assert.deepStrictEqual(
+                tablet.onOpen, [],
+                `${route} closed the side bar on a screen wide enough for both, so a tablet ` +
+                    `loses its file tree every time: ${tablet.onOpen}`,
+            );
+
+            // The other half: the user's answer outranks the screen, both ways
+            // round. Each case is given the device fact that disagrees with it,
+            // so an extension that reads only the fact would fail both.
+            const forcedOn = await activate(
+                fs.mkdtempSync(path.join(base, 'forced-on-')), resolves,
+                { autoHide: 'on', compact: false, deliver },
+            );
+            assert.ok(
+                forcedOn.onOpen.includes('workbench.action.closeSidebar'),
+                `${route}: a user who asked for the side bar to close was ignored on a screen ` +
+                    `wide enough for both, so their own setting decides nothing: ${forcedOn.onOpen}`,
+            );
+
+            const forcedOff = await activate(
+                fs.mkdtempSync(path.join(base, 'forced-off-')), resolves,
+                { autoHide: 'off', compact: true, deliver },
+            );
+            assert.deepStrictEqual(
+                forcedOff.onOpen, [],
+                `${route}: a user who turned this off on a phone had it closed anyway, which is ` +
+                    `the defect the setting exists to let them fix: ${forcedOff.onOpen}`,
+            );
+
+            // The same rejection rule as everywhere else in this file: the close
+            // is nobody's request, so its failure is not the user's to see.
+            const closeRejects = await activate(
+                fs.mkdtempSync(path.join(base, 'open-close-fails-')),
+                (id) => (id === 'workbench.action.closeSidebar' ? rejects() : resolves()),
+                { autoHide: 'on', deliver },
+            );
+            assert.ok(
+                closeRejects.onOpen.includes('workbench.action.closeSidebar'),
+                `${route}: the side bar was never asked to close, so the rejection below is not ` +
+                    'measured',
+            );
+            assert.deepStrictEqual(
+                escaped, [],
+                `a rejected close after ${route} escaped as an unhandled rejection: ${escaped}`,
+            );
+        }
+
+        // Two terminal events that put nothing on screen, on a phone where a
+        // visible terminal closes the bar. A terminal created with `hideFromUser`
+        // still reaches onDidOpenTerminal: chat runs its terminal commands in
+        // those, and the workbench revives background terminals the same way at
+        // startup, so a phone's Explorer would vanish with nothing appearing in
+        // its place. And the active terminal becomes undefined when the last one
+        // closes, which empties the panel rather than filling it.
+        const hidden = await activate(
+            fs.mkdtempSync(path.join(base, 'hidden-terminal-')), resolves,
+            {
+                compact: true,
+                deliver: ['onDidOpenTerminal', { name: 'chat', creationOptions: { hideFromUser: true } }],
+            },
         );
         assert.deepStrictEqual(
-            tablet.onOpen, [],
-            'opening a file closed the side bar on a screen wide enough for both, so a tablet ' +
-                `loses its file tree on every file it opens: ${tablet.onOpen}`,
+            hidden.onOpen, [],
+            'a terminal hidden from the user closed the side bar on a phone, so a command run in ' +
+                `the background takes away the view the user was looking at: ${hidden.onOpen}`,
         );
 
-        // The other half: the user's answer outranks the screen, both ways
-        // round. Each case is given the device fact that disagrees with it, so
-        // an extension that reads only the fact would fail both.
-        const forcedOn = await activate(
-            fs.mkdtempSync(path.join(base, 'forced-on-')), resolves,
-            { autoHide: 'on', compact: false, openAFile: true },
-        );
-        assert.ok(
-            forcedOn.onOpen.includes('workbench.action.closeSidebar'),
-            'a user who asked for the side bar to close was ignored on a screen wide enough ' +
-                `for both, so their own setting decides nothing: ${forcedOn.onOpen}`,
-        );
-
-        const forcedOff = await activate(
-            fs.mkdtempSync(path.join(base, 'forced-off-')), resolves,
-            { autoHide: 'off', compact: true, openAFile: true },
+        const noneActive = await activate(
+            fs.mkdtempSync(path.join(base, 'no-active-terminal-')), resolves,
+            { compact: true, deliver: ['onDidChangeActiveTerminal', undefined] },
         );
         assert.deepStrictEqual(
-            forcedOff.onOpen, [],
-            'a user who turned this off on a phone had it closed anyway, which is the defect ' +
-                `the setting exists to let them fix: ${forcedOff.onOpen}`,
-        );
-
-        // The same rejection rule as everywhere else in this file: the close is
-        // nobody's request, so its failure is not the user's to see.
-        const closeRejects = await activate(
-            fs.mkdtempSync(path.join(base, 'open-close-fails-')),
-            (id) => (id === 'workbench.action.closeSidebar' ? rejects() : resolves()),
-            { autoHide: 'on', openAFile: true },
-        );
-        assert.ok(
-            closeRejects.onOpen.includes('workbench.action.closeSidebar'),
-            'the side bar was never asked to close, so the rejection below is not measured',
-        );
-        assert.deepStrictEqual(
-            escaped, [],
-            `a rejected close after opening a file escaped as an unhandled rejection: ${escaped}`,
+            noneActive.onOpen, [],
+            'closing the last terminal closed the side bar on a phone, where nothing came on ' +
+                `screen to need the room: ${noneActive.onOpen}`,
         );
 
         // The palette entry. Nothing above calls it, because the extension only
@@ -339,8 +394,8 @@ async function main() {
             'that failed, both are recorded for one that ran, no rejection escapes from either ' +
             'command or from the close in between, the palette entry hands its failure back, ' +
             'the layout setting is declared as something the Settings editor can draw a control ' +
-            'for, and opening a file closes the side bar where the screen asks for it and where ' +
-            'the user does, and nowhere else',
+            'for, and opening a file or a terminal, or switching to a terminal, closes the side ' +
+            'bar where the screen asks for it and where the user does, and nowhere else',
     );
 }
 

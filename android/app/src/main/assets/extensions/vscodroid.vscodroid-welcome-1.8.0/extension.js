@@ -63,7 +63,8 @@ function alignSecondarySideBar(context) {
 }
 
 /**
- * Closes the side bar when a file is opened, on a screen too narrow to hold both.
+ * Closes the side bar when a file or a terminal is opened, on a screen too narrow
+ * to hold both.
  *
  * A phone in portrait is about 411dp wide. The activity bar takes 36 of that and
  * the side bar will not go below 170 however far its divider is dragged, so
@@ -98,48 +99,77 @@ function alignSecondarySideBar(context) {
  * also fires on a plain tab switch, where the bar is already closed and
  * `closeSidebar` costs nothing.
  *
+ * A terminal is worse off than a file, because the panel will not go below 300.
+ * With the activity bar and the side bar beside it that is 506 on a 411 screen,
+ * and the 95 that run off the right edge hold the terminal's tab list, so a
+ * tab's menu and its rename cannot be reached, and most of the panel's buttons.
+ * `onDidOpenTerminal` covers a new terminal from any route, a task included;
+ * `onDidChangeActiveTerminal` covers switching to one that already exists. A
+ * terminal created with `hideFromUser` reaches the first as well, and is left
+ * out: chat runs its terminal commands in those and the workbench revives
+ * background terminals that way at startup, so none of them puts anything on
+ * screen to make room for.
+ *
  * `closeSidebar` closes whichever view is showing, not the Explorer alone, and
  * that is the intent: a phone that has just put a file on screen has no room
  * for Search or Source Control beside it either, and the same icon the user
  * opened brings it back.
  *
- * One case it deliberately does not cover: tapping a file that is already the
+ * Cases it deliberately does not cover. Tapping a file that is already the
  * active editor changes no editor, so no event arrives and the side bar stays.
  * Nothing else changed on screen either, so the tap looks like what it was.
+ * Showing the panel again on the terminal that was already active is the same:
+ * the extension host reports a change of active terminal only when it is a
+ * different one. And opening the side bar while the panel is showing overflows
+ * as before, because that is the user asking for the bar, and taking it away
+ * again would leave no way to open it.
  */
 function autoHideSideBar(context) {
+    const closeSideBar = () => {
+        // Two keys, and the split is the point. The app owns
+        // `vscodroid.layout.compactScreen`, which is a fact about the device it
+        // cannot express as a static default; the user owns
+        // `vscodroid.layout.autoHideSideBar`, and `auto` means "follow the
+        // screen". They were one key, written by the app into the settings file
+        // the workbench merges ON TOP of the user's own, so changing it in
+        // Settings did nothing at all.
+        //
+        // Anything that is not an explicit answer follows the screen: `auto`, a
+        // value missing because the contributed default has not been read yet,
+        // and the boolean an older build of this app wrote all mean the same
+        // thing here, and that boolean carried the device's own answer anyway.
+        const config = vscode.workspace.getConfiguration();
+        const chosen = config.get('vscodroid.layout.autoHideSideBar');
+        const enabled = chosen === 'on' || chosen === 'off'
+            ? chosen === 'on'
+            : config.get('vscodroid.layout.compactScreen') === true;
+        if (!enabled) {
+            return;
+        }
+        // Fire and forget with its own handler, the shape every other
+        // executeCommand in this file uses and for the same reason: nobody asked
+        // for this one, so a rejection is not theirs to see.
+        Promise.resolve(
+            vscode.commands.executeCommand('workbench.action.closeSidebar')
+        ).catch(() => {});
+    };
     context.subscriptions.push(
         vscode.window.onDidChangeActiveTextEditor((editor) => {
-            if (!editor) {
-                return;
+            if (editor) {
+                closeSideBar();
             }
-            // Two keys, and the split is the point. The app owns
-            // `vscodroid.layout.compactScreen`, which is a fact about the
-            // device it cannot express as a static default; the user owns
-            // `vscodroid.layout.autoHideSideBar`, and `auto` means "follow the
-            // screen". They were one key, written by the app into the settings
-            // file the workbench merges ON TOP of the user's own, so changing
-            // it in Settings did nothing at all.
-            //
-            // Anything that is not an explicit answer follows the screen:
-            // `auto`, a value missing because the contributed default has not
-            // been read yet, and the boolean an older build of this app wrote
-            // all mean the same thing here, and that boolean carried the
-            // device's own answer anyway.
-            const config = vscode.workspace.getConfiguration();
-            const chosen = config.get('vscodroid.layout.autoHideSideBar');
-            const enabled = chosen === 'on' || chosen === 'off'
-                ? chosen === 'on'
-                : config.get('vscodroid.layout.compactScreen') === true;
-            if (!enabled) {
-                return;
+        }),
+        vscode.window.onDidOpenTerminal((terminal) => {
+            // A hidden terminal fires this too, and puts nothing on screen.
+            if (!terminal.creationOptions.hideFromUser) {
+                closeSideBar();
             }
-            // Fire and forget with its own handler, the shape every other
-            // executeCommand in this file uses and for the same reason: nobody
-            // asked for this one, so a rejection is not theirs to see.
-            Promise.resolve(
-                vscode.commands.executeCommand('workbench.action.closeSidebar')
-            ).catch(() => {});
+        }),
+        vscode.window.onDidChangeActiveTerminal((terminal) => {
+            // Undefined when the last terminal closes, which frees room.
+            if (terminal) {
+                closeSideBar();
+            }
         })
     );
 }

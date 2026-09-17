@@ -49,6 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Extension sign-ins, such as GitHub for Copilot, and API keys that extensions store are kept when the app is closed or reloaded. They were held only in memory and had to be entered again every time.
 - A link to a file served on the editor's own address no longer replaces the editor with that file. A page opened that way from a workspace could read the editor's stored sign-ins and the app bridge, and the app stayed on it until force-stopped.
 - Creating or renaming a file in the Explorer no longer makes the keyboard rise and fall without end when the item sits low on the screen. The keyboard pushed the row out of view, which took its name box and the keyboard down with it.
+- On a phone, opening a terminal closes the side bar, so the terminal's tabs and panel buttons fit on screen instead of running off its right edge.
 
 ## [1.3.0] - 2026-09-06
 
