@@ -227,9 +227,10 @@ class PortFinderTest {
 
         @Test
         fun `returns the same port on the next cold start`() {
-            // The workbench keys IndexedDB by origin, and the port is part of the
-            // origin: a different port here empties secret storage and every
-            // extension's globalState, with nothing in any log to explain it.
+            // The workbench keys IndexedDB and localStorage by origin, and the port is
+            // part of the origin: every extension's globalState lives in the first and
+            // the sealed extension secrets in the second, so a different port here
+            // empties both, with nothing in any log to explain it.
             //
             // A cold start begins from what the previous process left in prefs, so
             // the remembered port is seeded rather than allocated here, and it has

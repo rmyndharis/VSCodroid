@@ -115,7 +115,7 @@ Section 5.1 carries the consequence for the data classification.
 | VS Code settings | App-private storage                                                                                         |
 | Git credentials  | Git credential store in app-private home dir                                                                |
 | SSH keys         | File permissions 600, app-private storage                                                                   |
-| OAuth tokens     | Held by the workbench's own secret storage, which `patches/0007-persist-secrets.patch` keeps across a restart. They sit in the WebView's IndexedDB as plaintext; the boundary around them is the Android app sandbox, not encryption |
+| OAuth tokens     | Held by the workbench's `LocalStorageSecretStorageProvider`, which the app switches on with the `vscode-secret-key-path` cookie. They are sealed with AES-GCM into the WebView's localStorage under a 32-byte key kept in `no_backup` (`SecretStorageKey`), which the WebView client answers to a POST on the workbench origin (see 3.7). Neither is backed up. Any script running on the workbench origin, and any process in the app sandbox (extensions, terminals, build scripts, `/vscode-remote-resource` with the token), can obtain both the key and the sealed data, so the sandbox is still the boundary. `patches/0007-persist-secrets.patch` has no effect on any of this |
 | Clipboard data   | Transient, follows Android clipboard lifecycle                                                              |
 
 ### 3.5 Toolchain Delivery Security
@@ -160,7 +160,7 @@ to: patch 0005 disables the service worker upstream uses to scope each webview t
 | `https://<uuid>.vscode-cdn.net`         | Extension webview documents, answered locally by the interception           |
 | `https://<scheme>+.vscode-resource.vscode-cdn.net` | Subresources of those documents, read off the filesystem         |
 
-- **One arm answers ahead of all of this, and it is on our own origin.** A request to
+- **Two arms answer ahead of all of this, and both are on our own origin.** A request to
   `http://127.0.0.1:<port>/_nls/<commit>/<version>/<locale>/nls.messages.js` is answered out of
   the APK by `interfaceBundleResponse` and never reaches the rules below, which judge
   `*.vscode-cdn.net` and nothing else. It is deliberately unguarded: no `Origin`, `Referer`,
@@ -171,8 +171,18 @@ to: patch 0005 disables the service worker upstream uses to scope each webview t
   and a language this build does not carry is a 404 that leaves the interface in English. The
   port must be the one this client was constructed with, so no other loopback service is
   addressable through it, and the response carries no `Access-Control-Allow-Origin`, so only the
-  workbench, which is same-origin with it, can read the body. Every other localhost request
-  returns null here and is answered by our own server, which does require the token.
+  workbench, which is same-origin with it, can read the body.
+- **The secret storage key is the second arm.** `POST http://127.0.0.1:<port>/_vscodroid/secret-key`
+  is answered by `secretKeyResponse` with the 32 bytes of `SecretStorageKey`,
+  `Cache-Control: no-store`, no `Access-Control-Allow-Origin` and no connection token. Any other method gets 403, and
+  so does a request whose `Origin` is not the workbench or whose `Sec-Fetch-Site` is not
+  `same-origin` (`secretKeyRequest`). A request carrying neither header is answered, because
+  refusing the workbench would lose its stored secrets. Measured on an API 33 emulator, WebView
+  passes `Origin` to `shouldInterceptRequest` (a sandboxed frame's POST arrived as
+  `origin=null` and was refused) and does not pass `Sec-Fetch-Site`. The missing
+  `Access-Control-Allow-Origin` stops another origin reading the key either way, and the key opens
+  nothing without the workbench origin's localStorage. Every other localhost request returns null here and is answered
+  by our own server, which does require the token.
 - **Resources are answered to the origin that asked, never with `*`.** The response carries
   `Access-Control-Allow-Origin: <the requesting origin>` and `Vary: Origin`. A request with no
   `Origin` gets no such header: those are the no-cors subresource loads (`<img>`, `<link>`,

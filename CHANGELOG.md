@@ -45,6 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Claude Code keeps working on Android 13 and 14 when it asks the system for something the sandbox refuses. The refusal reached it as a value it never asked for, and the next call it depends on ended the process.
 - A sign-in callback too large to be one is ignored instead of taking the app down with it.
 - First run asks for the space the unpack really takes. The reserve did not cover what the filesystem itself spends on 22,600 files, so a device could pass the check and run out part-way through.
+- Extension sign-ins, such as GitHub for Copilot, and API keys that extensions store are kept when the app is closed or reloaded. They were held only in memory and had to be entered again every time.
 
 ## [1.3.0] - 2026-09-06
 

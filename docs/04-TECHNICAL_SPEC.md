@@ -669,7 +669,7 @@ flowchart TD
   P --> P4["0004 Extension Host as a worker_thread"]
   P --> P5["0005 webview: disable the service worker, relax its CSP"]
   P --> P6["0006 OAuth callback relayed into the app over intent://"]
-  P --> P7["0007 persist secrets across a restart"]
+  P --> P7["0007 isEncryptionAvailable answers true (no effect in the web workbench)"]
   P --> P8["0008 activity bar overflow sized from live height"]
   P --> P9["0009 marketplace: request the alpine target on Android"]
   P --> P10["0010 .moduleignore: keep the Copilot SDK entry"]

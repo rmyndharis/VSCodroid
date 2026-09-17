@@ -58,8 +58,9 @@ object PortFinder {
     /**
      * The port this install serves the workbench on, stable across cold starts.
      *
-     * The port is part of the WebView's origin, and the browser keys IndexedDB by
-     * origin. Secret storage and every extension's `globalState` live there, so a
+     * The port is part of the WebView's origin, and the browser keys IndexedDB and
+     * localStorage by origin. Every extension's `globalState` lives in the first
+     * and the sealed extension secrets in the second, so a
      * freshly allocated port on each launch silently emptied all of it: sessions
      * signed out, extension state reset, with nothing in any log to connect it to
      * the port. The chosen port is therefore remembered and reused whenever it is

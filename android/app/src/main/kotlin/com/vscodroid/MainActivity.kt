@@ -77,6 +77,7 @@ import com.vscodroid.webview.VSCodroidWebView
 import com.vscodroid.webview.VSCodroidWebViewClient
 import com.vscodroid.webview.urlLogLabel
 import com.vscodroid.webview.RETRY_URL
+import com.vscodroid.webview.SecretStorageKey
 import com.vscodroid.webview.TlsFailure
 import com.vscodroid.webview.TlsFailureReason
 import com.vscodroid.webview.HandoffFailure
@@ -2605,6 +2606,7 @@ class MainActivity : AppCompatActivity() {
         rendererCrashLoopShown = false
         initBridge(port)
         applyEditorLanguage()
+        applySecretStorage()
         // Before the folder chain, because a closed folder is the one state that
         // chain cannot name and would otherwise fall through to the remembered
         // folder, reopening the workspace the user had just closed. [fromUrl] is
@@ -2943,6 +2945,7 @@ class MainActivity : AppCompatActivity() {
             // AssetManager tied to an activity is one more thing to get wrong on
             // recreation. Both point at the same APK.
             interfaceTranslations = applicationContext.assets,
+            secretStorageKey = { SecretStorageKey.forApp(applicationContext).bytes() },
         )
         wv.webChromeClient = VSCodroidWebChromeClient(
             navigationIsOurs = ::navigationIsOurs,
@@ -3331,6 +3334,31 @@ class MainActivity : AppCompatActivity() {
             // the WebView provider, and a device whose provider is being updated
             // throws from anywhere inside it.
             Logger.w(tag, "Could not set the editor's language cookie: ${e.message}")
+        }
+    }
+
+    /**
+     * Switches on the workbench's persistent secret storage for the next load.
+     *
+     * Without this cookie the workbench keeps extension secrets in the page's
+     * memory, so every sign-in and API key was gone after the app was closed,
+     * reloaded after five minutes in the background, or recovered from a crash.
+     * With it, the workbench seals them into its localStorage with a key it asks
+     * [VSCodroidWebViewClient] for. Set on every load for the reason the language
+     * cookie is: it is how the first load of a new process gets it.
+     *
+     * A missing cookie costs that one session its persistence and nothing more:
+     * the workbench does not open the stored secrets at all, so it cannot lose
+     * them.
+     */
+    private fun applySecretStorage() {
+        try {
+            CookieManager.getInstance().apply {
+                setAcceptCookie(true)
+                setCookie("http://127.0.0.1/", VSCodroidWebViewClient.secretStorageCookie())
+            }
+        } catch (e: Exception) {
+            Logger.w(tag, "Could not switch on persistent secret storage: ${e.message}")
         }
     }
 

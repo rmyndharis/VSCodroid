@@ -762,8 +762,8 @@ class ProcessManager(private val context: Context) {
         //  - the next cold start finds the port taken, and
         //    `PortFinder.getOrAllocatePort` moves to another one. It says so
         //    itself: "Workbench storage keyed to the old origin is lost." That is
-        //    IndexedDB -- signed-out sessions, every extension's globalState,
-        //    secret storage -- discarded with no user-visible cause.
+        //    IndexedDB and localStorage -- signed-out sessions, every extension's
+        //    globalState, the sealed secrets -- discarded with no user-visible cause.
         //  - and the restart budget is refilled by the survivor answering, so this
         //    class can never conclude that anything is wrong. Note what that does
         //    and does not mean: an earlier version of this note said the children

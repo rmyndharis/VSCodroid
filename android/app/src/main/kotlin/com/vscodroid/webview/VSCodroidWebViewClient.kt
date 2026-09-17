@@ -703,6 +703,9 @@ internal class BoundedInputStream(wrapped: java.io.InputStream, private var rema
     override fun available(): Int = minOf(super.available().toLong(), remaining).toInt()
 }
 
+/** What [VSCodroidWebViewClient.secretKeyRequest] decides about one request. */
+internal enum class SecretKeyRequest { NOT_ONE, ANSWER, REFUSE }
+
 @SuppressLint("MissingOnRenderProcessGone")
 class VSCodroidWebViewClient(
     private val allowedPort: Int,
@@ -758,6 +761,13 @@ class VSCodroidWebViewClient(
      * path to hand over instead.
      */
     private val interfaceTranslations: AssetManager? = null,
+    /**
+     * The key the workbench seals extension secrets with. See [SecretStorageKey].
+     *
+     * A function for the reason [connectionToken] is one: the store belongs to
+     * the process, and this client is rebuilt with every WebView.
+     */
+    private val secretStorageKey: () -> ByteArray = { throw IllegalStateException("no secret storage key") },
 ) : WebViewClient() {
     // MissingOnRenderProcessGone: overridden below, and what it does there is the
     // reason the class exists in one piece. The check misses the override on a
@@ -988,6 +998,19 @@ class VSCodroidWebViewClient(
         // own origin and that arm refuses everything which is not
         // *.vscode-cdn.net. See [nlsBundleRequested] for the shape.
         if (isLocalhost(request.url)) {
+            val headers = request.requestHeaders
+            val origin = headerValue(headers, "Origin")
+            val fetchSite = headerValue(headers, "Sec-Fetch-Site")
+            when (secretKeyRequest(request.url.path, request.method, origin, fetchSite, allowedPort)) {
+                SecretKeyRequest.ANSWER -> return secretKeyResponse()
+                SecretKeyRequest.REFUSE -> {
+                    // At `d`, like the resource arm's refusals: the values are
+                    // the requesting page's to choose.
+                    Logger.d(tag, "Refused a secret key request: ${request.method} origin=$origin site=$fetchSite")
+                    return emptyResponse(403, "Forbidden")
+                }
+                SecretKeyRequest.NOT_ONE -> Unit
+            }
             val requested = nlsBundleRequested(request.url) ?: return null
             return interfaceBundleResponse(requested)
         }
@@ -995,6 +1018,32 @@ class VSCodroidWebViewClient(
             request, allowedPort, connectionToken(), resourceRoots, sensitiveLocations, openFolder
         )
     }
+
+    /**
+     * The key, raw, for the workbench's secret storage.
+     *
+     * Never cached by the WebView, and never an error the page could mistake for
+     * an answer. A failure here is logged loudly because of what follows it on
+     * the page: with the key out of reach it starts with no secrets, and a later
+     * sign-in that does reach the key overwrites everything stored before.
+     */
+    private fun secretKeyResponse(): WebResourceResponse {
+        val key = try {
+            secretStorageKey()
+        } catch (e: Exception) {
+            Logger.e(tag, "Secret storage key unavailable: ${e.message}")
+            return emptyResponse(503, "Service Unavailable")
+        }
+        return WebResourceResponse(
+            "application/octet-stream", null, 200, "OK",
+            mapOf("Cache-Control" to "no-store"), ByteArrayInputStream(key)
+        )
+    }
+
+    private fun emptyResponse(status: Int, reason: String) = WebResourceResponse(
+        "text/plain", "utf-8", status, reason,
+        mapOf("Cache-Control" to "no-store"), ByteArrayInputStream(ByteArray(0))
+    )
 
     /**
      * Answers the page's request for a translated interface bundle.
@@ -1263,6 +1312,44 @@ class VSCodroidWebViewClient(
         private const val NLS_BUNDLE_FILE = "nls.messages.js"
 
         private const val NLS_ASSIGNMENT_PREFIX = "globalThis._VSCODE_NLS_MESSAGES="
+
+        /**
+         * Where the workbench asks for the key its secret storage is sealed with.
+         *
+         * The workbench keeps extension secrets in memory unless a
+         * `vscode-secret-key-path` cookie names such a path, and then it keeps
+         * them sealed in its localStorage, fetching the key with a body-less
+         * `POST` that must answer exactly 32 bytes. Upstream's `serve-web`
+         * answers it from a proxy; nothing in front of this server does, so this
+         * client answers it before the request reaches Node, which would refuse
+         * the `POST` with 405. [secretStorageCookie] is the other half.
+         */
+        internal const val SECRET_KEY_PATH = "/_vscodroid/secret-key"
+
+        /**
+         * Whether a request to our own origin is the workbench asking for its key.
+         *
+         * Refused only on evidence it came from elsewhere: a method the workbench
+         * never uses, an `Origin` that is not the workbench, or a
+         * `Sec-Fetch-Site` that is not `same-origin`. An absent header is not
+         * evidence. Refusing the workbench is not a visible error but data loss,
+         * see [secretKeyResponse]; another frame handed the key still cannot
+         * read the storage it opens, which belongs to the workbench's origin.
+         */
+        internal fun secretKeyRequest(
+            path: String?, method: String?, origin: String?, fetchSite: String?, port: Int,
+        ): SecretKeyRequest {
+            if (path != SECRET_KEY_PATH) return SecretKeyRequest.NOT_ONE
+            if (!method.equals("POST", ignoreCase = true)) return SecretKeyRequest.REFUSE
+            if (origin != null && !isWorkbenchOrigin(origin, port)) return SecretKeyRequest.REFUSE
+            if (fetchSite != null && !fetchSite.equals("same-origin", ignoreCase = true)) {
+                return SecretKeyRequest.REFUSE
+            }
+            return SecretKeyRequest.ANSWER
+        }
+
+        /** The cookie that switches the workbench's persistent secret storage on. */
+        internal fun secretStorageCookie(): String = "vscode-secret-key-path=$SECRET_KEY_PATH; path=/"
 
         /**
          * The locale in an interface-bundle request, or null if this is not one.
