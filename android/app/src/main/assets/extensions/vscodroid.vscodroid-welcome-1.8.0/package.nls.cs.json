@@ -1,7 +1,7 @@
 {
   "displayName": "VSCodroid Vítejte",
   "description": "Uvítací průvodce VSCodroidem",
-  "config.layout.autoHideSideBar": "Zavře postranní panel, když otevřete soubor nebo terminál. Volba auto se řídí obrazovkou: zapnuto tam, kde se strom souborů a editor vedle sebe nevejdou, vypnuto tam, kde ano. Volbou on nebo off si to tady můžete určit sami.",
+  "config.layout.autoHideSideBar": "Zavře postranní panel, když otevřete soubor nebo terminál. Volba auto to zapne na telefonu, na výšku i na šířku, a vypne na tabletu. Volbou on nebo off si to tady můžete určit sami.",
   "command.welcome.open": "VSCodroid: Otevřít uvítání",
   "command.welcome.toolsDismissed": "VSCodroid: Dokončit krok s nástroji",
   "walkthrough.title": "Začínáme s VSCodroidem",

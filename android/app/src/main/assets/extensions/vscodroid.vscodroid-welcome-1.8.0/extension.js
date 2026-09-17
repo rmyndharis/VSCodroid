@@ -63,8 +63,8 @@ function alignSecondarySideBar(context) {
 }
 
 /**
- * Closes the side bar when a file or a terminal is opened, on a screen too narrow
- * to hold both.
+ * Closes the side bar when a file or a terminal is opened on a phone, in either
+ * orientation.
  *
  * A phone in portrait is about 411dp wide. The activity bar takes 36 of that and
  * the side bar will not go below 170 however far its divider is dragged, so
@@ -79,6 +79,8 @@ function alignSecondarySideBar(context) {
  * width Android itself calls a phone) into the settings file it owns, and writes
  * `vscodroid.layout.autoHideSideBar` nowhere at all: that key is the user's, it
  * lives in their own settings file, and `auto` there means follow the screen.
+ * Smallest width does not change with rotation, so a phone turned to landscape
+ * still closes the bar although there is room for it there.
  *
  * Three string values rather than the nullable boolean this began as, and the
  * shape is not cosmetic. The Settings editor resolves a two-member type array to
@@ -103,12 +105,15 @@ function alignSecondarySideBar(context) {
  * With the activity bar and the side bar beside it that is 506 on a 411 screen,
  * and the 95 that run off the right edge hold the terminal's tab list, so a
  * tab's menu and its rename cannot be reached, and most of the panel's buttons.
- * `onDidOpenTerminal` covers a new terminal from any route, a task included;
- * `onDidChangeActiveTerminal` covers switching to one that already exists. A
- * terminal created with `hideFromUser` reaches the first as well, and is left
- * out: chat runs its terminal commands in those and the workbench revives
- * background terminals that way at startup, so none of them puts anything on
- * screen to make room for.
+ * `onDidChangeActiveTerminal` and not `onDidOpenTerminal`: every route that puts
+ * a new terminal on screen also makes it the active one (Create New Terminal,
+ * `Terminal.show()`, a task that reveals, a debug session's terminal, a terminal
+ * in the editor area), and the same event covers switching to one that already
+ * exists. The open event also arrives for a terminal nothing shows, such as a
+ * task set to reveal never or silent, or an extension's `createTerminal()`
+ * without `show()`, and closing the bar for one of those took the view away, and
+ * the keyboard focus with it, with nothing in its place. A terminal created with
+ * `hideFromUser` cannot become the active one without being shown.
  *
  * `closeSidebar` closes whichever view is showing, not the Explorer alone, and
  * that is the intent: a phone that has just put a file on screen has no room
@@ -123,6 +128,19 @@ function alignSecondarySideBar(context) {
  * different one. And opening the side bar while the panel is showing overflows
  * as before, because that is the user asking for the bar, and taking it away
  * again would leave no way to open it.
+ *
+ * Cases where it closes the bar without need, accepted because nothing in the
+ * extension API tells them apart. A terminal added to an empty panel becomes the
+ * active one even when nothing shows it, so a task that never reveals, run with
+ * no terminal open, still closes the bar. When the active terminal closes and
+ * another is left in the panel or the editor area, that one becomes active and
+ * the bar closes with nothing new on screen. Terminals still running when the
+ * window loads again, as after Reload Window, reconnect after this extension
+ * has started and one becomes active, so a side bar left open closes a few
+ * seconds after the load. And a Terminal view moved into the primary side bar
+ * is closed with it when a terminal is created or switched there, since
+ * nothing reports where a view lives: `off` keeps it, and so does the
+ * secondary side bar, which `closeSidebar` does not touch.
  */
 function autoHideSideBar(context) {
     const closeSideBar = () => {
@@ -156,12 +174,6 @@ function autoHideSideBar(context) {
     context.subscriptions.push(
         vscode.window.onDidChangeActiveTextEditor((editor) => {
             if (editor) {
-                closeSideBar();
-            }
-        }),
-        vscode.window.onDidOpenTerminal((terminal) => {
-            // A hidden terminal fires this too, and puts nothing on screen.
-            if (!terminal.creationOptions.hideFromUser) {
                 closeSideBar();
             }
         }),

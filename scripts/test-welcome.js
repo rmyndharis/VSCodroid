@@ -145,13 +145,12 @@ async function activate(home, commandFor, {
     // is still active. Recorded separately from the walkthrough's own close,
     // which has already happened by now, so a case can tell the two apart.
     const beforeOpen = ran.length;
-    if (deliver) {
+    // Delivered the way the workbench delivers it, to whoever listens. An event
+    // the extension does not subscribe to still fires, and doing nothing is then
+    // the outcome to measure, so a missing listener is reported, not fatal.
+    const listened = Boolean(deliver && listeners[deliver[0]]);
+    if (listened) {
         const [event, value] = deliver;
-        assert.ok(
-            listeners[event],
-            `the extension no longer listens to ${event}, so nothing closes the side bar on a ` +
-                'phone when it fires',
-        );
         listeners[event](value);
         await sleep(50);
     }
@@ -161,12 +160,13 @@ async function activate(home, commandFor, {
         marker: fs.existsSync(path.join(home, MARKER)),
         aligned: workspaceState.get('vscodroid.secondarySideBar.aligned') === true,
         ran: ran.slice(),
+        listened,
         onOpen: afterOpen,
     };
 }
 
-// What a terminal the user can see looks like to a listener: `hideFromUser`
-// unset, as on one opened from the panel, the palette or a task.
+// A terminal as the workbench hands it to a listener: `hideFromUser` unset, as on
+// one opened from the panel, the palette or a task.
 const A_TERMINAL = { name: 'bash', creationOptions: {} };
 
 // Every route to something on screen that the side bar leaves no room for, with
@@ -175,11 +175,11 @@ const A_TERMINAL = { name: 'bash', creationOptions: {} };
 // past the check, on its own. A terminal is on the list because the panel will
 // not go below 300px: with the activity bar and the side bar beside it that is
 // 506 on a 411 screen, and the 95 that run off the right edge hold the terminal
-// tabs and most of the panel's buttons.
+// tabs and most of the panel's buttons. Its route is the active terminal
+// changing, which is what opening one on screen does as well as switching to one.
 const ROUTES = {
     'opening a file': ['onDidChangeActiveTextEditor', { document: { uri: 'file:///workspace/a.txt' } }],
-    'opening a terminal': ['onDidOpenTerminal', A_TERMINAL],
-    'switching to a terminal': ['onDidChangeActiveTerminal', A_TERMINAL],
+    'a terminal becoming the active one': ['onDidChangeActiveTerminal', A_TERMINAL],
 };
 
 const REAL_HOME = process.env.HOME;
@@ -284,6 +284,11 @@ async function main() {
                 { compact: true, deliver },
             );
             assert.ok(
+                phone.listened,
+                `the extension no longer listens to ${deliver[0]}, so nothing closes the side bar ` +
+                    `on a phone after ${route}`,
+            );
+            assert.ok(
                 phone.onOpen.includes('workbench.action.closeSidebar'),
                 `${route} did not close the side bar on a phone with no preference set, which ` +
                     `is every phone until its user opens Settings: ${phone.onOpen}`,
@@ -341,23 +346,23 @@ async function main() {
         }
 
         // Two terminal events that put nothing on screen, on a phone where a
-        // visible terminal closes the bar. A terminal created with `hideFromUser`
-        // still reaches onDidOpenTerminal: chat runs its terminal commands in
-        // those, and the workbench revives background terminals the same way at
-        // startup, so a phone's Explorer would vanish with nothing appearing in
-        // its place. And the active terminal becomes undefined when the last one
-        // closes, which empties the panel rather than filling it.
-        const hidden = await activate(
-            fs.mkdtempSync(path.join(base, 'hidden-terminal-')), resolves,
-            {
-                compact: true,
-                deliver: ['onDidOpenTerminal', { name: 'chat', creationOptions: { hideFromUser: true } }],
-            },
+        // terminal coming on screen closes the bar. A terminal is reported open
+        // whether or not anything shows it: a task set to reveal never or silent,
+        // or an extension's createTerminal() without show(), adds one to the
+        // panel and leaves the panel hidden, so closing the bar for it took the
+        // Explorer away with nothing in its place. What shows a terminal also
+        // makes it the active one, and this delivers the open alone. And the
+        // active terminal becomes undefined when the last one closes, which
+        // empties the panel rather than filling it.
+        const unshown = await activate(
+            fs.mkdtempSync(path.join(base, 'unshown-terminal-')), resolves,
+            { compact: true, deliver: ['onDidOpenTerminal', A_TERMINAL] },
         );
         assert.deepStrictEqual(
-            hidden.onOpen, [],
-            'a terminal hidden from the user closed the side bar on a phone, so a command run in ' +
-                `the background takes away the view the user was looking at: ${hidden.onOpen}`,
+            unshown.onOpen, [],
+            'a terminal that opened without becoming the active one closed the side bar on a ' +
+                'phone, so a task running out of sight takes away the view the user was ' +
+                `looking at: ${unshown.onOpen}`,
         );
 
         const noneActive = await activate(
@@ -394,8 +399,9 @@ async function main() {
             'that failed, both are recorded for one that ran, no rejection escapes from either ' +
             'command or from the close in between, the palette entry hands its failure back, ' +
             'the layout setting is declared as something the Settings editor can draw a control ' +
-            'for, and opening a file or a terminal, or switching to a terminal, closes the side ' +
-            'bar where the screen asks for it and where the user does, and nowhere else',
+            'for, and opening a file or a terminal becoming the active one closes the side bar ' +
+            'where the screen asks for it and where the user does, and nowhere else, not even ' +
+            'for a terminal that opens without becoming active',
     );
 }
 
