@@ -77,6 +77,7 @@ import com.vscodroid.webview.VSCodroidWebView
 import com.vscodroid.webview.VSCodroidWebViewClient
 import com.vscodroid.webview.urlLogLabel
 import com.vscodroid.webview.RETRY_URL
+import com.vscodroid.webview.isWorkbenchPath
 import com.vscodroid.webview.SecretStorageKey
 import com.vscodroid.webview.TlsFailure
 import com.vscodroid.webview.TlsFailureReason
@@ -4143,8 +4144,22 @@ class MainActivity : AppCompatActivity() {
                     // Returns the window rather than null: the caller reads
                     // `!!window.open(...)` and draws its own popup-blocked
                     // message for a falsy answer.
-                    if (url && url.indexOf(window.location.origin + '/') === 0) {
-                        window.location.href = url;
+                    //
+                    // Only the workbench's own address, `/` with at most a query
+                    // or a fragment, is navigated to. Any other path on this
+                    // origin is refused here and not later: the server serves a
+                    // workspace's own HTML through /vscode-remote-resource, and a
+                    // page loaded from there shares the editor's storage and
+                    // bridge. Kotlin refuses that load too, but only after the
+                    // workbench has run beforeunload and stopped its extension
+                    // host, which left the editor half dead; measured on an
+                    // emulator.
+                    var root = window.location.origin + '/';
+                    if (url && url.indexOf(root) === 0) {
+                        var next = url.charAt(root.length);
+                        if (next === '' || next === '?' || next === '#') {
+                            window.location.href = url;
+                        }
                         return window;
                     }
                     if (url && /^https?:/.test(url) && typeof AndroidBridge !== 'undefined') {
@@ -5501,7 +5516,8 @@ internal fun isWorkbenchUrl(url: String?, port: Int): Boolean {
     // is what has to go.
     val parsed = runCatching { java.net.URI(url) }.getOrNull() ?: return false
     val hostName = parsed.host ?: return false
-    return (hostName == "127.0.0.1" || hostName == "localhost") && parsed.port == port
+    return (hostName == "127.0.0.1" || hostName == "localhost") && parsed.port == port &&
+        isWorkbenchPath(parsed.path)
 }
 
 /**

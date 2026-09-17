@@ -158,12 +158,13 @@ class ExternalUrlHandoffTest {
 
     private fun request(
         scheme: String, host: String, port: Int, address: String = "",
-        fromMainFrame: Boolean = true, withGesture: Boolean = false
+        fromMainFrame: Boolean = true, withGesture: Boolean = false, path: String = "/"
     ): WebResourceRequest {
         val uri = mockk<Uri>(relaxed = true)
         every { uri.scheme } returns scheme
         every { uri.host } returns host
         every { uri.port } returns port
+        every { uri.path } returns path
         // Read by `authRequestIdsIn`, and a relaxed mock's own `toString` names
         // the mock rather than an address, so a case about request ids has to
         // say what the address is. Empty elsewhere: no id, nothing armed.
@@ -318,6 +319,31 @@ class ExternalUrlHandoffTest {
         )
 
         assertFalse(retried, "a URL that only looks like the retry control was accepted")
+    }
+
+    /**
+     * A page on the workbench's origin that is not the workbench is not shown.
+     *
+     * `/vscode-remote-resource` serves any file as its own type, so a workspace's
+     * HTML loaded there as the page runs with the workbench's storage, the key
+     * its sealed secrets open with, and the bridge token. Measured on an
+     * emulator: one tap on a link in a Markdown preview replaced the editor with
+     * such a page, which decrypted the stored secrets and read the token. A
+     * subframe is left alone: the webview host frames live on this origin under
+     * the static path.
+     */
+    @Test
+    fun `another page on the workbench origin is not loaded as the page`() {
+        val handled = client.shouldOverrideUrlLoading(
+            view, request("http", "127.0.0.1", ALLOWED_PORT, path = "/vscode-remote-resource")
+        )
+        assertTrue(handled, "a workspace file was loaded in place of the editor")
+        verify(exactly = 0) { context.startActivity(any()) }
+
+        val framed = client.shouldOverrideUrlLoading(
+            view, request("http", "127.0.0.1", ALLOWED_PORT, fromMainFrame = false, path = "/stable-abc/static/x.html")
+        )
+        assertFalse(framed, "a subframe on our own origin was refused")
     }
 
     /** The control: an internal URL must NOT be handed to an activity. */

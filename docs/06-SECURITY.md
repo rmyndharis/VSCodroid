@@ -183,6 +183,18 @@ to: patch 0005 disables the service worker upstream uses to scope each webview t
   `Access-Control-Allow-Origin` stops another origin reading the key either way, and the key opens
   nothing without the workbench origin's localStorage. Every other localhost request returns null here and is answered
   by our own server, which does require the token.
+- **Only the workbench is loaded as the page on our own origin.** The server answers more than
+  the workbench there: `/vscode-remote-resource` serves any file as its own type, a workspace's
+  HTML included, and a page loaded from it shares the workbench's localStorage, the secret storage
+  key and, if taken for the workbench, the bridge token. Measured on an emulator before this rule:
+  one tap on a link in a Markdown preview replaced the editor with such a page, which decrypted the
+  stored secrets and read the token. The `window.open` override, which is how the workbench opens a
+  link, now navigates in place only to `/` with a query or fragment and quietly refuses any other
+  path on the origin. It has to be refused there: `shouldOverrideUrlLoading` also refuses a
+  main-frame load of any path but `/` on the workbench port, but by then the workbench has run
+  `beforeunload` and stopped its extension host, which left the editor half dead. `isWorkbenchUrl`,
+  which decides who is given the token, requires the same path. Subframes are not gated, because
+  the webview host frames live on this origin under the static path.
 - **Resources are answered to the origin that asked, never with `*`.** The response carries
   `Access-Control-Allow-Origin: <the requesting origin>` and `Vary: Origin`. A request with no
   `Origin` gets no such header: those are the no-cors subresource loads (`<img>`, `<link>`,

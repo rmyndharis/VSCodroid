@@ -334,6 +334,12 @@ class WorkspaceUrlRoundTripTest {
                 "reads `!!window.open(...)`, so VS Code draws its popup-blocked " +
                 "message over a navigation that is working"
         }
+        val guard = override.indexOf("url.charAt(root.length)")
+        assertTrue(guard >= 0 && guard < override.indexOf("window.location.href = url")) {
+            "any address on our origin is navigated to in place, so a workspace HTML " +
+                "file served through /vscode-remote-resource replaces the editor with " +
+                "the editor's storage and bridge in reach"
+        }
     }
 
     /**

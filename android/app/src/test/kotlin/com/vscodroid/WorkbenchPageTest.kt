@@ -58,6 +58,21 @@ class WorkbenchPageTest {
         assertFalse(isWorkbenchUrl("https://example.com:41234/", port))
     }
 
+    /**
+     * Another page the server can serve on the workbench's origin is not the
+     * workbench. `/vscode-remote-resource` answers any file, a workspace's own
+     * HTML included, and a page believed to be the workbench is handed the
+     * bridge token.
+     */
+    @Test
+    fun `another path on this server is not the workbench`() {
+        assertFalse(
+            isWorkbenchUrl("http://127.0.0.1:41234/vscode-remote-resource?path=/p/index.html", port)
+        )
+        assertFalse(isWorkbenchUrl("http://127.0.0.1:41234/stable-abc/static/out/page.html", port))
+        assertTrue(isWorkbenchUrl("http://127.0.0.1:41234", port), "no path is the workbench's own address")
+    }
+
     @Test
     fun `nothing loaded and no server are both false`() {
         assertFalse(isWorkbenchUrl(null, port))

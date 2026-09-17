@@ -303,6 +303,18 @@ internal fun redactToken(text: String?): String =
 internal const val RETRY_URL = "vscodroid://retry-server"
 
 /**
+ * Whether [path] is the workbench's own page on its origin.
+ *
+ * The server serves more than the workbench there: `/vscode-remote-resource`
+ * answers any file as its own type, a workspace's HTML included. A page loaded
+ * from such a path shares the workbench's origin, so it can read the stored
+ * secrets and the key they open with, and a page taken for the workbench is
+ * handed the bridge token. The workbench is always loaded at `/`, with the
+ * folder, workspace or empty window in the query.
+ */
+internal fun isWorkbenchPath(path: String?): Boolean = path.isNullOrEmpty() || path == "/"
+
+/**
  * Why the WebView refused a certificate, in the shape a sentence can be built from.
  *
  * [HANDSHAKE] is not one of `SslError`'s codes and never arrives as one. It
@@ -788,6 +800,17 @@ class VSCodroidWebViewClient(
         if (request.isForMainFrame && url.toString() == RETRY_URL) {
             Logger.i(tag, "Retrying the server from the error page")
             onRetryServer()
+            return true
+        }
+        // Before the origin test below lets our own address through. Measured on
+        // an emulator: one tap on a link in a Markdown preview loaded a workspace
+        // file from `/vscode-remote-resource` in place of the editor, where it
+        // decrypted the stored secrets and read the bridge token, and the app
+        // stayed on that page until it was force-stopped. Subframes are not
+        // gated: the webview host frames live on this origin under the static
+        // path. Not logged with the path, which is the page's to choose.
+        if (request.isForMainFrame && isLocalhost(url) && !isWorkbenchPath(url.path)) {
+            Logger.d(tag, "Refused to load a server path other than the workbench as the page")
             return true
         }
         if (isLocalhost(url) || isCdnRedirect(url)) {
