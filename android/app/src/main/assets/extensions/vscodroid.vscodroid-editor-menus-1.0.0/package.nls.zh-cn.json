@@ -1,0 +1,5 @@
+{
+  "displayName": "VSCodroid 编辑器菜单",
+  "description": "编辑器上下文菜单的附加项",
+  "command.selectAll": "选择全部"
+}

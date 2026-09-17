@@ -3491,7 +3491,7 @@ claude() {
                 put("metadata", JSONObject().apply {
                     put("installedTimestamp", System.currentTimeMillis())
                     put("source", "bundled")
-                    // Our own four are the app, not extensions a user chose, and
+                    // Our own extensions are the app, not ones a user chose, and
                     // without this the workbench offers to uninstall them: its
                     // Uninstall action disables itself only for a builtin
                     // (`if(this.extension.isBuiltin){this.enabled=!1;return}` in

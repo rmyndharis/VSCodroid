@@ -11,6 +11,5 @@
   "command.clearCaches": "VSCodroid: 캐시 지우기",
   "command.manageToolchains": "VSCodroid: 툴체인 관리",
   "command.toggleExtraKeyRow": "VSCodroid: 추가 키 행 표시 전환",
-  "command.about": "VSCodroid: 정보",
-  "command.selectAll": "모두 선택"
+  "command.about": "VSCodroid: 정보"
 }

@@ -1,0 +1,5 @@
+{
+  "displayName": "VSCodroid 編輯器功能表",
+  "description": "編輯器操作功能表的其他項目",
+  "command.selectAll": "全選"
+}

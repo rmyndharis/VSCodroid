@@ -1,0 +1,5 @@
+{
+  "displayName": "VSCodroid 편집기 메뉴",
+  "description": "편집기 상황에 맞는 메뉴의 추가 항목",
+  "command.selectAll": "모두 선택"
+}

@@ -11,6 +11,5 @@
   "command.clearCaches": "VSCodroid: キャッシュを消去",
   "command.manageToolchains": "VSCodroid: ツールチェーンの管理",
   "command.toggleExtraKeyRow": "VSCodroid: 追加キー行の表示を切り替え",
-  "command.about": "VSCodroid: バージョン情報",
-  "command.selectAll": "すべてを選択"
+  "command.about": "VSCodroid: バージョン情報"
 }

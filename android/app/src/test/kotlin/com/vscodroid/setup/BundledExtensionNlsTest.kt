@@ -195,8 +195,8 @@ class BundledExtensionNlsTest {
 
         const val BASE = "package.nls.json"
 
-        /** welcome, saf-bridge, process-monitor, serve-network. */
-        const val EXPECTED_EXTENSIONS = 4
+        /** welcome, saf-bridge, process-monitor, serve-network, editor-menus. */
+        const val EXPECTED_EXTENSIONS = 5
 
         /** Em dash, en dash and horizontal bar, by number so they are not written here. */
         val BANNED = listOf(0x2014, 0x2013, 0x2015)

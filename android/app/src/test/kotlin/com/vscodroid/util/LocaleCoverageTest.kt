@@ -36,8 +36,8 @@ class LocaleCoverageTest {
         const val RES = "src/main/res"
         const val OWN_EXTENSIONS = "src/main/assets/extensions"
 
-        /** welcome, saf-bridge, process-monitor, serve-network. */
-        const val OWN_EXTENSION_COUNT = 4
+        /** welcome, saf-bridge, process-monitor, serve-network, editor-menus. */
+        const val OWN_EXTENSION_COUNT = 5
 
         /** `package.nls.fr.json`. The English base carries no suffix and is not a language. */
         val BUNDLE_FILE = Regex("""package\.nls\.([a-z-]+)\.json""")

@@ -11,6 +11,5 @@
   "command.clearCaches": "VSCodroid: Önbellekleri temizle",
   "command.manageToolchains": "VSCodroid: Araç zincirlerini yönet",
   "command.toggleExtraKeyRow": "VSCodroid: Ek tuş satırını göster veya gizle",
-  "command.about": "VSCodroid: Hakkında",
-  "command.selectAll": "Tümünü Seç"
+  "command.about": "VSCodroid: Hakkında"
 }

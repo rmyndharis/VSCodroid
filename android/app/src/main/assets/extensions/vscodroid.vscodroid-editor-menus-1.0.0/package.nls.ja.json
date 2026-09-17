@@ -1,0 +1,5 @@
+{
+  "displayName": "VSCodroid エディターのメニュー",
+  "description": "エディターのコンテキスト メニューに追加する項目",
+  "command.selectAll": "すべてを選択"
+}

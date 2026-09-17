@@ -1,0 +1,29 @@
+{
+  "name": "vscodroid-editor-menus",
+  "displayName": "%displayName%",
+  "description": "%description%",
+  "version": "1.0.0",
+  "publisher": "vscodroid",
+  "engines": {
+    "vscode": "^1.96.0"
+  },
+  "categories": [
+    "Other"
+  ],
+  "contributes": {
+    "commands": [
+      {
+        "command": "editor.action.selectAll",
+        "title": "%command.selectAll%"
+      }
+    ],
+    "menus": {
+      "editor/context": [
+        {
+          "command": "editor.action.selectAll",
+          "group": "9_cutcopypaste@5"
+        }
+      ]
+    }
+  }
+}

@@ -11,6 +11,5 @@
   "command.clearCaches": "VSCodroid: Zwischenspeicher leeren",
   "command.manageToolchains": "VSCodroid: Toolchains verwalten",
   "command.toggleExtraKeyRow": "VSCodroid: Zusatztastenleiste ein- oder ausblenden",
-  "command.about": "VSCodroid: Info",
-  "command.selectAll": "Alle auswählen"
+  "command.about": "VSCodroid: Info"
 }

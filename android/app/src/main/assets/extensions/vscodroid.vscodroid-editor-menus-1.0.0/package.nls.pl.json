@@ -1,0 +1,5 @@
+{
+  "displayName": "VSCodroid Menu edytora",
+  "description": "Dodatkowe pozycje menu kontekstowego edytora",
+  "command.selectAll": "Wybierz wszystko"
+}

@@ -59,10 +59,6 @@
       {
         "command": "vscodroid.about",
         "title": "%command.about%"
-      },
-      {
-        "command": "editor.action.selectAll",
-        "title": "%command.selectAll%"
       }
     ],
     "menus": {
@@ -78,12 +74,6 @@
         {
           "command": "vscodroid.about",
           "group": "remote_90_vscodroid_about"
-        }
-      ],
-      "editor/context": [
-        {
-          "command": "editor.action.selectAll",
-          "group": "9_cutcopypaste@5"
         }
       ]
     }

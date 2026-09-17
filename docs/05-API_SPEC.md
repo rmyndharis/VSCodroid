@@ -1067,12 +1067,12 @@ lists them; count them with
 `ls android/app/src/main/assets/vscode-reh/extensions/`.
 
 **2. `assets/extensions/`**: nine directories, extracted to `~/.vscodroid/extensions/`
-on first run:
+during setup:
 
 ```mermaid
 flowchart TD
-  ROOT["assets/extensions/"] --> T["5 from Open VSX, fetched at build time"]
-  ROOT --> O["4 first-party, source in git"]
+  ROOT["assets/extensions/"] --> T["4 from Open VSX, fetched at build time"]
+  ROOT --> O["5 first-party, source in git"]
   T --> T2["esbenp.prettier-vscode"]
   T --> T3["ms-python.python"]
   T --> T4["dbaeumer.vscode-eslint"]
@@ -1081,20 +1081,27 @@ flowchart TD
   O --> O2["vscodroid.vscodroid-welcome (Get Started walkthrough)"]
   O --> O3["vscodroid.vscodroid-process-monitor"]
   O --> O4["vscodroid.vscodroid-serve-network (dev-server preview)"]
+  O --> O5["vscodroid.vscodroid-editor-menus (Select All in the editor context menu, no code)"]
 ```
 
 ⚠️ **`git ls-files` answers a different question than `ls` here, and the gap is
 deliberate.** `.gitignore` ignores `assets/extensions/*` and un-ignores only
 `vscodroid.vscodroid-*/`, because this project's own extensions are source and the rest
-are downloads. So a worktree shows **four** directories and a built tree shows **nine**:
-the five Open VSX ones are fetched by `scripts/download-extensions.sh`, whose
+are downloads. So a worktree shows **five** directories and a built tree shows **nine**:
+the four Open VSX ones are fetched by `scripts/download-extensions.sh`, whose
 `EXTENSIONS` array is the tracked, authoritative list of what a build pulls. Read that
-array plus the four `vscodroid.*` directories; do not enumerate this set from git.
+array plus the five `vscodroid.*` directories; do not enumerate this set from git.
 
-The version is part of each directory name, and that is load-bearing:
-`extractBundledExtensions` copies a bundled extension only when its directory does not
-already exist, so shipping a change without bumping the version leaves every existing
-install on the old copy. `supersededExtensionDirs` is what removes the stale one.
+The version is part of each directory name, and that is load-bearing, though not
+because of extraction. `bundledDirsToExtract` re-unpacks every `vscodroid.*` directory
+on each setup run, so edited code does reach an existing install; a fetched one is
+unpacked only when its directory is absent or was left half-finished, and not when the
+user removed it or already holds a newer copy. The server, however, caches its scan of
+user extensions against the modification time of `extensions.json`, so a changed
+`package.json` (its `contributes`, for example) stays invisible until the directory
+name changes and `reconcileExtensionsManifest` rewrites that file. Bump the version in
+the directory name, `package.json` and `MILESTONES.md` together for any manifest change;
+`supersededExtensionDirs` removes the older directory.
 
 ---
 

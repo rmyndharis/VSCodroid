@@ -47,7 +47,7 @@ says "Prettier" against a `displayName` of "Prettier - Code formatter", and
 extension of that name. So the table carries the id as its own column.
 
 Scoped to the `EXTENSIONS` list, never to a walk of the extensions directory.
-Four `vscodroid.*` extensions are committed there, and they have no `license`
+The `vscodroid.*` extensions are committed there, and they have no `license`
 field and no licence file because this repository's own `LICENSE` covers them,
 exactly as the notices say. A checker that walked the directory would fail on
 them immediately and be switched off within the day.

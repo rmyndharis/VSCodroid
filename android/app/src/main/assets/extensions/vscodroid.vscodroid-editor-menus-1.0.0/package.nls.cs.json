@@ -1,0 +1,5 @@
+{
+  "displayName": "VSCodroid Nabídky editoru",
+  "description": "Další položky místní nabídky editoru",
+  "command.selectAll": "Vybrat vše"
+}
