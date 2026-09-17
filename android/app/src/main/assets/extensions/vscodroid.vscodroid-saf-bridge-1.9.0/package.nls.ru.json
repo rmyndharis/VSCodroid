@@ -11,5 +11,6 @@
   "command.clearCaches": "VSCodroid: Очистить кэши",
   "command.manageToolchains": "VSCodroid: Наборы инструментов",
   "command.toggleExtraKeyRow": "VSCodroid: Показать или скрыть ряд дополнительных клавиш",
-  "command.about": "VSCodroid: О приложении"
+  "command.about": "VSCodroid: О приложении",
+  "command.selectAll": "Выбрать все"
 }

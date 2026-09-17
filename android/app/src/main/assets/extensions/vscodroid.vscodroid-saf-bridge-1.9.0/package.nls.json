@@ -11,5 +11,6 @@
   "command.clearCaches": "VSCodroid: Clear Caches",
   "command.manageToolchains": "VSCodroid: Manage Toolchains",
   "command.toggleExtraKeyRow": "VSCodroid: Toggle Extra Key Row",
-  "command.about": "VSCodroid: About"
+  "command.about": "VSCodroid: About",
+  "command.selectAll": "Select All"
 }

@@ -48,7 +48,7 @@ class SafBridgeManifestTest {
     private fun registered(): Set<String> {
         val source = File(extensionDir(), "extension.js")
         assertTrue(source.isFile) { "no extension.js in ${extensionDir().name}" }
-        return Regex("""registerCommand\(\s*'([\w.]+)'""")
+        return Regex("""registerCommand\(\s*['"`]([\w.]+)['"`]""")
             .findAll(source.readText())
             .map { it.groupValues[1] }
             .toSet()
@@ -61,6 +61,12 @@ class SafBridgeManifestTest {
             .toSet()
     }
 
+    /**
+     * Symmetric for our own namespace only. A built-in id is declared purely to give a
+     * menu entry a command the workbench will accept, and its handler is the editor's
+     * own; registering it here as well would put every invocation of it, Ctrl+A
+     * included, through the extension host.
+     */
     @Test
     fun `the manifest declares exactly the commands the extension registers`() {
         val registered = registered()
@@ -68,14 +74,72 @@ class SafBridgeManifestTest {
             "no registerCommand call was read from extension.js, so this would pass by " +
                 "comparing two empty sets"
         }
+        val (ours, builtIn) = declared().partition { it.startsWith(OWN_NAMESPACE) }
         assertEquals(
             emptySet<String>(), registered - declared(),
             "these commands are registered and not declared, so nothing can invoke them",
         )
         assertEquals(
-            emptySet<String>(), declared() - registered,
+            emptySet<String>(), ours.toSet() - registered,
             "these commands are declared and never registered, so the palette offers " +
                 "them and each one fails with \"command not found\"",
+        )
+        assertEquals(
+            emptySet<String>(), builtIn.toSet().intersect(registered),
+            "these built-in commands are registered by the extension, which replaces the " +
+                "editor's own handler with one that waits on the extension host",
+        )
+    }
+
+    /**
+     * The editor's context menu has Cut, Copy and Paste and no Select All: upstream adds
+     * that only to the Selection menu and the simple editor's menu, so a long-press
+     * offered no way to select the whole file.
+     *
+     * Each assertion is a way the entry silently vanishes or misbehaves. The workbench
+     * drops a menu item whose command no extension declares, so the declaration is
+     * required. A `when` or an `enablement` would hide or grey it on conditions the
+     * editor already checks itself. A literal title would skip translation. Order 4 is
+     * Paste, so anything above it lands after Paste in the same group.
+     */
+    @Test
+    fun `the editor context menu offers Select All beside Cut, Copy and Paste`() {
+        val entries = manifest().getJSONObject("contributes")
+            .getJSONObject("menus")
+            .getJSONArray("editor/context")
+        val entry = (0 until entries.length()).map { entries.getJSONObject(it) }
+            .singleOrNull { it.getString("command") == SELECT_ALL }
+        assertTrue(entry != null, "no editor/context entry for $SELECT_ALL")
+
+        val group = entry!!.getString("group")
+        val (name, order) = group.split('@').let { it[0] to it.getOrNull(1)?.toIntOrNull() }
+        assertEquals("9_cutcopypaste", name, "Select All belongs with Cut, Copy and Paste")
+        assertTrue(
+            order != null && order > 4,
+            "the order must place Select All after Paste (order 4); group was $group",
+        )
+        assertTrue(!entry.has("when"), "a when clause would hide Select All: ${entry.opt("when")}")
+
+        assertTrue(
+            SELECT_ALL in declared(),
+            "the workbench drops a menu item whose command is not in contributes.commands",
+        )
+        val commands = manifest().getJSONObject("contributes").getJSONArray("commands")
+        val command = (0 until commands.length()).map { commands.getJSONObject(it) }
+            .single { it.getString("command") == SELECT_ALL }
+        assertTrue(
+            !command.has("enablement"),
+            "the editor's own precondition already governs Select All; " +
+                "found ${command.opt("enablement")}",
+        )
+        val title = command.getString("title")
+        assertTrue(
+            Regex("%[^%]+%").matches(title),
+            "the title must be a %key% placeholder so it is translated; was $title",
+        )
+        assertTrue(
+            SELECT_ALL !in registered(),
+            "registering $SELECT_ALL in extension.js would route Ctrl+A through the extension host",
         )
     }
 
@@ -107,5 +171,10 @@ class SafBridgeManifestTest {
                 "so a tap on the remote indicator is the discoverable way to bring the row " +
                 "back; found $commands",
         )
+    }
+
+    private companion object {
+        const val OWN_NAMESPACE = "vscodroid."
+        const val SELECT_ALL = "editor.action.selectAll"
     }
 }

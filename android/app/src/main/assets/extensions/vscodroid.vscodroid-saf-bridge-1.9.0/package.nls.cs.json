@@ -11,5 +11,6 @@
   "command.clearCaches": "VSCodroid: Vymazat mezipaměti",
   "command.manageToolchains": "VSCodroid: Spravovat sady nástrojů",
   "command.toggleExtraKeyRow": "VSCodroid: Zobrazit nebo skrýt řádek doplňkových kláves",
-  "command.about": "VSCodroid: O aplikaci"
+  "command.about": "VSCodroid: O aplikaci",
+  "command.selectAll": "Vybrat vše"
 }

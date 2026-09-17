@@ -11,5 +11,6 @@
   "command.clearCaches": "VSCodroid: Svuota le cache",
   "command.manageToolchains": "VSCodroid: Gestisci le toolchain",
   "command.toggleExtraKeyRow": "VSCodroid: Mostra o nascondi la riga di tasti extra",
-  "command.about": "VSCodroid: Informazioni"
+  "command.about": "VSCodroid: Informazioni",
+  "command.selectAll": "Seleziona tutto"
 }
