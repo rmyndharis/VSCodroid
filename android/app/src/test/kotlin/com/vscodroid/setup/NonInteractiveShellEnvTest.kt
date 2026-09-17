@@ -419,6 +419,25 @@ class NonInteractiveShellEnvTest {
     }
 
     /**
+     * pip() starts pip the way `python3 -m pip` does, so a venv made with
+     * `--without-pip` answers with the one line `-m` prints. `run_module` raised
+     * the same ImportError as a five-line traceback, through the shim's own
+     * frames. Measured against a real interpreter rather than here: no python3
+     * runs in this suite, and the stub above stands in for all of it.
+     */
+    @Test
+    fun `pip starts the module the way python3 -m pip does`() {
+        FirstRunSetup(context).createBashEnvFile()
+
+        val wrapper = bashEnvFile().readText().substringAfter("pip()", "").substringBefore("\n}")
+        assertTrue(wrapper.isNotEmpty(), "the pip wrapper is gone")
+        assertTrue(
+            wrapper.contains("runpy._run_module_as_main(\"pip\")"),
+            "pip is not started as -m starts it, so a missing pip prints a traceback: $wrapper",
+        )
+    }
+
+    /**
      * tkinter and turtle are not in this Python, and pip gives no hint of it:
      * `tkinter` is not on PyPI, and `tk` is, as an unrelated package that
      * installs cleanly. So this note is keyed on the name, success included,
