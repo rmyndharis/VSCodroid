@@ -3214,6 +3214,8 @@ class MainActivity : AppCompatActivity() {
         injectKeyboardGuard()
         // Keeps a context menu open while the keyboard is up, and Escape able to close it
         injectTouchContextMenu()
+        // Keeps an inline list edit (New File, Rename) in view when the keyboard rises
+        injectListEditKeeper()
         // Fix #7: Override window.open() to route through AndroidBridge
         injectWindowOpenOverride()
         // Answers a paste out of Android's clipboard, which the WebView will not
@@ -3929,6 +3931,87 @@ class MainActivity : AppCompatActivity() {
                 document.querySelectorAll('.shadow-root-host').forEach(function(h) {
                     if (h.shadowRoot) adopt(h.shadowRoot);
                 });
+            })();
+            """.trimIndent(),
+            null
+        )
+    }
+
+    /**
+     * Keeps a row being edited inline in view when the keyboard shrinks the list.
+     *
+     * New File or Rename on a row in the lower part of the Explorer made the
+     * keyboard rise and fall without end. Four workbench behaviours make the
+     * loop, none of them wrong on a desktop:
+     *
+     * - The keyboard and the key row reach the page as a resize, and the
+     *   workbench lays the list out again with only its height changed. The
+     *   scroll position is kept, so a row near the bottom is now below the fold.
+     * - A list draws only the rows in view, with no buffer. A row outside is
+     *   taken down, and taking it down removes its input box without finishing
+     *   the edit, so the edit stays open with nothing on screen to type into.
+     * - With the focused input gone the keyboard goes down, the list grows, and
+     *   the row is drawn again. Drawing it builds a new input box and focuses it
+     *   at once, which raises the keyboard, and the loop starts over.
+     * - The Explorer reveals the row once, when the edit starts, before the
+     *   keyboard exists, and never again. Chromium's own scroll of a focused
+     *   field into view is thrown back by the list.
+     *
+     * So the row's place is read in the capture phase, before the workbench's own
+     * resize listener lays out and takes the row down, and the list is scrolled
+     * in an animation frame, which runs after that layout and before the frame is
+     * drawn. Scrolling at once is not enough: the list can scroll only as far as
+     * its content height minus its current height, so until it has shrunk, a
+     * short tree or a row near its end has no room to move. The scroll goes
+     * through the touch-scroll event the list listens for, which sets its scroll
+     * position the way a finger would.
+     *
+     * The scroll overshoots by one row on purpose. The Explorer cancels an edit
+     * when a scroll leaves the edited row outside the list's visible height, and
+     * that height is the list's own figure, not the element height read here;
+     * landing exactly on the bottom edge, a pixel short would silently cancel
+     * New File rather than leave the row barely hidden. The margin is capped at
+     * the row's own top: in a list shorter than two rows, as in landscape with
+     * the keyboard up, or for a Settings row several times taller, a full row
+     * would push the row's top out of view and cancel the edit the same way.
+     * Near the end of the tree the list clamps the scroll, which leaves the row
+     * in view anyway.
+     *
+     * Aimed at any list row holding an input box, not at the Explorer's class
+     * names: Ports, the debug watch list, breakpoints and terminal tabs build
+     * their inline edits the same way. The loop was traced for the Explorer
+     * only; whether those loop too has not been reproduced. The mechanism was
+     * read from the shipped workbench and `ListEditKeeperWiringTest` holds the
+     * names to it, but it has not been measured on a device. A workbench patch
+     * would not reach an installed app, for the reason [injectTouchContextMenu]
+     * gives.
+     */
+    private fun injectListEditKeeper() {
+        webView?.evaluateJavascript(
+            """
+            (function() {
+                if (window.__vscodroidListEditKeeper) return;
+                window.__vscodroidListEditKeeper = true;
+                window.addEventListener('resize', function() {
+                    var input = document.activeElement;
+                    var row = input && input.closest && input.closest('.monaco-inputbox') && input.closest('.monaco-list-row');
+                    var rows = row && row.parentNode;
+                    if (!rows || !rows.classList.contains('monaco-list-rows')) return;
+                    // Read now: by the frame the row may already be taken down.
+                    var height = row.offsetHeight;
+                    var bottom = parseFloat(row.style.top) + height;
+                    requestAnimationFrame(function() {
+                        // The rows container is offset by minus the scroll position.
+                        var hidden = bottom + parseFloat(rows.style.top) - rows.parentNode.clientHeight;
+                        if (!(hidden > 0)) return;
+                        // A row's margin, but never past the row's own top.
+                        var top = bottom - height + parseFloat(rows.style.top);
+                        var scroll = new CustomEvent('-monaco-gesturechange', { cancelable: true });
+                        scroll.translationX = 0;
+                        scroll.translationY = -Math.max(hidden, Math.min(hidden + height, top));
+                        rows.dispatchEvent(scroll);
+                    });
+                }, true);
             })();
             """.trimIndent(),
             null
