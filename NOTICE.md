@@ -164,6 +164,17 @@ licences screen a device installing the Ruby pack has.
 
 OpenJDK's own licence and third-party notice files ship inside the Java pack at `usr/lib/jvm/java-17-openjdk/legal`; Ruby's per-gem licence files likewise ship inside the Ruby pack.
 
+## Mirrored Python Wheels
+
+Prebuilt Android wheels that VSCodroid re-hosts on its own releases, pinned in `wheelhouse.json`. They are not bundled in the APK; pip downloads one only when a user installs that package. Each wheel carries its own notices, and pandas' vendored ones ship beside it on the release. The detail is in `docs/LEGAL_NOTICES.md`.
+
+| Software | License | Built by |
+|----------|---------|---------|
+| numpy | BSD 2-Clause, with OpenBLAS and LAPACK | Termux User Repository |
+| pandas | BSD 3-Clause, with vendored components | Termux User Repository |
+| pydantic-core | MIT, with statically linked Rust crates | Termux User Repository |
+| psutil | BSD 3-Clause | Termux, repacked into a wheel |
+
 ## Extension Marketplace
 
 | Service | License | URL |

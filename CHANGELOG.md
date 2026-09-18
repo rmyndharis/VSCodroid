@@ -7,51 +7,58 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.4.0] - 2026-09-18
+
 ### Added
 
-- Opening a Python file offers to install Black Formatter. It is the formatter that works without installing anything with pip, and no marketplace search returns it, so it could not be found by looking.
+- Jupyter notebooks run. The Jupyter extension reaches a kernel in a Python virtual environment and installs `ipykernel` into it, instead of offering a Jupyter server install that cannot succeed.
+- `pip install` of `numpy`, `pandas`, `pydantic-core` and `psutil` succeeds, from prebuilt Android builds pip is now pointed at. `pydantic` itself needs `pip install "pydantic<2.13"`, the range that matches the mirrored `pydantic-core`.
+- pip prefers a package's newest release with a ready-made build over a newer one it would have to compile, which this device cannot do.
+- A `pip install` that fails while building a package ends with a note that the device cannot compile C; asking for `tkinter`, `tk` or `turtle` says they are not included.
+- Opening a Python file offers to install the Black Formatter extension, which brings its own copy of black and needs nothing installed with pip. No search in the Extensions view returns it, so it could not be found by looking.
 - **VSCodroid: Toggle Extra Key Row**, in the Command Palette and the remote indicator menu, hides the extra key row until it is run again, for typing on a hardware keyboard.
 - Long-pressing in the editor offers Select All beside Cut, Copy and Paste.
-- Jupyter notebooks run. The Jupyter extension reaches a kernel in a Python virtual environment and installs `ipykernel` into it, instead of offering a Jupyter server install that cannot succeed.
-- `pip install` of `numpy`, `pandas`, `pydantic-core` and `psutil` succeeds, from prebuilt Android builds pip is now pointed at. `pydantic` installs as `pydantic<2.13`.
-- pip prefers a package's newest release with a ready-made build over a newer one it would have to compile.
-- A `pip install` that fails while building a package ends with a note that the device cannot compile C; asking for `tkinter`, `tk` or `turtle` says they are not included.
-- Building from source needs CMake, and `./scripts/setup.sh` reports it missing before the downloads. `REQUIRE_NDK=0` skips that check too.
+- Building the app from source now needs CMake. `./scripts/setup.sh` reports it missing before the downloads, and `REQUIRE_NDK=0` skips that check as it does the NDK one.
+
+### Changed
+
+- The Ruby toolchain is now Ruby 4.0, up from 3.4. It installs 37.6 MB rather than 35.7, from a 10.4 MB download.
 
 ### Fixed
 
+- A long press opens the editor menu with the keyboard up or down, and it stays open. Tapping an item runs it, a submenu opens, Esc on the key row closes one level, tapping away closes the menu, and the keyboard stays where it was. The menu used to disappear about 60 milliseconds after it appeared, or not open at all with the keyboard down.
 - Menu items that open a picker, such as File > New File..., open it on a tap instead of doing nothing, and a menu item no longer leaves the menu open behind what it opened.
-- Interrupting a Jupyter kernel also interrupts the processes it started, including ones an earlier cell left running, and restarting or closing the kernel ends them instead of leaving them behind.
-- `npm install` run by an extension, such as Claude Code's Bash tool, gets the same platform override as in the terminal, so a package whose install script refuses Android installs there too.
-- Python, pip and the Jupyter kernel start faster: bytecode is cached, under the app's cache, so `python3 -m pip --version` takes about a third of the time it did.
-- pip keeps its download cache under the app's cache, where Clear Caches and Android can free it, instead of in the app's files.
-- Lists no longer overlap their own rows. Every row in the explorer, the search results, the command palette and a settings dropdown was drawn 14px taller than the space it was given, so each one covered the top of the next: option labels in a dropdown stacked on each other, and tapping the lower edge of a filename opened the file below it.
-- Editor tabs and status bar entries fit their strips again. Both were drawn taller than the area holding them, by 5px and 10px.
-- A long press opens a menu that stays open while the keyboard is up. The menu took focus from the text, the keyboard went down, and the workbench answered the resize by closing the menu about 60ms after it appeared, so it read as flickering or dead. Esc on the key row still closes it.
 - Menus no longer list keyboard shortcuts beside their items on a touch screen. The items run on a tap; the chord was width taken from a phone to advertise a key it does not have.
-- A long press opens the editor menu whether the keyboard is up or down, and using it leaves the keyboard where it was. Tapping an item runs it, a submenu opens, Esc closes one level and tapping away closes the menu.
-- Paste works again, in the editor, the terminal, the Command Palette and anything an extension pastes into. Copying put text on the device clipboard and pasting it back raised "Unable to read from the browser's clipboard", asking for a permission a WebView has no way to grant.
-- Signing in to GitHub no longer goes through a confirmation dialog first. The sign-in ends by opening github.com, and every address outside the extension marketplace was treated as untrusted.
-- The editor is not reloaded when Android ends only the process that started its server. The server kept running and the page was still connected, but the reload restarted extensions and could drop an edit made a moment before.
-- Opening a device folder from Open Recent after it dropped off the recent folders list says the permission expired. It opened a copy that nothing synced back to the device.
-- Removing a toolchain no longer deletes files outside it through a folder you linked into its directory.
-- A sign-in finishing in the browser is accepted only for the request it answers. Another app on the device could read what marked a callback as genuine and answer one of its own.
-- A browser sign-in returns only to VSCodroid. Another installed app declaring the same callback link could be offered the result in a chooser.
-- A confirmation dialog fits a phone screen. It was drawn wider than the screen and centred, so the button that proceeds hung off the right edge with a letter of it showing.
-- The editor keeps a usable height in landscape with the keyboard up. The extra key row took the last of the space the keyboard left, so the file being renamed and the line being typed were both off screen.
-- An extension that opens a preview in your browser now opens one. Live Server and everything like it reported "Could not open the default browser" and left the address to be copied by hand.
-- Commands Claude Code runs start. Every `bash` and `node` process it launched aborted with "stack corruption detected", on every Android version.
-- A command `pip` installs outside a virtual environment runs, such as `black`, `pytest` or `httpie`. It installed and then refused to start. One installed while the editor is open works after switching away and back, in a new terminal.
-- A command installed with `gem install` runs, the same way. It installed and was then not found.
-- Claude Code keeps working on Android 13 and 14 when it asks the system for something the sandbox refuses. The refusal reached it as a value it never asked for, and the next call it depends on ended the process.
-- A sign-in callback too large to be one is ignored instead of taking the app down with it.
-- First run asks for the space the unpack really takes. The reserve did not cover what the filesystem itself spends on 22,600 files, so a device could pass the check and run out part-way through.
-- Extension sign-ins, such as GitHub for Copilot, and API keys that extensions store are kept when the app is closed or reloaded. They were held only in memory and had to be entered again every time.
-- A link to a file served on the editor's own address no longer replaces the editor with that file. A page opened that way from a workspace could read the editor's stored sign-ins and the app bridge, and the app stayed on it until force-stopped.
-- Creating or renaming a file in the Explorer no longer makes the keyboard rise and fall without end when the item sits low on the screen. The keyboard pushed the row out of view, which took its name box and the keyboard down with it.
+- Lists no longer overlap their own rows. Every row in the explorer, the search results, the command palette and a settings dropdown was drawn taller than the space it was given, so each one covered the top of the next: option labels in a dropdown stacked on each other, and tapping the lower edge of a filename opened the file below it.
+- Editor tabs and status bar entries fit their strips again. Both were drawn taller than the area holding them.
 - Enter on the on-screen keyboard confirms a new file name or a rename in the Explorer, and a Command Palette pick. It was ignored while the keyboard still underlined the last word typed.
 - A word typed on the on-screen keyboard stays as typed when you then tap a toolbar or the side bar. It was written in again, reversed, so `xyz` became `xyzzyxzyxzyx`.
-- On a phone, opening a terminal closes the side bar, so the terminal's tabs and panel buttons fit on screen instead of running off its right edge.
+- Naming a file in the Explorer, or editing a list in Settings, no longer makes the keyboard rise and fall without end when the row sits low on the screen. The box you type in is now scrolled into view, and out from under a sticky folder heading that used to cancel the edit.
+- The editor keeps a usable height in landscape with the keyboard up. The extra key row took the last of the space the keyboard left, so the file being renamed and the line being typed were both off screen.
+- On a phone, showing a terminal closes the side bar, so the terminal's tabs and panel buttons fit on screen instead of running off its right edge. This follows the same `vscodroid.layout.autoHideSideBar` setting as opening a file, and a terminal nothing puts on screen leaves the side bar alone.
+- A confirmation dialog fits a narrow screen. It was drawn wider than the screen and centred, so the button that proceeds hung off the right edge with a letter of it showing.
+- Paste works again, in the editor, the terminal, the Command Palette and anything an extension pastes into. Copying put text on the device clipboard and pasting it back raised "Unable to read from the browser's clipboard", asking for a permission a WebView has no way to grant.
+- An extension that opens a preview in your browser now opens one. Live Server and everything like it reported "Could not open the default browser" and left the address to be copied by hand.
+- Signing in to GitHub no longer goes through a confirmation dialog first. The sign-in ends by opening github.com, and every address outside the extension marketplace was treated as untrusted.
+- Tapping a link no app on the device can open now says so, and asking for a device folder where the system picker is turned off does nothing. Both used to close the app, taking the editor session with them.
+- Interrupting a Jupyter kernel also interrupts the processes it started, including ones an earlier cell left running, and restarting or closing the kernel ends them instead of leaving them behind.
+- Python, pip and the Jupyter kernel start faster: bytecode is cached, under the app's cache, so `python3 -m pip --version` takes about a third of the time it did.
+- pip keeps its download cache under the app's cache, where Clear Caches and Android can free it, instead of in the app's files.
+- A command `pip` installs outside a virtual environment runs, such as `black`, `pytest` or `httpie`. It installed and then refused to start. One installed while the editor is open works after switching away and back, in a new terminal.
+- A command installed with `gem install` runs, the same way. It installed and was then not found.
+- `npm install` run by an extension, such as Claude Code's Bash tool, gets the same platform override as in the terminal, so a package whose install script refuses Android installs there too.
+- Commands Claude Code runs start. Every `bash` and `node` process it launched aborted with "stack corruption detected", on every Android version.
+- Claude Code keeps working on Android 13 and 14 when it asks the system for something the sandbox refuses. The refusal reached it as a value it never asked for, and the next call it depends on ended the process.
+- Extension sign-ins, such as GitHub for Copilot, and API keys that extensions store are kept when the app is closed or reloaded. They were held only in memory and had to be entered again every time.
+- A sign-in finishing in the browser is accepted only for the request it answers. Another app on the device could read what marked a callback as genuine and answer one of its own.
+- A browser sign-in returns only to VSCodroid. Another installed app declaring the same callback link could be offered the result in a chooser.
+- A malformed sign-in callback is ignored instead of closing the app.
+- A link to a file served on the editor's own address no longer replaces the editor with that file. A page opened that way from a workspace could read the editor's stored sign-ins and the app bridge, and the app stayed on it until force-stopped.
+- Updating the app no longer follows a link out of the editor's extensions folder when it clears out an extension it no longer ships. A folder linked in from a project, by `npm link` or by hand, was emptied before the link itself was removed.
+- Removing a toolchain no longer deletes files outside it through a folder you linked into its directory.
+- First run asks for the space the unpack really takes. The reserve did not cover what the filesystem itself spends on 22,600 files, so a device could pass the check and run out part-way through.
+- Opening a device folder from the editor's Open Recent, after the app had released its permission on that folder, now says the permission expired. It opened the local copy instead, which nothing synced back to the device.
+- The editor is not reloaded when Android ends only the process that started its server. The server kept running and the page was still connected, but the reload restarted extensions and could drop an edit made a moment before.
 
 ## [1.3.0] - 2026-09-06
 
@@ -998,7 +1005,8 @@ This release represents the cumulative work across milestones M0 through M5, bri
 - Health check polling for server readiness
 - Android intent handling for "Open with VSCodroid"
 
-[Unreleased]: https://github.com/rmyndharis/VSCodroid/compare/v1.3.0...HEAD
+[Unreleased]: https://github.com/rmyndharis/VSCodroid/compare/v1.4.0...HEAD
+[1.4.0]: https://github.com/rmyndharis/VSCodroid/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/rmyndharis/VSCodroid/compare/v1.2.0...v1.3.0
 [1.2.0]: https://github.com/rmyndharis/VSCodroid/compare/v1.1.0...v1.2.0
 [1.1.0]: https://github.com/rmyndharis/VSCodroid/compare/v1.0.0...v1.1.0

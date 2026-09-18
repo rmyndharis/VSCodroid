@@ -1,7 +1,7 @@
 # VSCodroid Privacy Policy
 
 **Effective Date: February 13, 2026**
-**Last Updated: September 16, 2026**
+**Last Updated: September 18, 2026**
 
 ## Summary
 
@@ -70,13 +70,13 @@ It has no account to work against until you sign in to GitHub, which happens thr
 
 That sign-in does not have to be one you made for the chat. A GitHub session created for anything else in the editor, the built-in GitHub features for example, is available to GitHub Copilot Chat without a second prompt: the editor's product configuration lists it as trusted for GitHub accounts, and it appears as trusted, and cannot be unticked, in the editor's list of extensions with access to an account. So "signing in to GitHub" and "giving the chat an account" are the same act here.
 
-Once you are signed in and you use it, **what you send goes to GitHub**. That means the message you type and the material the extension decides to attach as context, which normally includes code from the file you are working in and can include other parts of the project. That exchange is between you and GitHub under GitHub's terms and privacy statement (https://docs.github.com/site-policy). VSCodroid does not proxy it, read it, or keep a copy, and it is the only feature in this app that sends anything you write to a service we did not have to name elsewhere in this policy.
+Once you are signed in and you use it, **what you send goes to GitHub**. That means the message you type and the material the extension decides to attach as context, which normally includes code from the file you are working in and can include other parts of the project. That exchange is between you and GitHub under GitHub's terms and privacy statement (https://docs.github.com/site-policy). It passes through the same on-device proxy described under Git Operations below, which tunnels the encrypted connection without reading it; VSCodroid does not read it or keep a copy, and this is the only feature in this app that sends anything you write to a service we did not have to name elsewhere in this policy.
 
 If you would rather it were not there, disable **GitHub Copilot Chat** from the Extensions view; the editor works without it. It ships inside the app rather than being downloaded, so the view offers Disable rather than Uninstall, and disabling it is what stops it loading.
 
 ### Git Operations (User-Initiated)
 
-When you push, pull, clone or fetch, the bundled Git client connects directly to the remote you configured: GitHub, GitLab, a self-hosted server, whatever you named. VSCodroid does not proxy these connections, add its own destinations, or record where you push.
+When you push, pull, clone or fetch, the bundled Git client reaches the remote you configured: GitHub, GitLab, a self-hosted server, whatever you named. The connection goes through a proxy that runs inside the app, on your device, at `127.0.0.1`. It exists because some bundled programs cannot look up a hostname on Android by themselves, so the lookup happens there instead. For an `https` remote it opens a tunnel and passes the encrypted bytes through without reading them; nothing leaves your device except the connection to the remote you named. VSCodroid adds no destination of its own and keeps no record of where you push.
 
 ### Toolchain Downloads (User-Initiated)
 

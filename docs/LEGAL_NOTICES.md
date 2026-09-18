@@ -590,7 +590,7 @@ The weakest point in our reading is the `ripgrep` substitution, because a binary
 
 ## Mirrored Python Wheels
 
-`pip` on the device is pointed at a page listing prebuilt Android wheels that VSCodroid re-hosts, unmodified, on the `wheels-<python-version>-<n>` prereleases of this repository. `wheelhouse.json` pins each one and records where it came from. They are not bundled in the APK; pip downloads one only when a user installs that package.
+`pip` on the device is pointed at a page listing prebuilt Android wheels that VSCodroid re-hosts on the `wheels-<python-version>-<n>` prereleases of this repository. `wheelhouse.json` pins each one and records where it came from. They are not bundled in the APK; pip downloads one only when a user installs that package.
 
 | Wheel | Built by | Licence | Notices |
 |---|---|---|---|
@@ -769,4 +769,4 @@ For questions about licenses, trademarks, or legal notices:
 
 ---
 
-_This document was last updated on September 15, 2026._
+_This document was last updated on September 18, 2026._

@@ -91,11 +91,15 @@ object ToolchainRegistry {
             displayName = "Ruby",
             shortLabel = "Ruby",
             descriptionRes = R.string.toolchain_ruby_description,
-            // 34,888 KiB measured with `du -sk` over the pack's `usr/` tree,
-            // which is 35.7 MB. 2,279 files, so the block rounding is most of
-            // the gap between that and the 30.0 MB the file contents sum to.
-            estimatedSize = 36_000_000,
-            downloadSize = 9_900_000,
+            // 36,736 KiB measured with `du -sk` over the pack's `usr/` tree,
+            // which is 37.6 MB. 2,403 files, so the block rounding is most of
+            // the gap between that and the 31.6 MB the file contents sum to.
+            // Termux moved ruby from 3.4.1 to 4.0.6 and the tree grew past the
+            // 36,000,000 recorded here, which package-toolchains.sh refuses
+            // rather than shipping a card that admits a device to an install it
+            // cannot finish. The ZIP that tree packs into is 10,421,167 bytes.
+            estimatedSize = 39_000_000,
+            downloadSize = 10_500_000,
             downloadUrl = "https://github.com/rmyndharis/VSCodroid/releases/latest/download/toolchain_ruby.zip",
         ),
         ToolchainInfo(
@@ -111,7 +115,7 @@ object ToolchainRegistry {
             // not move with it. Two comments in ToolchainManager were updated to
             // say "about 155 MB" while this stayed at 146.
             estimatedSize = 156_000_000,
-            downloadSize = 55_400_000,
+            downloadSize = 56_500_000,
             downloadUrl = "https://github.com/rmyndharis/VSCodroid/releases/latest/download/toolchain_java.zip",
         ),
     )

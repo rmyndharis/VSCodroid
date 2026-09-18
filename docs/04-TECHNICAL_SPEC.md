@@ -796,8 +796,8 @@ ToolchainInfo(
     displayName = "Ruby",
     shortLabel = "Ruby",
     descriptionRes = R.string.toolchain_ruby_description,   // "Ruby with irb, gem, bundler"
-    estimatedSize = 36_000_000,   // unpacked, what the free-space gate uses; 35.7 MB measured
-    downloadSize = 9_900_000,     // the ZIP, what the picker quotes to the user
+    estimatedSize = 39_000_000,   // unpacked, what the free-space gate uses; 37.6 MB measured
+    downloadSize = 10_500_000,    // the ZIP, what the picker quotes to the user
     downloadUrl = "https://github.com/rmyndharis/VSCodroid/releases/latest/download/toolchain_ruby.zip",
 )
 ```
@@ -951,7 +951,6 @@ Mapping to VS Code version:
   Both are read by build-vscode-oss.sh and by fetch-vscode-oss.sh, which refuse a
   tree or a tarball that disagrees with them.
 
-  VSCodroid 1.2.0 -> VS Code 1.133.0
 ```
 
 ### 9.2 Update Cadence

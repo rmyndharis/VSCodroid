@@ -631,8 +631,8 @@ Beyond the bundled tools (Node.js, Python, Git, Bash), VSCodroid offers addition
 
 | Language | Download Size | Installed Size | Includes |
 |----------|--------------|----------------|----------|
-| Ruby 3.4 | 9.9 MB | 36 MB | ruby, gem, irb, bundler, rake |
-| Java 17 (OpenJDK) | 55.4 MB | 156 MB | java, javac, jar, jshell |
+| Ruby 4.0 | 10.5 MB | 39 MB | ruby, gem, irb, bundler, rake |
+| Java 17 (OpenJDK) | 56.5 MB | 156 MB | java, javac, jar, jshell |
 
 ### Installing During First Run
 
