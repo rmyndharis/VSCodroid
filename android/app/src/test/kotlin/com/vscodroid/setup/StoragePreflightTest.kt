@@ -245,17 +245,20 @@ class StoragePreflightTest {
      * `EXTRACTED_ASSET_BYTES` is the sum of logical file lengths. What the unpack
      * actually consumes is that sum rounded up to a filesystem block per file,
      * plus a block for each directory it creates, and the slack is the only term
-     * standing for either. Measured over the shipped tree on 2026-08-23: 23,494
-     * files and 5,021 directories, 809.5 MiB logical and 872.8 MiB at 4 KiB
-     * blocks, so 63.3 MiB of rounding from the files alone before the
-     * directories add about 19.6 MiB more. Against that the old 64 MiB asked
-     * 873.5 MiB for an unpack consuming roughly 892 on ext4: the gate passed a
-     * device, the bar ran for minutes, and the write then met ENOSPC, which is
-     * the one direction the constant's own doc names as the one to avoid.
+     * standing for either. Measured over the shipped tree on 2026-09-18, counting
+     * the way BuildConfig.EXTRACTED_ASSET_BYTES counts (assets minus nls): 22,653
+     * files and 5,103 directories, 774.1 MiB logical and 834.3 MiB at 4 KiB
+     * blocks, so 60.1 MiB of rounding from the files alone before the directories
+     * add 19.9 MiB more.
      *
-     * f2fs with inline_data keeps the 17,270 files under ~3.4 KiB inside the
-     * inode and lands near 821 MiB, which is why the shortfall was invisible on
-     * most devices and why the figures below are the ext4 ones.
+     * f2fs is the filesystem that binds, and the figure below is its one, not
+     * ext4's. inline_data does not make a small file free: the node block holding
+     * it is itself a 4 KiB allocation charged against the free space the gate
+     * reads, so f2fs costs ext4 plus a block for every file it does not inline.
+     * 6,343 of those 22,653 files are over the ~3.4 KiB ceiling, which is 24.8 MiB
+     * on top of the 80.1 MiB ext4 pays. Asserting the ext4 figure alone would
+     * leave this case green at any slack down to 81 MiB, which is exactly the
+     * f2fs ENOSPC the constant was raised to 128 MiB for.
      *
      * The counts are recorded rather than walked, deliberately. Walking
      * `src/main/assets` would need an `assumeTrue` for the CI runner, which stubs
@@ -266,20 +269,22 @@ class StoragePreflightTest {
      */
     @Test
     fun `the slack covers the block rounding of the tree this release ships`() {
-        val shippedFiles = 23_494L
-        val shippedDirectories = 5_021L
+        val shippedFiles = 22_653L
+        val shippedDirectories = 5_103L
+        val shippedNonInlined = 6_343L
         val blockBytes = 4_096L
 
-        // 872.8 MiB block-rounded against 809.5 MiB logical, in bytes.
-        val fileRounding = 915_128_320L - 848_756_736L
-        val directoryBlocks = shippedDirectories * blockBytes
-        val overhead = fileRounding + directoryBlocks
+        // 834.3 MiB block-rounded against 774.1 MiB logical, in bytes.
+        val fileRounding = 874_803_200L - 811_745_977L
+        val nodeBlocks = (shippedDirectories + shippedNonInlined) * blockBytes
+        val overhead = fileRounding + nodeBlocks
 
         assertTrue(
             slack >= overhead,
             "the slack is ${slack / mb} MiB against ${overhead / mb} MiB of on-disk overhead " +
-                "for $shippedFiles files and $shippedDirectories directories, so the " +
-                "pre-flight admits a device the unpack then fills",
+                "for $shippedFiles files and $shippedDirectories directories, of which " +
+                "$shippedNonInlined are too large for f2fs to inline, so the pre-flight " +
+                "admits a device the unpack then fills",
         )
     }
 
@@ -576,8 +581,8 @@ class StoragePreflightTest {
      * It is the same `--extensions-dir` the server installs gallery extensions
      * into, and the gate offered the whole of it with a literal `foreignBytes =
      * 0`, which asserts the directory is ours alone. That was worth 60 KB while
-     * everything bundled here was ours; this release bundles five extensions from
-     * the gallery, so the cap that credit is measured against grew 800-fold and a
+     * everything bundled here was ours; this release bundles gallery extensions
+     * too, so the cap that credit is measured against grew 800-fold and a
      * device with any gallery installs at all was credited the whole bundled tree
      * for bytes not one of which was on disk.
      *
