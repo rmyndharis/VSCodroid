@@ -94,7 +94,7 @@ class SupersededExtensionsTest {
         // bundled set does not contain -- dropped before the guard again.
         //
         // Scored with "x" as 0, 5.35.x looks older than the bundled 5.37.0 and
-        // gets deleteRecursively()d, taking a directory the app did not ship.
+        // is swept, taking a directory the app did not ship.
         val present = bundled + "PKief.material-icon-theme-5.35.x"
         assertTrue(
             supersededExtensionDirs(present, bundled).isEmpty(),

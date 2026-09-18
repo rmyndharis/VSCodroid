@@ -3231,13 +3231,13 @@ claude() {
             //   f2fs untested, and it measured the removal rather than this
             //   code.
             //
-            //   `listFiles()` answering null would. deleteRecursively walks
-            //   with it and returns false having removed nothing -- measured in
-            //   a JVM probe. Reachable here only through hardware failure: the
-            //   tree is created by mkdirs moments earlier in this same run, by
-            //   this process, under filesDir, with nothing changing its mode in
-            //   between. A plain file at the path is not this case; the walk
-            //   yields it and removes it.
+            //   `listFiles()` answering null would. [removeExtensionDir] walks
+            //   with it and removes nothing, so the path is still there and
+            //   the line below fires. Reachable here only through hardware
+            //   failure: the tree is created by mkdirs moments earlier in this
+            //   same run, by this process, under filesDir, with nothing
+            //   changing its mode in between. A plain file at the path is not
+            //   this case; the walk yields it and removes it.
             //
             // So the error line below reports a state nobody expects rather
             // than guarding one we do. Usually the extension is still retried
@@ -3298,7 +3298,7 @@ claude() {
             }
             if (!extractAssetDir("extensions/$name", "home/.vscodroid/extensions/$name", progress)) {
                 if (failedUnpackMustBeRemoved(name, existedBefore, marker.isFile) &&
-                    !dest.deleteRecursively()
+                    !removeExtensionDir(dest)
                 ) {
                     Logger.e(
                         tag,
@@ -3320,7 +3320,7 @@ claude() {
         val present = extensionsDir.list()?.toList() ?: emptyList()
         val superseded = supersededExtensionDirs(present, bundled.toList())
         for (name in superseded) {
-            if (File(extensionsDir, name).deleteRecursively()) {
+            if (removeExtensionDir(File(extensionsDir, name))) {
                 Logger.i(tag, "Removed superseded bundled extension: $name")
             }
         }
@@ -3328,7 +3328,7 @@ claude() {
         // Disjoint from superseded by construction: that set is versions of ids
         // still bundled, this one is our ids that stopped being bundled at all.
         for (name in retiredOwnExtensionDirs(present, bundled.toList())) {
-            if (File(extensionsDir, name).deleteRecursively()) {
+            if (removeExtensionDir(File(extensionsDir, name))) {
                 Logger.i(tag, "Removed retired bundled extension: $name")
             }
         }
@@ -3347,7 +3347,7 @@ claude() {
         val owed = retiredIdsToSweep(sweptAlready)
         if (owed.isNotEmpty()) {
             for (name in retiredFetchedExtensionDirs(present, owed)) {
-                if (File(extensionsDir, name).deleteRecursively()) {
+                if (removeExtensionDir(File(extensionsDir, name))) {
                     Logger.i(tag, "Removed a bundled extension this build no longer ships: $name")
                 }
             }
@@ -5383,6 +5383,29 @@ internal fun bundledIdsToRelist(
         // Never bundled before, so there was no copy for the user to remove.
         else -> id !in previouslyBundledIds
     }
+}
+
+/**
+ * Removes an extension directory, unlinking links rather than following them,
+ * and answers whether the path is gone.
+ *
+ * `File.deleteRecursively` asks `isDirectory` and `listFiles`, and both answer
+ * for the target of a link, so it empties whatever a link inside the swept tree
+ * points at before unlinking the link itself. The extensions directory is the
+ * user's: it is what the server is given as `--extensions-dir`, it is
+ * `~/.vscodroid/extensions` in the terminal, and `npm link` or a hand-made link
+ * into a project is an ordinary thing to find under it. Removing a superseded
+ * copy of a bundled extension then took the project's files with it. That is
+ * the same defect [ToolchainManager] fixed for toolchain roots, so this uses the
+ * same link-aware walk.
+ *
+ * The answer is "is it gone", not "did the walk report success": the walk
+ * returns freed bytes, and a directory nothing could remove is exactly what the
+ * callers want to log about.
+ */
+internal fun removeExtensionDir(dir: File): Boolean {
+    StorageManager.deleteRecursive(dir)
+    return !dir.exists() && !Files.isSymbolicLink(dir.toPath())
 }
 
 /**

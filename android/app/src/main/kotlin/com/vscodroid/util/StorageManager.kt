@@ -319,7 +319,11 @@ object StorageManager {
      * somewhere else on the device.
      */
     internal fun deleteRecursive(dir: File): Long {
-        if (!dir.exists()) return 0
+        // exists() resolves a link, so a dangling one answers false and would be
+        // left behind by an early return. It holds no bytes, but a caller that
+        // then asks whether the path is gone is told yes while the link is still
+        // there, so the walk below is entered for it and unlinks it.
+        if (!dir.exists() && !isLink(dir)) return 0
         var freed = 0L
         val stack = ArrayDeque<File>()
         val dirs = ArrayDeque<File>()
