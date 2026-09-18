@@ -79,8 +79,8 @@ class MainThreadWatchTest {
      * Log only, and only the two disk detectors.
      *
      * `penaltyDeath` would kill the debug build within seconds of the editor
-     * loading: the first violation on every launch is `publishedResourceRoots`,
-     * which is deliberate and documented, and the emoji font load androidx.startup
+     * loading: `publishedResourceRoots` reports one on every launch, which is
+     * deliberate and documented, and the emoji font load androidx.startup
      * schedules would trip it for a reason this repository cannot fix.
      * `penaltyDialog` would put a dialog over the workbench during the interaction
      * being investigated.

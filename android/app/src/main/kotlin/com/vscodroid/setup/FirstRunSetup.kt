@@ -409,7 +409,7 @@ class FirstRunSetup(
                     // avoid: it is the same `--extensions-dir` the server
                     // installs gallery extensions into. That was worth 60 KB
                     // while everything bundled here was ours; this release
-                    // bundles five extensions from the gallery and the cap it is
+                    // bundles gallery extensions too and the cap it is
                     // measured against is 46.6 MiB, so a device with any gallery
                     // installs at all was credited the whole bundled tree for
                     // bytes not one of which was on disk. Measured this way the
@@ -1852,13 +1852,16 @@ class FirstRunSetup(
      *    the exports, the aliases and the startup `cd` until Clear Data.
      *
      * That second case needs a rewrite that fails and an append moments later
-     * that succeeds, and no state of the device produces the pair: both go
-     * through the same `.bashrc.tmp~`, and neither payload reaches 4 KiB (the
-     * rewrite roughly 2.3 KB, most of it PROMPT_BLOCK; the append 1.8 KB),
-     * so each wants one inode and one block and a full disk, a quota, an
-     * occupied temporary path or a failing rename stops both alike. It takes
-     * something else freeing a block in between, which is why this is written
-     * down rather than closed.
+     * that succeeds, and no state of the device produces the pair: every one of
+     * them rewrites the whole file through the same `.bashrc.tmp~`, so none can
+     * succeed where the rewrite failed. `createNpmWrappers` writes several times
+     * the rewrite's size, so a disk or a quota that refused the rewrite refuses
+     * it outright; `ensureToolchainEnvSourcing` writes a couple of hundred bytes
+     * against the rewrite's couple of kilobytes, both inside one inode and one
+     * block, so they fail together. An occupied temporary path or a failing
+     * rename is size-independent and stops all three alike. It takes something
+     * else freeing a block in between, which is why this is written down rather
+     * than closed.
      *
      * Closing it would mean testing the empty shape for what an append cannot
      * remove: a `.bashrc` with no `PROJECTS_DIR` export, whatever its first
@@ -2558,16 +2561,16 @@ claude() {
     # which is what an app gets for a syscall bionic does not expose. The CLI's
     # runtime calls epoll_pwait2, absent from SYSCALLS.TXT until android15, and
     # libseccomp-shim.so answers exactly that call so the CLI runs on the older
-    # releases too. Reaching here therefore means the shim did not do its work --
-    # it failed to load, or the runtime found a second call nobody has emulated --
-    # and a bare "Bad system call" would say neither.
+    # releases too. Its handler answers every other refused call with -ENOSYS
+    # rather than letting the signal through, so reaching here means the shim
+    # never loaded, and a bare "Bad system call" would not say so.
     local status=${'$'}?
     if [ "${'$'}status" -eq 159 ]; then
         echo "claude: the CLI was killed for a system call this Android does not" >&2
-        echo "        allow, which libseccomp-shim.so is supposed to answer. Check" >&2
-        echo "        that it sits beside libclaude-launch.so in the app's native" >&2
-        echo "        library directory; if it does, the runtime is asking for a" >&2
-        echo "        call the shim does not cover yet." >&2
+        echo "        allow, which libseccomp-shim.so is supposed to answer. It" >&2
+        echo "        answers every refused call once it is loaded, so check that" >&2
+        echo "        it sits beside libclaude-launch.so in the app's native" >&2
+        echo "        library directory." >&2
     fi
     return ${'$'}status
 }

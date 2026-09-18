@@ -126,10 +126,11 @@ jobs:
       - name: Check every workflow step is runnable and pinned
         run: python3 scripts/check-workflow-steps.py
 
-      # Four gates whose refusal has no file in the tree to fire on: every
+      # Five gates whose refusal has no file in the tree to fire on: every
       # release gate is an allowlist, every bundled executable names Android's
-      # loader, every server tree carries the Copilot CLI licence, and every
-      # patch in patches/ carries a number the manifest can key it by. A
+      # loader, every server tree carries the Copilot CLI licence, every
+      # patch in patches/ carries a number the manifest can key it by, and a
+      # virtualenv's activate script carries the home the app runs from. A
       # refusal that has quietly stopped firing prints exactly what a clean
       # tree prints, so each one is handed the input it exists to refuse, and
       # a control it must accept, on every run.

@@ -164,7 +164,7 @@ if git -C "$ROOT_DIR" rev-parse --git-dir >/dev/null 2>&1; then
         #
         # The digest field must be stripped here as well, or every managed name
         # becomes "<id>-<version>#<hex>", matches no extracted directory, and the
-        # sweep below deletes and re-downloads all five trees on every run.
+        # sweep below deletes and re-downloads every extracted tree on every run.
         entry_tail="${entry#*@}"
         managed="$managed ${entry%%@*}-${entry_tail%%#*}"
     done
@@ -417,7 +417,7 @@ done
 # committed sources.
 #
 # --require-trees because "every" above is a claim this call site can make and
-# the workflow ones cannot: the loop has just placed all five or exited. It is
+# the workflow ones cannot: the loop has just placed all of them or exited. It is
 # the sweep for any future path that ends a run with an extension unplaced,
 # rather than a restatement of the exits above, which stop long before here.
 echo ""

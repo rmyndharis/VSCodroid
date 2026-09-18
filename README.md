@@ -245,7 +245,7 @@ adb install android/app/build/outputs/apk/debug/app-debug.apk
 | RAM usage (typical)                    | ~400-700 MB          |
 
 The install figure is larger than what the app ends up occupying because extraction
-needs room to work: it is the asset tree plus about 101 MB of headroom, which covers
+needs room to work: it is the asset tree plus about 134 MB of headroom, which covers
 the filesystem block rounding a tree of 22,000 files costs. When it refuses to
 start for lack of space it asks for the shortfall it measured, not for the whole
 figure, so a device already holding part of the tree is asked only for what is

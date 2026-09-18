@@ -25,7 +25,7 @@ A practical guide to using VSCodroid -- the full VS Code IDE running natively on
 ### What Happens on First Open
 
 1. **Install**. Download from the [Play Store](#) or [GitHub Releases](https://github.com/rmyndharis/VSCodroid/releases). The core download is roughly 270 MB, and you need about 946 MB free for the extraction that follows.
-2. **Binary extraction** -- On first launch, VSCodroid extracts bundled tools (Node.js, Python, Git, Bash, and others) to internal storage. About 812 MB lands on disk, unpacked one file at a time behind a progress bar, so allow minutes rather than seconds on a slower device. The ~946 MB above is that payload plus the working room setup insists on before it will start. It happens on the first launch and again after every app update, because the extraction is keyed on the app version rather than on what is already unpacked. An update needs far less free space than a fresh install (the app credits what it already holds, so roughly 220 MB rather than 946 MB), but it does re-copy the files and it does take minutes. A first run that is interrupted and retried on the same version is the one case that does not start over: files already the right size are left alone.
+2. **Binary extraction** -- On first launch, VSCodroid extracts bundled tools (Node.js, Python, Git, Bash, and others) to internal storage. About 812 MB lands on disk, unpacked one file at a time behind a progress bar, so allow minutes rather than seconds on a slower device. The ~946 MB above is that payload plus the working room setup insists on before it will start. It happens on the first launch and again after every app update, because the extraction is keyed on the app version rather than on what is already unpacked. An update needs far less free space than a fresh install (the app credits what it already holds, so roughly 260 MB rather than 946 MB), but it does re-copy the files and it does take minutes. A first run that is interrupted and retried on the same version is the one case that does not start over: files already the right size are left alone.
 3. **Language Picker** -- A prompt asks "What do you code in?" with options for Ruby and Java. This is the only time you are *asked*, but not your only chance to choose: touch and hold the app icon and pick **Manage toolchains** to add or remove them later. Whatever you select downloads there on the setup screen, one at a time; a download that fails is skipped and the rest continue. Skip goes straight to the editor.
 4. **Ready** -- The VS Code editor loads with terminal, file explorer, and all bundled tools available immediately.
 
@@ -337,10 +337,11 @@ These extensions come bundled with VSCodroid:
 - **Tailwind CSS IntelliSense** -- Tailwind autocomplete
 - **Python** -- Python language support
 
-VSCodroid also ships four of its own, which do not appear in the marketplace:
+VSCodroid also ships five of its own, which do not appear in the marketplace:
 the Get Started walkthrough, the Android bridge (device folders, the device
-browser, SSH keys and storage), **Serve on Network**, and the process monitor
-in the status bar.
+browser, SSH keys and storage), **Serve on Network**, the process monitor
+in the status bar, and the editor menu entries that add Select All beside Cut,
+Copy and Paste.
 
 VSCodroid opens on the editor's own dark theme, and it is not the only one installed. Nineteen
 colour themes ship with it: the Dark and Light defaults with their Modern and high-contrast
@@ -369,6 +370,8 @@ The Jupyter extension (`ms-toolsai.jupyter`) installs from the Extensions view l
 Notebooks run in a Python virtual environment. Create one in the terminal with `python3 -m venv .venv`, open a `.ipynb` file, choose **Select Kernel**, then **Python Environments...**, and pick that environment. If it does not have `ipykernel` yet, the extension installs it when the first cell runs, which takes about half a minute and needs a network connection. `ipykernel` depends on `psutil`, which PyPI has no Android build of; pip takes it from the prebuilt packages described in [Python Packages Written in C](#python-packages-written-in-c).
 
 If the extension offers to install `jupyter` and `notebook`, decline: that is a Jupyter server, whose dependencies cannot be built here and whose commands Android will not run from the app's storage.
+
+The Android build of that add-on is pointed at by `ZEROMQ_PREBUILD`, which every process VSCodroid starts inherits. A Node project of your own pinned to `zeromq` 5.x or 6.0.x picks it up too, which is what lets it load at all here. To run such a project against its own copy instead, clear the variable for that command: `ZEROMQ_PREBUILD= node app.js`.
 
 ### What Is Not Available
 

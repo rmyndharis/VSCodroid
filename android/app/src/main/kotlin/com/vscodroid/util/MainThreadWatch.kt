@@ -61,6 +61,11 @@ import com.vscodroid.BuildConfig
  *    coroutine's stack rather than on a path of their own, and third rather than
  *    first as an earlier version of this comment claimed.
  *  - The thirteenth is `MainActivity.folderFromUrl` from `onPageFinished`.
+ *  - Read from the code and not yet re-measured: `ProcessManager.markReadyAnnounced`,
+ *    reached from `NodeService.announceReady` on that same coroutine, resolves
+ *    `filesDir` and then stats and reads `files/server/editor-server.pid` on every
+ *    announcement. It arrived after the count above was taken, so the count is the
+ *    launch that was measured rather than the launch this build produces.
  *
  * Judged rather than left open, so nobody re-litigates it: none of the eleven is
  * worth removing. Memoising `filesDir` would take them all, and 37 tests across

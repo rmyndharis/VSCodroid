@@ -389,6 +389,18 @@ class ExtraKeyRow @JvmOverloads constructor(
     private var suppressedForHeight = false
 
     /**
+     * Whether the soft keyboard was up at the last inset dispatch, or null before
+     * the first. The page reads it: the touch menu script keeps focus in the editor
+     * only while the keyboard is up, because that is when moving it resizes the
+     * window.
+     */
+    var imeVisible: Boolean? = null
+        private set
+
+    /** Called on the main thread when [imeVisible] changes. */
+    var onImeVisibilityChanged: ((Boolean) -> Unit)? = null
+
+    /**
      * Whether the user has turned the row off, with VSCodroid: Toggle Extra Key Row.
      *
      * For typing on a hardware keyboard, which carries every key the row offers,
@@ -404,18 +416,6 @@ class ExtraKeyRow @JvmOverloads constructor(
      * as well as on the row. Writing `visibility` here would skip both, and the
      * next letter typed on the soft keyboard would go out as a chord.
      */
-    /**
-     * Whether the soft keyboard was up at the last inset dispatch, or null before
-     * the first. The page reads it: the touch menu script keeps focus in the editor
-     * only while the keyboard is up, because that is when moving it resizes the
-     * window.
-     */
-    var imeVisible: Boolean? = null
-        private set
-
-    /** Called on the main thread when [imeVisible] changes. */
-    var onImeVisibilityChanged: ((Boolean) -> Unit)? = null
-
     var hiddenByUser = false
         set(value) {
             if (field == value) return

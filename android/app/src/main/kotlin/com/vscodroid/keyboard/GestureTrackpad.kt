@@ -219,14 +219,17 @@ class GestureTrackpad @JvmOverloads constructor(
  * initialiser reaches resources and display metrics on its first line, so no
  * JVM unit test can construct one. This is the half that is data, so it can be
  * checked -- and the half worth checking, because a direction that [KeyMapping]
- * does not know is dropped by [KeyInjector] with nothing said.
+ * does not know does not fail loudly: it reaches the page as a different
+ * keystroke.
  *
  * The two halves of each pair are different kinds of string and only one is
  * language. The label is read out as an entry in the actions menu a screen
  * reader offers, so it is a resource id; the direction is a DOM key name the
  * page receives, so it is a literal and must stay one. Translating a direction
  * would send "ArrowLeft" to [KeyMapping] under a name it does not hold, and
- * [KeyInjector] drops what it cannot resolve without saying so.
+ * [KeyMapping.getKeyDefOrLetter] then derives a key from its first letter, so
+ * the page receives a different keystroke rather than none.
+ * `KeyRowAccessibilityTest` fails the build if a direction leaves the table.
  */
 internal val ARROW_ACTIONS: List<Pair<Int, String>> = listOf(
     R.string.trackpad_action_left to "ArrowLeft",

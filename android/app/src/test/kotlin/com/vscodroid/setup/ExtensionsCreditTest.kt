@@ -26,9 +26,9 @@ import java.io.File
  * literal `foreignBytes = 0`, which asserts the directory is ours alone, and
  * `sharedTreeCredit`'s own doc names that as the assumption to avoid.
  *
- * It cost nothing while everything bundled here was ours: four extensions,
+ * It cost nothing while everything bundled here was ours: our own extensions,
  * 60 KB, and the cap the credit is measured against was 60 KB with it. This
- * release bundles five extensions from the gallery and that cap is 46.6 MiB, so
+ * release bundles gallery extensions too and that cap is 46.6 MiB, so
  * a device with any gallery installs at all was credited the whole bundled tree
  * for bytes not one of which was on disk. The slack absorbs it rather than
  * ENOSPC, which is the point: it is 46.6 MiB out of a 64 MiB margin, spent

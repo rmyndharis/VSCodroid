@@ -3,7 +3,7 @@
 
     check-bundled-extensions.py
 
-Five extensions are downloaded from Open VSX and shipped inside the APK.
+Extensions are downloaded from Open VSX and shipped inside the APK.
 `NOTICE.md` carries a table naming them and their licences, and nothing read
 that table: the list and the table are two hand-maintained copies of one fact,
 and adding or dropping an extension only ever touched one of them. They agree
@@ -33,7 +33,7 @@ nothing cannot be read as one that examined all of them.
 
 None and all are the two states a checkout can honestly be in, and a count was
 all that separated them from every state in between. `download-extensions.sh`
-places all five or exits non-zero, so a partial set is not a checkout that has
+places all of them or exits non-zero, so a partial set is not a checkout that has
 not downloaded yet: it is a tree that was built and then lost, which is what
 ships an APK missing an extension `NOTICE.md` still attributes. So the fourth
 rule fails. Zero trees stays a note, because it is the ordinary state of a
@@ -83,8 +83,8 @@ NOTICE_SECTION = "## Bundled VS Code Extensions"
 # the row must not be read as covering what installing it leads to.
 ALLOWED_LICENCES = {"MIT", "Apache-2.0", "BSD-2-Clause", "BSD-3-Clause", "ISC"}
 
-# Case-insensitive, because the five trees do not agree: dbaeumer ships
-# License.txt and the other four ship LICENSE.txt.
+# Case-insensitive, because the extracted trees do not agree: dbaeumer ships
+# License.txt and the others ship LICENSE.txt.
 LICENCE_FILE = re.compile(r"^(licen[sc]e|copying|notice)", re.I)
 
 
