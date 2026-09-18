@@ -44,6 +44,7 @@ def page_problems(manifest, declared):
     abi = "cp" + declared.replace(".", "")
     tag = f"{abi}-{abi}-android_24_arm64_v8a"
     expected = set()
+    problems = []
     for package in manifest.get("packages", []):
         url = package["url"]
         if url.endswith(".deb"):
@@ -72,7 +73,6 @@ def page_problems(manifest, declared):
                 notices.get("sha256"),
             ))
     listed = set()
-    problems = []
     for link in re.findall(r'href="([^"]*)"', page.read_text(encoding="utf-8")):
         href, _, fragment = link.partition("#")
         match = re.fullmatch(r"sha256=([0-9a-f]{64})", fragment)
