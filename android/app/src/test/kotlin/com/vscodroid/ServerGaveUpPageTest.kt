@@ -60,4 +60,83 @@ class ServerGaveUpPageTest {
         assertFalse(escaped.contains("</p>"), "a closing tag survived escaping: $escaped")
         assertTrue(escaped.contains("&lt;a"), "the text should still be readable as text")
     }
+
+    /**
+     * The log block shows the newest lines, with a repeated failure said once.
+     *
+     * This page is reached only after the restart budget is spent, so a failure
+     * that is the same every time has written its line six times by then.
+     * Measured on an emulator with the Node binary removed: the block filled with
+     * six identical copies of one sentence and showed nothing else.
+     */
+    @Test
+    fun `a run of identical lines is shown once, and the newest lines are kept`() {
+        val log = listOf("started", "boom", "boom", "boom", "boom", "boom", "boom")
+
+        assertEquals(listOf("started", "boom"), collapseRuns(log, 20))
+    }
+
+    /**
+     * Collapsing before cutting, which is the order that carries the value.
+     *
+     * Cut first and the six repeats ARE the whole window, so the attempt that
+     * preceded them is dropped and the page shows one sentence with no context.
+     */
+    @Test
+    fun `the collapse happens before the cut, so context survives a long run`() {
+        val log = listOf("started") + List(6) { "boom" }
+
+        // Two lines fit in a window of two only because the run collapsed first.
+        assertEquals(listOf("started", "boom"), collapseRuns(log, 2))
+    }
+
+    /** Only consecutive runs merge: a line recurring later is a new event. */
+    @Test
+    fun `a line that comes back later is not merged with its earlier self`() {
+        val log = listOf("boom", "boom", "restarted", "boom")
+
+        assertEquals(listOf("boom", "restarted", "boom"), collapseRuns(log, 20))
+    }
+
+    /** An empty log is an empty block, not a crash and not a blank line. */
+    @Test
+    fun `an empty log collapses to nothing`() {
+        assertEquals(emptyList<String>(), collapseRuns(emptyList(), 20))
+    }
+
+    /**
+     * Which failures get the log, pinned at the call sites.
+     *
+     * The split is the load-bearing part and it is invisible: both variants draw
+     * the same page, so swapping one call site shows a previous session's log as
+     * the explanation for a foreground-service refusal, or drops the log from the
+     * one failure it was written for. Neither shows up as a test failure anywhere
+     * else, and neither is visible in a diff that only reads the page.
+     */
+    @Test
+    fun `only the spent-restart-budget failures are given the server log`() {
+        val src = SourceScan.withoutComments(
+            SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt")
+        )
+
+        // A refused foreground service: nothing was launched, so the file holds
+        // some earlier session and offering it would explain the wrong thing.
+        for (site in listOf("private fun startAndBindService(", "private fun retryServerStart(")) {
+            val body = SourceScan.body(src, site)
+            assertTrue(body.contains("showServerGaveUp()")) {
+                "$site no longer shows the gave-up page at all"
+            }
+            assertFalse(body.contains("showServerGaveUpWithLog(")) {
+                "$site offers the server log for a foreground-service refusal, which " +
+                    "happens before anything is launched: the log it shows belongs to " +
+                    "an earlier session"
+            }
+        }
+
+        // The restart budget running out, which is what the log describes.
+        assertTrue(src.contains("if (afterRestarts) showServerGaveUpWithLog() else showServerGaveUp()")) {
+            "the onServerGaveUp handler no longer chooses by the flag, so either a " +
+                "STAND_DOWN shows a stale log or a real crash loop shows none"
+        }
+    }
 }

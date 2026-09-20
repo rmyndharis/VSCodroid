@@ -69,6 +69,8 @@ import com.vscodroid.storage.SafStorageManager
 import com.vscodroid.util.Logger
 import com.vscodroid.util.MainThreadWatch
 import com.vscodroid.util.Notices
+import com.vscodroid.util.ServerLog
+import com.vscodroid.util.redactSecrets
 import com.vscodroid.webview.DownloadCoordinator
 import com.vscodroid.webview.DownloadHost
 import com.vscodroid.webview.DownloadOutcome
@@ -76,6 +78,7 @@ import com.vscodroid.webview.VSCodroidWebChromeClient
 import com.vscodroid.webview.VSCodroidWebView
 import com.vscodroid.webview.VSCodroidWebViewClient
 import com.vscodroid.webview.urlLogLabel
+import com.vscodroid.webview.COPY_DIAGNOSTICS_URL
 import com.vscodroid.webview.RETRY_URL
 import com.vscodroid.webview.isWorkbenchPath
 import com.vscodroid.webview.SecretStorageKey
@@ -2088,6 +2091,11 @@ class MainActivity : AppCompatActivity() {
                 }
                 return true
             }
+            if (url == COPY_DIAGNOSTICS_URL) {
+                Logger.i(tag, "Copying the diagnostics from the error page")
+                copyDiagnostics()
+                return true
+            }
             if (url != RETRY_URL) return false
             Logger.i(tag, "Retrying the server from the error page")
             retryServerStart()
@@ -2357,8 +2365,11 @@ class MainActivity : AppCompatActivity() {
         // is killed. What was on screen behind it read "Starting server...", and
         // went on reading that for ever, so the one thing the screen said was the
         // one thing that was no longer true.
-        nodeService?.onServerGaveUp = {
-            runOnUiThread { showServerGaveUp() }
+        nodeService?.onServerGaveUp = { afterRestarts ->
+            // The log is offered only when the restart budget was spent, because
+            // only then did this episode try to run a server. See the callback's
+            // own documentation for the other raiser.
+            runOnUiThread { if (afterRestarts) showServerGaveUpWithLog() else showServerGaveUp() }
         }
         // Stopping the server from the notification leaves this activity showing
         // an editor whose backend is gone, and, because the binding it holds is
@@ -2427,7 +2438,7 @@ class MainActivity : AppCompatActivity() {
                 // happened and carries the only control that can change it.
                 Logger.w(tag, "Server had already given up when this binding arrived")
                 Toast.makeText(this, decision.message, Toast.LENGTH_LONG).show()
-                showServerGaveUp()
+                showServerGaveUpWithLog()
             }
             is BindDecision.Load -> {
                 Logger.i(tag, "Server already serving on port ${decision.port}, loading immediately")
@@ -2452,6 +2463,70 @@ class MainActivity : AppCompatActivity() {
      * already installed.
      */
     private fun showServerGaveUp() = showErrorPage(getString(R.string.error_server_gave_up), RETRY_URL)
+
+    /**
+     * The same page, carrying what the server said before it stopped answering.
+     *
+     * Separate from [showServerGaveUp], and the split is which failures the log
+     * describes rather than a preference. This one is for the terminal state
+     * [NodeService.enterTerminalState] reaches once the restart budget is gone,
+     * where six attempts to run the server happened and `server.log` holds what
+     * they said. [showServerGaveUp] is for a foreground promotion refused before
+     * anything was launched, where that file holds some earlier session and
+     * offering it as the explanation would point at the wrong thing entirely.
+     *
+     * Which of the two a raiser means is carried by `onServerGaveUp`'s flag, and
+     * it has to be: both states reach the same callback and the same page. This
+     * comment claimed instead that both of this function's callers were the
+     * terminal one, which was false: the STAND_DOWN arm of
+     * `NodeService.onStartCommand` raises that callback too.
+     *
+     * One caller is left on this variant that the flag cannot reach:
+     * [BindDecision.ShowGaveUp], which an activity binding after the fact reads
+     * out of `lastStartupNotice()`, and a notice carries only `terminal`. Both
+     * states set it. The asymmetry is deliberate rather than overlooked: the
+     * terminal state keeps the service alive on purpose, so a later bind is the
+     * case it exists for, while STAND_DOWN calls `stopSelf()` in the next line
+     * and its notice is readable only by a bind that lands in the gap before the
+     * service goes. Widening the notice to carry the flag would buy that race and
+     * nothing else.
+     *
+     * It also keeps that refusal synchronous, which matters at one of its call
+     * sites. `startAndBindService` paints this page and then binds on the next
+     * line, and a bind that finds a server already serving navigates over it;
+     * loaded a dispatch later, this page could instead land ON a working editor,
+     * with a retry button offering to restart a healthy server.
+     */
+    private fun showServerGaveUpWithLog() {
+        // Cleared here as well as inside showErrorPage, and that is not belt and
+        // braces: the tail below is read off this thread, so the page is loaded a
+        // dispatch later than this call, and nothing arriving in between should
+        // be told a workbench is up.
+        workbenchLoaded = false
+        lifecycleScope.launch {
+            // Off the main thread, for the reason checkPreviousCrash gives about
+            // the same file: ServerLog.tail reads it whole, up to MAX_BYTES, under
+            // the lock a rotation holds. Small, but it is a file read on the one
+            // screen a user reaches after something has already gone wrong, and
+            // MainThreadWatch is installed by this point precisely to catch it.
+            val detail = withContext(Dispatchers.IO) {
+                ServerLog(File(Environment.getLogsDir(this@MainActivity), "server.log"))
+                    .tail(SERVER_LOG_SCAN_LINES)
+                    // Redacted on the way out as well as on the way in, which is
+                    // the rule `CrashReporter.generateBugReport` states for the
+                    // other reader of this file and gives the reason for: the
+                    // report stays clean whatever else ever writes there, and
+                    // `--logsPath` points the editor server at the same directory.
+                    // This reader needs it more, not less. The clipboard copy is
+                    // at least marked EXTRA_IS_SENSITIVE; this one is drawn on
+                    // screen, where it survives a screenshot and anyone standing
+                    // nearby.
+                    .map { redactSecrets(redactToken(it)) }
+                    .let { collapseRuns(it, SERVER_LOG_LINES) }
+            }
+            showErrorPage(getString(R.string.error_server_gave_up), RETRY_URL, detail.joinToString("\n"))
+        }
+    }
 
     /**
      * Says that the editor kept dying and stops reloading it.
@@ -2504,7 +2579,7 @@ class MainActivity : AppCompatActivity() {
      * the other one the button would be dead, which is the failure RETRY_URL's own
      * documentation records from when it had a private copy per client.
      */
-    private fun showErrorPage(message: String, control: String) {
+    private fun showErrorPage(message: String, control: String, detail: String = "") {
         // The page about to be shown is not the workbench, so nothing arriving
         // afterwards should be told it is. recreateWebView clears this for the
         // same reason when it throws the loaded page away.
@@ -2515,6 +2590,37 @@ class MainActivity : AppCompatActivity() {
         // restarts the server, needs the readiness that follows to load.
         rendererCrashLoopShown = control == RELOAD_URL
         val retry = getString(R.string.error_server_retry)
+        // The diagnostics half of the page, and the two parts of it travel
+        // together on purpose: the log tail says what happened and the button
+        // takes it somewhere a maintainer can read it, and neither is worth
+        // showing alone. A caller that passes no detail gets the page exactly as
+        // it was, which is what keeps [showRendererCrashLoop] unchanged: its
+        // failure is in the renderer, and `server.log` describes a server that is
+        // still running perfectly well.
+        //
+        // The tail is bounded here rather than at the source. `ServerLog.tail`
+        // already takes a line count, but a line is free to be long, and the one
+        // this exists for carries an absolute path; without a height and a scroll
+        // the block pushes the retry button off a phone screen, which is the one
+        // control this page must never lose. `pre-wrap` with `break-all` for the
+        // same path, which has no spaces to break at.
+        //
+        // `column-reverse` on the scrolling box is what puts the END of the log on
+        // screen, and it is load-bearing rather than decoration. Measured on an
+        // emulator: twenty lines of wrapped absolute paths are three times the
+        // height this box allows, so the block opened at the top and showed the
+        // previous healthy session while the six failures that put the page up sat
+        // below the fold. A reverse flex direction starts a scroll container at
+        // what is visually the bottom, which needs no script on a page that
+        // deliberately has none.
+        val diagnostics = if (detail.isBlank()) "" else """
+               <div style="max-height:38vh;overflow:auto;display:flex;flex-direction:column-reverse;
+               margin:1em 0 0;background:#111;border-radius:4px">
+               <pre style="text-align:left;margin:0;padding:.7em;color:#999;font-size:.75em;
+               line-height:1.4;white-space:pre-wrap;word-break:break-all">${escapeHtml(detail)}</pre></div>
+               <p><a href="$COPY_DIAGNOSTICS_URL" style="display:inline-block;margin-top:.6em;
+               padding:.5em 1.2em;background:#333;color:#ccc;text-decoration:none;
+               border-radius:4px;font-size:.9em">${escapeHtml(getString(R.string.crash_copy_report))}</a></p>"""
         // This app deciding to replace a dead editor, which is exactly the
         // distinction navigationIsOurs draws. Unmarked, the workbench's unload
         // veto puts the platform's leave-page modal in front of this load, and
@@ -2531,12 +2637,12 @@ class MainActivity : AppCompatActivity() {
             null,
             """<html><head><meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"></head>
                <body style="background:#1e1e1e;color:#ccc;font-family:sans-serif;
-               display:flex;align-items:center;justify-content:center;height:100vh;margin:0;">
+               display:flex;align-items:center;justify-content:center;min-height:100vh;margin:0;">
                <div style="text-align:center;max-width:32em;padding:1.5em">
                <h2 style="color:#ccc;margin:0 0 .6em">VSCodroid</h2>
                <p style="color:#aaa;line-height:1.5">${escapeHtml(message)}</p>
                <p><a href="$control" style="display:inline-block;margin-top:.8em;padding:.6em 1.4em;
-               background:#0e639c;color:#fff;text-decoration:none;border-radius:4px">${escapeHtml(retry)}</a></p>
+               background:#0e639c;color:#fff;text-decoration:none;border-radius:4px">${escapeHtml(retry)}</a></p>$diagnostics
                </div></body></html>""",
             "text/html", "utf-8", null,
         )
@@ -2941,6 +3047,7 @@ class MainActivity : AppCompatActivity() {
                 }
             },
             onRetryServer = { retryServerStart() },
+            onCopyDiagnostics = { copyDiagnostics() },
             // The application's assets, not this activity's, because the client
             // outlives nothing here but the request it is answering and an
             // AssetManager tied to an activity is one more thing to get wrong on
@@ -5253,6 +5360,61 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
+     * Puts the bug report on the clipboard and says so.
+     *
+     * Two screens reach it and neither can reach the other: the crash dialog,
+     * which needs an uncaught Kotlin exception behind it, and the server-gave-up
+     * page, which is shown when no such exception happened and no workbench ever
+     * loaded. Written twice they would drift on the part that is easy to leave
+     * out, which is the sensitive flag below.
+     *
+     * Suspending rather than launching its own coroutine, because the crash
+     * dialog has work of its own to do after it and that work has to follow the
+     * copy rather than race it.
+     */
+    private suspend fun copyBugReport() {
+        // Off the main thread: generateBugReport reads three crash files and all
+        // of server.log under the lock a rotation holds, and a button fires on
+        // the main thread, which on both of these screens is the one thing the
+        // user is looking at. The clipboard write, the sensitive flag and the
+        // toast come back to Main with the result.
+        val report = withContext(Dispatchers.IO) {
+            CrashReporter.generateBugReport(this@MainActivity)
+        }
+        val clipboard = getSystemService(android.content.ClipboardManager::class.java)
+        val clip = android.content.ClipData.newPlainText("VSCodroid Bug Report", report)
+        // Marked sensitive before it goes anywhere, because of what this clip
+        // holds: [CrashReporter.generateBugReport] gathers the last 200 lines of
+        // server output and the text of the three most recent crash logs. Android
+        // 13 and later draw a preview of whatever is copied, so without this a
+        // crashing session's log is rendered over the editor for anyone looking at
+        // the screen, and the clipboard is readable by every app the user pastes
+        // into next. The preview is suppressed; the paste is unaffected.
+        //
+        // Deliberately not applied to the editor's own copy in [ClipboardBridge].
+        // There the preview confirms what was copied, which is the whole
+        // affordance, and the text is a line the user selected rather than a log
+        // they never read.
+        clip.description.extras = android.os.PersistableBundle().apply {
+            putBoolean(android.content.ClipDescription.EXTRA_IS_SENSITIVE, true)
+        }
+        clipboard.setPrimaryClip(clip)
+        Toast.makeText(this@MainActivity, getString(R.string.crash_report_copied), Toast.LENGTH_SHORT).show()
+    }
+
+    /**
+     * Answers the server-gave-up page's copy button.
+     *
+     * Nothing is cleared afterwards, which is the one way this differs from the
+     * crash dialog's use of [copyBugReport]: the server log is not a record of an
+     * event that has been dealt with, it is the current state of a server that is
+     * still not running, and a second press should hand over the same thing.
+     */
+    private fun copyDiagnostics() {
+        lifecycleScope.launch { copyBugReport() }
+    }
+
+    /**
      * Shows a dialog if the app crashed in a previous session.
      */
     private fun checkPreviousCrash() {
@@ -5266,34 +5428,7 @@ class MainActivity : AppCompatActivity() {
             .setPositiveButton(getString(R.string.crash_dismiss)) { _, _ -> CrashReporter.clearCrashLogs() }
             .setNeutralButton(getString(R.string.crash_copy_report)) { _, _ ->
                 lifecycleScope.launch {
-                    // Off the main thread: generateBugReport reads three crash files
-                    // and all of server.log under the lock a rotation holds, and a
-                    // button fires on the main thread, which is the one screen shown
-                    // after a crash. The clipboard write, the sensitive flag and the
-                    // toast come back to Main with the result.
-                    val report = withContext(Dispatchers.IO) {
-                        CrashReporter.generateBugReport(this@MainActivity)
-                    }
-                    val clipboard = getSystemService(android.content.ClipboardManager::class.java)
-                    val clip = android.content.ClipData.newPlainText("VSCodroid Bug Report", report)
-                    // Marked sensitive before it goes anywhere, because of what this
-                    // clip holds: [CrashReporter.generateBugReport] gathers the last
-                    // 200 lines of server output and the text of the three most recent
-                    // crash logs. Android 13 and later draw a preview of whatever is
-                    // copied, so without this a crashing session's log is rendered
-                    // over the editor for anyone looking at the screen, and the
-                    // clipboard is readable by every app the user pastes into next.
-                    // The preview is suppressed; the paste is unaffected.
-                    //
-                    // Deliberately not applied to the editor's own copy in
-                    // [ClipboardBridge]. There the preview confirms what was copied,
-                    // which is the whole affordance, and the text is a line the user
-                    // selected rather than a log they never read.
-                    clip.description.extras = android.os.PersistableBundle().apply {
-                        putBoolean(android.content.ClipDescription.EXTRA_IS_SENSITIVE, true)
-                    }
-                    clipboard.setPrimaryClip(clip)
-                    Toast.makeText(this@MainActivity, getString(R.string.crash_report_copied), Toast.LENGTH_SHORT).show()
+                    copyBugReport()
                     CrashReporter.clearCrashLogs()
                 }
             }
@@ -5434,6 +5569,33 @@ class MainActivity : AppCompatActivity() {
          * never reaches `loadVSCode`, so the real client is not installed.
          */
         private const val RELOAD_URL = "vscodroid://reload-editor"
+
+        /**
+         * How much of `server.log` the server-gave-up page shows.
+         *
+         * Far fewer than the 200 lines [CrashReporter.generateBugReport] copies,
+         * and the two numbers answer different questions. The report is read by
+         * someone who wants the whole run; the page is read on a phone by someone
+         * who wants to know what broke, and the failures it exists for say it in
+         * their last line or two: a missing program, a missing entry point, a
+         * signal. Twenty leaves room for the throw that preceded it without
+         * turning the page into a log viewer.
+         */
+        private const val SERVER_LOG_LINES = 20
+
+        /**
+         * How much of the file the run above reads before collapsing repeats.
+         *
+         * Wide enough that collapsing a run of identical failures still leaves
+         * the attempt before them, which is the whole point of scanning more than
+         * is shown. `CrashReporter.generateBugReport` happens to take 200 as well;
+         * nothing holds the two in step and neither reads the other, so treat
+         * them as answering the same question rather than as one number.
+         *
+         * Cheap at any width: `ServerLog` caps the file at 256 KiB and this read
+         * happens once, on a screen shown at most once per episode.
+         */
+        private const val SERVER_LOG_SCAN_LINES = 200
 
         /**
          * Every mirror this process has put a watcher on, whether or not one is
@@ -6307,6 +6469,30 @@ internal fun connectionHealthProbe(): String =
         return 'ok';
     })()
     """.trimIndent()
+
+/**
+ * The newest [keep] lines of a log, with runs of the same line collapsed to one.
+ *
+ * Top-level and internal because the page that uses it is a private method on an
+ * Activity and a JVM test cannot reach one, which is the reason [bindDecision]
+ * and [escapeHtml] live out here too: the decision is the part worth pinning.
+ *
+ * Collapsing is what the server-gave-up page needs and the ordinary tail is not.
+ * That page is reached only after six attempts to start the server, so a failure
+ * that is the same every time has written its line six times by then. Measured on
+ * an emulator with the Node binary removed: the block filled with six identical
+ * copies of one sentence and showed nothing else.
+ *
+ * Consecutive runs only, never global. Two attempts that got further print lines
+ * differing in the pid, so nothing merges them, and a line repeating LATER in the
+ * run is a thing happening again, which is exactly what a reader needs to see.
+ *
+ * Collapsed first and cut second, which is the order that matters. Cutting to
+ * [keep] and then collapsing leaves one line on the failure this exists for,
+ * throwing away the attempt that preceded it.
+ */
+internal fun collapseRuns(lines: List<String>, keep: Int): List<String> =
+    lines.filterIndexed { i, line -> i == 0 || line != lines[i - 1] }.takeLast(keep)
 
 /**
  * The five characters that change the meaning of surrounding HTML.

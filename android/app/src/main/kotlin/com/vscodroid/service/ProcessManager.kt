@@ -965,6 +965,20 @@ class ProcessManager(private val context: Context) {
             true
         } catch (e: Exception) {
             Logger.e(tag, "Failed to start server", e)
+            // Mirrored into `server.log`, because this is the one failure that
+            // otherwise writes nothing to it. Every other line in that file comes
+            // from a process: the start summary above is written after the spawn,
+            // and [startOutputReader] drains a pipe that only exists once there is
+            // one. So a spawn that was refused left the file exactly as empty as a
+            // server that had nothing to say, and the two are the ones a reader
+            // most needs to tell apart. The message names the program and the
+            // errno, which is what says whether the binary is missing.
+            //
+            // The class name as well as the message, because `message` is null on
+            // plenty of throwables and the line would then read "Failed to start
+            // server: null", which names nothing and looks like a bug in this
+            // line rather than a report about the one above it.
+            serverLog.append("Failed to start server: ${e.javaClass.simpleName}: ${e.message}")
             false
         }
     }

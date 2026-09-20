@@ -167,11 +167,23 @@ class NodeService : Service() {
      * they call for opposite responses: wait, close, or say the server is not
      * coming and offer a way to try again.
      *
-     * Reached only from [enterTerminalState], which has already called
-     * [stopServingRecoverably], so the service is alive and startable. That is
-     * what makes a retry an honest offer rather than a button that does nothing.
+     * Two raisers, and the flag is which. [enterTerminalState] passes true: the
+     * restart budget is spent, so six attempts to run the server happened and
+     * `server.log` holds what they said. The STAND_DOWN arm of [onStartCommand]
+     * passes false: the foreground promotion was refused before anything was
+     * launched, so nothing in this episode wrote to that file and whatever is in
+     * it belongs to some earlier session. An activity showing a log has to know
+     * the difference or it explains a failure with the wrong evidence.
+     *
+     * This said "Reached only from [enterTerminalState]" until the STAND_DOWN arm
+     * was read against it; that arm has raised this since the arm existed.
+     *
+     * Either way the service is alive and startable, which is what makes a retry
+     * an honest offer rather than a button that does nothing: [enterTerminalState]
+     * has already called [stopServingRecoverably], and STAND_DOWN never started
+     * serving in the first place.
      */
-    var onServerGaveUp: (() -> Unit)? = null
+    var onServerGaveUp: ((afterRestarts: Boolean) -> Unit)? = null
 
     // -- Binder --
 
@@ -264,7 +276,9 @@ class NodeService : Service() {
                 // `stopServingRecoverably` is not reusable here: it calls
                 // `startForeground`, which is the call that just failed.
                 reportStartupNotice(getString(R.string.error_server_start), terminal = true)
-                onServerGaveUp?.invoke()
+                // false: nothing was launched, so `server.log` has nothing from
+                // this episode. See [onServerGaveUp].
+                onServerGaveUp?.invoke(false)
                 stopSelf()
                 START_NOT_STICKY
             }
@@ -1146,7 +1160,7 @@ class NodeService : Service() {
         // that binds after it has to be told too. The notification says the same
         // thing, but the notification is not on screen while the editor is.
         reportStartupNotice(getString(R.string.notification_text_stopped), terminal = true)
-        onServerGaveUp?.invoke()
+        onServerGaveUp?.invoke(true)
     }
 
     /**

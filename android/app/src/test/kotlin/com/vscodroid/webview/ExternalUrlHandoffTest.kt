@@ -156,6 +156,9 @@ class ExternalUrlHandoffTest {
     /** Set by the client's retry callback, so a case can ask whether it fired. */
     private var retried = false
 
+    /** The same, for the copy control beside it on the server-gave-up page. */
+    private var copied = false
+
     private fun request(
         scheme: String, host: String, port: Int, address: String = "",
         fromMainFrame: Boolean = true, withGesture: Boolean = false, path: String = "/"
@@ -260,6 +263,7 @@ class ExternalUrlHandoffTest {
             onCrash = {},
             onPageLoaded = {},
                     onRetryServer = { retried = true },
+            onCopyDiagnostics = { copied = true },
             onHandoffFailed = { uri, error ->
                 announced += uri.scheme to error.javaClass.simpleName
             },
@@ -288,6 +292,41 @@ class ExternalUrlHandoffTest {
         assertTrue(handled, "the navigation was allowed to proceed")
         assertTrue(retried, "the only way off the server-gave-up page did nothing")
         verify(exactly = 0) { context.startActivity(any()) }
+    }
+
+    /**
+     * The second control on that page, answered here for the same reason.
+     *
+     * It is the only route to the server log on a device where the workbench
+     * never loaded, so a session that had reached the editor once and then lost
+     * its server must not be the session where the button is dead. That is the
+     * failure the retry control above records from when it was answered by one
+     * client only.
+     */
+    @Test
+    fun `the copy-diagnostics navigation is answered here, not handed to another app`() {
+        copied = false
+
+        val handled = client.shouldOverrideUrlLoading(
+            view, request("vscodroid", "copy-diagnostics", -1, COPY_DIAGNOSTICS_URL)
+        )
+
+        assertTrue(handled, "the navigation was allowed to proceed")
+        assertTrue(copied, "the only route to the server log did nothing")
+        verify(exactly = 0) { context.startActivity(any()) }
+    }
+
+    /** Gated like the retry, and for a reason of its own: the clip is a log. */
+    @Test
+    fun `a subframe cannot copy the diagnostics`() {
+        copied = false
+
+        client.shouldOverrideUrlLoading(
+            view,
+            request("vscodroid", "copy-diagnostics", -1, COPY_DIAGNOSTICS_URL, fromMainFrame = false)
+        )
+
+        assertFalse(copied, "a page in an iframe put the server log on the clipboard")
     }
 
     /**

@@ -303,6 +303,22 @@ internal fun redactToken(text: String?): String =
 internal const val RETRY_URL = "vscodroid://retry-server"
 
 /**
+ * The navigation the server-gave-up page's second button makes.
+ *
+ * Beside [RETRY_URL] and handled in the same two places for the same reason: the
+ * page carrying it can be put up at any point in the session, so either client
+ * may be the one in force when it is.
+ *
+ * It exists because the log that says why the server would not start is written
+ * to a file inside the app's own data directory and read by exactly one function,
+ * `CrashReporter.generateBugReport`, whose other callers are the workbench bridge
+ * and a dialog gated on a pending Kotlin crash. A server that never came up
+ * satisfies neither, so before this the one failure a user could not diagnose was
+ * the one that left them with nothing else to try.
+ */
+internal const val COPY_DIAGNOSTICS_URL = "vscodroid://copy-diagnostics"
+
+/**
  * Whether [path] is the workbench's own page on its origin.
  *
  * The server serves more than the workbench there: `/vscode-remote-resource`
@@ -729,6 +745,26 @@ class VSCodroidWebViewClient(
     private val onPageLoaded: (String?) -> Unit,
     private val onRetryServer: () -> Unit,
     /**
+     * Asked to put the diagnostics on the clipboard, from the same page
+     * [onRetryServer] is reached from.
+     *
+     * Defaulted, where [onRetryServer] is not, because the tests that build this
+     * class do not build the page this control appears on. Defaulted to a THROW
+     * rather than to nothing, the way [secretStorageKey] below is, and for the
+     * same reason: the failure a silent default produces here is a tap that does
+     * nothing, with no log and no message, on the page whose whole purpose is
+     * being the last route out. Loud at the one moment it is wrong beats quiet
+     * for ever.
+     *
+     * The production construction is in `MainActivity.initBridge`, not
+     * `setupWebView`, which installs the bootstrap client that answers this same
+     * URL. In a file where which client is in force decides everything, naming
+     * the wrong one sends the next reader to the wrong place.
+     */
+    private val onCopyDiagnostics: () -> Unit = {
+        throw IllegalStateException("no copy-diagnostics handler")
+    },
+    /**
      * Told when a URL this app decided to hand away could not be handed away.
      *
      * A constructor parameter for the reason the three above are: this class has
@@ -800,6 +836,17 @@ class VSCodroidWebViewClient(
         if (request.isForMainFrame && url.toString() == RETRY_URL) {
             Logger.i(tag, "Retrying the server from the error page")
             onRetryServer()
+            return true
+        }
+        // Gated on the main frame for the same reason the retry above is: this
+        // client sees subframe navigations from pages built out of workspace
+        // content, and the clip this writes carries the server log. Nothing is
+        // handed to the page either way, so a subframe reaching it would cost a
+        // clipboard write rather than a disclosure, but the narrower rule is the
+        // one this file already keeps.
+        if (request.isForMainFrame && url.toString() == COPY_DIAGNOSTICS_URL) {
+            Logger.i(tag, "Copying the diagnostics from the error page")
+            onCopyDiagnostics()
             return true
         }
         // Before the origin test below lets our own address through. Measured on
