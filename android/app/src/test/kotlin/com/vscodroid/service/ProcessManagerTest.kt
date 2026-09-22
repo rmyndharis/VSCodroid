@@ -1227,6 +1227,36 @@ class ProcessManagerTest {
         )
     }
 
+    @Test
+    fun `the watchdog writes how the server ended to the server log`() {
+        // The two tests above pin the words, and they reach logcat only. The
+        // gave-up page and the bug report both read server.log, so a server
+        // killed by a signal before it printed anything left six start
+        // summaries there and nothing saying how any of them ended.
+        //
+        // Its own manager, because the shared one was built with a relative
+        // logs directory and ServerLog resolves its file at construction.
+        every { Environment.getLogsDir(any()) } returns File(tempDir, "logs").path
+        val watched = ProcessManager(contextMock)
+        watched.serverProcessField = mockk<Process>(relaxed = true) {
+            every { waitFor() } returns 139
+            every { isAlive } returns false
+        }
+        val crashed = CountDownLatch(1)
+        watched.onServerCrashed = { crashed.countDown() }
+
+        ProcessManager::class.java.getDeclaredMethod("startWatchdog")
+            .apply { isAccessible = true }
+            .invoke(watched)
+
+        assertTrue(crashed.await(5, TimeUnit.SECONDS), "the watchdog never reported the exit")
+        assertEquals(
+            listOf("Server killed by SIGSEGV"),
+            File(tempDir, "logs/server.log").takeIf { it.isFile }?.readLines(),
+            "the exit must be in server.log before the crash is reported"
+        )
+    }
+
     // -- Connection token --
 
     @Test

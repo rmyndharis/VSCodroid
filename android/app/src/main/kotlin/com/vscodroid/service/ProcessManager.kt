@@ -1987,19 +1987,28 @@ class ProcessManager(private val context: Context) {
                     Logger.i(tag, "Server shut down gracefully")
                     return@thread
                 }
-                when {
-                    exitCode == 0 -> Logger.i(tag, "Server exited cleanly")
-                    exitCode == 137 -> Logger.w(tag, "Server killed (OOM or phantom limit)")
+                val ending = when {
+                    exitCode == 0 -> "Server exited cleanly"
+                    exitCode == 137 -> "Server killed (OOM or phantom limit)"
                     // The bootstrap reports a killed child as 128 + signal, so any
                     // other signal is named rather than printed as a bare number.
                     // Before, none of these could arrive: the bootstrap collapsed
                     // every signal to a clean zero, so even the 137 branch above
                     // was unreachable.
-                    exitCode in 129..192 -> Logger.w(
-                        tag, "Server killed by ${signalName(exitCode - 128)}"
-                    )
-                    else -> Logger.e(tag, "Server crashed with exit code $exitCode")
+                    exitCode in 129..192 -> "Server killed by ${signalName(exitCode - 128)}"
+                    else -> "Server crashed with exit code $exitCode"
                 }
+                when {
+                    exitCode == 0 -> Logger.i(tag, ending)
+                    exitCode in 129..192 -> Logger.w(tag, ending)
+                    else -> Logger.e(tag, ending)
+                }
+                // Mirrored for the same reason as the refused spawn in
+                // [startServer]: the gave-up page and the bug report read
+                // server.log, and a server killed before it printed anything left
+                // only its start summary there. Before the callback, so the page
+                // that callback may lead to already has the line.
+                serverLog.append(ending)
                 onServerCrashed?.invoke(exitCode)
             } catch (e: InterruptedException) {
                 Logger.d(tag, "Watchdog interrupted")

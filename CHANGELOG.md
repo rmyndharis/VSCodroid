@@ -9,7 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- The screen shown when the development server will not start now shows the last lines of the server log and offers Copy Report. The reason was written only to a file the editor could reach, and the editor was what had failed to open.
+- The screen shown when the development server will not start now shows the last lines of the server log, including how each attempt ended, and offers Copy Report. The reason was written only to a file the editor could reach, and the editor was what had failed to open.
 
 ## [1.4.0] - 2026-09-18
 
