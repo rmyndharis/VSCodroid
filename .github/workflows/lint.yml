@@ -66,10 +66,6 @@ jobs:
       # Gradle from compileSdk, which is why removing it changes no behaviour.
       - name: Set up Android SDK
         uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
-        with:
-          # The action's default also asks for `tools`, which Google's SDK
-          # repository no longer lists, so sdkmanager exits 1 and the job stops.
-          packages: platform-tools
 
       - name: Setup Gradle
         uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
