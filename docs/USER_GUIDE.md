@@ -295,21 +295,45 @@ work:
   a desktop
 - a command that pip or npm installed, inside or outside a virtual environment
 
-The same applies to a task the editor runs from `tasks.json`, of either kind.
-What it does not reach is a program an extension starts itself, outside any
-terminal: an extension's own copy of Git, a language server, or a terminal an
-extension creates with a shell of its own choosing. Those still cannot start a
-file under the app's storage, which is why this guide keeps its `python3 -m`
-advice for that case.
+That covers the app's own storage, and nothing else. An install from before
+1.2.0 whose projects folder is still on shared storage, under
+`Android/data/com.vscodroid/files/projects` (see [Storage](#storage)), keeps
+that folder, and a program or a Git hook stored there still cannot run. A
+folder under `~` that is not `~/projects` is under the app's own storage on
+such an install, and this works there.
 
-One thing shows: a program that asks the system for its own path is told the
-loader's, so a tool that finds its files that way may need to be told where it
-is.
+A task the editor runs from `tasks.json` is covered too, with one distinction.
+A `"type": "shell"` task runs in a shell, so anything it names works as it
+would in a terminal. A `"type": "process"` task starts its command directly,
+and that command itself still has to be a bundled tool, a toolchain command by
+name, or a system program: an absolute path to a program under the app's
+storage fails as the command, with or without the setting. What the command
+starts then reaches your files, so a `python3` task can run `./a.out` or a
+script by its path.
 
-To switch it off, open Settings, choose the **Remote** tab, and set
-`"LD_PRELOAD": null` under `terminal.integrated.env.linux`. That tab edits the
-settings file this app owns, which is where VSCodroid writes the entry; the
-next terminal you open runs without it, and your choice survives updates.
+What it does not reach is a program an extension starts on its own, without a
+terminal: an extension's own copy of Git, or a language server. Those still
+cannot start a file under the app's storage, which is why this guide keeps its
+`python3 -m` advice for that case. A terminal an extension opens is expected to
+carry it, since the setting applies to every terminal the editor creates,
+unless the extension asks for a strict environment of its own.
+
+Two limits show. A `#!` line of the form `#!/usr/bin/env -S ...` fails with
+`env: Unknown option`, because the system's `env` has no `-S`; write
+`#!/usr/bin/env node` or name the interpreter directly. And while such a
+program runs, the terminal tab shows `linker64` as its name, because the system
+loader is what is running it. For the same reason a program that asks the
+system for its own path is told the loader's, so a tool that finds its files
+that way may need to be told where it is.
+
+To switch it off, open Settings, choose the tab labelled **Remote
+[127.0.0.1:13337]** (the port can differ on your device) and, under
+`terminal.integrated.env.linux`, replace the value of `LD_PRELOAD` with
+`null`. That tab edits the settings file this app owns, which is where
+VSCodroid writes the entry; the next terminal you open runs without it, and
+your choice survives relaunches. The same `null` in the **User** tab, which is
+the one Settings opens on, does not switch it off: the app's own file outranks
+it.
 
 ---
 
@@ -469,6 +493,10 @@ git checkout feature-x        # Switch to branch
 ```
 
 VS Code's built-in Source Control panel (Ctrl+Shift+G) also works for staging, committing, and viewing diffs.
+
+`git submodule` commands run, and print a few lines reading
+`git: 'sh-i18n--envsubst' is not a git command` on the way. They are harmless:
+that helper is not bundled, and the command completes without it.
 
 ### SSH Configuration
 
@@ -955,7 +983,8 @@ actually is rather than pretending to be Linux.
 Android refuses to execute any file inside an app's data directory, which is where
 installed toolchains live, so every start of one is handed to the system loader
 instead. In a terminal, and in a task the editor runs, the terminal does that for
-any program (see [What Runs in the Terminal](#what-runs-in-the-terminal)).
+any program the shell or the task's command goes on to start (see
+[What Runs in the Terminal](#what-runs-in-the-terminal)).
 Everywhere else VSCodroid does it two ways: a bash function per command, and a
 small program on `PATH` that every other kind of start finds.
 
@@ -964,14 +993,16 @@ it: typing `ruby` in a terminal, `bash -c`, `sh -c`, a `make` recipe, an npm
 lifecycle script, a VS Code task of either kind, and a process an extension or a
 language server starts directly.
 
-What still fails, when the start comes from an extension rather than from a
-terminal or a task, is a start that names a path instead of a command:
+What still fails is a start that names a path instead of a command, when the
+start comes from an extension or is the command of a `"type": "process"` task
+itself:
 
 - an absolute path such as `$JAVA_HOME/bin/java`, which is not a `PATH` lookup at all
 - a toolchain that forks its own helper by absolute path, which is what the JDK's `lib/jspawnhelper` does
 - a script under the app's storage run by its own path: Android refuses the script file itself, before its `#!` line is ever read. Run it as `ruby script.rb` instead
 
-In a terminal all three work.
+In a terminal, in a shell task, and in whatever a process task's command starts,
+all three work.
 
 `npm` and `npx` are bash functions and nothing else, so those two are still
 reachable only from bash. `sh -c 'npm -v'` fails where `bash -c 'npm -v'` works.

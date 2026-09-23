@@ -474,7 +474,12 @@ never a bare name and never a path into `nativeLibraryDir`: Bionic treats a miss
 a path that a reinstall moves would kill every new terminal until the next repair. The setting is
 `terminal.integrated.env.linux` and not the profile's `env`, because the profile env misses the
 first session after an edit made while the app was stopped and never reaches a `"type": "process"`
-task, while `env.linux` reaches terminals, shell tasks and process tasks and applies live. And the
+task, while `env.linux` reaches terminals, shell tasks and process tasks and applies live. What it
+cannot reach is the pty host's own `execve` of a process task's command, which carries no preload
+because `LD_PRELOAD` is absent from the server environment by design: that command has to be
+exec-able as it is today (a bundled tool, a toolchain name through `tcbin`, or a system program),
+and only the task's children gain the interceptor; an absolute path under `filesDir` as the
+command fails with `execvp(3) failed.: Permission denied` with and without the setting. And the
 three variables the library reads (`TERMUX_APP__DATA_DIR`, `TERMUX_APP__LEGACY_DATA_DIR`, both
 spellings needed because `getcwd` reports `/data/data`, and `TERMUX__PREFIX`) sit in the server
 environment (`Environment.buildProcessEnvironment`), where they are inert until the preload
