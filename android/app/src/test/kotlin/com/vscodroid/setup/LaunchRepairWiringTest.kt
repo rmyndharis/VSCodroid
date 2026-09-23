@@ -80,6 +80,10 @@ class LaunchRepairWiringTest {
         "setupToolSymlinks",
         "setupGitCore",
         "setupGitCaBundle",
+        // Beside the CA bundle, in the same directory: the file OPENSSL_CONF
+        // names, without which Node will not start on a device where Termux
+        // has run (its compiled-in default is Termux's, unreadable from here).
+        "setupOpensslConfig",
         "setupRipgrepVscodeSymlink",
         "setupCopilotAndroidAliases",
         "repairTruncatedSetupFiles",

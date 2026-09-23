@@ -197,6 +197,22 @@ object Environment {
             // does resolve the old hashes keeps working.
             "SSL_CERT_FILE" to "$filesDir/usr/etc/tls/cert.pem",
             "SSL_CERT_DIR" to getSystemCaCertsPath(),
+            // The configuration file libcrypto loads at start, named here
+            // because the default is Termux's. The bundled libcrypto carries
+            // OPENSSLDIR /data/data/com.termux/files/usr/etc/tls compiled in,
+            // so with nothing said it opens that directory's openssl.cnf in
+            // every process. On a device without Termux that open fails with
+            // ENOENT, which OpenSSL ignores, and nobody noticed. On a device
+            // where Termux has run, the directory exists and belongs to
+            // another app, the open fails with EACCES, and Node treats any
+            // error but a missing file as fatal: "OpenSSL configuration
+            // error: ... BIO_new_file:Permission denied ... calling
+            // fopen(/data/data/com.termux/files/usr/etc/tls/openssl.cnf)"
+            // before main(), on all six attempts, and the server-gave-up page
+            // is what the user sees (issue #447, the reporter's own
+            // server.log). The file this names is written on every launch by
+            // FirstRunSetup.setupOpensslConfig, beside the CA bundle above.
+            "OPENSSL_CONF" to "$filesDir/usr/etc/tls/openssl.cnf",
             "NPM_CONFIG_PREFIX" to "$filesDir/usr",
             "NPM_CONFIG_CACHE" to "$cacheDir/npm-cache",
             // Beside npm's, for the same reason: a cache Clear Caches can empty and
