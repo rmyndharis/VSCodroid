@@ -115,26 +115,64 @@ class TerminalPreloadSettingTest {
             assertEquals(document, without(result, "LD_PRELOAD"), "bytes outside the new line changed")
         }
 
+        /**
+         * An object with no property to borrow an indent from nests the line one
+         * level past the key's own line, the level being the document's. The
+         * flat four-space fallback put it flush with the key: valid JSON, and
+         * exactly what an off switch removed through the Settings editor left
+         * behind once the next launch refilled the object, measured on API 33
+         * and 36 emulators, 2026-09-23. Exact bytes, because that is what the
+         * user sees in their file.
+         */
         @Test
-        fun `an empty object gains the line without a trailing comma`() {
+        fun `an empty object at root indent gains the line nested past the key, without a trailing comma`() {
             val result = ensureTerminalPreload(settings(envLinux = "{}"), preload)
 
             requireNotNull(result)
-            assertTrue(
-                result.contains("\"terminal.integrated.env.linux\": {\n    \"LD_PRELOAD\": \"$preload\"},\n"),
-                "an empty object took a trailing comma or the wrong shape:\n$result",
+            assertEquals(
+                settings(envLinux = "{\n        \"LD_PRELOAD\": \"$preload\"}"),
+                result,
+                "an empty object took a trailing comma or the wrong indent:\n$result",
             )
         }
 
         @Test
-        fun `an object whose first entry is a comment falls back to four spaces`() {
+        fun `an object emptied by the Settings editor keeps its blank line and gains the nested line`() {
+            // The shape "Edit in settings.json" leaves after the one entry is
+            // deleted: the object open on the key's line, a blank line, the
+            // close at the key's indent.
+            val document = settings(envLinux = "{\n\n    }")
+
+            val result = ensureTerminalPreload(document, preload)
+
+            requireNotNull(result)
+            assertEquals(settings(envLinux = "{\n        \"LD_PRELOAD\": \"$preload\"\n\n    }"), result)
+        }
+
+        @Test
+        fun `an empty object in a tab-indented document nests one tab past the key`() {
+            // A tab, not two spaces: two spaces plus two is the four-space
+            // fallback again, and a case that passes either way pins nothing.
+            val document = "{\n\t\"editor.fontSize\": 14,\n\t\"terminal.integrated.env.linux\": {\n\t}\n}\n"
+
+            val result = ensureTerminalPreload(document, preload)
+
+            requireNotNull(result)
+            assertEquals(
+                "{\n\t\"editor.fontSize\": 14,\n\t\"terminal.integrated.env.linux\": {\n\t\t\"LD_PRELOAD\": \"$preload\"\n\t}\n}\n",
+                result,
+            )
+        }
+
+        @Test
+        fun `an object whose first entry is a comment nests past the key too`() {
             val document = settings(envLinux = "{\n        // keep\n        \"FOO\": \"bar\"\n    }")
 
             val result = ensureTerminalPreload(document, preload)
 
             requireNotNull(result)
             val line = result.lines().single { it.contains("LD_PRELOAD") }
-            assertEquals("    \"LD_PRELOAD\": \"$preload\",", line)
+            assertEquals("        \"LD_PRELOAD\": \"$preload\",", line)
             assertTrue(result.contains("        // keep\n"), "the comment did not survive:\n$result")
         }
 

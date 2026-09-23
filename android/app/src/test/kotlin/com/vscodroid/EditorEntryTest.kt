@@ -79,6 +79,44 @@ class EditorEntryTest {
         }
     }
 
+    /**
+     * The one launch repair this route runs itself, and where it sits.
+     *
+     * The machine settings name `usr/lib/libtermux-exec.so` in `LD_PRELOAD` for
+     * every terminal, and the linker aborts every exec whose preload it cannot
+     * map, the shell included. Measured on API 33 and 36 emulators, 2026-09-23:
+     * with that file deleted, a direct start of this activity and a launcher
+     * tap that merely resumed it both left it absent, and every terminal the
+     * panel opened died with CANNOT LINK EXECUTABLE until a cold launch through
+     * `SplashActivity` put it back. So this route restores it too, after the
+     * hand-off (a fresh install has no tree to repair into and is leaving
+     * anyway) and before the service, whose first act recreates the terminals
+     * that need it, inside a guard of its own so a full disk costs the repair
+     * and not the launch.
+     */
+    @Test
+    fun `the exec preload is restored on this route, between the hand-off and the server start`() {
+        val lines = code()
+        val handoff = lines.indexOfFirst { it.contains("handOffToSetup()") }
+        val repair = lines.indexOfFirst { it.contains("ensureExecPreload()") }
+        val service = lines.indexOfFirst { it.contains("startAndBindService()") }
+
+        assertTrue(repair >= 0) {
+            "ensureExecPreload() is not called from MainActivity, so an editor reached " +
+                "without SplashActivity runs on whatever the last launch left under " +
+                "usr/lib, and a missing interceptor kills every terminal it opens"
+        }
+        assertTrue(handoff >= 0 && service >= 0) { "the hand-off or the service start is gone; this test is measuring nothing" }
+        assertTrue(repair in (handoff + 1) until service) {
+            "the repair has to run after the hand-off and before the service starts, " +
+                "or the terminals the service recreates are opened against the missing file"
+        }
+        assertEquals("try {", lines[repair - 1].trim()) {
+            "the repair is not guarded on its own, so a full disk turning the write into " +
+                "an exception crashes the editor before it draws"
+        }
+    }
+
     @Test
     fun `the hand-off asks the same question first-run setup answers`() {
         // The control for the case above, and the half more likely to rot: a

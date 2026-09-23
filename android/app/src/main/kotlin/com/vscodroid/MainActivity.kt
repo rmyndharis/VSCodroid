@@ -631,6 +631,29 @@ class MainActivity : AppCompatActivity() {
         // First, because everything below it assumes an extracted tree. See
         // handOffToSetup for what reaching this activity without one costs.
         if (handOffToSetup()) return
+        // One repair from SplashActivity's launch block, and only this one,
+        // because it is the one whose absence is fatal rather than degrading.
+        // The machine settings name usr/lib/libtermux-exec.so in LD_PRELOAD for
+        // every terminal, and the linker aborts every exec whose preload it
+        // cannot map, the shell included. Measured on API 33 and 36 emulators,
+        // 2026-09-23: with the file deleted, a direct start of this activity
+        // and a launcher tap that merely resumed it both left it absent, and
+        // every terminal the panel opened died with CANNOT LINK EXECUTABLE
+        // until a cold launch through SplashActivity put it back. The rest of
+        // that block stays there, for the reason handOffToSetup gives: a folder
+        // may be open here. This one touches nothing a session reads.
+        //
+        // On the main thread, as SplashActivity runs its block, and guarded the
+        // way its repair() guards each one: a full disk turning the write into
+        // an exception costs this repair and not the launch. When the file is
+        // whole it is one asset open and one stat; and it sits ahead of
+        // MainThreadWatch.install() at the tail of this method, so the write,
+        // deliberate, is not a violation the policy logs.
+        try {
+            FirstRunSetup(this).ensureExecPreload()
+        } catch (e: Exception) {
+            Logger.e(tag, "Launch-time refresh of the exec preload failed", e)
+        }
         setContentView(R.layout.activity_main)
 
         // The application context, and that is the whole of what this outlives an
@@ -773,9 +796,9 @@ class MainActivity : AppCompatActivity() {
      * service spawned `libnode.so` five times, each dying on a missing
      * `libz.so.1`, before telling the user the server had crashed repeatedly.
      * The same entry also skips the repairs [SplashActivity] runs on every
-     * launch, so a session reached this way runs on dangling `usr/bin` symlinks
-     * and on `settings.json` paths naming the previous install's native library
-     * directory.
+     * launch, all but the exec preload (see `onCreate`), so a session reached
+     * this way runs on dangling `usr/bin` symlinks and on `settings.json` paths
+     * naming the previous install's native library directory.
      *
      * The filter stays on this activity rather than moving to the splash
      * screen, and that is a decision rather than an omission. A callback

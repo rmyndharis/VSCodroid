@@ -1491,7 +1491,12 @@ class FirstRunSetup(
      * dev case) runs no extraction, so the first build carrying the asset would
      * otherwise be installed over one without it, and [updateSettingsNativeLibPaths]
      * would find no file and write no setting; and a user who removes the file
-     * by hand is one launch from a working terminal rather than one update.
+     * by hand is one launch from a working terminal rather than one update,
+     * whichever activity that launch enters. `MainActivity.onCreate` runs this
+     * repair too, and only this one: a callback intent or a launcher tap that
+     * resumes a live task never passes through SplashActivity, and measured on
+     * API 33 and 36 emulators, 2026-09-23, both left a deleted file absent and
+     * every terminal dead with CANNOT LINK EXECUTABLE until a cold launch.
      *
      * The length check matters as much as the existence check. A file left
      * truncated by a kill or a full disk passes `isFile`, and the linker aborts
@@ -6041,8 +6046,12 @@ private val JSON_STRING = Regex(""""(?:\\.|[^"\\])*"""")
  * user's, which the workbench then resolves in an order this app does not
  * control. The indent is borrowed from the object's first property, as the
  * root insert borrows the document's; an object opening with a comment or
- * holding nothing takes four spaces, the conservative direction the other
- * callers ask for.
+ * holding nothing takes one level past the key's own line instead. The flat
+ * four-space fallback the root insert uses put the line flush with the key
+ * here, which is where an emptied object sits after the off switch is deleted
+ * through the Settings editor and the next launch refills it: valid JSON, and
+ * the wrong shape for a file the user reads. Measured on API 33 and 36
+ * emulators, 2026-09-23.
  *
  * @return the document with the line, or null when there is nothing to write.
  */
@@ -6058,11 +6067,24 @@ internal fun ensureTerminalPreload(content: String, preloadPath: String): String
     val brace = open.range.last
     val close = objectEnd(scan, brace)
     if (close < 0 || scan.substring(brace, close).contains("\"LD_PRELOAD\"")) return null
-    val indent = firstPropertyIndent(content, brace) ?: "    "
+    val indent = firstPropertyIndent(content, brace) ?: nestedIndent(content, open.range.first)
     val comma = if (scan.substring(brace + 1, close).isBlank()) "" else ","
     return content.substring(0, brace + 1) +
         "\n$indent\"LD_PRELOAD\": \"$preloadPath\"$comma" +
         content.substring(brace + 1)
+}
+
+/**
+ * The indent one level past the line holding [key], for a line added inside
+ * an object that has no property of its own to borrow from: the key's own
+ * indent plus the step the document's root properties use, or four spaces
+ * when the root opens with a comment and offers none.
+ */
+private fun nestedIndent(content: String, key: Int): String {
+    val own = content.substring(content.lastIndexOf('\n', key) + 1, key).takeWhile { it == ' ' || it == '\t' }
+    val root = rootBraceIndex(content)
+    val step = (if (root >= 0) firstPropertyIndent(content, root) else null) ?: "    "
+    return own + step
 }
 
 /**
