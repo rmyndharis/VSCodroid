@@ -989,6 +989,35 @@ class FirstRunSetup(
         }
 
     /**
+     * Writes the OpenSSL configuration file `OPENSSL_CONF` names.
+     *
+     * The bundled libcrypto is Termux's build, and with no `OPENSSL_CONF` it
+     * opens `/data/data/com.termux/files/usr/etc/tls/openssl.cnf`, the path
+     * compiled into it. That is harmless on a device without Termux, where the
+     * open fails with ENOENT and OpenSSL carries on. It is fatal on a device
+     * where Termux has run: the directory belongs to another app, the open
+     * fails with EACCES, and Node refuses to start ("OpenSSL configuration
+     * error", before `main()`), six times over, so the user is told the server
+     * crashed repeatedly. Read off the reporter's server.log in issue #447; no
+     * emulator here had Termux on it, which is why it was never seen.
+     *
+     * The content is the smallest complete configuration: it names the default
+     * provider, which is what OpenSSL uses when no file says otherwise, so
+     * nothing changes for a process that was already starting. Rewritten
+     * whenever the bytes differ rather than when the file is missing, because a
+     * half-written file passes an existence check and fails the parser, which
+     * Node treats exactly like the unreadable path this replaces.
+     */
+    fun setupOpensslConfig() {
+        val file = File(context.filesDir, "usr/etc/tls/openssl.cnf")
+        if (file.isFile && runCatching { file.readText() }.getOrNull() == OPENSSL_CONF_CONTENT) return
+        file.parentFile?.mkdirs()
+        writeAtomically(file, { Logger.w(tag, it) }) { out ->
+            out.write(OPENSSL_CONF_CONTENT.toByteArray())
+        }
+    }
+
+    /**
      * Builds the single-file CA bundle git's curl insists on having.
      *
      * The bundled libcurl comes from Termux and carries Termux's compiled-in
@@ -5836,3 +5865,29 @@ internal fun pipConfigContent(pythonMinor: String): String = """$PIP_CONF_HEADER
 find-links = ${wheelhouseUrl(pythonMinor)}
 prefer-binary = true
 """
+
+/**
+ * The OpenSSL configuration [FirstRunSetup.setupOpensslConfig] writes and
+ * `OPENSSL_CONF` names.
+ *
+ * The smallest complete file: it activates the default provider, which is what
+ * OpenSSL 3 uses when no configuration says otherwise, so a process that was
+ * already starting behaves as before. Node looks for a `nodejs_conf` section
+ * and is content when there is none, as it is with Termux's own file. The
+ * first two lines are for whoever finds the file and wonders why it exists.
+ */
+internal val OPENSSL_CONF_CONTENT = """
+    # Written by VSCodroid on every launch; edits here do not survive one.
+    # Named by OPENSSL_CONF because the bundled libcrypto's compiled-in default
+    # is another app's directory, which this app may not read.
+    openssl_conf = openssl_init
+
+    [openssl_init]
+    providers = provider_sect
+
+    [provider_sect]
+    default = default_sect
+
+    [default_sect]
+    activate = 1
+""".trimIndent() + "\n"

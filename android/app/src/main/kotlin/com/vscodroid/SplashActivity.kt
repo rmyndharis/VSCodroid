@@ -103,6 +103,7 @@ class SplashActivity : AppCompatActivity() {
         repair("tool symlinks") { setup.setupToolSymlinks() }
         repair("git core") { setup.setupGitCore() }
         repair("the git CA bundle") { setup.setupGitCaBundle() }
+        repair("the OpenSSL configuration") { setup.setupOpensslConfig() }
         repair("the ripgrep symlink") { setup.setupRipgrepVscodeSymlink() }
         repair("the Copilot aliases") { setup.setupCopilotAndroidAliases() }
         // Before the three below, all of which extend .bashrc only when it
