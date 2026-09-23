@@ -314,8 +314,9 @@ script by its path.
 What it does not reach is a program an extension starts on its own, without a
 terminal: an extension's own copy of Git, or a language server. Those still
 cannot start a file under the app's storage, which is why this guide keeps its
-`python3 -m` advice for that case. A terminal an extension opens is expected to
-carry it, since the setting applies to every terminal the editor creates,
+`python3 -m` advice for that case. A terminal an extension opens carries it
+(measured with the JavaScript Debug Terminal on API 33 and 36 emulators,
+2026-09-23), since the setting applies to every terminal the editor creates,
 unless the extension asks for a strict environment of its own.
 
 Two limits show. A `#!` line of the form `#!/usr/bin/env -S ...` fails with
@@ -730,10 +731,13 @@ javac Main.java
 java Main
 ```
 
-A command a gem installs (`rubocop`, `rails`) works in a terminal the moment
-`gem install` finishes; see [What Runs in the Terminal](#what-runs-in-the-terminal).
-A program an extension starts on its own cannot reach it; run `ruby -S rubocop`
-there.
+A command a gem installs (`rubocop`, `rails`) lands in a folder that is not on
+the terminal's `PATH`, so by its bare name it is reachable after you switch away
+from VSCodroid and back, or on the next launch, which is when the app lists the
+commands installed so far; by its full path under `$GEM_HOME/bin` it runs in a
+terminal the moment `gem install` finishes (see
+[What Runs in the Terminal](#what-runs-in-the-terminal)). A program an extension
+starts on its own cannot reach it either way; run `ruby -S rubocop` there.
 
 ### Removing Toolchains
 
