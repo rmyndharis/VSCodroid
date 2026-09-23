@@ -122,7 +122,9 @@ object Environment {
             // the interception has been measured; from this map it would load
             // under node itself and everything node forks, which has not.
             // ExecPreloadEnvTest pins that absence.
-            "TERMUX_APP__DATA_DIR" to context.applicationInfo.dataDir,
+            // The fallback is the value every device reports; JVM fixtures built
+            // from a bare ApplicationInfo() may leave dataDir unset.
+            "TERMUX_APP__DATA_DIR" to (context.applicationInfo.dataDir ?: "/data/user/0/${context.packageName}"),
             "TERMUX_APP__LEGACY_DATA_DIR" to "/data/data/${context.packageName}",
             "TERMUX__PREFIX" to "$filesDir/usr",
             "NODE_PATH" to "$filesDir/server/vscode-reh/node_modules",

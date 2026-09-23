@@ -64,6 +64,26 @@ class TerminalPreloadSettingTest {
         }
 
         @Test
+        fun `a key mentioned only inside a comment is still absent`() {
+            // Without comments blanked the scan finds the key in the comment,
+            // sees an LD_PRELOAD in the object it opens, and writes nothing: an
+            // install that commented the setting out would never get the line.
+            val document = "{\n" +
+                "    // \"terminal.integrated.env.linux\": { \"LD_PRELOAD\": null },\n" +
+                "    \"editor.fontSize\": 14\n" +
+                "}\n"
+
+            val result = ensureTerminalPreload(document, preload)
+
+            requireNotNull(result) { "a mention inside a comment must not count as the key" }
+            assertTrue(
+                result.contains("\n    \"terminal.integrated.env.linux\": { \"LD_PRELOAD\": \"$preload\" },\n"),
+                "the key was not inserted at root level:\n$result",
+            )
+            assertEquals(document, without(result, "\"LD_PRELOAD\": \"$preload\""), "bytes outside the new line changed")
+        }
+
+        @Test
         fun `a root object opening with a comment falls back to four spaces`() {
             val document = "{\n  // mine\n  \"editor.fontSize\": 14\n}\n"
 
@@ -174,9 +194,12 @@ class TerminalPreloadSettingTest {
         }
 
         @Test
-        fun `comments elsewhere survive byte for byte`() {
+        fun `a commented-out LD_PRELOAD inside the object does not count, and comments survive byte for byte`() {
+            // The mention inside the object is the one that discriminates: read
+            // without comments blanked, it reads as the key already present and
+            // the line is never written.
             val document = settings(
-                envLinux = "{\n        \"FOO\": \"bar\"\n    }",
+                envLinux = "{\n        // \"LD_PRELOAD\": \"/mine.so\"\n        \"FOO\": \"bar\"\n    }",
                 preamble = "    // the user's note, with a brace { in it\n" +
                     "    /* and \"LD_PRELOAD\" in a block */\n",
             )
@@ -184,7 +207,8 @@ class TerminalPreloadSettingTest {
             val result = ensureTerminalPreload(document, preload)
 
             requireNotNull(result) { "a mention inside a comment must not count as the key" }
-            assertEquals(document, without(result, "\"LD_PRELOAD\": \"$preload\""))
+            assertEquals(1, result.lines().count { it.contains("\"LD_PRELOAD\": \"$preload\"") }, "one line, once:\n$result")
+            assertEquals(document, without(result, "\"LD_PRELOAD\": \"$preload\""), "bytes outside the new line changed")
         }
     }
 

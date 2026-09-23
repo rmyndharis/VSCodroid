@@ -126,11 +126,13 @@ class SplashActivity : AppCompatActivity() {
         // changed wheelhouse URL reaches a device already installed.
         repair("the pip configuration") { setup.ensurePipConfig() }
         // Ahead of the settings refresh, which writes the preload's LD_PRELOAD
-        // line only when this file is there. A same-version reinstall runs no
-        // extraction, so without this the first build carrying the library
-        // would land over an install that has no file for the line to name,
-        // and a preload the linker cannot find kills every terminal rather
-        // than degrading one.
+        // line only when this file is there. That guard is what keeps the line
+        // from ever standing alone (a preload the linker cannot find kills
+        // every terminal rather than degrading one); the order is what gets
+        // the file and the line in the same launch. A same-version reinstall
+        // runs no extraction, so with the two reversed the first build carrying
+        // the library would put the file down after the refresh had looked, and
+        // the line would wait for the launch after.
         repair("the exec preload") { setup.ensureExecPreload() }
         repair("the native library paths in settings.json") { setup.updateSettingsNativeLibPaths() }
         // Beside the other idempotent repairs, for the same reason they are

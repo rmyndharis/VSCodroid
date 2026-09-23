@@ -40,7 +40,10 @@ import java.io.File
  * nothing has measured. A well-meant one-row addition beside the three below
  * is exactly how that would happen.
  *
- * Every path here is measured on API 33 and 36 emulators, 2026-09-22/23.
+ * The rows' values and the shape of the preload path are measured on API 33
+ * and 36 emulators, 2026-09-22/23. That the rows reach a terminal from the
+ * server environment, rather than exported through the settings as the probes
+ * did, is the prototype's first device row and not something this file shows.
  */
 class ExecPreloadEnvTest {
 
@@ -140,20 +143,54 @@ class ExecPreloadEnvTest {
      */
     @Test
     fun `a clean install's settings carry the preload in terminal env linux`() {
+        File(Environment.getExecPreloadPath(context)).apply { parentFile!!.mkdirs(); writeText("elf") }
+
+        createDefaultSettings()
+
+        val value = preloadValue(settingsText()) ?: error("env.linux has no LD_PRELOAD:\n${settingsText()}")
+        assertEquals(Environment.getExecPreloadPath(context), value)
+        assertFalse(value.contains("/data/app/"), "the written value names nativeLibraryDir: $value")
+    }
+
+    /**
+     * Bionic aborts every exec whose preload it cannot map, the shell included,
+     * so a build whose assets lack the library (a stale CI cache, a skipped
+     * build script) must write no line at all rather than a line naming a file
+     * that never arrives. The launch-time refresh then adds the line as soon as
+     * the file is there, so an install the library reaches later is one launch
+     * from the feature and never a dead terminal.
+     */
+    @Test
+    fun `without the library on disk no LD_PRELOAD is written, and the refresh adds it once it is`() {
+        createDefaultSettings()
+
+        assertFalse(
+            settingsText().contains("LD_PRELOAD"),
+            "a fresh install wrote a preload for a file that is not there:\n${settingsText()}",
+        )
+
+        File(Environment.getExecPreloadPath(context)).apply { parentFile!!.mkdirs(); writeText("elf") }
+        FirstRunSetup(context).updateSettingsNativeLibPaths()
+
+        assertEquals(Environment.getExecPreloadPath(context), preloadValue(settingsText()))
+    }
+
+    private fun createDefaultSettings() {
         FirstRunSetup::class.java
             .getDeclaredMethod("createDefaultSettings")
             .apply { isAccessible = true }
             .invoke(FirstRunSetup(context))
+    }
 
+    private fun settingsText(): String {
         val settings = File(Environment.getMachineSettingsPath(context))
         assertTrue(settings.isFile, "no settings file was written at $settings")
-        val text = settings.readText()
-
-        val block = text.substringAfter("\"terminal.integrated.env.linux\"", "")
-        assertTrue(block.isNotEmpty(), "the env.linux key is missing:\n$text")
-        val value = Regex("\"LD_PRELOAD\"\\s*:\\s*\"([^\"]+)\"").find(block)?.groupValues?.get(1)
-            ?: error("env.linux has no LD_PRELOAD; block was: ${block.take(200)}")
-        assertEquals(Environment.getExecPreloadPath(context), value)
-        assertFalse(value.contains("/data/app/"), "the written value names nativeLibraryDir: $value")
+        return settings.readText()
     }
+
+    /** The LD_PRELOAD value under the env.linux key, or null when either is absent. */
+    private fun preloadValue(text: String): String? =
+        Regex("\"LD_PRELOAD\"\\s*:\\s*\"([^\"]+)\"")
+            .find(text.substringAfter("\"terminal.integrated.env.linux\"", ""))
+            ?.groupValues?.get(1)
 }

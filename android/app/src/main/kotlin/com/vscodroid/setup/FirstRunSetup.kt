@@ -1499,12 +1499,14 @@ class FirstRunSetup(
      * library is a dead terminal and not a degraded one. `isFile` alone was the
      * obvious guard and is the wrong one.
      *
-     * Ahead of the settings refresh in SplashActivity, and that order is
-     * load-bearing: the refresh writes the LD_PRELOAD line only when this file
-     * is there, so a build that shipped without the asset (a stale CI cache, a
-     * build that skipped `scripts/build-termux-exec.sh`) writes nothing and
-     * degrades to today's behaviour. [extractAssetFile] answers an absent asset
-     * with a debug line and true, which is exactly that.
+     * Ahead of the settings refresh in SplashActivity. The refresh writes the
+     * LD_PRELOAD line only when this file is there, and that guard, not the
+     * order, is what keeps the line from ever standing alone: a build that
+     * shipped without the asset (a stale CI cache, a build that skipped
+     * `scripts/build-termux-exec.sh`) writes nothing and degrades to today's
+     * behaviour, and [extractAssetFile] answers an absent asset with a debug
+     * line and true, which is exactly that. The order is what gets the file
+     * and the line in the same launch rather than one launch apart.
      */
     fun ensureExecPreload() {
         extractAssetFile(
@@ -3123,22 +3125,10 @@ claude() {
         // build off an update service is that the packaged `product.json` carries
         // no `updateUrl` for anything to ask.
         //
-        // `terminal.integrated.env.linux` carries the exec interceptor, and it
-        // is that setting and not the bash profile's own `env` for two measured
-        // reasons (API 33 and 36 emulators, 2026-09-22/23). A profile env is
-        // invisible for the whole first session after the file gained the line
-        // while the app was stopped, because the workbench compares profiles by
-        // name, args, path and the like and never by env, and builds its
-        // startup list from the cached settings; and it never reaches a
-        // `"type": "process"` task, which takes no profile at all. env.linux is
-        // read by the server at every process creation, so it reaches terminals,
-        // shell tasks and process tasks alike and applies live. It is written
-        // here, after `usr/` is extracted, so the first session has both the
-        // line and the file it names; an install that predates it gets the line
-        // from [ensureTerminalPreload] on its next launch. Nothing an extension
-        // spawns without a pty sees either, which is the boundary of terminal
-        // scope. `"LD_PRELOAD": null` in this object is the off switch, and the
-        // refresh leaves a key of any value alone.
+        // `terminal.integrated.env.linux`, the exec interceptor's row, is not in
+        // this template: it is added below, through the same insert that reaches
+        // an install made before the setting existed, and only once the library
+        // is on disk.
         val defaults = """
             {
                 "vscodroid.layout.compactScreen": ${isCompactScreen()},
@@ -3149,9 +3139,6 @@ claude() {
                         "args": [],
                         "icon": "terminal-bash"
                     }
-                },
-                "terminal.integrated.env.linux": {
-                    "LD_PRELOAD": "${Environment.getExecPreloadPath(context)}"
                 },
                 "git.path": "$nativeLibDir/libgit.so",
                 "extensions.verifySignature": false,
@@ -3197,7 +3184,33 @@ claude() {
                 }
             }
         """.trimIndent()
-        return writeAtomically(settingsFile) { it.write(defaults.toByteArray()) }
+        // `terminal.integrated.env.linux` carries the exec interceptor, and it
+        // is that setting and not the bash profile's own `env` for two reasons
+        // measured on API 33 and 36 emulators, 2026-09-22/23. A profile env is
+        // invisible for the whole first session after the file gained the line
+        // while the app was stopped (the workbench compares profiles by name,
+        // args, path and the like and never by env, which is the likely cause
+        // and not a measured one); and it never reaches a `"type": "process"`
+        // task, which takes no profile at all. env.linux is read by the server
+        // at every process creation, so it reaches terminals, shell tasks and
+        // process tasks alike and applies live. Nothing an extension spawns
+        // without a pty sees either, which is the boundary of terminal scope.
+        // `"LD_PRELOAD": null` in this object is the off switch, and the refresh
+        // leaves a key of any value alone.
+        //
+        // Only once the library is on disk, the rule [updateSettingsNativeLibPaths]
+        // follows: a preload the linker cannot find aborts every exec in that
+        // environment, the shell included, so a build whose assets lack the file
+        // (a stale CI cache, a skipped `scripts/build-termux-exec.sh`) must
+        // write no line here, or a fresh install has no working terminal at
+        // all. A fresh install writes this after `usr/` is extracted, so it gets
+        // the file and the line together; an install the file reaches later
+        // gets the line from the refresh on the launch after. One writer of the
+        // line, [ensureTerminalPreload], so the two paths cannot disagree on
+        // its shape.
+        val preloadPath = Environment.getExecPreloadPath(context)
+        val content = if (File(preloadPath).isFile) ensureTerminalPreload(defaults, preloadPath) ?: defaults else defaults
+        return writeAtomically(settingsFile) { it.write(content.toByteArray()) }
     }
 
     private fun extractBundledExtensions() {

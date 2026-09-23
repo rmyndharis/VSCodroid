@@ -38,7 +38,10 @@ import java.util.concurrent.TimeUnit
  * than from `usr/lib`, so the suite does not depend on first-run state, and it
  * is left at the mode the write gives it, 0600 under the app's umask, because
  * that is the mode the extraction leaves the real one in and what the linker
- * has to be able to map. Measured on API 33 and 36 emulators, 2026-09-22/23.
+ * has to be able to map. That 0600 case is what this suite measures for the
+ * first time; the linker's behaviour on a missing preload and the patched
+ * paths below were measured on API 33 and 36 emulators, 2026-09-22/23, with
+ * 755-mode copies of the library.
  */
 @RunWith(AndroidJUnit4::class)
 class ExecPreloadOnDeviceTest {
@@ -173,6 +176,11 @@ class ExecPreloadOnDeviceTest {
      * and a node started through the linker reports `linker64` as its own path,
      * which breaks everything that re-executes `process.execPath`. A link onto
      * the system shell stands in for them so the case needs no extracted tree.
+     *
+     * This case also passes with no preload at all, since the kernel follows
+     * the link to a system file the app may exec, so it holds the direct start
+     * against a regression to upstream's linker route and says nothing about
+     * the library being present; the maps case is what shows it loaded.
      */
     @Test
     fun `a symlink onto a system binary is started as itself`() {
