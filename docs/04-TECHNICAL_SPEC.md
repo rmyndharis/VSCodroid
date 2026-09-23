@@ -463,7 +463,8 @@ a command installed while the app is in front is reachable after switching away 
 shell task and process task the pty host creates gets `LD_PRELOAD` naming
 `usr/lib/libtermux-exec.so` under `filesDir`, through `terminal.integrated.env.linux` in the machine
 settings file this app owns (`Environment.getExecPreloadPath`, written by
-`FirstRunSetup.writeDefaultSettings` and inserted into an existing file on launch). The library is
+`FirstRunSetup.writeDefaultSettings` and inserted into an existing file on launch, in both cases
+only once the library is on disk, so a build whose assets lack it writes no line). The library is
 termux-exec, built from source by `scripts/build-termux-exec.sh` with the repository's patch, and it
 rewrites each `exec*` of a file under the data directory into `/system/bin/linker64 <path>`, which
 is what the Termux build on Google Play does. Three things about the wiring are load-bearing, all

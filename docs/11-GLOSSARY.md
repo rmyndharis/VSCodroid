@@ -45,7 +45,7 @@ Compiling code on one platform (e.g., x86_64 Linux or macOS) to produce binaries
 ### E
 
 **Exec interceptor (termux-exec)**
-`usr/lib/libtermux-exec.so` under `filesDir`, loaded into every terminal and task through `LD_PRELOAD` from `terminal.integrated.env.linux`. It rewrites an `exec` of a file under the app's data directory into `/system/bin/linker64 <path>`, which the policy permits, as the Termux build on Google Play does. Built from the upstream source by `scripts/build-termux-exec.sh`; `"LD_PRELOAD": null` in the same setting turns it off.
+`usr/lib/libtermux-exec.so` under `filesDir`, loaded into every terminal and task through `LD_PRELOAD` from `terminal.integrated.env.linux`. It rewrites an `exec` of a file under the app's data directory into `/system/bin/linker64 <path>`, which SELinux permits, as the Termux build on Google Play does. Built from the upstream source by `scripts/build-termux-exec.sh`; `"LD_PRELOAD": null` in the same setting turns it off.
 
 **Extension Host**
 The VS Code process/thread that runs extensions. It provides the `vscode.*` API namespace and manages extension lifecycle (activation, deactivation). In VSCodroid, it runs as a `worker_thread` instead of a child process.

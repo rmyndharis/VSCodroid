@@ -501,8 +501,10 @@ the termux-core-package commit it links in statically, both fetched as pinned
 upstream tarballs, with the changes in `scripts/termux-exec.patch` applied
 first. It is upstream's code and carries upstream's terms: the Apache-2.0 text
 and the two MIT notices ship at `usr/share/doc/termux-exec`, beside the DEP-5
-`LICENSE` files that say which covers what, and each patched source file opens
-with the modification notice Apache-2.0 section 4(b) asks for.
+`LICENSE` files that say which covers what (their relative links are upstream's
+and do not resolve there; the licence each names is readable in the link text),
+and each patched source file opens with the modification notice Apache-2.0
+section 4(b) asks for.
 
 | Component | Licence | Copyleft | Files shipped |
 |---|---|---|---|

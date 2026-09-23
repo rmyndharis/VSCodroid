@@ -289,7 +289,7 @@ starts each such program through the system's own program loader on your
 behalf, as the Termux build on Google Play does, so from a terminal these all
 work:
 
-- a program you compiled elsewhere or downloaded, run as `./a.out`
+- a program built for Android (with the NDK), run as `./a.out`
 - a script with a `#!` line, run by its own path. That includes a Git hook in a
   repository you cloned, which fires on your first commit there, as it would on
   a desktop
@@ -702,9 +702,10 @@ javac Main.java
 java Main
 ```
 
-A command a gem installs (`rubocop`, `rails`) starts working once you switch away from
-VSCodroid and back, in a new terminal, the same delay as a command pip installs; see
-[Python Command-Line Tools](#python-command-line-tools).
+A command a gem installs (`rubocop`, `rails`) works in a terminal the moment
+`gem install` finishes; see [What Runs in the Terminal](#what-runs-in-the-terminal).
+A program an extension starts on its own cannot reach it; run `ruby -S rubocop`
+there.
 
 ### Removing Toolchains
 
