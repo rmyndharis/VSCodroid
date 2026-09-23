@@ -98,6 +98,12 @@ class LaunchRepairWiringTest {
         // wheelhouse URL reach a device already installed, on the next launch,
         // with no re-extraction.
         "ensurePipConfig",
+        // Ahead of the settings refresh, and that pair is ordered too: the
+        // refresh writes LD_PRELOAD into settings.json only when the library it
+        // names is on disk, so a same-version reinstall that skipped extraction
+        // gets the file first and the line after, never the line alone. The
+        // line alone is fatal to every terminal, not degraded.
+        "ensureExecPreload",
         "updateSettingsNativeLibPaths",
         "ensureProjectsDir",
         // Behind ensureProjectsDir, and that pair is the second ordered one in
