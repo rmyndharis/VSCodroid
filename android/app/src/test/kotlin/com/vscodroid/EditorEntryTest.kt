@@ -117,6 +117,34 @@ class EditorEntryTest {
         }
     }
 
+    /**
+     * The warm route. The activity is `singleTask`, so a launcher tap on a live
+     * task brings it forward without `onCreate`, and the repair there never
+     * runs; `onResume` has to carry it, off the main thread, since the watch
+     * is installed by then.
+     */
+    @Test
+    fun `the exec preload is restored on resume as well, off the main thread`() {
+        val lines = code()
+        val start = lines.indexOfFirst { it.contains("override fun onResume()") }
+        assertTrue(start >= 0) { "MainActivity has no onResume, so a resumed task runs no repair" }
+        val end = (start + 1 until lines.size).firstOrNull { lines[it].contains("override fun ") || lines[it].contains("private fun ") } ?: lines.size
+        val body = lines.subList(start, end)
+        val repair = body.indexOfFirst { it.contains("ensureExecPreload()") }
+
+        assertTrue(repair >= 0) {
+            "onResume does not restore the exec preload, so a launcher tap on a live " +
+                "task leaves a missing interceptor missing and every new terminal dead"
+        }
+        assertTrue(body.take(repair).any { it.contains("Dispatchers.IO") }) {
+            "the resume-time repair runs on the main thread, under the watch onCreate installed"
+        }
+        assertEquals("try {", body[repair - 1].trim()) {
+            "the resume-time repair is not guarded on its own, so a full disk would " +
+                "end the coroutine with an exception nobody logs"
+        }
+    }
+
     @Test
     fun `the hand-off asks the same question first-run setup answers`() {
         // The control for the case above, and the half more likely to rot: a

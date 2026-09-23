@@ -635,20 +635,24 @@ class MainActivity : AppCompatActivity() {
         // because it is the one whose absence is fatal rather than degrading.
         // The machine settings name usr/lib/libtermux-exec.so in LD_PRELOAD for
         // every terminal, and the linker aborts every exec whose preload it
-        // cannot map, the shell included. Measured on API 33 and 36 emulators,
-        // 2026-09-23: with the file deleted, a direct start of this activity
-        // and a launcher tap that merely resumed it both left it absent, and
-        // every terminal the panel opened died with CANNOT LINK EXECUTABLE
-        // until a cold launch through SplashActivity put it back. The rest of
-        // that block stays there, for the reason handOffToSetup gives: a folder
-        // may be open here. This one touches nothing a session reads.
+        // cannot map, the shell included. Measured 2026-09-23 with the file
+        // deleted: a direct start of this activity on API 33 and 36 emulators
+        // left it absent, and every terminal the panel opened died with CANNOT
+        // LINK EXECUTABLE until a cold launch through SplashActivity put it
+        // back. The rest of that block stays there, for the reason
+        // handOffToSetup gives: a folder may be open here. This one touches
+        // nothing a session reads. The warm route, a launcher tap that brings a
+        // live singleTask instance forward without creating it, never reaches
+        // this method at all; onResume carries the same repair for it.
         //
         // On the main thread, as SplashActivity runs its block, and guarded the
         // way its repair() guards each one: a full disk turning the write into
         // an exception costs this repair and not the launch. When the file is
-        // whole it is one asset open and one stat; and it sits ahead of
-        // MainThreadWatch.install() at the tail of this method, so the write,
-        // deliberate, is not a violation the policy logs.
+        // whole this is a stat of the file and a read of the asset's length,
+        // and it sits ahead of MainThreadWatch.install() at the tail of this
+        // method, so on the first onCreate of a process the write, deliberate,
+        // precedes the policy; a later onCreate in the same process runs under
+        // the policy the earlier one installed, which only logs.
         try {
             FirstRunSetup(this).ensureExecPreload()
         } catch (e: Exception) {
@@ -782,6 +786,26 @@ class MainActivity : AppCompatActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         receiveCallbackIntent(intent)
+    }
+
+    override fun onResume() {
+        super.onResume()
+        // The warm half of the repair in onCreate. This activity is singleTask,
+        // so a launcher tap on a live task brings it forward without creating
+        // it, and a callback intent lands in onNewIntent; neither passes
+        // through SplashActivity, and measured on an API 33 emulator,
+        // 2026-09-23, the icon tap left a deleted usr/lib/libtermux-exec.so
+        // absent and every new terminal dead. Off the main thread, because
+        // MainThreadWatch is installed by now and a stat on every resume is
+        // not what it exists to catch. A terminal opened before this finishes
+        // is opened against the old state; the next one is not.
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                FirstRunSetup(applicationContext).ensureExecPreload()
+            } catch (e: Exception) {
+                Logger.e(tag, "Resume-time refresh of the exec preload failed", e)
+            }
+        }
     }
 
     /**
