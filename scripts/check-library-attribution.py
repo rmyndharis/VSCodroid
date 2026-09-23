@@ -178,6 +178,10 @@ LIBRARIES = {
     "libssh.so": ("OpenSSH", "BSD"),
     "libssh-keygen.so": ("OpenSSH", "BSD"),
     "libldmusl.so": ("musl libc", "MIT"),
+    # Built here from pinned upstream source by build-termux-exec.sh, so it is
+    # attributed as upstream's rather than as VSCodroid's: termux-exec-package
+    # is Apache-2.0, and the termux-core-package it links in statically is MIT.
+    "libtermux-exec.so": ("termux-exec", "Apache-2.0, MIT"),
     "libandroid-support.so": ("libandroid-support", "Apache-2.0, MIT"),
     "libandroid-glob.so": ("libandroid-glob", "BSD-3-Clause"),
     "libandroid-posix-semaphore.so": ("libandroid-posix-semaphore", "MIT"),
@@ -259,13 +263,16 @@ TOOLCHAIN_LIBRARIES = {
 #
 # Almost every entry is `usr/share/doc/<termux package>`, which is where
 # `termux_copy_notices` (scripts/lib/termux-packages.sh) places what upstream
-# ships. Two are not, and both are measured rather than assumed:
+# ships. Three are not, the first two measured rather than assumed:
 #
 #   * ripgrep arrives with the server tree rather than from Termux, and
 #     @vscode/ripgrep-universal already carries its LICENSE inside the package;
 #   * musl's Alpine .apk carries no notice at all (three entries: the loader,
 #     the libc symlink, the metadata), so download-musl-loader.sh places
-#     licenses/COPYRIGHT.musl instead.
+#     licenses/COPYRIGHT.musl instead;
+#   * termux-exec never passes through a package here: build-termux-exec.sh
+#     compiles it from the upstream tarballs and copies both LICENSE files and
+#     the texts they point at into usr/share/doc/termux-exec itself.
 #
 # Keyed by component rather than by file, because that is the unit the two
 # attribution documents and LIBRARIES are written in, and because one package's
@@ -289,6 +296,7 @@ NOTICE_DIRS = {
     "tmux": "usr/share/doc/tmux",
     "OpenSSH": "usr/share/doc/openssh",
     "musl libc": "usr/share/doc/musl",
+    "termux-exec": "usr/share/doc/termux-exec",
     "libandroid-support": "usr/share/doc/libandroid-support",
     "libandroid-glob": "usr/share/doc/libandroid-glob",
     "libandroid-posix-semaphore": "usr/share/doc/libandroid-posix-semaphore",
