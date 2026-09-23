@@ -101,6 +101,30 @@ object Environment {
             "TMUX_TMPDIR" to tmpDir,
             "PATH" to path,
             "LD_LIBRARY_PATH" to "$nativeLibDir:$filesDir/usr/lib",
+            // What the exec interceptor reads to tell the app's own paths from
+            // the system's, once a terminal preloads it (see
+            // [getExecPreloadPath]). Inert until then: no bundled ELF reads any
+            // of these, so they change nothing for the server, the extension
+            // host or a language server. They sit here rather than beside
+            // LD_PRELOAD in the terminal setting because this map is the base of
+            // every terminal, task and extension spawn, so the day the preload
+            // is widened past the terminal it is one row and no settings edit.
+            //
+            // Both data-dir spellings are load-bearing. The interceptor decides
+            // from these which files are the app's, and the kernel reports the
+            // working directory as /data/data/<pkg> while applicationInfo says
+            // /data/user/0/<pkg>. With the legacy row unset every relative exec
+            // of a filesDir ELF was refused with 126, however the caller spelled
+            // it, measured on API 33 and 36 emulators, 2026-09-22/23.
+            //
+            // LD_PRELOAD itself is deliberately NOT here. It reaches terminals
+            // and tasks through terminal.integrated.env.linux, which is where
+            // the interception has been measured; from this map it would load
+            // under node itself and everything node forks, which has not.
+            // ExecPreloadEnvTest pins that absence.
+            "TERMUX_APP__DATA_DIR" to context.applicationInfo.dataDir,
+            "TERMUX_APP__LEGACY_DATA_DIR" to "/data/data/${context.packageName}",
+            "TERMUX__PREFIX" to "$filesDir/usr",
             "NODE_PATH" to "$filesDir/server/vscode-reh/node_modules",
             "NODE_OPTIONS" to nodeOptions,
             "SHELL" to shell,
@@ -522,6 +546,43 @@ object Environment {
      */
     fun getTerminalShellPath(context: Context): String =
         "${context.filesDir}/usr/bin/bash"
+
+    /**
+     * The exec interceptor's place under `usr/lib`, the same string relative to
+     * `assets/` and to filesDir, so the extraction and [getExecPreloadPath] name
+     * one file.
+     */
+    const val EXEC_PRELOAD_ASSET = "usr/lib/libtermux-exec.so"
+
+    /**
+     * The exec interceptor a terminal preloads, and the one LD_PRELOAD value
+     * that can be written into a setting.
+     *
+     * It is a Bionic library that catches every exec a shell makes and starts a
+     * file under filesDir, which SELinux refuses to execve, through
+     * `/system/bin/linker64` instead. That is what lets `./a.out`, a `#!/bin/sh`
+     * git hook and a venv's console script run from the terminal. Built by
+     * `scripts/build-termux-exec.sh` into `assets/usr/lib`, extracted with the
+     * rest of `usr/` on every version bump, and re-extracted on any launch that
+     * finds it missing or the wrong length (`FirstRunSetup.ensureExecPreload`).
+     *
+     * A real file under filesDir, and nothing else will do, because Bionic
+     * treats a preload name like a DT_NEEDED: one it cannot find aborts the
+     * exec of every program in that environment, bash and `/system/bin/sh`
+     * included, with `CANNOT LINK EXECUTABLE ... library not found` and no
+     * warning mode. Measured on API 33 and 36 emulators, 2026-09-22/23, for a
+     * missing file and for a dangling link alike: no terminal reaches a prompt
+     * until the file is back. So the path must be one that never moves and
+     * never dangles. Never `nativeLibraryDir`, which Android renames on every
+     * reinstall and which a same-version reinstall reached without Splash
+     * leaves stale with no repair; never a symlink into it, which dangles the
+     * same way; and never a bare name, which resolves through LD_LIBRARY_PATH
+     * and dies the moment a child clears that. What goes stale in a value
+     * here is fatal rather than degraded, unlike every other path in the
+     * settings file.
+     */
+    fun getExecPreloadPath(context: Context): String =
+        "${context.filesDir}/$EXEC_PRELOAD_ASSET"
 
     fun getGitPath(context: Context): String =
         "${context.applicationInfo.nativeLibraryDir}/libgit.so"
