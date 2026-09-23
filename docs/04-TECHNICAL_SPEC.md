@@ -101,7 +101,9 @@ the server cannot run without, and zeromq for the Jupyter extension, against Bio
 
 The first three land inside the packaged `vscode-reh` tree, **not** in `jniLibs/`; `@vscode/spdlog` is replaced by a JavaScript implementation rather than recompiled. That works because SELinux
 denies `execve` under the app's data directory but not `dlopen`, so an addon is loadable from
-`filesDir` even though a binary there cannot be executed. Each of those three is checked against
+`filesDir` even though a binary there cannot be exec'd directly (a preloaded shell starts one
+through the system linker instead; the server and the extension host have no such route). Each of
+those three is checked against
 the `package.json` the server was built with, since an addon compiled for a different Node ABI
 loads and then fails at the first call.
 
@@ -437,6 +439,8 @@ payload to `/system/bin/linker64` the same way the bash functions do. So a bare 
 still does not reach is an absolute-path invocation such as `$JAVA_HOME/bin/java`, a toolchain
 forking its own helper by absolute path (the JDK's `lib/jspawnhelper`), and direct execution of a
 shebang script under `filesDir`, whose own inode is refused before its interpreter is consulted.
+All three hold outside a preloaded shell only: under the exec interceptor described below they run,
+and the table is what the extension host's own spawns, which carry no preload, still go through.
 
 The table is no longer only about toolchains. One row is the app's own: `xdg-open`, the literal
 command every Node browser helper spawns, mapped through `libnode.so` onto `assets/xdg-open.js`.
@@ -447,12 +451,35 @@ The generator also scans `usr/bin` for regular files whose `#!` line names Pytho
 `pip install` writes for a package that ships a command, and gives each one an interpreter row onto
 the `usr/bin/python3` link rather than the `libpython.so` behind it, so `sys.executable` is a path an
 app update does not move. Without it `pip install black` produced a `black` on PATH that answered
-`bad interpreter: Permission denied`, since reaching the interpreter through a shebang means
-`execve` on the script's own inode. Symlinks in that directory are skipped: those are the bundled
-tools, already pointing at ELFs that run. The same scan covers `$GEM_HOME/bin` from the Ruby
-manifest for Ruby-shebang files, which is where `gem install` writes a gem's commands. The rows are
-written by the launch pass and again whenever the editor returns to the foreground, so a command
-installed while the app is in front is reachable after switching away and back.
+`bad interpreter: Permission denied` outside a preloaded shell, since reaching the interpreter
+through a shebang means `execve` on the script's own inode. Symlinks in that directory are skipped:
+those are the bundled tools, already pointing at ELFs that run. The same scan covers `$GEM_HOME/bin`
+from the Ruby manifest for Ruby-shebang files, which is where `gem install` writes a gem's commands.
+Those rows stay because a process the extension host starts has no preload and still needs them.
+The rows are written by the launch pass and again whenever the editor returns to the foreground, so
+a command installed while the app is in front is reachable after switching away and back.
+
+**The exec interceptor is the general route, and it is scoped to the terminal.** Every terminal,
+shell task and process task the pty host creates gets `LD_PRELOAD` naming
+`usr/lib/libtermux-exec.so` under `filesDir`, through `terminal.integrated.env.linux` in the machine
+settings file this app owns (`Environment.getExecPreloadPath`, written by
+`FirstRunSetup.writeDefaultSettings` and inserted into an existing file on launch). The library is
+termux-exec, built from source by `scripts/build-termux-exec.sh` with the repository's patch, and it
+rewrites each `exec*` of a file under the data directory into `/system/bin/linker64 <path>`, which
+is what the Termux build on Google Play does. Three things about the wiring are load-bearing, all
+measured on API 33 and 36 emulators, 2026-09-22/23. The value must be a real file under `filesDir`,
+never a bare name and never a path into `nativeLibraryDir`: Bionic treats a missing or dangling
+`LD_PRELOAD` entry as a missing `DT_NEEDED` and aborts every exec with `CANNOT LINK EXECUTABLE`, so
+a path that a reinstall moves would kill every new terminal until the next repair. The setting is
+`terminal.integrated.env.linux` and not the profile's `env`, because the profile env misses the
+first session after an edit made while the app was stopped and never reaches a `"type": "process"`
+task, while `env.linux` reaches terminals, shell tasks and process tasks and applies live. And the
+three variables the library reads (`TERMUX_APP__DATA_DIR`, `TERMUX_APP__LEGACY_DATA_DIR`, both
+spellings needed because `getcwd` reports `/data/data`, and `TERMUX__PREFIX`) sit in the server
+environment (`Environment.buildProcessEnvironment`), where they are inert until the preload
+appears; `LD_PRELOAD` itself is deliberately not there, because anything the extension host spawns
+without a pty is outside the measured scope. `"LD_PRELOAD": null` in the same setting is the off
+switch, and the launch-time insert leaves a present key alone whatever its value.
 
 ---
 
@@ -961,9 +988,11 @@ a standard dpkg `Packages` index, which is already what `scripts/lib/termux-pack
 and what `scripts/verify-termux-index.sh` anchors to Termux's signing key. No VSCodroid package
 host exists.
 
-> **Constraint that shapes it**: on a Play install every binary has to arrive through Play, so a
-> command that downloads executables from a third-party repository could not run there. Any
-> implementation would be limited to installs that did not come from Play, which is the same split
+> **Constraint that shapes it**: on a Play install every binary the app installs has to arrive
+> through Play, so an app-provided command that downloads executables from a third-party
+> repository could not run there. (A user running `pip install` or `apt`-style tools of their own
+> is a different case; see docs/10-RELEASE_PLAN.md section 5.3.) Any implementation would be
+> limited to installs that did not come from Play, which is the same split
 > `ToolchainManager.shouldUseHttpFallback()` already makes for toolchains.
 
 ---

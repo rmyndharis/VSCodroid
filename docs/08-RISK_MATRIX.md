@@ -137,8 +137,8 @@ that does exist.
 
 **Mitigation**:
 1. **Precedent**: Termux and UserLAnd are on Play Store using same .so technique.
-2. **All binaries via Play Store**: core binaries bundled as .so in the base APK, and the Ruby and Java 17 toolchains delivered as on-demand asset packs the user selects in the Language Picker, with Play handling the download. On a Play install nothing is fetched from a third party, which is the compliance story. A sideloaded install has no Play Asset Delivery, so it downloads the same toolchain ZIPs over HTTPS from this project's GitHub Releases, checked against a published sha256 manifest.
-3. **Prepare justification**: Document for Play Store review as "Educational developer tool, all binaries bundled at build time, no remote code execution."
+2. **Every binary the app installs comes from Play**: core binaries bundled as .so in the base APK, and the Ruby and Java 17 toolchains delivered as on-demand asset packs the user selects in the Language Picker, with Play handling the download. On a Play install the app fetches no executable code from a third party for itself, which is the sentence the policy actually contains. What the user builds or installs in the terminal is the user's, runs inside the sandbox, and is started through the system linker, as the Termux build on Google Play does. A sideloaded install has no Play Asset Delivery, so it downloads the same toolchain ZIPs over HTTPS from this project's GitHub Releases, checked against a published sha256 manifest.
+3. **Prepare justification**: Document for Play Store review as "Developer tool. Everything the app installs is bundled at build time or delivered by Play. Programs the user writes, builds or installs run locally inside the app sandbox with the app's own permissions; nothing listens on the network and nothing runs without the user starting it."
 4. **specialUse service justification**: Clearly explain it as "Local development server for code editor."
 5. **Content rating**: Properly categorize as Developer Tools.
 
@@ -314,5 +314,5 @@ The decisions these risks settled, and what each one buys:
 | Build Code - OSS from the MIT `microsoft/vscode` source | T03, R01 | The pre-built server on Microsoft's update CDN is under terms that do not permit modifying it and redistributing it inside an APK |
 | Extension Host as a `worker_thread` (`patches/0004`) | T01 | A thread costs nothing against the phantom-process limit; a `child_process.fork` costs one |
 | ptyHost as a `worker_thread` (`patches/0003`), one bash per terminal | T01 | Keeps the terminal host off the phantom count while every terminal keeps a real PTY |
-| Core binaries shipped as `.so` in `jniLibs`, toolchains never in the APK | P01, P02 | Extraction with the execute bit is the only supported route, and SELinux refuses `execve` under the data directory |
+| Core binaries shipped as `.so` in `jniLibs`, toolchains never in the APK | P01, P02 | Extraction with the execute bit is the only route for the app's own binaries, and SELinux refuses a direct `execve` under the data directory; a user's program is started through the system linker instead, which the same policy permits |
 | Open VSX, not Microsoft Marketplace | L01 | Microsoft's Marketplace terms do not permit third-party clients |
