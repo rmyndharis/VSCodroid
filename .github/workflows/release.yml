@@ -540,6 +540,15 @@ jobs:
             --scan android/app/src/main/assets/vscode-reh \
             --scan android/app/src/main/assets/extensions
 
+      # The library the terminals preload so a program under the app's own
+      # storage, which SELinux will not execve, starts through the system
+      # linker instead. Built from termux-exec's source with the repository's
+      # patch, into assets/usr/lib, so after the wipe like the shim.
+      - name: Build the exec interceptor
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
+        run: bash scripts/build-termux-exec.sh
+
       # The one binary this repository compiles for the app itself. It is what
       # puts a downloaded toolchain's commands on PATH as real files, so anything
       # that resolves a bare name and execve's the result -- an extension

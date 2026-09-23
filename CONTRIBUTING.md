@@ -63,7 +63,7 @@ This is the order CI uses, and the order matters: each step below notes why.
 
 ```bash
 # 0. Prerequisites. Checks node, git and python3, and exits on a missing
-#    ANDROID_NDK_HOME or CMake rather than letting steps 10 to 13 discover it
+#    ANDROID_NDK_HOME or CMake rather than letting steps 10 to 14 discover it
 #    after twenty minutes of downloading. REQUIRE_NDK=0 skips those two checks.
 ./scripts/setup.sh
 
@@ -113,21 +113,27 @@ python3 scripts/build-nls-bundles.py
     --scan android/app/src/main/assets/vscode-reh \
     --scan android/app/src/main/assets/extensions
 
-# 12. The execution trampoline (requires NDK). Without it a toolchain command
+# 12. The exec interceptor the terminals preload (requires NDK). Built from
+#     termux-exec's source with scripts/termux-exec.patch. Also lands in
+#     assets/usr/lib, so it too comes after step 4. Without it a program under
+#     the app's own storage cannot be started from the terminal.
+./scripts/build-termux-exec.sh
+
+# 13. The execution trampoline (requires NDK). Without it a toolchain command
 #     starts only from bash. It writes only into jniLibs, so it is not bound
 #     by the ordering above.
 ./scripts/build-exec-trampoline.sh
 
-# 13. The Claude Code launcher and seccomp shim (requires NDK). Without them the
+# 14. The Claude Code launcher and seccomp shim (requires NDK). Without them the
 #     Claude Code CLI cannot start. Also writes only into jniLibs.
 ./scripts/build-claude-shim.sh
 
-# 14. (Optional) On-demand toolchains
+# 15. (Optional) On-demand toolchains
 ./scripts/download-ruby.sh
 ./scripts/download-java.sh
 ```
 
-Alternatively, run steps 0 to 13 and the APK build in one go:
+Alternatively, run steps 0 to 14 and the APK build in one go:
 
 ```bash
 ./scripts/build-all.sh
@@ -296,6 +302,7 @@ checkouts differed.
 | `download-musl-loader.sh` | Extracts musl's dynamic loader from the Alpine package. The Claude Code CLI ships as a musl binary and Android has no loader for it. The version comes from the branch index at download time rather than being pinned here, so the run records which one it installed. `ALPINE_BRANCH` must name a branch Alpine still supports: an unsupported one keeps serving a correctly signed index for years, so the signature check alone cannot notice. The index is also refused when it is more than 30 days old (`ALPINE_INDEX_MAX_AGE_DAYS`), read from the tar member time inside the signed bytes | `jniLibs/arm64-v8a/libldmusl.so`, `toolchains/musl/resolved-musl.tsv` |
 | `build-native-addons.sh` | Cross-compiles node-pty, `@parcel/watcher` and `@vscode/sqlite3` for Bionic using the NDK, with 16 KB page alignment, and checks each `.node` against the JavaScript version shipped beside it. Also builds zeromq with a static libzmq (CMake) for the Jupyter extension users install from Open VSX, whose own builds are glibc and musl only; `ZEROMQ_PREBUILD` in `Environment.kt` points that extension at it | `assets/vscode-reh/node_modules/*/build/Release/*.node`, `assets/usr/lib/node-addons/zeromq/` |
 | `build-glibc-shim.sh` | Scans the packaged tree for addons built against glibc and generates versioned stub libraries so Bionic's loader accepts them. Run last: `download-termux-tools.sh` wipes the directory the stubs live in | `assets/usr/lib/libglibc-shim.so` and per-soname stubs |
+| `build-termux-exec.sh` | Cross-compiles termux-exec's `LD_PRELOAD` library with the NDK from the pinned upstream tarballs (termux-exec-package 2.5.0 and the termux-core-package commit it links statically), after applying `scripts/termux-exec.patch` to a fresh tree. Preloaded into the editor's terminals, it turns an `execve()` of a file under the app's own storage, which SELinux refuses, into `/system/bin/linker64 <file>`, which it allows, and resolves `#!` lines the same way; that is how the Termux build on Google Play runs user programs. The patch keeps `LD_*` for `/system` executables, execs a target directly when its realpath leaves the data directory, and falls back to `/system/bin` for `/bin/X` and `/usr/bin/X`. Only the eight `exec*()` entry points may be exported, and the script fails otherwise. Same ordering constraint as the shim above, since it writes into the same directory | `assets/usr/lib/libtermux-exec.so`, `assets/usr/share/doc/termux-exec/` |
 | `build-claude-shim.sh` | Cross-compiles two files with the NDK. `libseccomp-shim.so` is freestanding and is preloaded into the Claude Code CLI: it catches the SIGSYS Android raises for `epoll_pwait2`, which bionic exposes only from android15, and answers it with `epoll_pwait`, so the CLI runs on Android 13 and 14 instead of being killed. `libclaude-launch.so` is what `claudeCode.claudeProcessWrapper` names; it execs musl's loader with `--preload=` naming the shim, because a setting holds a path rather than a loader option, and never through `LD_PRELOAD`, which every Bionic child of the CLI would inherit and crash on. The script refuses a shim that names any library, since one libc in a process that already has another is the failure it exists to avoid | `jniLibs/arm64-v8a/libseccomp-shim.so`, `jniLibs/arm64-v8a/libclaude-launch.so` |
 | `build-exec-trampoline.sh` | Cross-compiles `exec-trampoline.c` with the NDK, 16 KB-aligned, as `libexec-trampoline.so`. One symlink per toolchain command points at it from `usr/libexec/tcbin`, which sits ahead of `usr/bin` on PATH, so a bare-name lookup reaches a file the app may execute instead of a payload SELinux refuses. It reads `toolchain-exec.tsv` and hands the named binary to `/system/bin/linker64`. Without it a toolchain command works only from bash, since the loader indirection exists nowhere else | `jniLibs/arm64-v8a/libexec-trampoline.so` |
 | `package-toolchains.sh` | Zips the toolchain asset-pack directories for the GitHub Release that non-Play installs download from. It takes the list from `ToolchainRegistry.kt` rather than carrying one, refuses a pack whose tree is larger than the `estimatedSize` recorded for it (in 4 KiB blocks, the unit that KDoc's `du -sk` reports, since both install pre-flights reserve against that figure), and a full run first deletes any ZIP the registry names no toolchain for, so a withdrawn one is not published beside the current ones | `toolchain-zips/toolchain_*.zip` |
