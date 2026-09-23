@@ -74,8 +74,7 @@ int main(int argc, char **argv) {
     // the interceptor. Given `--preload=<shim>` alone, the loader ignores the
     // environment variable and the CLI runs while LD_PRELOAD still names the
     // Bionic library. Measured on API 33 and 36 emulators, 2026-09-22/23, with
-    // CLI 2.1.216 (the relocation failure on API 36 with a musl stand-in for
-    // the CLI). So the forwarding gained nothing and broke the CLI whenever a
+    // CLI 2.1.216. So the forwarding gained nothing and broke the CLI whenever a
     // Bionic preload was exported. The variable itself is left in the
     // environment as it arrived, so the Bionic processes the CLI starts (bash,
     // node, git) still load it; an unsetenv() here would take that away from

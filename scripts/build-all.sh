@@ -59,7 +59,7 @@ step 8/11 "Downloading extensions..."
 step 9/11 "Downloading the musl loader..."
 "$SCRIPT_DIR/download-musl-loader.sh"
 
-step 10/11 "Building native addons and the compatibility shim..."
+step 10/11 "Building native addons, the compatibility shim and the exec interceptor..."
 "$SCRIPT_DIR/download-node.sh"
 "$SCRIPT_DIR/build-native-addons.sh"
 "$SCRIPT_DIR/build-glibc-shim.sh" \

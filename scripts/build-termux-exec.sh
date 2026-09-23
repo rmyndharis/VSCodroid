@@ -1,5 +1,10 @@
 #!/usr/bin/env bash
 set -euo pipefail
+# The .o globs below feed llvm-ar in the host's collation order, and the archive
+# member order reaches the link: en_US and C put a different object first, and
+# the two libraries differ in section layout (same size, same exports). Pinned
+# so every host builds what the Ubuntu runner builds.
+export LC_ALL=C
 
 # Builds the exec interceptor the editor's terminals preload.
 #
