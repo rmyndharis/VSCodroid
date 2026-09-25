@@ -297,7 +297,7 @@ until 2026-08-20; the rest have never been in scope.
 | **User Code**   | Source files in workspace             | App-scoped storage, see 5.2. The app uploads none of it. **One shipped component does**: GitHub Copilot Chat, once the user has signed in to GitHub and used it, sends the prompt and the source it attaches as context. Nothing else in this build sends a workspace file anywhere, and a git push is the user's own instruction |
 | **Credentials** | Git passwords, SSH keys, OAuth tokens | App-private internal storage. Not included in backups.                |
 | **Settings**    | VS Code settings, preferences         | App-private internal storage. No sync store is configured in `product.json`, so Settings Sync has nowhere to send them. |
-| **Cache**       | WebView cache, extension cache        | Clearable, the WebView's cache only through Android's own Clear cache or Clear storage: `VSCodroid: Clear Caches` does not reach it. No sensitive data. |
+| **Cache**       | WebView cache, extension cache        | Clearable. The app drops the WebView's cache on the first launch after each update; beyond that only Android's own Clear cache or Clear storage reach it, not `VSCodroid: Clear Caches`. No sensitive data. |
 | **Telemetry**   | None from VSCodroid or the editor build | Nothing is collected or transmitted by this app. The bundled chat extension carries senders of its own, gated on the editor's telemetry level; see 3.1 |
 
 ### 5.2 Data at Rest

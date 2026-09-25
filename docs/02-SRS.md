@@ -378,7 +378,7 @@ Detailed in [API Spec § Android Bridge API](./05-API_SPEC.md#2-a-android-bridge
 
 | Data | Location | Clearable |
 |------|----------|-----------|
-| WebView cache | App cache directory, `webview_vscodroid` | Only through Android's own Clear cache or Clear storage; `VSCodroid: Clear Caches` does not reach it |
+| WebView cache | App cache directory, `webview_vscodroid` | Dropped by the app on the first launch after each update (`MainActivity.dropCacheLeftByEarlierBuild`); otherwise only through Android's own Clear cache or Clear storage, since `VSCodroid: Clear Caches` does not reach it |
 | Extension marketplace cache | App cache directory | Yes |
 | Node.js module cache | App-private node_modules | Yes |
 
