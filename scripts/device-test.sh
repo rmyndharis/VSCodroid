@@ -134,6 +134,16 @@ derive_app_path() {
         "$ROOT_DIR/android/app/src/main/kotlin/com/vscodroid/util/Environment.kt" | head -1
 }
 
+# The log lines first_run_setup waits for, each beside the file that writes it.
+# They are prose, so there is nothing to derive them from; --self-check instead
+# asserts each is still logged. The not-first-run line was reworded once and this
+# suite kept waiting for the old words, so every run against an installed app
+# (--skip-install) spent its whole timeout and then failed a healthy device.
+SETUP_DONE_FIRST_RUN="First-run setup completed"
+SETUP_DONE_FIRST_RUN_SRC="android/app/src/main/kotlin/com/vscodroid/setup/FirstRunSetup.kt"
+SETUP_DONE_LATER_RUN="Not first run, setup is already behind this launch"
+SETUP_DONE_LATER_RUN_SRC="android/app/src/main/kotlin/com/vscodroid/SplashActivity.kt"
+
 derive_shortcut_target() {
     # The activity the launcher shortcut opens, read from the call that publishes
     # it. Bounded to that function because SplashActivity starts MainActivity the
@@ -491,6 +501,18 @@ if $SELF_CHECK; then
             "no ZEROMQ_PREBUILD readable in Environment.kt; the zeromq addon check would look nowhere"
     fi
 
+    for marker in "$SETUP_DONE_FIRST_RUN|$SETUP_DONE_FIRST_RUN_SRC" \
+                  "$SETUP_DONE_LATER_RUN|$SETUP_DONE_LATER_RUN_SRC"; do
+        marker_text=${marker%%|*}
+        marker_src=${marker#*|}
+        if grep -qF "\"$marker_text" "$ROOT_DIR/$marker_src"; then
+            pass "setup log line (\"$marker_text\", from ${marker_src##*/})"
+        else
+            fail "setup log line" \
+                "\"$marker_text\" is not logged by $marker_src; first_run_setup would wait out its timeout"
+        fi
+    done
+
     SHORTCUT_TARGET=$(derive_shortcut_target)
     if [ -n "$SHORTCUT_TARGET" ]; then
         pass "toolchain shortcut target ($SHORTCUT_TARGET, from SplashActivity.kt)"
@@ -815,16 +837,15 @@ fi
 # ═══════════════════════════════════════════════════════════════════
 # TEST 6: first_run_setup
 # ═══════════════════════════════════════════════════════════════════
-# Wait for first-run setup to complete.
-# On first run: VSCodroid.FirstRunSetup logs "First-run setup completed"
-# On subsequent runs: VSCodroid.SplashActivity logs "Not first run, launching main"
+# Wait for first-run setup to complete: FirstRunSetup logs SETUP_DONE_FIRST_RUN
+# on a first run, SplashActivity logs SETUP_DONE_LATER_RUN on every later one.
 SETUP_TIMEOUT=$TIMEOUT
 ELAPSED=0
 SETUP_OK=false
 
 while [ $ELAPSED -lt $SETUP_TIMEOUT ]; do
     LOGCAT=$($ADB logcat -d -s VSCodroid.SplashActivity:I VSCodroid.FirstRunSetup:I 2>/dev/null)
-    if echo "$LOGCAT" | grep -q "setup completed\|launching main"; then
+    if echo "$LOGCAT" | grep -qF -e "$SETUP_DONE_FIRST_RUN" -e "$SETUP_DONE_LATER_RUN"; then
         SETUP_OK=true
         break
     fi
