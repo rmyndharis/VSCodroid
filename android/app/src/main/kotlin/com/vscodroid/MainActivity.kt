@@ -1997,8 +1997,9 @@ class MainActivity : AppCompatActivity() {
         webView = findViewById(R.id.webView)
         webView?.let { wv ->
             VSCodroidWebView.configure(wv)
+            dropCacheLeftByEarlierBuild(wv)
             applyWindowInsetsPadding(wv)
-            // Here and not in initBridge, which runs once per server lifecycle
+            // Here and not in initBridge, which does its work once per WebView
             // behind a guard: a WebView with no download listener drops every
             // download on the floor without a word, which is exactly the state
             // this fixes, and a replacement view created for a renderer crash
@@ -2020,6 +2021,35 @@ class MainActivity : AppCompatActivity() {
             rendererCrashLoopShown = false
             wv.loadData(dataUrlSafe(loadingPage()), "text/html", "utf-8")
         }
+    }
+
+    /**
+     * Drops the WebView's HTTP cache once per build, before this build's first page.
+     *
+     * The server sends everything under `/<quality>-<commit>/static`, and the files
+     * of the extensions it serves, with `Cache-Control: public, max-age=31536000`
+     * and no validator, and that path moves only with the VS Code commit. An update
+     * extracts the tree again in place, so a file whose bytes changed at the same
+     * commit keeps its URL and the WebView goes on serving the copy an earlier build
+     * left. Measured on an API 33 emulator (WebView 151): after an update,
+     * `workbench.css` came from the cache while the server held the new file, and
+     * the mobile CSS the server build appends to it has changed more than once under
+     * one commit. The 18 MB `workbench.js` is too big to be cached, which is why the
+     * patches inside it did arrive.
+     *
+     * Only the HTTP cache goes: localStorage, IndexedDB and cookies are separate
+     * stores, so the open workspace, extension state and the sealed secrets are
+     * untouched. The removal runs asynchronously in Chromium; it is issued here, at
+     * WebView setup, and the first workbench load waits for a server that an update
+     * has just had to start from nothing.
+     */
+    private fun dropCacheLeftByEarlierBuild(wv: WebView) {
+        val build = "${BuildConfig.VERSION_NAME}/${BuildConfig.VERSION_CODE}"
+        val clearedFor = workspacePrefs.getString(KEY_WEBVIEW_CACHE_BUILD, null)
+        if (!webViewCacheIsStale(clearedFor, build)) return
+        wv.clearCache(true)
+        workspacePrefs.edit { putString(KEY_WEBVIEW_CACHE_BUILD, build) }
+        Logger.i(tag, "Dropped the WebView cache left by ${clearedFor ?: "no earlier build"}")
     }
 
     /**
@@ -5539,6 +5569,9 @@ class MainActivity : AppCompatActivity() {
         /** Whether the user has hidden the Extra Key Row. Absent means shown. */
         private const val KEY_EXTRA_KEY_ROW_HIDDEN = "extra_key_row_hidden"
 
+        /** The build that last dropped the WebView's HTTP cache, `versionName/versionCode`. */
+        private const val KEY_WEBVIEW_CACHE_BUILD = "webview_cache_build"
+
         /**
          * What [KEY_LAST_FOLDER] holds once the user has closed the folder.
          *
@@ -6531,6 +6564,15 @@ internal fun escapeHtml(s: String): String = s
 internal fun dataUrlSafe(html: String): String = html
     .replace("%", "%25")
     .replace("#", "%23")
+
+/**
+ * Whether the WebView's HTTP cache may still hold what an earlier build's server
+ * tree served, given the build that last dropped it.
+ *
+ * Any change of build counts, a versionCode alone included, because that is what
+ * makes setup extract the tree again.
+ */
+internal fun webViewCacheIsStale(clearedFor: String?, build: String): Boolean = clearedFor != build
 
 /**
  * A folder name read straight off a SAF tree URI, for the moment before the
