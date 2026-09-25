@@ -22,8 +22,10 @@ set -euo pipefail
 #
 # The two fit together neatly because resolveClaudeBinary() passes the resolved
 # binary path as the wrapper's first argument, which is already the loader's
-# calling convention -- so claudeCode.claudeProcessWrapper points straight at
-# this file and no shim script sits in between.
+# calling convention. claudeCode.claudeProcessWrapper still names a launcher
+# rather than this file: libclaude-launch.so (scripts/claude-launch.c) execs
+# this loader with --preload=libseccomp-shim.so, which the CLI needs below
+# Android 15.
 #
 # musl is MIT, so unlike the CLI itself this is ours to redistribute.
 

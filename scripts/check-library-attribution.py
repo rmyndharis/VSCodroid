@@ -4,11 +4,13 @@
     check-library-attribution.py
 
 Every shared library under `assets/usr/lib` and every executable under
-`jniLibs/arm64-v8a` is redistributed inside the APK, and all of them arrive from
-Termux or Alpine rather than from this repository. Permissive licences require
-their notice to travel with the binary; GPL and LGPL additionally require an
-offer of the corresponding source. Neither obligation is discharged by code, so
-nothing in the build could previously notice when one went unmet.
+`jniLibs/arm64-v8a` is redistributed inside the APK, and nearly all of them
+arrive from Termux or Alpine. The exceptions are ripgrep, copied out of the
+server tree, and the few built from this repository's own source, which
+LIBRARIES marks "VSCodroid". Permissive licences require their notice to travel
+with the binary; GPL and LGPL additionally require an offer of the corresponding
+source. Neither obligation is discharged by code, so nothing in the build could
+previously notice when one went unmet.
 
 Those two directories are not the whole of what ships. They are the top level of
 two directories, and the scan read only that: `assets/usr/lib/git-core/` holds

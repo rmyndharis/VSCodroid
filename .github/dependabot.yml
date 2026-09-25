@@ -10,9 +10,10 @@
 # would have aged silently, which is a slower version of the problem they were
 # added to solve.
 #
-# Only github-actions. Gradle and npm dependencies here are resolved by lockfiles
-# and by scripts that verify their own digests, and opening that surface is a
-# separate decision with a separate review burden.
+# Only github-actions. Gradle dependencies here are pinned by version in the
+# version catalog, npm ones by upstream's lockfile and by scripts that verify
+# their own digests, and opening that surface is a separate decision with a
+# separate review burden.
 version: 2
 updates:
   - package-ecosystem: github-actions

@@ -4,7 +4,7 @@ set -euo pipefail
 # Download pre-built extensions from Open VSX and extract them into
 # android/app/src/main/assets/extensions/ for bundling in the APK.
 #
-# Each extension becomes a directory like PKief.material-icon-theme-5.17.0/
+# Each extension becomes a directory like esbenp.prettier-vscode-12.4.0/
 # which FirstRunSetup extracts on device and registers via extensions.json.
 #
 # Compatible with bash 3.2+ (macOS default).

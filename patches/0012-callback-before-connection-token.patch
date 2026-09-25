@@ -1,6 +1,6 @@
 Serve the OAuth callback before the connection token check.
 
-Every extension sign-in ends with the identity provider redirecting the browser
+Every extension sign-in that returns by redirect ends with the browser sent
 to http://127.0.0.1:PORT/<product>/callback. On a desktop that request lands in
 the same browser that has the workbench open, so it carries the vscode-tkn
 cookie and the token check passes. On Android it does not. The provider is

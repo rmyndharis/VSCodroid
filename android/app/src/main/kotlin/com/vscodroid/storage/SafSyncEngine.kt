@@ -40,11 +40,12 @@ import kotlin.concurrent.thread
  * under a `.device-<time>` name before a newer mirror copy is written over it;
  * [setAsideDeviceCopy] says when.
  * External changes are picked up the next time the folder is opened, which is
- * the only refresh that exists: there is no "Refresh from device" action, and nothing
- * clears a mirror from inside the app either. Reopening also removes mirror files
- * for documents deleted on the device, under the conditions [reconcileDeletions]
- * spells out, and puts onto the device the files only the mirror has, under the
- * conditions [uploadMirrorOnlyDocuments] spells out.
+ * the only refresh that exists: there is no "Refresh from device" action, and the one
+ * in-app action on a mirror, "VSCodroid: Manage Device Folder Storage", removes the
+ * copy rather than refreshing it. Reopening also removes mirror files for documents
+ * deleted on the device, under the conditions [reconcileDeletions] spells out, and
+ * puts onto the device the files only the mirror has, under the conditions
+ * [uploadMirrorOnlyDocuments] spells out.
  */
 class SafSyncEngine(private val context: Context) {
 

@@ -63,7 +63,7 @@ BUILD_ALL = ROOT / "scripts/build-all.sh"
 # `bash scripts/foo.sh` in a workflow and `"$SCRIPT_DIR/foo.sh"` in build-all.sh
 # both name a script being run. CONTRIBUTING.md is matched on the bare name
 # instead: some of these are described in the script table without ever being a
-# command a contributor types -- build-vscode-oss.sh takes half an hour on an
+# command a contributor types -- build-vscode-oss.sh takes twelve minutes or more on an
 # arm64 runner -- and demanding an invocation line would document a step nobody
 # should follow.
 IN_WORKFLOW = re.compile(r"bash\s+scripts/([\w-]+\.sh)")

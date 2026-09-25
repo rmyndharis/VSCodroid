@@ -125,10 +125,10 @@ class ExtraKeyButton @JvmOverloads constructor(
      *
      * The same gap as [performClick], one gesture over: the popup's only entry
      * was [GestureDetector]'s `onLongPress`, which needs a finger held on the
-     * view, and touch exploration never delivers one. Five of the eight
+     * view, and touch exploration never delivers one. Five of the nine
      * alternates are top-level keys on other pages and one is Shift plus
-     * backtick, but `'` and `\` are on no page at all, so without this they
-     * exist on the row for sighted users only.
+     * backtick, but `)`, `'` and `\` are on no page at all, so without this
+     * they exist on the row for sighted users only.
      *
      * A key with no alternates falls through to `super`, which is what keeps
      * the row honest: those keys advertise no long click, so nothing offers an

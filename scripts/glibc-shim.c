@@ -40,10 +40,10 @@ int *__errno_location(void) { return __errno(); }
 /*
  * The environment, under all three names glibc exports.
  *
- * Bionic keeps `environ` internal to libc rather than exporting it for other
- * shared objects to bind against, so a glibc addon that reads it fails to link
- * even though the data is right there. These are re-exported copies, filled from
- * getenv's view at load time.
+ * Bionic's libc exports `environ` only at its own LIBC version and does not
+ * export `__environ` or `_environ` at all, so a glibc addon that asks libc.so.6
+ * for them at GLIBC_2.17 fails to link even though the data is right there.
+ * These are re-exported copies, filled from /proc/self/environ at load time.
  *
  * The ceiling: they are copies of the pointer, so an addon reading them after
  * the process has called setenv() sees the array as it was. Bionic reallocates
@@ -56,11 +56,10 @@ char **__environ = 0;
 char **_environ = 0;
 
 /*
- * Bionic keeps its environment array private -- it is not in libc's dynamic
- * symbol table, so a glibc addon that binds to `environ` fails to load even
- * though the data exists. These copies are built at load time from
- * /proc/self/environ, which the kernel maintains for every process and which is
- * the only view of it reachable from a shared object here.
+ * These copies are built at load time from /proc/self/environ, which the
+ * kernel maintains for every process, and not from Bionic's `environ`, which a
+ * bare reference here is not guaranteed to reach: this library defines that
+ * name itself.
  *
  * The ceiling: it is a snapshot. An addon reading it after the process calls
  * setenv() sees the environment as it was at load. That covers reading
@@ -334,8 +333,10 @@ void *__shim_resolve(const char *name) {
  * `environ` or `stdout` by name: they define those very names (versioned, at
  * default visibility), so the reference would bind to their own zeroed storage
  * and the constructor would copy NULL over NULL; measured with readelf, the
- * GLOB_DAT entries pointed at the stub's own .bss. This library defines
- * neither name, so from here the same references reach Bionic's real ones.
+ * GLOB_DAT entries pointed at the stub's own .bss. This library does not define
+ * `stdout` or its siblings, so from here those references reach Bionic's real
+ * ones. It does define `environ` (the copies above), so `__shim_environ`
+ * returns whichever definition the loader binds that name to.
  */
 char **__shim_environ(void) { return environ; }
 FILE *__shim_stdin(void)  { return stdin; }

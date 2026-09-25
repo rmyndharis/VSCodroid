@@ -46,7 +46,7 @@ set -euo pipefail
 # that ends up on the DEVICE are different numbers that merely coincide at 1.133.0.
 #
 # Run it on an arm64 host. Every native module in the tree is built for the build
-# host, and only two of them are overlaid afterwards by build-native-addons.sh:
+# host, and only four of them are replaced afterwards by build-native-addons.sh:
 # ripgrep in particular is downloaded by its own postinstall for whatever
 # os.platform()/arch() reports. The Verify stage refuses to finish an x86-64
 # tree rather than let one reach a device, where it fails at exec.
@@ -153,7 +153,8 @@ cd "$SRC"
 # whatever was built, not what it was supposed to be built from.
 #
 # Its position is load-bearing and cheap on purpose: this runs before npm ci,
-# so a wrong pin costs seconds instead of the half hour a full build takes.
+# so a wrong pin costs seconds instead of the twelve minutes or more a full
+# build takes.
 # Moving it later would keep the check and lose that.
 #
 # The redirect and the `|| true` are for a $SRC whose .git exists but is not

@@ -1562,9 +1562,10 @@ class ProcessManager(private val context: Context) {
      * is what a per-isolate limit looks like. So the number MULTIPLIES rather than
      * divides. Today's 768 authorises about 768 in the bootstrap isolate, 768 in
      * the editor server's main isolate, 768 in the Extension Host worker, 768 in
-     * the Pty Host worker and 768 in the still-forked file watcher. Anyone raising
-     * this number is taking a larger step than it looks, which is the reason
-     * [heapOverrideMaxMb] is as conservative as it is.
+     * the Pty Host worker, 768 in the still-forked file watcher and 768 in the
+     * forked agent host. Anyone raising this number is taking a larger step than
+     * it looks, which is the reason [heapOverrideMaxMb] is as conservative as
+     * it is.
      *
      * NOT THE LARGEST V8 HEAP ON THE DEVICE, and this is the other thing the
      * number invites a reader to assume. `typescript-language-features` builds
@@ -2231,14 +2232,15 @@ internal const val HEAP_PREFS_NAME = "vscodroid"
  * literal. The derived arm spends an eighth because the editor server is one of
  * several processes this app is responsible for; a quarter is the most that can be
  * spent on it while the Extension Host isolate, the Pty Host isolate, the forked
- * file watcher, tsserver, the app process and the Chromium renderer still have
- * somewhere to live. Note what makes that count matter: the flag is a PER-ISOLATE
- * limit, not one heap shared between them, so a request of R authorises roughly 3R
- * of V8 old space inside the server process family before anything native is
- * counted. See [heapCeilingForDevice] for the measurement behind that.
+ * file watcher, the forked agent host, tsserver, the app process and the Chromium
+ * renderer still have somewhere to live. Note what makes that count matter: the
+ * flag is a PER-ISOLATE limit, not one heap shared between them, so a request of R
+ * authorises roughly 6R of V8 old space inside the server process family before
+ * anything native is counted. See [heapCeilingForDevice] for the measurement
+ * behind that.
  *
  * The absolute cap, 1536, exists because the fraction stops protecting once T is
- * large: on a 16 GiB tablet T/4 is about 3900, and three isolates of that is more
+ * large: on a 16 GiB tablet T/4 is about 3900, and six isolates of that is more
  * V8 old space than the device can hold beside the renderer. Without this bound the
  * knob would let the app destabilise the DEVICE rather than only the editor, and
  * that failure is invisible from inside the app: Android's low-memory killer works
@@ -2255,7 +2257,7 @@ internal const val HEAP_PREFS_NAME = "vscodroid"
  * derived band binds exactly where the arithmetic says`. So T/4 exceeded a flat 768
  * only from 3072 MiB upward, and below that the fraction, which is the whole of the
  * safety argument on a small device, bound on nothing: a 2 GB phone was allowed
- * 768, and the flag being per-isolate makes that about three times 768 of V8 old
+ * 768, and the flag being per-isolate makes that about six times 768 of V8 old
  * space on a device that holds 2048.
  *
  * `isLowRam = false` is not an assumption about the device. [heapCeilingMb]

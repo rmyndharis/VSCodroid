@@ -305,7 +305,8 @@ class AuthRequestIdTest {
 
     @Test
     fun `an authorisation address carrying the callback in state names it too`() {
-        // The shape the bundled GitHub provider actually sends: the callback
+        // The shape the bundled GitHub provider's url-handler flow sends (a flow
+        // this build filters out, for want of a client secret): the callback
         // address is encoded into `state`, and then the whole parameter list is
         // encoded again on its way into the query. `=` becomes `%3D` and then
         // `%253D`, which is why matching the plain spelling alone finds nothing

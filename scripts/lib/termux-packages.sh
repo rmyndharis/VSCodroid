@@ -6,7 +6,7 @@
 #     . "$SCRIPT_DIR/lib/termux-packages.sh"
 #
 #     termux_fetch_index
-#     termux_resolve_packages resolved-go.tsv "${REQUIRED_PACKAGES[@]}"
+#     termux_resolve_packages resolved-ruby.tsv "${REQUIRED_PACKAGES[@]}"
 #     termux_download_packages "${REQUIRED_PACKAGES[@]}"
 #     termux_extract_packages "${REQUIRED_PACKAGES[@]}"
 #     termux_copy_notices "$ASSETS_DIR/usr" "${REQUIRED_PACKAGES[@]}"
@@ -23,6 +23,10 @@
 #
 # What each caller still owns is what actually differs: which packages it wants,
 # where the files go afterwards, and which of them are checked as ELF objects.
+#
+# build-wheelhouse.py also sources this, through `bash -c`, for
+# termux_fetch_index alone. download-node.sh does not: it keeps its own index
+# fetch and resolution.
 #
 # Compatible with bash 3.2 (macOS default), like the scripts that source it: no
 # associative arrays, no `local -n`, nothing newer.

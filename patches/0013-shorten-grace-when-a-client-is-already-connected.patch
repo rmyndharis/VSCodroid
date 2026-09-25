@@ -3,9 +3,9 @@ Shorten the reconnection grace when another client is already connected.
 Every WebView renderer crash leaks one file watcher process, and it holds it
 for three hours. Measured on an API 33 emulator by crashing the renderer three
 times: bootstrap-fork --type=fileWatcher went 2, 3, 4, 5, one per crash, none
-reaped, all five still parented to the editor server. Android caps an app at 32
-phantom processes and kills the whole app past that; this project's own budget
-is 3 to 5.
+reaped, all five still parented to the editor server. Android allows 32 phantom
+processes across the whole device and kills the surplus past that; this project
+idles at 5 and warns from 8.
 
 The watcher's life is the management connection's life. A SessionFileWatcher is
 created per client session and disposed when the last listener on its fileChange

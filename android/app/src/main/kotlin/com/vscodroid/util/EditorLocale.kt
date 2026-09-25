@@ -18,7 +18,7 @@ import java.util.Locale
  *
  * Everything here is that one mapping, from a language tag to a bundle name,
  * and it is shared deliberately: the same function answers the request coming
- * back from the page and picks the file the server process is pointed at.
+ * back from the page and picks the name the page is told to ask with.
  *
  * The tag the page asks with is this app's answer rather than the browser's:
  * `MainActivity.applyEditorLanguage` writes the resolved name into the

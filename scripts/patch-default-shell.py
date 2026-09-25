@@ -21,8 +21,8 @@ not a candidate. Its absolute path is not knowable here (it carries the Android
 user id), and `sh` under it already resolves through PATH, which ends in
 /system/bin (see Environment.buildProcessEnvironment).
 
-Measured on the shipped set: six of the eleven binaries in jniLibs name it, and
-the environment rescues none of them fully:
+Measured on the shipped set: six of the fourteen binaries in jniLibs name it,
+and the environment rescues none of them fully:
 
   * make deliberately does not take SHELL from the environment, so the compiled
     value runs every recipe line;
@@ -137,11 +137,10 @@ other eight are regular files under filesDir, which SELinux will not execve at
 all; and git runs no hook whose name ends in .sample.
 
 Deliberately not folded into verify-android-elf.py either, whose per-file callers
-include the toolchain downloads. Go's pack carries Termux shebangs in two plan9
-syscall generators and an iOS clang wrapper, and Java's lib/modules carries the
-path as a length-prefixed constant inside a jimage archive, next to
-sun.print.PrintServiceLookupProvider's AIX printer enumeration. None of the four
-is reachable on Android, and the archive could not be rewritten in place anyway,
+include the toolchain downloads. Java's lib/modules carries the path as a
+length-prefixed constant inside a jimage archive, next to
+sun.print.PrintServiceLookupProvider's AIX printer enumeration. That is not
+reachable on Android, and the archive could not be rewritten in place anyway,
 so the shared checker would fail builds that are correct.
 """
 

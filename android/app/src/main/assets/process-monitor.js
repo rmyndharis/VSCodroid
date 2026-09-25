@@ -178,9 +178,10 @@ const LANG_SERVER_PATTERNS = [
     // 'tailwindServer' with an extension on the end.
     //
     // check-langserver-patterns.py cannot see this one: it globs *ServerMain.js
-    // under vscode-reh/extensions, and Tailwind is a marketplace extension living
-    // under assets/extensions with a name that does not match the glob. The
-    // fixtures in scripts/test-process-monitor.js are what guard it instead.
+    // and *WorkerMain.js under vscode-reh/extensions, and Tailwind is a
+    // marketplace extension living under assets/extensions with a name that
+    // matches neither glob. The fixtures in scripts/test-process-monitor.js are
+    // what guard it instead.
     'tailwindServer', 'tailwindModeServer'
 ];
 

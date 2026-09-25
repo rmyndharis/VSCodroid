@@ -999,11 +999,11 @@ class AndroidBridge(
      * ⚠️ **This deletes files, and with [force] it deletes files that exist nowhere
      * else.** A mirror the app can vouch for is a copy of the device folder and
      * removing it loses nothing. A mirror it cannot vouch for holds work the app never
-     * delivered to the device: anything under `node_modules`, `.git`, `__pycache__` or
-     * `.gradle`, which the sync excludes by construction, and anything written while no
-     * watcher was running. [force] is the user's own decision to remove it anyway, and
-     * the caller must have said what is at stake in a modal the user had to accept. It
-     * is not a retry flag.
+     * delivered to the device: anything under `node_modules`, `.git`, `__pycache__`,
+     * `.gradle`, `.idea`, `venv` or a `.env` directory, which the sync excludes by
+     * construction, and anything written while no watcher was running. [force] is the
+     * user's own decision to remove it anyway, and the caller must have said what is
+     * at stake in a modal the user had to accept. It is not a retry flag.
      *
      * Without [force] the copy is walked to re-ask the gate and walked again to
      * report the bytes freed, so this takes as long as the disk is big; see
@@ -1236,7 +1236,7 @@ class AndroidBridge(
     }
 
     /**
-     * Returns JSON array of installed toolchain names (e.g. ["go", "ruby"]).
+     * Returns JSON array of installed toolchain names (e.g. ["ruby", "java"]).
      */
     @JavascriptInterface
     fun getInstalledToolchains(authToken: String): String {

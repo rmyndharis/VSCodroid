@@ -624,7 +624,7 @@ jobs:
       # source-only checks: the directory is empty until the download scripts
       # above have run, and the gate refuses an empty one rather than passing
       # over it. Deliberately not in lint.yml, which stubs the tree with a single
-      # four-byte libnode.so so Gradle will run.
+      # 64-byte libnode.so so Gradle will run.
       - name: Check the documented binary lists match what is packaged
         run: python3 scripts/check-binary-lists.py
       # Needs the assets in place, so it runs here rather than with the checks
@@ -640,7 +640,7 @@ jobs:
       # package-toolchains.sh zips those same directories for the GitHub Release
       # that non-Play installs download from. Fetched separately they can differ:
       # the versions come from the Termux index at fetch time, so one app version
-      # could ship Go 1.24 through Play and Go 1.25 through GitHub.
+      # could ship one Ruby through Play and a newer one through GitHub.
       - name: Download toolchain assets
         run: |
           bash scripts/download-ruby.sh
@@ -669,9 +669,9 @@ jobs:
       # lint.yml, which fires on pull_request and on push to main and not on a
       # tag. Fatal-severity issues are covered on this path already, because
       # lintVital sits in the assembleRelease graph, so what was missing is the
-      # warning-severity half that `abortOnError = true` and the 16-entry
-      # lint-baseline.xml were turned on together to make fail a build. A tag cut
-      # from a hotfix branch that reached neither trigger met none of it.
+      # warning-severity half that `abortOnError = true` and lint-baseline.xml
+      # were turned on together to make fail a build. A tag cut from a hotfix
+      # branch that reached neither trigger met none of it.
       #
       # Before the keystore, with the rest of the re-run block, so a failure here
       # never reaches a step handling a secret.
@@ -739,7 +739,7 @@ jobs:
       # The same gate as above, and this is the run that can see the toolchains.
       # Their manifests are written by "Download toolchain assets" and are
       # gitignored, so the earlier run reported "0 toolchain libraries" on a tag
-      # that was about to attach three packs to the release, and a new
+      # that was about to attach two packs to the release, and a new
       # transitive dependency in any of them would have shipped unattributed with
       # a green log. That is how libdb-18.1.so arrived in the first place: as a
       # transitive dependency nobody was asked about.

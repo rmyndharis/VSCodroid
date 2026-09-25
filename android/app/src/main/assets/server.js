@@ -30,7 +30,7 @@ const CALLBACK_INTENT = /#Intent;scheme=vscodroid;(?:package=[A-Za-z0-9._]+;)?en
 // Which external addresses open without the "Do you want VSCodroid to open the
 // external website?" confirmation.
 //
-// github.com is not a convenience. The GitHub sign-in this build can run is the
+// github.com is not a convenience. The GitHub sign-in this build tries first is the
 // device-code flow, and it ends in env.openExternal("https://github.com/login/device"),
 // so without this entry the one screen between a user and a signed-in editor is a
 // confirmation dialog. Everything else the workbench opens keeps the prompt.
@@ -347,7 +347,7 @@ if (!fs.existsSync(rehEntryPoint)) {
     // at build time, and the only product the server hands the page at runtime is a
     // three-key object that does not carry this list. So what the confirmation
     // dialog consults is branding/product.json as it stood at the last server build,
-    // and widening it there alone would reach a device only after a ~30 minute
+    // and widening it there alone would reach a device only after a server
     // rebuild and a new server release.
     //
     // The workbench adds `additionalTrustedDomains` from its web construction

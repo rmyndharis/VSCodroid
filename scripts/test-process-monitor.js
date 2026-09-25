@@ -458,10 +458,10 @@ function run(tmp, proc, signals) {
             'langserver'],
         [1035, [NODE, `${MIRROR}/node_modules/typescript/lib/tsserver.js`,
             '--useInferredProjectPerProjectRoot'], 'langserver'],
-        // A marketplace language server, not one of the three bundled with the
+        // A marketplace language server, not one of the four bundled with the
         // editor, and the reason it is here: check-langserver-patterns.py globs
-        // *ServerMain.js under vscode-reh/extensions and cannot see this file at
-        // all. The pattern for it matched the extension's directory name until
+        // *ServerMain.js and *WorkerMain.js under vscode-reh/extensions and
+        // cannot see this file at all. The pattern for it matched the extension's directory name until
         // classification moved to argument basenames, and nothing noticed.
         [1009, [NODE, `${EXT}/bradlc.vscode-tailwindcss-0.16.0/dist/tailwindServer.js`,
             '--node-ipc', '--clientProcessId=1'], 'langserver'],

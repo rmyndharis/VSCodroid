@@ -8,10 +8,10 @@ package com.vscodroid.util
  * without a device. The framework call naming the installed package is the only
  * part that needs one, and it is a single line at the call site.
  *
- * The floor is stated in three places a reader can reach (`README.md`, and
- * NFR-COMPAT-04 in `docs/02-SRS.md`) and for a year was enforced in none, which
- * is what [MINIMUM_CHROME_MAJOR] and the test pinning it to those documents
- * exist to prevent recurring.
+ * The floor is stated in three places a reader can reach (`README.md`,
+ * NFR-COMPAT-04 in `docs/02-SRS.md`, and `docs/05-API_SPEC.md`) and for a year
+ * was enforced in none, which is what [MINIMUM_CHROME_MAJOR] and the test
+ * pinning it to those documents exist to prevent recurring.
  */
 object WebViewVersion {
 

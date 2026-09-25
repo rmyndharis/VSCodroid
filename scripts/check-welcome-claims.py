@@ -18,7 +18,7 @@ Two rules, both mechanical:
     the tool is there and ready; a user who needs the number runs `node -v`,
     which the very next step of the walkthrough tells them to do.
 
-  * No "coming soon". Go, Java 17 and Ruby are installable today, and the screen
+  * No "coming soon". Java 17 and Ruby are installable today, and the screen
     said the opposite -- which is worse than a stale number, because it sends a
     user away from a toolchain already sitting on their device. Rust and C/C++
     were promised there too, and neither has a module, a pack or a registry

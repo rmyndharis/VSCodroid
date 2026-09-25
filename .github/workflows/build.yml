@@ -351,14 +351,14 @@ jobs:
       # source-only checks: the directory is empty until the download scripts
       # above have run, and the gate refuses an empty one rather than passing
       # over it. Deliberately not in lint.yml, which stubs the tree with a single
-      # four-byte libnode.so so Gradle will run.
+      # 64-byte libnode.so so Gradle will run.
       - name: Check the documented binary lists match what is packaged
         run: python3 scripts/check-binary-lists.py
 
       # Needs the extensions tree, so it runs here rather than beside the other
       # cheap checks in lint. A pattern that matches nothing is invisible twice:
       # the server keeps running, keeps counting against the phantom-process
-      # budget, and the feature meant to reclaim it never sees it.
+      # budget, and the details view built to explain that shows it as 'other'.
       - name: Check the monitor recognises the language servers that ship
         run: |
           python3 scripts/check-langserver-patterns.py \

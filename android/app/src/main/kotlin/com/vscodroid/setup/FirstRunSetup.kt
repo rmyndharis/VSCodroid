@@ -204,15 +204,15 @@ class FirstRunSetup(
      * toolchains install too, so naming those two credits everything again.
      * One level further down separates them: Java writes `usr/lib/jvm`, Ruby
      * writes `usr/lib/ruby` and `usr/bin` (which the APK does not carry at all),
-     * `npm install -g` writes `usr/lib/node_modules`, and none of those is a
-     * name the APK lists. It costs about 65 `list` calls against the 3400 a walk
-     * of the whole asset tree would.
+     * and none of those is a name the APK lists. It costs about 65 `list` calls
+     * against the 3400 a walk of the whole asset tree would.
      *
      * What it still over-counts, so the cap in [sharedTreeCredit] stays: bytes
-     * added INSIDE a bundled directory, `pip install` into
-     * `usr/lib/python3.x/site-packages` being the one that happens. That is
-     * bounded by the bundled figure; the unrecorded trees this replaces were
-     * not.
+     * added INSIDE a bundled directory. Two happen: `pip install` into
+     * `usr/lib/python3.x/site-packages`, and `npm install -g` into
+     * `usr/lib/node_modules`, which is bundled because npm itself lives there.
+     * That is bounded by the bundled figure; the unrecorded trees this replaces
+     * were not.
      *
      * An assets listing that cannot be read yields no credit, the same direction
      * an absent directory takes.
@@ -2013,7 +2013,7 @@ class FirstRunSetup(
                 // it and left a truncated `[ -f ...` line behind for good.
                 val block = """
 
-# On-demand toolchain env vars (Go, Ruby, Java, etc.)
+# On-demand toolchain env vars
 [ -f "${'$'}HOME/.vscodroid/toolchain-env.sh" ] && . "${'$'}HOME/.vscodroid/toolchain-env.sh"
 """
                 if (writeAtomically(bashrc) { it.write(existing); it.write(block.toByteArray()) }) {
@@ -2059,9 +2059,11 @@ class FirstRunSetup(
      * WHAT THIS DOES NOT FIX, because the gap is narrower than "commands work
      * now" and the rest needs a different mechanism:
      *
-     *  - a direct execve of the bare name. `child_process.spawn("go", ...)` with
-     *    no shell reaches no shell, so no function exists; and the file it would
-     *    have to find is under filesDir, which cannot be executed at all.
+     *  - a direct execve of the bare name. `child_process.spawn("npm", ...)` with
+     *    no shell reaches no shell, so no function exists. Toolchain commands
+     *    are past this and the next one: each has a link in `usr/libexec/tcbin`,
+     *    ahead of `usr/bin` on PATH, onto the exec trampoline in
+     *    `nativeLibraryDir` ([ToolchainManager.regenerateDerivedFiles]).
      *  - `sh -c`. Android's `sh` is mksh, which has never heard of BASH_ENV, and
      *    bash itself ignores the variable when it is invoked as `sh` or with
      *    `--posix` -- both measured. Node's `child_process.exec()` and make's
@@ -2115,7 +2117,7 @@ esac
         val content = BASH_ENV_HEADER + preload + npmBashFunctions() + claudeBashFunction() +
             pipBashFunctions() + """
 
-# On-demand toolchain env vars (Go, Ruby, Java, etc.)
+# On-demand toolchain env vars
 [ -f "${'$'}HOME/.vscodroid/toolchain-env.sh" ] && . "${'$'}HOME/.vscodroid/toolchain-env.sh"
 """
         if (envFile.isFile && runCatching { envFile.readText() }.getOrNull() == content) return
@@ -2891,7 +2893,7 @@ claude() {
             alias ls='ls --color=auto'
             alias ll='ls -la'
 
-            # On-demand toolchain env vars (Go, Ruby, Java, etc.)
+            # On-demand toolchain env vars
             [ -f "${'$'}HOME/.vscodroid/toolchain-env.sh" ] && . "${'$'}HOME/.vscodroid/toolchain-env.sh"
         """.trimIndent() + "\n\n" + STARTUP_DIR_BLOCK + "\n"
         return writeAtomically(bashrc) { it.write(initial.toByteArray()) }
@@ -5524,8 +5526,8 @@ private fun isOlderVersion(a: String, b: String): Boolean {
  * than only refreshed, so they reach installs made before the setting existed:
  * `claudeCode.claudeProcessWrapper`, itself a `nativeLibraryDir` path and so
  * refreshed too, but left alone when it points somewhere the user chose;
- * `extensions.verifySignature`; `workbench.secondarySideBar.defaultVisibility`;
- * and the two Python pins [PYTHON_LOCATOR] and [PYTHON_ENV_EXTENSION].
+ * `extensions.verifySignature`; and the two Python pins [PYTHON_LOCATOR] and
+ * [PYTHON_ENV_EXTENSION].
  *
  * Substitutes values in place and leaves every other byte untouched.
  * settings.json is JSONC: comments and trailing commas are legal there, so
@@ -5566,11 +5568,11 @@ internal fun refreshManagedPaths(
     }
 
     // Signature verification cannot run here and refuses the install when it
-    // cannot: Code - OSS has no node_modules/vsda, and verify-server-tree.py
-    // rejects any tree that carries it, since only Microsoft's build may. Left on,
-    // every marketplace install stops at "cannot verify the extension signature /
-    // Signature verification was not executed" and offers to proceed unverified,
-    // which teaches people to click past a security prompt for no gain.
+    // cannot: it loads @vscode/vsce-sign, which is not in this server's
+    // node_modules. Left on, every marketplace install stops at "cannot verify
+    // the extension signature / Signature verification was not executed" and
+    // offers to proceed unverified, which teaches people to click past a
+    // security prompt for no gain.
     //
     // Added for installs that predate it rather than only written at first run,
     // and skipped when the key is already present in either state, because

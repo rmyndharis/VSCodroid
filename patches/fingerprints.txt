@@ -51,7 +51,8 @@
 # packaging gate. The prose above each diff is not hashed, because git apply
 # never reads it, so rewriting a patch's reasoning there is free.
 #
-# Everything from the first `diff --git` down IS hashed, comments in the added
+# Everything from the first `diff --git` down IS hashed (or from the first
+# `---`/`+++` pair, in a bare unified diff such as 0010), comments in the added
 # code included. Editing one of those is a rebuild: the published server has to
 # be built again and refetched before any APK can be packaged, because until then
 # the manifest in the tree names the old text and the gate says so. Budget half
@@ -89,7 +90,8 @@
 0006 callback relay|out/vs/code/browser/workbench/callback.html|intent://callback
 # 0007 is the one row where a fingerprint exists and still cannot be used.
 # Measured 2026-08-19 against the packaged tree: the patched form appears in
-# workbench.web.main.internal.js and workbench.js, and the unpatched
+# workbench.js and in workbench.web.main.internal.js (which the Prune stage now
+# deletes), and the unpatched
 # isEncryptionAvailable(){return Promise.resolve(!1)} appears nowhere. That is a
 # sharper control than most rows here have. What refuses it is introduced_by,
 # correctly: the method name is a context line, and Promise.resolve(!0) on its own

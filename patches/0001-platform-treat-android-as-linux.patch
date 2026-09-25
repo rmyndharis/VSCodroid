@@ -5,12 +5,13 @@ compares against 'linux', so on device isLinux, isWindows and isMacintosh are al
 false at once and every Linux-shaped decision falls through to an untested
 default. Nothing errors; the behaviour is just quietly wrong.
 
-The one that is easiest to observe: terminal profiles are stored under
-`terminal.integrated.profiles.linux`, and the workbench picks that suffix from
-the platform the remote reports. With none matching, the whole profile block is
-skipped and terminals fall back to $SHELL with no arguments -- measured on an API
-36 emulator, where an explicit --init-file placed in the profile args never
-reached the spawned shell.
+One on the terminal path: the pty host finds a shell's working directory with
+lsof on macOS and through /proc/<pid>/cwd on Linux, and on anything else answers
+with the directory the shell started in. Terminal profiles are not among them.
+The workbench picks the `terminal.integrated.profiles.linux` suffix from the OS
+number the server sends, and the server computes that as
+`isMacintosh || isIOS ? 2 : isWindows ? 1 : 3` without consulting isLinux, so
+Android lands on linux with or without this patch.
 
 isAndroidPlatform is exported alongside it because collapsing the two is wrong in
 exactly one place: which target platform the extension marketplace is asked for.
