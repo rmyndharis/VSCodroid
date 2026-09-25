@@ -1999,7 +1999,7 @@ class MainActivity : AppCompatActivity() {
             VSCodroidWebView.configure(wv)
             dropCacheLeftByEarlierBuild(wv)
             applyWindowInsetsPadding(wv)
-            // Here and not in initBridge, which runs once per server lifecycle
+            // Here and not in initBridge, which does its work once per WebView
             // behind a guard: a WebView with no download listener drops every
             // download on the floor without a word, which is exactly the state
             // this fixes, and a replacement view created for a renderer crash
