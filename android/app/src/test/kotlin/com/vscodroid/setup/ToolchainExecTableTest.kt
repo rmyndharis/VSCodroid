@@ -83,6 +83,14 @@ class ToolchainExecTableTest {
             Files.createSymbolicLink(Path.of(secondArg<String>()), Path.of(firstArg<String>()))
             Unit
         }
+        every { Os.rename(any(), any()) } answers {
+            Files.move(
+                Path.of(firstArg<String>()), Path.of(secondArg<String>()),
+                java.nio.file.StandardCopyOption.REPLACE_EXISTING,
+                java.nio.file.StandardCopyOption.ATOMIC_MOVE,
+            )
+            Unit
+        }
 
         context = mockk(relaxed = true)
         every { context.filesDir } returns filesDir
@@ -687,4 +695,80 @@ class ToolchainExecTableTest {
         )
     }
 
+    // The git extension's helper scripts. It names them by absolute path, as
+    // GIT_ASKPASS, SSH_ASKPASS and GIT_EDITOR, and each is a `#!/bin/sh` file in
+    // the server tree under filesDir, so the kernel refuses to execve it and every
+    // credential prompt git raises from the terminal or from Source Control died
+    // on "cannot exec ... askpass.sh: Permission denied". Measured on an API 33
+    // emulator: with askpass.sh a link to the trampoline and a row naming the
+    // shell and the script, `git ls-remote` of a private URL raised the GitHub
+    // sign-in and then the Username box in the workbench instead.
+
+    private val gitDist get() = File(filesDir, "server/vscode-reh/extensions/git/dist")
+
+    private fun gitHelper(name: String, body: String = "#!/bin/sh\necho '$name'\n") =
+        File(gitDist, name).apply {
+            parentFile?.mkdirs()
+            writeText(body)
+        }
+
+    private val trampoline get() = File(nativeLibDir, "libexec-trampoline.so").absolutePath
+
+    @Test
+    fun `the git extension's askpass runs through the trampoline`() {
+        gitHelper("askpass.sh", "#!/bin/sh\nshipped\n")
+
+        regenerate()
+
+        val link = File(gitDist, "askpass.sh")
+        assertTrue(Files.isSymbolicLink(link.toPath()), "askpass.sh is still a script git cannot exec")
+        assertEquals(trampoline, Files.readSymbolicLink(link.toPath()).toString())
+        val kept = File(gitDist, "askpass.sh.script")
+        assertEquals("#!/bin/sh\nshipped\n", kept.readText(), "the shipped script was not kept")
+        assertTrue(
+            tableLines().contains("askpass.sh\t/system/bin/sh\t${kept.absolutePath}"),
+            "no row runs the kept script through the shell:\n" + execTable.readText(),
+        )
+    }
+
+    @Test
+    fun `a script an update wrote over the link replaces the kept copy`() {
+        gitHelper("ssh-askpass.sh", "old\n")
+        regenerate()
+        // Extraction writes the file through a temporary name and a rename, which
+        // replaces the link with a regular file carrying the new version.
+        File(gitDist, "ssh-askpass.sh").delete()
+        gitHelper("ssh-askpass.sh", "new\n")
+
+        regenerate()
+
+        assertEquals("new\n", File(gitDist, "ssh-askpass.sh.script").readText())
+        assertTrue(Files.isSymbolicLink(File(gitDist, "ssh-askpass.sh").toPath()))
+    }
+
+    @Test
+    fun `a link into an earlier install's library directory is repointed`() {
+        gitHelper("git-editor.sh")
+        regenerate()
+        val link = File(gitDist, "git-editor.sh").toPath()
+        Files.delete(link)
+        Files.createSymbolicLink(link, Path.of("/data/app/gone/lib/arm64/libexec-trampoline.so"))
+
+        regenerate()
+
+        assertEquals(trampoline, Files.readSymbolicLink(link).toString())
+    }
+
+    @Test
+    fun `helper scripts are not put on PATH`() {
+        gitHelper("askpass.sh")
+
+        regenerate()
+
+        assertFalse(
+            File(filesDir, "usr/libexec/tcbin/askpass.sh").exists() ||
+                Files.isSymbolicLink(File(filesDir, "usr/libexec/tcbin/askpass.sh").toPath()),
+            "askpass.sh became a command in every terminal",
+        )
+    }
 }
