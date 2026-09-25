@@ -175,7 +175,7 @@ owning extension is what frees a slot.
 - `scripts/check-patch-fingerprints.py` matches each patch against `patches/fingerprints.txt` in the packaged bundle, so a patch that applies but never reaches the output is caught; `fetch-vscode-oss.sh` runs the same check on what it downloads
 - `scripts/verify-server-tree.py` refuses any tree carrying `node_modules/vsda`, which only Microsoft's own build has
 
-**Trade-off**: A full build takes around half an hour on an arm64 runner (`.github/workflows/build-vscode-oss.yml`, dispatched by hand), and the patch set has to be rebased on every version bump. The runner architecture is not a preference: native modules are built for the build host, so an x86-64 tree builds green and then fails at exec on the device.
+**Trade-off**: A full build takes twelve to thirteen minutes on an arm64 runner (`.github/workflows/build-vscode-oss.yml`, dispatched by hand), and the patch set has to be rebased on every version bump. The runner architecture is not a preference: native modules are built for the build host, so an x86-64 tree builds green and then fails at exec on the device.
 
 ---
 
