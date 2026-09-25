@@ -3396,6 +3396,22 @@ claude() {
             prefs.edit(commit = true) { putStringSet(KEY_RETIRED_SWEPT, HashSet(sweptAlready + owed)) }
         }
 
+        // Bundled copies an earlier update unpacked beside the user's own gallery
+        // install, which nothing lists. [orphanedBundledCopies] carries the rules.
+        // The disk is read again here, after every sweep above, because the rule
+        // asks whether the user's copy is on disk NOW; and nothing is removed
+        // unless every profile's manifest could be read.
+        val listed = manifestEntryDirs(manifestFile)
+        val elsewhere = otherProfilesExtensionDirs()
+        if (listed != null && elsewhere != null) {
+            val onDisk = extensionsDir.list()?.toList() ?: emptyList()
+            for (name in orphanedBundledCopies(onDisk, bundled.toList(), listed, elsewhere)) {
+                if (removeExtensionDir(File(extensionsDir, name))) {
+                    Logger.i(tag, "Removed $name: an earlier update unpacked it beside the user's own copy, and nothing lists it")
+                }
+            }
+        }
+
         // The server manages this file for marketplace installs, so it is never
         // regenerated wholesale. But it is the default profile's manifest (the
         // scanner shows only what is listed in it), and bundled extensions
@@ -3437,6 +3453,55 @@ claude() {
      */
     private fun previouslyBundledIds(): Set<String> =
         prefs.getStringSet(KEY_BUNDLED_IDS, emptySet()) ?: emptySet()
+
+    /**
+     * Each entry of an `extensions.json` as its identifier, lowercased, and the
+     * directory it names, or null when the file cannot say.
+     *
+     * The directory is read the way [reconcileExtensionsManifest] reads it; an
+     * entry that names none carries "". Null for a missing or unparseable file,
+     * because the one caller deletes on the strength of what this lists.
+     */
+    private fun manifestEntryDirs(manifestFile: File): List<Pair<String, String>>? {
+        if (!manifestFile.isFile) return null
+        return try {
+            val entries = JSONArray(manifestFile.readText())
+            (0 until entries.length()).map { i ->
+                val entry = entries.getJSONObject(i)
+                val id = entry.optJSONObject("identifier")?.optString("id").orEmpty().lowercase()
+                val path = entry.optJSONObject("location")?.optString("path").orEmpty()
+                val dir = entry.optString("relativeLocation")
+                    .ifEmpty { if (path.isEmpty()) "" else File(path).name }
+                id to dir
+            }
+        } catch (e: Exception) {
+            Logger.d(tag, "Could not read ${manifestFile.path}: ${e.message}")
+            null
+        }
+    }
+
+    /**
+     * The directories every profile other than the default one lists, or null
+     * when one of their manifests cannot be read.
+     *
+     * Profiles share the extensions directory and keep a manifest each under
+     * `data/User/profiles/<id>/`, and a profile created while a bundled copy was
+     * still listed goes on naming it after the default profile moved on. A
+     * profile whose manifest this cannot read may name anything, so the answer is
+     * then "unknown" rather than "nothing".
+     */
+    private fun otherProfilesExtensionDirs(): Set<String>? {
+        val profilesDir = File(Environment.getUserDataDir(context), "data/User/profiles")
+        if (!profilesDir.exists()) return emptySet()
+        val profiles = profilesDir.listFiles() ?: return null
+        val dirs = mutableSetOf<String>()
+        for (profile in profiles) {
+            val manifest = File(profile, "extensions.json")
+            if (!manifest.exists()) continue
+            dirs += (manifestEntryDirs(manifest) ?: return null).map { it.second }
+        }
+        return dirs
+    }
 
     /**
      * The identifiers `extensions.json` lists, or null when it cannot say.
@@ -4919,6 +4984,49 @@ internal fun bundledDirsToExtract(
  */
 internal fun bundledExtensionIds(bundled: List<String>): List<String> =
     bundled.mapNotNull { splitExtensionDir(it)?.first?.lowercase() }
+
+/**
+ * Bundled copies an earlier update unpacked beside the user's own install of the
+ * same identifier, which nothing lists and nothing loads.
+ *
+ * Until [bundledDirsToExtract] learned to read a gallery directory's name, every
+ * update unpacked a fetched extension beside a newer copy the user had installed
+ * from the gallery. [bundledIdsToRelist] keeps the user's entry and adds none for
+ * the bundled copy, so it was never loaded, and every sweep leaves a directory
+ * this build bundles alone, so it was never removed either: 29 MiB for Python.
+ *
+ * It deletes, so a name must pass every one of these, each of which is evidence
+ * rather than an inference:
+ *  - it is a directory this build bundles, exactly: never a gallery install,
+ *    which carries a target platform in its name, and never our own publisher,
+ *    whose extensions are always listed;
+ *  - it is on disk, and neither the default profile's manifest nor any other
+ *    profile's names it;
+ *  - the default manifest lists the same identifier at another directory that
+ *    is on disk NOW. [onDisk] has to be read after the superseded sweep, because
+ *    a version bump leaves the new bundled copy unlisted for a moment too, while
+ *    the entry for the version just swept still names the old directory; the
+ *    reconcile that follows lists the new copy in its place.
+ *
+ * Identifiers are compared without case, as the manifest and the directory name
+ * may spell a publisher differently.
+ */
+internal fun orphanedBundledCopies(
+    onDisk: List<String>,
+    bundled: List<String>,
+    listed: List<Pair<String, String>>,
+    referencedElsewhere: Set<String>,
+): List<String> {
+    val listedDirs = listed.map { it.second }.toSet()
+    return bundled.filter { dir ->
+        if (dir.startsWith(OWN_EXTENSION_PREFIX)) return@filter false
+        if (dir !in onDisk || dir in listedDirs || dir in referencedElsewhere) return@filter false
+        val id = splitExtensionDir(dir)?.first?.lowercase() ?: return@filter false
+        listed.any { (otherId, otherDir) ->
+            otherId.lowercase() == id && otherDir.isNotEmpty() && otherDir != dir && otherDir in onDisk
+        }
+    }
+}
 
 /**
  * Whether the setup recorded on this device belongs to a build other than the
