@@ -4831,11 +4831,13 @@ internal fun failedUnpackMustBeRemoved(
  * runtime is never copied over, so that state survives an upgrade; a blanket
  * re-copy would silently revert it.
  *
- * A fetched extension is also skipped when a NEWER copy of the same identifier
- * is already installed, which is a user's own gallery install of something this
- * build has begun to bundle. Nothing else would ever have removed it:
- * [supersededExtensionDirs] refuses to touch a directory that is currently
- * bundled, [retiredOwnExtensionDirs] wants our publisher, and
+ * A fetched extension is also skipped when the same or a NEWER version of that
+ * identifier is already installed under another directory, which is a user's
+ * own gallery install of something this build bundles. The gallery names that
+ * directory `<id>-<version>-<targetPlatform>`, which [splitExtensionDir]
+ * reads. Nothing else would ever have removed it: [supersededExtensionDirs]
+ * refuses to touch a directory that is currently bundled or that the gallery
+ * named, [retiredOwnExtensionDirs] wants our publisher, and
  * [retiredFetchedExtensionDirs] wants an identifier this build no longer ships.
  * So it was unpacked, listed by nobody -- `bundledIdsToRelist` declines to add an
  * entry for an identifier whose own entry survives, deliberately, so the user's
@@ -4871,7 +4873,9 @@ internal fun bundledDirsToExtract(
     abandoned: Set<String> = emptySet(),
     uninstalled: Set<String> = emptySet(),
 ): List<String> {
-    val installed = present.mapNotNull(::splitExtensionDir)
+    // An abandoned directory is wreckage, not an install: it must not count as
+    // a copy of its own version that makes unpacking it redundant.
+    val installed = present.filterNot { it in abandoned }.mapNotNull(::splitExtensionDir)
     return bundled.filter { dir ->
         if (dir.startsWith(OWN_EXTENSION_PREFIX)) return@filter true
         if (dir in present && dir !in abandoned) return@filter false
@@ -4880,7 +4884,7 @@ internal fun bundledDirsToExtract(
         // the lowercased package.json halves; a real bundled publisher is PKief.
         if (id.lowercase() in uninstalled) return@filter false
         installed.none { (otherId, otherVersion) ->
-            otherId == id && isOlderVersion(version, otherVersion)
+            otherId == id && (otherVersion == version || isOlderVersion(version, otherVersion))
         }
     }
 }
@@ -5462,6 +5466,8 @@ internal fun supersededExtensionDirs(present: List<String>, bundled: List<String
     val current = bundled.mapNotNull(::splitExtensionDir).toMap()
     return present.filter { name ->
         if (name in bundled) return@filter false
+        // Named by the gallery, so the user's, never a leftover of ours.
+        if (TARGET_PLATFORM_SUFFIX.containsMatchIn(name)) return@filter false
         val (id, version) = splitExtensionDir(name) ?: return@filter false
         val bundledVersion = current[id] ?: return@filter false
         isOlderVersion(version, bundledVersion)
@@ -5473,17 +5479,33 @@ internal fun supersededExtensionDirs(present: List<String>, bundled: List<String
  * version, or null when it is not that shape.
  *
  * The last hyphen is the separator, because a publisher or a name may contain
- * one (`ms-python.python`) while a version may not.
+ * one (`ms-python.python`) while a version may not. A directory the gallery
+ * installed carries one more segment, the target platform upstream's
+ * `ExtensionKey` appends (`ms-python.python-2026.5.0-universal`), and that
+ * is dropped first; cutting at the last hyphen without doing so read the
+ * platform as the version and the version as part of the identifier.
  *
  * Shared by the three decisions that compare versions of one identifier, so a
  * directory cannot be read one way by the sweep that removes it and another way
  * by the one that decides whether to unpack over it.
  */
 private fun splitExtensionDir(dir: String): Pair<String, String>? {
-    val cut = dir.lastIndexOf('-')
-    if (cut <= 0 || cut == dir.length - 1) return null
-    return dir.substring(0, cut) to dir.substring(cut + 1)
+    val name = dir.replace(TARGET_PLATFORM_SUFFIX, "")
+    val cut = name.lastIndexOf('-')
+    if (cut <= 0 || cut == name.length - 1) return null
+    return name.substring(0, cut) to name.substring(cut + 1)
 }
+
+/**
+ * The target platforms upstream's `TargetPlatform` defines, as
+ * `ExtensionKey.toString()` appends them to the directory of an extension the
+ * gallery installed. `undefined` is never written, and nothing this app unpacks
+ * carries any of them.
+ */
+private val TARGET_PLATFORM_SUFFIX = Regex(
+    "-(?:win32-x64|win32-arm64|linux-x64|linux-arm64|linux-armhf|alpine-x64|alpine-arm64" +
+        "|darwin-x64|darwin-arm64|web|universal|unknown)$"
+)
 
 /**
  * Whether [a] is a strictly older version than [b].
