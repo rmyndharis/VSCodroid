@@ -231,9 +231,10 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 >   of last resort is clearing app data, which destroys the user's projects.
 >
 > Two limits worth knowing before quoting either row. The flag caps EACH V8 isolate in the
-> server, not all of them together, so a ceiling of N authorises roughly 3N of old space
-> across the server process family. And neither row bounds the largest V8 heap the device
-> actually runs: `tsserver.maxMemory` defaults to 3072 MB with no reference to device RAM,
+> server, not all of them together, so a ceiling of N authorises up to 6N of old space
+> across the server process family: the bootstrap, the editor server, its Extension Host and
+> Pty Host workers, and the forked file watcher and agent host. And neither row bounds the
+> largest V8 heap the device actually runs: `tsserver.maxMemory` defaults to 3072 MB with no reference to device RAM,
 > and nothing in this app reaches it.
 
 ### 4.3 Reliability (NFR-REL)
@@ -377,7 +378,7 @@ Detailed in [API Spec § Android Bridge API](./05-API_SPEC.md#2-a-android-bridge
 
 | Data | Location | Clearable |
 |------|----------|-----------|
-| WebView cache | WebView data directory | Yes |
+| WebView cache | App cache directory, `webview_vscodroid` | Only through Android's own Clear cache or Clear storage; `VSCodroid: Clear Caches` does not reach it |
 | Extension marketplace cache | App cache directory | Yes |
 | Node.js module cache | App-private node_modules | Yes |
 

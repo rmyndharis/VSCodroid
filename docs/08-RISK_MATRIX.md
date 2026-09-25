@@ -190,7 +190,7 @@ These plans cover risks that did not yet have dedicated sections above.
 | Risk | Mitigation Plan | Contingency |
 |------|------------------|-------------|
 | T04 (WebView fragmentation) | **Done:** a runtime check reads the installed WebView at launch and warns when it is below Chrome 105 (`MainActivity.checkWebViewVersion`). **Not done:** no compatibility matrix in CI or a device lab, and no release gate on WebView smoke tests | Deliberately a warning, not a blocking dialog: the floor is a tested one rather than a hard incompatibility, and an editor that degrades beats one that will not open |
-| T05 (memory pressure/OOM) | Derive the V8 heap ceiling from device RAM (`ProcessManager.heapCeilingForDevice`, held between 256 MB and 768 MB), lazy-load extensions/LSP, add memory watchdog and pressure-based cleanup. **This bounds one number out of several and must not be read as bounding the app's memory.** See the note below | Auto-disable heavy extensions and reduce concurrent LSP to 1. A user-set ceiling disables itself after three `SIGKILL`s and says so |
+| T05 (memory pressure/OOM) | Derive the V8 heap ceiling from device RAM (`ProcessManager.heapCeilingForDevice`, held between 256 MB and 768 MB) and lazy-load extensions/LSP. **This bounds one number out of several and must not be read as bounding the app's memory.** See the note below. **Not done:** a memory watchdog or pressure-based cleanup; `MainActivity.onTrimMemory` logs the level and hands it to a page hook that only writes a console warning | Nothing disables an extension or limits how many language servers run, and a killed language server is restarted by its extension within a second (T01). A user-set ceiling disables itself after three `SIGKILL`s and says so |
 | T06 (node-pty failure) | Build node-pty in CI for each Node.js bump, run PTY integration tests on physical device, keep pinned known-good node-pty version | Fallback terminal mode with reduced features until PTY patch is fixed |
 | T07 (16KB page alignment) | Enforce linker flags in all native build scripts, validate with `readelf` checks in CI | Block release for API 36 target until all binaries pass alignment checks |
 | T09 (asset pack download requires internet) | Keep the core toolchain offline-ready (Node/Python/Git), clear UI states for pending downloads, retry/backoff for flaky networks | A non-Play install fetches the same toolchain ZIPs over HTTPS from GitHub Releases, checked against a published sha256 manifest |
@@ -211,8 +211,9 @@ These plans cover risks that did not yet have dedicated sections above.
 >
 > 1. **The flag caps each V8 isolate, not all of them together.** `--max-old-space-size` reaches
 >    the bootstrap, the editor server's main isolate, the Extension Host worker, the Pty Host
->    worker and the forked file watcher, and every one of them is capped at the same number
->    rather than sharing it. A ceiling of N authorises roughly 3N of old space in that family.
+>    worker, the forked file watcher and the forked agent host, and every one of them is capped
+>    at the same number rather than sharing it. A ceiling of N authorises up to 6N of old space
+>    in that family.
 >    Raising the number is a larger step than it looks, which is why the user override is
 >    clamped to a quarter of RAM and to 1536 MB, not to whatever the device could nominally
 >    hold.
@@ -245,7 +246,7 @@ These plans cover risks that did not yet have dedicated sections above.
 | Indicator | Trigger | Action |
 |-----------|---------|--------|
 | Node.js build time > 2 hours | M0 build stage | Investigate build config, try Termux binary fallback |
-| Phantom process count at or above `ERROR_BUDGET` (14) | M1 integration test, and the status bar item on a device | Review process management. The app already warns the user at that count and offers the idle-server sweep; five is the idle baseline, so a threshold below eight fires on an app that is doing nothing |
+| Phantom process count at or above `ERROR_BUDGET` (14) | M1 integration test, and the status bar item on a device | Review process management. The app already warns the user at that count, and the details view it offers marks idle language servers and names disabling the owning extension as what frees a slot; nothing is swept or killed. Five is the idle baseline, so a threshold below eight fires on an app that is doing nothing |
 | Patch apply failure on new VS Code | CI monthly check | Pause upstream sync, fix patches |
 | WebView crash rate > 5% | M2 testing | Profile memory, reduce WebView load |
 | Play Store rejection | M5 submission | Prepare appeal, prepare alternative distribution |

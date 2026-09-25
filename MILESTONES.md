@@ -410,7 +410,7 @@ M6 (Release)   → Play Store release
    - [x] Reduces phantom process count by 2 (ExtHost + ptyHost invisible in `/proc`)
 
 2. **On-demand toolchain download scripts** (`scripts/download-ruby.sh`, `download-java.sh`)
-   - [x] Ruby from Termux `ruby` + libgmp + libyaml. Unpacked size is recorded in `ToolchainRegistry`, which is what every gate reads: 36 MB today
+   - [x] Ruby from Termux `ruby` + libgmp + libyaml. Unpacked size is recorded in `ToolchainRegistry`, which is what every gate reads: 39 MB today
    - [x] Java from Termux `openjdk-17` + libandroid-shmem + libandroid-spawn. 156 MB unpacked; the registry read 146 until the JDK grew past it
    - [x] Each script: download .deb → extract → place in asset pack module → strip → write manifest
    - [x] Each script fails the build on any symbolic link anywhere in the pack. Neither delivery path can carry one: an asset pack cannot hold a link, and `ToolchainManager.extractZip` writes it as a text file holding the target path
@@ -519,7 +519,7 @@ _Order: audit code → configure release build → test on devices → validate 
      - [x] `java -version` → OpenJDK 17.0.18; `javac` ✓; hello world compile+run ✓
      - [x] Verify toolchains persist across app restarts: all 3 survive force-stop+restart
      - [x] Verify uninstall cleans up correctly: Go/Java/Ruby all uninstalled via bridge, symlinks removed, installRoots deleted, libs cleaned, core tools (bash/git/node/python) intact, toolchains.json empty, toolchain-env.sh deleted
-     - Issues found and fixed: Go tool binaries need chmod +x (added to manifest binaries); Ruby needs `libandroid-execinfo.so` dep, `RUBYLIB` env var, versioned soname symlink (`libruby.so.3.4`), and bash wrapper functions for scripts (noexec /data)
+     - Issues found and fixed: Go tool binaries need chmod +x (added to manifest binaries); Ruby needs `libandroid-execinfo.so` dep, `RUBYLIB` env var, versioned soname symlink (`libruby.so.3.4`), and bash wrapper functions for scripts (SELinux refuses to exec a script under /data)
    - [x] **Memory**: OnePlus 131 MB PSS, POCO 167 MB PSS, Redmi 142 MB PSS at idle (app + Node.js server)
 
 7. **Android App Bundle & size audit**
