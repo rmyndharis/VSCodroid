@@ -42,11 +42,15 @@ const commands = new Map();
 // details view is a user-facing render with branches of its own, and a stub that
 // throws its lines away certified every one of them.
 const printed = [];
+// The button a notification resolves with, and the commands a choice ran.
+let answer;
+const executed = [];
 const vscodeStub = {
     StatusBarAlignment: { Left: 1, Right: 2 },
     ThemeColor: class { constructor(id) { this.id = id; } },
     commands: {
         registerCommand: (id, fn) => { commands.set(id, fn); return { dispose() {} }; },
+        executeCommand: (...args) => { executed.push(args); return Promise.resolve(); },
     },
     window: {
         createStatusBarItem: () => ({ show() {}, hide() {}, dispose() {} }),
@@ -63,8 +67,8 @@ const vscodeStub = {
         // stood beside 'Show Details' on both tiers, and a stub that dropped the
         // items could not tell a notification offering a signal from one that
         // does not.
-        showWarningMessage: (message, ...items) => { shown.push({ level: 'warning', message, items }); return Promise.resolve(undefined); },
-        showErrorMessage: (message, ...items) => { shown.push({ level: 'error', message, items }); return Promise.resolve(undefined); },
+        showWarningMessage: (message, ...items) => { shown.push({ level: 'warning', message, items }); return Promise.resolve(answer); },
+        showErrorMessage: (message, ...items) => { shown.push({ level: 'error', message, items }); return Promise.resolve(answer); },
         showInformationMessage: (message) => { shown.push({ level: 'info', message }); return Promise.resolve(undefined); },
     },
 };
@@ -562,9 +566,60 @@ function snapshot(total, terminals, langservers, budget = { idle: 5, soft: 8, er
     );
 }
 
-console.log(
+// Chat's two processes are named as chat, and only while they run is the
+// setting that stops them offered.
+//
+// The agent host and the model backend it spawns run from startup whether or
+// not chat is used, and the backend is typed langserver, so it was counted into
+// the language-server advice, which tells the reader to disable the extension
+// that starts it. No extension does. The button opens the setting that does.
+//
+// NEGATIVE CONTROL: return ['Show Details'] from tierButtons() and the first
+// assertion goes red; count every langserver again and the third does.
+(async () => {
+    const tree = [
+        { pid: 5001, ppid: 1, type: 'server', cmd: 'libnode.so server-main.js' },
+        { pid: 5002, ppid: 5001, type: 'system', cmd: 'libnode.so bootstrap-fork --type=agentHost' },
+        { pid: 5003, ppid: 5002, type: 'langserver', cmd: 'libnode.so copilot-android-arm64/index.js' },
+        { pid: 5004, ppid: 5001, type: 'langserver', cmd: 'libnode.so eslintServer.js' },
+        { pid: 5005, ppid: 5001, type: 'langserver', cmd: 'libnode.so jsonServerMain' },
+    ];
+    const snap = { timestamp: Date.now(), total: 20, budget: { current: 20, idle: 5, soft: 8, error: 14, hard: 32 }, tree };
+
+    answer = 'Hide AI Features';
+    executed.length = 0;
+    const raised = notificationFor(snap);
+    await new Promise((resolve) => setImmediate(resolve));
+    answer = undefined;
+    assert.deepStrictEqual(
+        raised[0] && raised[0].items, ['Show Details', 'Hide AI Features'],
+        `with chat running the notification offers ${JSON.stringify(raised)}`,
+    );
+    assert.deepStrictEqual(
+        executed, [['workbench.action.openSettings', '@id:chat.disableAIFeatures']],
+        `the Hide AI Features button ran ${JSON.stringify(executed)}`,
+    );
+
+    commands.get('vscodroid.showProcesses')();
+    const advice = printed.join('\n');
+    assert.match(
+        advice, /2 language servers running/,
+        `the chat backend is still counted as a language server:\n${advice}`,
+    );
+    assert.match(
+        advice, /Chat holds 2 of these .*chat\.disableAIFeatures/,
+        `the advice does not name chat and the setting that stops it:\n${advice}`,
+    );
+
+    // Without an agent host the setting is not offered and chat is not named.
+    const plain = notificationFor({ ...snap, tree: tree.filter((p) => p.pid !== 5002) });
+    assert.deepStrictEqual(plain[0].items, ['Show Details'], `chat is offered with no agent host: ${JSON.stringify(plain)}`);
+    commands.get('vscodroid.showProcesses')();
+    assert.ok(!/Chat holds/.test(printed.join('\n')), `chat is named with no agent host:\n${printed.join('\n')}`);
+})().then(() => console.log(
     'ok -- both notification tiers say the same thing whatever the counts, stay quiet below ' +
     'them, come from the snapshot rather than from literals and offer only the details view, ' +
     'nothing signals a process, and the details view marks idle servers, promises no reclaim ' +
-    'and marks a snapshot nobody is refreshing',
-);
+    'and marks a snapshot nobody is refreshing, and chat is named and its setting offered only ' +
+    'while it runs',
+), (err) => { console.error(err); process.exit(1); });
