@@ -31,7 +31,7 @@ asks the server things over HTTP on the loopback port, and learns of its death f
 ### 2.1 Bridge Registration
 
 ```kotlin
-// In MainActivity.initBridge(), once per server lifecycle
+// In MainActivity.initBridge(), once per WebView (recreateWebView clears the guard)
 wv.addJavascriptInterface(bridge, "AndroidBridge")
 ```
 
@@ -99,12 +99,15 @@ is why `listSshKeys` no longer answers with a key's comment and why a forced
    `openExternalUrl(url, authToken)`, `installToolchain(name, authToken)`,
    `removeToolchain(name, authToken)` and `cancelToolchainInstall(name, authToken)`.
    Read the signature before calling; the position is not a convention you can rely on.
-3. **No URL filtering.** `openExternalUrl()` hands any URL to the platform: any
-   scheme, any host, including one that is wrong. This is a development tool, and a
-   developer opening `http://192.168.1.5:3000`, a custom scheme, or a typo is doing
-   something ordinary; the app is not the right place to have an opinion about it.
-   Android decides whether an app exists to handle the link, and `false` says none
-   did. There is no scheme list and no host list to keep in step with anything.
+3. **No URL filtering beyond one address.** `openExternalUrl()` refuses this app's
+   own `vscodroid://callback` before arming anything (§2.4) and hands every other
+   URL to the platform: any scheme, any host, including one that is wrong. This is
+   a development tool, and a developer opening `http://192.168.1.5:3000`, a custom
+   scheme, or a typo is doing something ordinary; the app is not the right place to
+   have an opinion about it. Android decides whether an app exists to handle the
+   link, and the method answers with the empty string when one did and with the
+   reason otherwise. There is no scheme list and no host list to keep in step with
+   anything.
 
    Citations in this section name symbols rather than line numbers on purpose. All
    three used to carry ranges and all three had rotted; one of them pointed into a
@@ -157,8 +160,15 @@ the DOM's own names, not an interface this project defines.
 window.__vscodroid.onLowMemory(level: number); // Android trim-memory level
 ```
 
-This is the only hook Kotlin calls on the page, and the page supplies its own
-consumer: `MainActivity` installs one, rather than the workbench providing it.
+It is one of three hooks Kotlin calls on the page, and each consumer is one
+`MainActivity` injects rather than one the workbench provides; this one comes from
+`injectMemoryPressureHandler`. The other two are
+`window.__vscodroidBridgeReply(id, ok, payload)`, defined by `injectBridgeRelay` and
+called by `answerBridgeCommand` to post a late answer against its `replyId` (§2.4),
+and `window.__vscodroidDownload.send` and `.release`, defined by
+`injectDownloadCapture` and called from `DownloadHost.requestBytes` and
+`releaseBytes` to ask the page for a download's bytes or to have it let go of one
+(Saving a Download).
 
 There is no `onServerReady`, `onServerRestarting`, `onOAuthCallback` or
 `onOAuthError` on this object. Server readiness is a Kotlin-side callback on
@@ -180,7 +190,10 @@ testing `if (!result)` reads a refusal as success; test its `success` field.
 `openExternalUrl`, `reclaimSafMirror`, `getStorageBreakdown`, `clearCaches` and
 `listSafMirrors` return the refusal sentence itself,
 because for those five the EMPTY string is the success value, so the polarity is
-reversed and a truthiness test reads backwards in the other direction. Read the token from
+reversed and a truthiness test reads backwards in the other direction. Empty is not falsy
+for five of the twenty-eight either: `getDeviceInfo` refuses with `"{}"`, and
+`getRecentFolders`, `listSshKeys`, `getAvailableToolchains` and `getInstalledToolchains`
+with `"[]"`, and both are non-empty strings, so truthy until parsed. Read the token from
 `window.__vscodroid.authToken`, which MainActivity sets once the bridge is installed.
 `BridgeTokenUniformityTest` enumerates the methods by reflection and fails if one is
 added without the check, so this holds for the class rather than for the list below.
@@ -270,9 +283,13 @@ fun hasClipboardText(authToken: String): Boolean
 ```kotlin
 @JavascriptInterface
 fun openExternalUrl(url: String, authToken: String): String  // note: token LAST
-// Hands the URL to a browser: a Chrome Custom Tab for https, and a plain VIEW
-// intent for the rest, which is what the localhost dev-server preview needs.
-// Used by: VS Code "Open in Browser" actions.
+// Hands the URL to a browser: a Chrome Custom Tab for https to any host but
+// 127.0.0.1 and localhost, and a plain VIEW intent for the rest, loopback https
+// included, which is what a dev server on this device needs.
+// Used by: every http(s) URL the workbench opens outside itself, extension
+// sign-ins included, and the bundled "VSCodroid: Open in Browser" command
+// through the relay. The workbench's default external opener calls
+// window.open, and MainActivity.injectWindowOpenOverride routes that call here.
 //
 // Returns the empty string when it opened, and otherwise the reason it did not,
 // which the relay forwards to the user unchanged. Three reasons exist: the
@@ -391,9 +408,11 @@ fun getRecentFolders(authToken: String): String
 @JavascriptInterface
 fun openRecentFolder(authToken: String, uriString: String)
 // Re-opens a previously granted SAF folder by URI.
-// Returns NOTHING -- it hands the URI to MainActivity and returns. A URI whose
-// grant has lapsed fails later, in the sync, not here. There is no return value
-// to test for validity.
+// Returns NOTHING -- it hands the URI to MainActivity and returns. A URI this
+// app holds no read and write grant for is refused there, after this call has
+// returned and before any sync starts: MainActivity.openRecentSafFolder shows
+// the saf_permission_expired notice and opens no picker. There is no return
+// value to test for validity.
 
 @JavascriptInterface
 fun getStorageBreakdown(authToken: String, replyId: String): String
@@ -550,40 +569,48 @@ sequenceDiagram
   participant C as Chrome Custom Tabs
   participant P as Identity provider
   W->>K: openExternalUrl(authUrl, authToken)
-  K->>K: AuthTabWindow.arm(authRequestIdsIn(authUrl), elapsedRealtime)
-  K->>C: CustomTabsIntent.launchUrl (https only)
+  K->>K: AuthTabWindow.arm(authRequestIdsIn(authUrl), authCallbackNonceIn(authUrl), elapsedRealtime)
+  K->>C: CustomTabsIntent.launchUrl (https to a non-loopback host, a plain VIEW intent otherwise)
   C->>P: user login + consent
   P-->>C: redirect to the workbench callback page
   C-->>K: VIEW intent, vscodroid://callback?data=ENCODED_JSON
-  K->>K: gate: workbenchLoaded, then armedAt(id), then authCallbackIsExpected(...)
+  K->>K: gate: size, workbenchLoaded, armedAt(id), callbackSecretMatches(...), authCallbackIsExpected(...)
   K-->>W: evaluateJavascript, writes vscode-web.url-callbacks[id]
 ```
 
 The scheme is `vscodroid://callback`, not `vscodroid://oauth/<provider>`, and the
-payload is a single `data` parameter carrying the workbench's own JSON: no
-provider, code or state is parsed on the Kotlin side.
+payload is a single `data` parameter carrying the workbench's own JSON. Kotlin
+reads two things out of it: the request `id` (`callbackRequestId`) and the
+`vscodroid-nonce` parameter of `uri.query` (`callbackNonce`), which
+`callbackUriJson` removes before the address is relayed, because that secret is
+between this app and the browser and is not the extension's. No provider, code or
+state is parsed on the Kotlin side.
 
-**Four gates, and all of them refuse rather than relay.** The VIEW filter is
+**Six gates, and all of them refuse rather than relay.** The VIEW filter is
 exported and `BROWSABLE`, so any app or web page on the device can fire this
 intent:
 
 | Gate | Where | What it rejects |
 |---|---|---|
 | `isExtensionCallback(scheme, host)` | `MainActivity.kt` | Anything that is not exactly scheme `vscodroid` **and** host `callback` |
-| `workbenchLoaded` | `MainActivity.receiveCallbackIntent` | A callback arriving with no workbench page to receive it. Shows a "sign in again" toast rather than injecting, deliberately ahead of the timing gate, because a process killed while the browser had the foreground has no record of opening a tab |
+| `MAX_CALLBACK_PAYLOAD_CHARS` | `MainActivity.receiveCallbackIntent` | A `data` parameter longer than 8192 characters, refused before anything parses it: the platform's JSON reader recurses once per nesting level with no depth cap, and the stack overflow a deep enough payload causes would take the process with it. Logged only |
+| `workbenchLoaded` | `MainActivity.receiveCallbackIntent` | A callback arriving with no workbench page to receive it. Shows a "sign in again" toast, at most once per Activity instance, rather than injecting, deliberately ahead of the timing gate, because a process killed while the browser had the foreground has no record of opening a tab |
 | `AuthTabWindow.armedAt(callbackRequestId(data))` | `MainActivity.kt` | A callback whose payload cannot be parsed, or whose `vscode-reqid` this app never launched a browser for. Logged only; a message here would be one an outside caller could raise at will |
+| `callbackSecretMatches(callbackNonce(data), AuthTabWindow.nonceFor(id))` | `MainActivity.kt` | A callback that does not carry back the `vscodroid-nonce` the launched address carried (patch 0019 mints it beside `vscode-reqid`). Logged only, and ahead of the timing gate, so a forged callback can neither raise its message nor spend the record. Enforced only where the launch carried one: a launch that carried none accepts whatever the callback carries |
 | `authCallbackIsExpected(armedAt, now, AUTH_TAB_WINDOW_MILLIS)` | `MainActivity.kt` | A callback for a request this app did launch, arriving more than `AUTH_TAB_WINDOW_MILLIS` (10 minutes, `AndroidBridge.kt`) after that launch. Shows a fixed "sign-in took too long" toast, since a slow consent screen or second factor otherwise fails in silence, and takes the launch record back as it does so |
 
-The last two gates together test whether *this app* went looking for **this**
-sign-in, which is the only thing separating a genuine return from an invented one.
-The legitimate sender is a browser, so there is no caller identity to check, and
-the callback id is a counter the workbench hands out from one rather than a
-secret.
+`armedAt` and the window together test whether *this app* went looking for
+**this** sign-in, and on their own they cannot tell a genuine return from an
+invented one. The legitimate sender is a browser, so there is no caller identity
+to check, and the callback id is a counter the workbench hands out from one rather
+than a secret. The nonce is the secret: it left the device inside the address this
+app opened, and nothing on the device serves it back. Where a launch carried none,
+the id and the window are still all there is.
 
 That makes the last gate a bound on the message rather than a wall in front of
 it. Records are deliberately kept past their own window, and the id is a small
-integer, so an outside caller naming a request the user really did start reaches
-that toast once. Taking the record back as the message goes up means every
+integer, so an outside caller naming a request the user really did start, one
+whose launch carried no nonce, reaches that toast once. Taking the record back as the message goes up means every
 further arrival for that id falls through to the gate above it, which says
 nothing. An accepted callback does **not** consume its record: the workbench
 collects the relayed value asynchronously, and the resume path asks this same
@@ -1080,7 +1107,7 @@ flowchart TD
   O --> O1["vscodroid.vscodroid-saf-bridge (the 11 VSCodroid: commands)"]
   O --> O2["vscodroid.vscodroid-welcome (Get Started walkthrough)"]
   O --> O3["vscodroid.vscodroid-process-monitor"]
-  O --> O4["vscodroid.vscodroid-serve-network (dev-server preview)"]
+  O --> O4["vscodroid.vscodroid-serve-network (LAN address of a dev server on this device)"]
   O --> O5["vscodroid.vscodroid-editor-menus (Select All in the editor context menu, no code)"]
 ```
 

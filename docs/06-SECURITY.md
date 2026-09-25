@@ -25,8 +25,10 @@
 flowchart TD
   subgraph SANDBOX["Trust Boundary: Android App Sandbox"]
     W["WebView (workbench UI)"] <--> |"localhost"| N["VS Code Server (vscode-reh)<br/>extension host, terminals, the user's code"]
+    N --> |"HTTPS_PROXY"| P["dns-proxy.js<br/>loopback proxy inside the server process"]
   end
-  W --> |"external HTTPS"| O["Open VSX"]
+  W --> |"external HTTPS: gallery queries, READMEs, icons"| O["Open VSX"]
+  P --> |"external HTTPS: VSIX downloads, web extension resources"| O
   N --> |"external HTTPS/SSH"| G["GitHub/GitLab remotes"]
   N --> |"external HTTPS, after a GitHub sign-in"| C["GitHub Copilot service"]
 ```
@@ -37,6 +39,17 @@ that omits the one shipped component which sends the user's source somewhere is 
 290 MB), the packaged `product.json` names it in `defaultChatAgent`, and its `package.json` declares
 only `main`, so it runs in the Node extension host and its requests leave from the server side.
 Section 5.1 carries the consequence for the data classification.
+
+Open VSX is reached from both sides. The WebView fetches gallery queries, READMEs and icons
+itself. The server downloads the VSIX for every install it performs, after checking the version
+against the gallery again (`checkAndGetCompatibleVersion`, `downloadExtension` in
+`out/server-main.js`), answers `/web-extension-resource` from the gallery's `resourceUrlTemplate`,
+and repeats through its `request` channel any request the WebView's fetch throws on or gets a 405
+for. The server side leaves through `dns-proxy.js`, which `server.js` preloads into the editor
+server: it binds a loopback proxy in that same process and exports it as `HTTPS_PROXY`, so the
+server's request service, and anything else in that process tree that honours the variable, goes
+out through it. Any app on the device can reach a loopback port, so the proxy refuses a client
+without the credential minted for that boot, which rides in the proxy URL.
 
 ### 2.2 Threat Actors
 
@@ -102,7 +115,7 @@ Section 5.1 carries the consequence for the data classification.
 | Extension reach                | **No sandbox.** The extension host is Node, so an extension can `require('fs')` and reach whatever the app can. The `vscode.*` API is a convenience, not a boundary |
 | AndroidBridge capability model | All bridge APIs require the valid per-session token; no origin component, and section 3.7 says who shares that origin |
 | Extension provenance           | **A VSIX is trusted on the HTTPS connection to Open VSX and nothing else.** `FirstRunSetup` writes `extensions.verifySignature: false` into the machine defaults, and it has to: signature checking loads `@vscode/vsce-sign`, which no Code - OSS build ships and which is absent from `vscode-reh/node_modules`, so with the setting left at its default every gallery install fails with `SignatureVerificationInternal` (`out/server-main.js`, `downloadExtension`). There is no revocation feed either: `server.js` sets `extensionsGallery.controlUrl` to the empty string, and `getExtensionsControlManifest` then answers an empty malicious-and-deprecated list without asking anyone |
-| Extension updates              | Unattended. `extensions.autoCheckUpdates` (default true) and `extensions.autoUpdate` (default `"on"`) are APPLICATION-scoped, so the machine settings file this app writes cannot change them; the workbench asks Open VSX at startup and every 12 hours and installs what it finds, with no publisher verification behind it. The user can turn both off in the editor's own settings |
+| Extension updates              | Unattended. `extensions.autoCheckUpdates` (default true) and `extensions.autoUpdate` (default `"on"`) are APPLICATION-scoped, so the machine settings file this app writes cannot change them; the workbench asks Open VSX at startup and every 12 hours (not while the connection counts as metered) and installs what it finds, with no publisher verification behind it. The download itself runs in the server, through the proxy drawn in 2.1. The user can turn both off in the editor's own settings |
 | File system scoping            | Extensions see workspace folder by default                                                               |
 | Open VSX moderation            | Open VSX has namespace ownership and abuse reporting                                                     |
 | User consent                   | User explicitly installs each extension. The exception is `GitHub.copilot-chat`, which ships in the server tree and is present from first launch |
@@ -284,7 +297,7 @@ until 2026-08-20; the rest have never been in scope.
 | **User Code**   | Source files in workspace             | App-scoped storage, see 5.2. The app uploads none of it. **One shipped component does**: GitHub Copilot Chat, once the user has signed in to GitHub and used it, sends the prompt and the source it attaches as context. Nothing else in this build sends a workspace file anywhere, and a git push is the user's own instruction |
 | **Credentials** | Git passwords, SSH keys, OAuth tokens | App-private internal storage. Not included in backups.                |
 | **Settings**    | VS Code settings, preferences         | App-private internal storage. No sync store is configured in `product.json`, so Settings Sync has nowhere to send them. |
-| **Cache**       | WebView cache, extension cache        | Clearable. No sensitive data.                                         |
+| **Cache**       | WebView cache, extension cache        | Clearable, the WebView's cache only through Android's own Clear cache or Clear storage: `VSCodroid: Clear Caches` does not reach it. No sensitive data. |
 | **Telemetry**   | None from VSCodroid or the editor build | Nothing is collected or transmitted by this app. The bundled chat extension carries senders of its own, gated on the editor's telemetry level; see 3.1 |
 
 ### 5.2 Data at Rest
