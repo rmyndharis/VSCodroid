@@ -123,6 +123,53 @@ class BundledExtractionSplitTest {
         )
     }
 
+    /**
+     * The shape a gallery install really has on disk.
+     *
+     * The server names what it installs after upstream's `ExtensionKey`, which
+     * appends the target platform: `<id>-<version>-<targetPlatform>`. Open VSX
+     * reports `universal` for most extensions, and patch 0009 asks for
+     * `alpine-arm64` where a platform build exists. Neither of the cases above
+     * is written that way, which is how a split at the last hyphen passed them:
+     * it read `ms-python.python-2026.9.0-universal` as id
+     * `ms-python.python-2026.9.0`, version `universal`, matched no bundled id,
+     * and unpacked the 29 MiB copy beside the user's anyway.
+     */
+    @Test
+    fun `a newer gallery install stops the bundled copy being unpacked`() {
+        for (theirs in listOf("ms-python.python-2026.9.0-universal", "ms-python.python-2026.9.0-alpine-arm64")) {
+            assertTrue(
+                bundledDirsToExtract(present = listOf(theirs), bundled = listOf(fetchedPython)).isEmpty(),
+                "$theirs is the user's newer copy; the bundled one would be unlisted and never removed",
+            )
+        }
+    }
+
+    /**
+     * Same version, different directory: the user reinstalled from the gallery
+     * what this build also bundles. Their entry is the one `extensions.json`
+     * keeps, and `bundledIdsToRelist` declines to add a second for the same id,
+     * so an unpacked bundled copy would sit unlisted beside it for good.
+     */
+    @Test
+    fun `a gallery install of the same version stops the bundled copy being unpacked`() {
+        val theirs = "ms-python.python-2026.4.0-universal"
+
+        assertTrue(
+            bundledDirsToExtract(present = listOf(theirs), bundled = listOf(fetchedPython)).isEmpty(),
+        )
+    }
+
+    @Test
+    fun `an older gallery install still gets the bundled copy`() {
+        val theirs = "ms-python.python-2026.1.0-universal"
+
+        assertEquals(
+            listOf(fetchedPython),
+            bundledDirsToExtract(present = listOf(theirs), bundled = listOf(fetchedPython)),
+        )
+    }
+
     @Test
     fun `a newer install of a DIFFERENT id changes nothing`() {
         // The id has to match. Without that test every fetched extension would
