@@ -131,7 +131,12 @@ for patch in patches/*.patch; do
     git -C "$SRC" apply --verbose "$patch"
 done
 
-# 3. Branding: restore this stage's own targets, then overlay
+# 3. Install dependencies; the whole stage gets up to three attempts.
+npm ci
+
+# 4. Callback page: strip the logo callback.html embeds as a base64 image.
+
+# 5. Branding: restore this stage's own targets, then overlay
 #    branding/product.json onto the source product.json and replace the
 #    artwork at seven destinations: the titlebar mark and six letterpress
 #    files, two of them under src/vs/sessions/contrib/chat/browser/media/,
@@ -141,15 +146,25 @@ done
 #    the callback-page stage both own that file, and checking it out here
 #    would undo the intent:// relay and put the stripped logo back.
 
-# 4. Build.
+# 6. Build.
 npm run gulp core-ci
 npm run gulp compile-copilot-extension-build
 npm run gulp "vscode-reh-web-linux-arm64-min-ci"
 
-# 5. Check and pack.
-python3 scripts/verify-server-tree.py       vscode-reh-web-linux-arm64
-python3 scripts/check-patch-fingerprints.py vscode-reh-web-linux-arm64 patches
-tar czf vscode-reh-web-linux-arm64-$VSCODE_VERSION.tar.gz vscode-reh-web-linux-arm64
+# 7. Finish the packaged tree ($OUT, vscode-reh-web-linux-arm64). Prune removes
+#    the GNU/Linux node binary, the unreferenced embedder bundle and every
+#    sourceMappingURL comment naming main.vscode-cdn.net, and copies in
+#    LICENSE.txt and ThirdPartyNotices.txt. Mobile CSS appends touch-sized menu
+#    rules to workbench.css. patch-js-debug-env.py hands js-debug's helper
+#    processes PATH and LD_LIBRARY_PATH. The patch manifest,
+#    vscodroid-patches.json, is written last.
+
+# 8. Check, then pack into $TARBALL (vscode-reh-web-linux-arm64-$VSCODE_VERSION.tar.gz).
+#    It holds the tree's contents with no leading directory, so the fetcher
+#    extracts straight into the name the app expects.
+python3 scripts/verify-server-tree.py       "$OUT"
+python3 scripts/check-patch-fingerprints.py "$OUT" patches
+tar -C "$OUT" -czf "$TARBALL" .
 ```
 
 The `reh-web` target carries both halves, so one tree is the server and the web client it serves;
@@ -230,8 +245,8 @@ android {
         applicationId = "com.vscodroid"
         minSdk = 33
         targetSdk = 36
-        versionCode = 13            // moves every release; read build.gradle.kts, never this block
-        versionName = "1.2.0"      // both are persisted by markSetupComplete() and either one
+        versionCode = 15            // moves every release; read build.gradle.kts, never this block
+        versionName = "1.4.0"      // both are persisted by markSetupComplete() and either one
                                    // changing re-runs the whole of first-run extraction
 
         ndk {
@@ -330,9 +345,9 @@ flowchart TD
 ```mermaid
 flowchart TD
   A["Application.onCreate()<br/>WebView.setDataDirectorySuffix('vscodroid')<br/>Initialize logging"] --> B["SplashActivity (LAUNCHER, runs on every start)<br/>Per-launch repairs: symlinks, git core, npm wrappers, SAF reclaim<br/>Extraction only when versionName or versionCode changed<br/>Start MainActivity"]
-  B --> C["MainActivity.onCreate()<br/>setContentView (WebView + ExtraKeyRow)<br/>Configure WebView<br/>Register AndroidBridge<br/>Start/bind NodeService<br/>Wait server ready -> loadUrl(http://localhost:PORT/)"]
+  B --> C["MainActivity.onCreate()<br/>setContentView (WebView + ExtraKeyRow)<br/>Configure WebView<br/>Start/bind NodeService<br/>Wait server ready -> loadVSCode(): register AndroidBridge,<br/>load http://127.0.0.1:PORT/?folder=... with the connection token"]
   C --> D["NodeService.onCreate()<br/>Start Foreground Service (specialUse)<br/>Build environment variables<br/>Launch Node.js with ProcessBuilder<br/>Poll GET /version, accept only 200<br/>Notify MainActivity: server ready"]
-  D --> E["MainActivity (running)<br/>Handle ExtraKeyRow visibility<br/>Render VS Code in WebView<br/>Monitor Node.js health<br/>Handle rotation/back button/onTrimMemory"]
+  D --> E["MainActivity (running)<br/>Give ExtraKeyRow its root view and the user's hide choice (the row decides when it shows, 5.3)<br/>Render VS Code in WebView<br/>Monitor Node.js health<br/>Handle rotation/back button/onTrimMemory"]
   E --> F["MainActivity.onDestroy()<br/>Stop the SAF file watcher, unbind the service<br/>Destroy the WebView. The service is not stopped here<br/>Rotation does not reach this: configChanges keeps the activity"]
 ```
 
@@ -389,9 +404,16 @@ val env = mapOf(
 )
 ```
 
-**`COLORTERM` and `EDITOR` are not set**, and neither are `VISUAL`, `GIT_EDITOR` or `PAGER`. This
-block listed the first two until 2026-08-20 and they have never been in the map. No editor binary
-is bundled either, so `git commit` with no `-m` has nothing to open.
+**`COLORTERM` and `EDITOR` are not in this map**, and neither are `VISUAL`, `GIT_EDITOR` or
+`PAGER`. This block listed the first two until 2026-08-20 and they have never been in the map. A
+terminal's shell still gets `COLORTERM=truecolor`, from VS Code rather than from here: the
+environment it builds for every terminal not launched with `strictEnv` adds that,
+`TERM_PROGRAM=vscode` and `TERM_PROGRAM_VERSION`. Nothing adds `EDITOR`, and no editor binary is
+bundled either, so `git commit` with no `-m` has nothing to open.
+
+The `PATH` above is the server's. A terminal's has VS Code's `bin/remote-cli` in front of it, put
+there by the server's `buildUserEnvironment`, and once bash sources `toolchain-env.sh` each
+installed toolchain's `pathDirs` are appended again behind everything else.
 
 **`BASH_ENV` is the load-bearing entry.** `npm`, `npx`, `claude` and every toolchain binary are bash
 *functions*, not files, because SELinux refuses `execve` under `filesDir`. Those functions live in
@@ -535,25 +557,31 @@ Read `VSCodroidWebView.configure` for the live set. Three notes on what is **not
 ### 4.2 Crash Recovery
 
 ```kotlin
-override fun onRenderProcessGone(
-    view: WebView,
-    detail: RenderProcessGoneDetail
-): Boolean {
-    // Log crash
-    Log.e(TAG, "WebView renderer crashed: reason=${detail.rendererPriorityAtExit()}")
+// VSCodroidWebViewClient, and bootstrapClient() until that client is installed
+override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+    Logger.e(tag, "Render process gone! didCrash=${detail.didCrash()}")
+    onCrash()    // MainActivity.recreateWebView()
+    return true  // false tells the framework to end the application process
+}
 
-    // Destroy and recreate WebView
-    webViewContainer.removeView(webView)
-    webView.destroy()
-
-    webView = createAndConfigureWebView()
-    webViewContainer.addView(webView)
-
-    // Reload VS Code UI (server should still be running), unless the crashes
-    // have become a loop (see below)
-    webView.loadUrl("http://localhost:$port/")
-
-    return true  // We handled it
+// MainActivity.recreateWebView(), abridged
+val looping = crashLoopReached(webViewCrashes, SystemClock.elapsedRealtime())
+val lastUrl = wv.url              // the open folder, read off the dying WebView
+container.removeView(wv)
+wv.destroy()
+val newWebView = WebView(this)
+container.addView(newWebView, 0, LinearLayout.LayoutParams(MATCH_PARENT, 0, 1f))
+webView = newWebView
+bridgeInitialized = false         // so initBridge registers on the new WebView
+setupWebView()                    // bootstrap client and the loading placeholder
+if (looping) {
+    showRendererCrashLoop()       // see below
+    return
+}
+if (serverPort > 0 && nodeService?.isServerReady() == true) {
+    loadVSCode(serverPort, folderFromUrl(lastUrl), fromUrl = lastUrl)
+} else {
+    retryServerStart()            // a server still starting, or one that gave up
 }
 ```
 
@@ -596,8 +624,8 @@ does not repack, but a drop into a narrow split-screen pane does, through
 | 4 | F1 to F8 |
 | 5 | F9 to F12, Home, End, PageUp, PageDown |
 
-On a 360dp phone page 1 ends at `{}` and `()` opens page 2; on a 320dp phone page 1 is the
-five modifiers and the trackpad, with both bracket keys on page 2. The indicator under the
+On a 360dp phone page 1 ends at `{}` and `()` opens page 2; on a 320dp phone page 1 is Tab,
+Esc, Ctrl, Alt, Shift and the trackpad, with both bracket keys on page 2. The indicator under the
 row is where a user reads the real count, and it speaks the same thing: "Key page 1 of 5",
 with the latched modifier appended while one is held.
 
@@ -868,8 +896,9 @@ every non-Play user.
 
 ### 7.4 Language Picker Integration
 
-The picker is shown once, gated by `toolchain_picker_shown`, and it offers exactly what
-`ToolchainRegistry.available` lists:
+The picker is offered on every launch until it is answered, gated by `toolchain_picker_shown`,
+which only its Continue and Skip buttons write; a kill or an interrupted first run leaves it to be
+offered again on the next launch. It offers exactly what `ToolchainRegistry.available` lists:
 
 ```kotlin
 val toolchains = ToolchainRegistry.available   // toolchain_ruby, toolchain_java
@@ -882,7 +911,8 @@ fun onUserConfirmed(selected: List<ToolchainInfo>) {
 
 **Flow**:
 
-1. First launch, after asset extraction, check whether the picker has been shown before
+1. Every launch, once setup is behind it (`SplashActivity.continueAfterSetup`), check whether
+   the picker has been answered
 2. Show the picker with a card per registry entry, quoting each `downloadSize`
 3. User selects languages and confirms
 4. Fetch each pack in turn, Play Asset Delivery or HTTPS depending on install source

@@ -123,7 +123,7 @@ Developers increasingly work across multiple devices, yet Android (the world's m
 | Clipboard Bridge | Copy/paste between VSCodroid and other Android apps | M2 |
 | Keyboard Handling | Proper viewport resize, cursor scroll-into-view | M2 |
 | Touch Optimization | Long-press, context menu, scroll behavior | M2 |
-| Android Back Button | Close panels/dialogs first, then minimize | M2 |
+| Android Back Button | Minimizes the app (`moveTaskToBack`); the page is not asked first, and Esc on the Extra Key Row is what closes a palette | M2 |
 | Screen Orientation | Portrait, landscape, split-screen support | M2 |
 | Crash Recovery | WebView crash recovery, Node.js auto-restart | M2 |
 | ~~"Open with VSCodroid"~~ | **Out of scope.** A `content://` URI has no POSIX path and the server only ever sees POSIX paths, so an opened file would have to be materialised locally and every save would write to a copy. Folders open through the SAF picker instead, which has the sync engine that makes write-back work. See `AndroidManifest.xml`, where the reasoning sits in place of the filters | withdrawn |

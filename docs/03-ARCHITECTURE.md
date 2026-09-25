@@ -73,7 +73,7 @@ flowchart TD
 **External Systems:**
 - **Open VSX**: Extension search, download, update (HTTPS)
 - **GitHub/GitLab**: Remote git operations (HTTPS/SSH)
-- **Play Asset Delivery**: Ruby and Java 17 packs, for installs whose `installingPackageName` is `com.android.vending`
+- **Play Asset Delivery**: Ruby and Java 17 packs, for installs whose `installingPackageName` is `com.android.vending` or Play's legacy `com.google.android.feedback` (`ToolchainManager.PLAY_INSTALLERS`)
 - **GitHub Releases**: the same two toolchains as ZIPs under `releases/latest`, for every other install source
 
 Termux's package repository is a build-time source, not a runtime one: `scripts/download-node.sh`,
@@ -144,7 +144,7 @@ flowchart TD
 
     EXTHOST --> THREAD["Extension Host Thread<br/>Extension A (active)<br/>Extension B (active)<br/>Extension C (idle)"]
     TERM --> BASH["bash, one per terminal on a real PTY [phantom #2+]"]
-    EXTHOST -. lazy start .-> LS["Language Servers (lazy) [phantom #3+]<br/>tsserver, pylsp (idle after 5 min, shed under pressure or over budget)"]
+    EXTHOST -. lazy start .-> LS["Language Servers (lazy) [phantom #3+]<br/>tsserver, pylsp (marked idle after 5 min, never killed)"]
   end
 ```
 
@@ -175,7 +175,7 @@ owning extension is what frees a slot.
 - `scripts/check-patch-fingerprints.py` matches each patch against `patches/fingerprints.txt` in the packaged bundle, so a patch that applies but never reaches the output is caught; `fetch-vscode-oss.sh` runs the same check on what it downloads
 - `scripts/verify-server-tree.py` refuses any tree carrying `node_modules/vsda`, which only Microsoft's own build has
 
-**Trade-off**: A full build takes around half an hour on an arm64 runner (`.github/workflows/build-vscode-oss.yml`, dispatched by hand), and the patch set has to be rebased on every version bump. The runner architecture is not a preference: native modules are built for the build host, so an x86-64 tree builds green and then fails at exec on the device.
+**Trade-off**: A full build takes twelve to thirteen minutes on an arm64 runner (`.github/workflows/build-vscode-oss.yml`, dispatched by hand), and the patch set has to be rebased on every version bump. The runner architecture is not a preference: native modules are built for the build host, so an x86-64 tree builds green and then fails at exec on the device.
 
 ---
 
@@ -268,7 +268,7 @@ owning extension is what frees a slot.
 - Termux, UserLAnd, and other apps use this approach
 - Requires: Gradle `packagingOptions { jniLibs { useLegacyPackaging = true } }`
 
-**Consequence**: All core binaries (Node.js, Python, Git, bash, tmux, make, ripgrep, ssh) bundled as .so files in the base APK. The two on-demand toolchains, Ruby and Java 17, are delivered as asset packs via Play Store; the user picks them in the first-run toolchain picker (`SplashActivity.showToolchainPicker()`, shown once) and Play Store downloads them automatically. Toolchains are never inside the APK on any channel: `ToolchainManager.install()` picks a delivery path at runtime, and both paths converge on `installFromDirectory()`, which copies the payload into `filesDir/usr`, chmods the binaries its manifest names, and creates its symlinks, so installed toolchains survive app updates.
+**Consequence**: All core binaries (Node.js, Python, Git, bash, tmux, make, ripgrep, ssh) bundled as .so files in the base APK. The two on-demand toolchains, Ruby and Java 17, are delivered as asset packs via Play Store; the user picks them in the first-run toolchain picker (`SplashActivity.showToolchainPicker()`, offered by `continueAfterSetup()` on every launch that gets past setup, until its Continue or Skip button records `toolchain_picker_shown`) and Play Store downloads them automatically. Toolchains are never inside the APK on any channel: `ToolchainManager.install()` picks a delivery path at runtime, and both paths converge on `installFromDirectory()`, which copies the payload into `filesDir/usr`, chmods the binaries its manifest names, and creates its symlinks, so installed toolchains survive app updates.
 
 ---
 
@@ -333,7 +333,7 @@ owning extension is what frees a slot.
   the bundled saf-bridge extension contributes and which reaches `ToolchainActivity` through the
   `openToolchainSettings` relay command. `ToolchainActivity` is not exported, so those two are
   all of them
-- Sideloads are served by the same registry rather than by the APK: `ToolchainManager.shouldUseHttpFallback()` reads `getInstallSourceInfo().installingPackageName`, and anything other than `com.android.vending` sends `install()` into `downloadViaHttp()`, which fetches the `releases/latest` ZIP that `ToolchainRegistry` records as each entry's `downloadUrl`. `ToolchainManager.pinLatest` resolves that URL before the transfer: this build's own `releases/download/v<versionName>/` asset when the release publishes it, otherwise the tag `releases/latest` currently redirects to, and the unpinned `latest` URL if neither can be resolved. Pinning is what keeps a ZIP and the `toolchains.sha256` it is checked against from coming out of two different releases
+- Sideloads are served by the same registry rather than by the APK: `ToolchainManager.shouldUseHttpFallback()` reads `getInstallSourceInfo().installingPackageName`, and anything outside `PLAY_INSTALLERS` (`com.android.vending` and Play's legacy `com.google.android.feedback`), a null installer included, sends `install()` into `downloadViaHttp()`, which fetches the `releases/latest` ZIP that `ToolchainRegistry` records as each entry's `downloadUrl`. `ToolchainManager.pinLatest` resolves that URL before the transfer: this build's own `releases/download/v<versionName>/` asset when the release publishes it, otherwise the tag `releases/latest` currently redirects to, and the unpinned `latest` URL if neither can be resolved. Pinning is what keeps a ZIP and the `toolchains.sha256` it is checked against from coming out of two different releases
 
 **Trade-off**: Requires internet for toolchain download after initial install. Core functionality (Node.js, Python, Git) works fully offline.
 
@@ -397,7 +397,7 @@ sequenceDiagram
 
 ```mermaid
 flowchart TD
-  A["1. User taps key on soft keyboard / Extra Key Row"] --> B["2. Android dispatches KeyEvent to WebView<br/>or evaluateJavascript for Extra Key Row"]
+  A["1. User taps key on soft keyboard / Extra Key Row"] --> B["2. Android dispatches KeyEvent to WebView<br/>(Extra Key Row characters too; its command keys<br/>and chords go through evaluateJavascript)"]
   B --> C["3. Monaco Editor handles keypress<br/>updates internal model"]
   C --> D["4. VS Code auto-save or Ctrl+S triggers save"]
   D --> E["5. WebSocket: FileService.writeFile(uri, content)"]

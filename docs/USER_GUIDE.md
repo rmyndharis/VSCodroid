@@ -196,7 +196,7 @@ Ctrl+Backspace arrive as chords: Ctrl+Enter opens a line below without splitting
 the one you are on, rather than typing a plain newline.
 
 Under a screen reader, the dots below the row are one item that reads "Key page 1
-of 5", with any latched modifier named after it ("Key page 1 of 5, Ctrl+Shift
+of 5", with any latched modifier named after it ("Key page 1 of 5, ctrl+shift
 held"). It is spoken again each time you swipe to another page, which is the only
 announcement that the keys under your finger have changed.
 

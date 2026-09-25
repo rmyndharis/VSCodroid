@@ -102,6 +102,27 @@ class SupersededExtensionsTest {
         )
     }
 
+    /**
+     * A directory whose name carries a target platform was installed by the
+     * gallery, never unpacked by this app, so it is the user's and not a
+     * leftover of an earlier bundled version. It stays even when it is older
+     * than what this build bundles: deleting it would remove a copy the user
+     * chose, and a pinned older version is a choice too.
+     *
+     * This held before only by accident, because the split read
+     * `ms-python.python-2026.1.0-universal` as an id nothing bundles. Reading
+     * those names correctly for [bundledDirsToExtract] must not turn this sweep
+     * loose on them.
+     */
+    @Test
+    fun `never sweeps a gallery install, even an older one`() {
+        val present = bundled + listOf(
+            "ms-python.python-2026.1.0-universal",
+            "PKief.material-icon-theme-5.35.0-alpine-arm64",
+        )
+        assertTrue(supersededExtensionDirs(present, bundled).isEmpty())
+    }
+
     @Test
     fun `treats a missing trailing component as zero`() {
         val present = bundled + "ms-python.python-2026.4"

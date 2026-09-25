@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- An app update no longer unpacks an unused second copy of a bundled extension, up to 29 MB for Python, beside the same or a newer version installed from the Extensions view.
+- After an update, the editor loads its own styles fresh rather than the copy an earlier version left in the WebView cache, so touch fixes to menus and the side bar reach devices that had run an older version.
 - The editor starts on a device where Termux is installed and other apps' data directories are visible, as on some rooted phones. The bundled OpenSSL looked for its configuration in Termux's directory, was refused, and the server died before it could listen; it now reads a configuration file of its own.
 
 ## [1.4.0] - 2026-09-18
