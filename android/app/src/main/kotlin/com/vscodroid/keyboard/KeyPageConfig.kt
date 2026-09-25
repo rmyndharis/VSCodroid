@@ -10,7 +10,7 @@ import com.vscodroid.R
  * not: the popup drew each alternate with its glyph and nothing else, so the
  * only thing a screen reader could announce was the character itself. That is
  * the failure the row's descriptions exist to prevent, and this layer is the
- * one place it survived; `'` and `\` are on no page at all, so the popup is
+ * one place it survived; `)`, `'` and `\` are on no page at all, so the popup is
  * their only route and the popup said nothing about them. Requiring the
  * resource makes an unnamed alternate a compile error rather than a silent one,
  * and puts the words where a translator can reach them.

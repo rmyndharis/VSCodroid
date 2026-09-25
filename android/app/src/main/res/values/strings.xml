@@ -208,10 +208,11 @@
     <string name="toolchain_remove_confirm_title">Remove %s?</string>
     <string name="toolchain_remove_confirm_message">This will delete all %s files. You can reinstall anytime.</string>
 
-    <!-- Launcher shortcut: in practice the only route to the toolchain screen.
-         The activity is not exported and has no launcher entry, and the one
-         command that could reach it through the WebView is sent by no bundled
-         extension. SplashActivity.publishToolchainShortcut records both.
+    <!-- Launcher shortcut: one of two routes to the toolchain screen, and the
+         only one that works while the editor is not up. The activity is not
+         exported and has no launcher entry; the other route is the bundled
+         saf-bridge extension's Manage Toolchains command, which needs a loaded
+         workbench. SplashActivity.publishToolchainShortcut records both.
 
          The long label is the one that has to survive truncation, not the short
          one. The launcher's touch-and-hold menu shows longLabel: read off a

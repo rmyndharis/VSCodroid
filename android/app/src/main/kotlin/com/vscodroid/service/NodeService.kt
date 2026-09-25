@@ -1255,7 +1255,7 @@ class NodeService : Service() {
      * Narrowly the proxy, and not adoption in general. `assets/server.js` still
      * `require()`s `assets/process-monitor.js` in the BOOTSTRAP rather than
      * preloading it into the child, so an adopted server does run its whole
-     * session with no phantom-process sweep and no idle language-server reclaim.
+     * session with no process count and no idle language-server marking.
      * That is a real difference from a spawned session and it is unsurfaced;
      * whether it deserves a surface at all is a separate question from the one
      * this line answered. `ProcessManager.isAdopted` is still the right question

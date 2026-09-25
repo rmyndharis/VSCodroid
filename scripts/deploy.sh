@@ -64,9 +64,11 @@ echo "Launching VSCodroid..."
 # exist") unless a release build happened to be installed beside it, in which
 # case it started that one instead and the install above was wasted.
 #
-# SplashActivity and not MainActivity: MainActivity bypasses first-run setup
-# entirely, so a fresh install launched that way opens against an asset tree
-# that was never extracted.
+# SplashActivity and not MainActivity: MainActivity hands a launch that finds
+# setup undone back to SplashActivity, but it skips the repairs SplashActivity
+# runs on every launch, so after the reinstall above the session would run on
+# dangling usr/bin symlinks and settings paths naming the old native library
+# directory.
 PKG="${PKG:-com.vscodroid.debug}"
 adb shell am start -n "$PKG/com.vscodroid.SplashActivity"
 echo "  ✓ Launched $PKG"

@@ -106,8 +106,9 @@ object KeyMapping {
      * unshifted digit row at all, so the search below has nothing to match and
      * returns null; the row carries no digits either, so there is no key to hold
      * Shift over. Reaching one of them means putting the character itself on a
-     * page. Every other shifted character in the table is already on a page, so
-     * nothing beyond those three depends on this.
+     * page. Every other shifted character in the table is on a page, or, for
+     * `~`, a long-press alternate on the backtick key that Shift over backtick
+     * duplicates, so nothing beyond those three depends on this.
      */
     fun shiftedForm(key: String): String? {
         if (key.length == 1 && key[0].isLetter()) return key.uppercase()

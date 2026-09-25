@@ -3,7 +3,7 @@ set -euo pipefail
 
 # Download pre-compiled Python 3 + pip from Termux APT repo.
 # Places interpreter in jniLibs/arm64-v8a/ (.so trick), stdlib + pip in
-# assets/usr/lib/python3.12/, and new shared libs in assets/usr/lib/.
+# assets/usr/lib/python<major.minor>/, and new shared libs in assets/usr/lib/.
 #
 # Dependencies already provided by download-termux-tools.sh are NOT re-downloaded:
 #   libandroid-support, libexpat, ncurses, openssl, readline, zlib

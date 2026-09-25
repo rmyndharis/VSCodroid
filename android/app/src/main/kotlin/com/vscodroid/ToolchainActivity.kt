@@ -29,8 +29,8 @@ import java.util.concurrent.atomic.AtomicBoolean
  * and has none of its own.
  *
  * The launcher shortcut published by `publishToolchainShortcut` in
- * [SplashActivity] is the one that does not depend on the editor being up, which
- * is why it is the route the on-device test exercises. The other is
+ * [SplashActivity] is the one that does not depend on the editor being up; the
+ * instrumented tests launch this activity directly instead. The other is
  * [com.vscodroid.bridge.AndroidBridge.openToolchainSettings], reached by the
  * `openToolchainSettings` command on the BroadcastChannel relay, which the
  * bundled SAF-bridge extension now sends behind its `vscodroid.manageToolchains`

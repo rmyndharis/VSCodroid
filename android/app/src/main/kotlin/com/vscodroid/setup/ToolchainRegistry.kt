@@ -30,8 +30,9 @@ object ToolchainRegistry {
         /**
          * Approximate size on disk once unpacked, in bytes.
          *
-         * This is the free-space figure: `downloadViaHttp` gates on it plus a
-         * buffer, because the unpacked tree is what has to fit. It is not what
+         * This is the free-space figure: `downloadViaHttp` gates on about twice
+         * it plus a buffer, because the unpacked tree is what has to fit and a
+         * fresh HTTP install holds two copies of it at once. It is not what
          * the user is choosing about on mobile data, which is [downloadSize],
          * and telling them this number alone overstated every toolchain by
          * roughly three times.

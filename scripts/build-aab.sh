@@ -2,8 +2,10 @@
 # Build signed AAB for Play Store upload.
 # Usage: bash scripts/build-aab.sh
 #
-# Signing config is read from android/signing.properties (gitignored).
-# Falls back to VSCODROID_* env vars for CI.
+# Signing config is read from android/signing.properties (gitignored), and this
+# script stops without it. Gradle also falls back to VSCODROID_* env vars key
+# by key, which is how CI signs; to sign from those alone, run ./gradlew
+# directly.
 
 set -euo pipefail
 cd "$(dirname "$0")/../android"

@@ -196,7 +196,9 @@ class SafStorageManager(context: Context) {
      *
      * This must be called with the URI returned from [ActivityResultContracts.OpenDocumentTree].
      * Persisted permissions survive across app restarts and device reboots until
-     * the user explicitly revokes them in system settings.
+     * the user revokes them in system settings or this app releases them, which it
+     * does for a folder pushed off the recent list and for one whose local copy the
+     * user removes.
      */
     fun persistPermission(uri: Uri) {
         try {
@@ -692,8 +694,9 @@ class SafStorageManager(context: Context) {
      * [reclaimRevokedMirrorsSync]. But that pass then almost always declines, and it
      * declines hardest on the mirrors worth the most disk: a mirror gets large by being
      * worked in, and working in one creates files the sync record cannot vouch for.
-     * [SafSyncEngine.SKIP_DIRECTORIES] keeps `node_modules`, `.git`, `__pycache__` and
-     * `.gradle` out of that record by construction, so a single `npm install` inside a
+     * [SafSyncEngine.SKIP_DIRECTORIES] keeps `node_modules`, `.git`, `__pycache__`,
+     * `.gradle`, `.idea`, `venv` and a `.env` directory out of that record by
+     * construction, so a single `npm install` inside a
      * device folder makes its mirror permanently unreclaimable. Its recent-list entry
      * went with its grant, so it also has no name anywhere in the app, only a hash.
      *
@@ -1000,7 +1003,7 @@ class SafStorageManager(context: Context) {
         // out at all: the reclaim pass judges a mirror by whether a permission is
         // still persisted, so a folder that fell off this list kept its grant,
         // looked live for ever, and its mirror could never be reclaimed by
-        // anything the app does. Nothing in the UI removes a folder either.
+        // anything the app does.
         //
         // Safe to do here only because of what the reclaim pass refuses to delete,
         // and that clause has been wrong once already. It used to read "a mirror

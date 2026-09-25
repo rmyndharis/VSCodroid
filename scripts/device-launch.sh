@@ -50,8 +50,9 @@ echo "=== Launching ==="
 "$ADB" shell am force-stop "$PKG" || true
 "$ADB" shell am start -n "$PKG/com.vscodroid.SplashActivity" >/dev/null
 
-# Poll rather than sleep for a fixed time: a first run extracts ~100 MB and takes
-# far longer than an upgrade, and a fixed wait is either too short or wasteful.
+# Poll rather than sleep for a fixed time: a first run unpacks the asset tree,
+# several hundred MB, and takes far longer than an upgrade, and a fixed wait is
+# either too short or wasteful.
 for attempt in $(seq 1 40); do
     sleep 5
 

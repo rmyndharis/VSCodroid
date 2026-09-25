@@ -18,7 +18,7 @@ BOTH DIRECTIONS ARE CHECKED, and the second is the one that earns its place:
     binary that arrived without its documentation;
   * every binary the documents list is in the directory, which catches one that
     was withdrawn and left behind in prose, and which is also what stops this
-    gate passing over a stub. `lint.yml` creates a four-byte `libnode.so` so
+    gate passing over a stub. `lint.yml` creates a 64-byte `libnode.so` so
     Gradle will run, and a one-direction check would call that tree documented
     and exit 0. This gate is deliberately NOT wired into that job; the second
     direction is what makes running it there fail loudly rather than lie.

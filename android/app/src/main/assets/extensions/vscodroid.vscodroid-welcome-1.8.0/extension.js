@@ -31,9 +31,8 @@ const SIDE_BAR_ALIGNED = 'vscodroid.secondarySideBar.aligned';
  * later load reads the stored value and never consults the default again, so the
  * bar stays open for the life of the workspace however the setting reads.
  *
- * On a phone that is roughly 45 percent of the width, spent on a chat view whose
- * provider this build prunes, while the walkthrough beside it wraps to one word
- * per line.
+ * On a phone that is roughly 45 percent of the width, spent on a chat view,
+ * while the walkthrough beside it wraps to one word per line.
  *
  * Runs at most once per workspace, so the bar stays where the user leaves it:
  * opening it is a choice, and nothing here runs again to undo it. `hidden` is

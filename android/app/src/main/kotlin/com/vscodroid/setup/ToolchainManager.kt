@@ -40,8 +40,10 @@ import android.annotation.SuppressLint
  *   1. fetch() → AssetPackManager downloads the pack
  *   2. On COMPLETED → installFromDirectory() copies files to filesDir (off main thread)
  *   3. chmod +x on binaries, create symlinks in usr/bin/
- *   4. Write toolchain-env.sh for bash, persist state to toolchains.json
- *   5. removePack() to free the duplicate asset pack storage
+ *   4. Persist state to toolchains.json, then regenerate toolchain-env.sh and
+ *      toolchain-exec.tsv from it
+ *   5. removePack() to free the duplicate asset pack storage, only once that
+ *      record is written
  *
  * HTTP fallback (sideloaded/debug builds):
  *   1. Download ZIP from GitHub Releases via HttpURLConnection
@@ -896,7 +898,8 @@ class ToolchainManager(private val context: Context) {
         Logger.d(tag, "Pack $packName: status=$status, $downloaded/$totalBytes ($percent%)")
 
         // Don't fire onStateChange for COMPLETED here; the real COMPLETED fires
-        // after copyFromAssetPack() finishes extraction (line in copyFromAssetPack).
+        // at the end of installFromDirectoryHoldingPack(), once the copy is done
+        // and the record is written.
         // Firing it twice would cause downloadNext() to be called twice, skipping packs.
         //
         // FAILED is held back for a different reason: report() has no way to say
@@ -1176,12 +1179,13 @@ class ToolchainManager(private val context: Context) {
     }
 
     /**
-     * Hands Play's copy of [packName] back, whether or not the install used it.
+     * Hands Play's copy of [packName] back.
      *
-     * Called on both exits from the COMPLETED branch, which is the point. Play writes
-     * the pack outside `filesDir` and keeps it until asked; leaving it there after a
-     * refusal charged the user for a delivery nothing consumed, on the one path that
-     * fires only when the device is already out of room.
+     * Play writes the pack into `filesDir/assetpacks` and keeps it until asked, so
+     * each route that is done with a delivery ends here: an install that wrote its
+     * record, a cancel, and the launch-time reclaim in [reconcileDeliveredPacks]. A
+     * refused install is deliberately not one of them; [installDeliveredPack] says
+     * why.
      *
      * Guarded, because this now runs on a failure path. `removePack` is a Play Core
      * call and the HTTP delivery path never registered one; an exception here must not
@@ -1466,7 +1470,7 @@ class ToolchainManager(private val context: Context) {
             }
         }
 
-        // Create library symlinks (versioned sonames like libruby.so.3.4 → libruby.so)
+        // Create library symlinks (versioned sonames like libruby.so.4.0 → libruby.so)
         // Android assets can't contain symlinks, so versioned sonames are created at install time.
         val libSymlinks = manifest.optJSONObject("libSymlinks")
         if (libSymlinks != null) {
@@ -4026,8 +4030,8 @@ internal fun markExecutablesIn(root: File, isLink: (File) -> Boolean = ::isSymli
  *    absent under the name the user will type.
  *
  * Everything else measured -- `- . + : @ % ^ ! , { } ] * ? # ~ /`, a leading
- * digit, non-ASCII -- defines correctly and is allowed. All fifty command names in
- * the three shipped manifests pass, but those manifests are regenerated from
+ * digit, non-ASCII -- defines correctly and is allowed. Every command name in
+ * the two shipped manifests passes, but those manifests are regenerated from
  * upstream packages at build time, so what they contain is not this repository's
  * choice to make.
  */

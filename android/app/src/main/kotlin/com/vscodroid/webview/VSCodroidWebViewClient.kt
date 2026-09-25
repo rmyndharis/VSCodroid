@@ -1060,6 +1060,8 @@ class VSCodroidWebViewClient(
 
     /**
      * Intercepts requests to VS Code CDN domains and redirects them to the local server.
+     * On the app's own loopback origin it answers the secret storage key request and
+     * the translated interface bundles itself, and leaves the rest to the server.
      *
      * VS Code's web client has hardcoded CDN URLs (e.g. *.vscode-cdn.net) for webview
      * content, extension resources, etc. Since we run offline on localhost, we rewrite
@@ -1501,7 +1503,7 @@ class VSCodroidWebViewClient(
          *
          * Handles three types of *.vscode-cdn.net requests:
          * 1. main.vscode-cdn.net: Microsoft resources → empty JSON
-         * 2. *.vscode-resource.vscode-cdn.net: extension webview resources → local file/proxy
+         * 2. *.vscode-resource.vscode-cdn.net: extension webview resources → local file or 404
          * 3. HASH.vscode-cdn.net: VS Code static assets → rewrite to localhost
          */
         internal fun interceptCdnRequest(
@@ -1809,8 +1811,10 @@ class VSCodroidWebViewClient(
                 // of the renderer, and nothing in the app could force a refetch: that
                 // extension emits query-less resource URLs, unlike `media-preview`,
                 // which appends its own `version=`. The server tree and the extensions
-                // directory do not change within an install, so all they lose is a
-                // warm-start saving on a local file read.
+                // directory rarely change in place: an app upgrade rewrites the tree
+                // and our bundled extensions, and an extension install or update adds
+                // a new versioned directory. So all they lose is a warm-start saving
+                // on a local file read.
                 //
                 // The length is read off the descriptor that was opened rather
                 // than off the path, and that is the same gap the `try` above

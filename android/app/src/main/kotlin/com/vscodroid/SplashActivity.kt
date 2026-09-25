@@ -986,9 +986,10 @@ class SplashActivity : AppCompatActivity() {
         //
         // The navigation alone, never the whole method: an early return here also
         // skipped publishToolchainShortcut() below, and that is the only publisher
-        // of the only route to the Toolchains screen. Pressing Back during the
-        // first-run downloads therefore cost the user that route for the session,
-        // which is a worse trade than the stray launch this guard exists to stop.
+        // of the one route to the Toolchains screen that needs no editor. Pressing
+        // Back during the first-run downloads therefore cost the user that route
+        // for the session, which is a worse trade than the stray launch this guard
+        // exists to stop.
         val gone = isFinishing || isDestroyed
         if (gone) {
             Logger.i(tag, "The splash screen is gone; not launching the editor behind the user")

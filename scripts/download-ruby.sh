@@ -282,7 +282,7 @@ echo "=== Verifying Ruby binaries ==="
 # every ELF object in it is a promise that has to hold.
 #
 # The soname link directory is what makes this gate honest rather than noisy.
-# Every one of those extensions names libruby.so.3.4 in DT_NEEDED, but the pack
+# Every one of those extensions names libruby.so.X.Y in DT_NEEDED, but the pack
 # ships the file as libruby.so, because Android asset archives cannot carry
 # symlinks; ToolchainManager creates the versioned name at install time from the
 # manifest's libSymlinks. Verified against the pack as it sits on disk, all 103

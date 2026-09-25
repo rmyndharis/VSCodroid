@@ -3409,7 +3409,7 @@ class HeapOverrideTest {
     @Test
     fun `on a large device the absolute cap is what bounds a request`() {
         // 15500 MiB is a nominal 16 GB tablet, where a quarter is about 3875. The
-        // fraction has stopped protecting: three isolates at 3875 is more V8 old
+        // fraction has stopped protecting: six isolates at 3875 is more V8 old
         // space than the device can hold beside the renderer, which is why the
         // absolute bound exists on top of it.
         assertEquals(
@@ -3428,7 +3428,7 @@ class HeapOverrideTest {
         // binds exactly where the arithmetic says` already pins. The floor was
         // therefore the derived arm's MAXIMUM standing in for its VALUE, and it
         // swallowed the fraction on every device below 3072 MiB, where a flat 768
-        // is about three isolates of 768 on a device that holds 2048.
+        // is six isolates of 768 on a device that holds 2048.
         //
         // Written as a comparison against the derived arm so it cannot go stale the
         // same way: whatever either arm is retuned to, the ordering between them is

@@ -225,7 +225,7 @@ object Environment {
             // since process.platform reports "android" and the builds shipped
             // are for glibc and musl. Unset, it finds nothing and searching
             // fails with no explanation. Falsy sends it to `rg` on PATH, which
-            // is the Bionic build already bundled as libripgrep.so.
+            // is the statically linked build already bundled as libripgrep.so.
             "USE_BUILTIN_RIPGREP" to "0",
             // Where the Jupyter extension from Open VSX finds a zeromq addon it
             // can load. Its own prebuilds are for glibc and musl, so without this
@@ -543,8 +543,9 @@ object Environment {
      * that loader's own calling convention, so the loader used to be named here
      * directly. It cannot be any more: the CLI's runtime calls `epoll_pwait2`,
      * which bionic exposes only from android15, and on android13 and android14
-     * an app making it is killed rather than refused. The shim that answers that
-     * call has to be loaded before the binary runs, and a setting holds a path
+     * the call is refused with SIGSYS rather than an error return, which kills
+     * the process unless a handler answers it. The shim that answers that call
+     * has to be loaded before the binary runs, and a setting holds a path
      * rather than a loader option, so a launcher sits in between and passes it
      * as the loader's `--preload=`. See `scripts/claude-launch.c`.
      *

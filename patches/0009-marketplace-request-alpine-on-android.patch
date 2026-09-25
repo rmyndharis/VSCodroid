@@ -20,7 +20,8 @@ Android neither ships that file nor allows creating it, so it answers false.
 The side effect is global: this decides the target platform for every extension,
 not just this one. Checked against Open VSX before landing, because the fear is
 reasonable -- a musl .node dlopen'd into our Bionic Node would be strictly worse
-than the glibc one the compatibility shim already handles.
+than a glibc one, which the compatibility shim can load when its imports are
+ones the build found in the addons it scanned.
 
 Of 18 extensions probed, only four publish per-platform builds at all:
 Anthropic.claude-code, charliermarsh.ruff, rust-lang.rust-analyzer and

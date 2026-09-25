@@ -20,9 +20,10 @@ extension sign-in, with a title in the browser's tab bar.
 
 The third piece of Microsoft branding on this page is not here. Its `.branding`
 rule carries the VS Code logo as a 150 KB base64 PNG on one line, and a diff that
-removes a line has to quote it. The Branding stage of scripts/build-vscode-oss.sh
-strips it instead, and verify-server-tree.py asserts on both sides of the pivot
-that the packaged page carries no embedded image and no Microsoft product name.
+removes a line has to quote it. The Callback page stage of
+scripts/build-vscode-oss.sh strips it instead, and verify-server-tree.py asserts
+on both sides of the pivot that the packaged page carries no embedded image and
+no Microsoft product name.
 
 diff --git a/src/vs/code/browser/workbench/callback.html b/src/vs/code/browser/workbench/callback.html
 index 4f54d4d1..fa0adede 100644

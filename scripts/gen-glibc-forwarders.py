@@ -203,7 +203,9 @@ NEEDS_TRANSLATION = set()
 # and copies NULL over NULL -- the same self-binding hazard the resolver
 # comment below describes for dlopen, measured here with readelf: the GLOB_DAT
 # entries pointed into the stub's own .bss. libglibc-shim.so defines none of
-# these names, so a call routed through it reaches the real values.
+# these names except the three environ ones, and its constructor fills those
+# through the same references __shim_environ() reads, so a call routed through
+# it reaches a filled value.
 DATA_SYMBOLS = {
     "stdout": ("FILE *", "__shim_stdout()"),
     "stderr": ("FILE *", "__shim_stderr()"),

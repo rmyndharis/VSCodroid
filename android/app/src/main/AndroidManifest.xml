@@ -2,7 +2,10 @@
 <manifest xmlns:android="http://schemas.android.com/apk/res/android"
     xmlns:tools="http://schemas.android.com/tools">
 
-    <!-- Network: localhost communication between WebView and Node.js server -->
+    <!-- Network: localhost communication between WebView and Node.js server, and
+         every outbound connection: the extension marketplace, toolchain
+         downloads, dev-server previews on the local network, and whatever the
+         terminal or an extension fetches -->
     <uses-permission android:name="android.permission.INTERNET" />
 
     <!-- Foreground service: keep Node.js server alive -->
@@ -57,7 +60,9 @@
         android:theme="@style/Theme.VSCodroid"
         tools:targetApi="34">
 
-        <!-- Splash screen: shown during binary extraction and server startup -->
+        <!-- Splash screen: shown during setup (first-run extraction, the
+             toolchain picker and its downloads). MainActivity, not this,
+             starts the server. -->
         <!-- No android:noHistory, and its absence is load-bearing. It finishes an
              activity whenever it is STOPPED, which the screen timing out and the
              user pressing Home both do, and first-run extraction takes minutes
@@ -176,7 +181,7 @@
             android:parentActivityName=".MainActivity"
             android:theme="@style/Theme.VSCodroid" />
 
-        <!-- Node.js server service: runs code-server locally -->
+        <!-- Node.js server service: runs the Code - OSS server locally -->
         <service
             android:name=".service.NodeService"
             android:exported="false"

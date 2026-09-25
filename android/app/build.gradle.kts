@@ -533,11 +533,13 @@ tasks.withType<Test> {
     //
     // One declaration is what makes every manifest-reading suite run, so
     // narrowing it to a single reader's question silences the others, and they
-    // ask different questions. ProcessWideMemoryPressureTest asks whether
-    // `<application android:name>` still points at VSCodroidApp, the class that
-    // hears trim callbacks once no Activity is left. HardwareKeyboardTest,
-    // arriving with the hardware-keyboard guards, asks whether both activities
-    // still list every qualifier they need in `android:configChanges`. Treat
+    // ask different questions. EditorEntryTest asks whether MainActivity still
+    // carries the `vscodroid://callback` filter and SplashActivity still has no
+    // `android:noHistory`. ToolchainRemoveDialogTest asks whether
+    // ToolchainActivity still declares no `android:configChanges`.
+    // HardwareKeyboardTest, arriving with the hardware-keyboard guards, asks
+    // whether SplashActivity and MainActivity still list every qualifier they
+    // need in `android:configChanges`. Treat
     // that as a list of readers, not a limit on them:
     //   grep -rn 'File("src/main/AndroidManifest.xml")' android/app/src/test/kotlin
     inputs.file(layout.projectDirectory.file("src/main/AndroidManifest.xml"))
@@ -775,7 +777,7 @@ val checkPatchFingerprints = tasks.register<Exec>("checkPatchFingerprints") {
 // The same script fetch-vscode-oss.sh runs, pointed at the tree that actually
 // gets packaged instead of the one that was downloaded. Those are two different
 // trees and only the second ships: server/vscode-reh is copied into assets/ by
-// package-assets.sh locally and by an inline cp in build.yml and release.yml, and
+// package-assets.sh, locally and in build.yml and release.yml alike, and
 // build-native-addons.sh then writes its .node files INTO that copy. Several
 // steps read the packaged tree afterwards -- build-glibc-shim.sh --scan,
 // check-langserver-patterns.py, the "Verify assets" existence check -- but this
@@ -1200,11 +1202,9 @@ val verifyRequiredBinaries = tasks.register("verifyRequiredBinaries") {
 // so a binary nobody thought to list is still answered for.
 //
 // Here rather than in verify-android-elf.py, which every installer already calls
-// per file: Go's pack carries Termux shebangs in two syscall generators and a
-// clang wrapper, and Java's lib/modules carries the path inside a jimage archive.
-// None of those is reachable on Android and the archive cannot be rewritten in
-// place, so folding the question into the shared checker would fail builds that
-// are correct.
+// per file: Java's lib/modules carries the path inside a jimage archive, in code
+// Android never reaches, and the archive cannot be rewritten in place, so folding
+// the question into the shared checker would fail builds that are correct.
 //
 // What it costs when it goes wrong is silence of the worst kind: make runs every
 // recipe line through the compiled-in shell and never reads SHELL, so every
@@ -1238,8 +1238,8 @@ val verifyBundledShellPaths = tasks.register<Exec>("verifyBundledShellPaths") {
 }
 
 // The pack is a directory in the checkout whether or not anything has filled it:
-// its manifest is tracked and its payload is downloaded, so usr/ is what says a
-// download has run.
+// its build script is tracked and its payload is downloaded, so usr/ is what
+// says a download has run.
 /**
  * Two gates that examined the asset packs and the finished bundle only as
  * workflow steps, so their correctness rested on position in a step list.
@@ -1420,10 +1420,10 @@ fun anyPackHoldsPayload(): Boolean =
 // today, and ordering is not a gate -- a local AAB built over an older pack, or
 // a reordering, meets no check at all.
 //
-// Ruby alone, deliberately. Go's and Java's packs carry the same path in files
-// that are unreachable on Android and are left as they are, so sweeping those
-// would fail builds that are correct. scripts/patch-default-shell.py records
-// which directories qualify and what each one had to answer first.
+// Ruby alone, deliberately. Java's pack carries the same path in a file that is
+// unreachable on Android and is left as it is, so sweeping it would fail builds
+// that are correct. scripts/patch-default-shell.py records which directories
+// qualify and what each one had to answer first.
 val verifyRubyPackShellPaths = tasks.register<Exec>("verifyRubyPackShellPaths") {
     group = "verification"
     description = "Checks no file in the Ruby asset pack names Termux's prefix as its shell."
@@ -1434,9 +1434,10 @@ val verifyRubyPackShellPaths = tasks.register<Exec>("verifyRubyPackShellPaths") 
         "--check", "android/toolchain_ruby/src/main/assets",
     )
 
-    // Armed by the payload rather than by the directory: a checkout that has
-    // never run download-ruby.sh holds the pack's manifest and nothing else, and
-    // sweeping that would report a pack clean on the strength of one JSON file.
+    // Armed by the payload rather than by the directory: a pack whose usr/ is
+    // gone can still hold its manifest and nothing else, since the two are
+    // written separately, and sweeping that would report a pack clean on the
+    // strength of one JSON file.
     onlyIf { rubyPackHoldsPayload() }
 
     failOnExit(
@@ -1460,10 +1461,10 @@ val verifyRubyPackShellPaths = tasks.register<Exec>("verifyRubyPackShellPaths") 
 // this matches the family rather than the two names: a task added later would
 // otherwise fail the build at validation, and only in the release graph.
 //
-// That graph is the one nothing exercises. `release.yml` runs `assembleRelease`
-// at tag time, `r8.yml` runs a lint task alone against a stub tree, and no other
-// workflow runs a release task at all, so the build that cannot be retried
-// casually is the one that would have found out.
+// That graph is the one least exercised. `release.yml` runs `assembleRelease`
+// at tag time, `r8.yml` runs `optimizeReleaseResources` and `lintVitalRelease`
+// against a stub tree on a weekly cron and when its watched paths change, and
+// no other workflow runs a release task at all.
 tasks.matching { it.name.contains("Lint") || it.name.contains("lint") }
     .configureEach { dependsOn(bundleNotices) }
 
@@ -1557,7 +1558,7 @@ gradle.taskGraph.whenReady {
     // the name cannot.
     //
     // The `lint` figure is what says release.yml's lint step is cheap: it costs
-    // no second asset merge and re-runs none of the ten gates below, which
+    // no second asset merge and re-runs none of the eleven gates below, which
     // matters because that job's budget already covers the server fetch, every
     // download, the addons, the unit tests, assembleRelease and bundleRelease.
     val merging = here.filter { it.javaClass.name.contains("MergeSourceSetFolders") }
@@ -1604,8 +1605,8 @@ gradle.taskGraph.whenReady {
         )
     }
 
-    // The last question, and the one none of the ten gates can answer: is there
-    // an editor in this build at all.
+    // The last question, and the one none of the eleven gates can answer: is
+    // there an editor in this build at all.
     //
     // Four of them would notice an absent server tree, and all four are armed by
     // `onlyIf { entryPoint.isFile }` on that very file, so a tree without it does
@@ -1696,7 +1697,7 @@ val checkPermissionClaims = tasks.register<Exec>("checkPermissionClaims") {
 val permissionClaimsProducer = "processReleaseMainManifest"
 
 // Both gates are attached by an EXACT task name, which is the wiring the
-// assertion further up deliberately does not trust anywhere else: the ten
+// assertion further up deliberately does not trust anywhere else: the eleven
 // packaging gates are matched by name SHAPE and then checked against the live
 // graph, because a name that stops matching detaches in silence and takes an
 // unchecked asset tree into an APK with it.

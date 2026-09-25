@@ -641,7 +641,7 @@ class MainActivity : AppCompatActivity() {
         // that was a destroyed Activity and its whole inflated view tree, on a
         // device this app is trying to leave memory on.
         safManager = SafStorageManager(applicationContext)
-        // Read into locals for the same reason, and used by all four notices below:
+        // Read into locals for the same reason, and used by all five notices below:
         // a lambda that says `this@MainActivity`, `getString` or `runOnUiThread`
         // captures the Activity and hands it straight back to the engine. The
         // notices themselves have to survive, because the drain they report on is
@@ -780,10 +780,10 @@ class MainActivity : AppCompatActivity() {
      * The filter stays on this activity rather than moving to the splash
      * screen, and that is a decision rather than an omission. A callback
      * arriving while the editor is running has to reach `onNewIntent` on the
-     * live page; routing every one of them through [SplashActivity] would run
-     * its launch repairs with a device folder open, and
-     * [SafStorageManager.reclaimRevokedMirrors] is placed there precisely
-     * because nothing else guarantees no folder is open.
+     * live page. Keeping [SplashActivity]'s launch repairs away from an open
+     * device folder is not a reason: a launch never guaranteed that, and
+     * [SafStorageManager.reclaimRevokedMirrors] is safe for what it touches
+     * rather than for when it runs.
      *
      * The intent travels with the hand-off, so the sign-in this filter exists
      * for is not lost: [SplashActivity] passes `data` and the extras on to the
@@ -1020,7 +1020,7 @@ class MainActivity : AppCompatActivity() {
         // The manager it names is what outlives the Activity, because the engine
         // leaves the write-back worker running when the drain outruns that wait,
         // which is why the manager is built on the application context and why the
-        // three notices in onCreate close over that and a main-thread Handler
+        // five notices in onCreate close over that and a main-thread Handler
         // rather than over this Activity.
         val stopping = if (::safManager.isInitialized) safManager else null
         val logTag = tag
@@ -1870,9 +1870,9 @@ class MainActivity : AppCompatActivity() {
         //
         // The same distinction as in setupServiceCallbacks, and the same reason:
         // a restart respawns the process long before the editor server inside it
-        // is answering, so isServerRunning() calls a mid-restart server healthy
-        // and lets the branches below reload the page into a port that is not
-        // listening yet.
+        // is answering, so a liveness check (the removed isServerRunning(), which
+        // read Process.isAlive) called a mid-restart server healthy and let the
+        // branches below reload the page into a port that was not listening yet.
         // Through shouldActOnResume for the same reason as the binding decision:
         // the verdict has to be obeyed, and only a function that returns it can be
         // tested for obeying it. `backgroundedAt` is still consumed above whether
@@ -2421,8 +2421,9 @@ class MainActivity : AppCompatActivity() {
         // onServerReady at it (launchServer()'s coroutine has already finished),
         // so the state has to be asked for rather than waited on.
         //
-        // isServerReady(), not isServerRunning(). The latter is Process.isAlive,
-        // which is true from the moment the process is spawned and stays true for
+        // isServerReady(), not the liveness check isServerRunning() was, which has
+        // since been removed. That was Process.isAlive, which is true from the
+        // moment the process is spawned and stays true for
         // the seconds the editor server takes to bind its port, and for the whole
         // of a restart after a crash. Navigating on it points the WebView at a
         // port with nothing listening, and onReceivedError only logs a refused
@@ -2856,12 +2857,14 @@ class MainActivity : AppCompatActivity() {
 
     /**
      * Initializes the WebView bridge, security manager, and clients.
-     * Only called once per server lifecycle, not on every folder switch.
+     * Called from every [loadVSCode] and [navigateToFolder], but does its work once
+     * per WebView: [recreateWebView] clears the guard, and a server restart does not.
      */
     private fun initBridge(port: Int) {
         val wv = webView ?: return
 
-        // Skip re-initialization if bridge is already set up for this port
+        // Skip re-initialization if this WebView already has the bridge. The port
+        // is not part of the guard.
         if (bridgeInitialized) return
         bridgeInitialized = true
 
@@ -3374,11 +3377,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Injects CSS into VS Code to handle round-corner device safe areas.
+     * Injects CSS into VS Code for round-corner device safe areas.
      *
-     * Adds padding to the Activity Bar (left sidebar) and Status Bar (bottom)
-     * so content isn't clipped by the device's rounded display corners.
-     * Uses CSS `env(safe-area-inset-*)` with fallback padding.
+     * Pads the Activity Bar, Status Bar, title bar, side bar and panel by CSS
+     * `env(safe-area-inset-*)`, with a 0px fallback. In practice each of those
+     * normally resolves to 0px: [applyWindowInsetsPadding] exists to keep
+     * `env(safe-area-inset-*)` at zero inside the page, and the container
+     * padding is what keeps the editor clear of the bars and the cutout. The
+     * rules only take effect if an inset reaches the page anyway.
      */
     private fun injectSafeAreaCSS() {
         webView?.evaluateJavascript(
@@ -3437,15 +3443,15 @@ class MainActivity : AppCompatActivity() {
      * The server decides the page's language from the request it serves the
      * workbench on: a `vscode.nls.locale` cookie if there is one, else the first
      * `Accept-Language` entry. Left alone, that means the header decides the
-     * page while [EditorLocale] decides the server process, and the two can
-     * disagree: `android:localeConfig` lets someone set this app to Korean on an
-     * English phone, and whether the WebView's header follows the app's locale
-     * or the system's is not something this app controls. The failure is not a
-     * crash, it is a workbench in one language and its extension host in
-     * another, with nothing on screen to explain it.
+     * page rather than the app's own locale, and the two can disagree:
+     * `android:localeConfig` lets someone set this app to Korean on an English
+     * phone, and whether the WebView's header follows the app's locale or the
+     * system's is not something this app controls. The failure is not a crash,
+     * it is an editor in one language inside an app set to another, with
+     * nothing on screen to explain it.
      *
-     * So the cookie is written from the same answer the server process is given,
-     * and the header is never consulted. `en` is written rather than nothing
+     * So the cookie is written from [EditorLocale]'s answer for the app's own
+     * locale, and the header is never consulted. `en` is written rather than nothing
      * when no bundle fits, because a cookie already on the WebView from an
      * earlier language would otherwise stand: the server reads any locale
      * starting with "en" as "serve the English that already ships".
@@ -5691,7 +5697,8 @@ internal const val FORCE_RELOAD_THRESHOLD_MS = 300_000L  // 5 minutes
  */
 private const val FORCED_REMOVAL_CONFIRM_MS = 45_000L
 
-// Severities a trim level maps to, logged and handed to the page. Words rather
+// Severities a trim level maps to. Only the log line carries the word; the page
+// is handed the raw trim level, and only when it maps above none. Words rather
 // than numbers so that nothing downstream is tempted to compare them with >=,
 // which is the defect this replaced.
 internal const val PRESSURE_NONE = "none"
@@ -5898,11 +5905,12 @@ internal fun callbackUriJson(data: String?): String? {
         //
         // Only the parameter, not every copy of the value. A provider that echoes
         // the whole redirect back inside another parameter carries one with it:
-        // the bundled GitHub flow puts the callback URL in `state`, percent
-        // encoded, so the secret is in there too. Rewriting inside `state` is not
-        // an option, because that value is compared byte for byte by the flow
-        // that sent it. Nothing is gained by that copy: the extension holding it
-        // is the one whose sign-in this is.
+        // the GitHub extension's url-handler flow puts the callback URL in
+        // `state`, percent encoded, so the secret is in there too (that flow is
+        // filtered out on this build, which carries no GitHub client secret).
+        // Rewriting inside `state` is not an option, because that value is
+        // compared byte for byte by the flow that sent it. Nothing is gained by
+        // that copy: the extension holding it is the one whose sign-in this is.
         val query = uri.opt("query") as? String
         if (query != null && callbackNonceParam(query) != null) {
             val rest = callbackQueryWithoutNonce(query)
