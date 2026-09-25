@@ -241,6 +241,30 @@ class ToolchainManager(private val context: Context) {
         private const val DOWNLOAD_BUFFER_SIZE = 8192
         private const val MAX_REDIRECTS = 5
 
+        /** Where the built-in git extension keeps the helper scripts it exports. */
+        private const val GIT_EXTENSION_DIST = "server/vscode-reh/extensions/git/dist"
+
+        /**
+         * Every script the git extension may name in `GIT_ASKPASS`, `SSH_ASKPASS`
+         * or `GIT_EDITOR`; the `-empty` ones are what it names when its IPC
+         * server is off. A name missing from the shipped tree is skipped.
+         */
+        private val GIT_HELPER_SCRIPTS = listOf(
+            "askpass.sh", "askpass-empty.sh",
+            "ssh-askpass.sh", "ssh-askpass-empty.sh",
+            "git-editor.sh", "git-editor-empty.sh",
+        )
+
+        /** Appended to a git helper's name for the shipped script its link replaced. */
+        private const val GIT_HELPER_SUFFIX = ".script"
+
+        /**
+         * What runs a git helper. The scripts are POSIX `sh`, and this is a file
+         * the app may execute, which the trampoline hands to the loader with the
+         * kept script as its argument.
+         */
+        private const val SYSTEM_SHELL = "/system/bin/sh"
+
         /**
          * Ceiling on the digest manifest read into memory.
          *
@@ -3063,6 +3087,7 @@ class ToolchainManager(private val context: Context) {
             "xdg-open",
             "xdg-open\t${Environment.getNodePath(context)}\t$filesDir/server/xdg-open.js",
         )
+        val gitHelpers = addGitHelperRows(rows)
         val binDir = File(context.filesDir, "usr/bin")
         addInstalledScriptRows(rows, binDir, File(binDir, "python3").absolutePath, "python", "pip")
         gemBin?.let { (dir, ruby) -> addInstalledScriptRows(rows, dir, ruby, "ruby", "gem") }
@@ -3077,7 +3102,9 @@ class ToolchainManager(private val context: Context) {
             Logger.e(tag, "Could not write toolchain-exec.tsv; it still holds the previous table")
             return
         }
-        refreshTrampolineLinks(rows.keys)
+        // The git helpers are reached by the absolute path the extension exports,
+        // never by name, so they get no link on PATH.
+        refreshTrampolineLinks(rows.keys - gitHelpers)
         Logger.i(tag, "Regenerated toolchain-exec.tsv (${rows.size} commands, " +
             "${envRows.size} variables)")
     }
@@ -3251,6 +3278,62 @@ class ToolchainManager(private val context: Context) {
      * would instead leave a link pointing into a `nativeLibraryDir` that a
      * reinstall has already moved.
      */
+    /**
+     * Makes the git extension's helper scripts runnable, and answers the names it
+     * gave rows to.
+     *
+     * The built-in git extension exports `GIT_ASKPASS`, `SSH_ASKPASS` and
+     * `GIT_EDITOR` as absolute paths to `#!/bin/sh` scripts in its own `dist`
+     * directory, which is under filesDir, so the kernel refuses to execve them:
+     * every credential prompt git raised, from a terminal or from Source Control,
+     * ended in "cannot exec ... askpass.sh: Permission denied" (measured in the
+     * app's terminal on an API 33 emulator). The path is the extension's, so the
+     * file at it is what has to change. Each script is renamed aside with
+     * [GIT_HELPER_SUFFIX] and its name becomes a link to the trampoline, which
+     * dispatches on that name and runs the kept script with `/system/bin/sh`.
+     * Measured the same way: `git ls-remote` of a private URL then raised the
+     * GitHub sign-in and the Username box in the workbench.
+     *
+     * A regular file at the name is the script as the server tree ships it:
+     * setup writes it through a temporary name and a rename, on a fresh install
+     * and on every update, which replaces the link. So it always replaces the
+     * kept copy, and a script changed by an upstream bump is the one that runs.
+     * The link is rebuilt the way [refreshTrampolineLinksLocked] builds one, under
+     * a temporary name and renamed into place, because git may be starting a
+     * helper while the server runs.
+     */
+    private fun addGitHelperRows(rows: LinkedHashMap<String, String>): Set<String> {
+        val dist = File(context.filesDir, GIT_EXTENSION_DIST)
+        if (!dist.isDirectory) return emptySet()
+        val target = Environment.getTrampolinePath(context)
+        val served = mutableSetOf<String>()
+        for (name in GIT_HELPER_SCRIPTS) {
+            val link = File(dist, name)
+            val kept = File(dist, name + GIT_HELPER_SUFFIX)
+            val current = try { Os.readlink(link.absolutePath) } catch (e: Exception) { null }
+            if (current == null && link.isFile && !link.renameTo(kept)) {
+                Logger.w(tag, "Could not set $name aside; git cannot run it")
+                continue
+            }
+            if (!kept.isFile) continue
+            if (current != target) {
+                val staging = File(dist, ".$name.tmp~")
+                staging.delete()
+                try {
+                    Os.symlink(target, staging.absolutePath)
+                    Os.rename(staging.absolutePath, link.absolutePath)
+                } catch (e: Exception) {
+                    staging.delete()
+                    Logger.w(tag, "Could not link $name to the trampoline: ${e.message}")
+                    continue
+                }
+            }
+            rows.putIfAbsent(name, "$name\t$SYSTEM_SHELL\t${kept.absolutePath}")
+            served += name
+        }
+        return served
+    }
+
     private fun refreshTrampolineLinksLocked(commands: Set<String>) {
         val target = Environment.getTrampolinePath(context)
         if (commands.isNotEmpty() && !tcBinDir.exists() && !tcBinDir.mkdirs()) {
