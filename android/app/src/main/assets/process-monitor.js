@@ -35,19 +35,21 @@ const IDLE_THRESHOLD_MS = 5 * 60 * 1000;
 
 // What this app costs when nothing is happening, measured rather than guessed:
 // on a cold start left untouched, /proc under the app's own uid holds the
-// bootstrap, the editor server, the file watcher, the agent host, and the chat
-// agent's model backend. Five, on API 33 and on API 37 alike.
+// bootstrap, the editor server and the file watcher. Three, measured on API 33
+// and API 36 with Code - OSS 1.139.1. Before that it was five on API 33 and
+// API 37 alike: the chat agent host and its model backend started too, and
+// patch 0020 keeps both from starting.
 //
 // The number matters because the thresholds below are read against it. The soft
 // budget used to be 5, chosen when the idle set was smaller, so a fresh install
 // sat exactly on its own warning with nothing open and the status item was amber
 // from the first paint. A warning that is always lit is one nobody reads, which
 // costs more than the warning was worth.
-const IDLE_BASELINE = 5;
+const IDLE_BASELINE = 3;
 
 // Idle, plus a terminal and two language servers: a session with real work in
 // it. Below this the count says nothing a user could act on.
-const SOFT_BUDGET = 8;
+const SOFT_BUDGET = 6;
 
 // Far enough above the soft budget to mean something has gone wrong rather than
 // that the user is busy, and still well short of the hard limit, so there is

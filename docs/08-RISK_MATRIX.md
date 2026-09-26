@@ -88,12 +88,11 @@
 | 6. Monitoring | Count phantoms, warn user if approaching limit | User can close terminals/extensions |
 | 7. User guidance | In-app tips: "Close unused terminals to save resources" | User awareness |
 
-**Measured** before Code - OSS 1.139.1: 5 phantom processes with the app open and nothing
-happening, on API 33 and API 37 alike (`IDLE_BASELINE` in `process-monitor.js`, which names them:
-the bootstrap, the editor server, the file watcher, the agent host, and the chat agent's model
-backend). From 1.139.1, patch 0020 keeps the last two from starting, and the idle count has not been
-measured since; `IDLE_BASELINE` still holds the earlier figure. The thresholds above are set against
-that number, not against a target.
+**Measured** with Code - OSS 1.139.1: 3 phantom processes with the app open and nothing
+happening, on API 33 and API 36 (`IDLE_BASELINE` in `process-monitor.js`, which names them: the bootstrap,
+the editor server and the file watcher). Before 1.139.1 it was 5 on API 33 and API 37 alike: the
+chat agent host and its model backend started too, and patch 0020 keeps both from starting. The
+thresholds above are set against that number, not against a target.
 
 There is **no cap on concurrent language servers**. A "hard cap: max 2-3" was listed here as
 mitigation layer 4 until 2026-08-23; nothing implemented it, and layer 4 now describes the reclaim
