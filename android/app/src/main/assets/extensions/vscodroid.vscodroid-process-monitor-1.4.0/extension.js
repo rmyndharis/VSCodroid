@@ -39,6 +39,16 @@ function isStale(snapshot) {
     return !(Date.now() - snapshot.timestamp <= STALE_AFTER_MS);
 }
 
+// The workbench's own switch for chat, and the only way to stop its agent host
+// and model backend, which run from startup whether or not chat is used. Only
+// the User value does it: the same key in Machine settings hides the chat UI
+// while the agent host still starts, because the workbench decides that before
+// the remote settings arrive and never turns it back off (measured on API 33).
+// Nor does ticking it stop the pair already running, not even across a window
+// reload: they go when the server next starts.
+const HIDE_AI_SETTING = 'chat.disableAIFeatures';
+const HIDE_AI = 'Hide AI Features';
+
 let statusBarItem;
 let outputChannel;
 let pollTimer;
@@ -216,19 +226,15 @@ function updateStatusBar(snapshot) {
         vscode.window.showErrorMessage(
             'Too many phantom processes; Android may start killing them. ' +
                 'The live count is in the status bar.',
-            'Show Details'
-        ).then(choice => {
-            if (choice === 'Show Details') showProcessTree();
-        });
+            ...tierButtons(tree)
+        ).then(onTierChoice);
     } else if (total >= soft && !warningShownAtThreshold) {
         warningShownAtThreshold = true;
         vscode.window.showWarningMessage(
             `Phantom processes are above the target of ${idle}. ` +
                 'The live count is in the status bar.',
-            'Show Details'
-        ).then(choice => {
-            if (choice === 'Show Details') showProcessTree();
-        });
+            ...tierButtons(tree)
+        ).then(onTierChoice);
     } else if (total < soft) {
         // Re-arming, and each latch comes back at the tier below the one that
         // set it. This asked for `total < idle`, one BELOW the idle baseline,
@@ -258,6 +264,19 @@ function updateStatusBar(snapshot) {
         // tests its own flag.
         criticalShownAtThreshold = false;
         if (total <= idle) warningShownAtThreshold = false;
+    }
+}
+
+// The second button only while chat is running, since it is what it frees. It
+// opens the setting rather than writing it: ticking hides the whole chat UI.
+function tierButtons(tree) {
+    return chatProcesses(tree).length ? ['Show Details', HIDE_AI] : ['Show Details'];
+}
+
+function onTierChoice(choice) {
+    if (choice === 'Show Details') showProcessTree();
+    else if (choice === HIDE_AI) {
+        vscode.commands.executeCommand('workbench.action.openSettings', `@id:${HIDE_AI_SETTING}`);
     }
 }
 
@@ -367,7 +386,11 @@ function showProcessTree() {
 
     // Recommendations
     const tree = s.tree || [];
-    const langservers = tree.filter(p => p.type === 'langserver');
+    // The chat agent host's model backend is typed langserver so the monitor can
+    // call it idle, but no extension starts it: the language-server advice below
+    // would send the reader looking for one to disable. Counted as chat instead.
+    const chat = chatProcesses(tree);
+    const langservers = tree.filter(p => p.type === 'langserver' && !chat.includes(p));
     const terminals = tree.filter(p => p.type === 'terminal' || p.type === 'tmux');
     // The same threshold the status item colours on, from the same place, so
     // advice appears exactly when the count is worth acting on.
@@ -389,7 +412,22 @@ function showProcessTree() {
                     'Each restarts if killed; to free its slot, disable the extension that starts it'
             );
         }
+        if (chat.length) {
+            outputChannel.appendLine(
+                `  • Chat holds ${chat.length} of these whether or not it is used. If you do not use it, ` +
+                    `tick "Chat: Disable AI Features" in Settings (${HIDE_AI_SETTING}); they stop the ` +
+                    'next time the server starts, such as after Stop Server in the VSCodroid notification'
+            );
+        }
     }
+}
+
+// The agent host and every process it started, which is its model backend.
+// Matched on the fork's own --type argument, the way process-monitor.js tells a
+// file watcher from any other bootstrap-fork.
+function chatProcesses(tree) {
+    const host = tree.find(p => /(^| )--type=agentHost( |$)/.test(p.cmd || ''));
+    return host ? tree.filter(p => p === host || p.ppid === host.pid) : [];
 }
 
 function deactivate() {
