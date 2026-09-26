@@ -364,7 +364,8 @@ NOTICE_NAMES = ("copyright", "copying", "license", "licence", "notice")
 # ships ripgrep inside its own tree, and ripgrep's licence is not Copilot's.
 # Verified rather than assumed -- the SDK copy's `rg` is byte-identical to
 # `@vscode/ripgrep-universal`'s (sha256 e152ea68...), the `copilot-linux-arm64`
-# copy is a different ripgrep build, and both are ripgrep.
+# copy in trees built before 1.139.1 is a different ripgrep build, and both are
+# ripgrep.
 #
 # Every component here is one the documents already carry, or now carry: the
 # point of the widening is to check what ships against the record, not to invent
@@ -408,6 +409,8 @@ NESTED_LIBRARIES = {
     "vscode-reh/node_modules/kerberos/*": ("kerberos (Node addon)", "Apache-2.0"),
     # --- the search binary, wherever it is bundled from ---
     "vscode-reh/node_modules/@vscode/ripgrep-universal/*": ("ripgrep", "MIT"),
+    # Only in server trees built before 1.139.1, like the Copilot runtime entry
+    # further down; see there.
     "vscode-reh/node_modules/@github/copilot-linux-arm64/ripgrep/*": ("ripgrep", "MIT"),
     "vscode-reh/extensions/copilot/node_modules/@github/copilot/sdk/ripgrep/*":
         ("ripgrep", "MIT"),
@@ -437,6 +440,12 @@ NESTED_LIBRARIES = {
     # --- redistributed under GitHub's own terms, not an open source licence ---
     # Its full reasoning is the "Proprietary Redistributed Components" section of
     # LEGAL_NOTICES.md; what this line adds is that the binaries are counted.
+    #
+    # The copilot-linux-arm64 pair covers the chat agent host's runtime, which
+    # server trees built before 1.139.1 carry and 1.139.1 does not. On a tree
+    # without the package both match nothing and are not reported, because
+    # `stale_anchor` asks for a directory that is no longer there. Delete both
+    # once no tree this script is run against carries it.
     "vscode-reh/node_modules/@github/copilot-linux-arm64/*":
         ("@github/copilot (GitHub Copilot CLI)", "GitHub Copilot CLI License (proprietary)"),
     "vscode-reh/extensions/copilot/node_modules/@github/copilot/*":
@@ -800,11 +809,12 @@ def stale_anchor(pattern):
     containing directory survives the move, so it is what the question has to be
     asked about.
 
-    Concretely: Copilot ships ripgrep at `.../copilot-linux-arm64/ripgrep/rg`,
-    and the override there records it as ripgrep/MIT rather than as the
-    proprietary CLI around it. Move it to `.../copilot-linux-arm64/bin/rg` and
-    the container wins it; anchored on `ripgrep/` nothing would notice, anchored
-    on `copilot-linux-arm64/` the override is reported as claiming nothing.
+    Concretely: the Copilot extension's SDK copy ships ripgrep under
+    `.../@github/copilot/sdk/ripgrep/`, and the override there records it as
+    ripgrep/MIT rather than as the proprietary CLI around it. Move it to
+    `.../@github/copilot/sdk/bin/rg` and the container wins it; anchored on
+    `sdk/ripgrep/` nothing would notice, anchored on `@github/copilot/` the
+    override is reported as claiming nothing.
     """
     return (outer_pattern(pattern) or pattern).rsplit("/*", 1)[0]
 

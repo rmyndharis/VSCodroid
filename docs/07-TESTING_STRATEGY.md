@@ -193,7 +193,7 @@ Manual test scenarios that verify the full user experience:
 | E2E-08 | **Rotation** | Edit code → Rotate to landscape → Rotate back | No data loss, layout adapts |
 | E2E-09 | **Copy/paste** | Copy text in Chrome → Paste in VSCodroid editor | Text pastes correctly |
 | E2E-10 | **Large file** | Open 10,000-line file → Scroll → Search → Edit | No crash, responsive scrolling |
-| E2E-11 | **Phantom process count** | Open editor + 3 terminals + 1 extension with LSP → check `adb shell ps` | Nine: the five-process idle baseline plus one per terminal and one language server, well under the 14 at which the monitor calls it a problem |
+| E2E-11 | **Phantom process count** | Open editor + 3 terminals + 1 extension with LSP → check `adb shell ps` | The idle count plus one per terminal and one for the language server, well under the 14 at which the monitor calls it a problem |
 | E2E-12 | **Python terminal** | Open terminal → `python3 --version` → `pip install requests` | Correct version, pip works |
 | E2E-13 | **Low-memory handling** | Simulate low-memory via `adb shell am send-trim-memory` | App reduces memory, no crash |
 | E2E-14 | **Package manager** | Terminal → `vscodroid pkg search curl` → `vscodroid pkg install curl` | Package installs successfully (planned Tier 3 package manager) |
@@ -211,7 +211,7 @@ Manual test scenarios that verify the full user experience:
 | Memory usage (active) | RAM during active coding + terminal | < 700 MB | `adb shell dumpsys meminfo` |
 | File open time | Time to open and render file | < 1 sec (1MB file) | Custom instrumentation |
 | Extension install time | Download + extract + activate | < 30 sec | Stopwatch |
-| Phantom process count | Total child processes during use | 5 idle, under 14 in use (`IDLE_BASELINE`, `ERROR_BUDGET`) | `adb shell ps` |
+| Phantom process count | Total child processes during use | At or below `IDLE_BASELINE` idle, under 14 in use (`ERROR_BUDGET`) | `adb shell ps` |
 | Battery drain (active) | Battery consumption during coding session | < 15% per hour | `adb shell dumpsys batterystats` |
 | Battery drain (idle) | Battery consumption with app in foreground, no input | < 5% per hour | `adb shell dumpsys batterystats` |
 
@@ -382,8 +382,8 @@ Each milestone must pass its test gate before proceeding:
 | Milestone | Required Tests | Pass Criteria |
 |-----------|---------------|---------------|
 | M0 (POC) | Manual E2E-01, E2E-03 (node + git only) | Node.js runs, WebView loads |
-| M1 (Core) | Unit tests, Instrumented (Node, WebView, Extensions, Terminal), E2E 1-6 | All pass on Pixel 8, phantom processes at the idle baseline of 5 |
+| M1 (Core) | Unit tests, Instrumented (Node, WebView, Extensions, Terminal), E2E 1-6 | All pass on Pixel 8, phantom processes with nothing open at or below `IDLE_BASELINE` in `process-monitor.js` |
 | M2 (Mobile) | + E2E 7-10, Compatibility (2 devices) | All pass on 2 devices |
 | M3 (Dev Env) | + E2E-12, E2E-14, Python/Git tests, Toolchain install, RAM check after Python+toolchains | All pass on 2 devices |
-| M4 (Polish) | Full suite incl. E2E-11/E2E-13, Performance tests, Compatibility (4 devices), Backup & Restore tests, phantom process count gate (5 idle) | All targets met |
+| M4 (Polish) | Full suite incl. E2E-11/E2E-13, Performance tests, Compatibility (4 devices), Backup & Restore tests, phantom process count gate (idle at or below `IDLE_BASELINE`) | All targets met |
 | M5 (Release) | Full suite, Security tests (see 06-SECURITY §7), 48-hour beta soak | Zero S1/S2 bugs, security checklist pass |

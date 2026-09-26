@@ -545,44 +545,38 @@ attribute but this project's own source.
 The built-in GitHub Copilot Chat extension depends on GitHub's `@github/copilot` package. Unlike everything listed above, this component is **not open source**: it is redistributed under GitHub's own terms.
 
 - **Publisher**: GitHub, Inc.
-- **License**: GitHub Copilot CLI License. The full text ships with every copy in the server tree; read it at `extensions/copilot/node_modules/@github/copilot/LICENSE.md`. It is not reproduced here.
-- **Versions**: whatever the Copilot extension pins at the Code - OSS tag in `VSCODE_VERSION`. These are not all the same number; see below.
+- **License**: GitHub Copilot CLI License. The full text ships with the copy in the server tree; read it at `extensions/copilot/node_modules/@github/copilot/LICENSE.md`. It is not reproduced here.
+- **Version**: whatever the Copilot extension pins at the Code - OSS tag in `VSCODE_VERSION`.
 
-**What is redistributed.** Three copies, at two versions, all produced by the Code - OSS build:
+**What is redistributed.** One copy, produced by the Code - OSS build:
 
 | Location in the server tree | Version | What it is |
 |---|---|---|
-| `node_modules/@github/copilot` | 1.0.79-6 | The three-file npm loader (`npm-loader.js`, `package.json`, `LICENSE.md`) |
-| `node_modules/@github/copilot-linux-arm64` | 1.0.79-6 | The runtime itself, 104 files, ~175 MB |
-| `extensions/copilot/node_modules/@github/copilot` | 1.0.73 | The SDK copy the extension resolves, 67 files |
+| `extensions/copilot/node_modules/@github/copilot` | 1.0.73 | The SDK copy the extension resolves |
 
-The CLI **application** is among them: `index.js` is a `#!/usr/bin/env node` launcher and `app.js` is the 9 MB program it runs. What is *not* shipped is the standalone single-executable build: `build/lib/copilot.ts:212-213` excludes `copilot` and `copilot.exe`, and `:214-215` excludes the optional native payloads (`foundry-local-sdk`, `webview`, `clipboard`, `pvrecorder`) along with the non-target `prebuilds`. So the accurate statement is that VSCodroid ships the CLI as JavaScript executed by the bundled Node, not as a self-contained binary.
+Releases up to 1.4.0 also carried the chat agent host's copy of the CLI: a loader at `node_modules/@github/copilot` and its runtime at `node_modules/@github/copilot-linux-arm64`, both 1.0.79-6, the runtime being the CLI application as JavaScript run by the bundled Node. Code - OSS 1.139.1 no longer lists `@github/copilot` among the server's dependencies, so neither ships.
 
 **Why we believe redistribution is permitted.** Section 1 of the license grants the right to reproduce and redistribute unmodified copies of the Software as part of an application or service, subject to the five conditions in Section 2. Our position on each:
 
 | Condition (§2) | Assessment |
 |---|---|
 | Distributed only in unmodified form | **Judgment call (see below).** |
-| Redistributed solely as part of an application providing material functionality beyond the Software | Met. VSCodroid is a full IDE; the Copilot runtime is a dependency of one built-in extension. |
-| Not distributed standalone or as a primary product | Met. It is not separately installable, not advertised, and not reachable except through the extension; the standalone executable form is the one thing the build excludes. |
-| A copy of the license is included and notices retained | Met. `LICENSE.md` travels with every copy in the tree (all copies byte-identical), and `NOTICE.md` attributes the component. |
+| Redistributed solely as part of an application providing material functionality beyond the Software | Met. VSCodroid is a full IDE; the Copilot package is a dependency of one built-in extension. |
+| Not distributed standalone or as a primary product | Met. It is not separately installable, not advertised, and not reachable except through the extension, and the standalone executable form is not part of it. |
+| A copy of the license is included and notices retained | Met. `LICENSE.md` travels with the copy in the tree, and `NOTICE.md` attributes the component. |
 | The application is licensed independently of the Software | Met. VSCodroid's own source is MIT; the root `LICENSE` covers only that. |
 
 **The judgment call on "unmodified form".** The question is not whether the tree matches npm exactly (it does not) but what the differences actually are. Measured file by file against the upstream tarballs:
 
-*The loader copy* (`@github/copilot@1.0.79-6`): byte-identical in all three files it ships. Only `README.md` is omitted.
+*The SDK copy* (`@github/copilot@1.0.73`, the version the extension also pins at 1.139.1): 67 files in the tree built from 1.133.0, five of them re-rooted under `sdk/`. Its content differences from the upstream platform package are `package.json`, rewritten by the extension's own `postinstall` (renamed, given an `exports` map, platform constraints dropped), and the bundled `ripgrep` binary, replaced with the editor's own by the upstream packaging step `prepareBuiltInCopilotRipgrepShim`, which also writes a `shims.txt` marker. That replacement is byte-identical to `@vscode/ripgrep-universal`'s `rg`, sha256 `e152ea689d6e8420357e592f0d8253b96476c164118ca3e6e13074fa1705ddda`, measured in the shipped tree.
 
-*The runtime copy* (`@github/copilot-linux-arm64@1.0.79-6`): 99 of its 104 files are byte-identical to upstream. The remaining five (`app.js`, `sdk/index.js`, and the three `voice-*` workers) differ by exactly one thing: a trailing `//# sourceMappingURL=` comment has been removed. No `.map` files ship, so the removed lines pointed at files that are not there. The change is 32 to 41 bytes per file and alters no behavior.
+Pruning follows the upstream build's own `build/.moduleignore` and `build/lib/copilot.ts`.
 
-*The SDK copy* (`@github/copilot@1.0.73`): 67 files, five of them re-rooted under `sdk/`. Its content differences from the upstream platform package are `package.json`, rewritten by the extension's own `postinstall` (renamed, given an `exports` map, platform constraints dropped), and the bundled `ripgrep` binary, replaced with the editor's own by the upstream packaging step `prepareBuiltInCopilotRipgrepShim`, which also writes a `shims.txt` marker. That replacement is byte-identical to `@vscode/ripgrep-universal`'s `rg`, sha256 `e152ea689d6e8420357e592f0d8253b96476c164118ca3e6e13074fa1705ddda`, measured in the shipped tree.
-
-Pruning in both copies follows the upstream build's own `build/.moduleignore` and `build/lib/copilot.ts`.
-
-Every one of these transformations is performed by GitHub's or Microsoft's own build tooling, which VSCodroid runs unmodified; none is a VSCodroid intervention. The single patch this project applies to that area, `patches/0010-moduleignore-keep-copilot-sdk-entry.patch`, *removes* a pruning rule, so the result is closer to the published package than a default build would produce, not further from it.
+Every one of these transformations is performed by GitHub's or Microsoft's own build tooling, which VSCodroid runs unmodified; none is a VSCodroid intervention. The single patch this project applies to that area, `patches/0010-moduleignore-keep-copilot-sdk-entry.patch`, only narrows a pruning rule. From 1.139 upstream's `.moduleignore` strips the extension's whole `@github/copilot` package, `LICENSE.md` included; the patch puts back the per-directory list 1.138 used, minus its line for `sdk/index.js`, so the native and optional payload directories are still stripped and the rest is kept. The result is closer to the published package than upstream's rule would leave it, not further from it.
 
 We read "unmodified form" as directed at the redistributor altering the Software, not at the vendor's own build tooling producing the embedded shape it was designed to produce. To be precise about which mode of that tooling is in play: Microsoft's own CI does **not** compile this extension; it downloads it as a VSIX from an internal feed, and `compile-copilot-extension-build` is described upstream as the path "used by non-CI local builds where copilot is not downloaded as a VSIX" (`gulpfile.extensions.ts:288`). That is the path this build takes, and it is a mode Microsoft ships for building from source; it is not the identical pipeline behind their released desktop binaries.
 
-The weakest point in our reading is the `ripgrep` substitution, because a binary component is replaced rather than merely omitted. The `sourceMappingURL` stripping is the next weakest, though it is hard to characterise a dangling reference to an unshipped file as a modification of substance.
+The weakest point in our reading is the `ripgrep` substitution, because a binary component is replaced rather than merely omitted.
 
 **This is a reasoned engineering position, not legal advice.** It records how the maintainers understand the terms and why the component is bundled. Anyone redistributing VSCodroid, or building a product on it, should reach their own conclusion and take their own advice.
 
@@ -769,4 +763,4 @@ For questions about licenses, trademarks, or legal notices:
 
 ---
 
-_This document was last updated on September 26, 2026._
+_This document was last updated on September 27, 2026._

@@ -231,9 +231,9 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 >   of last resort is clearing app data, which destroys the user's projects.
 >
 > Two limits worth knowing before quoting either row. The flag caps EACH V8 isolate in the
-> server, not all of them together, so a ceiling of N authorises up to 6N of old space
+> server, not all of them together, so a ceiling of N authorises up to 5N of old space
 > across the server process family: the bootstrap, the editor server, its Extension Host and
-> Pty Host workers, and the forked file watcher and agent host. And neither row bounds the
+> Pty Host workers, and the forked file watcher. And neither row bounds the
 > largest V8 heap the device actually runs: `tsserver.maxMemory` defaults to 3072 MB with no reference to device RAM,
 > and nothing in this app reaches it.
 
@@ -426,7 +426,7 @@ Detailed in [API Spec § Android Bridge API](./05-API_SPEC.md#2-a-android-bridge
 - [ ] Cold start < 5 seconds on Pixel 7
 - [ ] No crash in 2 hours continuous use
 - [ ] Works on 4GB RAM device
-- [ ] Phantom processes at 5 with nothing open, and under 14 in a working session
+- [ ] Phantom processes at or below `IDLE_BASELINE` with nothing open, and under 14 in a working session
 - [ ] Extension Host migrated to worker_thread (reduces phantom count by 1)
 - [ ] Phantom process monitoring UI warns user when approaching limits
 - [ ] GitHub OAuth push/pull works

@@ -14,7 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - The editor is now Code - OSS 1.139.1, up from 1.133.0.
-- The chat agent host and its Copilot backend no longer start on Android, which frees memory; Copilot Chat through its extension works as before.
+
+### Removed
+
+- Chat no longer offers the agent host's Copilot harness in its session picker, and sessions created with that harness are no longer listed. The chat view and the Copilot extension are not changed by this.
+- The chat agent host and its Copilot backend, two background processes that started with the editor, no longer start, which frees memory.
 
 ### Fixed
 

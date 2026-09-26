@@ -70,9 +70,9 @@ const HARD_LIMIT = 32;
 // directory: renaming the leaf makes server.js exit naming the entry point it
 // cannot find, which is loud, while moving `server/` elsewhere leaves every
 // __dirname-relative path in server.js working and only stops this rule
-// matching -- and the chat agent's model backend, 226 MB and one of five
-// processes counted against the phantom budget, goes back to 'unknown', shown
-// as 'other' in the tooltip and never marked idle in the details view.
+// matching -- and the chat agent's model backend, on a build whose agent host
+// still starts it, goes back to 'unknown', shown as 'other' in the tooltip and
+// never marked idle in the details view.
 //
 // Exported for scripts/test-process-monitor.js, which loads a copy of this file
 // from a directory of its own and asks the same question there.
@@ -417,13 +417,13 @@ function classify(cmdline) {
     // a program name, and the node_modules segment is what keeps the needle off a
     // directory someone chose themselves.
     //
-    // Being unclassified was not cosmetic here. Measured idle on an API 33 and an
-    // API 37 emulator, signed out, nothing but the Welcome tab open: 226 MB
-    // resident, the largest process this app owns after the Android process
-    // itself, and one of only five counted against the phantom budget. As
-    // 'unknown' it was never in lsCpuTracker, so the details view could not say
-    // it was idle, which for a backend nobody is talking to is the one fact
-    // worth showing.
+    // Being unclassified was not cosmetic here. Measured idle before 1.139.1,
+    // on an API 33 and an API 37 emulator, signed out, nothing but the Welcome
+    // tab open: 226 MB resident, the largest process this app owns after the
+    // Android process itself, and one of only five counted against the phantom
+    // budget. As 'unknown' it was never in lsCpuTracker, so the details view
+    // could not say it was idle, which for a backend nobody is talking to is
+    // the one fact worth showing.
     //
     // `node_modules/@github/copilot-` on its own is not ours. @github/copilot
     // names eight @github/copilot-<platform> packages as optionalDependencies in

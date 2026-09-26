@@ -160,10 +160,10 @@ function start(log) {
     //
     // Which process that is has changed, and the blast radius with it. This is
     // preloaded into the editor server rather than run in the bootstrap, so the
-    // setting now also governs the gallery query, extension downloads and the
-    // agent host: on a host whose AAAA record resolves to a route that hangs
-    // rather than refusing, each of those waits a second before trying IPv4
-    // instead of a quarter of one. Measured here the IPv6 route is simply absent
+    // setting now also governs the gallery query and extension downloads: on a
+    // host whose AAAA record resolves to a route that hangs rather than
+    // refusing, each of those waits a second before trying IPv4 instead of a
+    // quarter of one. Measured here the IPv6 route is simply absent
     // and fails immediately, which is why the window is worth widening at all.
     net.setDefaultAutoSelectFamilyAttemptTimeout(1000);
 
