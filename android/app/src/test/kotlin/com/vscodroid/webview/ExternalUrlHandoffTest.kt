@@ -11,6 +11,7 @@ import com.vscodroid.authCallbackIsExpected
 import com.vscodroid.callbackSecretMatches
 import com.vscodroid.bridge.AUTH_TAB_WINDOW_MILLIS
 import com.vscodroid.bridge.AuthTabWindow
+import com.vscodroid.bridge.encodeCallbackState
 import com.vscodroid.util.Logger
 import io.mockk.Runs
 import io.mockk.every
@@ -19,6 +20,7 @@ import io.mockk.mockk
 import io.mockk.mockkConstructor
 import io.mockk.mockkObject
 import io.mockk.mockkStatic
+import io.mockk.unmockkStatic
 import io.mockk.verify
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -560,6 +562,36 @@ class ExternalUrlHandoffTest {
             callbackSecretWouldMatch(SIGN_IN_REQUEST_ID, "0".repeat(32)),
             "a guessed secret was accepted",
         )
+    }
+
+    /**
+     * The Microsoft sign-in leaves through here too when the bridge declines it,
+     * and has to leave with its callback put back into `state`, armed from that
+     * address. `encodeCallbackState` is pinned on its own in
+     * `CallbackStateEncodingTest`; this pins that the hand-off uses it.
+     */
+    @Test
+    fun `the Microsoft sign-in is handed over with its whole callback in state`() {
+        val handedOver = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize" +
+            "?client_id=abc&state=http://127.0.0.1:13337/callback%253F" +
+            "vscode-reqid=$SIGN_IN_REQUEST_ID&vscodroid-nonce=$SIGN_IN_SECRET" +
+            "&vscode-scheme=vscodroid&vscode-authority=vscode.microsoft-authentication"
+        val repaired = encodeCallbackState(handedOver)
+        mockkStatic(Uri::class)
+        try {
+            every { Uri.parse(repaired) } returns mockk(relaxed = true)
+
+            client.shouldOverrideUrlLoading(
+                view, request("https", "login.microsoftonline.com", -1, handedOver)
+            )
+
+            verify(exactly = 1) { Uri.parse(repaired) }
+            verify(exactly = 1) { context.startActivity(any()) }
+            assertTrue(callbackWouldBeTaken(SIGN_IN_REQUEST_ID), "the sign-in was not armed")
+            assertTrue(callbackSecretWouldMatch(SIGN_IN_REQUEST_ID, SIGN_IN_SECRET))
+        } finally {
+            unmockkStatic(Uri::class)
+        }
     }
 
     /**

@@ -20,6 +20,7 @@ import android.webkit.WebViewClient
 import com.vscodroid.bridge.AuthTabWindow
 import com.vscodroid.bridge.authCallbackNonceIn
 import com.vscodroid.bridge.authRequestIdsIn
+import com.vscodroid.bridge.encodeCallbackState
 import com.vscodroid.isExtensionCallback
 import com.vscodroid.util.EditorLocale
 import com.vscodroid.util.Environment
@@ -955,7 +956,11 @@ class VSCodroidWebViewClient(
         var armed: List<String> = emptyList()
         // Fix #7: Open external URLs in system browser instead of blocking silently
         try {
-            val intent = Intent(Intent.ACTION_VIEW, url)
+            // The Microsoft sign-in's callback, repaired as the bridge repairs it:
+            // the same `window.open` lands here whenever the bridge declines it.
+            val address = encodeCallbackState(url.toString())
+            val target = if (address == url.toString()) url else Uri.parse(address)
+            val intent = Intent(Intent.ACTION_VIEW, target)
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             // The app's second way out to a browser, and the one that recorded
             // nothing. The bridge is the route the workbench normally takes, but
@@ -987,8 +992,8 @@ class VSCodroidWebViewClient(
             // window every external link is followed.
             if (request.isForMainFrame) {
                 armed = AuthTabWindow.arm(
-                    authRequestIdsIn(url.toString()),
-                    authCallbackNonceIn(url.toString()),
+                    authRequestIdsIn(address),
+                    authCallbackNonceIn(address),
                     SystemClock.elapsedRealtime(),
                 )
             }

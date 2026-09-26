@@ -26,6 +26,7 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.lang.ref.WeakReference
+import java.net.URLEncoder
 import java.util.concurrent.Executor
 import java.util.concurrent.Executors
 import androidx.core.net.toUri
@@ -169,6 +170,40 @@ internal fun authRequestIdsIn(url: String): List<String> =
 /** The callback secret [url] carries, or null when it carries none. */
 internal fun authCallbackNonceIn(url: String): String? =
     AUTH_CALLBACK_NONCE.find(url)?.groupValues?.get(1)
+
+/**
+ * The Microsoft sign-in's `state` as it reaches this app: the callback URL with
+ * only its `?` escaped, so the rest of that URL's query sits beside `state` as
+ * parameters of the authorisation address.
+ *
+ * The extension appends `&state=` + `encodeURI(callbackUri)`, which escapes none
+ * of `?`, `&` or `=`, and the workbench opener's round trip then escapes only
+ * the `?`, twice over, to `%253F`. The provider echoes back only `state`, so the
+ * callback arrives without its nonce, scheme and authority and `callback.html`
+ * throws `Missing scheme`. The trailing parameters are the ones
+ * `LocalStorageURLCallbackProvider.create` pushes, in its order; a callback with
+ * any other key after them is a different shape and is left alone.
+ */
+private val UNENCODED_CALLBACK_STATE = Regex(
+    """(?<=[?&])state=(http://127\.0\.0\.1:\d+(?:/[A-Za-z0-9._~-]+)*/callback)%253F""" +
+        """(vscode-reqid=\d+&vscodroid-nonce=[0-9a-f]{32}""" +
+        """&vscode-scheme=[A-Za-z0-9._~-]+&vscode-authority=[A-Za-z0-9._~-]+)""" +
+        """(?=$|#|&(?!vscode-))"""
+)
+
+/**
+ * [url] with the callback run [UNENCODED_CALLBACK_STATE] matches put back into
+ * one `state` value, percent-encoded once, which Microsoft and vscode.dev's
+ * redirect both return whole. Any other address comes back unchanged, the MCP
+ * provider's correctly encoded `state` included.
+ *
+ * `URLEncoder` is safe here only because the pattern admits no space and no `*`,
+ * the two characters it would not escape the way a query needs.
+ */
+internal fun encodeCallbackState(url: String): String =
+    UNENCODED_CALLBACK_STATE.replace(url) {
+        "state=" + URLEncoder.encode("${it.groupValues[1]}?${it.groupValues[2]}", "UTF-8")
+    }
 
 /**
  * Why [AndroidBridge.openExternalUrl] did not open anything.
@@ -641,13 +676,14 @@ class AndroidBridge(
     @JavascriptInterface
     fun openExternalUrl(url: String, authToken: String): String {
         if (!security.validateToken(authToken)) return context.getString(OPEN_URL_STALE_SESSION)
+        val address = encodeCallbackState(url)
         // Empty until the launch arms something, and then the ids to take back if
         // the launch that armed them throws. Arming has to precede the launch, so
         // without this a launch nothing accepted still left the callback relay
         // open to those ids for ten minutes with no sign-in in flight.
         var armed: List<String> = emptyList()
         return try {
-            val uri = url.toUri()
+            val uri = address.toUri()
             // The one destination this method judges, and it is refused before
             // anything is armed rather than merely left unarmed.
             //
@@ -689,7 +725,8 @@ class AndroidBridge(
             // nothing: it used to widen the callback window by ten minutes exactly
             // as a sign-in did.
             armed = AuthTabWindow.arm(
-                authRequestIdsIn(url), authCallbackNonceIn(url), SystemClock.elapsedRealtime(),
+                authRequestIdsIn(address), authCallbackNonceIn(address),
+                SystemClock.elapsedRealtime(),
             )
             // Use system browser for localhost URLs (dev server preview needs full browser),
             // Chrome Custom Tabs for https (keeps user in-app, handles OAuth redirects).

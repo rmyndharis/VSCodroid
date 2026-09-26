@@ -5,6 +5,7 @@ import com.vscodroid.bridge.AUTH_TAB_WINDOW_MILLIS
 import com.vscodroid.bridge.AuthTabWindow
 import com.vscodroid.bridge.authCallbackNonceIn
 import com.vscodroid.bridge.authRequestIdsIn
+import com.vscodroid.bridge.encodeCallbackState
 import com.vscodroid.webview.redactToken
 import io.mockk.every
 import io.mockk.mockkStatic
@@ -18,6 +19,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import java.io.File
+import java.net.URLDecoder
 
 /**
  * The gate on the one exported entry point this app has.
@@ -413,6 +415,86 @@ class AuthRequestIdTest {
         )
 
         assertEquals(listOf("5"), ids)
+    }
+}
+
+/**
+ * The Microsoft sign-in's `state`, which reaches this app with the callback's own
+ * query spread across the authorisation address.
+ *
+ * Measured on an emulator: Microsoft echoes back only `state`, which there is the
+ * callback up to its request id, so `callback.html` throws `Missing scheme` and
+ * the sign-in never returns. With the whole callback encoded once into `state`,
+ * Microsoft and vscode.dev's redirect both hand it back entire.
+ */
+class CallbackStateEncodingTest {
+
+    private companion object {
+        const val NONCE = "695e0c1d2b3a49588f7e6d5c4b3a2918"
+        const val CALLBACK =
+            "http://127.0.0.1:13337/stable-a5b500951314efd502d07465bd138dfbd714a960/callback"
+        const val AUTHORIZE =
+            "https://login.microsoftonline.com/organizations/oauth2/v2.0/authorize" +
+                "?client_id=aebc6443-996d-45c2-90f0-388ff96faa56" +
+                "&redirect_uri=https://vscode.dev/redirect&scope=openid%20profile" +
+                "&response_type=code&code_challenge_method=S256"
+        const val CALLBACK_QUERY =
+            "vscode-reqid=1&vscodroid-nonce=$NONCE" +
+                "&vscode-scheme=vscodroid&vscode-authority=vscode.microsoft-authentication"
+
+        /** The address as the bridge receives it: only the `?` is escaped, twice. */
+        const val MICROSOFT = "$AUTHORIZE&state=$CALLBACK%253F$CALLBACK_QUERY"
+    }
+
+    @Test
+    fun `the Microsoft sign-in carries its whole callback in state`() {
+        val encoded = encodeCallbackState(MICROSOFT)
+
+        assertEquals(AUTHORIZE, encoded.substringBefore("&state="), "the rest of the address moved")
+        val state = encoded.substringAfter("&state=")
+        assertFalse('&' in state, "part of the callback is still a parameter of its own: $state")
+        assertEquals("$CALLBACK?$CALLBACK_QUERY", URLDecoder.decode(state, "UTF-8"))
+        // What the launch arms from, so the returning callback is still accepted.
+        assertEquals(listOf("1"), authRequestIdsIn(encoded))
+        assertEquals(NONCE, authCallbackNonceIn(encoded))
+    }
+
+    @Test
+    fun `a state that is already encoded is left alone`() {
+        // The MCP provider's shape, which returns correctly today.
+        val mcp = "https://auth.example.com/authorize?response_type=code&client_id=abc" +
+            "&state=http%3A%2F%2F127.0.0.1%3A13337%2Fcallback%3Fvscode-reqid%3D4" +
+            "%26vscodroid-nonce%3D$NONCE%26vscode-scheme%3Dvscodroid" +
+            "%26vscode-authority%3Dvscode.mcp%26vscode-path%3D%252Fauthorize" +
+            "%26vscode-query%3Dserver%253Dabc"
+
+        assertEquals(mcp, encodeCallbackState(mcp))
+    }
+
+    @Test
+    fun `an address with no callback in it is left alone`() {
+        for (link in listOf(
+            "https://code.visualstudio.com/docs?state=http://127.0.0.1:13337/",
+            "https://example.com/?state=abc&vscode-scheme=vscodroid",
+            "http://192.168.1.50:5173/",
+        )) {
+            assertEquals(link, encodeCallbackState(link))
+        }
+    }
+
+    @Test
+    fun `only part of the run is not repaired`() {
+        // Each is one step off the measured shape, and guessing at it would put
+        // parameters into the callback that the workbench never minted there.
+        for (link in listOf(
+            MICROSOFT.substringBefore("&vscode-authority="),
+            MICROSOFT.replace("&vscodroid-nonce=$NONCE", ""),
+            "$MICROSOFT&vscode-path=%2Fdid-authenticate",
+            MICROSOFT.replace("%253F", "?"),
+            MICROSOFT.replace("127.0.0.1", "localhost"),
+        )) {
+            assertEquals(link, encodeCallbackState(link), "rewrote: $link")
+        }
     }
 }
 

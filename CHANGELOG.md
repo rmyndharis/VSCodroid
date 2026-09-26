@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Signing in with a Microsoft account returns to the editor instead of stopping at a `Missing scheme` error, and its sign-in page opens without a confirmation prompt first.
 - The process details no longer count chat's model backend as a language server whose extension could be disabled.
 - Git asks for credentials again when an HTTPS remote needs them, in the terminal and from Source Control, including through the GitHub sign-in. Its prompt helper could not be started, so such a push, pull or clone failed.
 - The `vscodroid` command, which opens files in the editor from a terminal, starts instead of answering "Permission denied".
