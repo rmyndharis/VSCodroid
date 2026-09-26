@@ -33,7 +33,9 @@ const CALLBACK_INTENT = /#Intent;scheme=vscodroid;(?:package=[A-Za-z0-9._]+;)?en
 // github.com is not a convenience. The GitHub sign-in this build tries first is the
 // device-code flow, and it ends in env.openExternal("https://github.com/login/device"),
 // so without this entry the one screen between a user and a signed-in editor is a
-// confirmation dialog. Everything else the workbench opens keeps the prompt.
+// confirmation dialog. login.microsoftonline.com is the same case for the Microsoft
+// sign-in, whose authorisation page is opened the same way. Everything else the
+// workbench opens keeps the prompt.
 //
 // Loopback is deliberately absent. The matcher answers for localhost, *.localhost,
 // 127.0.0.1 and [::1] on any port before it ever consults this list, so a dev-server
@@ -41,7 +43,7 @@ const CALLBACK_INTENT = /#Intent;scheme=vscodroid;(?:package=[A-Za-z0-9._]+;)?en
 // was doing the work.
 //
 // Written with the scheme, so a bare host cannot also match plain http.
-const TRUSTED_LINK_DOMAINS = ['https://open-vsx.org', 'https://github.com'];
+const TRUSTED_LINK_DOMAINS = ['https://open-vsx.org', 'https://github.com', 'https://login.microsoftonline.com'];
 
 // What says the workbench page has already been given the list above, so a second
 // start does not stack a second copy of the same script into it.
@@ -359,12 +361,15 @@ if (!fs.existsSync(rehEntryPoint)) {
     // WebView that has loaded this build once would keep its cached bundle for a
     // year and never see the edit. The document carries no caching headers at all.
     //
-    // branding/product.json carries the same list for the next server build. After
-    // it, this still adds both entries: the membership test below sees only
-    // `additionalTrustedDomains`, which the server never sets, and the workbench
-    // appends that list to the inlined one without removing repeats. A repeated
-    // entry matches the same addresses, so it is harmless, and the script can go
-    // once a server release carrying the branding list is the oldest one shipped.
+    // branding/product.json carries open-vsx.org and github.com for the next server
+    // build, but not login.microsoftonline.com: a branding list the published tree
+    // does not carry fails fetch-vscode-oss.sh, so that entry joins it with the next
+    // server rebuild. Whatever the branding holds, this still adds every entry: the
+    // membership test below sees only `additionalTrustedDomains`, which the server
+    // never sets, and the workbench appends that list to the inlined one without
+    // removing repeats. A repeated entry matches the same addresses, so it is
+    // harmless, and the script can go only once the oldest server release shipped
+    // carries every entry of TRUSTED_LINK_DOMAINS in its branding.
     // How the script is inserted, and why it stays a bare <script>, is at
     // [extendWorkbenchPage].
     const workbenchHtmlPath = path.join(REH_DIR, 'out/vs/code/browser/workbench/workbench.html');

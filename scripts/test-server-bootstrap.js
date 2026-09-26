@@ -536,6 +536,10 @@ async function stoppingTakesTheEditorServerWithIt() {
             settings.additionalTrustedDomains.includes('https://github.com'),
             'the trusted-domain script did not add github.com',
         );
+        assert.ok(
+            settings.additionalTrustedDomains.includes('https://login.microsoftonline.com'),
+            'the trusted-domain script did not add login.microsoftonline.com',
+        );
         const recommended = settings.productConfiguration?.extensionRecommendations;
         assert.ok(recommended, 'no extensionRecommendations under productConfiguration');
         const entry = recommended[BLACK_FORMATTER];

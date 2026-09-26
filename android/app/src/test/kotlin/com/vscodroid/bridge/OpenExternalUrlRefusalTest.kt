@@ -234,6 +234,24 @@ class OpenExternalUrlRefusalTest {
     }
 
     /**
+     * The Microsoft sign-in is launched with its callback put back into `state`,
+     * not as the page handed it over. `encodeCallbackState` is pinned on its own
+     * in `CallbackStateEncodingTest`; this pins that the launch uses it.
+     */
+    @Test
+    fun `the Microsoft sign-in is launched with its whole callback in state`() {
+        val handedOver = "https://login.microsoftonline.com/common/oauth2/v2.0/authorize" +
+            "?client_id=abc&state=http://127.0.0.1:13337/callback%253Fvscode-reqid=606" +
+            "&vscodroid-nonce=${"a".repeat(32)}&vscode-scheme=vscodroid" +
+            "&vscode-authority=vscode.microsoft-authentication"
+
+        bridge.openExternalUrl(handedOver, security.getSessionToken())
+
+        verify(exactly = 0) { Uri.parse(handedOver) }
+        verify(exactly = 1) { Uri.parse(encodeCallbackState(handedOver)) }
+    }
+
+    /**
      * A launch that threw must not leave the sign-in callback window armed.
      *
      * `AuthTabWindow.arm()` is called before `launchUrl` on purpose -- a
