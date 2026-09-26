@@ -1,26 +1,54 @@
-Keep @github/copilot's sdk/index.js in the built-in copilot extension.
+Keep @github/copilot in the built-in copilot extension, minus its natives.
 
-Upstream strips it because desktop VS Code restores platform-specific SDK
-files at packaging time and the file is dead weight in the VSIX they ship.
-This build has no such later stage for the extension host side: the file is
-what the package.json exports map points at ("./sdk" -> "./sdk/index.js",
-written by the extension's postinstall), and it is the version-matched SDK
-entry the extension resolves when no platform package matches at runtime.
-Without it the copilotcli session provider dies with "Cannot find module
-.../@github/copilot/sdk/index.js" on device, three renames away from the
-line removed here.
+This build compiles the Copilot extension from source and packages it with
+packageCopilotExtensionStream, which runs the extension's production
+dependencies through build/.moduleignore. Since 1.139 that file strips
+'@github/copilot/**' outright, on the grounds that the agent host now uses the
+runtime bundled with @github/copilot-sdk. Microsoft's pipeline never meets the
+consequence, because it downloads the extension as a VSIX. A build from source
+loses the extension's whole @github/copilot package instead: sdk/index.js,
+package.json and LICENSE.md included.
 
-The SDK entry is plain JavaScript (its native-addon lookups key off
-os.type(), which reports "Linux" on Android, and are lazy per addon), so
-shipping it costs 2.6 MB and unlocks the whole session path.
+Three things need that package:
+
+  * The extension bundle keeps '@github/copilot' external and resolves "./sdk"
+    through the exports map its postinstall writes ("./sdk" -> "./sdk/index.js").
+    That is the version-matched SDK entry the copilotcli session provider loads,
+    and without it the provider dies with "Cannot find module
+    .../@github/copilot/sdk/index.js" on device.
+  * The packaging tail's prepareBuiltInCopilotRipgrepShim throws "Copilot SDK
+    directory not found" when sdk/ is missing, and build-vscode-oss.sh stops
+    one stage earlier on its own guard for the same directory.
+  * LICENSE.md is the GitHub Copilot CLI License, which has to travel with the
+    redistributed copy. verify-server-tree.py requires it.
+
+So the hunk replaces the blanket rule with the per-directory list 1.138 had,
+minus that list's first line, which stripped sdk/index.js. The native and
+optional payload directories are still stripped: prebuilds, clipboard,
+ripgrep, pvrecorder, foundry-local-sdk, mxc-bin, sharp and keytar.node. The
+target's natives come back after this filter as before, when
+prepareBuiltInCopilotRipgrepShim materializes them into sdk/prebuilds from the
+version-matched platform package.
+
+The SDK entry is plain JavaScript (its native-addon lookups key off os.type(),
+which reports "Linux" on Android, and are lazy per addon), so keeping it costs
+about 2.6 MB and unlocks the whole session path.
 
 --- a/build/.moduleignore
 +++ b/build/.moduleignore
-@@ -222,7 +222,6 @@
- @xterm/xterm-addon-*/out-test/**
-
+@@ -223,7 +223,14 @@
+ 
  # @github/copilot - strip unneeded binaries and files
--@github/copilot/sdk/index.js
- @github/copilot/prebuilds/**
- @github/copilot/clipboard/**
- @github/copilot/ripgrep/**
+ # Agent Host uses the runtime bundled with @github/copilot-sdk.
+-@github/copilot/**
++@github/copilot/prebuilds/**
++@github/copilot/clipboard/**
++@github/copilot/ripgrep/**
++@github/copilot/pvrecorder/**
++@github/copilot/foundry-local-sdk/**
++@github/copilot/mxc-bin/**
++@github/copilot/sharp/**
++@github/copilot/**/keytar.node
+ 
+ # Standalone Copilot CLI platform packages are not product dependencies.
+ @github/copilot-darwin-arm64/**

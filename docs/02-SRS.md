@@ -201,7 +201,7 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 |----|------------|--------|----------|
 | NFR-RES-01 | RAM usage (typical coding session) | < 700 MB | P1 |
 | NFR-RES-02 | RAM usage (4GB device minimum) | Functional without OOM | P0 |
-| NFR-RES-03 | Phantom process count | 5 with nothing open and 8 with a terminal and two language servers, the `IDLE_BASELINE` and `SOFT_BUDGET` of `assets/process-monitor.js`; the monitor warns at 8 and calls it a problem at 14, against Android's 32; nothing sheds a process | P0 |
+| NFR-RES-03 | Phantom process count | At or below `IDLE_BASELINE` of `assets/process-monitor.js` with nothing open; the monitor warns at `SOFT_BUDGET` and calls it a problem at 14, against Android's 32; nothing sheds a process | P0 |
 | NFR-RES-04 | AAB base module, compressed download | Under Play's 500 MB cap, which `scripts/check-bundle-size.py` refuses a bundle over. Last measured at 270.7 MiB, before the workbench internal bundles were pruned from the server tree, so re-measure from the AAB rather than quoting this. **200 MB is not a cap**: it is the size above which a mobile-data user sees a large-download dialog. The on-demand toolchain ZIPs are 10.5 MB for Ruby and 56.5 MB for Java 17, per `ToolchainRegistry.available`, and draw on Play's separate on-demand budget rather than this one | P1 |
 | NFR-RES-05 | Runtime storage (core extracted) | About 774 MiB, the asset tree that `BuildConfig.EXTRACTED_ASSET_BYTES` is computed from at build time; about 957 MiB with both toolchains installed. The app quotes the same quantities in decimal MB, 812 and 1,003, because that is the unit a phone's storage screen counts in | P1 |
 | NFR-RES-06 | Battery drain during active session | < 15% per hour | P2 |
@@ -231,9 +231,9 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 >   of last resort is clearing app data, which destroys the user's projects.
 >
 > Two limits worth knowing before quoting either row. The flag caps EACH V8 isolate in the
-> server, not all of them together, so a ceiling of N authorises up to 6N of old space
+> server, not all of them together, so a ceiling of N authorises up to 5N of old space
 > across the server process family: the bootstrap, the editor server, its Extension Host and
-> Pty Host workers, and the forked file watcher and agent host. And neither row bounds the
+> Pty Host workers, and the forked file watcher. And neither row bounds the
 > largest V8 heap the device actually runs: `tsserver.maxMemory` defaults to 3072 MB with no reference to device RAM,
 > and nothing in this app reaches it.
 
@@ -426,7 +426,7 @@ Detailed in [API Spec § Android Bridge API](./05-API_SPEC.md#2-a-android-bridge
 - [ ] Cold start < 5 seconds on Pixel 7
 - [ ] No crash in 2 hours continuous use
 - [ ] Works on 4GB RAM device
-- [ ] Phantom processes at 5 with nothing open, and under 14 in a working session
+- [ ] Phantom processes at or below `IDLE_BASELINE` with nothing open, and under 14 in a working session
 - [ ] Extension Host migrated to worker_thread (reduces phantom count by 1)
 - [ ] Phantom process monitoring UI warns user when approaching limits
 - [ ] GitHub OAuth push/pull works

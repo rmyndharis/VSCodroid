@@ -213,7 +213,7 @@ function checkCommandNames(snapshot, byPid) {
  * from __dirname and drops the app into its minimal health-check server -- but
  * moving the PARENT, files/server to files/editor or under a versioned
  * directory, leaves every __dirname-relative path in server.js working and would
- * silently stop this rule matching. The 226 MB backend then returns to
+ * silently stop this rule matching. The chat backend then returns to
  * 'unknown', outside lsCpuTracker and so never marked idle.
  *
  * Measured by moving it: a copy of the monitor is loaded from a directory of its
@@ -559,11 +559,12 @@ function run(tmp, proc, signals) {
         // user's. It is gone, and this is what its absence has to keep true.
         [1028, [NODE, '/data/user/0/com.vscodroid/files/home/projects/vscode-eslint-shim.js'],
             'unknown'],
-        // The two processes a signed-out, untouched editor leaves running on this
-        // device beyond its own core, measured on an API 33 and an API 37
-        // emulator: the agent host, and the model backend it forks. The backend
-        // is the one that was invisible. Its basename is `index.js`, so no
-        // pattern above can name it, and as 'unknown' it was never marked idle.
+        // The two processes a signed-out, untouched editor left running on this
+        // device beyond its own core before 1.139.1, measured on an API 33 and an
+        // API 37 emulator: the agent host, and the model backend it forks. Patch
+        // 0020 keeps both from starting from 1.139.1 on. The backend is the one
+        // that was invisible. Its basename is `index.js`, so no pattern above can
+        // name it, and as 'unknown' it was never marked idle.
         [1029, [NODE, HEAP, `${REH}/out/bootstrap-fork`, '--type=agentHost',
             '--logsPath', `${DATA}/logs`], 'system'],
         [1030, [NODE, `${REH}/node_modules/@github/copilot-android-arm64/index.js`,

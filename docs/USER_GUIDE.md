@@ -705,8 +705,8 @@ Note: tmux is a standalone tool, not integrated with VS Code's terminal tabs.
 The status bar shows a phantom process count. This tells you how many background processes VSCodroid is using.
 
 - Click the process count to see a detailed process tree in the Output panel.
-- An idle session costs 5, before you open anything. Add 1 per terminal tab and 1 per running language server.
-- At 8 the monitor warns you and at 14 it reports an error; both offer **Show Details**, which marks the language servers that have sat idle for five minutes or more.
+- Before you open anything, the count is the app's own background processes. Each terminal tab and each running language server adds 1.
+- At 6 the monitor warns you and at 14 it reports an error; both offer **Show Details**, which marks the language servers that have sat idle for five minutes or more.
 
 ### Quick File Navigation
 
@@ -971,14 +971,13 @@ Android 12 and later enforce a system-wide limit of 32 phantom processes (backgr
 | Bootstrap | 1 |
 | Node.js server | 1 |
 | File watcher | 1 |
-| Chat agent host and its model backend | 2 |
 | Extension Host | 0 (runs as worker thread) |
 | ptyHost | 0 (runs as worker thread) |
 | Each terminal tab | 1 (bash) |
 | Each language server | 1 |
 
-That is 5 on a cold start with nothing open, which is what the status bar shows
-before you do anything. Nothing sheds a language server automatically: a killed one
+What the status bar shows on a cold start, before you do anything, is the app's
+own share. Nothing sheds a language server automatically: a killed one
 is restarted by its extension within a second. If you hit the limit (other apps
 compete for the same 32 slots), close unused terminals and disable the extensions
 whose language servers **VSCodroid: Show Process Tree** marks idle.

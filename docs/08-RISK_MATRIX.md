@@ -88,10 +88,11 @@
 | 6. Monitoring | Count phantoms, warn user if approaching limit | User can close terminals/extensions |
 | 7. User guidance | In-app tips: "Close unused terminals to save resources" | User awareness |
 
-**Measured**: 5 phantom processes with the app open and nothing happening, on API 33 and API 37
-alike (`IDLE_BASELINE` in `process-monitor.js`, which names them: the bootstrap, the editor server,
-the file watcher, the agent host, and the chat agent's model backend). The thresholds above are set
-against that number, not against a target.
+**Measured** with Code - OSS 1.139.1: 3 phantom processes with the app open and nothing
+happening, on API 33 and API 36 (`IDLE_BASELINE` in `process-monitor.js`, which names them: the bootstrap,
+the editor server and the file watcher). Before 1.139.1 it was 5 on API 33 and API 37 alike: the
+chat agent host and its model backend started too, and patch 0020 keeps both from starting. The
+thresholds above are set against that number, not against a target.
 
 There is **no cap on concurrent language servers**. A "hard cap: max 2-3" was listed here as
 mitigation layer 4 until 2026-08-23; nothing implemented it, and layer 4 now describes the reclaim
@@ -211,9 +212,8 @@ These plans cover risks that did not yet have dedicated sections above.
 >
 > 1. **The flag caps each V8 isolate, not all of them together.** `--max-old-space-size` reaches
 >    the bootstrap, the editor server's main isolate, the Extension Host worker, the Pty Host
->    worker, the forked file watcher and the forked agent host, and every one of them is capped
->    at the same number rather than sharing it. A ceiling of N authorises up to 6N of old space
->    in that family.
+>    worker and the forked file watcher, and every one of them is capped at the same number
+>    rather than sharing it. A ceiling of N authorises up to 5N of old space in that family.
 >    Raising the number is a larger step than it looks, which is why the user override is
 >    clamped to a quarter of RAM and to 1536 MB, not to whatever the device could nominally
 >    hold.
@@ -246,7 +246,7 @@ These plans cover risks that did not yet have dedicated sections above.
 | Indicator | Trigger | Action |
 |-----------|---------|--------|
 | Node.js build time > 2 hours | M0 build stage | Investigate build config, try Termux binary fallback |
-| Phantom process count at or above `ERROR_BUDGET` (14) | M1 integration test, and the status bar item on a device | Review process management. The app already warns the user at that count, and the details view it offers marks idle language servers and names disabling the owning extension as what frees a slot; nothing is swept or killed. Five is the idle baseline, so a threshold below eight fires on an app that is doing nothing |
+| Phantom process count at or above `ERROR_BUDGET` (14) | M1 integration test, and the status bar item on a device | Review process management. The app already warns the user at that count, and the details view it offers marks idle language servers and names disabling the owning extension as what frees a slot; nothing is swept or killed. The soft budget of eight sits above the idle baseline (`IDLE_BASELINE` in `process-monitor.js`), so neither threshold fires on an app that is doing nothing |
 | Patch apply failure on new VS Code | CI monthly check | Pause upstream sync, fix patches |
 | WebView crash rate > 5% | M2 testing | Profile memory, reduce WebView load |
 | Play Store rejection | M5 submission | Prepare appeal, prepare alternative distribution |

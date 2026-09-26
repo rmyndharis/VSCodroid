@@ -433,11 +433,11 @@ class StoragePreflightTest {
     }
 
     /**
-     * The Copilot aliases link every entry of `copilot-linux-arm64`, the largest
-     * of which is 113 MiB, and the extension side links a whole `sdk` directory
-     * holding another 96 MiB. Counting a link as its target credits the install
-     * for space that is not there, which is the direction that lets the gate pass
-     * a device it should refuse.
+     * The agent host's alias farm, built until the move to Code - OSS 1.139,
+     * linked every entry of `copilot-linux-arm64`, the largest of which is
+     * 113 MiB. Counting a link as its target credits the install for space that
+     * is not there, which is the direction that lets the gate pass a device it
+     * should refuse.
      */
     @Test
     fun `a symlink cannot credit the same bytes twice`() {

@@ -710,6 +710,8 @@ flowchart TD
   P --> P17["0017 menus: ignore a pan that started in a submenu"]
   P --> P18["0018 debug terminal: build the command without /usr/bin/env"]
   P --> P19["0019 callback URL carries a secret minted per request"]
+  P --> P20["0020 chat agent host: not started on Android"]
+  P --> P21["0021 terminal hint: no Copilot CLI line on Android"]
 ```
 
 Five of these are load-bearing in ways their titles understate:

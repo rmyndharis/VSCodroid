@@ -146,6 +146,34 @@ class PreExtractionReclaimTest {
     }
 
     /**
+     * An upgrade that postdates the pivot still sheds the server packages the new
+     * tree does not ship, and does it ahead of the pre-flight, which then measures
+     * that room as free instead of crediting it as tree already unpacked. The
+     * orphan here stands for the agent host's Copilot CLI a 1.4.0 install carries.
+     *
+     * NEGATIVE CONTROL: move the `pruneUnshippedServerEntries` call for
+     * `node_modules/@github` out of `runPreExtractionMigrations`, or drop it; the
+     * low-storage refusal then returns first and this reddens.
+     */
+    @Test
+    fun `an upgrade short of space still sheds the packages the tree no longer ships`() {
+        val gh = File(tmp, "server/vscode-reh/node_modules/@github")
+        assertTrue(File(gh, "copilot-linux-arm64").mkdirs())
+        File(gh, "copilot-linux-arm64/index.js").writeText("// the old runtime")
+        assertTrue(File(gh, "copilot-sdk").mkdirs())
+        every { assets.list("vscode-reh/node_modules/@github") } returns arrayOf("copilot-sdk")
+
+        val result = runBlocking { FirstRunSetup(context(previousVersionCode = 11)).runSetup() }
+
+        assertEquals(FirstRunSetup.SetupResult.LOW_STORAGE, result)
+        assertFalse(
+            File(gh, "copilot-linux-arm64").exists(),
+            "the old runtime survived a low-storage refusal, so the pre-flight kept crediting it",
+        )
+        assertTrue(File(gh, "copilot-sdk").isDirectory, "a package the new tree ships was removed")
+    }
+
+    /**
      * A context whose SharedPreferences remember what was written to them.
      *
      * The relaxed mock above answers every read with a default and drops every

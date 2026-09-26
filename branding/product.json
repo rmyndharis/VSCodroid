@@ -35,6 +35,7 @@
     "webviewContentExternalBaseUrlTemplate",
     "darwinBundleIdentifier",
     "linuxIconName",
+    "linuxDesktopName",
     "tunnelApplicationName",
     "nodejsRepository",
     "win32AppUserModelId",

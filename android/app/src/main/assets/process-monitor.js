@@ -35,19 +35,21 @@ const IDLE_THRESHOLD_MS = 5 * 60 * 1000;
 
 // What this app costs when nothing is happening, measured rather than guessed:
 // on a cold start left untouched, /proc under the app's own uid holds the
-// bootstrap, the editor server, the file watcher, the agent host, and the chat
-// agent's model backend. Five, on API 33 and on API 37 alike.
+// bootstrap, the editor server and the file watcher. Three, measured on API 33
+// and API 36 with Code - OSS 1.139.1. Before that it was five on API 33 and
+// API 37 alike: the chat agent host and its model backend started too, and
+// patch 0020 keeps both from starting.
 //
 // The number matters because the thresholds below are read against it. The soft
 // budget used to be 5, chosen when the idle set was smaller, so a fresh install
 // sat exactly on its own warning with nothing open and the status item was amber
 // from the first paint. A warning that is always lit is one nobody reads, which
 // costs more than the warning was worth.
-const IDLE_BASELINE = 5;
+const IDLE_BASELINE = 3;
 
 // Idle, plus a terminal and two language servers: a session with real work in
 // it. Below this the count says nothing a user could act on.
-const SOFT_BUDGET = 8;
+const SOFT_BUDGET = 6;
 
 // Far enough above the soft budget to mean something has gone wrong rather than
 // that the user is busy, and still well short of the hard limit, so there is
@@ -70,9 +72,9 @@ const HARD_LIMIT = 32;
 // directory: renaming the leaf makes server.js exit naming the entry point it
 // cannot find, which is loud, while moving `server/` elsewhere leaves every
 // __dirname-relative path in server.js working and only stops this rule
-// matching -- and the chat agent's model backend, 226 MB and one of five
-// processes counted against the phantom budget, goes back to 'unknown', shown
-// as 'other' in the tooltip and never marked idle in the details view.
+// matching -- and the chat agent's model backend, on a build whose agent host
+// still starts it, goes back to 'unknown', shown as 'other' in the tooltip and
+// never marked idle in the details view.
 //
 // Exported for scripts/test-process-monitor.js, which loads a copy of this file
 // from a directory of its own and asks the same question there.
@@ -404,22 +406,26 @@ function classify(cmdline) {
     if (names.includes('sh')) return 'terminal';
 
     // The agent host's model backend, which `bootstrap-fork --type=agentHost`
-    // launches as node_modules/@github/copilot-<platform>/index.js. No
-    // LANG_SERVER_PATTERNS entry can reach it, because the basename every rule
-    // above compares is `index.js`: that names the package's entry point and not
-    // the program, so a bare word would miss it and a substring would claim every
-    // index.js on the device, the user's own included. Matched on the package path
-    // instead, the one rule here that reads a directory rather than a program
-    // name, and the node_modules segment is what keeps the needle off a directory
-    // someone chose themselves.
+    // launched as node_modules/@github/copilot-<platform>/index.js up to
+    // Code - OSS 1.138. From 1.139 the tree ships no such package and patch 0020
+    // keeps the host from starting on Android, so on device this rule no longer
+    // has a process to match.
     //
-    // Being unclassified was not cosmetic here. Measured idle on an API 33 and an
-    // API 37 emulator, signed out, nothing but the Welcome tab open: 226 MB
-    // resident, the largest process this app owns after the Android process
-    // itself, and one of only five counted against the phantom budget. As
-    // 'unknown' it was never in lsCpuTracker, so the details view could not say
-    // it was idle, which for a backend nobody is talking to is the one fact
-    // worth showing.
+    // No LANG_SERVER_PATTERNS entry could reach it, because the basename every
+    // rule above compares is `index.js`: that names the package's entry point and
+    // not the program, so a bare word would miss it and a substring would claim
+    // every index.js on the device, the user's own included. Matched on the
+    // package path instead, the one rule here that reads a directory rather than
+    // a program name, and the node_modules segment is what keeps the needle off a
+    // directory someone chose themselves.
+    //
+    // Being unclassified was not cosmetic here. Measured idle before 1.139.1,
+    // on an API 33 and an API 37 emulator, signed out, nothing but the Welcome
+    // tab open: 226 MB resident, the largest process this app owns after the
+    // Android process itself, and one of only five counted against the phantom
+    // budget. As 'unknown' it was never in lsCpuTracker, so the details view
+    // could not say it was idle, which for a backend nobody is talking to is
+    // the one fact worth showing.
     //
     // `node_modules/@github/copilot-` on its own is not ours. @github/copilot
     // names eight @github/copilot-<platform> packages as optionalDependencies in
@@ -432,9 +438,9 @@ function classify(cmdline) {
     //
     // So the rule asks for the tree this app unpacks, in the one argument that
     // names the program. REH_ROOT is that tree, derived above from where this
-    // file sits rather than written out here a second time. It holds both alias
-    // sites FirstRunSetup.setupCopilotAndroidAliases builds, the agent host's
-    // and the session provider's, and a project directory cannot be inside it.
+    // file sits rather than written out here a second time. It holds the alias
+    // FirstRunSetup.setupCopilotAndroidAliases builds for the Copilot extension,
+    // and a project directory cannot be inside it.
     const script = scriptArgument(parts);
     if (script.startsWith(REH_PREFIX) &&
         script.includes('/node_modules/@github/copilot-')) return 'langserver';

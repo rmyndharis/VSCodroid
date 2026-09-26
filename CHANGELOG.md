@@ -11,22 +11,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The screen shown when the development server will not start now shows the last lines of the server log, including how each attempt ended, and offers Copy Report. The reason was written only to a file the editor could reach, and the editor was what had failed to open.
 
-- While chat is running, the process warning offers Hide AI Features, which opens the setting that keeps chat's two background processes from starting with the server.
-
 ### Changed
 
-- The editor is now Code - OSS 1.138.0, up from 1.133.0.
+- The editor is now Code - OSS 1.139.1, up from 1.133.0.
+
+### Removed
+
+- Chat no longer offers the agent host's Copilot harness in its session picker, sessions created with that harness are no longer listed, and the settings `chat.defaultToCopilotHarness` and `chat.editor.preferCopilotHarness` have no effect. The Copilot extension is not changed by this.
+- The chat agent host and its Copilot backend, two background processes that started with the editor, no longer start, which frees about 350 MB at idle.
+- An empty terminal no longer suggests typing `copilot`, a command that cannot run here.
 
 ### Fixed
 
 - Signing in with a Microsoft account returns to the editor instead of stopping at a `Missing scheme` error, and its sign-in page opens without a confirmation prompt first.
-- The process details no longer count chat's model backend as a language server whose extension could be disabled.
 - Git asks for credentials again when an HTTPS remote needs them, in the terminal and from Source Control, including through the GitHub sign-in. Its prompt helper could not be started, so such a push, pull or clone failed.
 - The `vscodroid` command, which opens files in the editor from a terminal, starts instead of answering "Permission denied".
 - An app update no longer unpacks an unused second copy of a bundled extension, up to 29 MB for Python, beside the same or a newer version installed from the Extensions view.
 - The next app update removes such a copy that earlier updates left behind, when nothing lists it and the version installed from the Extensions view is on the device.
 - After an update, the editor loads its own styles fresh rather than the copy an earlier version left in the WebView cache, so touch fixes to menus and the side bar reach devices that had run an older version.
 - The editor starts on a device where Termux is installed and other apps' data directories are visible, as on some rooted phones. The bundled OpenSSL looked for its configuration in Termux's directory, was refused, and the server died before it could listen; it now reads a configuration file of its own.
+- An update removes the chat agent host's Copilot runtime that an earlier version left on the device, about 175 MB.
 
 ## [1.4.0] - 2026-09-18
 
