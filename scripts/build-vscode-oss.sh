@@ -569,9 +569,10 @@ fi
 elapsed $(( SECONDS - t0 ))
 step "Prune"
 # The node-linux-arm64 gulp task downloads a GNU/Linux Node and packageTask ships
-# it. Its interpreter (/lib/ld-linux-aarch64.so.1) does not exist on Android and
-# nothing here references it; the runtime uses nativeLibraryDir/libnode.so. The
-# OSS build produces it byte-for-byte the same as the proprietary one, so the
+# it. Its interpreter (/lib/ld-linux-aarch64.so.1) does not exist on Android. The
+# shipped scripts under bin/ still run $ROOT/node, and the device supplies it as a
+# link to nativeLibraryDir/libnode.so (ToolchainManager.linkServerNode). The OSS
+# build produces the binary byte-for-byte the same as the proprietary one, so the
 # pivot does not remove it and this stays a post-build step. Doing it here rather
 # than patching the gulpfile keeps it upright across version bumps.
 if [ -f "$OUT/node" ]; then

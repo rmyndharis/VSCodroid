@@ -17,6 +17,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The process details no longer count chat's model backend as a language server whose extension could be disabled.
 - Git asks for credentials again when an HTTPS remote needs them, in the terminal and from Source Control, including through the GitHub sign-in. Its prompt helper could not be started, so such a push, pull or clone failed.
+- The `vscodroid` command, which opens files in the editor from a terminal, starts instead of answering "Permission denied".
 - An app update no longer unpacks an unused second copy of a bundled extension, up to 29 MB for Python, beside the same or a newer version installed from the Extensions view.
 - The next app update removes such a copy that earlier updates left behind, when nothing lists it and the version installed from the Extensions view is on the device.
 - After an update, the editor loads its own styles fresh rather than the copy an earlier version left in the WebView cache, so touch fixes to menus and the side bar reach devices that had run an older version.

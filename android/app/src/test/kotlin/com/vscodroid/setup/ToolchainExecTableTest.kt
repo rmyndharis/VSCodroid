@@ -771,4 +771,55 @@ class ToolchainExecTableTest {
             "askpass.sh became a command in every terminal",
         )
     }
+
+    // The server's command-line client, first on every terminal's PATH. It is a
+    // `#!/usr/bin/env sh` file under filesDir like the git helpers, so bash
+    // answered "Permission denied", and its last line runs `$ROOT/node`, which the
+    // build prunes from the tree.
+
+    private val remoteCliDir get() = File(filesDir, "server/vscode-reh/bin/remote-cli")
+
+    private fun remoteCli(body: String = "#!/usr/bin/env sh\nshipped\n") =
+        File(remoteCliDir, "vscodroid").apply {
+            parentFile?.mkdirs()
+            writeText(body)
+        }
+
+    @Test
+    fun `the remote CLI runs through the trampoline beside its kept script`() {
+        remoteCli()
+
+        regenerate()
+
+        val link = File(remoteCliDir, "vscodroid")
+        assertEquals(trampoline, Files.readSymbolicLink(link.toPath()).toString())
+        // Beside the link and nowhere else: the script finds the server tree
+        // from three dirnames of its own path.
+        val kept = File(remoteCliDir, "vscodroid.script")
+        assertEquals("#!/usr/bin/env sh\nshipped\n", kept.readText(), "the shipped script was not kept")
+        assertTrue(
+            tableLines().contains("vscodroid\t/system/bin/sh\t${kept.absolutePath}"),
+            "no row runs the kept script through the shell:\n" + execTable.readText(),
+        )
+        assertFalse(
+            Files.exists(File(filesDir, "usr/libexec/tcbin/vscodroid").toPath(), LinkOption.NOFOLLOW_LINKS),
+            "vscodroid was put on PATH a second time",
+        )
+    }
+
+    @Test
+    fun `the server tree's node is the app's Node, repointed after a reinstall`() {
+        remoteCli()
+        val node = File(filesDir, "server/vscode-reh/node").toPath()
+
+        regenerate()
+        assertEquals(File(nativeLibDir, "libnode.so").absolutePath, Files.readSymbolicLink(node).toString())
+
+        // A reinstall hands out a new nativeLibraryDir and leaves the link dangling.
+        nativeLibDir = File(filesDir, "nativeLib-reinstalled").apply { mkdirs() }
+        File(nativeLibDir, "libnode.so").writeText("elf")
+        regenerate()
+
+        assertEquals(File(nativeLibDir, "libnode.so").absolutePath, Files.readSymbolicLink(node).toString())
+    }
 }
