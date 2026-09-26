@@ -274,6 +274,22 @@ int __register_atfork(void (*prepare)(void), void (*parent)(void),
 void sdallocx(void *ptr, size_t size, int flags) { (void)size; (void)flags; free(ptr); }
 
 /*
+ * glibc's heap trim. The agent host's Copilot runtime.node imports it from
+ * VS Code 1.138 on, strongly and at GLIBC_2.17, and Bionic has no malloc_trim
+ * at any API level, so without this its forwarder aborts on the first call.
+ * The Bionic call it stands for is mallopt(M_PURGE), which hands unused pages
+ * back to the kernel. The pad argument has no counterpart there and is ignored.
+ *
+ * The same object imports mallopt too, and that one is forwarded unchanged on
+ * purpose: glibc numbers its options 1..4 and -1..-8, Bionic from -100 down,
+ * so a glibc tuning request names no Bionic option and is refused with 0,
+ * which a glibc caller already reads as failure.
+ */
+#include <malloc.h>
+
+int malloc_trim(size_t pad) { (void)pad; return mallopt(M_PURGE, 0); }
+
+/*
  * Symbol resolution for the generated stubs.
  *
  * It lives here, and that is the whole point. Those stubs export glibc names --

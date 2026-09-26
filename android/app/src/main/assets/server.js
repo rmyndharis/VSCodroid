@@ -107,10 +107,12 @@ function writeThroughRename(target, contents, mode) {
  * lines that read and mutate `settings`; the wrapper around them, the marker that
  * makes a second start a no-op, and the write are the same every time.
  *
- * The tag has to stay a BARE `<script>`: the server hashes exactly that shape out
- * of the page it has just built and puts the hashes into the Content-Security-Policy
- * it serves with it, so a tag carrying any attribute is one the page's own policy
- * then refuses to run.
+ * The tag is written the way the page's own inline scripts are, because the policy
+ * the server sends with the page trusts only that shape. From 1.138 each of them
+ * carries `nonce="{{WORKBENCH_SCRIPT_NONCE}}"`, which the server fills with a fresh
+ * nonce per request and names in `script-src`, and a script without it is refused.
+ * Before that the server hashed every BARE `<script>` out of the page it had built,
+ * so a tag carrying any attribute was the one refused.
  *
  * A page that is not there is not a page this can fix, and a missing server tree is
  * already a failed start and a build-time gate in verify-server-tree.py. A page that
@@ -127,9 +129,11 @@ function extendWorkbenchPage(pagePath, marker, lines) {
     if (!html.includes(anchor)) {
         throw new Error('the workbench page does not carry the configuration element this extends');
     }
+    const nonce = '{{WORKBENCH_SCRIPT_NONCE}}';
+    const open = html.includes(`<script nonce="${nonce}">`) ? `<script nonce="${nonce}">` : '<script>';
     const script = [
         '',
-        '\t\t<script>',
+        `\t\t${open}`,
         `\t\t\t/* ${marker} */`,
         '\t\t\t(function () {',
         "\t\t\t\tvar el = document.getElementById('vscode-workbench-web-configuration');",
@@ -370,7 +374,7 @@ if (!fs.existsSync(rehEntryPoint)) {
     // removing repeats. A repeated entry matches the same addresses, so it is
     // harmless, and the script can go only once the oldest server release shipped
     // carries every entry of TRUSTED_LINK_DOMAINS in its branding.
-    // How the script is inserted, and why it stays a bare <script>, is at
+    // How the script is inserted, and which tag it has to use, is at
     // [extendWorkbenchPage].
     const workbenchHtmlPath = path.join(REH_DIR, 'out/vs/code/browser/workbench/workbench.html');
     try {

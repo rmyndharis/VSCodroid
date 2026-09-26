@@ -582,8 +582,8 @@ there, Extension Host output included. Nothing writes `exthost.log` under any na
 | Android app | Kotlin, compiled to JVM target 17 | The version AGP 9.3.1 brings (`agp` in `android/gradle/libs.versions.toml`) |
 | Build system | Gradle (Kotlin DSL), pinned by the wrapper and its `distributionSha256Sum` | 9.7.1 (`android/gradle/wrapper/gradle-wrapper.properties`) |
 | UI framework | Android View + WebView | API 33-36 |
-| Node.js | Node.js from Termux's `nodejs-lts` package, installed as `libnode.so` by `scripts/download-node.sh` | 24.18.0, the version `remote/.npmrc` `target` names at the pinned VS Code tag |
-| VS Code | Code - OSS, built from MIT source with the diffs in `patches/` | 1.133.0 (pinned in the `VSCODE_VERSION` file at the repo root) |
+| Node.js | Node.js from Termux's `nodejs-lts` package, installed as `libnode.so` by `scripts/download-node.sh` | 24.18.0; the pinned VS Code tag's `remote/.npmrc` `target` names 24.18.1, the same major and so the same `NODE_MODULE_VERSION` |
+| VS Code | Code - OSS, built from MIT source with the diffs in `patches/` | 1.138.0 (pinned in the `VSCODE_VERSION` file at the repo root) |
 | Extension Host | VS Code Extension Host as a worker_thread (patch `0004`); the Pty Host likewise (patch `0003`) | Same as VS Code |
 | Terminal | node-pty spawning bash on a real PTY (tmux bundled as a standalone tool) | Latest |
 | Toolchain delivery | Play Asset Delivery packs, or `releases/latest` ZIPs for non-Play installs | Ruby, Java 17 |
