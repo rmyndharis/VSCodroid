@@ -33,10 +33,10 @@ minification: === "/callback" appears nowhere in an unpatched bundle, where the
 route is only ever compared against a hoisted constant.
 
 diff --git a/src/vs/server/node/remoteExtensionHostAgentServer.ts b/src/vs/server/node/remoteExtensionHostAgentServer.ts
-index e7ae07d..f9546ee 100644
+index fcecdac0..822014f8 100644
 --- a/src/vs/server/node/remoteExtensionHostAgentServer.ts
 +++ b/src/vs/server/node/remoteExtensionHostAgentServer.ts
-@@ -141,6 +141,22 @@ class RemoteExtensionHostAgentServer extends Disposable implements IServerAPI {
+@@ -160,6 +160,22 @@ class RemoteExtensionHostAgentServer extends Disposable implements IServerAPI {
  			return void res.end('OK');
  		}
  
@@ -56,6 +56,6 @@ index e7ae07d..f9546ee 100644
 +			return;
 +		}
 +
- 		if (!httpRequestHasValidConnectionToken(this._connectionToken, req, parsedUrl)) {
+ 		if (!httpRequestHasValidConnectionToken(this._connectionToken, req, parsedUrl.searchParams)) {
  			// invalid connection token
  			return serveError(req, res, 403, `Forbidden.`);

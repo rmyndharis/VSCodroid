@@ -25,18 +25,18 @@ minified output to a real source patch. `git apply` fails loudly when the contex
 shifts, which is the point: the regexes it replaces print SKIP and exit 0.
 
 diff --git a/src/vs/base/common/platform.ts b/src/vs/base/common/platform.ts
-index d2072de..c211d65 100644
+index bc542baa..77e6925f 100644
 --- a/src/vs/base/common/platform.ts
 +++ b/src/vs/base/common/platform.ts
-@@ -11,6 +11,7 @@ let _isWindows = false;
- let _isMacintosh = false;
+@@ -12,6 +12,7 @@ let _isMacintosh = false;
  let _isLinux = false;
  let _isLinuxSnap = false;
+ let _isChromeOS = false;
 +let _isAndroidPlatform = false;
  let _isNative = false;
  let _isWeb = false;
  let _isElectron = false;
-@@ -74,7 +75,15 @@ declare const navigator: INavigator;
+@@ -75,7 +76,15 @@ declare const navigator: INavigator;
  if (typeof nodeProcess === 'object') {
  	_isWindows = (nodeProcess.platform === 'win32');
  	_isMacintosh = (nodeProcess.platform === 'darwin');
@@ -53,10 +53,10 @@ index d2072de..c211d65 100644
  	_isLinuxSnap = _isLinux && !!nodeProcess.env['SNAP'] && !!nodeProcess.env['SNAP_REVISION'];
  	_isElectron = isElectronProcess;
  	_isCI = !!nodeProcess.env['CI'] || !!nodeProcess.env['BUILD_ARTIFACTSTAGINGDIRECTORY'] || !!nodeProcess.env['GITHUB_WORKSPACE'];
-@@ -143,6 +152,11 @@ export const isWindows = _isWindows;
- export const isMacintosh = _isMacintosh;
+@@ -146,6 +155,11 @@ export const isMacintosh = _isMacintosh;
  export const isLinux = _isLinux;
  export const isLinuxSnap = _isLinuxSnap;
+ export const isChromeOS = _isChromeOS;
 +// The OS this process runs on. Not to be merged with the isAndroid further
 +// down, which asks whether the *browser* showing the workbench is Android --
 +// on a phone both are true, but they answer different questions and only

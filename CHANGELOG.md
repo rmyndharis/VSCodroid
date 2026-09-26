@@ -13,6 +13,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - While chat is running, the process warning offers Hide AI Features, which opens the setting that keeps chat's two background processes from starting with the server.
 
+### Changed
+
+- The editor is now Code - OSS 1.138.0, up from 1.133.0.
+
 ### Fixed
 
 - Signing in with a Microsoft account returns to the editor instead of stopping at a `Missing scheme` error, and its sign-in page opens without a confirmation prompt first.

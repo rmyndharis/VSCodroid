@@ -236,7 +236,7 @@ project, different licence, nearly the same name.
 - **Version**: whatever the server tree ships (`node_modules/@microsoft/mxc-sdk/package.json`)
 - **License**: MIT License
 - **Copyright**: Copyright (c) Microsoft Corporation.
-- **Ships**: eleven binaries in `bin/arm64/`, only two of which are ARM64 Linux executables (`linux-test-proxy`, `lxc-exec`). The rest are a Mach-O helper (`mxc-exec-mac`) and eight Windows PE files (`mxc-diagnostic-console.exe`, `winhttp-proxy-shim.exe`, `wslcsdk.dll`, `wxc-exec.exe`, `wxc-host-prep.exe`, `wxc-test-proxy.exe`, `wxc-windows-sandbox-daemon.exe`, `wxc-windows-sandbox-guest.exe`), which the directory name does not describe and which nothing here can run. They are listed because they are redistributed.
+- **Ships**: thirteen binaries in `bin/arm64/` at 0.8.0, only one of which is an ARM64 Linux executable (`lxc-exec`). The rest are two Mach-O helpers (`mxc-exec-mac`, `unix-test-proxy`) and ten Windows PE files (`mxc-diagnostic-console.exe`, `plm.exe`, `winhttp-proxy-shim.exe`, `wslcsdk.dll`, `wxc-exec.exe`, `wxc-host-prep.exe`, `wxc-test-proxy.exe`, `wxc-windows-sandbox-daemon.exe`, `wxc-windows-sandbox-guest.exe`, `wxc-wslc-daemon.exe`), which the directory name does not describe and which nothing here can run. They are listed because they are redistributed.
 
 ### js-debug
 
@@ -769,4 +769,4 @@ For questions about licenses, trademarks, or legal notices:
 
 ---
 
-_This document was last updated on September 18, 2026._
+_This document was last updated on September 26, 2026._

@@ -570,6 +570,38 @@ async function stoppingTakesTheEditorServerWithIt() {
     fs.rmSync(dir, { recursive: true, force: true });
 }
 
+// From 1.138 the page's policy trusts inline scripts by a per-request nonce and
+// no longer hashes bare ones, so the injected scripts have to carry the page's
+// own nonce placeholder, which the server fills in on every request.
+//
+// NEGATIVE CONTROL: always emit a bare <script> in extendWorkbenchPage and the
+// first assertion goes red.
+{
+    const nonce = '{{WORKBENCH_SCRIPT_NONCE}}';
+    const anchor =
+        '<meta id="vscode-workbench-web-configuration" data-settings="{{WORKBENCH_WEB_CONFIGURATION}}">';
+    const dir = fixture(UPSTREAM);
+    const pagePath = path.join(dir, 'vscode-reh', 'out', 'vs', 'code', 'browser', 'workbench', 'workbench.html');
+    fs.mkdirSync(path.dirname(pagePath), { recursive: true });
+    fs.writeFileSync(pagePath, [
+        '<!DOCTYPE html>', '<html>', '\t<head>',
+        `\t\t<script nonce="${nonce}">`, '\t\t\tperformance.mark("code/didStartRenderer");', '\t\t</script>',
+        `\t\t${anchor}`, '\t</head>', '</html>', '',
+    ].join('\n'));
+
+    const run = boot(dir);
+    assert.strictEqual(run.status, 0, `a 1.138-shaped page should boot cleanly:\n${run.output}`);
+    const page = fs.readFileSync(pagePath, 'utf8');
+    const injected = [...page.matchAll(/<script nonce="\{\{WORKBENCH_SCRIPT_NONCE\}\}">\n(\t\t\t\/\* vscodroid-[\s\S]*?)\n\t\t<\/script>/g)];
+    assert.strictEqual(
+        injected.length, 2,
+        `the injected scripts do not carry the page's nonce, so its policy refuses them:\n${page}`,
+    );
+    assert.ok(!/\n\t\t<script>\n/.test(page), 'a bare <script> was injected into a page trusted by nonce');
+    injected.forEach((m) => new Function(m[1])); // eslint-disable-line no-new-func -- a parse check
+    fs.rmSync(dir, { recursive: true, force: true });
+}
+
 // A page missing the element costs a log line, not a start. The bootstrap is
 // restarted by the watchdog, so a throw here would be a crash loop.
 {

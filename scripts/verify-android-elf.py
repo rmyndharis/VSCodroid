@@ -64,18 +64,18 @@ ANDROID_INTERP = "/system/bin/linker64"
 # The aarch64 executables in the packaged tree that name a glibc loader, kept by
 # path because they ship and cannot run.
 #
-# Both arrive inside @microsoft/mxc-sdk, which the server tree references from
-# out/server-main.js and out/vs/platform/agentHost/node/agentHostMain.js, and
-# both are built for glibc: PT_INTERP is /lib/ld-linux-aarch64.so.1, a path
-# Android does not have. 4.53 MiB that no code path here can start. Nothing in
-# this repository builds that tree -- it is fetched whole from a server-<version>
-# release -- so pruning them belongs to whoever owns the fetch, and until then
-# naming them here is what stops a THIRD one arriving unnoticed on the next VS
-# Code bump. Measured 2026-08-23: 53 aarch64 executables in the packaged trees
-# name /system/bin/linker64 and exactly these two do not.
+# It arrives inside @microsoft/mxc-sdk, which the server tree references from
+# out/server-main.js and out/vs/platform/agentHost/node/agentHostMain.js, and it
+# is built for glibc: PT_INTERP is /lib/ld-linux-aarch64.so.1, a path Android
+# does not have, so no code path here can start it. Nothing in this repository
+# builds that tree -- it is fetched whole from a server-<version> release -- so
+# pruning it belongs to whoever owns the fetch, and until then naming it here is
+# what stops another one arriving unnoticed on the next VS Code bump. Measured
+# 2026-08-23: 53 aarch64 executables in the packaged trees named
+# /system/bin/linker64 and two did not; mxc-sdk 0.8.0, which 1.138.0 locks,
+# replaced the second, linux-test-proxy, with a Mach-O unix-test-proxy.
 FOREIGN_INTERP_ALLOWED = {
     "vscode-reh/node_modules/@microsoft/mxc-sdk/bin/arm64/lxc-exec",
-    "vscode-reh/node_modules/@microsoft/mxc-sdk/bin/arm64/linux-test-proxy",
 }
 
 # Provided by the system on every supported device, so they never need bundling.

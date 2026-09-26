@@ -43,7 +43,8 @@ set -euo pipefail
 # person builds locally.
 #
 # Note also the Dockerfile's own warning: the Node this build HOST runs and the Node
-# that ends up on the DEVICE are different numbers that merely coincide at 1.133.0.
+# the tree targets for the DEVICE are different numbers. They coincided at 1.133.0
+# and do not at 1.138.0 (.nvmrc 24.18.0, remote/.npmrc `target` 24.18.1).
 #
 # Run it on an arm64 host. Every native module in the tree is built for the build
 # host, and only four of them are replaced afterwards by build-native-addons.sh:
