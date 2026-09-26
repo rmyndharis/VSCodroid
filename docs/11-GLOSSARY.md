@@ -44,6 +44,9 @@ Compiling code on one platform (e.g., x86_64 Linux or macOS) to produce binaries
 
 ### E
 
+**Exec interceptor (termux-exec)**
+`usr/lib/libtermux-exec.so` under `filesDir`, loaded into every terminal and task through `LD_PRELOAD` from `terminal.integrated.env.linux`. It rewrites an `exec` of a file under the app's data directory into `/system/bin/linker64 <path>`, which SELinux permits, as the Termux build on Google Play does. Built from the upstream source by `scripts/build-termux-exec.sh`; `"LD_PRELOAD": null` in the same setting turns it off.
+
 **Extension Host**
 The VS Code process/thread that runs extensions. It provides the `vscode.*` API namespace and manages extension lifecycle (activation, deactivation). In VSCodroid, it runs as a `worker_thread` instead of a child process.
 
@@ -147,7 +150,7 @@ The file format for VS Code extensions. A ZIP archive containing the extension's
 ### W
 
 **W^X (Write XOR Execute)**
-A security policy where memory pages cannot be both writable and executable. The related restriction that shapes VSCodroid is a different one and worth naming separately: SELinux denies `execute_no_trans` on `app_data_file` for targetSdk ≥ 29, so a binary written into the app's own `filesDir` cannot be `execve`'d no matter what its mode bits say. The .so trick sidesteps that by having Android's package manager extract binaries into `nativeLibraryDir` at install time. `dlopen()` is not denied, which is why a `.node` addon can still be loaded out of `filesDir`.
+A security policy where memory pages cannot be both writable and executable. The related restriction that shapes VSCodroid is a different one and worth naming separately: SELinux denies `execute_no_trans` on `app_data_file` for targetSdk ≥ 29, so a binary written into the app's own `filesDir` cannot be `execve`'d directly no matter what its mode bits say. The .so trick answers that for the app's own binaries by having Android's package manager extract them into `nativeLibraryDir` at install time. `dlopen()` is not denied, which is why a `.node` addon can still be loaded out of `filesDir`. What a user sees is narrower than the kernel fact: in a terminal, and in a task the editor runs, the exec interceptor starts such a file through `/system/bin/linker64` instead, so `./a.out` and a `#!` script run there; a program the extension host starts itself still gets `EACCES`.
 
 **WebView**
 Android's browser component. A View that displays web content within an app. Based on Chromium, updated via Google Play. VSCodroid uses WebView to render VS Code's web UI.

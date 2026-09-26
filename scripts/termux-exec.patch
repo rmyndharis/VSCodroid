@@ -1,0 +1,207 @@
+termux-exec-package 2.5.0, built into assets/usr/lib/libtermux-exec.so by
+scripts/build-termux-exec.sh, with the changes below. The library is
+preloaded into the editor's terminals so that a program under the app's own
+storage, which SELinux will not execve, is started through
+/system/bin/linker64 instead. Upstream's decisions were written for Termux's
+layout, where the prefix holds every binary; here the binaries sit in
+nativeLibraryDir behind symlinks from usr/bin, and /system's toybox stands in
+for tools the prefix does not carry.
+
+  P1  /system executables keep LD_LIBRARY_PATH and LD_PRELOAD. Upstream strips
+      both for anything under /system except sh and the two linkers, so
+      `env node` and `xargs git` lost the libraries of the program they start
+      and were no longer intercepted when they exec'd it.
+  P2  A target under the app data directory is realpath()ed and exec'd
+      directly when it resolves outside it, so a usr/bin symlink to a
+      nativeLibraryDir binary is not started through the linker, which would
+      make the linker its /proc/self/exe.
+  P3  /usr/bin/X and /bin/X fall back to /system/bin/X when $TERMUX__PREFIX/bin/X
+      is absent, so `#!/bin/sh` and `#!/usr/bin/env` scripts run without a
+      copy of every toybox tool in the prefix.
+  P4  A manual `linker64 <absolute payload>` sets TERMUX_EXEC__PROC_SELF_EXE to
+      that payload instead of stripping an inherited value, so what the exec
+      trampoline and the toolchain launchers do by hand keeps a self-locating
+      payload working.
+  P5  The /system fallback of P3 also applies when TERMUX__PREFIX is unset and
+      the compiled-in default does not exist, the one case P3 alone made
+      worse: /bin/sh ran with no preload and failed with it.
+
+Each changed file gains a first-line notice that it was modified, which the
+Apache-2.0 licence (section 4(b)) asks of a redistributed modification.
+
+Measured on API 33 and 36 emulators, 2026-09-22/23. Applies with `patch -p1`
+to the pristine 2.5.0 tree, `--dry-run` included; the build script applies it
+to a fresh tree on every run and stops if a hunk does not fit.
+
+diff -ruN a/lib/termux-exec_nos_c/tre/include/termux/termux_exec__nos__c/v1/termux/api/termux_exec/service/ld_preload/direct/exec/ExecIntercept.h b/lib/termux-exec_nos_c/tre/include/termux/termux_exec__nos__c/v1/termux/api/termux_exec/service/ld_preload/direct/exec/ExecIntercept.h
+--- a/lib/termux-exec_nos_c/tre/include/termux/termux_exec__nos__c/v1/termux/api/termux_exec/service/ld_preload/direct/exec/ExecIntercept.h
++++ b/lib/termux-exec_nos_c/tre/include/termux/termux_exec__nos__c/v1/termux/api/termux_exec/service/ld_preload/direct/exec/ExecIntercept.h
+@@ -1,3 +1,4 @@
++// Modified for VSCodroid. The changes to this file are recorded in scripts/termux-exec.patch at https://github.com/rmyndharis/VSCodroid.
+ #ifndef LIBTERMUX_EXEC__NOS__C__EXEC_INTERCEPT___H
+ #define LIBTERMUX_EXEC__NOS__C__EXEC_INTERCEPT___H
+ 
+@@ -298,10 +299,8 @@
+  *
+  * @param isNonNativeElf The value for `TermuxFileHeaderInfo.isNonNativeElf`
+  *        for the executable file.
+- * @param executablePath The **normalized** executable path to check.
+- * @return Returns `true` if `isNonNativeElf` equals `true` or
+- * `executablePath` starts with `/system/`, but does not equal
+- * `/system/bin/sh`, `system/bin/linker` or `/system/bin/linker64`.
++ * @param executablePath Unused; `/system` executables keep the variables.
++ * @return Returns `true` if `isNonNativeElf` equals `true`.
+  *
+  */
+ bool shouldUnsetLDVarsFromEnv(bool isNonNativeElf, const char *executablePath);
+diff -ruN a/lib/termux-exec_nos_c/tre/src/termux/api/termux_exec/service/ld_preload/TermuxExecLDPreload.c b/lib/termux-exec_nos_c/tre/src/termux/api/termux_exec/service/ld_preload/TermuxExecLDPreload.c
+--- a/lib/termux-exec_nos_c/tre/src/termux/api/termux_exec/service/ld_preload/TermuxExecLDPreload.c
++++ b/lib/termux-exec_nos_c/tre/src/termux/api/termux_exec/service/ld_preload/TermuxExecLDPreload.c
+@@ -1,3 +1,4 @@
++// Modified for VSCodroid. The changes to this file are recorded in scripts/termux-exec.patch at https://github.com/rmyndharis/VSCodroid.
+ #define _GNU_SOURCE
+ #include <errno.h>
+ #include <fcntl.h>
+@@ -160,6 +161,28 @@
+     }
+ 
+     bool shouldEnableSystemLinkerExec = isExecutableUnderTermuxAppDataDir == 0;
++
++    // A path under the app data directory can be a symlink out of it,
++    // like `$TERMUX__PREFIX/bin/node` to `<nativeLibraryDir>/libnode.so`.
++    // Such a target can be executed directly, and starting it with the
++    // linker would make the linker its `/proc/self/exe`. Both sides are
++    // resolved, as `realpath()` can turn `/data/user/0/<package>` into
++    // `/data/data/<package>`.
++    if (shouldEnableSystemLinkerExec) {
++        const char *termuxAppDataDir = termuxApp_dataDir_get(LOG_TAG);
++        char realAppDataDirBuffer[PATH_MAX];
++        char realPathBuffer[PATH_MAX];
++        if (termuxAppDataDir != NULL &&
++            realpath(termuxAppDataDir, realAppDataDirBuffer) != NULL &&
++            realpath(executablePath, realPathBuffer) != NULL &&
++            termuxApp_dataDir_isPathUnder(LOG_TAG, realPathBuffer,
++                realAppDataDirBuffer, realAppDataDirBuffer) == 1) {
++            if (!isRunningTests) {
++                logErrorVVerbose(LOG_TAG, "real_exe_outside_termux_app_data_dir: '%s'", realPathBuffer);
++            }
++            shouldEnableSystemLinkerExec = false;
++        }
++    }
+ 
+     if (!isRunningTests) {
+         logErrorVVerbose(LOG_TAG, "system_linker_exec_enabled_for_file: '%d'",
+diff -ruN a/lib/termux-exec_nos_c/tre/src/termux/api/termux_exec/service/ld_preload/direct/exec/ExecIntercept.c b/lib/termux-exec_nos_c/tre/src/termux/api/termux_exec/service/ld_preload/direct/exec/ExecIntercept.c
+--- a/lib/termux-exec_nos_c/tre/src/termux/api/termux_exec/service/ld_preload/direct/exec/ExecIntercept.c
++++ b/lib/termux-exec_nos_c/tre/src/termux/api/termux_exec/service/ld_preload/direct/exec/ExecIntercept.c
+@@ -1,3 +1,4 @@
++// Modified for VSCodroid. The changes to this file are recorded in scripts/termux-exec.patch at https://github.com/rmyndharis/VSCodroid.
+ #define _GNU_SOURCE
+ #include <elf.h>
+ #include <errno.h>
+@@ -43,8 +44,38 @@
+ __attribute__((visibility("hidden")))
+ int execveInterceptInternal(const char *origExecutablePath, char *const argv[], char *const envp[]);
+ 
++/**
++ * Call `termuxPrefixPath()`, but if the prefixed file does not exist
++ * and the same path under `/system` does, return that instead, so that
++ * `/usr/bin/env` is `/system/bin/env` when `$TERMUX__PREFIX/bin/env`
++ * is absent.
++ */
++static char *termuxPrefixPathOrSystemPath(const char *termuxPrefixDir, const char *path,
++    char *buffer, size_t bufferSize) {
++    char *prefixedPath = termuxPrefixPath(LOG_TAG, termuxPrefixDir, path, buffer, bufferSize);
++    if (prefixedPath != NULL && (strcmp(prefixedPath, path) == 0 || access(prefixedPath, F_OK) == 0)) {
++        return prefixedPath;
++    }
+ 
++    // Also reached with `prefixedPath == NULL`, which is a process whose
++    // environment has no `TERMUX__PREFIX` and whose compiled-in default
++    // does not exist: `/bin/sh` must still run there, as it does with no
++    // preload at all. `errno` is kept for the caller, as `access()` below
++    // overwrites it.
++    int savedErrno = errno;
++    char systemPath[PATH_MAX];
++    if (termuxPrefixPath(LOG_TAG, "/system", path, systemPath, sizeof(systemPath)) == NULL ||
++        strlen(systemPath) >= bufferSize || access(systemPath, F_OK) != 0) {
++        errno = savedErrno;
++        return prefixedPath;
++    }
+ 
++    strcpy(buffer, systemPath);
++    return buffer;
++}
++
++
++
+ int execveIntercept(bool intercept, const char *executablePath, char *const argv[], char *const envp[]) {
+     bool debugLoggingEnabled = getCurrentLogLevel() >= LOG_LEVEL__NORMAL;
+ 
+@@ -154,7 +185,7 @@
+         const char *normalizedExecutablePath = executablePath;
+ 
+ 
+-        executablePath = termuxPrefixPath(LOG_TAG, NULL, executablePath,
++        executablePath = termuxPrefixPathOrSystemPath(NULL, executablePath,
+             processedExecutablePathBuffer, sizeof(processedExecutablePathBuffer));
+         if (executablePath == NULL) {
+             logStrerrorDebug(LOG_TAG, "Failed to prefix normalized executable path '%s'", normalizedExecutablePath);
+@@ -352,14 +383,27 @@
+     // If `system_linker_exec` is going to be used, then set `TERMUX_EXEC__PROC_SELF_EXE`
+     // environment variable to `processedExecutablePath`, otherwise
+     // unset it if it is already set.
++    // A caller that runs the linker itself, `/system/bin/linker64 <payload>`,
++    // is doing `system_linker_exec` by hand (a shell function, a launcher
++    // that names the loader). Its payload is named the same way, instead of
++    // an inherited value being stripped, so a payload that locates itself
++    // through the variable still can.
++    const char *systemLinkerPath = SYSTEM_LINKER_PATH;
++    const char *procSelfExePath = processedExecutablePath;
++    if (!shouldEnableSystemLinkerExec && strcmp(executablePath, systemLinkerPath) == 0 &&
++        argv != NULL && argv[0] != NULL && argv[1] != NULL && argv[1][0] == '/') {
++        procSelfExePath = argv[1];
++        logErrorVVerbose(LOG_TAG, "manual_system_linker_exec_payload: '%s'", procSelfExePath);
++    }
++
+     char *envTermuxProcSelfExe = NULL;
+-    if (shouldEnableSystemLinkerExec) {
++    if (shouldEnableSystemLinkerExec || procSelfExePath != processedExecutablePath) {
+         modifyEnv = true;
+         logErrorVVerbose(LOG_TAG, "set_proc_self_exe_var_in_env: '%d'", true);
+ 
+-        if (asprintf(&envTermuxProcSelfExe, "%s%s", ENV_PREFIX__TERMUX_EXEC__PROC_SELF_EXE, processedExecutablePath) == -1) {
++        if (asprintf(&envTermuxProcSelfExe, "%s%s", ENV_PREFIX__TERMUX_EXEC__PROC_SELF_EXE, procSelfExePath) == -1) {
+             errno = ENOMEM;
+-            logStrerrorDebug(LOG_TAG, "asprintf failed for '%s%s'", ENV_PREFIX__TERMUX_EXEC__PROC_SELF_EXE, processedExecutablePath);
++            logStrerrorDebug(LOG_TAG, "asprintf failed for '%s%s'", ENV_PREFIX__TERMUX_EXEC__PROC_SELF_EXE, procSelfExePath);
+             return -1;
+         }
+     } else {
+@@ -571,7 +615,7 @@
+ 
+         const char *normalizedInterpreterPath = interpreterPath;
+ 
+-        info->interpreterPath = termuxPrefixPath(LOG_TAG, termuxPrefixDir,
++        info->interpreterPath = termuxPrefixPathOrSystemPath(termuxPrefixDir,
+             interpreterPath, info->interpreterPathBuffer, interpreterPathBufferSize);
+         if (info->interpreterPath == NULL) {
+             logStrerrorDebug(LOG_TAG, "Failed to prefix normalized interpreter path '%s'", normalizedInterpreterPath);
+@@ -665,11 +709,12 @@
+ 
+ 
+ bool shouldUnsetLDVarsFromEnv(bool isNonNativeElf, const char *executablePath) {
+-    return isNonNativeElf ||
+-        (stringStartsWith(executablePath, "/system/") &&
+-        strcmp(executablePath, "/system/bin/sh") != 0 &&
+-        strcmp(executablePath, "/system/bin/linker") != 0 &&
+-        strcmp(executablePath, "/system/bin/linker64") != 0);
++    // `/system` binaries keep `LD_LIBRARY_PATH` and `LD_PRELOAD`, as they
++    // would without this library: `env node` or `xargs git` must still
++    // find the libraries of the program they start, and exec it through
++    // this library.
++    (void) executablePath;
++    return isNonNativeElf;
+ }
+ 
+ int modifyExecEnv(char *const *envp, char ***newEnvpPointer,

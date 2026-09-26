@@ -281,7 +281,7 @@ M6 (Release)   → Play Store release
    - [x] Symlink: `make` → `libmake.so` via `setupToolSymlinks()`
 
 3. **npm integration** (`FirstRunSetup.createNpmWrappers`)
-   - [x] npm/npx defined as bash functions in `.bashrc` (not script wrappers; SELinux denies `execute_no_trans` under `filesDir`, while `dlopen` of a `.node` addon there still works)
+   - [x] npm/npx defined as bash functions in `.bashrc` (not script wrappers; SELinux denies `execute_no_trans` under `filesDir` outside a preloaded shell, while `dlopen` of a `.node` addon there still works)
    - [x] Functions invoke Node.js with `npm-cli.js` entry point from `usr/lib/node_modules/npm/`
    - [x] `.npmrc` created with `script-shell` pointing to `libbash.so`
 
@@ -414,7 +414,7 @@ M6 (Release)   → Play Store release
    - [x] Java from Termux `openjdk-17` + libandroid-shmem + libandroid-spawn. 156 MB unpacked; the registry read 146 until the JDK grew past it
    - [x] Each script: download .deb → extract → place in asset pack module → strip → write manifest
    - [x] Each script fails the build on any symbolic link anywhere in the pack. Neither delivery path can carry one: an asset pack cannot hold a link, and `ToolchainManager.extractZip` writes it as a text file holding the target path
-   - Go shipped here and was withdrawn: it ran but could not compile, because Android refuses to execute a file under the app's data directory and `go build` forks its own compiler.
+   - Go shipped here and was withdrawn: it ran but could not compile, because `go build` forks its own compiler from the app's data directory and, outside a preloaded shell, nothing starts a file there. The terminal's exec interceptor now does; that does not reinstate Go.
 
 3. **Play Asset Delivery integration** (`ToolchainManager.kt`, `ToolchainRegistry.kt`)
    - [x] Gradle asset pack modules (`toolchain_ruby/`, `toolchain_java/`)
@@ -573,6 +573,7 @@ _Order: audit code → configure release build → test on devices → validate 
     - [x] Content rating questionnaire
     - [x] Foreground service permission declaration (video demo + written justification)
     - [x] Prepare for binary execution policy review (explain .so trick, local-only execution): passed; production access granted
+    - [ ] Re-state the binary execution explanation for the release that lets the terminal run user programs: the .so delivery is unchanged, and user programs run through the system linker inside the sandbox (see docs/10-RELEASE_PLAN.md section 5.3)
 
 13. **Launch**
     - [x] Internal testing track: AAB uploaded (versionCode 2)

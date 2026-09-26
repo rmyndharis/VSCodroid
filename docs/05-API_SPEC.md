@@ -896,10 +896,12 @@ Added by `server.js` itself, not passed from Kotlin:
 
 - `--accept-server-license-terms`
 - `--without-browser-env-var`: without it the server exports `BROWSER` pointing at
-  `bin/helpers/browser.sh`, a shebang script under `filesDir` that SELinux will not
-  exec and that calls a `$ROOT/node` the packaged tree does not have. Node's browser
-  helpers prefer `$BROWSER` over `xdg-open`, so with it set they stop at a script that
-  cannot run; unset, they reach the `xdg-open` row the exec table provides.
+  `bin/helpers/browser.sh`, a shebang script under `filesDir`. The server and the
+  extension host run without the terminal's exec interceptor, so SELinux refuses to
+  exec it there, and where it could start it calls a `$ROOT/node` the packaged tree
+  does not have. Node's browser helpers prefer `$BROWSER` over `xdg-open`, so with it
+  set they stop at a script that cannot run; unset, they reach the `xdg-open` row the
+  exec table provides.
 - `--disable-workspace-trust`: without it every folder opens in Restricted Mode and
   most extensions never activate. The `security.workspace.trust.enabled` setting
   cannot substitute: it is APPLICATION-scoped, and the WEB CLIENT takes only the

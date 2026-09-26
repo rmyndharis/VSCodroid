@@ -186,11 +186,13 @@ the device.
 
 Go was here as TC-1 and TC-5, the second of them recording `go build` as an
 expected failure. It is no longer offered. `go` starts its compiler and linker as
-separate programs from the app's own storage, and Android refuses to execute
-anything stored there, a limit no packaging change reaches and one that
-`-toolexec` cannot route around: it governs how `go` runs its tools, and `go`
-itself is what fails to start. An install that still carries it is removed on the
-first launch of a build that has this line, so the row to run instead is TC-8.
+separate programs from the app's own storage, and at the time nothing started a
+file stored there for it: `-toolexec` could not help, since it governs how `go`
+runs its tools and `go` itself was what failed to start. The terminal's exec
+interceptor (TT-14 to TT-18) now starts such files through the system linker,
+so that reason no longer holds, but nothing here promises Go's return. An
+install that still carries it is removed on the first launch of a build that has
+this line, so the row to run instead is TC-8.
 
 ## 11. Terminal & Tools
 
@@ -208,7 +210,12 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | TT-10 | VS Code Search | Use Search sidebar (Ctrl+Shift+F) | Results appear, file navigation works | | |
 | TT-11 | Commands outside the terminal | `bash -c 'type -t npm; type -t npx'`, then a `"type": "shell"` task running `npm -v` | Each reports `function`, and the task prints a version rather than "command not found". `sh -c 'type npm'` still fails, which is the boundary, not a regression: `npm` exists only as a bash function. A toolchain command is not bound by that boundary any more and TC-9 covers it | | |
 | TT-12 | Python packages with a compiled part | `pip install numpy pandas psutil`, then `python3 -c "import numpy, pandas, psutil; print(numpy.__version__, pandas.__version__, psutil.__version__)"` | All three install without building anything and the versions print: they come from the prebuilt Android builds pip is pointed at, not from PyPI, which has no Android wheel for any of them. A `Preparing metadata` step that runs a compiler and fails means `~/.pip/pip.conf` did not get the extra index | | |
-| TT-13 | A command pip installed runs by name | `pip install cowsay`, press Home and return to the app, then in a terminal `hash -r; cowsay -t hi` | The cow prints. The command is reached through the same launcher as a toolchain's: the table that names it is rebuilt when the editor returns to the foreground, so a `command not found` before switching away is expected and one after it is the failure | | |
+| TT-13 | A command pip installed runs by name | `pip install cowsay`, then in the same terminal `cowsay -t hi` | The cow prints, with no switch away and back: the terminal starts the launcher pip wrote through the system linker (TT-14). A `bad interpreter: Permission denied` means the terminal has no preload; check `grep -c libtermux-exec /proc/self/maps` prints 4 | | |
+| TT-14 | A program under the app's storage runs from the terminal | `cp "$(readlink -f "$(command -v make)")" ~/hello && chmod +x ~/hello && ~/hello --version` | The GNU Make banner prints. `~/hello` is a real ELF under `filesDir`; Android refuses to exec it directly, and the terminal's exec interceptor starts it through `/system/bin/linker64`. An exit 126 or `Permission denied` means `LD_PRELOAD` is missing from the terminal (`echo $LD_PRELOAD` should name `usr/lib/libtermux-exec.so` under the app's files) | | |
+| TT-15 | A shebang script runs by its own path, and a Git hook fires | `mkdir -p ~/h && cd ~/h && git init -q && printf '#!/bin/sh\necho hook-ran\n' > .git/hooks/pre-commit && chmod +x .git/hooks/pre-commit && git -c user.name=tt15 -c user.email=tt15@example.invalid commit -q --allow-empty -m x` | `hook-ran` prints before the commit lands. The `-c` pair keeps the row self-contained: git settles the author before it runs the hook, and a device whose tester never set an identity would fail here for a reason that has nothing to do with the preload. The hook is a `#!/bin/sh` file under the app's storage that git execs by path; `/bin/sh` does not exist here, and the interceptor maps it to `/system/bin/sh` | | |
+| TT-16 | A virtual environment's own commands run | `python3 -m venv ~/v && ~/v/bin/pip --version` | The pip version prints from `~/v`. That launcher is a `#!` file naming the venv's interpreter, which no table ever covered; TT-13 without the preload was the same failure | | |
+| TT-17 | What a process task starts reaches a program under the app's storage only through the setting | In a terminal print the two paths with `echo "$PREFIX/bin/python3" ~/hello` (a process task spawns no shell, so neither `$PREFIX` nor `~` is expanded there). Add a `"type": "process"` task whose command is that `python3` path with args `-c` and `import subprocess,sys; sys.exit(subprocess.run(['<absolute path of ~/hello>','--version']).returncode)`, and run it; then set `"LD_PRELOAD": null` as in TT-18 and run it again; then restore the value | The first run prints `GNU Make 4.4.1` and the task exits 0; the second ends in a Python `PermissionError` naming the `hello` path. The command of a process task is exec'd by the editor's own process, which carries no preload, so it has to be a bundled tool, a toolchain command or a system program: the absolute path of `~/hello` as the command fails with `execvp(3) failed.: Permission denied` with and without the setting. The `python3` path passes because `usr/bin/python3` is a link onto the app's own program directory, the same file a bare `python3` resolves to, so it is not a program under the app's storage. What that command starts is where `terminal.integrated.env.linux` acts, and a process task reads no bash startup file, so the setting is the one thing that reaches it | | |
+| TT-18 | The off switch, and that it survives a relaunch | Settings, the tab labelled **Remote [127.0.0.1:13337]** (the port can differ on the device; it is not the **User** tab Settings opens on), and under `terminal.integrated.env.linux` replace the path value of `LD_PRELOAD` with `null` (replace, not add: a second `LD_PRELOAD` key beside the first is a duplicate, and the last one wins); open a new terminal and run `~/hello --version`; force-stop the app, relaunch through SplashActivity, and read the setting again; then restore the value and open a new terminal | The new terminal answers `Permission denied` and `echo $LD_PRELOAD` is empty; after the relaunch the `null` is still there, not replaced by the library path (the launch-time insert leaves a present key alone); after the restore, the next terminal runs `~/hello` again. The same `null` set in the **User** tab does not switch it off: the app's own file outranks it. Deleting the line instead of restoring it leaves the object empty, and the path comes back only on the next cold launch through SplashActivity, not in the next terminal | | |
 
 ## 12. SAF & External Files
 
@@ -273,10 +280,10 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | Low Memory & Stress | 4 | | | |
 | Performance | 10 | | | |
 | Toolchains | 7 | | | |
-| Terminal & Tools | 13 | | | |
+| Terminal & Tools | 18 | | | |
 | SAF & Files | 16 | | | |
 | Display Language | 6 | | | |
-| **Total** | **131** | | | |
+| **Total** | **136** | | | |
 
 **Overall Result**: [ ] PASS / [ ] FAIL
 

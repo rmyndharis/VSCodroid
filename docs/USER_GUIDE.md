@@ -281,6 +281,61 @@ npm install express
 node index.js
 ```
 
+### What Runs in the Terminal
+
+Android does not let an app start a program straight out of its own storage,
+and that is where everything you build, clone or install ends up. The terminal
+starts each such program through the system's own program loader on your
+behalf, as the Termux build on Google Play does, so from a terminal these all
+work:
+
+- a program built for Android (with the NDK), run as `./a.out`
+- a script with a `#!` line, run by its own path. That includes a Git hook in a
+  repository you cloned, which fires on your first commit there, as it would on
+  a desktop
+- a command that pip or npm installed, inside or outside a virtual environment
+
+That covers the app's own storage, and nothing else. An install from before
+1.2.0 whose projects folder is still on shared storage, under
+`Android/data/com.vscodroid/files/projects` (see [Storage](#storage)), keeps
+that folder, and a program or a Git hook stored there still cannot run. A
+folder under `~` that is not `~/projects` is under the app's own storage on
+such an install, and this works there.
+
+A task the editor runs from `tasks.json` is covered too, with one distinction.
+A `"type": "shell"` task runs in a shell, so anything it names works as it
+would in a terminal. A `"type": "process"` task starts its command directly,
+and that command itself still has to be a bundled tool, a toolchain command by
+name, or a system program: an absolute path to a program under the app's
+storage fails as the command, with or without the setting. What the command
+starts then reaches your files, so a `python3` task can run `./a.out` or a
+script by its path.
+
+What it does not reach is a program an extension starts on its own, without a
+terminal: an extension's own copy of Git, or a language server. Those still
+cannot start a file under the app's storage, which is why this guide keeps its
+`python3 -m` advice for that case. A terminal an extension opens carries it
+(measured with the JavaScript Debug Terminal on API 33 and 36 emulators,
+2026-09-23), since the setting applies to every terminal the editor creates,
+unless the extension asks for a strict environment of its own.
+
+Two limits show. A `#!` line of the form `#!/usr/bin/env -S ...` fails with
+`env: Unknown option`, because the system's `env` has no `-S`; write
+`#!/usr/bin/env node` or name the interpreter directly. And while such a
+program runs, the terminal tab shows `linker64` as its name, because the system
+loader is what is running it. For the same reason a program that asks the
+system for its own path is told the loader's, so a tool that finds its files
+that way may need to be told where it is.
+
+To switch it off, open Settings, choose the tab labelled **Remote
+[127.0.0.1:13337]** (the port can differ on your device) and, under
+`terminal.integrated.env.linux`, replace the value of `LD_PRELOAD` with
+`null`. That tab edits the settings file this app owns, which is where
+VSCodroid writes the entry; the next terminal you open runs without it, and
+your choice survives relaunches. The same `null` in the **User** tab, which is
+the one Settings opens on, does not switch it off: the app's own file outranks
+it.
+
 ---
 
 ## Extensions
@@ -439,6 +494,10 @@ git checkout feature-x        # Switch to branch
 ```
 
 VS Code's built-in Source Control panel (Ctrl+Shift+G) also works for staging, committing, and viewing diffs.
+
+`git submodule` commands run, and print a few lines reading
+`git: 'sh-i18n--envsubst' is not a git command` on the way. They are harmless:
+that helper is not bundled, and the command completes without it.
 
 ### SSH Configuration
 
@@ -672,9 +731,13 @@ javac Main.java
 java Main
 ```
 
-A command a gem installs (`rubocop`, `rails`) starts working once you switch away from
-VSCodroid and back, in a new terminal, the same delay as a command pip installs; see
-[Python Command-Line Tools](#python-command-line-tools).
+A command a gem installs (`rubocop`, `rails`) lands in a folder that is not on
+the terminal's `PATH`, so by its bare name it is reachable after you switch away
+from VSCodroid and back, or on the next launch, which is when the app lists the
+commands installed so far; by its full path under `$GEM_HOME/bin` it runs in a
+terminal the moment `gem install` finishes (see
+[What Runs in the Terminal](#what-runs-in-the-terminal)). A program an extension
+starts on its own cannot reach it either way; run `ruby -S rubocop` there.
 
 ### Removing Toolchains
 
@@ -823,44 +886,22 @@ in [Dev Server Preview](#dev-server-preview) above.
 ### Python Command-Line Tools
 
 Some packages install a command as well as a module: `pytest`, `black`, `httpie`,
-`cowsay`. These work, with one delay worth knowing about: a command you have just
-installed starts working once you switch away from VSCodroid and back, not straight
-away.
+`cowsay`. In a terminal they work the moment pip finishes, inside or outside a
+virtual environment. Android does not let an app run a program straight out of
+its own storage, and what pip writes is exactly that: a short text file starting
+with `#!` and the path to the interpreter. So the terminal starts each one
+through the system's own program loader on your behalf (see [What Runs in the
+Terminal](#what-runs-in-the-terminal)). You will not notice, except that a
+program asking the system for its own path is told the loader's.
 
-```
-$ pip install cowsay
-$ cowsay -t hi
-bash: /data/.../usr/bin/cowsay: /data/.../usr/bin/python3: bad interpreter: Permission denied
-```
-
-Switch to another app or the home screen, come back, open a new terminal, and the
-same line works. A terminal that already tried the command remembers where it
-failed; `hash -r` there makes it look again.
-
-The delay comes from how the command is made to run at all. Android does not let
-an app run a program out of its own storage, and what pip writes is exactly that:
-a short text file starting with `#!` and the path to the interpreter. VSCodroid
-keeps a small table of what each command means and starts the interpreter itself,
-which is allowed. That table is rebuilt when the app starts and when it comes back to the
-front, so a command installed while you are in the editor is not in it yet, and until then you get the message
-above. It names `python3`, so it reads as a broken Python; Python is fine, and the
-interpreter it names runs perfectly when you call it yourself. It is the one-line
-launcher that cannot start.
-
-If you would rather not wait, run the module. It does the same thing and works the
-moment pip finishes:
+A program an extension starts on its own does not go through the terminal, and
+there the launcher pip wrote cannot start. The module form works everywhere, so
+use it in any script an extension runs for you:
 
 ```bash
 python3 -m pytest
 python3 -m black .
-python3 -m cowsay -t hi
 ```
-
-A command installed inside a virtual environment is the exception: it does not
-start at all, and switching away and back does not change that. pip writes it into
-the environment's own `bin` directory, and VSCodroid fills its table only from
-`usr/bin`, where pip puts a command outside a virtual environment. With the
-environment active, run the module instead, for example `python -m pytest`.
 
 `pip` itself is the same shape and is already handled: `pip` and `pip3` are set up
 as shell functions that call `python3 -m pip`, so they work in the terminal
@@ -944,20 +985,28 @@ actually is rather than pretending to be Linux.
 ### Toolchains Must Be Started by Name
 
 Android refuses to execute any file inside an app's data directory, which is where
-installed toolchains live. VSCodroid works around it by handing the file to the
-system loader instead, and it does that two ways: a bash function per command, and
-a small program on `PATH` that every other kind of start finds.
+installed toolchains live, so every start of one is handed to the system loader
+instead. In a terminal, and in a task the editor runs, the terminal does that for
+any program the shell or the task's command goes on to start (see
+[What Runs in the Terminal](#what-runs-in-the-terminal)).
+Everywhere else VSCodroid does it two ways: a bash function per command, and a
+small program on `PATH` that every other kind of start finds.
 
 So a toolchain command works when it is started by its bare name, whoever starts
 it: typing `ruby` in a terminal, `bash -c`, `sh -c`, a `make` recipe, an npm
 lifecycle script, a VS Code task of either kind, and a process an extension or a
 language server starts directly.
 
-What still fails is a start that names a path instead of a command:
+What still fails is a start that names a path instead of a command, when the
+start comes from an extension or is the command of a `"type": "process"` task
+itself:
 
 - an absolute path such as `$JAVA_HOME/bin/java`, which is not a `PATH` lookup at all
 - a toolchain that forks its own helper by absolute path, which is what the JDK's `lib/jspawnhelper` does
 - a script under the app's storage run by its own path: Android refuses the script file itself, before its `#!` line is ever read. Run it as `ruby script.rb` instead
+
+In a terminal, in a shell task, and in whatever a process task's command starts,
+all three work.
 
 `npm` and `npx` are bash functions and nothing else, so those two are still
 reachable only from bash. `sh -c 'npm -v'` fails where `bash -c 'npm -v'` works.
@@ -1037,7 +1086,10 @@ lay some structures out differently, so an add-on can start and then misbehave.
 
 The second wall is that Android refuses to execute any file inside an app's own
 storage, which is exactly where an installed extension lives, so even a
-correctly built program has to be handed to a loader by something else.
+correctly built program has to be handed to a loader by something else. In a
+terminal that is done for you (see [What Runs in the
+Terminal](#what-runs-in-the-terminal)), but an extension starts its program
+itself, outside any terminal, and that start is not covered.
 VSCodroid asks the marketplace for the musl build wherever an extension
 publishes one, which is what makes that route possible at all, but the extension
 itself then has to offer a setting that lets its command be prefixed. Almost
@@ -1192,7 +1244,7 @@ If `npm install` fails with errors:
 
 ### Python: Installed, and Then Something Fails
 
-- **`bad interpreter: Permission denied`** after installing a package that brings a command with it (`pytest`, `black`, `httpie`). Switch away from VSCodroid and back, then use a new terminal, and the command works; to use it without waiting, run it as a module: `python3 -m pytest`. A command installed inside a virtual environment never starts, however often you come back to the app; run it as a module there too, for example `python -m pytest`. See [Python Command-Line Tools](#python-command-line-tools) for why the message names `python3` when Python is not the problem.
+- **`bad interpreter: Permission denied`** from a command pip installed (`pytest`, `black`, `httpie`) when something other than a terminal or a task starts it, such as an extension running it on its own. Run it as a module there, `python3 -m pytest`, which works everywhere. In a terminal the command itself works the moment pip finishes; the same message there means the terminal's program loader is switched off, so check `terminal.integrated.env.linux` in the Remote settings tab (see [What Runs in the Terminal](#what-runs-in-the-terminal)). The message names `python3` because the one-line launcher pip wrote could not start, not because Python is broken.
 - **`Format Document` does nothing in a `.py` file** and the status bar sticks on "Running black". That is the formatter a marketplace search finds, which needs black installed separately (`pip install black`) and says nothing when it is missing. Opening a Python file offers you one that needs no pip step; see [The Python Formatter Is Not in Search Results](#the-python-formatter-is-not-in-search-results).
 - **`ZoneInfoNotFoundError`** from `zoneinfo`, `pandas` or anything that resolves a named time zone. `pip install tzdata` and it works from then on; see [Time Zones In Python](#time-zones-in-python).
 - **`ModuleNotFoundError: No module named 'tkinter'`** (or `'turtle'`), including from a package built on them such as `customtkinter`. Neither is included, and pip cannot add them: `pip install tkinter` finds no such package, and `pip install tk` installs an unrelated one. To show graphics, write a PNG or an SVG and keep it open in a preview, or serve a page and open it in the browser; see [Python Packages Written in C](#python-packages-written-in-c).

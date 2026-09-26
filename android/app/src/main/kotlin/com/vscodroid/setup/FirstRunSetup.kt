@@ -783,11 +783,19 @@ class FirstRunSetup(
         }
     }
 
-    /** @return false only when the asset existed and its copy failed. */
+    /**
+     * @param sameLengthIsCurrent take a file already at the asset's own length as
+     *   current whatever build wrote it, which [resumeSameBuild] alone permits
+     *   only within one interrupted run. A per-launch repair of a single file
+     *   passes it, because the version bump that could make equal length lie
+     *   re-extracts the whole tree behind it anyway.
+     * @return false only when the asset existed and its copy failed.
+     */
     private fun extractAssetFile(
         assetPath: String,
         destPath: String,
         onBytes: ((Long) -> Unit)? = null,
+        sameLengthIsCurrent: Boolean = false,
     ): Boolean {
         val destFile = File(context.filesDir, destPath)
         destFile.parentFile?.mkdirs()
@@ -829,7 +837,7 @@ class FirstRunSetup(
             // It repairs rather than preserving damage. A file left truncated by
             // a kill or a full disk has a length that does not match, so the skip
             // passes it over and the copy runs.
-            if (resumeSameBuild) {
+            if (resumeSameBuild || sameLengthIsCurrent) {
                 val assetLength = stream.available().toLong()
                 if (assetLength > 0 && destFile.isFile && destFile.length() == assetLength) {
                     onBytes?.invoke(assetLength)
@@ -1471,6 +1479,49 @@ class FirstRunSetup(
                 Logger.d(tag, "Failed to create ripgrep symlink: ${e.message}")
             }
         }
+    }
+
+    /**
+     * Puts the exec interceptor under `usr/lib` on any launch that finds it
+     * missing or not the asset's length.
+     *
+     * The full `usr/` extraction already writes it on every version bump, so
+     * this covers the two launches that extraction does not reach. A
+     * same-version reinstall (`adb install -r` of a rebuilt APK, the everyday
+     * dev case) runs no extraction, so the first build carrying the asset would
+     * otherwise be installed over one without it, and [updateSettingsNativeLibPaths]
+     * would find no file and write no setting; and a user who removes the file
+     * by hand is one launch from a working terminal rather than one update,
+     * whichever activity that launch enters. `MainActivity` runs this repair
+     * too, and only this one: from `onCreate` for a callback intent that builds
+     * a fresh instance, and from `onResume` for a launcher tap that brings a
+     * live singleTask instance forward without creating it. Neither route
+     * passes through SplashActivity. Measured 2026-09-23: a direct start of
+     * MainActivity on API 33 and 36 emulators, and an icon tap on a live task
+     * on API 33, each left a deleted file absent and every terminal dead with
+     * CANNOT LINK EXECUTABLE until a cold launch.
+     *
+     * The length check matters as much as the existence check. A file left
+     * truncated by a kill or a full disk passes `isFile`, and the linker aborts
+     * every exec whose preload it cannot map, the shell included, so a partial
+     * library is a dead terminal and not a degraded one. `isFile` alone was the
+     * obvious guard and is the wrong one.
+     *
+     * Ahead of the settings refresh in SplashActivity. The refresh writes the
+     * LD_PRELOAD line only when this file is there, and that guard, not the
+     * order, is what keeps the line from ever standing alone: a build that
+     * shipped without the asset (a stale CI cache, a build that skipped
+     * `scripts/build-termux-exec.sh`) writes nothing and degrades to today's
+     * behaviour, and [extractAssetFile] answers an absent asset with a debug
+     * line and true, which is exactly that. The order is what gets the file
+     * and the line in the same launch rather than one launch apart.
+     */
+    fun ensureExecPreload() {
+        extractAssetFile(
+            Environment.EXEC_PRELOAD_ASSET,
+            Environment.EXEC_PRELOAD_ASSET,
+            sameLengthIsCurrent = true,
+        )
     }
 
     /**
@@ -2607,12 +2658,25 @@ claude() {
         // defaults a device that installed an earlier version never had. Either
         // one alone can be the reason there is something to write.
         val current = settingsFile.readText()
-        val refreshed = refreshManagedPaths(
-            current,
-            Environment.getTerminalShellPath(context),
-            Environment.getGitPath(context),
-            Environment.getClaudeLauncherPath(context),
-        )
+        val refreshed = run {
+            val paths = refreshManagedPaths(
+                current,
+                Environment.getTerminalShellPath(context),
+                Environment.getGitPath(context),
+                Environment.getClaudeLauncherPath(context),
+            )
+            // Only once the library is on disk. A preload the linker cannot find
+            // aborts every exec in that environment, the shell included, so the
+            // line without the file is a dead terminal on every install the
+            // build reached; with no file there is nothing to write and the
+            // terminal stays as it is today. [ensureExecPreload] runs ahead of
+            // this in SplashActivity so an install that has the asset gets the
+            // file first and the line in the same launch.
+            val preloadPath = Environment.getExecPreloadPath(context)
+            val preloaded =
+                if (File(preloadPath).isFile) ensureTerminalPreload(paths ?: current, preloadPath) else null
+            preloaded ?: paths
+        }
         // Once per install, between the two: the preferences this app used to
         // write are taken back out here, and re-reading a document that no
         // longer holds any of them is work with no outcome.
@@ -3068,6 +3132,11 @@ claude() {
         // neither reader of this file can act on either. What actually keeps this
         // build off an update service is that the packaged `product.json` carries
         // no `updateUrl` for anything to ask.
+        //
+        // `terminal.integrated.env.linux`, the exec interceptor's row, is not in
+        // this template: it is added below, through the same insert that reaches
+        // an install made before the setting existed, and only once the library
+        // is on disk.
         val defaults = """
             {
                 "vscodroid.layout.compactScreen": ${isCompactScreen()},
@@ -3123,7 +3192,33 @@ claude() {
                 }
             }
         """.trimIndent()
-        return writeAtomically(settingsFile) { it.write(defaults.toByteArray()) }
+        // `terminal.integrated.env.linux` carries the exec interceptor, and it
+        // is that setting and not the bash profile's own `env` for two reasons
+        // measured on API 33 and 36 emulators, 2026-09-22/23. A profile env is
+        // invisible for the whole first session after the file gained the line
+        // while the app was stopped (the workbench compares profiles by name,
+        // args, path and the like and never by env, which is the likely cause
+        // and not a measured one); and it never reaches a `"type": "process"`
+        // task, which takes no profile at all. env.linux is read by the server
+        // at every process creation, so it reaches terminals, shell tasks and
+        // process tasks alike and applies live. Nothing an extension spawns
+        // without a pty sees either, which is the boundary of terminal scope.
+        // `"LD_PRELOAD": null` in this object is the off switch, and the refresh
+        // leaves a key of any value alone.
+        //
+        // Only once the library is on disk, the rule [updateSettingsNativeLibPaths]
+        // follows: a preload the linker cannot find aborts every exec in that
+        // environment, the shell included, so a build whose assets lack the file
+        // (a stale CI cache, a skipped `scripts/build-termux-exec.sh`) must
+        // write no line here, or a fresh install has no working terminal at
+        // all. A fresh install writes this after `usr/` is extracted, so it gets
+        // the file and the line together; an install the file reaches later
+        // gets the line from the refresh on the launch after. One writer of the
+        // line, [ensureTerminalPreload], so the two paths cannot disagree on
+        // its shape.
+        val preloadPath = Environment.getExecPreloadPath(context)
+        val content = if (File(preloadPath).isFile) ensureTerminalPreload(defaults, preloadPath) ?: defaults else defaults
+        return writeAtomically(settingsFile) { it.write(content.toByteArray()) }
     }
 
     private fun extractBundledExtensions() {
@@ -5921,6 +6016,96 @@ private fun insertSetting(content: String, key: String, value: String): String {
     return content.substring(0, brace + 1) +
         "\n$indent\"$key\": $value," +
         content.substring(brace + 1)
+}
+
+/**
+ * The terminal environment object, anchored on the whole key so the `osx` and
+ * `windows` objects that may sit beside it are never the one edited. The first
+ * form finds the key with any value, the second only an object.
+ */
+private val TERMINAL_ENV_LINUX_KEY = Regex(""""terminal\.integrated\.env\.linux"\s*:""")
+private val TERMINAL_ENV_LINUX_OPEN = Regex(""""terminal\.integrated\.env\.linux"\s*:\s*\{""")
+
+/** A JSON string literal, escapes included, for stepping over one in a scan. */
+private val JSON_STRING = Regex(""""(?:\\.|[^"\\])*"""")
+
+/**
+ * Puts the exec interceptor into `terminal.integrated.env.linux`, or declines.
+ *
+ * Reaches installs made before the setting existed, the way [insertSetting]'s
+ * callers in [refreshManagedPaths] do: the key is inserted when absent, one
+ * line is added inside an object that holds no `"LD_PRELOAD"`, and a key that
+ * is already there is left exactly as it stands. That last rule is the whole
+ * of the user's control over the feature. A path of their own is a choice, and
+ * `"LD_PRELOAD": null` is the off switch, since a null in this object deletes
+ * the variable from every terminal; both are theirs and neither is touched,
+ * the rule [CLAUDE_WRAPPER_KEY] draws. A key holding something other than an
+ * object is not a shape this app wrote, and is left alone rather than guessed
+ * at.
+ *
+ * The object is scanned with comments blanked and strings stepped over, so a
+ * `}` inside a value cannot end it early and a mention inside a comment cannot
+ * count as the key. Either mistake writes a second copy of the key beside the
+ * user's, which the workbench then resolves in an order this app does not
+ * control. The indent is borrowed from the object's first property, as the
+ * root insert borrows the document's; an object opening with a comment or
+ * holding nothing takes one level past the key's own line instead. The flat
+ * four-space fallback the root insert uses put the line flush with the key
+ * here, which is where an emptied object sits after the off switch is deleted
+ * through the Settings editor and the next launch refills it: valid JSON, and
+ * the wrong shape for a file the user reads. Measured on API 33 and 36
+ * emulators, 2026-09-23.
+ *
+ * @return the document with the line, or null when there is nothing to write.
+ */
+internal fun ensureTerminalPreload(content: String, preloadPath: String): String? {
+    val scan = commentsBlanked(content)
+    val open = TERMINAL_ENV_LINUX_OPEN.find(scan)
+        ?: return if (TERMINAL_ENV_LINUX_KEY.containsMatchIn(scan)) {
+            null
+        } else {
+            insertSetting(content, "terminal.integrated.env.linux", "{ \"LD_PRELOAD\": \"$preloadPath\" }")
+                .takeIf { it != content }
+        }
+    val brace = open.range.last
+    val close = objectEnd(scan, brace)
+    if (close < 0 || scan.substring(brace, close).contains("\"LD_PRELOAD\"")) return null
+    val indent = firstPropertyIndent(content, brace) ?: nestedIndent(content, open.range.first)
+    val comma = if (scan.substring(brace + 1, close).isBlank()) "" else ","
+    return content.substring(0, brace + 1) +
+        "\n$indent\"LD_PRELOAD\": \"$preloadPath\"$comma" +
+        content.substring(brace + 1)
+}
+
+/**
+ * The indent one level past the line holding [key], for a line added inside
+ * an object that has no property of its own to borrow from: the key's own
+ * indent plus the step the document's root properties use, or four spaces
+ * when the root opens with a comment and offers none.
+ */
+private fun nestedIndent(content: String, key: Int): String {
+    val own = content.substring(content.lastIndexOf('\n', key) + 1, key).takeWhile { it == ' ' || it == '\t' }
+    val root = rootBraceIndex(content)
+    val step = (if (root >= 0) firstPropertyIndent(content, root) else null) ?: "    "
+    return own + step
+}
+
+/**
+ * The offset of the `}` closing the object whose `{` is at [open], or -1 when
+ * it never closes. Strings are stepped over; comments are the caller's to blank.
+ */
+private fun objectEnd(scan: String, open: Int): Int {
+    var depth = 0
+    var i = open
+    while (i < scan.length) {
+        when (scan[i]) {
+            '"' -> i = (JSON_STRING.matchAt(scan, i) ?: return -1).range.last
+            '{' -> depth++
+            '}' -> if (--depth == 0) return i
+        }
+        i++
+    }
+    return -1
 }
 
 /**

@@ -631,6 +631,33 @@ class MainActivity : AppCompatActivity() {
         // First, because everything below it assumes an extracted tree. See
         // handOffToSetup for what reaching this activity without one costs.
         if (handOffToSetup()) return
+        // One repair from SplashActivity's launch block, and only this one,
+        // because it is the one whose absence is fatal rather than degrading.
+        // The machine settings name usr/lib/libtermux-exec.so in LD_PRELOAD for
+        // every terminal, and the linker aborts every exec whose preload it
+        // cannot map, the shell included. Measured 2026-09-23 with the file
+        // deleted: a direct start of this activity on API 33 and 36 emulators
+        // left it absent, and every terminal the panel opened died with CANNOT
+        // LINK EXECUTABLE until a cold launch through SplashActivity put it
+        // back. The rest of that block stays there, for the reason
+        // handOffToSetup gives: a folder may be open here. This one touches
+        // nothing a session reads. The warm route, a launcher tap that brings a
+        // live singleTask instance forward without creating it, never reaches
+        // this method at all; onResume carries the same repair for it.
+        //
+        // On the main thread, as SplashActivity runs its block, and guarded the
+        // way its repair() guards each one: a full disk turning the write into
+        // an exception costs this repair and not the launch. When the file is
+        // whole this is a stat of the file and a read of the asset's length,
+        // and it sits ahead of MainThreadWatch.install() at the tail of this
+        // method, so on the first onCreate of a process the write, deliberate,
+        // precedes the policy; a later onCreate in the same process runs under
+        // the policy the earlier one installed, which only logs.
+        try {
+            FirstRunSetup(this).ensureExecPreload()
+        } catch (e: Exception) {
+            Logger.e(tag, "Launch-time refresh of the exec preload failed", e)
+        }
         setContentView(R.layout.activity_main)
 
         // The application context, and that is the whole of what this outlives an
@@ -761,6 +788,26 @@ class MainActivity : AppCompatActivity() {
         receiveCallbackIntent(intent)
     }
 
+    override fun onResume() {
+        super.onResume()
+        // The warm half of the repair in onCreate. This activity is singleTask,
+        // so a launcher tap on a live task brings it forward without creating
+        // it, and a callback intent lands in onNewIntent; neither passes
+        // through SplashActivity, and measured on an API 33 emulator,
+        // 2026-09-23, the icon tap left a deleted usr/lib/libtermux-exec.so
+        // absent and every new terminal dead. Off the main thread, because
+        // MainThreadWatch is installed by now and a stat on every resume is
+        // not what it exists to catch. A terminal opened before this finishes
+        // is opened against the old state; the next one is not.
+        lifecycleScope.launch(Dispatchers.IO) {
+            try {
+                FirstRunSetup(applicationContext).ensureExecPreload()
+            } catch (e: Exception) {
+                Logger.e(tag, "Resume-time refresh of the exec preload failed", e)
+            }
+        }
+    }
+
     /**
      * Sends a launch that got here without first-run setup back through it.
      *
@@ -773,9 +820,9 @@ class MainActivity : AppCompatActivity() {
      * service spawned `libnode.so` five times, each dying on a missing
      * `libz.so.1`, before telling the user the server had crashed repeatedly.
      * The same entry also skips the repairs [SplashActivity] runs on every
-     * launch, so a session reached this way runs on dangling `usr/bin` symlinks
-     * and on `settings.json` paths naming the previous install's native library
-     * directory.
+     * launch, all but the exec preload (see `onCreate`), so a session reached
+     * this way runs on dangling `usr/bin` symlinks and on `settings.json` paths
+     * naming the previous install's native library directory.
      *
      * The filter stays on this activity rather than moving to the splash
      * screen, and that is a decision rather than an omission. A callback

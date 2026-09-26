@@ -46,10 +46,12 @@ Versions are deliberately not listed unless pinned in this repository: most comp
 
 Licences here are Termux's own `TERMUX_PKG_LICENSE` for the package each binary
 comes from, and the "Linked by" column is read out of the shipped ELF headers
-rather than written by hand. Two rows arrive from somewhere else and carry their
-own package's licence: musl's loader is an Alpine package
-(`scripts/download-musl-loader.sh`), and `libripgrep.so` is the `rg` the Code - OSS
-server tree ships, copied into `jniLibs` by `scripts/fetch-vscode-oss.sh`.
+rather than written by hand. Three rows arrive from somewhere else and carry
+their own source's licence: musl's loader is an Alpine package
+(`scripts/download-musl-loader.sh`), `libripgrep.so` is the `rg` the Code - OSS
+server tree ships, copied into `jniLibs` by `scripts/fetch-vscode-oss.sh`, and
+`libtermux-exec.so` is compiled here from termux-exec's own repositories
+(`scripts/build-termux-exec.sh`).
 `scripts/check-library-attribution.py` fails the build
 when a shipped binary is attributed nowhere in this file, when it is missing from
 `docs/LEGAL_NOTICES.md`, when a copyleft component is missing from the source
@@ -130,6 +132,7 @@ verbatim; `docs/LEGAL_NOTICES.md` records which text covers which component.
 | readline | GPL-3.0 | Bash, Python |
 | ripgrep | MIT | bundled tool in its own right |
 | SQLite | Public Domain | Node.js, Python |
+| termux-exec | Apache-2.0, MIT | preloaded into every terminal; built here from upstream source, https://github.com/termux/termux-exec-package |
 | tmux | ISC | bundled tool in its own right |
 | xz / liblzma | LGPL-2.1, GPL-2.0, GPL-3.0 | Python |
 | zlib | Zlib | Git, Node.js, OpenSSH, Python, SQLite, libcurl, libssh2, and the on-demand Java and Ruby toolchains |

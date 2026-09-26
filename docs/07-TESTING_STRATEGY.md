@@ -133,7 +133,7 @@ test source.
 
 ### 3.2 Instrumented Tests
 
-52 tests across eleven classes, in `android/app/src/androidTest/`. They
+61 tests across twelve classes, in `android/app/src/androidTest/`. They
 need an `arm64-v8a` device or emulator, because the app ships that ABI alone.
 Counted from the sources (`grep -cE '^\s*@Test'` over the directory), because no
 run covers the whole set and none of it is scheduled. Nothing holds this figure
@@ -153,6 +153,7 @@ to the suite; `android/app/src/androidTest/README.md` states the total that
 | **TextEntryInstrumentedTest** | That `virtualKeyboardEvents` types what the row asks it to, against the device's real `KeyCharacterMap`: every typeable key and alternate resolves to presses that produce it, `{` is pressed with Shift held, and every press carries the virtual-keyboard device id and a current timestamp | arm64 device |
 | **GestureTrackpadTouchInstrumentedTest** | Multi-pointer `MotionEvent`s on the trackpad: a second finger taking over does not jump the caret, and an untracked finger lifting does not end the drag | arm64 device |
 | **ExecTrampolineOnDeviceTest** | The kernel policy no JVM test can ask about: a payload under `filesDir` cannot be executed directly, the trampoline runs the same payload by bare name, an unknown name fails with a reason, an environment row in the table reaches the program, and a variable the caller already has is not overwritten. The direct-execve control is asserted first, so a device that never denied anything fails loudly rather than passing for the wrong reason | arm64 device |
+| **ExecPreloadOnDeviceTest** | The same question asked of the exec interceptor: a shell with `libtermux-exec.so` preloaded starts a payload under `filesDir` that the app may not execve, a `#!/bin/sh` script finds the system shell, a system binary keeps the preload for what it starts, a symlink onto a system binary is started as itself, and a preload naming a missing file kills the shell itself. The library is copied out of the APK's assets at mode 0600, so the suite needs no first-run state. Same direct-execve control, and the same precondition: the instrumentation process must carry no LD_PRELOAD of its own | arm64 device |
 
 **Framework**: AndroidJUnit4 + Espresso + UI Automator (JUnit 4, on device)
 

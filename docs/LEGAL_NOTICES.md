@@ -401,13 +401,14 @@ is what these packages are built from, rather than from upstream project pages
 that may describe a different version. `scripts/check-termux-licenses.py` reads
 that field back on every release and reports where this column and Termux
 disagree, so the sentence before this one is measured rather than promised for
-every package Termux states a licence for and that upstream answered for. Two
-rows come from elsewhere and carry the licence of the package they do come from:
-musl's loader is an Alpine package (`scripts/download-musl-loader.sh`), and
+every package Termux states a licence for and that upstream answered for. Three
+rows come from elsewhere and carry the licence of the source they do come from:
+musl's loader is an Alpine package (`scripts/download-musl-loader.sh`),
 `libripgrep.so` is the `rg` from the Code - OSS server tree, copied into
-`jniLibs` by `scripts/fetch-vscode-oss.sh`. That same gate prints both of them as
-entries no Termux package accounts for, so the exception is named by the run and
-not only here.
+`jniLibs` by `scripts/fetch-vscode-oss.sh`, and `libtermux-exec.so` is compiled
+here from termux-exec's own repositories (`scripts/build-termux-exec.sh`). That
+same gate prints the three of them as entries no Termux package accounts for, so
+the exception is named by the run and not only here.
 
 bzip2 is the one row Termux cannot settle: it declares plain `BSD`, which names
 no variant. This document said `BSD-4-Clause` until 2026-08-23, and that variant
@@ -494,6 +495,17 @@ lets a downloaded toolchain command start from a bare name on `PATH`. So are
 freestanding and links against no library at all, so there is nothing in it to
 attribute but this project's own source.
 
+One row below is built here rather than downloaded: `libtermux-exec.so` is
+compiled by `scripts/build-termux-exec.sh` from termux-exec-package 2.5.0 and
+the termux-core-package commit it links in statically, both fetched as pinned
+upstream tarballs, with the changes in `scripts/termux-exec.patch` applied
+first. It is upstream's code and carries upstream's terms: the Apache-2.0 text
+and the two MIT notices ship at `usr/share/doc/termux-exec`, beside the DEP-5
+`LICENSE` files that say which covers what (their relative links are upstream's
+and do not resolve there; the licence each names is readable in the link text),
+and each patched source file opens with the modification notice Apache-2.0
+section 4(b) asks for.
+
 | Component | Licence | Copyleft | Files shipped |
 |---|---|---|---|
 | [Bash](https://www.gnu.org/software/bash/) | GPL-3.0 | **yes** | `libbash.so` |
@@ -531,6 +543,7 @@ attribute but this project's own source.
 | [readline](https://tiswww.case.edu/php/chet/readline/rltop.html) | GPL-3.0 | **yes** | `libreadline.so.8` |
 | [ripgrep](https://github.com/BurntSushi/ripgrep) | MIT | no | `libripgrep.so` |
 | [SQLite](https://sqlite.org) | Public Domain | no | `libsqlite3.so` |
+| [termux-exec](https://github.com/termux/termux-exec-package) | Apache-2.0, MIT | no | `libtermux-exec.so` |
 | [tmux](https://github.com/tmux/tmux) | ISC | no | `libtmux.so` |
 | [xz / liblzma](https://tukaani.org/xz/) | LGPL-2.1, GPL-2.0, GPL-3.0 | **yes** | `liblzma.so.5` |
 | [zlib](https://zlib.net) | Zlib | no | `libz.so.1` |
