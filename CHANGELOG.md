@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Chat no longer offers the agent host's Copilot harness in its session picker, sessions created with that harness are no longer listed, and the settings `chat.defaultToCopilotHarness` and `chat.editor.preferCopilotHarness` have no effect. The Copilot extension is not changed by this.
 - The chat agent host and its Copilot backend, two background processes that started with the editor, no longer start, which frees memory.
+- An empty terminal no longer suggests typing `copilot`, a command that cannot run here.
 
 ### Fixed
 

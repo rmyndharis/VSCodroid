@@ -147,3 +147,4 @@
 # the cut itself compiles to `&&!` against a renamed binding. workbench.js is
 # where WebAgentHostEnablementService lands, through workbench.web.main.internal.
 0020 agent host off|out/vs/code/browser/workbench/workbench.js|Android: the agent host is not started on this device
+0021 terminal hint|out/vs/code/browser/workbench/workbench.js|_chatEntitlementService.sentiment.hidden||

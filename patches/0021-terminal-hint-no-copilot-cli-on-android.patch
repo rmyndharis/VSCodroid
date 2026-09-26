@@ -1,0 +1,44 @@
+Do not suggest the Copilot CLI in terminals on Android.
+
+From 1.139 an empty terminal shows "Type copilot to use Copilot CLI."
+whenever AI features are not hidden, and clicking it types `copilot`. On
+this server that command does not work. The Copilot extension puts its
+`copilot` shim on PATH only once its terminal integration has
+initialised; the shim is a shell script under the app's files, which
+Android refuses to execute; and what it runs asks to install the Copilot
+CLI from npm, whose native runtime has no Android build. Measured on an
+API 36 emulator: `copilot --version` answered command not found (127),
+and the shim run with node printed "Cannot find GitHub Copilot CLI" and
+an install prompt.
+
+The hint builder already has a state without that line: with AI features
+hidden it offers terminal suggestions instead. This treats Android the
+same way inside this one contribution, so an empty terminal shows the
+suggestions hint, or nothing when suggestions are off. Nothing else reads
+this local.
+
+isAndroid is the user-agent test, as in 0020: this workbench is only shown
+by the app's WebView.
+
+diff --git a/src/vs/workbench/contrib/terminalContrib/inlineHint/browser/terminal.initialHint.contribution.ts b/src/vs/workbench/contrib/terminalContrib/inlineHint/browser/terminal.initialHint.contribution.ts
+index d7bb9e3d..ebc7f717 100644
+--- a/src/vs/workbench/contrib/terminalContrib/inlineHint/browser/terminal.initialHint.contribution.ts
++++ b/src/vs/workbench/contrib/terminalContrib/inlineHint/browser/terminal.initialHint.contribution.ts
+@@ -11,7 +11,7 @@ import { KeybindingLabel } from '../../../../../base/browser/ui/keybindingLabel/
+ import { WorkbenchActionExecutedClassification, WorkbenchActionExecutedEvent } from '../../../../../base/common/actions.js';
+ import { Emitter, Event } from '../../../../../base/common/event.js';
+ import { Disposable, DisposableStore, MutableDisposable } from '../../../../../base/common/lifecycle.js';
+-import { OS } from '../../../../../base/common/platform.js';
++import { isAndroid, OS } from '../../../../../base/common/platform.js';
+ import { hasKey } from '../../../../../base/common/types.js';
+ import { localize } from '../../../../../nls.js';
+ import { ICommandService } from '../../../../../platform/commands/common/commands.js';
+@@ -268,7 +268,7 @@ class TerminalInitialHintWidget extends Disposable {
+ 		const hintElement = $('div.terminal-initial-hint');
+ 		hintElement.style.display = 'block';
+ 
+-		const aiFeaturesHidden = this._chatEntitlementService.sentiment.hidden;
++		const aiFeaturesHidden = this._chatEntitlementService.sentiment.hidden || isAndroid;
+ 
+ 		// Copilot CLI hint (only shown when AI features are enabled)
+ 		if (!aiFeaturesHidden) {
