@@ -244,6 +244,18 @@ class ToolchainManager(private val context: Context) {
         /** Where the built-in git extension keeps the helper scripts it exports. */
         private const val GIT_EXTENSION_DIST = "server/vscode-reh/extensions/git/dist"
 
+        /** The server tree, whose `node` the remote CLI runs. */
+        private const val SERVER_TREE = "server/vscode-reh"
+
+        /**
+         * Where the server keeps its command-line client, the directory it puts
+         * first on every terminal's PATH.
+         */
+        private const val REMOTE_CLI_DIR = "$SERVER_TREE/bin/remote-cli"
+
+        /** The client's name there, which is `applicationName` in the product config. */
+        private const val REMOTE_CLI = "vscodroid"
+
         /**
          * Every script the git extension may name in `GIT_ASKPASS`, `SSH_ASKPASS`
          * or `GIT_EDITOR`; the `-empty` ones are what it names when its IPC
@@ -3087,7 +3099,9 @@ class ToolchainManager(private val context: Context) {
             "xdg-open",
             "xdg-open\t${Environment.getNodePath(context)}\t$filesDir/server/xdg-open.js",
         )
-        val gitHelpers = addGitHelperRows(rows)
+        val setAside = addGitHelperRows(rows, GIT_EXTENSION_DIST, GIT_HELPER_SCRIPTS) +
+            addGitHelperRows(rows, REMOTE_CLI_DIR, listOf(REMOTE_CLI))
+        linkServerNode()
         val binDir = File(context.filesDir, "usr/bin")
         addInstalledScriptRows(rows, binDir, File(binDir, "python3").absolutePath, "python", "pip")
         gemBin?.let { (dir, ruby) -> addInstalledScriptRows(rows, dir, ruby, "ruby", "gem") }
@@ -3103,8 +3117,9 @@ class ToolchainManager(private val context: Context) {
             return
         }
         // The git helpers are reached by the absolute path the extension exports,
-        // never by name, so they get no link on PATH.
-        refreshTrampolineLinks(rows.keys - gitHelpers)
+        // never by name, and the remote CLI's own directory is already first on a
+        // terminal's PATH, so none of them gets a link here.
+        refreshTrampolineLinks(rows.keys - setAside)
         Logger.i(tag, "Regenerated toolchain-exec.tsv (${rows.size} commands, " +
             "${envRows.size} variables)")
     }
@@ -3301,33 +3316,31 @@ class ToolchainManager(private val context: Context) {
      * The link is rebuilt the way [refreshTrampolineLinksLocked] builds one, under
      * a temporary name and renamed into place, because git may be starting a
      * helper while the server runs.
+     *
+     * The server's own `vscodroid` command in [REMOTE_CLI_DIR] is the same kind
+     * of file and was refused the same way, with "Permission denied" from every
+     * terminal. The kept copy stays in the same directory because the script
+     * finds the server tree from its own path.
      */
-    private fun addGitHelperRows(rows: LinkedHashMap<String, String>): Set<String> {
-        val dist = File(context.filesDir, GIT_EXTENSION_DIST)
+    private fun addGitHelperRows(
+        rows: LinkedHashMap<String, String>,
+        dir: String,
+        names: List<String>,
+    ): Set<String> {
+        val dist = File(context.filesDir, dir)
         if (!dist.isDirectory) return emptySet()
         val target = Environment.getTrampolinePath(context)
         val served = mutableSetOf<String>()
-        for (name in GIT_HELPER_SCRIPTS) {
+        for (name in names) {
             val link = File(dist, name)
             val kept = File(dist, name + GIT_HELPER_SUFFIX)
             val current = try { Os.readlink(link.absolutePath) } catch (e: Exception) { null }
             if (current == null && link.isFile && !link.renameTo(kept)) {
-                Logger.w(tag, "Could not set $name aside; git cannot run it")
+                Logger.w(tag, "Could not set $name aside; it cannot run")
                 continue
             }
             if (!kept.isFile) continue
-            if (current != target) {
-                val staging = File(dist, ".$name.tmp~")
-                staging.delete()
-                try {
-                    Os.symlink(target, staging.absolutePath)
-                    Os.rename(staging.absolutePath, link.absolutePath)
-                } catch (e: Exception) {
-                    staging.delete()
-                    Logger.w(tag, "Could not link $name to the trampoline: ${e.message}")
-                    continue
-                }
-            }
+            if (current != target && !relink(link, target)) continue
             rows.putIfAbsent(name, "$name\t$SYSTEM_SHELL\t${kept.absolutePath}")
             served += name
         }
@@ -3375,6 +3388,42 @@ class ToolchainManager(private val context: Context) {
         if (created + updated + removed > 0) {
             Logger.i(tag, "Trampoline links: $created created, $updated repointed, " +
                 "$removed removed in usr/libexec/tcbin/")
+        }
+    }
+
+    /**
+     * Links the server tree's `node` to the app's own Node, for the remote CLI.
+     *
+     * The `vscodroid` script ends by running `$ROOT/node`, and the build prunes
+     * that file because the one gulp packages is a GNU/Linux binary that cannot
+     * start here. Rebuilt on every pass because a reinstall moves
+     * `nativeLibraryDir`, which dangles the link.
+     */
+    private fun linkServerNode() {
+        val tree = File(context.filesDir, SERVER_TREE)
+        if (!tree.isDirectory) return
+        val node = File(tree, "node")
+        val target = Environment.getNodePath(context)
+        val current = try { Os.readlink(node.absolutePath) } catch (e: Exception) { null }
+        if (current != target) relink(node, target)
+    }
+
+    /**
+     * Points [link] at [target] under a temporary name renamed into place, so a
+     * program starting it meanwhile finds the old link or the new one. False,
+     * and logged, when that failed.
+     */
+    private fun relink(link: File, target: String): Boolean {
+        val staging = File(link.parentFile, ".${link.name}.tmp~")
+        staging.delete()
+        return try {
+            Os.symlink(target, staging.absolutePath)
+            Os.rename(staging.absolutePath, link.absolutePath)
+            true
+        } catch (e: Exception) {
+            staging.delete()
+            Logger.w(tag, "Could not link ${link.name} to $target: ${e.message}")
+            false
         }
     }
 

@@ -172,8 +172,9 @@ def main(tree):
         check(not found, "no vsda", "this is not an OSS tree")
 
     # gulp's node-linux-arm64 task ships a GNU/Linux Node whose interpreter does
-    # not exist on Android. Nothing references it; the runtime uses
-    # nativeLibraryDir/libnode.so. 92 MiB of dead weight in every APK.
+    # not exist on Android. The shipped scripts under bin/ run $ROOT/node, and the
+    # device supplies it as a link to nativeLibraryDir/libnode.so, so a real file
+    # here is 92 MiB of dead weight in every APK.
     found = present(tree / "node", "node")
     if found is not None:
         check(not found, "no bundled GNU/Linux node", "prune it before packaging")
