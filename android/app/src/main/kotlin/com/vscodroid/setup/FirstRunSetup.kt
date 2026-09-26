@@ -1474,24 +1474,30 @@ class FirstRunSetup(
     }
 
     /**
-     * Aliases the Copilot platform packages under the name Android resolves.
+     * Aliases Copilot's platform-named paths under the name Android resolves.
      *
-     * Node here reports process.platform === "android", and the Copilot CLI SDK
-     * resolves its platform package as @github/copilot-<platform>-<arch> with no
-     * fallback, so everything the server tree ships for linux-arm64 is invisible
-     * on device: chat submit dies in ChatSessionsService before any request is
-     * made. The server tarball cannot carry these aliases itself because AAPT
-     * flattens asset symlinks into copies, so like the tool symlinks above they
-     * are rebuilt on every launch. Relative targets keep them valid across
-     * reinstalls. Three sites:
+     * Node here reports process.platform === "android", and Copilot builds
+     * package and directory names from it with no fallback, so what the server
+     * tree ships for linux-arm64 is invisible on device under its own name. The
+     * server tarball cannot carry these aliases itself because AAPT flattens
+     * asset symlinks into copies, so like the tool symlinks above they are
+     * rebuilt on every launch. Relative targets keep them valid across
+     * reinstalls. Two sites:
      *
-     *  - REH node_modules: a link farm over copilot-linux-arm64 for the agent
-     *    host, which runs the newer CLI line the server tree carries.
      *  - the built-in extension's node_modules: sdk -> ../copilot/sdk, whose
      *    index.js patch 0010 keeps in the build; the manifest pins the version
-     *    the extension was compiled against.
+     *    the extension was compiled against. What resolves the name from there
+     *    is the SDK the CLI package carries for its own extensions
+     *    (`copilot-sdk/`, `getBundledCliPath`).
      *  - ripgrep-universal: bin/android-arm64 -> linux-arm64, whose rg is
-     *    already the Bionic binary via setupRipgrepVscodeSymlink().
+     *    already the Bionic binary via setupRipgrepVscodeSymlink(). The
+     *    extension's ripgrep shim copies from bin/<platform>-<arch>.
+     *
+     * There was a third, a link farm over the server's copilot-linux-arm64 for
+     * the agent host. Patch 0020 keeps that host from starting here and the
+     * tree stopped shipping the package with Code - OSS 1.139, so the farm is
+     * gone, and an upgrade removes the one an earlier release left
+     * ([pruneUnshippedServerEntries] from [runPreExtractionMigrations]).
      */
     fun setupCopilotAndroidAliases() {
         val serverRoot = File(context.filesDir, "server/vscode-reh")
@@ -1526,33 +1532,8 @@ class FirstRunSetup(
             }
         }
 
-        // REH side, for the agent host.
-        val gh = File(serverRoot, "node_modules/@github")
-        val linuxPkg = File(gh, "copilot-linux-arm64")
-        if (linuxPkg.isDirectory) {
-            val alias = File(gh, "copilot-android-arm64")
-            alias.mkdirs()
-            linuxPkg.listFiles()?.forEach { entry ->
-                if (entry.name != "package.json") {
-                    linkTo(File(alias, entry.name), "../copilot-linux-arm64/${entry.name}")
-                }
-            }
-            try {
-                val manifest = File(linuxPkg, "package.json").readText()
-                    .replace("copilot-linux-arm64", "copilot-android-arm64")
-                val aliasManifest = File(alias, "package.json")
-                if (!aliasManifest.exists() || aliasManifest.readText() != manifest) {
-                    aliasManifest.writeText(manifest)
-                    Logger.i(tag, "copilot alias: REH copilot-android-arm64 -> copilot-linux-arm64")
-                }
-            } catch (e: Exception) {
-                Logger.d(tag, "copilot REH alias manifest failed: ${e.message}")
-            }
-        }
-
-        // Extension side, for the copilotcli session provider. Only meaningful
-        // when the tree keeps sdk/index.js (patch 0010); without it the alias
-        // would resolve to a directory with no entry point.
+        // Only meaningful when the tree keeps sdk/index.js (patch 0010); without
+        // it the alias would resolve to a directory with no entry point.
         val extCopilot = File(serverRoot, "extensions/copilot/node_modules/@github/copilot")
         if (File(extCopilot, "sdk/index.js").exists()) {
             try {
@@ -3765,15 +3746,15 @@ claude() {
      * deletes, so nothing it does depends on the room the pre-flight is
      * measuring.
      *
-     * Runs at most once per device, recorded in [KEY_PIVOT_MIGRATED] rather than
-     * inferred from the version code, and that is what makes a retry keep its
-     * progress. `previousVersionCode` is written by [markSetupComplete], the last
-     * statement of the run, so every failed attempt and every Retry still reads
-     * the pre-upgrade code. Without a record of its own this deleted
-     * `server/vscode-reh` again on each attempt -- by then the partly written NEW
-     * tree -- so the gate measured a freshly emptied device, passed, and the
-     * unpack failed in the same place for ever, which is the one thing the abort
-     * in [runSetupLocked] promises cannot happen.
+     * The pivot reclaim runs at most once per device, recorded in
+     * [KEY_PIVOT_MIGRATED] rather than inferred from the version code, and that
+     * is what makes a retry keep its progress. `previousVersionCode` is written
+     * by [markSetupComplete], the last statement of the run, so every failed
+     * attempt and every Retry still reads the pre-upgrade code. Without a record
+     * of its own this deleted `server/vscode-reh` again on each attempt -- by
+     * then the partly written NEW tree -- so the gate measured a freshly emptied
+     * device, passed, and the unpack failed in the same place for ever, which is
+     * the one thing the abort in [runSetupLocked] promises cannot happen.
      *
      * Recorded only when the trees are actually gone. A delete that failed leaves
      * the pre-built tree to be merged into, and skipping the next attempt's
@@ -3830,6 +3811,17 @@ claude() {
                 prefs.edit(commit = true) { putBoolean(KEY_PIVOT_MIGRATED, true) }
             }
         }
+
+        // On every upgrade, with no record of its own: it removes only names this
+        // APK does not ship, so a retry cannot take anything an earlier attempt of
+        // this build wrote. Until Code - OSS 1.139 the tree shipped the agent
+        // host's Copilot CLI here, @github/copilot and copilot-linux-arm64, about
+        // 175 MB, and earlier releases linked copilot-android-arm64 over it. The
+        // tree no longer ships either package and patch 0020 keeps the host from
+        // starting, so nothing loads them, and extraction would have kept them for
+        // good. Ahead of the pre-flight they are measured as free space rather
+        // than credited as tree already unpacked.
+        pruneUnshippedServerEntries("vscode-reh/node_modules/@github")
     }
 
     fun getPreviousVersionCode(): Int {
@@ -3857,25 +3849,33 @@ claude() {
      * both contributing the same views and editors. Upstream has renamed one before
      * (image-preview became media-preview).
      *
-     * Only top-level entries, and only against a listing that could be read: an
-     * empty or unreadable listing removes nothing. `listFiles()` returns files as
-     * well as directories, and both are removed, because what the server lists is
-     * the same set: an asset dropped between builds could be either. Nothing but
-     * extraction writes a top-level entry there; the Copilot aliases go inside
-     * `extensions/copilot`, and extensions a user installs live under
+     * Nothing but extraction writes a top-level entry there; the Copilot aliases
+     * go inside `extensions/copilot`, and extensions a user installs live under
      * `--extensions-dir`.
      */
-    private fun pruneDroppedBuiltInExtensions() {
-        val bundled = try {
-            context.assets.list("vscode-reh/extensions")?.toSet()
+    private fun pruneDroppedBuiltInExtensions() = pruneUnshippedServerEntries("vscode-reh/extensions")
+
+    /**
+     * Removes each entry directly under `server/<assetDir>` that the APK's own
+     * `assetDir` does not list, for a directory only extraction writes to.
+     *
+     * Only top-level entries, and only against a listing that could be read: an
+     * empty or unreadable listing removes nothing. `listFiles()` returns files as
+     * well as directories, and both are removed, because an asset dropped between
+     * builds could be either. [StorageManager.deleteRecursive] unlinks a link and
+     * never descends it, so an alias goes without whatever it points at.
+     */
+    private fun pruneUnshippedServerEntries(assetDir: String) {
+        val shipped = try {
+            context.assets.list(assetDir)?.toSet()
         } catch (e: IOException) {
             null
         }
-        if (bundled.isNullOrEmpty()) return
-        File(context.filesDir, "server/vscode-reh/extensions").listFiles()
-            ?.filter { it.name !in bundled }
+        if (shipped.isNullOrEmpty()) return
+        File(context.filesDir, "server/$assetDir").listFiles()
+            ?.filter { it.name !in shipped }
             ?.forEach {
-                Logger.i(tag, "Removing built-in extension ${it.name}, which this build no longer ships")
+                Logger.i(tag, "Removing server/$assetDir/${it.name}, which this build no longer ships")
                 StorageManager.deleteRecursive(it)
             }
     }
@@ -4199,13 +4199,13 @@ claude() {
          *    `setupCopilotAndroidAliases` writes an alias `package.json` under it
          *    on every launch, and `setupRipgrepVscodeSymlink` makes directories
          *    and a symlink. Because neither can put a counted byte there before
-         *    extraction has run, for two different reasons. The alias manifests
-         *    sit behind `if (linuxPkg.isDirectory)`, which is the extracted tree
-         *    itself; and the ripgrep repair writes only a directory and a link,
-         *    which [installedExtractionBytes] counts as nothing, with no copying
-         *    fallback if the link fails. Check both if either is edited: a repair
-         *    that starts writing a file into `server/` unconditionally puts this
-         *    gate back where it was.
+         *    extraction has run, for two different reasons. The alias manifest
+         *    sits behind a test for the extension's `sdk/index.js`, which is the
+         *    extracted tree itself; and the ripgrep repair writes only a
+         *    directory and a link, which [installedExtractionBytes] counts as
+         *    nothing, with no copying fallback if the link fails. Check both if
+         *    either is edited: a repair that starts writing a file into `server/`
+         *    unconditionally puts this gate back where it was.
          *  - [EXTRACTION_SLACK_BYTES], for what neither of those counts.
          *
          * Takes its figures rather than reading `BuildConfig`, so the decision can
@@ -5412,11 +5412,10 @@ private fun releaseWriteLock(path: String, lock: DestinationLock) = synchronized
  * would do.
  *
  * Symlinks are skipped rather than followed, and that is not tidiness. The
- * Copilot alias farm links every entry of `copilot-linux-arm64`, including the
- * 113 MiB `runtime.node`, the largest file in the tree, and the extension side
- * links a whole `sdk` directory holding another 96 MiB. Following those counts
- * the same bytes twice and credits the install for space that does not exist,
- * which is the direction that lets the gate pass a device it should refuse.
+ * Copilot extension's alias links its whole `sdk` directory, the largest in the
+ * extension. Following it counts the same bytes twice and credits the install
+ * for space that does not exist, which is the direction that lets the gate pass
+ * a device it should refuse.
  *
  * Asks `Files.isSymbolicLink` rather than [isSymlink], which is the same
  * question, both are `lstat` on the final component, and `SymlinkPredicateTest`

@@ -404,14 +404,18 @@ function classify(cmdline) {
     if (names.includes('sh')) return 'terminal';
 
     // The agent host's model backend, which `bootstrap-fork --type=agentHost`
-    // launches as node_modules/@github/copilot-<platform>/index.js. No
-    // LANG_SERVER_PATTERNS entry can reach it, because the basename every rule
-    // above compares is `index.js`: that names the package's entry point and not
-    // the program, so a bare word would miss it and a substring would claim every
-    // index.js on the device, the user's own included. Matched on the package path
-    // instead, the one rule here that reads a directory rather than a program
-    // name, and the node_modules segment is what keeps the needle off a directory
-    // someone chose themselves.
+    // launched as node_modules/@github/copilot-<platform>/index.js up to
+    // Code - OSS 1.138. From 1.139 the tree ships no such package and patch 0020
+    // keeps the host from starting on Android, so on device this rule no longer
+    // has a process to match.
+    //
+    // No LANG_SERVER_PATTERNS entry could reach it, because the basename every
+    // rule above compares is `index.js`: that names the package's entry point and
+    // not the program, so a bare word would miss it and a substring would claim
+    // every index.js on the device, the user's own included. Matched on the
+    // package path instead, the one rule here that reads a directory rather than
+    // a program name, and the node_modules segment is what keeps the needle off a
+    // directory someone chose themselves.
     //
     // Being unclassified was not cosmetic here. Measured idle on an API 33 and an
     // API 37 emulator, signed out, nothing but the Welcome tab open: 226 MB
@@ -432,9 +436,9 @@ function classify(cmdline) {
     //
     // So the rule asks for the tree this app unpacks, in the one argument that
     // names the program. REH_ROOT is that tree, derived above from where this
-    // file sits rather than written out here a second time. It holds both alias
-    // sites FirstRunSetup.setupCopilotAndroidAliases builds, the agent host's
-    // and the session provider's, and a project directory cannot be inside it.
+    // file sits rather than written out here a second time. It holds the alias
+    // FirstRunSetup.setupCopilotAndroidAliases builds for the Copilot extension,
+    // and a project directory cannot be inside it.
     const script = scriptArgument(parts);
     if (script.startsWith(REH_PREFIX) &&
         script.includes('/node_modules/@github/copilot-')) return 'langserver';
