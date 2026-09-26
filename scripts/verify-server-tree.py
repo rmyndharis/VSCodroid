@@ -43,11 +43,12 @@ REQUIRED = [
     # reader it ships inside the server tree. Without it the APK redistributes
     # every dependency Code - OSS vendors with none of their notices.
     "ThirdPartyNotices.txt",
-    # What patch 0010 exists to keep: upstream's .moduleignore strips the SDK
-    # entry the extension's own exports map points at, and on device that
-    # surfaces as chat submit dying in ChatSessionsService. The android-arm64
-    # aliases built at runtime resolve into this file, so a tree without it
-    # ships a Copilot that renders but cannot send.
+    # What patch 0010 exists to keep: upstream's .moduleignore strips the
+    # extension's @github/copilot package (all of it since 1.139, before that
+    # the SDK entry the extension's own exports map points at), and on device
+    # that surfaces as chat submit dying in ChatSessionsService. The
+    # android-arm64 aliases built at runtime resolve into this file, so a tree
+    # without it ships a Copilot that renders but cannot send.
     "extensions/copilot/node_modules/@github/copilot/sdk/index.js",
     # The one component of this tree that is not MIT. @github/copilot ships
     # under the GitHub Copilot CLI License, which grants redistribution only on
@@ -315,7 +316,13 @@ def main(tree):
         # lands one upstream carries it into the built file with nothing in this
         # repository having changed. That path only exists in the built tree,
         # which is why it is checked here rather than beside the other two.
-        nls = sorted(k for k in product if "nls" in k.lower())
+        #
+        # nlsMetadataHash is the one exception, and it is not a URL. 1.139's
+        # packaging stamps it into the built file (gulpfile.reh.ts), after the
+        # overlay has run, so "remove" cannot reach it, and all it does is name
+        # the per-build language-pack cache directory in place of the commit
+        # (resolveNLSConfiguration in src/vs/base/node/nls.ts). Nothing is fetched.
+        nls = sorted(k for k in product if "nls" in k.lower() and k != "nlsMetadataHash")
         check(not nls, "no upstream string bundle URL",
               f"product.json now carries {', '.join(nls)}, pointing the page at "
               "Microsoft's CDN over the network. Interface strings come from the "

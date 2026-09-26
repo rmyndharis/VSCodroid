@@ -1,0 +1,97 @@
+Do not start the chat agent host on Android.
+
+The agent host is a separate server process that runs chat sessions through
+harnesses of its own, and on this server it registers one: the Copilot SDK
+harness, which spawns a second process for its runtime. Neither is needed for
+chat. The chat view and its default local harness come from the built-in
+Copilot extension and run in the extension host; the agent-host harness is
+used only when chosen, since chat.defaultToCopilotHarness and
+chat.editor.preferCopilotHarness both default to false. On 1.138 the pair
+still started with every window, signed in or not, and held two phantom
+process slots and about 330 MB. On 1.139 the harness looks for its runtime
+in a @github/copilot-sdk-<platform>-<arch> package and none that can run here
+is in the tree, so the backend would never start while the host still did,
+rethrowing the resolve error into session listing.
+
+What starts the host, read from 1.139.1. server-main.js is launched without
+--agent-host-* flags, so setupServerServices (serverServices.ts) takes its
+default branch: a ServerAgentHostManager in 'lazy' mode, which forks nothing
+on construction, behind an AgentHostChannel registered as 'agentHostProxy'.
+The only caller of ensureStarted() there is that channel's endpoint
+resolver, run when a renderer calls 'connect' on it. The only renderer code
+that calls 'connect' is EditorRemoteAgentHostServiceClient._connect(),
+reached only from startAgentHost(), which the client calls from an autorun
+while IAgentHostEnablementService.enabled is true. In the web workbench
+(workbench.web.main.ts, and sessions.web.main.ts likewise) that service is
+WebAgentHostEnablementService, whose runtime flag is
+!!environmentService.remoteAuthority, true for every window this server
+serves.
+
+So the cut is that flag. With it false, enabled is false from construction,
+the autorun never connects, the server never forks, and the Copilot backend,
+which only the host spawns, never starts either. The agentHostEnabled
+context key is then false, so the agent-host session types, pickers and the
+Host Settings command are hidden and new chats take the local harness. The
+client object still exists and never connects; every caller that could send
+it a request is gated on that key or starts from a user action. The two
+harness settings, chat.defaultToCopilotHarness and
+chat.editor.preferCopilotHarness, stay visible in Settings and do nothing.
+Cutting on the server instead, by registering UnavailableAgentHostChannel,
+would stop the fork but leave all of that UI enabled and failing against a
+channel that refuses to connect.
+
+It is decided here, synchronously, rather than read from the server, because
+the remote environment arrives after this constructor runs and the autorun
+fires on the first value it sees.
+
+isAndroid is the user-agent test, not patch 0001's isAndroidPlatform, which
+reads process.platform and is false in any browser. 0001 warns that the two
+answer different questions. Here they coincide: this tree only runs on
+Android, and its workbench is only ever shown by the app's WebView on the
+same device. A desktop browser reaching the server some other way would
+still start the host, and get the host process without a backend.
+
+The log line is also the only text in the hunk that survives minification,
+so it is what the Verify stage greps workbench.js for. The injected
+ILogService is one upstream's own unit test for this class does not supply;
+no gate here runs that test.
+
+diff --git a/src/vs/workbench/services/agentHost/browser/webAgentHostEnablementService.ts b/src/vs/workbench/services/agentHost/browser/webAgentHostEnablementService.ts
+index d50f022c..de242a0d 100644
+--- a/src/vs/workbench/services/agentHost/browser/webAgentHostEnablementService.ts
++++ b/src/vs/workbench/services/agentHost/browser/webAgentHostEnablementService.ts
+@@ -3,6 +3,7 @@
+  *  Licensed under the MIT License. See License.txt in the project root for license information.
+  *--------------------------------------------------------------------------------------------*/
+ 
++import { isAndroid } from '../../../../base/common/platform.js';
+ import { AgentHostEnablementService } from '../../../../platform/agentHost/browser/agentHostEnablementService.js';
+ import { IAgentHostEnablementService } from '../../../../platform/agentHost/common/agentHostEnablementService.js';
+ import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
+@@ -10,6 +11,7 @@ import { IContextKeyService } from '../../../../platform/contextkey/common/conte
+ import { InstantiationType, registerSingleton } from '../../../../platform/instantiation/common/extensions.js';
+ import { IWorkbenchEnvironmentService } from '../../environment/common/environmentService.js';
+ import { IManagedSettingsService } from '../../../../platform/policy/common/copilotManagedSettings.js';
++import { ILogService } from '../../../../platform/log/common/log.js';
+ 
+ export class WebAgentHostEnablementService extends AgentHostEnablementService {
+ 	constructor(
+@@ -17,8 +19,17 @@ export class WebAgentHostEnablementService extends AgentHostEnablementService {
+ 		@IContextKeyService contextKeyService: IContextKeyService,
+ 		@IWorkbenchEnvironmentService environmentService: IWorkbenchEnvironmentService,
+ 		@IManagedSettingsService managedSettingsService: IManagedSettingsService,
++		@ILogService logService: ILogService,
+ 	) {
+-		super(!!environmentService.remoteAuthority, configurationService, contextKeyService, managedSettingsService);
++		// The server forks the agent host lazily, when this window first connects
++		// to it, so reporting the runtime unavailable here keeps that process and
++		// the Copilot backend it starts off the phone entirely. isAndroid is the
++		// user-agent test: on Android this workbench is only ever shown by the
++		// app's own WebView, on the same device as its server.
++		super(!!environmentService.remoteAuthority && !isAndroid, configurationService, contextKeyService, managedSettingsService);
++		if (isAndroid) {
++			logService.info('Android: the agent host is not started on this device.');
++		}
+ 	}
+ }
+ 

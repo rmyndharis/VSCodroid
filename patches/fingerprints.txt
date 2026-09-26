@@ -143,3 +143,7 @@
 0017 menu pan ownership|out/vs/code/browser/workbench/workbench.js|closest('.monaco-submenu')
 0018 debug terminal env|out/vs/workbench/api/node/extensionHostProcess.js|unset ${
 0019 callback nonce|out/vs/code/browser/workbench/workbench.js|vscodroid-nonce=
+# 0020 gates on the log line it adds, the only text in its hunk a minifier keeps:
+# the cut itself compiles to `&&!` against a renamed binding. workbench.js is
+# where WebAgentHostEnablementService lands, through workbench.web.main.internal.
+0020 agent host off|out/vs/code/browser/workbench/workbench.js|Android: the agent host is not started on this device

@@ -16,8 +16,8 @@ ENV DEBIAN_FRONTEND=noninteractive
 # Matches .nvmrc at the VS Code tag being built: the Node this build host runs.
 # The Node that ends up on the device is Termux's nodejs-lts (download-node.sh),
 # which has to match the tag's remote/.npmrc `target` in the major. At 1.133.0 all
-# three were 24.18.0; at 1.138.0 .nvmrc is still 24.18.0 while `target` is
-# 24.18.1. Read both at the tag rather than assuming.
+# three were 24.18.0; at 1.139.1 .nvmrc is still 24.18.0 while `target` is
+# 24.20.0. Read both at the tag rather than assuming.
 ARG NODE_VERSION=24.18.0
 
 RUN apt-get update && apt-get install -y --no-install-recommends \

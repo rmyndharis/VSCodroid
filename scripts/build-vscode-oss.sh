@@ -44,7 +44,7 @@ set -euo pipefail
 #
 # Note also the Dockerfile's own warning: the Node this build HOST runs and the Node
 # the tree targets for the DEVICE are different numbers. They coincided at 1.133.0
-# and do not at 1.138.0 (.nvmrc 24.18.0, remote/.npmrc `target` 24.18.1).
+# and do not at 1.139.1 (.nvmrc 24.18.0, remote/.npmrc `target` 24.20.0).
 #
 # Run it on an arm64 host. Every native module in the tree is built for the build
 # host, and only four of them are replaced afterwards by build-native-addons.sh:
@@ -507,7 +507,8 @@ step "Build (core-ci)"
 # (product-build-linux-compile.yml:211,311, and the darwin/win32/alpine
 # equivalents). `core-ci` is esbuild -- tsgo type-check, transpile, then bundle
 # straight into out-vscode-reh-web-min. The legacy gulp-and-mangler chain was
-# renamed `core-ci-old` (gulpfile.vscode.ts:195) and is invoked by nothing.
+# renamed `core-ci-old` (gulpfile.vscode.ts:195 at 1.138.0), invoked by nothing,
+# and is gone at 1.139.1.
 #
 # Calling `-min` cost eight failed builds, and every failure was in that
 # abandoned path: the mangler's protected-fields gate, 168 compile errors from
@@ -587,7 +588,9 @@ fi
 # and the embedder bundle beside it, which is what the vscode-web npm package
 # exposes and which nothing in this tree names: a recursive grep over the whole
 # packaged output matches only the two files themselves. 18 MB of JavaScript and
-# 1.4 MB of CSS, 4.8 MiB of them compressed in the base module.
+# 1.4 MB of CSS, 4.8 MiB of them compressed in the base module. From 1.139 the
+# server-web target folds it into workbench.js and emits no embedder bundle, so
+# this finds nothing there; it stays for trees built from older pins.
 for dead in out/vs/workbench/workbench.web.main.internal.js \
             out/vs/workbench/workbench.web.main.internal.css; do
     if [ -f "$OUT/$dead" ]; then
@@ -596,6 +599,30 @@ for dead in out/vs/workbench/workbench.web.main.internal.js \
         echo "  removed the unreferenced embedder bundle $dead ($size)"
     fi
 done
+
+# The agent host's Copilot runtime. Since 1.139 packaging re-adds the target's
+# @github/copilot-sdk-<platform> package after .moduleignore has stripped it
+# (getCopilotRuntimePrebuildFiles in gulpfile.reh.ts), so it can only come out
+# here. Its one consumer is the agent host, which patch 0020 keeps from
+# starting, and none of it could run here anyway: a glibc copilot-runtime, an
+# 84 MB glibc runtime.node, and x86-64 copies of rg and tgrep that upstream's
+# filters do not strip. It also ships no licence file. Left in, it fails the ELF
+# gate (a foreign interpreter) and the attribution gate, and costs ~111 MB.
+for pkg in "$OUT"/node_modules/@github/copilot-sdk-*; do
+    [ -d "$pkg" ] || continue
+    size=$(du -sh "$pkg" | cut -f1)
+    rm -rf "$pkg"
+    echo "  removed the agent host's Copilot runtime ${pkg#"$OUT"/} ($size)"
+done
+# Asserted by outcome, not by the glob matching: a package upstream renames or
+# moves would slip past the loop in silence and publish a server whose APK then
+# fails the ELF gate one pipeline later.
+leftover=$(find "$OUT/node_modules" \( -name copilot-runtime -o -name copilot-runtime.exe \) -print -quit)
+if [ -n "$leftover" ]; then
+    echo "ERROR: the agent host's Copilot runtime is still in the tree: ${leftover#"$OUT"/}" >&2
+    echo "  upstream moved or renamed the package this step removes; prune it here" >&2
+    exit 1
+fi
 
 # Every minified bundle ends with a sourceMappingURL pointing at
 # main.vscode-cdn.net and naming the upstream commit, written by the minify

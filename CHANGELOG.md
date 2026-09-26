@@ -11,16 +11,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The screen shown when the development server will not start now shows the last lines of the server log, including how each attempt ended, and offers Copy Report. The reason was written only to a file the editor could reach, and the editor was what had failed to open.
 
-- While chat is running, the process warning offers Hide AI Features, which opens the setting that keeps chat's two background processes from starting with the server.
-
 ### Changed
 
-- The editor is now Code - OSS 1.138.0, up from 1.133.0.
+- The editor is now Code - OSS 1.139.1, up from 1.133.0.
+- The chat agent host and its Copilot backend no longer start on Android, which frees memory; Copilot Chat through its extension works as before.
 
 ### Fixed
 
 - Signing in with a Microsoft account returns to the editor instead of stopping at a `Missing scheme` error, and its sign-in page opens without a confirmation prompt first.
-- The process details no longer count chat's model backend as a language server whose extension could be disabled.
 - Git asks for credentials again when an HTTPS remote needs them, in the terminal and from Source Control, including through the GitHub sign-in. Its prompt helper could not be started, so such a push, pull or clone failed.
 - The `vscodroid` command, which opens files in the editor from a terminal, starts instead of answering "Permission denied".
 - An app update no longer unpacks an unused second copy of a bundled extension, up to 29 MB for Python, beside the same or a newer version installed from the Extensions view.
