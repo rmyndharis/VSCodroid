@@ -705,7 +705,7 @@ Note: tmux is a standalone tool, not integrated with VS Code's terminal tabs.
 The status bar shows a phantom process count. This tells you how many background processes VSCodroid is using.
 
 - Click the process count to see a detailed process tree in the Output panel.
-- The count on a cold start, before you open anything, is the app's own. Add 1 per terminal tab and 1 per running language server.
+- Before you open anything, the count is the app's own background processes. Each terminal tab and each running language server adds 1.
 - At 8 the monitor warns you and at 14 it reports an error; both offer **Show Details**, which marks the language servers that have sat idle for five minutes or more.
 
 ### Quick File Navigation

@@ -554,7 +554,7 @@ The built-in GitHub Copilot Chat extension depends on GitHub's `@github/copilot`
 |---|---|---|
 | `extensions/copilot/node_modules/@github/copilot` | 1.0.73 | The SDK copy the extension resolves |
 
-Releases up to 1.4.0 also carried the chat agent host's copy of the CLI: a loader at `node_modules/@github/copilot` and its runtime at `node_modules/@github/copilot-linux-arm64`, both 1.0.79-6, the runtime being the CLI application as JavaScript run by the bundled Node. Code - OSS 1.139.1 no longer lists `@github/copilot` among the server's dependencies, so neither ships.
+Releases 1.1.0 to 1.4.0 (Code - OSS 1.133.0) also carried the chat agent host's copy of the CLI: a loader at `node_modules/@github/copilot` and its runtime at `node_modules/@github/copilot-linux-arm64`, both 1.0.79-6, the runtime being the CLI application as JavaScript run by the bundled Node. Code - OSS 1.139.1 no longer lists `@github/copilot` among the server's dependencies, so neither ships.
 
 **Why we believe redistribution is permitted.** Section 1 of the license grants the right to reproduce and redistribute unmodified copies of the Software as part of an application or service, subject to the five conditions in Section 2. Our position on each:
 

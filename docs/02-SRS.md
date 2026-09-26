@@ -201,7 +201,7 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 |----|------------|--------|----------|
 | NFR-RES-01 | RAM usage (typical coding session) | < 700 MB | P1 |
 | NFR-RES-02 | RAM usage (4GB device minimum) | Functional without OOM | P0 |
-| NFR-RES-03 | Phantom process count | 5 with nothing open and 8 with a terminal and two language servers, the `IDLE_BASELINE` and `SOFT_BUDGET` of `assets/process-monitor.js`; the monitor warns at 8 and calls it a problem at 14, against Android's 32; nothing sheds a process | P0 |
+| NFR-RES-03 | Phantom process count | At or below `IDLE_BASELINE` of `assets/process-monitor.js` with nothing open; the monitor warns at `SOFT_BUDGET` and calls it a problem at 14, against Android's 32; nothing sheds a process | P0 |
 | NFR-RES-04 | AAB base module, compressed download | Under Play's 500 MB cap, which `scripts/check-bundle-size.py` refuses a bundle over. Last measured at 270.7 MiB, before the workbench internal bundles were pruned from the server tree, so re-measure from the AAB rather than quoting this. **200 MB is not a cap**: it is the size above which a mobile-data user sees a large-download dialog. The on-demand toolchain ZIPs are 10.5 MB for Ruby and 56.5 MB for Java 17, per `ToolchainRegistry.available`, and draw on Play's separate on-demand budget rather than this one | P1 |
 | NFR-RES-05 | Runtime storage (core extracted) | About 774 MiB, the asset tree that `BuildConfig.EXTRACTED_ASSET_BYTES` is computed from at build time; about 957 MiB with both toolchains installed. The app quotes the same quantities in decimal MB, 812 and 1,003, because that is the unit a phone's storage screen counts in | P1 |
 | NFR-RES-06 | Battery drain during active session | < 15% per hour | P2 |

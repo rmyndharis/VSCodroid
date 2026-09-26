@@ -35,8 +35,8 @@ flowchart TD
 
 The last edge is drawn because this document did not name it until 2026-08-23, and a threat model
 that omits the one shipped component which sends the user's source somewhere is not a threat model.
-`extensions/copilot` in the server tree is GitHub Copilot Chat (`GitHub.copilot-chat` 0.61.0,
-290 MB), the packaged `product.json` names it in `defaultChatAgent`, and its `package.json` declares
+`extensions/copilot` in the server tree is GitHub Copilot Chat (`GitHub.copilot-chat` 0.67.0 in the
+1.139.1 tree, 290 MB), the packaged `product.json` names it in `defaultChatAgent`, and its `package.json` declares
 only `main`, so it runs in the Node extension host and its requests leave from the server side.
 Section 5.1 carries the consequence for the data classification.
 

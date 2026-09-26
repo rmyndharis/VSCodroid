@@ -2256,7 +2256,7 @@ internal const val HEAP_PREFS_NAME = "vscodroid"
  * derived band binds exactly where the arithmetic says`. So T/4 exceeded a flat 768
  * only from 3072 MiB upward, and below that the fraction, which is the whole of the
  * safety argument on a small device, bound on nothing: a 2 GB phone was allowed
- * 768, and the flag being per-isolate makes that about six times 768 of V8 old
+ * 768, and the flag being per-isolate makes that about five times 768 of V8 old
  * space on a device that holds 2048.
  *
  * `isLowRam = false` is not an assumption about the device. [heapCeilingMb]
