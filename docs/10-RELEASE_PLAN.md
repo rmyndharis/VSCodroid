@@ -444,9 +444,16 @@ with no section naming the version a user installed.
       back to the latest release"): this step tests the app, not the new ZIPs
    c. After each half, this prints nothing, and `adb logcat -d -b crash` holds
       no com.vscodroid entry:
-      adb logcat -d | grep -E -e 'FATAL EXCEPTION|Launch-time refresh of' \
+      uid=$(adb shell pm list packages -U com.vscodroid |
+        sed -n 's/^package:com\.vscodroid uid://p')
+      adb logcat -d --uid="$uid" | grep -v FeatureFlagsImplExport | grep -E \
+        -e 'FATAL EXCEPTION|Launch-time refresh of' \
         -e 'NoClassDefFoundError|ClassNotFoundException|AbstractMethodError' \
         -e 'NoSuchMethodError|NoSuchFieldError|AndroidBridge.*not a function'
+      --uid keeps other apps out: an API 33 image logs these errors from its
+      system apps every hour. FeatureFlagsImplExport appears in the app's own
+      process too, from platform code whose boot class loader lookup fails on
+      an older image; R8 cannot cause it
    A failure the debug build does not show is a keep rule missing from
    android/app/proguard-rules.pro; read its trace against the artifact's
    mapping.txt. Record the device, API level, run id, headSha and pass or fail
