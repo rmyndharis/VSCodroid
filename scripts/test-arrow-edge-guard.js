@@ -1,5 +1,5 @@
 /**
- * Self-check for the guard that ends an arrow at the edge of a text box.
+ * Self-check for the guard that ends a Left or Right at the edge of a text box.
  *
  *   node scripts/test-arrow-edge-guard.js
  *
@@ -94,39 +94,49 @@ function cancels(key, box, opts = {}) {
         key,
         target: { tagName: 'DIV' },
         defaultPrevented: !!opts.handled,
+        ctrlKey: !!opts.ctrl,
+        altKey: !!opts.alt,
         shiftKey: !!opts.shift,
+        metaKey: !!opts.meta,
         composedPath: () => [box],
         preventDefault() { prevented = true; },
     });
     return prevented;
 }
 
-const box = (value, start, end, direction = 'none', tagName = 'INPUT') =>
-    ({ tagName, value, selectionStart: start, selectionEnd: end, selectionDirection: direction });
+const box = (value, start, end = start, tagName = 'INPUT') =>
+    ({ tagName, value, selectionStart: start, selectionEnd: end });
 
 const cases = [
-    ['Left at the start', cancels('ArrowLeft', box('abc', 0, 0)), true],
-    ['Up at the start', cancels('ArrowUp', box('abc', 0, 0)), true],
-    ['Right at the end', cancels('ArrowRight', box('abc', 3, 3)), true],
-    ['Down at the end', cancels('ArrowDown', box('abc', 3, 3)), true],
-    ['Left in the middle moves the caret', cancels('ArrowLeft', box('abc', 1, 1)), false],
-    ['Right at the start moves the caret', cancels('ArrowRight', box('abc', 0, 0)), false],
-    ['Left at the end moves the caret', cancels('ArrowLeft', box('abc', 3, 3)), false],
-    ['an arrow without Shift collapses a selection', cancels('ArrowRight', box('abc', 1, 3)), false],
-    ['Shift+Right with the selection already at the end',
-        cancels('ArrowRight', box('abc', 1, 3, 'forward'), { shift: true }), true],
-    ['Shift+Left with a backward selection at the start',
-        cancels('ArrowLeft', box('abc', 0, 2, 'backward'), { shift: true }), true],
-    ['Shift+Right moves the start of a backward selection',
-        cancels('ArrowRight', box('abc', 0, 2, 'backward'), { shift: true }), false],
-    ['an arrow a handler already used', cancels('ArrowLeft', box('abc', 0, 0), { handled: true }), false],
-    ['Tab is not an arrow', cancels('Tab', box('abc', 3, 3)), false],
-    ['Home is not an arrow', cancels('Home', box('abc', 0, 0)), false],
+    ['Left at the start', cancels('ArrowLeft', box('abc', 0)), true],
+    ['Right at the end', cancels('ArrowRight', box('abc', 3)), true],
+    ['Right in an empty box', cancels('ArrowRight', box('', 0)), true],
+    ['Right at the end of a textarea', cancels('ArrowRight', box('a\nb', 3, 3, 'TEXTAREA')), true],
+    ['Left in the middle moves the caret', cancels('ArrowLeft', box('abc', 1)), false],
+    ['Right at the start moves the caret', cancels('ArrowRight', box('abc', 0)), false],
+    ['Left at the end moves the caret', cancels('ArrowLeft', box('abc', 3)), false],
+    ['Left at the start of a second line moves the caret',
+        cancels('ArrowLeft', box('a\nb', 2, 2, 'TEXTAREA')), false],
+    ['a selection collapses, which moves', cancels('ArrowLeft', box('abc', 0, 3)), false],
+    ['Shift+Left at the start: spatial navigation ignores Shift',
+        cancels('ArrowLeft', box('abc', 0), { shift: true }), false],
+    ['Ctrl+Left at the start: spatial navigation ignores Ctrl',
+        cancels('ArrowLeft', box('abc', 0), { ctrl: true }), false],
+    ['Meta+Right at the end: spatial navigation ignores Meta',
+        cancels('ArrowRight', box('abc', 3), { meta: true }), false],
+    ['Alt+Left in the middle', cancels('ArrowLeft', box('abc', 1), { alt: true }), true],
+    ['Alt+Right in the middle of a textarea',
+        cancels('ArrowRight', box('abc def', 3, 3, 'TEXTAREA'), { alt: true }), true],
+    ['Alt+Right with a selection, which collapses',
+        cancels('ArrowRight', box('abc', 1, 2), { alt: true }), false],
+    ['Alt+Left on an input with no caret, such as a checkbox',
+        cancels('ArrowLeft', box('', null), { alt: true }), false],
+    ['an arrow a handler already used', cancels('ArrowLeft', box('abc', 0), { handled: true }), false],
+    ['Up is never pressed for real', cancels('ArrowUp', box('abc', 0)), false],
+    ['Down is never pressed for real', cancels('ArrowDown', box('abc', 3)), false],
+    ['Tab is not an arrow', cancels('Tab', box('abc', 3)), false],
+    ['Home is not an arrow', cancels('Home', box('abc', 0)), false],
     ['a target that takes no text', cancels('ArrowLeft', { tagName: 'DIV' }), false],
-    ['an input with no caret, such as a checkbox', cancels('ArrowLeft', box('', null, null)), false],
-    ['Down at the end of a textarea',
-        cancels('ArrowDown', box('a\nb', 3, 3, 'none', 'TEXTAREA')), true],
-    ['Right in an empty box', cancels('ArrowRight', box('', 0, 0)), true],
 ];
 
 let failed = 0;

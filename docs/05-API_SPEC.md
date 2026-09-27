@@ -131,15 +131,15 @@ and performs no default action: that is why `{` announced as a DOM event inserte
 nothing at all. Text has to enter through the browser's own input path, and a real
 key press is the only way into it from Kotlin.
 
-The trackpad arrows, `Home`, `End`, `PageUp` and `PageDown` are **pressed** the
-same way, as real `KeyEvent`s listed in `NAVIGATION_KEYS`, with any latched
-modifier as meta state, so they move the caret in text boxes and reach extension
-webviews.
+The trackpad's Left and Right, `Home`, `End`, `PageUp` and `PageDown` are
+**pressed** the same way, as real `KeyEvent`s listed in `NAVIGATION_KEYS`, with
+any latched modifier as meta state, so they move the caret in text boxes and
+reach extension webviews.
 
 Everything else is **announced**: a key spelled out rather than typed (`Tab`,
-`Escape`, `F7`), and any character held with Ctrl, Alt or Meta, becomes the
-`KeyboardEvent` below, because that is what the workbench resolves its bindings
-from. `isTextEntry` and `NAVIGATION_KEYS` decide which route a press takes and
+`Escape`, `F7`, the trackpad's Up and Down), and any character held with Ctrl,
+Alt or Meta, becomes the `KeyboardEvent` below, because that is what the
+workbench resolves its bindings from. `isTextEntry` and `NAVIGATION_KEYS` decide which route a press takes and
 `typeCharacter` is the first of them; all three live in the `keyboard` package
 beside `KeyInjector`.
 

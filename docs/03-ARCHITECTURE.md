@@ -397,7 +397,7 @@ sequenceDiagram
 
 ```mermaid
 flowchart TD
-  A["1. User taps key on soft keyboard / Extra Key Row"] --> B["2. Android dispatches KeyEvent to WebView<br/>(Extra Key Row characters and navigation keys too;<br/>its other command keys and chords go through evaluateJavascript)"]
+  A["1. User taps key on soft keyboard / Extra Key Row"] --> B["2. Android dispatches KeyEvent to WebView<br/>(Extra Key Row characters, Home/End/PgUp/PgDn<br/>and the trackpad's Left and Right too; its other<br/>command keys and chords go through evaluateJavascript)"]
   B --> C["3. Monaco Editor handles keypress<br/>updates internal model"]
   C --> D["4. VS Code auto-save or Ctrl+S triggers save"]
   D --> E["5. WebSocket: FileService.writeFile(uri, content)"]

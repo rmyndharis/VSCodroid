@@ -360,11 +360,13 @@ class KeyInjectorLatchTest {
      * and the row can go with it, and the Explorer's rename box commits the
      * half-typed name on blur. The guard cancels that press and nothing else.
      *
-     * This holds its shape only. What it decides at each caret position is run
-     * under node by `scripts/test-arrow-edge-guard.js`.
+     * This holds its shape, and that it covers exactly the arrows pressed for
+     * real, which only the Kotlin side can see. What it decides at each caret
+     * position is run under node by `scripts/test-arrow-edge-guard.js`.
      *
      * NEGATIVE CONTROL: deleting the listener fails the slice; registering it
-     * in the capture phase, or adding Tab or Home to EDGE, fails an assertion.
+     * in the capture phase, adding Tab or Home to EDGE, or putting ArrowUp back
+     * into NAVIGATION_KEYS without guarding it, fails an assertion.
      */
     @Test
     fun `an arrow at the edge of a text box ends there instead of moving focus`() {
@@ -377,9 +379,9 @@ class KeyInjectorLatchTest {
 
         val edge = Regex("""var EDGE = \{([^}]*)\}""").find(guard)!!.groupValues[1]
         assertEquals(
-            ARROW_ACTIONS.map { it.second }.toSet(),
+            NAVIGATION_KEYS.keys.intersect(ARROW_ACTIONS.map { it.second }.toSet()),
             Regex("""(\w+):""").findAll(edge).map { it.groupValues[1] }.toSet(),
-            "the guard covers keys spatial navigation never moves focus with. It reads: $guard",
+            "the guard does not cover exactly the arrows pressed for real. It reads: $guard",
         )
         assertTrue(
             guard.contains("window.addEventListener('keydown', function(e) {") && !guard.contains("}, true)"),

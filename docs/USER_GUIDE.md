@@ -155,10 +155,12 @@ shortcut the editor or an extension binds to one is a tap away.
 #### The trackpad
 
 The wide pad on page 1 stands in for the four arrow keys. Drag it and the cursor
-moves. It sends real arrow keys, so it works anywhere an arrow key does, the
-terminal, text boxes and extension panels included, and a diagonal drag moves on
-both axes at once. Inside an extension panel, a drag past the end of a text box
-can move focus to the next control.
+moves, in the editor and the terminal, and a diagonal drag moves on both axes at
+once. Dragging left or right also moves the caret in text boxes such as rename,
+the Command Palette and find, and inside extension panels, and so do `Home`,
+`End`, `PgUp` and `PgDn`; dragging up or down there works as before. Inside an
+extension panel, a drag past either end of a text box can move focus to the next
+control.
 
 It has three gears, and which one you are in depends on how far your finger has
 travelled since the drag began, not on how fast you are moving it. A short drag

@@ -87,7 +87,7 @@ class KeyInjectorTextEntryTest {
     }
 
     @Test
-    fun `a trackpad arrow is pressed as a real key with the latched modifiers as meta state`() {
+    fun `a horizontal trackpad arrow is pressed as a real key with the latched modifiers as meta state`() {
         // An announced arrow moves nothing in a text box and never reaches a
         // frame; a real one does both. Shift has to ride along as meta state, or
         // a Shift-drag stops selecting.
@@ -112,12 +112,27 @@ class KeyInjectorTextEntryTest {
     }
 
     @Test
+    fun `the trackpad's Up and Down are still announced as DOM events`() {
+        // They are the quick pick's list keys. A real one pressed while the soft
+        // keyboard composes carries isComposing, and the workbench then runs no
+        // keybinding, so the Command Palette highlight would stop moving. Alt is
+        // latched on one of them because a real Alt+Up leaves a text box by
+        // spatial navigation wherever the caret is.
+        injector().injectKey("ArrowUp")
+        injector().injectKey("ArrowDown", altKey = true)
+
+        assertTrue(pressed.isEmpty(), "a vertical arrow was pressed as a real key: $pressed")
+        verify(exactly = 0) { webView.dispatchKeyEvent(any()) }
+        verify(exactly = 2) { webView.evaluateJavascript(any(), any()) }
+    }
+
+    @Test
     fun `navigation keys carry the scan code Chromium turns into KeyboardEvent code`() {
         // Linux evdev codes, which is the column Chromium's Android key code
         // conversion reads. A zero here delivers the key with code "".
         assertEquals(
             mapOf(
-                "ArrowUp" to 103, "ArrowLeft" to 105, "ArrowRight" to 106, "ArrowDown" to 108,
+                "ArrowLeft" to 105, "ArrowRight" to 106,
                 "Home" to 102, "End" to 107, "PageUp" to 104, "PageDown" to 109,
             ),
             NAVIGATION_KEYS.mapValues { it.value.second },
@@ -128,14 +143,17 @@ class KeyInjectorTextEntryTest {
     }
 
     @Test
-    fun `the navigation keys are the trackpad's arrows and the row's Home, End, PgUp and PgDn`() {
+    fun `the navigation keys are the trackpad's Left and Right and the row's Home, End, PgUp and PgDn`() {
         // Derived from the row, so Tab, Escape and the function keys, which are
-        // all on it, fail the second assertion if one is ever added.
+        // all on it, fail the second assertion if one is ever added. The first
+        // fails if Up or Down comes back, or Left or Right goes.
         val row = KeyPages.defaults.flatMap { it.items }
             .filterIsInstance<KeyItem.Button>()
             .flatMap { button -> listOf(button.value) + button.alternates.map { it.value } }
             .toSet()
-        assertEquals(ARROW_ACTIONS.map { it.second }.toSet(), NAVIGATION_KEYS.keys - row)
+        val arrows = ARROW_ACTIONS.map { it.second }.toSet()
+        assertTrue(arrows.containsAll(setOf("ArrowLeft", "ArrowRight")), "the trackpad no longer sends $arrows")
+        assertEquals(setOf("ArrowLeft", "ArrowRight"), NAVIGATION_KEYS.keys - row)
         assertEquals(setOf("Home", "End", "PageUp", "PageDown"), NAVIGATION_KEYS.keys.intersect(row))
     }
 
@@ -143,7 +161,7 @@ class KeyInjectorTextEntryTest {
     fun `a navigation press the WebView refuses falls back to the DOM event`() {
         every { webView.dispatchKeyEvent(any()) } returns false
 
-        injector().injectKey("ArrowDown")
+        injector().injectKey("ArrowRight")
 
         assertEquals(1, pressed.size, "the press was never tried, so this is not the refusal path")
         verify(exactly = 1) { webView.evaluateJavascript(any(), any()) }
@@ -223,7 +241,10 @@ class KeyInjectorTextEntryTest {
     fun `an announced keystroke asks for no answer on a build that logs nothing`() {
         // A callback makes the renderer serialize the script's return value back
         // across the process boundary, and the only thing that reads it is
-        // Logger.d, which is gated on a debuggable build.
+        // Logger.d, which is gated on a debuggable build. Every vertical
+        // trackpad arrow takes this path, and one touch delta in the fast gear
+        // pays out several, so on the row's one continuous control the round
+        // trip was bought dozens of times a second to discard the answer.
         //
         // Logger.debugEnabled is false here because Logger.init is never called
         // off a device, which is also what a release APK reports.

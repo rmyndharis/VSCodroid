@@ -28,8 +28,8 @@ import android.view.KeyEvent
  * chord is a command however it is spelled. Shift does not: the layout below
  * presses Shift itself for the characters that need it.
  *
- * A spelled-out key that moves the caret is the third case, and it is pressed
- * rather than announced, modifiers and all: see [NAVIGATION_KEYS].
+ * A spelled-out key listed in [NAVIGATION_KEYS] is the third case: it moves the
+ * caret, and it is pressed rather than announced, modifiers and all.
  *
  * ASCII only, because [virtualKeyboardEvents] resolves through a US layout and
  * anything outside it has no key to press there.
@@ -72,7 +72,7 @@ internal fun virtualKeyboardEvents(text: String): List<KeyEvent>? {
  * The keys pressed as real key events, by name: the Android key code and the
  * evdev scan code a hardware keyboard sends for each.
  *
- * An announced arrow runs the page's listeners and performs no default action.
+ * An announced key runs the page's listeners and performs no default action.
  * The editor and the terminal do not notice, because their own handlers do the
  * moving. A text box has no such handler, so the caret stays put in the
  * Explorer's rename box, the Command Palette and the find widget, and an
@@ -84,18 +84,23 @@ internal fun virtualKeyboardEvents(text: String): List<KeyEvent>? {
  * rather than `key` takes for no key at all. `MOVE_HOME` and `MOVE_END`, never
  * `KEYCODE_HOME`, which is the system Home button.
  *
- * Tab, Escape and the function keys stay announced. A real Tab moves focus,
- * and the Explorer's rename and New File boxes commit the typed name when they
- * lose it. A real arrow turns on WebView spatial navigation until the next
- * touch on the page, and under it an unhandled real Escape blurs whatever has
- * focus. The function keys are workbench bindings, which the announced event
- * already reaches.
+ * The trackpad's Up and Down, Tab, Escape and the function keys stay
+ * announced. Up and Down are the quick pick's list keys, in the Command Palette
+ * and Go to File, and a real key pressed while the soft keyboard is composing a
+ * word carries `isComposing`, for which the workbench dispatches no keybinding
+ * at all; the announced event carries none and moves the highlight. Keeping
+ * them announced also means no real vertical arrow is ever sent: Blink's
+ * editing on Android has no command for Alt+Up or Alt+Down, so a real one
+ * would go straight to spatial navigation, below, wherever the caret is. A
+ * real Tab moves focus, and the Explorer's rename and New File boxes commit the
+ * typed name when they lose it. A real arrow turns on WebView spatial
+ * navigation until the next touch on the page, and under it an unhandled real
+ * Escape blurs whatever has focus. The function keys are workbench bindings,
+ * which the announced event already reaches.
  */
 internal val NAVIGATION_KEYS: Map<String, Pair<Int, Int>> = mapOf(
     "ArrowLeft" to (KeyEvent.KEYCODE_DPAD_LEFT to 105),
-    "ArrowUp" to (KeyEvent.KEYCODE_DPAD_UP to 103),
     "ArrowRight" to (KeyEvent.KEYCODE_DPAD_RIGHT to 106),
-    "ArrowDown" to (KeyEvent.KEYCODE_DPAD_DOWN to 108),
     "Home" to (KeyEvent.KEYCODE_MOVE_HOME to 102),
     "End" to (KeyEvent.KEYCODE_MOVE_END to 107),
     "PageUp" to (KeyEvent.KEYCODE_PAGE_UP to 104),

@@ -92,7 +92,7 @@ temporary directory, and is executed directly by `node`.
 | DNS proxy | The Basic-auth token on the loopback proxy every musl DNS lookup goes through | `scripts/test-dns-proxy.js` |
 | Bridge relay | The BroadcastChannel relay injected into the workbench | `scripts/test-bridge-relay.js` |
 | Download capture | The script that makes saving a file out of the Explorer possible at all | `scripts/test-download-capture.js` |
-| Arrow edge guard | That an arrow at the start or end of a text box is cancelled, and one that can still move the caret or that a handler already used is not | `scripts/test-arrow-edge-guard.js` |
+| Arrow edge guard | That a Left or Right at the start or end of a text box is cancelled, and one that can still move the caret or that a handler already used is not | `scripts/test-arrow-edge-guard.js` |
 | Serve on Network | The port scan and its reachable/local split | `scripts/test-serve-network.js` |
 | Welcome | That the walkthrough and side bar markers are written only after the command they record actually ran | `scripts/test-welcome.js` |
 | xdg-open | The `openExternal` message `xdg-open.js` sends over the editor's CLI socket, and that anything but an `http` or `https` address is refused rather than sent | `scripts/test-xdg-open.js` |

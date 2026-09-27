@@ -661,28 +661,38 @@ shifted forms is written by hand. This route exists because a `KeyboardEvent` co
 in the page is untrusted: listeners run, no default action is performed, and the
 character is never inserted. That is what made `{`, `;` and `"` do nothing at all.
 
-**Navigation keys are pressed.** The four trackpad arrows (a drag or one of the
+**Navigation keys are pressed.** The trackpad's Left and Right (a drag or one of the
 `ARROW_ACTIONS`) and the row's `Home`, `End`, `PageUp` and `PageDown` go through the same
 dispatch as real `KeyEvent` pairs, with any latched Ctrl, Alt or Shift as meta state, so
 they move the caret and select in text boxes and reach extension webviews, where an
-announced arrow did nothing. Each carries the evdev scan code a hardware keyboard sends,
+announced key did nothing. Each carries the evdev scan code a hardware keyboard sends,
 because Chromium derives `KeyboardEvent.code` from it, and Home and End use
 `KEYCODE_MOVE_HOME`/`KEYCODE_MOVE_END`, not the system Home key. A press the WebView
 refuses falls back to the announce route. A real arrow turns WebView spatial navigation on
-until the next touch on the page, so an arrow at the start or end of a text box would move
-focus out of it; a `keydown` listener installed with the modifier interceptor cancels such a
-press when no handler used it. It reaches the workbench document only, not a text box
-inside an extension webview. `ExtraKeyRow` sets `FOCUS_BLOCK_DESCENDANTS`, because an
-arrow the page leaves unused makes the WebView hand Android focus to the nearest focusable
-view, and ViewPager2's RecyclerView is one.
+until the next touch on the page, so a Left or Right that leaves a collapsed caret at the
+start or end of a text box would move focus out of it. A `keydown` listener installed with
+the modifier interceptor cancels such a press when no handler used it, and cancels any
+Alt+Left or Alt+Right on a collapsed caret, because on Android those move to a line end
+the script cannot locate in a wrapped text area. Spatial navigation ignores an arrow held
+with Ctrl, Shift or Meta and acts on no key but the four arrows, so Home, End, PageUp and
+PageDown need no guard. It reaches the workbench document only, not a text box inside an
+extension webview. `ExtraKeyRow` sets `FOCUS_BLOCK_DESCENDANTS`, because an arrow the page
+leaves unused makes the WebView hand Android focus to the nearest focusable view, and
+ViewPager2's RecyclerView is one.
 
 **Everything else is announced.** A key that names a command rather than a character
-(`Tab`, `Escape`, `F7`), and any character held with Ctrl, Alt or Meta, is sent as a
-`keydown`/`keyup` pair built by `evaluateJavascript` at `document.activeElement`, since
-that is what the workbench resolves its key bindings from. Tab stays here because a real
-one moves focus, and the Explorer's rename and New File boxes commit the typed name when
-they lose it; Escape because under spatial navigation an unhandled real Escape blurs the
-focused element. Values going into that script are escaped by `KeyMapping.jsQuote`.
+(`Tab`, `Escape`, `F7`), the trackpad's Up and Down, and any character held with Ctrl, Alt
+or Meta, is sent as a `keydown`/`keyup` pair built by `evaluateJavascript` at
+`document.activeElement`, since that is what the workbench resolves its key bindings from.
+Tab stays here because a real one moves focus, and the Explorer's rename and New File boxes
+commit the typed name when they lose it; Escape because under spatial navigation an
+unhandled real Escape blurs the focused element. Up and Down stay because they are the
+quick pick's list keys: a real key pressed while the soft keyboard composes a word carries
+`isComposing`, and the workbench dispatches no keybinding for it, so the Command Palette
+highlight would stop moving. With no real vertical arrow sent, spatial navigation never
+gets one either, and Blink's editing on Android has no command for Alt+Up or Alt+Down,
+which would otherwise leave a text box wherever the caret sat. Values going into that
+script are escaped by `KeyMapping.jsQuote`.
 
 A latched Shift is resolved before the split, by `KeyMapping.shiftedForm`, because it
 changes which character is typed rather than whether it is typed. If `typeCharacter`
