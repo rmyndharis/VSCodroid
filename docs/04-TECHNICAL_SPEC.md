@@ -166,7 +166,8 @@ npm run gulp "vscode-reh-web-linux-arm64-min-ci"
 #    extracts straight into the name the app expects.
 python3 scripts/verify-server-tree.py       "$OUT"
 python3 scripts/check-patch-fingerprints.py "$OUT" patches
-tar -C "$OUT" -czf "$TARBALL" .
+tar --sort=name --format=gnu --mtime="@$(git -C "$SRC" log -1 --format=%ct)" \
+    --owner=0 --group=0 --numeric-owner -C "$OUT" -czf "$TARBALL" .
 ```
 
 The `reh-web` target carries both halves, so one tree is the server and the web client it serves;

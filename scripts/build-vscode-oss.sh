@@ -909,9 +909,22 @@ step "Package"
 # Packed here rather than in the workflow so a local build and a CI build produce
 # the same file. The contents are stored without a leading directory, so the
 # fetcher extracts straight into whatever name the app expects.
+#
+# Members in name order, owned by 0/0 and stamped with the source commit time
+# (the value product.json's `date` carries), so the tarball depends on the tree
+# rather than on the runner's user, clock and readdir order. gzip already writes
+# no name and a zero MTIME when tar pipes into it. --format=gnu pins GNU tar
+# 1.35's default, so a host defaulting to posix cannot add pax time headers.
+# The epoch is assigned on its own line because set -e does not see a failed
+# command substitution inside an argument.
 TARBALL="$WORK/vscode-reh-web-linux-$ARCH-$VSCODE_VERSION.tar.gz"
+epoch=$(git -C "$SRC" log -1 --format=%ct)
+case "$epoch" in
+    ''|*[!0-9]*) echo "ERROR: no commit time for $SRC: '$epoch'" >&2; exit 1 ;;
+esac
 t0=$SECONDS
-tar -C "$OUT" -czf "$TARBALL" .
+tar --sort=name --format=gnu --mtime="@$epoch" --owner=0 --group=0 --numeric-owner \
+    -C "$OUT" -czf "$TARBALL" .
 elapsed $(( SECONDS - t0 ))
 echo "  tarball : $TARBALL"
 du -h "$TARBALL" | awk '{print "  size    : "$1}'
