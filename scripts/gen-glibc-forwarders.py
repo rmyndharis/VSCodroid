@@ -48,10 +48,13 @@ import re
 import struct
 import sys
 
-# Bionic folded these into libc long ago, so a name that used to live in one of
-# them resolves from libc now. The stubs still have to exist under the old names
-# because that is what the addon's DT_NEEDED asks for.
-BIONIC_LIBS = ["-lc", "-lm", "-ldl", "-llog"]
+# The Bionic libraries a forwarder's target can come from, read from the NDK
+# stubs for the minimum API level. __shim_resolve in glibc-shim.c asks libc and
+# libdl by handle, then libglibc-shim.so, then RTLD_NEXT. libm is a separate
+# library on Android, not part of libc: the libc handle does not find pow.
+# Nothing in the shim layer NEEDs it; it is loaded because libnode.so and the
+# system liblog.so, a DT_NEEDED of the shim, both do.
+BIONIC_LIBS = ("libc.so", "libm.so", "libdl.so")
 
 # Provided by whatever loads the addon rather than by any library: Node defines
 # these itself and resolves them at dlopen. Forwarding them would bind to
@@ -369,7 +372,21 @@ class Elf:
             yield name, version
 
 
-def verify_shipped(inputs, lib_dir: pathlib.Path) -> int:
+def unresolved_targets(needed, provided):
+    """(soname, target) for each forwarder whose target nothing provides.
+
+    A translated forwarder's target is its __shim_ wrapper, and a data symbol
+    is filled from an accessor the stub links directly, so neither is looked
+    up by name.
+    """
+    return sorted({(soname, TRANSLATED.get(name, name))
+                   for soname, wants in needed.items() for name, _ in wants
+                   if name not in DATA_SYMBOLS
+                   and TRANSLATED.get(name, name) not in provided})
+
+
+def verify_shipped(inputs, lib_dir: pathlib.Path,
+                   bionic_dir: pathlib.Path = None) -> int:
     """Check the addons against the stubs that were actually built.
 
     Everything before this verifies intent: the generator emits what it decided
@@ -379,6 +396,11 @@ def verify_shipped(inputs, lib_dir: pathlib.Path) -> int:
     symbol at that version. A stub that failed to build, a soname nobody
     compiled, a symbol dropped between the two, all surface here as the same
     kind of miss.
+
+    With bionic_dir it also asks what stands behind each name. A forwarder
+    finds its target by name at load time, a string the linker never sees, and
+    one that finds nothing aborts the process on its first call. malloc_trim
+    was that case until glibc-shim.c defined it.
     """
     print("")
     print("--- addon imports vs shipped stubs ---")
@@ -425,7 +447,17 @@ def verify_shipped(inputs, lib_dir: pathlib.Path) -> int:
         for name, version in sorted(wants):
             if (name, version) not in have:
                 missing.append((soname, name, version))
-        print(f"  {soname:<24} {len(wants):4d} imports resolved")
+        print(f"  {soname:<24} {len(wants):4d} imports carried")
+
+    unresolved = []
+    if bionic_dir:
+        libs = [bionic_dir / so for so in BIONIC_LIBS] + [lib_dir / "libglibc-shim.so"]
+        provided = {name for lib in libs for name, _ in Elf(lib).exports()}
+        unresolved = unresolved_targets(needed, provided)
+        if not unresolved:
+            # With nothing provided, every target comes back.
+            total = len(unresolved_targets(needed, set()))
+            print(f"  forwarder targets {total} resolved at API {bionic_dir.name}")
 
     if missing:
         print(f"\n  ERROR: {len(missing)} import(s) are not in the libraries that ship:",
@@ -444,7 +476,43 @@ def verify_shipped(inputs, lib_dir: pathlib.Path) -> int:
               "\n  RUNTIME_PROVIDED. Anything else needs the library that exports"
               "\n  it, or the addon rebuilt without the reference.", file=sys.stderr)
 
-    return 1 if (missing or unbound) else 0
+    if unresolved:
+        print(f"\n  ERROR: {len(unresolved)} forwarder target(s) exist neither in Bionic at"
+              f" API {bionic_dir.name}"
+              f"\n  nor in libglibc-shim.so, so the stub aborts on the first call:",
+              file=sys.stderr)
+        for soname, name in unresolved:
+            print(f"    {soname}: {name}", file=sys.stderr)
+        print("\n  Define it in scripts/glibc-shim.c, or resolve it there at runtime with"
+              "\n  a fallback, as copy_file_range and posix_spawn_file_actions_addchdir"
+              "\n  already do.", file=sys.stderr)
+
+    return 1 if (missing or unbound or unresolved) else 0
+
+
+def self_test() -> int:
+    """Hand unresolved_targets() the forwarders it exists to refuse, and a control.
+
+    Every target in the shipped tree resolves, so the refusal has no file to
+    fire on. sigaction is in Bionic on purpose: a check that dropped the
+    TRANSLATED mapping would find it there and pass. stdout is provided
+    nowhere, so a check that stopped skipping data symbols would flag it.
+    """
+    needed = {"libc.so.6": {("malloc_trim", "GLIBC_2.17"), ("stdout", "GLIBC_2.17")},
+              "libpthread.so.0": {("sigaction", "GLIBC_2.17")}}
+    bionic = {"sigaction"}
+    cases = (("every target provided", {"malloc_trim", "__shim_sigaction"}, []),
+             ("the shim lacks malloc_trim", {"__shim_sigaction"},
+              [("libc.so.6", "malloc_trim")]),
+             ("the shim lacks a translating wrapper", {"malloc_trim"},
+              [("libpthread.so.0", "__shim_sigaction")]))
+    for label, shim, expected in cases:
+        got = unresolved_targets(needed, bionic | shim)
+        if got != expected:
+            print(f"  FAIL   self-test: {label}: expected {expected}, got {got}")
+            return 1
+    print("  ok     self-test: a forwarder with nothing behind it is refused")
+    return 0
 
 
 def report_unforwardable(unforwardable) -> int:
@@ -532,9 +600,6 @@ def generate(inputs, out_dir: pathlib.Path):
             "",
             "#include <android/log.h>",
             "",
-            "/* Bionic merged libm, libdl, libpthread and librt into libc, so one",
-            " * handle answers for every name this stub stands in for. Opened with",
-            " * NOLOAD because libc is always already mapped. */",
             "/* Resolution lives in libglibc-shim.so, not here: this file exports",
             " * dlopen@GLIBC_2.17 and friends, so calling dlopen by name from inside",
             " * it would bind to its own unfilled trampoline. */",
@@ -706,7 +771,16 @@ def main():
     ap.add_argument("--verify-against", type=pathlib.Path,
                     help="check the addons against the stubs already built in this "
                          "directory instead of generating; run after the build")
+    ap.add_argument("--bionic-dir", type=pathlib.Path,
+                    help="NDK sysroot usr/lib/<triple>/<api>; with --verify-against, "
+                         "also check that every forwarder target exists there or in "
+                         "libglibc-shim.so")
+    ap.add_argument("--self-test", action="store_true",
+                    help="check that a forwarder with no target is refused, and exit")
     args = ap.parse_args()
+
+    if args.self_test:
+        return self_test()
 
     if not args.verify_against and args.out is None:
         print("  ERROR: --out is required unless --verify-against is given",
@@ -756,7 +830,7 @@ def main():
                 file=sys.stderr,
             )
             return 1
-        return verify_shipped(inputs, args.verify_against)
+        return verify_shipped(inputs, args.verify_against, args.bionic_dir)
     return generate(inputs, args.out)
 
 

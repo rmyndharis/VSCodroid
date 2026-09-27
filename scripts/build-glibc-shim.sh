@@ -19,9 +19,9 @@ set -euo pipefail
 # Each stub is an empty library that depends on Bionic's libc and on the shim.
 # Loading it therefore pulls both into the process, and the addon's imports
 # resolve from the global namespace: the ordinary ones (memcpy, pthread_create,
-# fopen) from Bionic, the glibc-only ones from the shim. Bionic long ago merged
-# libdl, libpthread, libm and librt into libc, which is why one stub body serves
-# for all of them.
+# fopen) from Bionic, the glibc-only ones from the shim. Bionic folded libpthread
+# and librt into libc, and the shim's resolver also reaches libm and libdl, which
+# stay separate libraries, so one stub body serves for all of them.
 #
 # This is a compatibility shim, not an emulator. It works because the two libcs
 # agree on the ABI that matters. Where they do not -- a struct laid out
@@ -37,8 +37,9 @@ WORK_DIR="${WORK_DIR:-$ROOT_DIR/.build/glibc-shim}"
 TARGET=aarch64-linux-android
 API=33
 
-# The names a glibc-linked binary carries in DT_NEEDED. Bionic folded all of
-# these into libc, so every stub has the same (empty) body.
+# The names a glibc-linked binary carries in DT_NEEDED. Every stub finds its
+# targets through the shim's resolver, whichever Bionic library holds them, so
+# the stubs differ only in the names they carry.
 STUBS=(libc.so.6 libdl.so.2 libpthread.so.0 libm.so.6 librt.so.1 libutil.so.1
        libgcc_s.so.1 libresolv.so.2 libcrypt.so.1 ld-linux-aarch64.so.1)
 
@@ -176,10 +177,13 @@ done
 # intent -- the generator emitted what it decided to emit, the compiler built
 # what it was handed, each library loads. None of it compares the addons against
 # the libraries that ship. This does: for every versioned symbol an addon
-# imports, the stub it names has to carry that symbol at that version.
+# imports, the stub it names has to carry that symbol at that version. The
+# forwarders' targets, strings the linker never sees, are then checked against
+# the API $API NDK libraries plus the shim.
 #
 # It runs only when addons were given, because with none there is nothing to
 # check and the stubs are deliberately empty.
 if [ "$#" -gt 0 ]; then
-    python3 "$SCRIPT_DIR/gen-glibc-forwarders.py" "$@" --verify-against "$OUT_DIR"
+    python3 "$SCRIPT_DIR/gen-glibc-forwarders.py" "$@" --verify-against "$OUT_DIR" \
+        --bionic-dir "$NDK/toolchains/llvm/prebuilt/$HOST_TAG/sysroot/usr/lib/$TARGET/$API"
 fi
