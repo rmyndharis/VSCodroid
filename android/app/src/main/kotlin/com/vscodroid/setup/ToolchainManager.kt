@@ -3278,40 +3278,6 @@ class ToolchainManager(private val context: Context) {
     }
 
     /**
-     * Every name in [commands] becomes a symlink onto the single trampoline
-     * binary in `nativeLibraryDir`; anything else in the directory is removed.
-     *
-     * The links point from filesDir INTO nativeLibraryDir and never the other
-     * way round, which is the shape `FirstRunSetup.setupToolSymlinks` has proved
-     * in production for ten binaries: the app cannot write to nativeLibraryDir,
-     * and execve judges the resolved inode, which there is on a partition the
-     * app may execute from.
-     *
-     * Rebuilt on every launch rather than only at install time, for the same
-     * reason those ten are: Android hands out a new `nativeLibraryDir` path on
-     * every reinstall, which dangles every absolute link into the old one.
-     * Staleness is decided by reading the link rather than by `File.exists()`,
-     * which follows a link and answers false for a dangling one, so a link
-     * pointing at a directory that no longer exists would be read as absent and
-     * then fail to be created.
-     *
-     * A link is created under a temporary name and renamed into place. The
-     * delete-then-create that `setupToolSymlinks` performs leaves a window in
-     * which the name does not exist at all, and unlike that pass this one runs
-     * while the server is alive and something may be resolving PATH through the
-     * directory. Rename within one directory is atomic, so a lookup sees the old
-     * link or the new one. The existing window is narrow and has caused no
-     * reported failure; this is the cheaper shape rather than a fix for
-     * something observed.
-     *
-     * The links are created even when the trampoline binary is missing, which is
-     * what a downgrade to a build without it produces. `execvp` treats ENOENT as
-     * "keep looking further along PATH", so a dangling link degrades to exactly
-     * today's behaviour rather than to something worse, and skipping the write
-     * would instead leave a link pointing into a `nativeLibraryDir` that a
-     * reinstall has already moved.
-     */
-    /**
      * Makes the git extension's helper scripts runnable, and answers the names it
      * gave rows to.
      *
@@ -3365,6 +3331,40 @@ class ToolchainManager(private val context: Context) {
         return served
     }
 
+    /**
+     * Every name in [commands] becomes a symlink onto the single trampoline
+     * binary in `nativeLibraryDir`; anything else in the directory is removed.
+     *
+     * The links point from filesDir INTO nativeLibraryDir and never the other
+     * way round, which is the shape `FirstRunSetup.setupToolSymlinks` has proved
+     * in production for ten binaries: the app cannot write to nativeLibraryDir,
+     * and execve judges the resolved inode, which there is on a partition the
+     * app may execute from.
+     *
+     * Rebuilt on every launch rather than only at install time, for the same
+     * reason those ten are: Android hands out a new `nativeLibraryDir` path on
+     * every reinstall, which dangles every absolute link into the old one.
+     * Staleness is decided by reading the link rather than by `File.exists()`,
+     * which follows a link and answers false for a dangling one, so a link
+     * pointing at a directory that no longer exists would be read as absent and
+     * then fail to be created.
+     *
+     * A link is created under a temporary name and renamed into place. The
+     * delete-then-create that `setupToolSymlinks` performs leaves a window in
+     * which the name does not exist at all, and unlike that pass this one runs
+     * while the server is alive and something may be resolving PATH through the
+     * directory. Rename within one directory is atomic, so a lookup sees the old
+     * link or the new one. The existing window is narrow and has caused no
+     * reported failure; this is the cheaper shape rather than a fix for
+     * something observed.
+     *
+     * The links are created even when the trampoline binary is missing, which is
+     * what a downgrade to a build without it produces. `execvp` treats ENOENT as
+     * "keep looking further along PATH", so a dangling link degrades to exactly
+     * today's behaviour rather than to something worse, and skipping the write
+     * would instead leave a link pointing into a `nativeLibraryDir` that a
+     * reinstall has already moved.
+     */
     private fun refreshTrampolineLinksLocked(commands: Set<String>) {
         val target = Environment.getTrampolinePath(context)
         if (commands.isNotEmpty() && !tcBinDir.exists() && !tcBinDir.mkdirs()) {
@@ -4313,6 +4313,22 @@ enum class ToolchainFailure(@param:StringRes val message: Int) {
 }
 
 /**
+ * Why a Play fetch was refused before any state was ever delivered.
+ *
+ * [AssetPackException] carries the same error codes the state listener reports,
+ * so a refusal maps to the same message as the equivalent mid-download failure.
+ * Anything else is an exception the Play library does not classify, and INTERNAL
+ * is the honest answer: the alternative is telling a user to check their
+ * connection for something that was never a network problem.
+ *
+ * Separate from [toolchainFailureFor] because that one takes a code and this one
+ * takes a throwable, and the cast is the whole of the difference.
+ */
+internal fun playFetchFailure(e: Exception): ToolchainFailure =
+    (e as? AssetPackException)?.let { toolchainFailureFor(it.errorCode) }
+        ?: ToolchainFailure.INTERNAL
+
+/**
  * Play's error code for a failed asset pack, in the terms [ToolchainFailure] speaks.
  *
  * The Play delivery path reported FAILED with no reason at all. The code went to
@@ -4350,22 +4366,6 @@ enum class ToolchainFailure(@param:StringRes val message: Int) {
  * has no constant for and fall through with the rest. Every code that lands in
  * INTERNAL is still in the log line beside this call, raw.
  */
-/**
- * Why a Play fetch was refused before any state was ever delivered.
- *
- * [AssetPackException] carries the same error codes the state listener reports,
- * so a refusal maps to the same message as the equivalent mid-download failure.
- * Anything else is an exception the Play library does not classify, and INTERNAL
- * is the honest answer: the alternative is telling a user to check their
- * connection for something that was never a network problem.
- *
- * Separate from [toolchainFailureFor] because that one takes a code and this one
- * takes a throwable, and the cast is the whole of the difference.
- */
-internal fun playFetchFailure(e: Exception): ToolchainFailure =
-    (e as? AssetPackException)?.let { toolchainFailureFor(it.errorCode) }
-        ?: ToolchainFailure.INTERNAL
-
 internal fun toolchainFailureFor(errorCode: Int): ToolchainFailure = when (errorCode) {
     AssetPackErrorCode.NETWORK_ERROR -> ToolchainFailure.NETWORK
     AssetPackErrorCode.INSUFFICIENT_STORAGE -> ToolchainFailure.STORAGE

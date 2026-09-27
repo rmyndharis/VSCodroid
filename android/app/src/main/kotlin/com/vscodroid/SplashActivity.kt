@@ -177,12 +177,13 @@ class SplashActivity : AppCompatActivity() {
 
         if (!setup.isFirstRun()) {
             // The interpreter ships in the APK and every install replaces it,
-            // while its runtime and stdlib are extracted only when versionName
-            // changes. Reinstalling a rebuilt APK is exactly that gap, and it is
-            // the one case where "not first run" still has work to do. The check
-            // is two directory listings; the work it gates is 23 MB, so it runs
-            // off the main thread and holds this activity open while it does:
-            // lifecycleScope is cancelled the moment we finish for MainActivity.
+            // while its runtime and stdlib are extracted only when versionName or
+            // versionCode changes. Reinstalling a rebuilt APK is exactly that gap,
+            // and it is the one case where "not first run" still has work to do.
+            // The check is two directory listings; the work it gates is 23 MB, so
+            // it runs off the main thread and holds this activity open while it
+            // does: lifecycleScope is cancelled the moment we finish for
+            // MainActivity.
             if (setup.pythonRuntimeNeedsWork()) {
                 Logger.i(tag, "Bundled Python changed since the last extraction; reconciling")
                 showSplashLayout()
@@ -518,8 +519,8 @@ class SplashActivity : AppCompatActivity() {
      * Asking on every launch rather than only after setup costs nothing on an
      * install that answered the picker, because answering it is what writes the
      * preference: both the Continue and the Skip buttons call [markPickerShown].
-     * An upgrade is unaffected either way, since a new versionName makes
-     * `isFirstRun()` true and that route already passed through here.
+     * An upgrade is unaffected either way, since a new versionName or versionCode
+     * makes `isFirstRun()` true and that route already passed through here.
      *
      * It is also where the delivered-pack reconcile runs, so that a first run has
      * finished unpacking before anything copies a toolchain into the same tree.

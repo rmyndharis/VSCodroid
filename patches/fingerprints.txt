@@ -29,9 +29,9 @@
 #   * It requires the pattern to appear in what the patch itself ADDS. The rule
 #     here used to read "verify the pattern appears zero times in an unpatched
 #     bundle", which is the right rule and was advice to a human, because doing it
-#     needs a second full build -- thirty minutes on an arm64 runner. Checking
-#     provenance instead is the half that runs offline: a pattern the patch does
-#     not introduce cannot be evidence the patch arrived.
+#     needs a second full build, twelve to thirteen minutes on an arm64 runner.
+#     Checking provenance instead is the half that runs offline: a pattern the
+#     patch does not introduce cannot be evidence the patch arrived.
 #
 # That second check is necessary, not sufficient. It catches a pattern lifted from
 # surrounding code; it cannot prove the same text appears nowhere else in the
@@ -55,9 +55,9 @@
 # `---`/`+++` pair, in a bare unified diff such as 0010), comments in the added
 # code included. Editing one of those is a rebuild: the published server has to
 # be built again and refetched before any APK can be packaged, because until then
-# the manifest in the tree names the old text and the gate says so. Budget half
-# an hour on an arm64 runner for a comment, and reach for the header when the
-# note can live there instead.
+# the manifest in the tree names the old text and the gate says so. Budget
+# twelve to thirteen minutes on an arm64 runner for a comment, and reach for the
+# header when the note can live there instead.
 #
 # Rows are therefore back to answering the question they are good at: did this
 # reach the packaged bundle at all. Moving one with a revision is still worth

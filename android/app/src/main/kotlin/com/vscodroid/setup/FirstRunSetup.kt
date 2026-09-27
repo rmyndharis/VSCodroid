@@ -2010,7 +2010,7 @@ class FirstRunSetup(
      * Writes the file `BASH_ENV` points at, which is what gives a NON-interactive
      * shell the commands the terminal has.
      *
-     * npm, npx, claude and every toolchain binary are bash functions rather than
+     * npm, npx, pip, claude and every toolchain binary are bash functions, not
      * files, because SELinux denies execve under filesDir. They were defined in
      * `.bashrc` alone, and bash reads `.bashrc` only when it is interactive. So
      * everything that runs a command through `bash -c` -- a VS Code task, an npm
@@ -4122,7 +4122,7 @@ claude() {
          * been stable across pins while the size has not.
          *
          * 128 MiB, raised from 96, and 96 from 64, each time because the figure
-         * did not cover what it names. Measured over the tree in this checkout,
+         * did not cover what it names. Measured at Code - OSS 1.133.0,
          * counting the way BuildConfig.EXTRACTED_ASSET_BYTES counts (assets minus
          * nls): 22,626 files, 5,102 directories, 774.0 MiB of logical length.
          * Rounding every file to a 4 KiB block and charging a block per directory
@@ -4178,10 +4178,10 @@ claude() {
          *    when a pin drops files that extraction never removes.
          *  - the room to rewrite one file, bounded by what is on disk to rewrite.
          *    [writeAtomically] writes `<dest>.tmp~` and renames, so while the
-         *    biggest file is being replaced both copies exist, 113 MiB of Copilot
-         *    runtime, currently. On an install with nothing on disk there is no
-         *    second copy to hold, and charging for one would refuse fresh
-         *    installs that fit.
+         *    biggest file is being replaced both copies exist: the Copilot
+         *    extension's `runtime.node`, 91.8 MiB at 1.139.1. On an install with
+         *    nothing on disk there is no second copy to hold, and charging for one
+         *    would refuse fresh installs that fit.
          *
          *    The bound is the smaller of the two, not a step from zero to the
          *    whole figure, because a tree can be present and still far too small
@@ -4235,8 +4235,9 @@ claude() {
          * How much of a directory extraction shares with something else may be
          * credited as already unpacked.
          *
-         * `server/` can be measured and believed, because nothing but extraction
-         * writes there. `usr/` and the extensions directory cannot: toolchains
+         * `server/` can be measured and believed: near enough every byte there is
+         * one the next unpack writes over, for the reasons [installedExtractionBytes]
+         * gives. `usr/` and the extensions directory cannot: toolchains
          * install into the first, `npm install -g` lands there too, and the
          * second fills with whatever the user takes from the gallery. Their size
          * on disk is therefore not an answer to "how much of what we are about
@@ -4389,7 +4390,7 @@ private const val BASHRC_HEADER = "# VSCodroid bash configuration"
 private const val BASH_ENV_HEADER = """# VSCodroid: sourced by NON-INTERACTIVE bash through BASH_ENV.
 # Generated at every launch -- edit ~/.bashrc instead, which is yours.
 #
-# npm, npx, claude and the toolchain binaries are shell functions because
+# npm, npx, pip, claude and the toolchain binaries are shell functions because
 # SELinux will not execute a file under this app's data directory. Functions
 # live in .bashrc, which only an INTERACTIVE bash reads, so without this file a
 # task or an npm lifecycle script gets "command not found" for a command the
@@ -5393,15 +5394,18 @@ private fun releaseWriteLock(path: String, lock: DestinationLock) = synchronized
  * pre-flight passes are believed to different degrees, which is [sharedTreeCredit]'s
  * job rather than this one's:
  *
- *  - `server/` is measured and believed. It is 700 of the tree's 810 MiB and
- *    near enough every byte counted there is a byte the next unpack writes
- *    over. Near enough rather than all: `setupCopilotAndroidAliases` writes an
- *    alias `package.json` beside the packages it aliases, and those are counted
- *    without extraction replacing them. That credits bytes overwriting does not
- *    give back, so it asks for less space rather than more, which is the worse
- *    direction; they are kilobytes against 700 MiB and the slack absorbs them
- *    many times over, so they are left rather than filtered. A repair that ever
- *    writes something substantial there would have to be.
+ *  - `server/` is measured and believed. It is most of the tree (464 of 604 MiB
+ *    at 1.139.1) and near enough every byte counted there is a byte the next
+ *    unpack writes over. Near enough rather than all: `setupCopilotAndroidAliases`
+ *    writes an alias `package.json` beside the packages it aliases, `server.js`
+ *    leaves its pid note there, and ToolchainManager keeps the git helper
+ *    scripts and the remote CLI beside their links under a `.script` name, and
+ *    all of those are counted without extraction replacing them. That credits
+ *    bytes overwriting does not give back, so it asks for less space rather than
+ *    more, which is the worse direction; they are kilobytes against hundreds of
+ *    MiB and the slack absorbs them many times over, so they are left rather
+ *    than filtered. A repair that ever writes something substantial there would
+ *    have to be.
  *  - `usr/` is shared ground. Toolchains install into it, Java is 146 MB
  *    unpacked, and `npm install -g` lands there too, so its size on disk is not
  *    an answer to "how much of what we are about to write is already here".

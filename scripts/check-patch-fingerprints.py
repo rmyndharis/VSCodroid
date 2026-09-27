@@ -27,10 +27,10 @@ train people to ignore the gate.
 A comment INSIDE a hunk reads the same to a person and is the opposite case: it
 is an added source line, so a tree built before the edit really was built from
 different source, and nothing here can tell it from a line that changes what the
-code does. So editing one costs a server rebuild and a republish, about thirty
-minutes on an arm64 runner, before anything can package an APK again. Those are
-the only two categories, and the second is the common edit in a repository whose
-comments carry the reasoning.
+code does. So editing one costs a server rebuild and a republish, twelve to
+thirteen minutes on an arm64 runner, before anything can package an APK again.
+Those are the only two categories, and the second is the common edit in a
+repository whose comments carry the reasoning.
 
 Dropping whole-line comments from the hash would make that edit free and is the
 obvious next step. It cannot be taken on its own: changing what is hashed
@@ -125,8 +125,8 @@ def introduced_by(pattern, patch_path):
 
     The table's instruction has always been to verify a pattern appears zero times
     in an UNPATCHED bundle, because one that already matched proves nothing. That
-    check needs a second full build -- thirty minutes on an arm64 runner -- so it
-    has only ever been advice to a human.
+    check needs a second full build, twelve to thirteen minutes on an arm64
+    runner, so it has only ever been advice to a human.
 
     This is the half that can run offline: a pattern whose text the patch does not
     introduce cannot be evidence that the patch arrived. It is necessary, not

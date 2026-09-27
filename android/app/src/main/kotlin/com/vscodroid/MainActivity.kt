@@ -3842,11 +3842,9 @@ class MainActivity : AppCompatActivity() {
      *
      * Patch 0015 met the same chain on the menubar and excused Android from
      * the menubar's own resize listener. `ContextView.layout` is a different
-     * listener and is not covered by it. It could be patched the same way,
-     * but a patched bundle does not reach an installed app: `/static` is served
-     * for a year under a URL keyed by the upstream commit, which a rebuild of
-     * the same VS Code version does not change, and nothing here clears the
-     * WebView cache. So the fix has to arrive with the app, which is here.
+     * listener and is not covered by it. It could be patched the same way;
+     * this fix predates [dropCacheLeftByEarlierBuild], without which a patched
+     * bundle did not reach an installed app.
      *
      * The chain is broken at its first link. On a coarse pointer, while the
      * soft keyboard is up, a `focus()` call that would move focus OUT of an
@@ -4206,8 +4204,7 @@ class MainActivity : AppCompatActivity() {
      * and created the file, and editing the first `files.exclude` pattern left
      * its box on screen, where before it sat off the top of the page. The other
      * lists were not run. `ListEditKeeperWiringTest` holds the names the script
-     * reads to the shipped workbench. A workbench patch would not reach an
-     * installed app, for the reason [injectTouchContextMenu] gives.
+     * reads to the shipped workbench.
      */
     private fun injectListEditKeeper() {
         webView?.evaluateJavascript(
@@ -4310,8 +4307,7 @@ class MainActivity : AppCompatActivity() {
      * it kept Alpha. Gboard 18.1 types Latin letters into these boxes without a
      * composition, so there the script is not reached for them. A multi-line
      * setting was not run. `ComposingEnterWiringTest` holds the script and the
-     * bundle to it. A workbench patch would not reach an installed app, for the
-     * reason [injectTouchContextMenu] gives.
+     * bundle to it.
      */
     private fun injectComposingEnter() {
         webView?.evaluateJavascript(

@@ -71,14 +71,14 @@
              The extraction itself survives, because runSetupLocked's body is
              blocking with no suspension point in it, so markSetupComplete() runs
              and isFirstRun() goes false; what is lost is the continuation after
-             it, which is the only thing that ever calls showToolchainPicker().
-             toolchain_picker_shown stays false and the picker is unreachable for
-             the life of that install, because it is only offered inside the
-             isFirstRun() branch. The second cost is worse and needs no timing
+             it, which offers the toolchain picker and opens the editor. The
+             picker is not lost with it: continueAfterSetup() offers it on every
+             launch until Continue or Skip writes toolchain_picker_shown, so this
+             cost is one more launch. The second cost is worse and needs no timing
              argument: with the activity finished, the only thing holding the
-             process through the ~810 MB write is the setup hold NodeService
-             takes for it (SplashActivity.holdProcessForSetup), and a kill there
-             still costs whatever the interrupted file was.
+             process through the write of the whole asset tree is the setup hold
+             NodeService takes for it (SplashActivity.holdProcessForSetup), and a
+             kill there still costs whatever the interrupted file was.
 
              Nothing is left in the back stack by dropping it: launchMain() calls
              finish() on every route that reaches MainActivity, and the one screen
@@ -90,14 +90,15 @@
         <!-- uiMode is in both lists below, and it is the only one of the eleven
              undeclared qualifiers that fires with no user interaction at all: a
              sunset-to-sunrise dark schedule and battery saver's forced dark both
-             flip it while the app is in use. Here the cost is the worst in the
-             app: runSetup() runs inside lifecycleScope, so a relaunch cancels the
-             coroutine mid-extraction, and the replacement instance has to wait on
-             setupMutex for a run it can no longer report progress for. In
-             MainActivity the cost is smaller but unattended: the fresh
-             WebView holds only the data: placeholder, folderFromUrl refuses an
-             opaque URI, and loadVSCode falls through to the default projects
-             directory, so the user is silently moved out of their workspace.
+             flip it while the app is in use. Here a relaunch mid-extraction does
+             not stop the unpack, whose body blocks with no suspension point: the
+             replacement waits on setupMutex and takes the progress bar over
+             (FirstRunSetup.onProgress), so the cost is a rebuilt screen. In
+             MainActivity the cost is a full workbench reload: the fresh WebView
+             holds only the data: placeholder, folderFromUrl refuses an opaque
+             URI, and loadVSCode reopens the remembered folder
+             (rememberedWorkspaceFolder), an empty window if the user had closed
+             it, or the default projects directory if that folder is gone.
 
              Safe to declare because almost nothing on these two screens resolves
              by night. The module has no values-night directory at all, and every
@@ -108,9 +109,9 @@
              ProgressBars carry style="?android:attr/progressBarStyleHorizontal",
              whose TRACK colour comes from the theme. Their fill is pinned by
              progressTint, so what can go stale after a night flip is the shade of
-             a progress track, against the alternative of restarting an 810 MB
-             extraction. Sweep for it with '?[a-zA-Z:]*attr/', not '?attr/': the
-             narrower pattern cannot see ?android:attr and is what missed these.
+             a progress track, against a relaunch of either screen. Sweep for it
+             with '?[a-zA-Z:]*attr/', not '?attr/': the narrower pattern cannot
+             see ?android:attr and is what missed these.
 
              uiMode is also wider than night. CONFIG_UI_MODE covers the whole
              uiMode field, so this suppresses relaunch for car, desk, television,

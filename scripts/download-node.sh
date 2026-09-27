@@ -16,8 +16,11 @@ set -euo pipefail
 #
 # Termux's package is a maintained Bionic build with the same 16 KB page
 # alignment Android 16 requires. Taking it removes a cross-compile we do not have
-# the means to debug, and its version (24.18.0) is exactly what VS Code 1.133
-# asks for in remote/.npmrc, which is what makes the version bump possible at all.
+# the means to debug, and it tracks the Node line VS Code names in remote/.npmrc,
+# which is what made the VS Code version bump possible at all. It matches that
+# target in the major only: this script pins nothing and takes whatever
+# nodejs-lts the Termux index carries, and build-native-addons.sh checks only
+# that the major matches its addon headers.
 #
 # The libraries it links against are placed by download-termux-tools.sh, not
 # here: that script wipes assets/usr/lib before repopulating it, so anything

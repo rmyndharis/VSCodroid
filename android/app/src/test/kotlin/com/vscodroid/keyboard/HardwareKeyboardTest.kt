@@ -253,9 +253,9 @@ class HardwareKeyboardTest {
         // default projects directory; the folder is remembered now, so what a
         // relaunch costs is the reload rather than the workspace, and the reason
         // to declare the attribute is the teardown itself.
-        // In SplashActivity it restarts the whole first-run
-        // extraction, because runSetup() lives in lifecycleScope and the relaunch
-        // cancels it before markSetupComplete() runs.
+        // In SplashActivity the unpack runs on through a relaunch, because its
+        // body never suspends, and the replacement takes the progress bar over,
+        // so there too the cost is the teardown.
         //
         // Declaring it is only safe while almost nothing on those two screens
         // resolves by night, and the manifest comment states that condition
