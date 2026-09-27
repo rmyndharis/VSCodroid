@@ -957,6 +957,7 @@ What still fails is a start that names a path instead of a command:
 
 - an absolute path such as `$JAVA_HOME/bin/java`, which is not a `PATH` lookup at all
 - a toolchain that forks its own helper by absolute path, which is what the JDK's `lib/jspawnhelper` does
+- `jshell` started anywhere but bash, because its default engine starts a second JVM that way; the terminal's `jshell` runs your snippets in its own JVM instead
 - a script under the app's storage run by its own path: Android refuses the script file itself, before its `#!` line is ever read. Run it as `ruby script.rb` instead
 
 `npm` and `npx` are bash functions and nothing else, so those two are still

@@ -2820,6 +2820,24 @@ class ToolchainManager(private val context: Context) {
                         continue
                     }
                     if (!isElfFile(File(context.filesDir, relPath))) continue
+                    if (command == "jshell") {
+                        // jshell's default engine runs snippets in a second JVM it
+                        // starts through lib/jspawnhelper, both under filesDir, so it
+                        // fails to launch; `--execution local` keeps them in jshell's
+                        // own JVM. jshell refuses a repeated --execution and accepts
+                        // abbreviations of it, hence the guard. VFORK lets jline start
+                        // stty, without which Tab and ArrowUp do not work, and
+                        // user.home replaces Termux's compiled-in home, where the
+                        // preferences store cannot be written and exit stalls.
+                        lines.add(
+                            "jshell() { case \" \$* \" in *\" -ex\"*|*\" --ex\"*) ;; " +
+                                "*) set -- --execution local \"\$@\" ;; esac; " +
+                                "$systemLoader \"\$PREFIX/../$relPath\" " +
+                                "-J-Djdk.lang.Process.launchMechanism=VFORK " +
+                                "-J-Duser.home=\"\$HOME\" \"\$@\"; }"
+                        )
+                        continue
+                    }
                     lines.add("$command() { $systemLoader \"\$PREFIX/../$relPath\" \"\$@\"; }")
                 }
                 if (lines.isNotEmpty()) {

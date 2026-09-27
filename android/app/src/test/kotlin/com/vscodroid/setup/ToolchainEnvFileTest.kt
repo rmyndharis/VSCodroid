@@ -13,10 +13,12 @@ import io.mockk.unmockkAll
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.util.concurrent.TimeUnit
 
 /**
  * What `toolchain-env.sh` has to contain for a downloaded toolchain to run at
@@ -288,6 +290,65 @@ class ToolchainEnvFileTest {
             emptyList<String>(),
             envLines().filter { it.contains("script wrappers") },
             "an empty script-wrapper section was announced:\n" + envFile.readText(),
+        )
+    }
+
+    /**
+     * `jshell` is the one wrapper that adds arguments, and they are what make it
+     * start at all: its default engine launches a second JVM by absolute path,
+     * which cannot be exec'd from filesDir, so the wrapper selects the local
+     * engine unless the caller chose one. jshell refuses `--execution` given
+     * twice and accepts abbreviations of it, so the guard is asserted in all
+     * three spellings. The file is sourced by a real bash with the loader
+     * replaced by a function that prints its arguments, which also holds the
+     * quoting of a `$HOME` with a space in it. `java` is the control: the special
+     * case must not leak into the ordinary wrapper beside it.
+     */
+    @Test
+    fun `jshell runs its snippets in its own JVM`() {
+        assumeTrue(File("/bin/bash").canExecute(), "no /bin/bash on this host")
+        val jdk = "usr/lib/jvm/java-17-openjdk"
+        elf("$jdk/bin/java")
+        elf("$jdk/bin/jshell")
+        stateFile.writeText(
+            """[{"name":"java","binaries":["$jdk/bin/java","$jdk/bin/jshell"],""" +
+                """"env":{"JAVA_HOME":"${'$'}FILESDIR/$jdk"}}]"""
+        )
+
+        regenerate()
+
+        val sourced = File(filesDir, "env-under-test.sh")
+        sourced.writeText(envFile.readText().replace("/system/bin/linker64", "argv"))
+        val builder = ProcessBuilder(
+            "/bin/bash", "-c",
+            """argv() { printf '<%s>' "${'$'}@"; echo; }; PREFIX=/p; HOME='/h o/me'; """ +
+                """. "${'$'}1"; jshell; jshell a 'b c'; jshell --execution jdi; """ +
+                """jshell --exec=jdi; jshell -execution jdi; java -version""",
+            "bash", sourced.path,
+        ).redirectErrorStream(true)
+        builder.environment().apply {
+            remove("BASH_ENV")
+            remove("SSH_CLIENT")
+            remove("SSH2_CLIENT")
+        }
+        val process = builder.start()
+        val out = process.inputStream.bufferedReader().readText()
+        assertTrue(process.waitFor(30, TimeUnit.SECONDS), "bash did not finish")
+
+        val jshell = "</p/../$jdk/bin/jshell><-J-Djdk.lang.Process.launchMechanism=VFORK>" +
+            "<-J-Duser.home=/h o/me>"
+        assertEquals(
+            listOf(
+                "$jshell<--execution><local>",
+                "$jshell<--execution><local><a><b c>",
+                "$jshell<--execution><jdi>",
+                "$jshell<--exec=jdi>",
+                "$jshell<-execution><jdi>",
+                "</p/../$jdk/bin/java><-version>",
+            ),
+            out.lines().filter { it.isNotEmpty() },
+            "the jshell wrapper no longer selects the local engine exactly once, so " +
+                "jshell fails to launch or refuses its arguments:\n" + envFile.readText(),
         )
     }
 
