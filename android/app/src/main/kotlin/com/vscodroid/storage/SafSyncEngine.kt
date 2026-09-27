@@ -38,7 +38,9 @@ import kotlin.concurrent.thread
  * `.local-<time>` name; [setAsideDivergedMirror] says exactly when. The other
  * direction has the same guard: a device edit made since the last sync is set aside
  * under a `.device-<time>` name before a newer mirror copy is written over it;
- * [setAsideDeviceCopy] says when.
+ * [setAsideDeviceCopy] says when. While the folder is open, a save that would replace
+ * a device document changed since this engine last read or wrote it keeps the device's
+ * copy as `.device-<time>` first; see [keepsDeviceEdit].
  * External changes are picked up the next time the folder is opened, which is
  * the only refresh that exists: there is no "Refresh from device" action, and the one
  * in-app action on a mirror, "VSCodroid: Manage Device Folder Storage", removes the
@@ -168,6 +170,19 @@ class SafSyncEngine(private val context: Context) {
     private val refusalsAnnounced = ConcurrentHashMap.newKeySet<String>()
 
     /**
+     * What the device reported for each document, as (COLUMN_LAST_MODIFIED, COLUMN_SIZE)
+     * by absolute mirror path, when this engine last read it ([initialSync] phase 2) or
+     * wrote it (every write-back). A save may replace exactly that and nothing newer;
+     * [keepsDeviceEdit] is what asks.
+     *
+     * In memory only, never in the `.synced` record, because a record line licenses a
+     * deletion (see [deviceChangedSinceRecord]). Scoped per mirror in [initialSync] like
+     * [unfetched], and for the same reason: a switch that fails partway restores the
+     * previous folder's watcher on this engine, and its entries must survive that.
+     */
+    private val deviceSeen = ConcurrentHashMap<String, Pair<Long, Long>>()
+
+    /**
      * The tree [docIdCache]'s entries were resolved against. The cache is cleared
      * and refilled per folder, and a write-back drain can outlive its folder, so
      * anything resolving at processing time has to know whether the cache still
@@ -249,6 +264,7 @@ class SafSyncEngine(private val context: Context) {
         // folder's mirror is still relying on.
         unfetched.removeAll { it.startsWith(mirrorDir.absolutePath + File.separator) }
         refusalsAnnounced.removeAll { it.startsWith(mirrorDir.absolutePath + File.separator) }
+        deviceSeen.keys.removeAll { it.startsWith(mirrorDir.absolutePath + File.separator) }
 
         // Phase 1: Enumerate all documents in the tree
         val documents = mutableListOf<DocumentInfo>()
@@ -411,6 +427,10 @@ class SafSyncEngine(private val context: Context) {
             if (doc.isDirectory) {
                 localPath.mkdirs()
             } else {
+                // First, so it covers every arm below: each one either arms `unfetched`,
+                // which blocks writes on its own, leaves the device as enumerated, or
+                // writes it, and the write refreshes this entry.
+                deviceSeen[localPath.absolutePath] = doc.lastModified to doc.size
                 // The one thing no timestamp comparison can see: this app was
                 // writing this path back when it stopped. A newer, shorter
                 // document here is CONSISTENT with this app's own truncated copy,
@@ -980,9 +1000,10 @@ class SafSyncEngine(private val context: Context) {
      *
      * Like the `.local-` copy, this one is a candidate for [uploadMirrorOnlyDocuments]
      * in the same sync, so it usually reaches the device folder a moment later and sits
-     * in the explorer beside the file it was set aside from. The same in-flight guard
-     * as phase 2's own copies, and for the same reason: two syncs over one mirror write
-     * one scratch path.
+     * in the explorer beside the file it was set aside from. [keepsDeviceEdit] also calls
+     * this while the folder is open, and there the watcher, not phase 2b, puts the copy on
+     * the device. The same in-flight guard as phase 2's own copies, and for the same
+     * reason: two syncs over one mirror write one scratch path.
      *
      * The answer is three-valued because the callers ask two different questions of it.
      * "May the mirror go over the device copy now" is yes for [DeviceCopyOutcome.PRESERVED]
@@ -1040,6 +1061,52 @@ class SafSyncEngine(private val context: Context) {
                 "since the last sync",
         )
         return DeviceCopyOutcome.PRESERVED
+    }
+
+    /**
+     * Keeps the device copy of [localFile] before a save replaces it, when the device
+     * moved since this engine last read or wrote that document, and answers whether the
+     * save has to be held back instead.
+     *
+     * The live counterpart of phase 2's guard: while the folder is open the device is not
+     * read again, and a save opens the document with `"wt"`, so an edit another app made
+     * in the meantime was destroyed with no copy anywhere. The answer here is the one
+     * phase 2 gives: the device copy goes to `.device-<time>` beside the mirror file, in a
+     * watched directory, so the watcher uploads it as a CREATE.
+     *
+     * - A path with no [deviceSeen] entry fails open, which is the behaviour before this
+     *   existed: nothing here knows what the device held for it.
+     * - The first free name is taken because [setAsideDeviceCopy] replaces its
+     *   destination, and a provider with no clock names every copy `.device-0`, so a
+     *   second foreign edit in one session would otherwise destroy the first.
+     * - A copy that cannot be made holds the save back without arming [unfetched], so the
+     *   next save asks again.
+     *
+     * Ceilings: a provider reporting neither column; a same-size edit inside one clock
+     * tick; a foreign edit in the window between a landed write and its refresh; entries
+     * not following a directory rename; and on a provider with no clock, every copy after
+     * the first carries its counter as a time, which is cosmetic.
+     */
+    private fun keepsDeviceEdit(localFile: File, docUri: Uri): Boolean {
+        val seen = deviceSeen[localFile.absolutePath] ?: return false
+        val now = deviceStamp(docUri) ?: return false
+        if (now == seen) return false
+        var time = now.first
+        while (File(localFile.parentFile, "${localFile.name}$DEVICE_COPY_SUFFIX$time").exists()) {
+            time++
+        }
+        val kept = setAsideDeviceCopy(
+            DocumentInfo(docUri, "", localFile.name, false, now.second, time),
+            localFile,
+        )
+        if (kept != DeviceCopyOutcome.UNAVAILABLE) return false
+        Logger.w(
+            tag,
+            "Not writing ${localFile.name} back: its device copy changed since this app " +
+                "last read or wrote it and could not be set aside",
+        )
+        announceLost(localFile)
+        return true
     }
 
     /**
@@ -2246,6 +2313,11 @@ class SafSyncEngine(private val context: Context) {
             // directory above it moves both records while the stream runs.
             if (landed) clearUploadInFlight(claim)
             else releaseUploadClaim(claim)
+            // Landed or not: the device now holds this app's own bytes, whole or
+            // truncated, and the next save may replace them without keeping a copy.
+            val stamp = deviceStamp(safDocUri)
+            if (stamp != null) deviceSeen[localFile.absolutePath] = stamp
+            else deviceSeen.remove(localFile.absolutePath)
         }
     }
 
@@ -2871,7 +2943,9 @@ class SafSyncEngine(private val context: Context) {
                     )
                 ) {
                     refuseUnreadDocument(file, file.name)
-                } else {
+                } else if (existingDocId == null || !keepsDeviceEdit(file, docUri)) {
+                    // A document this call just created is empty, and a stale entry left
+                    // by a deleted namesake would otherwise set that emptiness aside.
                     writeLocalToSaf(file, docUri)
                 }
             }
@@ -3015,6 +3089,36 @@ class SafSyncEngine(private val context: Context) {
                 "carries that name too",
         )
         return renamed
+    }
+
+    /**
+     * What the device reports for [docUri] now, as (COLUMN_LAST_MODIFIED, COLUMN_SIZE), or
+     * null when the provider does not answer. A missing column reads as 0, the rule
+     * [walkTree] applies, so both sides of a [deviceSeen] comparison are read alike.
+     */
+    private fun deviceStamp(docUri: Uri): Pair<Long, Long>? = try {
+        context.contentResolver.query(
+            docUri,
+            arrayOf(
+                DocumentsContract.Document.COLUMN_LAST_MODIFIED,
+                DocumentsContract.Document.COLUMN_SIZE,
+            ),
+            null, null, null,
+        )?.use { cursor ->
+            if (!cursor.moveToFirst()) return@use null
+            val modifiedIndex =
+                cursor.getColumnIndex(DocumentsContract.Document.COLUMN_LAST_MODIFIED)
+            val sizeIndex = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_SIZE)
+            val modified = if (modifiedIndex >= 0 && !cursor.isNull(modifiedIndex)) {
+                cursor.getLong(modifiedIndex)
+            } else {
+                0L
+            }
+            val size = if (sizeIndex >= 0) cursor.getLong(sizeIndex) else 0L
+            modified to size
+        }
+    } catch (e: Exception) {
+        null
     }
 
     /**
@@ -3187,7 +3291,9 @@ class SafSyncEngine(private val context: Context) {
                 val localFile = File(job.localPath)
                 if (!localFile.exists()) return
                 if (job.safDocUri != null) {
-                    writeLocalToSaf(localFile, job.safDocUri)
+                    if (!keepsDeviceEdit(localFile, job.safDocUri)) {
+                        writeLocalToSaf(localFile, job.safDocUri)
+                    }
                 } else if (job.safParentUri != null && job.safTreeUri != null) {
                     // FileObserver may report MODIFY instead of CREATE for new files
                     // (e.g., `echo > file` on Android API 36). Fall through to CREATE.
@@ -4738,11 +4844,14 @@ internal enum class SyncType {
 /**
  * What became of a device document that a newer mirror copy is about to replace.
  *
- * See [SafSyncEngine.setAsideDeviceCopy] for why the two callers need three answers
+ * See [SafSyncEngine.setAsideDeviceCopy] for why the callers need three answers
  * rather than a Boolean.
  */
 internal enum class DeviceCopyOutcome {
-    /** A `.device-<time>` file is beside the mirror copy, and phase 2b may put it across. */
+    /**
+     * A `.device-<time>` file is beside the mirror copy, and phase 2b or the live watcher
+     * may put it across.
+     */
     PRESERVED,
 
     /**

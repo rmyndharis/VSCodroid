@@ -245,6 +245,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | SF-14 | A folder you closed stays closed | Open a folder, run **File: Close Folder**, force-stop the app, relaunch through the launcher | The empty window comes back, not the folder that was closed. Opening a folder again and relaunching must still reopen it | | |
 | SF-15 | A second window is this window | Run **New Window** from the Command Palette, then **Open Folder in New Window** | The editor reuses its own window. The device browser must not come to the front, and no popup-blocked message appears over the editor | | |
 | SF-16 | An external link still leaves the app | With a dev server running on another port, follow a link to it from the editor | The device browser opens it. This is the branch the window reuse above must not swallow | | |
+| SF-17 | Conflicting edits while open | Open a folder; save a file once in the editor; change the same file with another app; edit and save it again in the editor | The first save adds no copy. After the second, the editor's version is on the device and the other app's version is beside it as `<name>.device-<time>`, in the Explorer and in the device folder. A further save with no change from the other app adds no second copy | | |
 
 ---
 
@@ -274,9 +275,9 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | Performance | 10 | | | |
 | Toolchains | 7 | | | |
 | Terminal & Tools | 13 | | | |
-| SAF & Files | 16 | | | |
+| SAF & Files | 17 | | | |
 | Display Language | 6 | | | |
-| **Total** | **131** | | | |
+| **Total** | **132** | | | |
 
 **Overall Result**: [ ] PASS / [ ] FAIL
 

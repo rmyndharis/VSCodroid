@@ -55,8 +55,15 @@ VSCodroid is VS Code. If you have used VS Code on desktop, everything works the 
   time there are no recent folders, so it offers **Open Folder**, which opens
   Android's folder picker; after that the same command lists the folders you have
   granted, with **Browse device...** at the end to add another. Android grants
-  access one folder at a time, and the folder is kept in sync both ways for as
-  long as it is open.
+  access one folder at a time.
+- A device folder is edited as a copy inside the app. The copy is read from the
+  device when you open the folder, and each save is written back to the device
+  as you make it. Changes another app makes while the folder is open do not
+  reach the editor until you open the folder again. If you save a file that
+  another app changed since you opened the folder or last saved that file, the
+  other app's version is kept beside yours as `<name>.device-<time>`, in the
+  editor and in the device folder. If that version cannot be copied, your save
+  stays inside VSCodroid and a notice says so.
 - A `.code-workspace` file opens as a multi-root workspace: open the file and
   choose **Open Workspace**. On a device folder its roots have to sit inside the
   folder you granted, because nothing outside that folder is reachable.

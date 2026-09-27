@@ -37,6 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Security
 
 - The editor server's connection token is replaced on every server restart, and the app neither sends it nor forwards webview requests to the server's port until the server is ready, so another app that takes the port during a restart gets no usable token.
+- Saving a file in a device folder no longer overwrites changes another app made to it while the folder was open; the other app's version is kept beside yours as `<name>.device-<time>`.
 
 ## [1.4.0] - 2026-09-18
 
