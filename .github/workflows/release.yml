@@ -668,10 +668,10 @@ jobs:
       # workflow is named after: `./gradlew lint` appears in exactly one place,
       # lint.yml, which fires on pull_request and on push to main and not on a
       # tag. Fatal-severity issues are covered on this path already, because
-      # lintVital sits in the assembleRelease graph, so what was missing is the
-      # warning-severity half that `abortOnError = true` and lint-baseline.xml
-      # were turned on together to make fail a build. A tag cut from a hotfix
-      # branch that reached neither trigger met none of it.
+      # lintVital sits in the assembleRelease graph and checks nothing else, so
+      # what was missing is errors and warnings, which `abortOnError` and
+      # `warningsAsErrors` in android/app/build.gradle.kts make fail a build. A
+      # tag cut from a hotfix branch that reached neither trigger met none of it.
       #
       # Before the keystore, with the rest of the re-run block, so a failure here
       # never reaches a step handling a secret.

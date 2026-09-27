@@ -218,10 +218,10 @@ class NoticesTest {
         // notices open the licence texts, and each step is a private method with
         // one caller: drop the button that calls it and the APK still carries all
         // five documents, every assertion here still passes, and nothing on a
-        // device can reach any of them. Nothing else notices either. Both methods
-        // stay compiled, their own KDoc keeps naming them, and a string resource
-        // left unreferenced is a lint warning, which does not fail a build whose
-        // abortOnError covers errors.
+        // device can reach any of them. Little else notices. Both methods stay
+        // compiled and their own KDoc keeps naming them, and lint fails only a
+        // button taken out whole, whose label is then an unused string; a call
+        // dropped from behind a label that stays passes it.
         //
         // Reading the source is what is available: the activity binds a service
         // and builds a WebView on the way to these dialogs, so there is no seam

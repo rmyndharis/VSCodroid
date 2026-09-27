@@ -299,10 +299,10 @@ object CrashReporter {
  * API level has.
  *
  * `Thread.threadId()` is API 36 and `minSdk` is 33, and nothing backports it
- * here: `coreLibraryDesugaring` is off, and `abortOnError = false` means lint
- * cannot stop a build over it either. On 33, 34 and 35 the call therefore raises
- * `NoSuchMethodError`, and it sat above `file.writeText` inside a
- * `catch (_: Throwable)`: the write never happened, `hasPendingCrash()` stayed
+ * here: `coreLibraryDesugaring` is off, and lint did not stop it: `abortOnError`
+ * was still false when the call was written. On 33, 34 and 35 the call
+ * therefore raises `NoSuchMethodError`, and it sat above `file.writeText` inside
+ * a `catch (_: Throwable)`: the write never happened, `hasPendingCrash()` stayed
  * false, the dialog in `MainActivity.checkPreviousCrash` never appeared, and the
  * crash section of `generateBugReport` was permanently empty. A crash reporter
  * that reports nothing is worse than none, because the empty report reads as

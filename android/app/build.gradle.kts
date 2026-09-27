@@ -414,6 +414,24 @@ android {
         // claimed new issues were "flagged", which was true of the report and
         // not of the build.
         abortOnError = true
+        // abortOnError fails the build on errors only. Warnings here are held to
+        // the same standard, each one fixed, suppressed with its reason, or one of
+        // the baseline entries above, and without this flag nothing enforced it:
+        // #395, #398 and #464 added 18 warnings under a green lint.
+        warningsAsErrors = true
+        // Raised by an upstream release or by the calendar, not by a commit, so as
+        // errors they would turn every pull request red on the day one arrives.
+        // Informational keeps them in the report, which is the only prompt to bump
+        // a Gradle dependency since dependabot covers github-actions alone, and
+        // warningsAsErrors does not raise that severity. ExpiringTargetSdkVersion
+        // runs on Play's calendar while targetSdk is held at 36 for the local
+        // network reason in defaultConfig; that deadline is a decision to take
+        // from the report, not a failed build.
+        informational += listOf(
+            "GradleDependency",
+            "AndroidGradlePluginVersion",
+            "ExpiringTargetSdkVersion",
+        )
         baseline = file("lint-baseline.xml")
     }
 

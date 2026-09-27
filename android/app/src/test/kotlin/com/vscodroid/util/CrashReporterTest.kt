@@ -723,8 +723,8 @@ class CrashReporterTest {
  * `minSdk` is 33 and `Thread.threadId()` first appears in the android-36 stub:
  * `javap` on `java/lang/Thread.class` from `platforms/android-33`, `-34` and
  * `-35` shows `getId()` and nothing else. Nothing backports it here:
- * `coreLibraryDesugaring` is not enabled, and `abortOnError = false` means lint
- * cannot stop a build over it either.
+ * `coreLibraryDesugaring` is not enabled, and lint did not stop it: `abortOnError`
+ * was still false when the call was written.
  *
  * The consequence was not a visible crash. The call sat above `file.writeText`
  * inside `catch (_: Throwable)`, so on 33, 34 and 35 the `NoSuchMethodError` was

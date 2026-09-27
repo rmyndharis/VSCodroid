@@ -1070,11 +1070,6 @@ class NodeService : Service() {
     // apply() must not be used, which is exactly how a future reader tidying
     // warnings would break it. `the count is committed rather than deferred` is the
     // guard; this annotation is so the guard is never reached in the first place.
-    //
-    // The KTX `edit(commit = true) { }` form would also silence UseKtx and is
-    // deliberately not used: its regression is `edit { }`, which contains no
-    // `.apply()` for a source-reading guard to find, so the safer-looking spelling
-    // is the one that can rot without anything going red.
     @Suppress("ApplySharedPref")
     private suspend fun chargeHeapOverride(exitCode: Int) {
         if (!processManager.heapOverrideInEffect()) return

@@ -26,7 +26,7 @@ Nothing could notice. `LintBaselineFixed`, the issue lint raises for an entry
 matching nothing, is Information severity: the same measurement left 45 entries
 unmatched and `./gradlew lint` still exited 0 with `abortOnError = true`.
 
-Three assertions, all against the committed file, none needing a lint run:
+Four assertions, all against the committed files, none needing a lint run:
 
   * the entry count equals the number the comment in build.gradle.kts states.
     One number, read from the file that states it rather than restated here, so
@@ -36,7 +36,10 @@ Three assertions, all against the committed file, none needing a lint run:
     one lint rooted at a variable such as `$HOME`, matches only in the checkout
     that produced it and is dead weight in every other, including the runner's;
   * the file parses, holds entries, and holds locations. A checker that reads
-    nothing reports nothing, and CI reads the exit status, not the log.
+    nothing reports nothing, and CI reads the exit status, not the log;
+  * the lint block still sets `abortOnError = true` and
+    `warningsAsErrors = true`. Without either, a new warning lands under a green
+    lint, and a baseline entry hides nothing that could have failed.
 
 Both of the first two are needed, and each covers what the other misses. Only
 the count sees a regeneration performed outside the home directory, where lint
@@ -81,6 +84,9 @@ STATED_COUNT = re.compile(r"\b(\d+) issues recorded in lint-baseline\.xml\b")
 # because `e` and `s` are both word characters and there is no boundary between
 # them.
 AN_ENTRY = re.compile(r"<issue\b")
+
+# What makes lint fail a build at all, errors and warnings alike.
+LINT_FLAGS = ("abortOnError = true", "warningsAsErrors = true")
 
 HOW_TO_EDIT = (
     "Do not regenerate it: `./gradlew updateLintBaseline` rewrites the whole "
@@ -141,8 +147,9 @@ def main() -> int:
         return 1
 
     failed = False
+    gradle_text = GRADLE.read_text()
 
-    stated = STATED_COUNT.findall(comment_prose(GRADLE.read_text()))
+    stated = STATED_COUNT.findall(comment_prose(gradle_text))
     if len(stated) != 1:
         print(f"  FAIL   build.gradle.kts states the baseline entry count "
               f"{len(stated)} times, expected once")
@@ -158,6 +165,17 @@ def main() -> int:
     else:
         print(f"  ok     the baseline holds the {len(entries)} entries "
               f"build.gradle.kts states")
+
+    code = {line.strip() for line in gradle_text.splitlines()
+            if not line.strip().startswith("//")}
+    unset = [flag for flag in LINT_FLAGS if flag not in code]
+    if unset:
+        print(f"  FAIL   build.gradle.kts no longer sets {' or '.join(unset)}")
+        print("         Without it a new warning lands under a green lint, and "
+              "a baseline entry hides nothing that could have failed.")
+        failed = True
+    else:
+        print("  ok     lint fails the build on errors and warnings alike")
 
     located = [(issue.get("id"), loc.get("file"))
                for issue in entries
