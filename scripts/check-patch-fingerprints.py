@@ -41,11 +41,11 @@ Two things this fixes about the check it replaces, which was a heredoc inside
 build-vscode-oss.sh:
 
   * It walks patches/, not the table. The old loop iterated its own rows, so a
-    patch added without a row produced a run of "ok" lines and passed. Two
-    patches legitimately have no fingerprint, and their absence looked identical
-    to an oversight -- the gate could not tell deliberate from forgotten, so
-    exemptions are now written down as lines that say how the patch is proven
-    instead.
+    patch added without a row produced a run of "ok" lines and passed. Some
+    patches legitimately have no fingerprint (0010 today), and their absence
+    looked identical to an oversight -- the gate could not tell deliberate from
+    forgotten, so exemptions are now written down as lines that say how the
+    patch is proven instead.
 
   * It takes the tree as an argument, like verify-server-tree.py, which is what
     lets the same check run on both sides. build-vscode-oss.sh checks what it

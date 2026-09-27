@@ -699,7 +699,6 @@ flowchart TD
   P --> P4["0004 Extension Host as a worker_thread"]
   P --> P5["0005 webview: disable the service worker, relax its CSP"]
   P --> P6["0006 OAuth callback relayed into the app over intent://"]
-  P --> P7["0007 isEncryptionAvailable answers true (no effect in the web workbench)"]
   P --> P8["0008 activity bar overflow sized from live height"]
   P --> P9["0009 marketplace: request the alpine target on Android"]
   P --> P10["0010 .moduleignore: keep the Copilot SDK entry"]
@@ -798,7 +797,7 @@ short-circuits on a tree carrying no manifest at all and reports it as stale.
 | ---- | ----------- |
 | The checker walks `patches/`, not the table | A patch added without a row fails, rather than producing a run of "ok" lines |
 | A patch may carry more than one row | 0003 has two, one per bundle: the worker itself lands in `out/server-main.js`, the `process.send` bridge in `out/bootstrap-fork.js`, and a file missing from the target's graph is exactly what a fingerprint is for |
-| A row may declare that no fingerprint is possible, and say how the patch is proven instead | 0007 and 0010 are the two: 0007's added half minifies to `!0`, and 0010 edits `build/.moduleignore`, so its proof is the kept file, which `verify-server-tree.py` requires |
+| A row may declare that no fingerprint is possible, and say how the patch is proven instead | 0010 is the one: it edits `build/.moduleignore`, so its proof is the kept file, which `verify-server-tree.py` requires |
 | Matching tolerates quote style and whitespace | `case"android"` and `case "android"` both count, so a new esbuild version cannot fail a row describing a correct tree |
 | The pattern must appear in what the patch itself adds | A pattern lifted from surrounding code cannot be evidence that the patch arrived |
 
