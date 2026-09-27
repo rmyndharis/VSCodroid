@@ -235,8 +235,9 @@
         <item quantity="one">A file could not be copied into the editor. It is unchanged in the device folder.</item>
         <item quantity="other">%1$d files could not be copied into the editor. They are unchanged in the device folder.</item>
     </plurals>
-    <!-- The same shortfall when the sizes the provider reported did not fit in the space
-         left. Named separately because it is the one the user can act on. -->
+    <!-- The same shortfall when the space left did not fit what the provider reported,
+         or free space fell below the floor at which the open stops copying. Named
+         separately because it is the one the user can act on. -->
     <plurals name="saf_documents_not_copied_no_room">
         <item quantity="one">Not enough free space: a file could not be copied into the editor. It is unchanged in the device folder.</item>
         <item quantity="other">Not enough free space: %1$d files could not be copied into the editor. They are unchanged in the device folder.</item>

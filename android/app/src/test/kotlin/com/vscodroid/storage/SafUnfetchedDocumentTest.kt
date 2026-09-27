@@ -281,6 +281,27 @@ class SafUnfetchedDocumentTest {
     }
 
     /**
+     * The same tree as the control above, opened with free space under the floor, so
+     * `notes.md` is held back rather than copied. Held back has to mean guarded: the
+     * editor shows `docs` empty, and deleting it must not take the document with it.
+     */
+    @Test
+    fun `a directory whose documents were held back for space is kept on the device`() {
+        engine.usableSpaceOf = { SafSyncEngine.OPEN_SPACE_FLOOR_BYTES - 1 }
+        deviceTree(
+            mapOf(
+                "root" to listOf(Entry("docs", isDirectory = true)),
+                "doc:docs" to listOf(Entry("notes.md")),
+            )
+        )
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+
+        deleteDirectory("docs")
+
+        verify(exactly = 0) { DocumentsContract.deleteDocument(any(), any()) }
+    }
+
+    /**
      * The same loss as a skipped directory, with no name to recognise it by. The
      * provider answered for `docs` itself and then refused to list what is under it,
      * so the walk carried on and the mirror holds an empty `docs` while the device

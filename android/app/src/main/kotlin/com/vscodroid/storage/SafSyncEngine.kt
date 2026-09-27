@@ -6,6 +6,7 @@ import android.net.Uri
 import android.os.FileObserver
 import android.provider.DocumentsContract
 import com.vscodroid.util.Logger
+import com.vscodroid.util.StorageManager
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
@@ -287,7 +288,8 @@ class SafSyncEngine(private val context: Context) {
         // refused on the strength of it: these are the sizes the provider reported, and a
         // folder that opens is worth more than a prediction. It decides one thing, which
         // notice the user gets if a copy does fail, and that is the difference between a
-        // message they can act on and one they cannot.
+        // message they can act on and one they cannot. What does refuse a fetch is the
+        // floor in [copyDocumentToLocal], which reads the disk rather than the provider.
         val toFetch = bytesToFetch(documents, mirrorDir)
         val room = usableSpaceOf(mirrorDir)
         val outOfRoom = toFetch > room
@@ -800,6 +802,11 @@ class SafSyncEngine(private val context: Context) {
             }
         }
 
+        // Read here, where phase 2 stopped fetching, rather than beside the notice: phase
+        // 2b writes into the device folder, which for internal storage is this same
+        // partition, and phase 3 frees mirror files, so either could change the answer.
+        val belowFloor = failedCopies > 0 && usableSpaceOf(mirrorDir) < OPEN_SPACE_FLOOR_BYTES
+
         // Phase 2b: put onto the device what only the mirror has.
         //
         // Guarded by the same two facts [reconcileDeletions] needs, and for a mirrored
@@ -839,7 +846,17 @@ class SafSyncEngine(private val context: Context) {
         // an expected, permanent condition that would toast on every open of the folder
         // holding it, and the write-back guard already keeps a local file of that name
         // from replacing it.
-        if (failedCopies > 0) onDocumentsNotCopied(failedCopies, outOfRoom)
+        if (failedCopies > 0) {
+            if (belowFloor) {
+                Logger.w(
+                    tag,
+                    "${mirrorDir.name} stopped fetching under " +
+                        "${OPEN_SPACE_FLOOR_BYTES / 1_000_000} MB free; documents not " +
+                        "fetched stay on the device",
+                )
+            }
+            onDocumentsNotCopied(failedCopies, outOfRoom || belowFloor)
+        }
     }
 
     /**
@@ -1999,7 +2016,8 @@ class SafSyncEngine(private val context: Context) {
      * @return whether [dest] now holds this document. False means [dest] was left exactly
      *   as it was, which, because of the partial-and-rename below, can mean it still
      *   holds an edit of the user's that no sync wrote. Callers that record what the
-     *   mirror holds have to know the difference.
+     *   mirror holds have to know the difference. False also when free space is below
+     *   [OPEN_SPACE_FLOOR_BYTES], decided before anything is read.
      */
     private fun copyDocumentToLocal(
         docUri: Uri,
@@ -2007,6 +2025,17 @@ class SafSyncEngine(private val context: Context) {
         sourceModified: Long,
         onReplacing: (fetched: File) -> Unit = {},
     ): Boolean {
+        // The only floor, and here because both fetches into filesDir pass through this
+        // function: phase 2's copy and [setAsideDeviceCopy]. Both already read false as a
+        // copy that did not happen and turn it into [unfetched] or UNAVAILABLE, so a
+        // document held back is guarded exactly like one that failed. Measured before
+        // every fetch rather than latched, so copies resume if space comes back mid-open.
+        if (usableSpaceOf(dest.parentFile ?: dest) < OPEN_SPACE_FLOOR_BYTES) {
+            // Logger.d: a folder of twenty thousand documents would otherwise put twenty
+            // thousand lines into a release logcat. The sync logs one line at the end.
+            Logger.d(tag, "Not copying into ${dest.name}: free space is below the floor")
+            return false
+        }
         // Written beside the destination and moved into place only once the stream
         // finished. Writing straight to dest would truncate it first, so a copy cut
         // short (by an exception, or by the process being killed mid-stream) would
@@ -2350,7 +2379,7 @@ class SafSyncEngine(private val context: Context) {
     /**
      * Told, once per [initialSync], when documents the device holds did not reach the
      * mirror: how many, and whether the sizes reported for them did not fit in the room
-     * that was left.
+     * that was left or free space fell below [OPEN_SPACE_FLOOR_BYTES] and held them back.
      *
      * Its own seam rather than a reuse of [onWriteBackFailed], because the two say
      * opposite things. That one means the app holds the only copy; this one means the
@@ -2410,14 +2439,16 @@ class SafSyncEngine(private val context: Context) {
      * How much room is left where the mirror lives.
      *
      * A seam because no JVM test can make a real filesystem answer that it is full, and
-     * the pre-flight that reads this is exactly the code that has to be right when it is.
+     * the pre-flight and the floor that read this are exactly the code that has to be
+     * right when it is.
      *
      * `usableSpace` rather than `StorageManager.getAllocatableBytes`, which lint asks for
-     * and which reports more, because it counts cache Android is willing to evict. The
-     * larger figure is the right one for deciding whether to attempt a write; this decides
-     * nothing of the kind. It runs after a copy has already failed and only picks which
-     * sentence explains it, so the question is not "could this have fit" but "was the disk
-     * visibly full when it did not", and free space is what answers that one.
+     * and which reports more, because it counts cache Android is willing to evict. This
+     * also decides whether a fetch is attempted at all, through the floor in
+     * [copyDocumentToLocal], and the larger figure is wrong for that too, although this
+     * comment once called it the right one for deciding a write: the evictable cache
+     * belongs to other apps, it is not space this app can count on, and free space is
+     * what the floor exists to leave behind.
      */
     @SuppressLint("UsableSpace")
     internal var usableSpaceOf: (File) -> Long = { it.usableSpace }
@@ -4339,6 +4370,18 @@ class SafSyncEngine(private val context: Context) {
 
         /** Max file size to sync (50 MB). Larger files are skipped. */
         internal const val MAX_FILE_SIZE = 50L * 1024 * 1024
+
+        /**
+         * Free space below which a fetch into the mirror is not attempted: the app's own
+         * critically-low line plus one [MAX_FILE_SIZE] fetch, because the check runs
+         * before a fetch and one fetch can spend that much. Read live from the disk, so
+         * it needs no slack for block rounding the way a predicted total does.
+         *
+         * The [MAX_FILE_SIZE] half holds only for documents whose provider reports a
+         * size. One reported as 0 passes the size gate unmeasured, and a single such
+         * fetch can still run from the floor to a full disk.
+         */
+        internal const val OPEN_SPACE_FLOOR_BYTES = StorageManager.LOW_STORAGE_BYTES + MAX_FILE_SIZE
 
         /**
          * How many entries one directory-create is allowed to copy to the device.

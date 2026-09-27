@@ -257,14 +257,18 @@ object StorageManager {
     }
 
     /**
-     * Returns true if available storage is critically low (<100 MB).
+     * The line below which available storage is critically low, and so also the
+     * reserve an open of a device folder leaves untouched.
      *
      * Decimal, because the caller formats the same quantity with [formatSize] and
      * prints it beside this warning. A binary threshold under a decimal formatter
      * lets the toast announce "104.8 MB available" under a sentence that says 100.
      */
+    internal const val LOW_STORAGE_BYTES = 100_000_000L
+
+    /** Returns true if available storage is critically low (below [LOW_STORAGE_BYTES]). */
     fun isStorageLow(context: Context): Boolean {
-        return getAvailableStorage(context) < 100_000_000L
+        return getAvailableStorage(context) < LOW_STORAGE_BYTES
     }
 
     /**

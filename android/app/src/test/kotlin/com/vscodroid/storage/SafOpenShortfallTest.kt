@@ -38,7 +38,8 @@ import java.io.IOException
  *
  * The notice carries whether the sizes the provider reported fit in the space that
  * was left, because that is the difference between something the user can act on
- * and something they cannot.
+ * and something they cannot. The same flag is set when free space fell below
+ * [SafSyncEngine.OPEN_SPACE_FLOOR_BYTES], the floor under which no fetch is attempted.
  */
 class SafOpenShortfallTest {
 
@@ -134,6 +135,16 @@ class SafOpenShortfallTest {
     }
 
     /**
+     * The pre-flight sees [room] and the floor sees plenty, so a case about the wording
+     * does not turn on whether copies were held back. The pre-flight in
+     * [SafSyncEngine.initialSync] is the seam's first reader.
+     */
+    private fun preflightSees(room: Long) {
+        var calls = 0
+        engine.usableSpaceOf = { if (calls++ == 0) room else Long.MAX_VALUE }
+    }
+
+    /**
      * The case this exists for. One document could not be read, and the user is told
      * that once, with the count.
      */
@@ -185,7 +196,7 @@ class SafOpenShortfallTest {
      */
     @Test
     fun `a shortfall with no room left says so`() {
-        engine.usableSpaceOf = { 8 }
+        preflightSees(8)
         deviceHolding(Doc("notes.md", 64, readable = false), Doc("readme.md", 64))
 
         runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
@@ -194,19 +205,42 @@ class SafOpenShortfallTest {
     }
 
     /**
-     * The pre-flight decides the wording, never whether the folder opens. A device
-     * that is genuinely out of room still gets its readable documents copied, because
-     * the reported sizes are a claim and a folder that opens beats a prediction.
+     * The pre-flight decides the wording, never whether the folder opens. An estimate
+     * that says nothing fits still lets every readable document be copied while the
+     * disk itself has room, because the reported sizes are a claim and a folder that
+     * opens beats a prediction.
      */
     @Test
-    fun `no room left does not stop the copy`() {
-        engine.usableSpaceOf = { 0 }
+    fun `the pre-flight estimate does not stop the copy`() {
+        preflightSees(0)
         deviceHolding(Doc("readme.md", 64))
 
         runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
 
         assertEquals("device contents", File(mirror, "readme.md").readText())
         assertTrue(notices.isEmpty(), "announced $notices when every copy succeeded")
+    }
+
+    /**
+     * What does stop a copy is the disk. Once free space falls under the floor, the
+     * rest of the folder is held back as failed copies, what already arrived is kept,
+     * and the user is told once, with the free-space wording even though the pre-flight
+     * saw room.
+     */
+    @Test
+    fun `a fetch below the space floor is held back and announced as a space shortfall`() {
+        engine.usableSpaceOf = {
+            if (File(mirror, "a.md").exists()) SafSyncEngine.OPEN_SPACE_FLOOR_BYTES - 1
+            else Long.MAX_VALUE
+        }
+        deviceHolding(Doc("a.md", 64), Doc("b.md", 64), Doc("c.md", 64))
+
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+
+        assertEquals("device contents", File(mirror, "a.md").readText())
+        assertFalse(File(mirror, "b.md").exists(), "b.md was fetched below the floor")
+        assertFalse(File(mirror, "c.md").exists(), "c.md was fetched below the floor")
+        assertEquals(listOf(2 to true), notices)
     }
 
     /**
@@ -253,7 +287,7 @@ class SafOpenShortfallTest {
      */
     @Test
     fun `a folder whose sizes were withheld is not blamed on free space`() {
-        engine.usableSpaceOf = { 0 }
+        preflightSees(0)
         deviceHolding(Doc("notes.md", 0, readable = false))
 
         runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }

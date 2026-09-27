@@ -177,6 +177,40 @@ class SafDeviceCopySetAsideTest {
     }
 
     /**
+     * The same hold-back when the disk, rather than the document, is the limit. The
+     * set-aside fetch lands in `filesDir` like phase 2's own copies, so it obeys the free
+     * space floor too, and it is held back the same way: journal line standing, mirror
+     * untouched, repair left for the next open.
+     */
+    @Test
+    fun `a device copy is not fetched to set aside once free space is below the floor`() {
+        engine.usableSpaceOf = { SafSyncEngine.OPEN_SPACE_FLOOR_BYTES - 1 }
+        val local = strandedUploadOf("notes.md", "edited here, never delivered")
+        deviceHolding(
+            "notes.md",
+            "written on the device since",
+            size = 27,
+            modified = 2_000_000_000_000L,
+        )
+
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+
+        assertEquals(
+            listOf("notes.md"), namesInMirror(),
+            "the repair fetched a device copy into this app's own storage below the floor",
+        )
+        assertEquals(
+            listOf(local.absolutePath), engine.uploadsInFlight().toList(),
+            "the repair was withheld, so its journal line has to stand for the next open " +
+                "to try again",
+        )
+        assertEquals(
+            "edited here, never delivered", local.readText(),
+            "the mirror held the only complete copy and the sync overwrote it",
+        )
+    }
+
+    /**
      * The count and the sentence that account for `.device-` files say nothing when there
      * is no such file.
      *
