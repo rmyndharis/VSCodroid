@@ -76,6 +76,11 @@ PAGE_SIZE_FLAGS=(-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384)
 # shim that answered with no build-id and was read as no symbols at all.
 BUILD_ID_FLAG=(-Wl,--build-id=sha1)
 
+# A strong reference to a name the API $API libraries lack fails the link here,
+# instead of failing dlopen on an API $API device, as a direct call to
+# posix_spawn_file_actions_addchdir_np did. Weak references are still allowed.
+NO_UNDEFINED_FLAG=(-Wl,-z,defs)
+
 echo ""
 echo "--- libglibc-shim.so ---"
 # -soname because the library now looks itself up by name at load time, to fill
@@ -89,7 +94,8 @@ echo "--- libglibc-shim.so ---"
     -Wl,-soname,libglibc-shim.so \
     -llog \
     "${PAGE_SIZE_FLAGS[@]}" \
-    "${BUILD_ID_FLAG[@]}"
+    "${BUILD_ID_FLAG[@]}" \
+    "${NO_UNDEFINED_FLAG[@]}"
 echo "  $(wc -c < "$OUT_DIR/libglibc-shim.so" | tr -d ' ') bytes"
 
 echo ""
@@ -152,7 +158,8 @@ for stub in "${STUBS[@]}"; do
         ${version_script[@]+"${version_script[@]}"} \
         -L"$OUT_DIR" -lglibc-shim -llog \
         "${PAGE_SIZE_FLAGS[@]}" \
-        "${BUILD_ID_FLAG[@]}"
+        "${BUILD_ID_FLAG[@]}" \
+        "${NO_UNDEFINED_FLAG[@]}"
     printf '  %-18s %8s bytes%s\n' "$stub" "$(wc -c < "$OUT_DIR/$stub" | tr -d ' ')" \
         "$([ -f "$generated" ] && echo '  (versioned forwarders)' || echo '')"
 done
@@ -167,7 +174,7 @@ echo "=== Verify ==="
 #
 # What it does not cover: whether an undefined symbol exists at the minimum API
 # level. This checks that DT_NEEDED libraries resolve, which is a different
-# question -- see the addchdir fix for the class it cannot see.
+# question. NO_UNDEFINED_FLAG on both links above answers that one.
 for lib in libglibc-shim.so "${STUBS[@]}"; do
     echo "  --- $lib ---"
     python3 "$SCRIPT_DIR/verify-android-elf.py" "$OUT_DIR/$lib" --lib-dir "$OUT_DIR"
