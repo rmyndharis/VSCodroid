@@ -258,8 +258,10 @@ extract_wrapper_targets() {
     # declares pathDirs. Matching the substring took all three, and the two that
     # are lists come back carrying a `:` and a second unexpanded $PREFIX. That is
     # not a path, so it can never be on disk, so the phase reported the payload
-    # missing on an install where every wrapper target was present.
-    sed -n 's|^[^ "]*() { [^"]* "\$PREFIX/\.\./\([^"]*\)" "\$@"; }$|\1|p' | sort -u
+    # missing on an install where every wrapper target was present. A wrapper may
+    # also run a guard before the loader and pass options after the file, as the
+    # jshell wrapper does, so both stretches are free-form.
+    sed -n 's|^[^ "]*() { .*"\$PREFIX/\.\./\([^"]*\)" .*"\$@"; }$|\1|p' | sort -u
 }
 
 derive_wrapper_line_samples() {
@@ -545,16 +547,19 @@ if $SELF_CHECK; then
     # install as a payload that is gone.
     WRAP_SAMPLE=$(derive_wrapper_line_samples)
     WRAP_RENDERED=$(printf '%s\n' "$WRAP_SAMPLE" | grep -c . || true)
-    WRAP_INPUT=$(printf '%s\nexport RUBYLIB="$PREFIX/../usr/lib/ruby/3.4.0:$PREFIX/../usr/lib/ruby/3.4.0/aarch64-linux-android"\nexport PATH="$PREFIX/../usr/bin:$PATH"\n' "$WRAP_SAMPLE")
+    # The jshell wrapper is assembled from several string literals, so the
+    # renderer above cannot read it; its shape is written out here instead.
+    WRAP_JSHELL='jshell() { case " $* " in *" -ex"*|*" --ex"*) ;; *) set -- --execution local "$@" ;; esac; /system/bin/loader "$PREFIX/../usr/lib/sample/bin/jsample" -J-Duser.home="$HOME" "$@"; }'
+    WRAP_INPUT=$(printf '%s\n%s\nexport RUBYLIB="$PREFIX/../usr/lib/ruby/3.4.0:$PREFIX/../usr/lib/ruby/3.4.0/aarch64-linux-android"\nexport PATH="$PREFIX/../usr/bin:$PATH"\n' "$WRAP_SAMPLE" "$WRAP_JSHELL")
     WRAP_GOT=$(printf '%s\n' "$WRAP_INPUT" | extract_wrapper_targets | tr '\n' ' ' | sed 's/ *$//')
     if [ "$WRAP_RENDERED" -eq 0 ]; then
         fail "wrapper target reading" \
             "no wrapper line readable in ToolchainManager.kt; the toolchain payload check would have nothing to compare against"
-    elif [ "$WRAP_GOT" = "usr/lib/sample/bin/sample" ]; then
+    elif [ "$WRAP_GOT" = "usr/lib/sample/bin/jsample usr/lib/sample/bin/sample" ]; then
         pass "wrapper target reading ($WRAP_RENDERED generated shapes, exports and PATH ignored)"
     else
         fail "wrapper target reading" \
-            "reading ToolchainManager.kt's own wrapper lines yielded '$WRAP_GOT', not the single file they name"
+            "reading the sample wrapper lines yielded '$WRAP_GOT', not the two files they name"
     fi
 
     # Read twice on purpose: as this host will run it, and again on a host with
