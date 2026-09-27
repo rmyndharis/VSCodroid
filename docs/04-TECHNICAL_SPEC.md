@@ -152,7 +152,9 @@ npm run gulp compile-copilot-extension-build
 npm run gulp "vscode-reh-web-linux-arm64-min-ci"
 
 # 7. Finish the packaged tree ($OUT, vscode-reh-web-linux-arm64). Prune removes
-#    the GNU/Linux node binary, the unreferenced embedder bundle and every
+#    the GNU/Linux node binary, the unreferenced embedder bundle, the agent
+#    host's @github/copilot-sdk-* runtime, @microsoft/mxc-sdk's bin/ helpers,
+#    @vscode/sandbox-runtime's x86-64 apply-seccomp and every
 #    sourceMappingURL comment naming main.vscode-cdn.net, and copies in
 #    LICENSE.txt and ThirdPartyNotices.txt. Mobile CSS appends touch-sized menu
 #    rules to workbench.css. patch-js-debug-env.py hands js-debug's helper

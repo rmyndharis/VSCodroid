@@ -32,6 +32,9 @@ import java.nio.file.Path
  * `copilot-android-arm64` alias over it at runtime. From 1.139 none of the three
  * is shipped or loaded, and extraction merges without deleting, so an upgraded
  * device kept all of it. `copilot-sdk` is still shipped and has to stay.
+ *
+ * The same holds for `@microsoft/mxc-sdk/bin`, which the server build prunes
+ * and older trees left on the device.
  */
 class UnshippedServerPackageTest {
 
@@ -168,6 +171,39 @@ class UnshippedServerPackageTest {
         every { assets.list("vscode-reh/node_modules/@github") } returns null
         prune()
         assertTrue(File(gh, "copilot").isDirectory, "a null listing removed every package")
+    }
+
+    /**
+     * Driven through the migration an upgrade runs, not the helper alone, so it
+     * is the call that is under test.
+     *
+     * NEGATIVE CONTROL: drop the `pruneUnshippedServerEntries` call for
+     * `@microsoft/mxc-sdk` from `runPreExtractionMigrations`; `bin` survives and
+     * this reddens.
+     */
+    @Test
+    fun `an upgrade removes the mxc-sdk helpers and keeps the package`() {
+        val mxc = File(filesDir, "server/vscode-reh/node_modules/@microsoft/mxc-sdk")
+        File(mxc, "bin/arm64").mkdirs()
+        File(mxc, "bin/arm64/wxc-exec.exe").writeText("MZ")
+        File(mxc, "dist").mkdirs()
+        File(mxc, "dist/index.js").writeText("// the sdk")
+        File(mxc, "package.json").writeText("{}")
+        shipping("copilot-sdk")
+        every { assets.list("vscode-reh/node_modules/@microsoft/mxc-sdk") } returns
+            arrayOf("LICENSE.md", "dist", "package.json")
+
+        // At the pivot's version code, so the pivot reclaim is skipped and only
+        // the prunes run.
+        FirstRunSetup::class.java
+            .getDeclaredMethod("runPreExtractionMigrations", Int::class.javaPrimitiveType)
+            .apply { isAccessible = true }
+            .invoke(FirstRunSetup(context), 11)
+
+        assertEquals(
+            listOf("dist", "package.json"), mxc.list()!!.sorted(),
+            "the upgrade did not leave exactly what the new tree ships of mxc-sdk",
+        )
     }
 
     @Test

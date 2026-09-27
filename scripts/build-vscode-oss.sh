@@ -624,6 +624,25 @@ if [ -n "$leftover" ]; then
     exit 1
 fi
 
+# Helper programs nothing on Android can start. @microsoft/mxc-sdk's bin/ holds
+# a glibc lxc-exec, two Mach-O and ten Windows PE files. The package's own code
+# is imported only by out/server-main.js behind a win32 test and by the agent
+# host, which patch 0020 keeps from starting; MXC_BIN_DIR, which the Copilot
+# extension sets, is read only by that package's dist/platform.js; and it picks
+# lxc-exec only when os.platform() is 'linux', where Node here reports
+# 'android'. @vscode/sandbox-runtime picks vendor/seccomp/<process.arch>, arm64
+# on a device, so its x64 apply-seccomp is never chosen. Only x64 goes, never
+# the whole vendor/seccomp, so an arm64 helper added upstream would be kept.
+# verify-server-tree.py refuses a tree still carrying either.
+for dead in node_modules/@microsoft/mxc-sdk/bin \
+            node_modules/@vscode/sandbox-runtime/vendor/seccomp/x64; do
+    if [ -e "$OUT/$dead" ]; then
+        size=$(du -sh "$OUT/$dead" | cut -f1)
+        rm -rf "$OUT/$dead"
+        echo "  removed $dead, helpers Android cannot run ($size)"
+    fi
+done
+
 # Every minified bundle ends with a sourceMappingURL pointing at
 # main.vscode-cdn.net and naming the upstream commit, written by the minify
 # task's hardcoded URL. The .map files are filtered out of the package, so the

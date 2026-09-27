@@ -114,7 +114,8 @@ COPYLEFT = (
 
 # The object formats redistributed in this tree, by the first bytes of the file.
 #
-# All four appear under assets/ today. Mach-O and PE are here because npm
+# Three appear under assets/ today, and Mach-O did until build-vscode-oss.sh
+# began pruning @microsoft/mxc-sdk's helpers. Mach-O and PE are here because npm
 # packages ship every platform's build of a helper and the whole package lands in
 # the APK; WebAssembly because tree-sitter, oniguruma and two of js-debug's
 # panels are compiled to it rather than to native code.
@@ -396,8 +397,6 @@ NESTED_LIBRARIES = {
     "vscode-reh/node_modules/@vscode/sqlite3/*": ("@vscode/sqlite3", "BSD-3-Clause"),
     "vscode-reh/node_modules/@vscode/deviceid/*": ("@vscode/deviceid", "MIT"),
     "vscode-reh/node_modules/@vscode/native-watchdog/*": ("@vscode/native-watchdog", "MIT"),
-    "vscode-reh/node_modules/@vscode/sandbox-runtime/*": ("@vscode/sandbox-runtime", "Apache-2.0"),
-    "vscode-reh/node_modules/@microsoft/mxc-sdk/*": ("@microsoft/mxc-sdk", "MIT"),
     # Built by build-native-addons.sh for the Jupyter extension, outside the
     # server tree. libzmq is linked into the same file statically, so its
     # licence rides on it, the way Oniguruma's does on vscode-oniguruma below.

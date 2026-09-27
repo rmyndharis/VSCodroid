@@ -204,7 +204,7 @@ Node.js includes V8 (BSD-3-Clause), libuv (MIT), OpenSSL (Apache-2.0), ICU (Unic
 - **Project**: https://github.com/anthropic-experimental/sandbox-runtime, as declared by the package's own `repository` field
 - **Version**: whatever the server tree ships (`node_modules/@vscode/sandbox-runtime/package.json`)
 - **License**: Apache License 2.0. The full text ships at `node_modules/@vscode/sandbox-runtime/LICENSE` and carries no filled-in copyright line.
-- **Ships**: `vendor/seccomp/x64/apply-seccomp`, an x86-64 helper that cannot run on an ARM64 device. It is listed because it is redistributed, not because it is used.
+- **Ships**: JavaScript and the C source of its seccomp helper. `build-vscode-oss.sh` removes `vendor/seccomp/x64/apply-seccomp`, an x86-64 binary.
 
 ### @vscode/spdlog
 
@@ -236,7 +236,7 @@ project, different licence, nearly the same name.
 - **Version**: whatever the server tree ships (`node_modules/@microsoft/mxc-sdk/package.json`)
 - **License**: MIT License
 - **Copyright**: Copyright (c) Microsoft Corporation.
-- **Ships**: thirteen binaries in `bin/arm64/` at 0.8.0, only one of which is an ARM64 Linux executable (`lxc-exec`). The rest are two Mach-O helpers (`mxc-exec-mac`, `unix-test-proxy`) and ten Windows PE files (`mxc-diagnostic-console.exe`, `plm.exe`, `winhttp-proxy-shim.exe`, `wslcsdk.dll`, `wxc-exec.exe`, `wxc-host-prep.exe`, `wxc-test-proxy.exe`, `wxc-windows-sandbox-daemon.exe`, `wxc-windows-sandbox-guest.exe`, `wxc-wslc-daemon.exe`), which the directory name does not describe and which nothing here can run. They are listed because they are redistributed.
+- **Ships**: JavaScript only. `build-vscode-oss.sh` removes the package's `bin/` directory (a glibc `lxc-exec`, two Mach-O and ten Windows helpers), none of which can run on Android.
 
 ### js-debug
 
@@ -763,4 +763,4 @@ For questions about licenses, trademarks, or legal notices:
 
 ---
 
-_This document was last updated on September 27, 2026._
+_This document was last updated on September 28, 2026._

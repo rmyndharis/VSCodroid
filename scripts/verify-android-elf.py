@@ -62,21 +62,13 @@ MIN_ALIGN = 16384
 ANDROID_INTERP = "/system/bin/linker64"
 
 # The aarch64 executables in the packaged tree that name a glibc loader, kept by
-# path because they ship and cannot run.
+# path because they ship and cannot run. A path belongs here only if it ships,
+# cannot run, and cannot be pruned.
 #
-# It arrives inside @microsoft/mxc-sdk, which the server tree references from
-# out/server-main.js and out/vs/platform/agentHost/node/agentHostMain.js, and it
-# is built for glibc: PT_INTERP is /lib/ld-linux-aarch64.so.1, a path Android
-# does not have, so no code path here can start it. Nothing in this repository
-# builds that tree -- it is fetched whole from a server-<version> release -- so
-# pruning it belongs to whoever owns the fetch, and until then naming it here is
-# what stops another one arriving unnoticed on the next VS Code bump. Measured
-# 2026-08-23: 53 aarch64 executables in the packaged trees named
-# /system/bin/linker64 and two did not; mxc-sdk 0.8.0, which 1.138.0 locks,
-# replaced the second, linux-test-proxy, with a Mach-O unix-test-proxy.
-FOREIGN_INTERP_ALLOWED = {
-    "vscode-reh/node_modules/@microsoft/mxc-sdk/bin/arm64/lxc-exec",
-}
+# Empty. The last entry, @microsoft/mxc-sdk's bin/arm64/lxc-exec, is removed by
+# build-vscode-oss.sh's Prune stage along with the rest of that directory, so
+# any glibc executable a VS Code bump brings in now fails the sweep.
+FOREIGN_INTERP_ALLOWED = set()
 
 # Provided by the system on every supported device, so they never need bundling.
 BIONIC = {
@@ -402,9 +394,9 @@ def alignment_sweep(root: pathlib.Path) -> int:
     if not checked:
         print(f"  FAIL   no aarch64 ELF under {root}; nothing was examined")
         return 1
-    # An allowlist entry has to earn its place by winning for a real file. The
-    # two here are paths inside a tree this repository does not build and fetches
-    # whole, so a VS Code bump can move or drop either one without a word; the
+    # An allowlist entry has to earn its place by winning for a real file.
+    # Entries are paths inside a tree the app build does not build and fetches
+    # whole, so a VS Code bump can move or drop one without a word; the
     # entry then sits there waving through whatever later lands at that exact
     # path, which is the one thing the sweep is looking for. Reported after the
     # walk rather than at the entry, because only the whole walk knows what

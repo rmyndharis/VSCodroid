@@ -61,6 +61,13 @@ REQUIRED = [
     "extensions/copilot/node_modules/@github/copilot/LICENSE.md",
 ]
 
+# Helper programs nothing on Android can start, which build-vscode-oss.sh's
+# Prune stage removes; its comment says why each is unreachable.
+PRUNED = (
+    "node_modules/@microsoft/mxc-sdk/bin",
+    "node_modules/@vscode/sandbox-runtime/vendor/seccomp/x64",
+)
+
 failed = False
 
 
@@ -179,6 +186,15 @@ def main(tree):
     found = present(tree / "node", "node")
     if found is not None:
         check(not found, "no bundled GNU/Linux node", "prune it before packaging")
+
+    # Above the manifest gate: the Prune stage is not a patch effect, and a
+    # tarball built before it arrives with the right name and a valid digest.
+    for rel in PRUNED:
+        found = present(tree / rel, rel)
+        if found is not None:
+            check(not found, f"no {rel}",
+                  "helpers nothing on Android can run; build-vscode-oss.sh's Prune "
+                  "stage removes them, so this tree predates it")
 
     # Every native module is built for the build host, and four are dealt with
     # for Bionic afterwards by build-native-addons.sh: node-pty, @parcel/watcher
@@ -723,12 +739,14 @@ def main(tree):
 
 
 def self_test() -> int:
-    """Hand main() a tree missing the Copilot CLI licence, then one carrying it.
+    """Hand main() a tree missing the Copilot CLI licence, then one carrying it;
+    then a tree without the helpers the Prune stage removes, and one with them.
 
     A required path that is never absent in a real tree is a rule whose
     refusal nobody has seen fire, and a rule that has stopped firing prints
-    what a clean tree prints. The tree here is otherwise empty, so every other
-    check fails too; only the two lines about this file are read.
+    what a clean tree prints. The same holds for a pruned path that is never
+    present. The trees here are otherwise empty, so every other check fails
+    too; only the lines about these paths are read.
     """
     import contextlib
     import io
@@ -756,6 +774,24 @@ def self_test() -> int:
                       f"{'present' if present else 'absent'}, no line read {want!r}")
                 return 1
     print("  ok     self-test: the Copilot CLI licence is required and read")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tree = pathlib.Path(tmp)
+        for carrying, verdict in ((False, "ok      no "), (True, "FAIL    no ")):
+            if carrying:
+                for rel in PRUNED:
+                    (tree / rel).mkdir(parents=True)
+                    (tree / rel / "helper").write_bytes(b"MZ")
+            out = io.StringIO()
+            failed = False
+            with contextlib.redirect_stdout(out):
+                main(tree)
+            unread = [verdict + rel for rel in PRUNED if verdict + rel not in out.getvalue()]
+            if unread:
+                print(f"  FAIL   self-test: with the pruned helpers "
+                      f"{'present' if carrying else 'absent'}, no line read {unread[0]!r}")
+                return 1
+    print("  ok     self-test: a tree still carrying the pruned helpers is refused")
     return 0
 
 

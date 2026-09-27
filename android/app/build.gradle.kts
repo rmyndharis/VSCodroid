@@ -937,10 +937,10 @@ val verifyPackagedAlignment = tasks.register<Exec>("verifyPackagedAlignment") {
             "on the device can start it. This tree is extracted to filesDir,\n" +
             "where SELinux refuses execve outright, and the loader indirection\n" +
             "that does start a payload there hands it to /system/bin/linker64,\n" +
-            "which cannot satisfy a glibc binary either. The glibc-built\n" +
-            "helper inside @microsoft/mxc-sdk is known and allowed by name in\n" +
-            "verify-android-elf.py; a third arriving with a VS Code bump is what\n" +
-            "this catches. That allowlist is checked in the other direction too:\n" +
+            "which cannot satisfy a glibc binary either. verify-android-elf.py\n" +
+            "can allow one by path in FOREIGN_INTERP_ALLOWED, which is empty\n" +
+            "today; one arriving with a VS Code bump is what this catches.\n" +
+            "That allowlist is checked in the other direction too:\n" +
             "an entry no file matched fails, because a bump that moves an allowed\n" +
             "file leaves a path waving through whatever lands there next. That FAIL\n" +
             "names a line in verify-android-elf.py rather than a file, and deleting\n" +
