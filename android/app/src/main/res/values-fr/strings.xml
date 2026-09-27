@@ -232,12 +232,14 @@
          device does, and the file is simply absent from the editor. -->
     <plurals name="saf_documents_not_copied">
         <item quantity="one">%1$d fichier n\'a pas pu être copié dans l\'éditeur. Il reste inchangé dans le dossier de l\'appareil.</item>
+        <item quantity="many">%1$d fichiers n\'ont pas pu être copiés dans l\'éditeur. Ils restent inchangés dans le dossier de l\'appareil.</item>
         <item quantity="other">%1$d fichiers n\'ont pas pu être copiés dans l\'éditeur. Ils restent inchangés dans le dossier de l\'appareil.</item>
     </plurals>
     <!-- The same shortfall when the sizes the provider reported did not fit in the space
          left. Named separately because it is the one the user can act on. -->
     <plurals name="saf_documents_not_copied_no_room">
         <item quantity="one">Espace libre insuffisant : %1$d fichier n\'a pas pu être copié dans l\'éditeur. Il reste inchangé dans le dossier de l\'appareil.</item>
+        <item quantity="many">Espace libre insuffisant : %1$d fichiers n\'ont pas pu être copiés dans l\'éditeur. Ils restent inchangés dans le dossier de l\'appareil.</item>
         <item quantity="other">Espace libre insuffisant : %1$d fichiers n\'ont pas pu être copiés dans l\'éditeur. Ils restent inchangés dans le dossier de l\'appareil.</item>
     </plurals>
     <!-- A directory deleted in the editor that was left standing in the device folder,
@@ -324,6 +326,7 @@
          copy is inside VSCodroid" would overstate. -->
     <plurals name="saf_upload_incomplete">
         <item quantity="one">%2$s : %1$d élément n\'est pas arrivé dans le dossier de l\'appareil.</item>
+        <item quantity="many">%2$s : %1$d éléments ne sont pas arrivés dans le dossier de l\'appareil.</item>
         <item quantity="other">%2$s : %1$d éléments ne sont pas arrivés dans le dossier de l\'appareil.</item>
     </plurals>
     <!-- The same folder stopped by the enumeration cap rather than by a refusal. Named
@@ -376,6 +379,7 @@
          just how far along it is. -->
     <plurals name="saf_sync_progress">
         <item quantity="one">Synchronisation de \"%1$s\"\n%2$d / %3$d fichier…</item>
+        <item quantity="many">Synchronisation de \"%1$s\"\n%2$d / %3$d fichiers…</item>
         <item quantity="other">Synchronisation de \"%1$s\"\n%2$d / %3$d fichiers…</item>
     </plurals>
 

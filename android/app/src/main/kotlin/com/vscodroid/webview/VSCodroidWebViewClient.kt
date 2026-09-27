@@ -37,6 +37,7 @@ import java.net.URISyntaxException
 import java.net.URL
 import java.net.URLDecoder
 import android.annotation.SuppressLint
+import androidx.core.net.toUri
 
 /**
  * The directories this app publishes to content rendered inside the WebView,
@@ -959,7 +960,7 @@ class VSCodroidWebViewClient(
             // The Microsoft sign-in's callback, repaired as the bridge repairs it:
             // the same `window.open` lands here whenever the bridge declines it.
             val address = encodeCallbackState(url.toString())
-            val target = if (address == url.toString()) url else Uri.parse(address)
+            val target = if (address == url.toString()) url else address.toUri()
             val intent = Intent(Intent.ACTION_VIEW, target)
             intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK)
             // The app's second way out to a browser, and the one that recorded

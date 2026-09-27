@@ -232,12 +232,14 @@
          device does, and the file is simply absent from the editor. -->
     <plurals name="saf_documents_not_copied">
         <item quantity="one">%1$d arquivo não pôde ser copiado para o editor. Ele continua inalterado na pasta do dispositivo.</item>
+        <item quantity="many">%1$d arquivos não puderam ser copiados para o editor. Eles continuam inalterados na pasta do dispositivo.</item>
         <item quantity="other">%1$d arquivos não puderam ser copiados para o editor. Eles continuam inalterados na pasta do dispositivo.</item>
     </plurals>
     <!-- The same shortfall when the sizes the provider reported did not fit in the space
          left. Named separately because it is the one the user can act on. -->
     <plurals name="saf_documents_not_copied_no_room">
         <item quantity="one">Espaço livre insuficiente: %1$d arquivo não pôde ser copiado para o editor. Ele continua inalterado na pasta do dispositivo.</item>
+        <item quantity="many">Espaço livre insuficiente: %1$d arquivos não puderam ser copiados para o editor. Eles continuam inalterados na pasta do dispositivo.</item>
         <item quantity="other">Espaço livre insuficiente: %1$d arquivos não puderam ser copiados para o editor. Eles continuam inalterados na pasta do dispositivo.</item>
     </plurals>
     <!-- A directory deleted in the editor that was left standing in the device folder,
@@ -324,6 +326,7 @@
          copy is inside VSCodroid" would overstate. -->
     <plurals name="saf_upload_incomplete">
         <item quantity="one">%2$s: um item não chegou à pasta do dispositivo.</item>
+        <item quantity="many">%2$s: %1$d itens não chegaram à pasta do dispositivo.</item>
         <item quantity="other">%2$s: %1$d itens não chegaram à pasta do dispositivo.</item>
     </plurals>
     <!-- The same folder stopped by the enumeration cap rather than by a refusal. Named
@@ -376,6 +379,7 @@
          just how far along it is. -->
     <plurals name="saf_sync_progress">
         <item quantity="one">Sincronizando \"%1$s\"\n%2$d / %3$d arquivo…</item>
+        <item quantity="many">Sincronizando \"%1$s\"\n%2$d / %3$d arquivos…</item>
         <item quantity="other">Sincronizando \"%1$s\"\n%2$d / %3$d arquivos…</item>
     </plurals>
 

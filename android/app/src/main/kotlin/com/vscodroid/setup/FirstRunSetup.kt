@@ -2672,12 +2672,13 @@ claude() {
     /**
      * Records that the app's old machine-settings preferences have been taken out.
      *
-     * `apply`, not the `commit` [markSetupComplete] argues for: what a lost write
-     * costs there is a repeated 810 MiB unpack, and what it costs here is one more
-     * regex pass over a small file on the next launch, which finds nothing.
+     * Committed like every other write in this class, although a lost write here
+     * costs only one more regex pass over a small file on the next launch. The
+     * record is written once per install, so waiting for the disk costs nothing
+     * worth an exception to the rule the class header states.
      */
     private fun markMovedDefaultsPruned() {
-        prefs.edit().putBoolean(KEY_MOVED_DEFAULTS_PRUNED, true).apply()
+        prefs.edit(commit = true) { putBoolean(KEY_MOVED_DEFAULTS_PRUNED, true) }
     }
 
     /**
