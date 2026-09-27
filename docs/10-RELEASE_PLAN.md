@@ -125,7 +125,7 @@ Gradle's own dependency and build caches are handled by `gradle/actions/setup-gr
 | Workflow | Schedule | Purpose | Failure Action |
 |----------|----------|---------|----------------|
 | `patch-drift.yml` | Monday 04:00 UTC, or dispatched with a tag | Applies every patch in `patches/` to an upstream VS Code tag, cumulatively and in glob order, the way the build does. Not `git apply --check`: two patches touch the same server source, so checking them independently would judge the second against a tree the first was supposed to have changed | Rebase the patch set before the next version bump |
-| `r8.yml` | Monday 03:00 UTC, pushes to main, pull requests, or dispatched. A pull request is filtered to the files that configure the shrinkers; a push to main also covers the app sources they run over, so a change to Kotlin alone reaches a minified build when it lands rather than at the cron | Runs R8, the resource shrinker and `lintVitalRelease`, so a dependency that arrives without its consumer rules is caught before a tag | Fix the keep rules, or the shrinker configuration, before tagging |
+| `r8.yml` | Monday 03:00 UTC, pushes to main, pull requests, or dispatched. A pull request is filtered to the files that configure the shrinkers; a push to main also covers the app sources they run over, so a change to Kotlin alone reaches a minified build when it lands rather than at the cron | Runs R8, the resource shrinker and `lintVitalRelease`, so a dependency whose missing consumer rules make R8 fail is caught before a tag; a member R8 removes silently is not, which is what 6.5 step 4 runs the minified build for | Fix the keep rules, or the shrinker configuration, before tagging |
 
 ---
 
@@ -392,7 +392,7 @@ Notes:
 2. Branch from main, fix, and test on device
 3. Land it on main, so there is one line of history and nothing to cherry-pick afterwards
 4. Bump versionName and versionCode together, and add the CHANGELOG entry
-5. Tag the patch version from main (e.g., v1.0.1); release.yml triggers on `v*` and signs the AAB
+5. Run the minified build as 6.5 describes, then tag the patch version at that commit (e.g., v1.0.1); release.yml triggers on `v*` and signs the AAB
 6. Upload to Play Store with expedited review request
 7. 100% rollout immediately (critical fix)
 ```
@@ -415,9 +415,46 @@ with no section naming the version a user installed.
    versionCode that is not greater than the previous v* tag's
 3. Land both on main. The tag is taken from main, so there is one line of
    history and nothing to cherry-pick afterwards
-4. Tag vX.Y.Z from main and push it. release.yml signs the AAB and the APK,
-   attaches the toolchain ZIPs and the build manifest, and publishes the release
-5. Upload the AAB to Play and start the staged rollout in 6.2
+4. Run the minified build on an emulator before tagging. R8 and the resource
+   shrinker run on the release build type alone, and r8.yml proves only that
+   they finish: a member reached by name that no keep rule covers is removed
+   without an error, and no debug build and no CI job shows it.
+   - Timing: dispatch only after step 3 has landed. An APK still carrying the
+     previous versionCode upgrades without re-running setup, and tests nothing
+   - Build: `gh workflow run release.yml --ref main`. Once that run is green,
+     `gh run download <run-id> -n release-artifacts -D /tmp/vscodroid-rc`
+   - APK: /tmp/vscodroid-rc/android/app/build/outputs/apk/release/app-release.apk,
+     signed with the key every GitHub release carries
+   - Device: a fresh arm64 AVD, never a phone holding work. The uninstall below
+     erases the app's files, and a Play-installed copy carries Play's key and
+     refuses the update
+   - Before each half: `adb logcat -c`
+   a. Upgrade: `gh release download v<previous> -p app-release.apk
+      -D /tmp/vscodroid-prev`, `adb install` it, finish setup, install Ruby and
+      open a device folder. Then `adb install -r` the new APK and launch it from
+      the launcher. Setup runs again, VSCodroid: About names X.Y.Z, the folder
+      reopens, `ruby --version` prints in a new terminal, and SF-2 passes
+   b. Fresh: `adb uninstall com.vscodroid`, install the new APK and finish
+      setup; the toolchain picker comes first, then the notification dialog.
+      Run TC-2, SF-1, SF-2 and SF-16, and ED-6 pasting into a terminal with
+      "Terminal: Paste into Active Terminal". VSCodroid: About > Licenses shows
+      no "[... is missing from this build]" line, VSCodroid: Open in Browser on
+      an https address opens a Custom Tab, and the extra key row swipes through
+      its pages. Before the tag exists TC-2 pins the previous release ("falling
+      back to the latest release"): this step tests the app, not the new ZIPs
+   c. After each half, this prints nothing, and `adb logcat -d -b crash` holds
+      no com.vscodroid entry:
+      adb logcat -d | grep -E -e 'FATAL EXCEPTION|Launch-time refresh of' \
+        -e 'NoClassDefFoundError|ClassNotFoundException|AbstractMethodError' \
+        -e 'NoSuchMethodError|NoSuchFieldError|AndroidBridge.*not a function'
+   A failure the debug build does not show is a keep rule missing from
+   android/app/proguard-rules.pro; read its trace against the artifact's
+   mapping.txt. Record the device, API level, run id, headSha and pass or fail
+   per item in a comment on the pull request step 3 landed
+5. Tag vX.Y.Z at the commit step 4 built (`gh run view <run-id> --json headSha`),
+   and push it. release.yml signs the AAB and the APK, attaches the toolchain
+   ZIPs and the build manifest, and publishes the release
+6. Upload the AAB to Play and start the staged rollout in 6.2
 ```
 
 Step 1 is gated on the tag path. The "Check the tag matches the app version"

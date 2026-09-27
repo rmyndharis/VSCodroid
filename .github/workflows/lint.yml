@@ -221,9 +221,10 @@ jobs:
       - name: Check no document offers a withdrawn toolchain
         run: python3 scripts/check-toolchain-claims.py
 
-      # Reads one Markdown file and no assets. The summary it checks is derived
-      # data kept by hand, and it is the only record of whether a manual test
-      # pass covered everything, so a wrong count is a coverage claim nobody made.
+      # Reads two Markdown files, the checklist and the release plan that cites
+      # its rows, and no assets. The summary it checks is derived data kept by
+      # hand, and it is the only record of whether a manual test pass covered
+      # everything, so a wrong count is a coverage claim nobody made.
       - name: Check the device-test checklist accounts for its own rows
         run: python3 scripts/check-checklist-totals.py
 
