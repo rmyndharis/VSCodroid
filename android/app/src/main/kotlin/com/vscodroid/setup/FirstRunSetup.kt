@@ -3826,6 +3826,9 @@ claude() {
         // and glibc helpers nothing on Android can start, which server trees
         // built before build-vscode-oss.sh pruned them left on the device.
         pruneUnshippedServerEntries("vscode-reh/node_modules/@microsoft/mxc-sdk")
+        // And @vscode/sandbox-runtime's vendor/seccomp, whose only content was an
+        // x86-64 apply-seccomp; the APK now ships vendor/seccomp-src alone.
+        pruneUnshippedServerEntries("vscode-reh/node_modules/@vscode/sandbox-runtime/vendor")
     }
 
     fun getPreviousVersionCode(): Int {

@@ -57,6 +57,9 @@ class UnshippedServerPackageTest {
         mockkObject(Logger)
         every { Logger.i(any(), any()) } just Runs
         assets = mockk()
+        // A listing a case does not name reads as empty, which the prune takes
+        // as nothing to remove; each case stubs the directory it is about.
+        every { assets.list(any()) } returns emptyArray()
         context = mockk(relaxed = true)
         every { context.filesDir } returns filesDir
         every { context.assets } returns assets
@@ -203,6 +206,32 @@ class UnshippedServerPackageTest {
         assertEquals(
             listOf("dist", "package.json"), mxc.list()!!.sorted(),
             "the upgrade did not leave exactly what the new tree ships of mxc-sdk",
+        )
+    }
+
+    /**
+     * NEGATIVE CONTROL: drop the `pruneUnshippedServerEntries` call for
+     * `@vscode/sandbox-runtime/vendor`; `seccomp` survives and this reddens.
+     */
+    @Test
+    fun `an upgrade removes the x86-64 seccomp helper and keeps its source`() {
+        val vendor = File(filesDir, "server/vscode-reh/node_modules/@vscode/sandbox-runtime/vendor")
+        File(vendor, "seccomp/x64").mkdirs()
+        File(vendor, "seccomp/x64/apply-seccomp").writeText("\u007fELF")
+        File(vendor, "seccomp-src").mkdirs()
+        File(vendor, "seccomp-src/apply-seccomp.c").writeText("// the source")
+        shipping("copilot-sdk")
+        every { assets.list("vscode-reh/node_modules/@vscode/sandbox-runtime/vendor") } returns
+            arrayOf("seccomp-src")
+
+        FirstRunSetup::class.java
+            .getDeclaredMethod("runPreExtractionMigrations", Int::class.javaPrimitiveType)
+            .apply { isAccessible = true }
+            .invoke(FirstRunSetup(context), 11)
+
+        assertEquals(
+            listOf("seccomp-src"), vendor.list()!!.sorted(),
+            "the upgrade did not leave exactly what the new tree ships of sandbox-runtime's vendor",
         )
     }
 
