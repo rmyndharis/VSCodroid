@@ -179,7 +179,7 @@ flowchart TD
 | Architecture | arm64-v8a                          |
 | WebView      | Chrome 105+                        |
 | RAM          | 4 GB recommended                   |
-| Storage      | ~946 MB free to install            |
+| Storage      | ~768 MB free to install            |
 
 ## 🚀 Getting Started
 
@@ -238,15 +238,15 @@ adb install android/app/build/outputs/apk/debug/app-debug.apk
 | Metric                                 | Size                 |
 | -------------------------------------- | -------------------- |
 | Play Store download (core)             | ~270 MB              |
-| + Each toolchain (on-demand)           | 10-55 MB per language |
-| Free space required to install         | ~946 MB              |
-| Extracted to internal storage (core)   | ~812 MB              |
-| Extracted, plus both toolchains        | ~1,000 MB            |
+| + Each toolchain (on-demand)           | 10-57 MB per language |
+| Free space required to install         | ~768 MB              |
+| Extracted to internal storage (core)   | ~633 MB              |
+| Extracted, plus both toolchains        | ~830 MB              |
 | RAM usage (typical)                    | ~400-700 MB          |
 
 The install figure is larger than what the app ends up occupying because extraction
 needs room to work: it is the asset tree plus about 134 MB of headroom, which covers
-the filesystem block rounding a tree of 22,000 files costs. When it refuses to
+the filesystem block rounding a tree of over 23,000 files costs. When it refuses to
 start for lack of space it asks for the shortfall it measured, not for the whole
 figure, so a device already holding part of the tree is asked only for what is
 missing. Freeing only what the extracted size suggests is what leaves setup

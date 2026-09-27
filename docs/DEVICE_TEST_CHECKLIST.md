@@ -150,7 +150,7 @@ fresh.
 
 | ID | Metric | Steps | Target | Actual | Pass/Fail | Notes |
 |----|--------|-------|--------|--------|-----------|-------|
-| PF-1 | Cold start (first run) | Time from tap to editor visible. Record the number rather than pass/fail: no target has ever been measured, and extraction unpacks about 774 MiB across 22,626 files one at a time | Progress advances throughout and the editor opens; write the elapsed time in Notes | | | |
+| PF-1 | Cold start (first run) | Time from tap to editor visible. Record the number rather than pass/fail: no target has ever been measured, and extraction unpacks about 604 MiB across over 23,000 files one at a time | Progress advances throughout and the editor opens; write the elapsed time in Notes | | | |
 | PF-2 | Cold start (subsequent) | Kill app, re-launch, time to editor | <5s | | | |
 | PF-3 | Warm start | Home → return to app | <2s | | | |
 | PF-4 | Memory (idle) | Open app, check `dumpsys meminfo` | <400MB | | | |
