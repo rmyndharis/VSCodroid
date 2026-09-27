@@ -219,9 +219,11 @@ class NoticesTest {
         // one caller: drop the button that calls it and the APK still carries all
         // five documents, every assertion here still passes, and nothing on a
         // device can reach any of them. Little else notices. Both methods stay
-        // compiled and their own KDoc keeps naming them, and lint fails only a
-        // button taken out whole, whose label is then an unused string; a call
-        // dropped from behind a label that stays passes it.
+        // compiled and their own KDoc keeps naming them. Lint fails only the
+        // About dialog's Licenses button taken out whole, whose label is then an
+        // unused string. The License Texts label also titles the dialog it opens,
+        // so removing that button passes lint, as does a call dropped from behind
+        // a label that stays.
         //
         // Reading the source is what is available: the activity binds a service
         // and builds a WebView on the way to these dialogs, so there is no seam
