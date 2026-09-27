@@ -122,7 +122,7 @@ These methods are called from Kotlin via `evaluateJavascript()`:
 
 There is no `window.__vscodroid.injectKey`, and this block described one until it
 was checked. The page is not asked to inject anything: `KeyInjector.injectKey` is
-Kotlin, and it delivers the press itself, by one of two routes.
+Kotlin, and it delivers the press itself, by one of three routes.
 
 A printable ASCII character pressed with no Ctrl, Alt or Meta is **typed**, as
 real Android `KeyEvent`s dispatched through `webView.dispatchKeyEvent`. A
@@ -131,13 +131,19 @@ and performs no default action: that is why `{` announced as a DOM event inserte
 nothing at all. Text has to enter through the browser's own input path, and a real
 key press is the only way into it from Kotlin.
 
-Everything else is **announced**: a key spelled out rather than typed (`Tab`,
-`Escape`, `PageDown`), and any key held with Ctrl, Alt or Meta, becomes the
-`KeyboardEvent` below, because that is what the workbench resolves its bindings
-from. `isTextEntry` decides which route a press takes and `typeCharacter` is the
-first of them; both live in the `keyboard` package beside `KeyInjector`.
+The trackpad arrows, `Home`, `End`, `PageUp` and `PageDown` are **pressed** the
+same way, as real `KeyEvent`s listed in `NAVIGATION_KEYS`, with any latched
+modifier as meta state, so they move the caret in text boxes and reach extension
+webviews.
 
-Nothing needs to be defined on the page for either route to work, and defining a
+Everything else is **announced**: a key spelled out rather than typed (`Tab`,
+`Escape`, `F7`), and any character held with Ctrl, Alt or Meta, becomes the
+`KeyboardEvent` below, because that is what the workbench resolves its bindings
+from. `isTextEntry` and `NAVIGATION_KEYS` decide which route a press takes and
+`typeCharacter` is the first of them; all three live in the `keyboard` package
+beside `KeyInjector`.
+
+Nothing needs to be defined on the page for any route to work, and defining a
 hook by that name (which is what following the old text led to) leaves a function
 nothing ever calls.
 

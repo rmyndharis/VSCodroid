@@ -12,7 +12,8 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 
 /**
- * Which presses are typed and which are announced.
+ * Which presses are typed, which navigation keys are pressed, and which are
+ * announced.
  *
  * Measured on a device before this split existed: tapping `{}` or `()` on the
  * key row logged a press and inserted nothing, while Tab indented and the soft
@@ -39,6 +40,9 @@ class KeyInjectorTextEntryTest {
     /** Every string the injector asked the layout to type. */
     private val asked = mutableListOf<String>()
 
+    /** Every navigation press the injector built: key code, scan code, meta state. */
+    private val pressed = mutableListOf<Triple<Int, Int, Int>>()
+
     @BeforeEach
     fun setUp() {
         // Logger.w is not gated on debugEnabled, and the fallback case below
@@ -50,7 +54,14 @@ class KeyInjectorTextEntryTest {
     }
 
     private fun injector(events: List<KeyEvent>? = listOf(down, up)) =
-        KeyInjector(webView) { text -> asked.add(text); events }
+        KeyInjector(
+            webView,
+            keyEventsFor = { text -> asked.add(text); events },
+            navigationEventsFor = { keyCode, scanCode, metaState ->
+                pressed.add(Triple(keyCode, scanCode, metaState))
+                listOf(down, up)
+            },
+        )
 
     @Test
     fun `a bracket is typed as a key press, not announced as a DOM event`() {
@@ -63,11 +74,78 @@ class KeyInjectorTextEntryTest {
     }
 
     @Test
-    fun `Tab is still announced as a DOM event`() {
-        injector().injectKey("Tab")
+    fun `Tab, Escape and the function keys are still announced as DOM events`() {
+        // A real Tab moves focus, and the Explorer's rename and New File boxes
+        // commit the typed name when they lose it. A real Escape blurs the
+        // focused element once a real arrow has turned on spatial navigation.
+        for (key in listOf("Tab", "Escape", "F5")) injector().injectKey(key)
 
-        assertTrue(asked.isEmpty(), "Tab is a command, not a character; the layout must not be asked to type it")
+        assertTrue(asked.isEmpty(), "these are commands, not characters; the layout must not be asked to type them")
+        assertTrue(pressed.isEmpty(), "a command key was pressed as a real key: $pressed")
         verify(exactly = 0) { webView.dispatchKeyEvent(any()) }
+        verify(exactly = 3) { webView.evaluateJavascript(any(), any()) }
+    }
+
+    @Test
+    fun `a trackpad arrow is pressed as a real key with the latched modifiers as meta state`() {
+        // An announced arrow moves nothing in a text box and never reaches a
+        // frame; a real one does both. Shift has to ride along as meta state, or
+        // a Shift-drag stops selecting.
+        injector().injectKey("ArrowLeft", shiftKey = true)
+
+        assertEquals(
+            listOf(Triple(KeyEvent.KEYCODE_DPAD_LEFT, 105, KeyEvent.META_SHIFT_ON or KeyEvent.META_SHIFT_LEFT_ON)),
+            pressed,
+        )
+        verify(exactly = 1) { webView.dispatchKeyEvent(down) }
+        verify(exactly = 1) { webView.dispatchKeyEvent(up) }
+        verify(exactly = 0) { webView.evaluateJavascript(any(), any()) }
+    }
+
+    @Test
+    fun `Ctrl on the row reaches a navigation key as meta state and nothing else does`() {
+        injector().injectKey("ArrowRight", ctrlKey = true)
+
+        val meta = pressed.single().third
+        assertEquals(KeyEvent.META_CTRL_ON or KeyEvent.META_CTRL_LEFT_ON, meta, "Ctrl+arrow lost or gained a modifier")
+        verify(exactly = 0) { webView.evaluateJavascript(any(), any()) }
+    }
+
+    @Test
+    fun `navigation keys carry the scan code Chromium turns into KeyboardEvent code`() {
+        // Linux evdev codes, which is the column Chromium's Android key code
+        // conversion reads. A zero here delivers the key with code "".
+        assertEquals(
+            mapOf(
+                "ArrowUp" to 103, "ArrowLeft" to 105, "ArrowRight" to 106, "ArrowDown" to 108,
+                "Home" to 102, "End" to 107, "PageUp" to 104, "PageDown" to 109,
+            ),
+            NAVIGATION_KEYS.mapValues { it.value.second },
+        )
+        // MOVE_HOME is 122. KEYCODE_HOME, 3, is the system Home button.
+        assertEquals(122, NAVIGATION_KEYS.getValue("Home").first)
+        assertEquals(123, NAVIGATION_KEYS.getValue("End").first)
+    }
+
+    @Test
+    fun `the navigation keys are the trackpad's arrows and the row's Home, End, PgUp and PgDn`() {
+        // Derived from the row, so Tab, Escape and the function keys, which are
+        // all on it, fail the second assertion if one is ever added.
+        val row = KeyPages.defaults.flatMap { it.items }
+            .filterIsInstance<KeyItem.Button>()
+            .flatMap { button -> listOf(button.value) + button.alternates.map { it.value } }
+            .toSet()
+        assertEquals(ARROW_ACTIONS.map { it.second }.toSet(), NAVIGATION_KEYS.keys - row)
+        assertEquals(setOf("Home", "End", "PageUp", "PageDown"), NAVIGATION_KEYS.keys.intersect(row))
+    }
+
+    @Test
+    fun `a navigation press the WebView refuses falls back to the DOM event`() {
+        every { webView.dispatchKeyEvent(any()) } returns false
+
+        injector().injectKey("ArrowDown")
+
+        assertEquals(1, pressed.size, "the press was never tried, so this is not the refusal path")
         verify(exactly = 1) { webView.evaluateJavascript(any(), any()) }
     }
 
@@ -145,10 +223,7 @@ class KeyInjectorTextEntryTest {
     fun `an announced keystroke asks for no answer on a build that logs nothing`() {
         // A callback makes the renderer serialize the script's return value back
         // across the process boundary, and the only thing that reads it is
-        // Logger.d, which is gated on a debuggable build. Every trackpad arrow
-        // takes this path, and one touch delta in the fast gear pays out several,
-        // so on the row's one continuous control the round trip was bought
-        // dozens of times a second to discard the answer.
+        // Logger.d, which is gated on a debuggable build.
         //
         // Logger.debugEnabled is false here because Logger.init is never called
         // off a device, which is also what a release APK reports.

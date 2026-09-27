@@ -298,6 +298,11 @@ class ExtraKeyRow @JvmOverloads constructor(
 
     init {
         orientation = VERTICAL
+        // A real arrow the page leaves unused makes the WebView hand focus to the
+        // nearest focusable view, and ViewPager2's RecyclerView below it is one,
+        // even in touch mode; losing focus hides the keyboard. Nothing on the row
+        // needs input focus: its keys are not focusable (ExtraKeyButton).
+        descendantFocusability = FOCUS_BLOCK_DESCENDANTS
         setBackgroundColor(context.getColor(R.color.colorSurface))
 
         // ViewPager2 for swipeable key pages

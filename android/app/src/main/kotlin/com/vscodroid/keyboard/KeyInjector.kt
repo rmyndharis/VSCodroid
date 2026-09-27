@@ -9,21 +9,28 @@ import com.vscodroid.util.Logger
  * @param keyEventsFor how a character becomes key presses. Defaulted rather than
  * called directly so the routing can be exercised on the JVM: `KeyCharacterMap`
  * and `KeyEvent` are android.jar stubs that throw off a device.
+ * @param navigationEventsFor how a [NAVIGATION_KEYS] entry becomes its press,
+ * defaulted for the same reason.
  */
 class KeyInjector(
     private val webView: WebView,
-    private val keyEventsFor: (String) -> List<KeyEvent>? = ::virtualKeyboardEvents
+    private val keyEventsFor: (String) -> List<KeyEvent>? = ::virtualKeyboardEvents,
+    private val navigationEventsFor: (keyCode: Int, scanCode: Int, metaState: Int) -> List<KeyEvent> =
+        ::navigationKeyEvents,
 ) {
     private val tag = "KeyInjector"
 
     /**
-     * Delivers one press of [key], by whichever of the two routes it needs.
+     * Delivers one press of [key], by whichever of the three routes it needs.
      *
-     * See [isTextEntry] for which is which and why there have to be two. In
-     * short: a character is typed as a real key press, because a synthetic DOM
-     * event performs no default action and inserts nothing; everything else,
-     * and anything held with Ctrl, Alt or Meta, is announced as a DOM event,
-     * because that is what the workbench resolves its bindings from.
+     * See [isTextEntry] for the first two and why they differ. In short: a
+     * character is typed as a real key press, because a synthetic DOM event
+     * performs no default action and inserts nothing; a navigation key is
+     * pressed for real too, with any latched modifier as its meta state, for the
+     * reason [NAVIGATION_KEYS] gives; everything else, and any character held
+     * with Ctrl, Alt or Meta, is announced as a DOM event, because that is what
+     * the workbench resolves its bindings from. Tab and Escape stay announced,
+     * for the reasons [NAVIGATION_KEYS] gives.
      */
     fun injectKey(
         key: String,
@@ -37,6 +44,10 @@ class KeyInjector(
         // so resolving it here is what makes those reachable at all.
         val typed = if (shiftKey) KeyMapping.shiftedForm(key) ?: key else key
         if (isTextEntry(typed, ctrlKey, altKey, metaKey) && typeCharacter(typed)) return
+        NAVIGATION_KEYS[key]?.let { (keyCode, scanCode) ->
+            val metaState = navigationMetaState(ctrlKey, altKey, shiftKey, metaKey)
+            if (press(key, navigationEventsFor(keyCode, scanCode, metaState))) return
+        }
         announceKeystroke(key, ctrlKey, altKey, shiftKey, metaKey)
     }
 
@@ -64,6 +75,17 @@ class KeyInjector(
             Logger.w(tag, "no press types '$key' on the virtual keyboard layout")
             return false
         }
+        return press(key, events)
+    }
+
+    /**
+     * Dispatches [events] at the WebView, false when the view refused one.
+     *
+     * True means the WebView took the events, not that the page acted on them:
+     * while the soft keyboard is connected, the WebView queues a key event
+     * behind the keyboard's own input and answers true whatever happens next.
+     */
+    private fun press(key: String, events: List<KeyEvent>): Boolean {
         var handled = true
         for (event in events) handled = webView.dispatchKeyEvent(event) && handled
         if (!handled) {
@@ -74,7 +96,7 @@ class KeyInjector(
             Logger.w(tag, "the WebView refused the press for '$key'")
             return false
         }
-        Logger.d(tag, "typed key=$key presses=${events.size}")
+        Logger.d(tag, "pressed key=$key presses=${events.size}")
         return true
     }
 
@@ -129,19 +151,7 @@ class KeyInjector(
         // The callback is attached only where something reads it. Passing one
         // makes the renderer serialize the script's return value back across
         // the process boundary, and the body below is `Logger.d`, which does
-        // nothing on a build that is not debuggable. The trackpad is what makes
-        // that matter: an arrow is not text entry, so every one comes through
-        // here, and one MOVE delta in the fast gear pays out several arrows,
-        // each of which was buying a round trip to discard the answer.
-        //
-        // The script itself is still one per arrow, and knowingly so. The
-        // trackpad invokes its callback once per direction, so a MOVE that pays
-        // out three builds and posts three of these. Collapsing them needs a
-        // second entry point taking a list and an IIFE that loops, which is a
-        // shape the text-entry routing above does not generalise to, and the
-        // remaining cost is a one-way post with no reply to wait for. It is
-        // worth doing when a fast flick is measured and this is what it costs,
-        // not before.
+        // nothing on a build that is not debuggable.
         val report = if (Logger.debugEnabled) {
             ValueCallback<String> { target ->
                 // What this can honestly report is where the event went, not
@@ -194,6 +204,21 @@ class KeyInjector(
      * EditContext path, which Chromium reports to the `EditContext` object and
      * never to the element, and typing inside a frame, which no event in this
      * document can see.
+     *
+     * The same script guards an arrow at the edge of a text box. A real arrow
+     * turns WebView spatial navigation on until the next touch on the page, and
+     * the trackpad is not on the page, so it stays on while the user types.
+     * Under it, an arrow that cannot move the caret any further, at the start or
+     * the end of the text, moves focus to the nearest control instead. A control
+     * that takes no text drops the soft keyboard and this row with it, and the
+     * Explorer's rename box commits the half-typed name when it loses focus.
+     * Cancelling such a press ends it where a desktop would. A key some handler
+     * already cancelled is left alone: the editor, the quick input and the
+     * terminal cancel the arrows they use. It covers this document only, so a
+     * text box inside an extension webview, a frame of another origin, is not
+     * guarded. It applies to a hardware keyboard's arrows too, which is
+     * intended. The edges are read in logical order, which is the screen's
+     * order for left-to-right text.
      *
      * Call once after the page finishes loading.
      */
@@ -444,6 +469,20 @@ class KeyInjector(
                     mod.ctrl = false;
                     mod.alt = false;
                     mod.shift = false;
+                });
+
+                // An arrow at the edge of a text box ends there instead of
+                // moving focus. See the KDoc for why the edge is dangerous.
+                // Bubble phase, so any handler that uses the key has had it.
+                var EDGE = { ArrowLeft: -1, ArrowUp: -1, ArrowRight: 1, ArrowDown: 1 };
+                window.addEventListener('keydown', function(e) {
+                    if (e.defaultPrevented || !EDGE.hasOwnProperty(e.key)) return;
+                    var t = e.composedPath()[0];
+                    if (!t || (t.tagName !== 'INPUT' && t.tagName !== 'TEXTAREA')) return;
+                    var start = t.selectionStart, end = t.selectionEnd;
+                    if (start === null || (start !== end && !e.shiftKey)) return;
+                    var moving = t.selectionDirection === 'backward' ? start : end;
+                    if (moving === (EDGE[e.key] < 0 ? 0 : t.value.length)) e.preventDefault();
                 });
             })();
         """.trimIndent()

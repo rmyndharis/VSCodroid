@@ -1,5 +1,6 @@
 package com.vscodroid.keyboard
 
+import android.view.InputDevice
 import android.view.KeyCharacterMap
 import android.view.KeyEvent
 import androidx.test.ext.junit.runners.AndroidJUnit4
@@ -118,6 +119,31 @@ class TextEntryInstrumentedTest {
                 event.eventTime,
                 event.downTime,
             )
+        }
+    }
+
+    @Test
+    fun everyNavigationKeyIsOnePressWithItsScanCodeAndModifiers() {
+        // The JVM cases only ever see a fake builder. A lost scan code delivers
+        // the key with KeyboardEvent.code "", and a lost meta state turns a
+        // Shift-drag on the trackpad into plain caret movement.
+        val shift = KeyEvent.META_SHIFT_ON or KeyEvent.META_SHIFT_LEFT_ON
+        for ((name, codes) in NAVIGATION_KEYS) {
+            val (keyCode, scanCode) = codes
+            val events = navigationKeyEvents(keyCode, scanCode, shift)
+            assertEquals(
+                "$name is not one press, down then up",
+                listOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP),
+                events.map { it.action },
+            )
+            for (event in events) {
+                assertEquals("$name key code", keyCode, event.keyCode)
+                assertEquals("$name scan code", scanCode, event.scanCode)
+                assertTrue("$name lost the latched Shift", event.isShiftPressed)
+                assertEquals("$name device", KeyCharacterMap.VIRTUAL_KEYBOARD, event.deviceId)
+                assertEquals("$name source", InputDevice.SOURCE_KEYBOARD, event.source)
+                assertEquals("$name repeat count", 0, event.repeatCount)
+            }
         }
     }
 }

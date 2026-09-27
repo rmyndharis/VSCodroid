@@ -6,6 +6,7 @@ import io.mockk.mockk
 import io.mockk.slot
 import io.mockk.unmockkAll
 import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -350,6 +351,50 @@ class KeyInjectorLatchTest {
                 hook.contains("mod.alt = false;") &&
                 hook.contains("mod.shift = false;"),
             "the blur hook registers but spends nothing. It reads: $hook"
+        )
+    }
+
+    /**
+     * A real arrow turns WebView spatial navigation on, and under it an arrow at
+     * the start or end of a text box moves focus out of the box: the keyboard
+     * and the row can go with it, and the Explorer's rename box commits the
+     * half-typed name on blur. The guard cancels that press and nothing else.
+     *
+     * NEGATIVE CONTROL: deleting the listener fails the slice; registering it
+     * in the capture phase, or adding Tab or Home to EDGE, fails an assertion.
+     */
+    @Test
+    fun `an arrow at the edge of a text box ends there instead of moving focus`() {
+        val installed = installedListener()
+        val start = installed.indexOf("var EDGE =")
+        assertTrue(start >= 0, "nothing guards an arrow at the edge of a text box. It reads:\n$installed")
+        val end = installed.indexOf("});", start)
+        assertTrue(end > start, "the edge guard's listener is never closed")
+        val guard = installed.substring(start, end + "});".length)
+
+        val edge = Regex("""var EDGE = \{([^}]*)\}""").find(guard)!!.groupValues[1]
+        assertEquals(
+            ARROW_ACTIONS.map { it.second }.toSet(),
+            Regex("""(\w+):""").findAll(edge).map { it.groupValues[1] }.toSet(),
+            "the guard covers keys spatial navigation never moves focus with. It reads: $guard",
+        )
+        assertTrue(
+            guard.contains("window.addEventListener('keydown', function(e) {") && !guard.contains("}, true)"),
+            "the guard is not a bubble-phase keydown listener, so it can cancel an arrow " +
+                "before the editor or the quick input has used it. It reads: $guard",
+        )
+        assertTrue(
+            guard.contains("if (e.defaultPrevented"),
+            "the guard acts on an arrow a handler already used. It reads: $guard",
+        )
+        assertTrue(
+            guard.contains("e.composedPath()[0]"),
+            "the guard does not read the innermost target, and at the window a box " +
+                "inside a shadow root is reported as its shadow host. It reads: $guard",
+        )
+        assertTrue(
+            guard.contains("e.preventDefault();"),
+            "the guard cancels nothing, so the arrow still moves focus. It reads: $guard",
         )
     }
 }

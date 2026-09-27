@@ -304,8 +304,8 @@ flowchart TD
   APP --> KEY["keyboard/"]
   KEY --> KEY1["ExtraKeyRow.kt (Custom View for extra keys)"]
   KEY --> KEY2["ExtraKeyButton.kt (Individual key button)"]
-  KEY --> KEY3["KeyInjector.kt (real key presses for characters, JS KeyboardEvents for chords)"]
-  KEY --> KEY4["TextEntry.kt (isTextEntry: which of the two routes a press takes)"]
+  KEY --> KEY3["KeyInjector.kt (real key presses for characters and navigation keys, JS KeyboardEvents for other commands and chords)"]
+  KEY --> KEY4["TextEntry.kt (isTextEntry, NAVIGATION_KEYS: which of the three routes a press takes)"]
   APP --> SETUP["setup/"]
   SETUP --> SET1["FirstRunSetup.kt (Binary extraction, initialization)"]
   SETUP --> SET2["ToolchainManager.kt (On-demand toolchain install)"]
@@ -647,10 +647,11 @@ modifier clears exactly as it does on an ordinary key.
 
 ### 5.2 Key Injection
 
-`KeyInjector.injectKey` has two routes, and `isTextEntry` (`TextEntry.kt`) chooses
-between them. No snippet is reproduced here: this section carried one for a long time,
-it drifted from the signature, the event pair and the quoting all at once, and a stale
-copy of the code is worse than a pointer to it. `KeyInjector.kt` is the source of truth.
+`KeyInjector.injectKey` has three routes, chosen by `isTextEntry` and `NAVIGATION_KEYS`
+(both in `TextEntry.kt`). No snippet is reproduced here: this section carried one for a
+long time, it drifted from the signature, the event pair and the quoting all at once, and
+a stale copy of the code is worse than a pointer to it. `KeyInjector.kt` is the source of
+truth.
 
 **Characters are typed.** A single ASCII character in `0x20..0x7E` pressed with no Ctrl,
 Alt or Meta goes through `typeCharacter`, which asks `KeyCharacterMap.VIRTUAL_KEYBOARD`
@@ -660,11 +661,28 @@ shifted forms is written by hand. This route exists because a `KeyboardEvent` co
 in the page is untrusted: listeners run, no default action is performed, and the
 character is never inserted. That is what made `{`, `;` and `"` do nothing at all.
 
+**Navigation keys are pressed.** The four trackpad arrows (a drag or one of the
+`ARROW_ACTIONS`) and the row's `Home`, `End`, `PageUp` and `PageDown` go through the same
+dispatch as real `KeyEvent` pairs, with any latched Ctrl, Alt or Shift as meta state, so
+they move the caret and select in text boxes and reach extension webviews, where an
+announced arrow did nothing. Each carries the evdev scan code a hardware keyboard sends,
+because Chromium derives `KeyboardEvent.code` from it, and Home and End use
+`KEYCODE_MOVE_HOME`/`KEYCODE_MOVE_END`, not the system Home key. A press the WebView
+refuses falls back to the announce route. A real arrow turns WebView spatial navigation on
+until the next touch on the page, so an arrow at the start or end of a text box would move
+focus out of it; a `keydown` listener installed with the modifier interceptor cancels such a
+press when no handler used it. It reaches the workbench document only, not a text box
+inside an extension webview. `ExtraKeyRow` sets `FOCUS_BLOCK_DESCENDANTS`, because an
+arrow the page leaves unused makes the WebView hand Android focus to the nearest focusable
+view, and ViewPager2's RecyclerView is one.
+
 **Everything else is announced.** A key that names a command rather than a character
-(`Tab`, `Escape`, `F7`, `PageDown`), and any key held with Ctrl, Alt or Meta, is sent as
-a `keydown`/`keyup` pair built by `evaluateJavascript` at `document.activeElement`, since
-that is what the workbench resolves its key bindings from. Values going into that script
-are escaped by `KeyMapping.jsQuote`.
+(`Tab`, `Escape`, `F7`), and any character held with Ctrl, Alt or Meta, is sent as a
+`keydown`/`keyup` pair built by `evaluateJavascript` at `document.activeElement`, since
+that is what the workbench resolves its key bindings from. Tab stays here because a real
+one moves focus, and the Explorer's rename and New File boxes commit the typed name when
+they lose it; Escape because under spatial navigation an unhandled real Escape blurs the
+focused element. Values going into that script are escaped by `KeyMapping.jsQuote`.
 
 A latched Shift is resolved before the split, by `KeyMapping.shiftedForm`, because it
 changes which character is typed rather than whether it is typed. If `typeCharacter`

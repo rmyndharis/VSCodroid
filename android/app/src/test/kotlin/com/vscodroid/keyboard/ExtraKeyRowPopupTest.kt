@@ -6,7 +6,8 @@ import org.junit.jupiter.api.Test
 import java.io.File
 
 /**
- * That the alternates window is owned by the row that opens it.
+ * That the alternates window is owned by the row that opens it, and that the
+ * row itself never takes input focus.
  *
  * A [LongPressPopup] is a window, not a child view: nothing takes it down with
  * the row it was anchored to. It used to be constructed and dropped on the
@@ -158,6 +159,31 @@ class ExtraKeyRowPopupTest {
             body.contains("longPressPopup?.dismiss()"),
             "detaching the row no longer dismisses the popup, so the window outlives the " +
                 "view it is anchored to. It reads:\n$body",
+        )
+    }
+
+    /**
+     * The row cannot take input focus from the WebView.
+     *
+     * A real arrow the page leaves unused, which the trackpad now sends, makes
+     * the WebView move focus to the nearest focusable view, and ViewPager2's
+     * RecyclerView is focusable even in touch mode. Focus there hides the
+     * keyboard, and the row with it.
+     */
+    @Test
+    fun `nothing in the row can take input focus`() {
+        val source = SourceScan.withoutComments(
+            SourceScan.read("src/main/kotlin/com/vscodroid/keyboard/ExtraKeyRow.kt"),
+        )
+        val init = SourceScan.body(source, "init {")
+        assertTrue(
+            init.contains("orientation = VERTICAL"),
+            "the block read is not the row's initialiser. It reads:\n$init",
+        )
+        assertTrue(
+            init.contains("descendantFocusability = FOCUS_BLOCK_DESCENDANTS"),
+            "the row's children can take focus, so an unused arrow can move it into the " +
+                "pager and drop the keyboard. It reads:\n$init",
         )
     }
 

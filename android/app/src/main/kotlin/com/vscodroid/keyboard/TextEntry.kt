@@ -28,6 +28,9 @@ import android.view.KeyEvent
  * chord is a command however it is spelled. Shift does not: the layout below
  * presses Shift itself for the characters that need it.
  *
+ * A spelled-out key that moves the caret is the third case, and it is pressed
+ * rather than announced, modifiers and all: see [NAVIGATION_KEYS].
+ *
  * ASCII only, because [virtualKeyboardEvents] resolves through a US layout and
  * anything outside it has no key to press there.
  */
@@ -60,6 +63,62 @@ internal fun virtualKeyboardEvents(text: String): List<KeyEvent>? {
         KeyEvent(
             now, now, event.action, event.keyCode, event.repeatCount, event.metaState,
             KeyCharacterMap.VIRTUAL_KEYBOARD, event.scanCode, event.flags,
+            InputDevice.SOURCE_KEYBOARD,
+        )
+    }
+}
+
+/**
+ * The keys pressed as real key events, by name: the Android key code and the
+ * evdev scan code a hardware keyboard sends for each.
+ *
+ * An announced arrow runs the page's listeners and performs no default action.
+ * The editor and the terminal do not notice, because their own handlers do the
+ * moving. A text box has no such handler, so the caret stays put in the
+ * Explorer's rename box, the Command Palette and the find widget, and an
+ * announced key never reaches a frame at all. A real press is what a hardware
+ * keyboard sends, and it works in all of them.
+ *
+ * The scan code is what Chromium derives `KeyboardEvent.code` from; without
+ * one every press arrives with a `code` of "", which a listener reading `code`
+ * rather than `key` takes for no key at all. `MOVE_HOME` and `MOVE_END`, never
+ * `KEYCODE_HOME`, which is the system Home button.
+ *
+ * Tab, Escape and the function keys stay announced. A real Tab moves focus,
+ * and the Explorer's rename and New File boxes commit the typed name when they
+ * lose it. A real arrow turns on WebView spatial navigation until the next
+ * touch on the page, and under it an unhandled real Escape blurs whatever has
+ * focus. The function keys are workbench bindings, which the announced event
+ * already reaches.
+ */
+internal val NAVIGATION_KEYS: Map<String, Pair<Int, Int>> = mapOf(
+    "ArrowLeft" to (KeyEvent.KEYCODE_DPAD_LEFT to 105),
+    "ArrowUp" to (KeyEvent.KEYCODE_DPAD_UP to 103),
+    "ArrowRight" to (KeyEvent.KEYCODE_DPAD_RIGHT to 106),
+    "ArrowDown" to (KeyEvent.KEYCODE_DPAD_DOWN to 108),
+    "Home" to (KeyEvent.KEYCODE_MOVE_HOME to 102),
+    "End" to (KeyEvent.KEYCODE_MOVE_END to 107),
+    "PageUp" to (KeyEvent.KEYCODE_PAGE_UP to 104),
+    "PageDown" to (KeyEvent.KEYCODE_PAGE_DOWN to 109),
+)
+
+/** The row's latched modifiers as the meta state a hardware keyboard would report. */
+internal fun navigationMetaState(ctrl: Boolean, alt: Boolean, shift: Boolean, meta: Boolean): Int =
+    (if (ctrl) KeyEvent.META_CTRL_ON or KeyEvent.META_CTRL_LEFT_ON else 0) or
+        (if (alt) KeyEvent.META_ALT_ON or KeyEvent.META_ALT_LEFT_ON else 0) or
+        (if (shift) KeyEvent.META_SHIFT_ON or KeyEvent.META_SHIFT_LEFT_ON else 0) or
+        (if (meta) KeyEvent.META_META_ON or KeyEvent.META_META_LEFT_ON else 0)
+
+/**
+ * One press of a [NAVIGATION_KEYS] entry, down then up, stamped and addressed
+ * the way [virtualKeyboardEvents] stamps a typed character.
+ */
+internal fun navigationKeyEvents(keyCode: Int, scanCode: Int, metaState: Int): List<KeyEvent> {
+    val now = SystemClock.uptimeMillis()
+    return listOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP).map { action ->
+        KeyEvent(
+            now, now, action, keyCode, 0, metaState,
+            KeyCharacterMap.VIRTUAL_KEYBOARD, scanCode, 0,
             InputDevice.SOURCE_KEYBOARD,
         )
     }

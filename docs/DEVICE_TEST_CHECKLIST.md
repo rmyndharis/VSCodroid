@@ -65,6 +65,8 @@
 | KB-25 | The alternates go away with the row | Hold `{}` on the key row until `[` and `<` appear. With them up, turn the phone over; then hold `{}` again and let the keyboard go, by tapping outside a text area or with the keyboard's own hide key | Both times the alternates disappear with the row. Before the fix they stayed: after the rotation they sat over the middle of the soft keyboard, a screen's width from the key, and after the keyboard went down they sat over the editor with nothing under them, until the user tapped elsewhere. `smallestScreenWidthDp` does not change on rotation, so this is the case the popup's own teardown could not see | | |
 | KB-26 | Menu survives the keyboard | With the keyboard up, press and hold a word in a file until the menu opens, then lift | The menu stays open and the keyboard stays up. Tap Rename Symbol: the rename box opens. Reopen it and tap Esc on the key row: it closes. Reopen it and tap the file above it: it closes. Before this row was added the menu closed itself about 60ms after opening | | |
 | KB-27 | No chords beside menu items | Open the same menu, then the explorer's (hold a file), then the menubar's File menu | None of them shows a keyboard shortcut next to an item. Every item still runs on a tap | | |
+| KB-28 | Trackpad and navigation keys in text boxes | In turn in the Explorer rename box (hold a file, Rename), the Command Palette and the find widget: type a word, drag the trackpad left 2 and type X; latch Shift and drag left 2; press Home and End on the last page. Then serve a page with two inputs from the terminal (`python3 -m http.server 8000` in a folder holding one), open it with `Simple Browser: Show` at `http://127.0.0.1:8000/`, and repeat in its first input. Record the API level, the WebView version and the Gboard version, and whether Gboard showed the word underlined (composing) when the drag began | X lands two characters from the end, the Shift-drag selects two characters with the Shift badge lit until the finger lifts, and Home and End reach the ends of the text, in all four boxes. Down in the Command Palette moves the highlight. Tab on the row still indents in the editor (KB-5), and in the rename box it renames nothing. Before the fix the caret did not move in any of them | | |
+| KB-29 | An arrow past the edge of a text box | In the rename box with the caret at the end, drag right 4 and down 2; with it at the start, drag left 4 and up 2. Repeat in the Command Palette and the find widget. Run `adb shell dumpsys input_method \| grep -E 'mServedView\|mInputShown'` after each | The box stays open and focused, the keyboard and the key row stay up, and the Explorer still shows the old name. `mServedView` names `android.webkit.WebView` and `mInputShown` is true. In a Simple Browser input (KB-28), which nothing guards, record where focus goes | | |
 
 ## 4. Screen & Orientation
 
@@ -266,7 +268,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 |----------|-------|------|------|------|
 | Device Matrix | 4 | | | |
 | Android Versions | 4 | | | |
-| Keyboard Input | 27 | | | |
+| Keyboard Input | 29 | | | |
 | Screen & Orientation | 10 | | | |
 | Editor Operations | 14 | | | |
 | Extensions | 7 | | | |
@@ -277,7 +279,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | Terminal & Tools | 13 | | | |
 | SAF & Files | 17 | | | |
 | Display Language | 6 | | | |
-| **Total** | **132** | | | |
+| **Total** | **134** | | | |
 
 **Overall Result**: [ ] PASS / [ ] FAIL
 
