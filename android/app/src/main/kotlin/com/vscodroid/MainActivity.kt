@@ -1897,10 +1897,10 @@ class MainActivity : AppCompatActivity() {
                 // follows re-sends the token in the query, which the server turns
                 // into a fresh cookie.
                 //
-                // Not a fresh token -- an earlier version of this comment said
-                // that and it is wrong. The server writes the token once and
-                // reuses it on every later start, so what a cold start renews is
-                // the cookie, never the value inside it.
+                // Nor is a server restart. Every spawn writes a new token, and
+                // every spawn is followed by onServerReady, whose loadVSCode
+                // rebuilds the URL with it, so the cookie this reload sends
+                // already holds the live one.
                 markAppNavigation()
                 webView?.reload()
             }
@@ -2750,10 +2750,13 @@ class MainActivity : AppCompatActivity() {
         // folder, reopening the workspace the user had just closed. [fromUrl] is
         // for the caller whose WebView no longer holds the URL it is asking about,
         // which is the renderer-crash path: [recreateWebView] builds a new one.
-        emptyWindowUrl(fromUrl ?: webView?.url, port)?.let {
+        //
+        // Rebuilt with the live token rather than reloaded verbatim: each spawn
+        // has a token of its own, and the cookie a verbatim reload relied on
+        // named the server that set it.
+        if (emptyWindowUrl(fromUrl ?: webView?.url, port) != null) {
             Logger.i(tag, "Restoring the closed-folder window rather than a folder")
-            markAppNavigation()
-            webView?.loadUrl(it)
+            navigateToFolder(port, null)
             return
         }
         // onServerReady routes a restart through here without a folder. Falling back
@@ -2791,15 +2794,9 @@ class MainActivity : AppCompatActivity() {
             // The connection token rides along, because this is the branch every
             // cold start takes: `onServerReady` calls this with no folder and the
             // WebView is still holding the `data:` placeholder, so `known` is
-            // null. `ProcessManager.connectionToken` is `cachedToken ?: readTokenFile()`
-            // and nothing has read it before the first navigation, so resolving it
-            // where [navigateToFolder] used to meant a `stat` and a `readText` on
-            // the main thread on every cold launch, at exactly the moment the
-            // workbench URL is built. `MainThreadWatch` lists that read among the
-            // sites its measured inventory did NOT see, explaining the absence as
-            // needing an interaction a cold launch does not perform; a cold launch
-            // always navigates. Resolving it here costs nothing extra, because the
-            // hop was already being made, and makes that inventory true again.
+            // null. It is a field read: `ProcessManager` reads the token file in
+            // its readiness probe, on Dispatchers.IO, before `onServerReady` can
+            // call this, so no navigation reads the disk for it.
             val resolved = withContext(Dispatchers.IO) {
                 val connectionToken = nodeService?.getConnectionToken()
                 // The close is asked about before the remembered folder, and both
@@ -3261,11 +3258,10 @@ class MainActivity : AppCompatActivity() {
      * because this is the funnel every workbench load passes through, and one
      * route reaches it with the flag cleared. See the paragraph on it below.
      *
-     * [token] is the connection token, and it is a parameter so that the caller
-     * which already has a thread to spare can read it there. The default keeps
-     * every other caller as it was: reading it costs a `stat` and a small
-     * `readText` only until `ProcessManager` has cached it, which the first
-     * navigation of the run does. See [loadVSCode] for which caller pays it.
+     * [token] is the connection token, and it is a parameter so that a caller
+     * already holding it passes that value. The default reads what
+     * `ProcessManager` recorded when the server became ready, a field read with
+     * no disk behind it, and null while the server is not ready.
      */
     private fun navigateToFolder(
         port: Int,
@@ -6340,7 +6336,7 @@ internal fun workspaceDirectoryInForce(
     }
 
 /**
- * The URL to reload when the workbench had the folder closed, or null.
+ * The URL when it shows the workbench with the folder closed, or null.
  *
  * A closed folder is the third thing the workbench can be showing, and it is the
  * one the folder chain cannot express: [workbenchTarget] answers a path or
@@ -6348,13 +6344,14 @@ internal fun workspaceDirectoryInForce(
  * over a closed folder fell through to the remembered folder and put the user
  * back into the workspace they had just closed. `handleResumeFromBackground`
  * already sidesteps this by calling `reload()` rather than rebuilding a URL, and
- * this is the same answer for the paths that do rebuild.
+ * this is how the paths that do rebuild recognise the state.
  *
- * Returned verbatim and without a token. The workbench was already running, so
- * the server has turned the token into a cookie that outlives this by a week,
- * which is the reasoning the resume path states in full. A `folder` or
- * `workspace` URL is deliberately NOT returned: those the folder chain can name,
- * and it rebuilds them with a fresh token rather than reloading a stripped one.
+ * A predicate in practice: both callers test the answer for null and never load
+ * it. The URL carries no token, and the cookie that authenticated it named a
+ * server that a restart may since have replaced with one holding a new token, so
+ * the closed state is rebuilt through [workbenchUrl], which spells `ew=true` with
+ * the live one. A `folder` or `workspace` URL is deliberately NOT recognised:
+ * those the folder chain can name.
  *
  * What makes a URL ours is asked of [workbenchUrl] rather than spelled again
  * here. That keeps the host in exactly one expression, which is the affordance

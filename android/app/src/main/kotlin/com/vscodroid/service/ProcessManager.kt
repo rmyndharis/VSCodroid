@@ -11,10 +11,15 @@ import kotlinx.coroutines.delay
 import org.json.JSONObject
 import java.io.BufferedReader
 import java.io.File
+import java.io.IOException
 import java.io.InputStreamReader
+import java.io.RandomAccessFile
 import java.io.Reader
 import java.net.HttpURLConnection
 import java.net.URL
+import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.util.UUID
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.concurrent.thread
@@ -387,21 +392,23 @@ class ProcessManager(private val context: Context) {
 
     /**
      * The connection token the server requires on every route except `/version`,
-     * `/delay-shutdown` and `/callback`.
+     * `/delay-shutdown` and `/callback`, as held by the server this instance last
+     * saw become ready, or null whenever it is not ready.
      *
-     * The server owns this value, not us: with no connection-token flag on its
+     * Null while not ready because the port may be anyone's then: binding a
+     * loopback port needs no permission, and everything that reads this sends the
+     * value to that port. [probeReadiness] reads the file, under the same epoch as
+     * the readiness it records, and [rotateConnectionToken] replaces it before
+     * every spawn, so a token handed to whoever held the port while ours was down
+     * authenticates against no server that comes back.
+     *
+     * The server decides what it accepts: with no connection-token flag on its
      * command line it reads the file [Environment.getConnectionTokenPath] names,
-     * generates one if it is absent, and writes it back with mode 0600. Reading
-     * that file is therefore the only way to learn it, and it is only there once
-     * the server has started, which is why this is read on demand rather than
-     * cached at construction.
-     *
-     * Returns null before the server has written it. Callers that need it are all
-     * downstream of readiness, so in practice that is the "server failed to start"
-     * path, where a missing token is not the interesting failure.
+     * keeps content matching `[0-9A-Za-z_-]+`, and otherwise writes a new token
+     * there with mode 0600.
      */
     val connectionToken: String?
-        get() = cachedToken ?: readTokenFile()?.also { cachedToken = it }
+        get() = if (_isReady) cachedToken else null
 
     @Volatile
     private var cachedToken: String? = null
@@ -443,10 +450,8 @@ class ProcessManager(private val context: Context) {
      */
     internal var nanoClock: () -> Long = { System.nanoTime() }
 
-    // Cached on the first successful read and never invalidated, which is correct
-    // rather than merely convenient: the server generates the token only when the
-    // file is absent and otherwise reuses what is there, so the value survives its
-    // own restarts. Without the cache this would be a filesystem read on every
+    // Read only by [probeReadiness], off the main thread, and kept in [cachedToken]
+    // until the next readiness replaces it: the getter is asked on every
     // intercepted request, and the workbench issues hundreds during a cold load.
     private fun readTokenFile(): String? = try {
         File(Environment.getConnectionTokenPath(context))
@@ -457,6 +462,43 @@ class ProcessManager(private val context: Context) {
     } catch (e: Exception) {
         Logger.w(tag, "Could not read the connection token: ${e.message}")
         null
+    }
+
+    /**
+     * Gives the server about to be spawned a token no earlier one held.
+     *
+     * While our server is down the port can be bound by anything, and the page
+     * and its cookie may have sent it the old token by then. A new one per spawn
+     * makes what they sent worthless to the server that comes back.
+     *
+     * Rewritten in place rather than deleted for the server to create again: a
+     * new file needs a free inode and block, and on a full partition the server
+     * swallows the failed write and runs with a token nobody can read, so every
+     * page load would be refused. A UUID matches the server's own format, so it
+     * reads the file and never writes it. A link is never written through, since
+     * `setLength` would truncate whatever it points at; it is removed instead,
+     * as is a file that could not be rewritten, and the server then mints one.
+     */
+    private fun rotateConnectionToken() {
+        val file = File(Environment.getConnectionTokenPath(context))
+        val path = file.toPath()
+        if (Files.isRegularFile(path, LinkOption.NOFOLLOW_LINKS)) {
+            try {
+                val fresh = UUID.randomUUID().toString().toByteArray(Charsets.US_ASCII)
+                RandomAccessFile(file, "rw").use {
+                    it.write(fresh)
+                    it.setLength(fresh.size.toLong())
+                }
+                return
+            } catch (e: IOException) {
+                Logger.w(tag, "Could not rewrite the connection token: ${e.message}")
+            }
+        }
+        try {
+            Files.deleteIfExists(path)
+        } catch (e: IOException) {
+            Logger.w(tag, "Could not replace the connection token; the new server will reuse it")
+        }
     }
 
     // -- Callbacks --
@@ -744,8 +786,8 @@ class ProcessManager(private val context: Context) {
         // What IS wrong is that nothing distinguishes the survivor from a server
         // this class started. The health probe read a response code, so a
         // survivor satisfied readiness, `NodeService.announceReady` fired, and the
-        // WebView was pointed at it. That much worked -- the token matches,
-        // because `server.js` reuses the token file -- which is why nothing
+        // WebView was pointed at it. That much worked -- the token matched,
+        // because `server.js` reused the token file -- which is why nothing
         // downstream noticed. It no longer passes: [probeReadiness] now waits for
         // the process this start spawned to say it is listening, and a spawn that
         // lost the port never does, so a start onto a held port ends in
@@ -847,6 +889,9 @@ class ProcessManager(private val context: Context) {
         // the answer above, and so has a first start's move to a free one.
         spawnedOntoHeldPort = !portIsFree
         unboundRefusalLogged = false
+        // Below the adoption branch, which returned above: an adopted server holds
+        // the token it started with in memory and must keep the file that names it.
+        rotateConnectionToken()
         Logger.i(tag, "Starting server on port $_port")
 
         // Ensure TMPDIR is a usable directory: Android may clear cache between
@@ -1861,8 +1906,18 @@ class ProcessManager(private val context: Context) {
         // this is safe to do here: liveness is not this function's question and
         // never becomes it, a probe simply loses to any clear that happened
         // while it was asking.
+        //
+        // The token is read here and stored in the same step. `/version`
+        // answering means the editor server has settled the token file, since
+        // every request waits for the server object whose construction reads or
+        // writes it. Under the same epoch, the value can neither outlive nor
+        // predate the readiness it belongs to; a lazy read in the getter could
+        // run after a new start's rotation and hand the next server's token to
+        // the port before that server is ready.
+        val token = readTokenFile()
         synchronized(readinessLock) {
             if (epoch != readinessEpoch.get()) return false
+            cachedToken = token
             _isReady = true
         }
         return true

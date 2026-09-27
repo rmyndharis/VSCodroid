@@ -83,7 +83,7 @@ class SecretKeyRequestTest {
         val load = SourceScan.body(activity, "private fun loadVSCode(")
         val cookie = load.indexOf("applySecretStorage()")
         assertTrue(
-            cookie >= 0 && cookie < load.indexOf("loadUrl("),
+            cookie >= 0 && cookie < load.indexOf("navigateToFolder("),
             "loadVSCode must set the secret storage cookie before it navigates",
         )
         val client = SourceScan.withoutComments(

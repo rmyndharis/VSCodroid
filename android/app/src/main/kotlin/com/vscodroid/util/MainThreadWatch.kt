@@ -79,12 +79,11 @@ import com.vscodroid.BuildConfig
  * perform, so their absence says nothing about them.
  *
  * `readTokenFile` is the one that has to be read differently, and the reason
- * matters more than the absence. Every cold launch reads that file, at the moment
- * the workbench URL is built: it is missing from the list because
- * `MainActivity.loadVSCode` resolves the token inside the `Dispatchers.IO` hop it
- * was already making, and a ThreadPolicy is per-thread. Move that resolution back
- * onto the main thread and it is a violation on every launch, not an unexercised
- * site.
+ * matters more than the absence. Every launch reads that file, but only inside
+ * `ProcessManager.probeReadiness`, which runs on `Dispatchers.IO`, and a
+ * ThreadPolicy is per-thread; every navigation reads the value it recorded. Add
+ * a read of the file on the main thread and it is a violation on every launch,
+ * not an unexercised site.
  *
  * Anything not on that list is worth reading. What this cannot see is stated
  * rather than left to be discovered: a ThreadPolicy is per-thread, so nothing

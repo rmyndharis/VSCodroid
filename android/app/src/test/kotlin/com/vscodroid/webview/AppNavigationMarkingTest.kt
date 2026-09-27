@@ -76,9 +76,11 @@ class AppNavigationMarkingTest {
 
         // The control for the case itself. A scan that matches nothing passes
         // every assertion below it, which is the one way a derived list is weaker
-        // than a written one. Five is what MainActivity holds today; a change that
-        // legitimately removes one updates this number and says which.
-        assertTrue(sites.size >= 5) {
+        // than a written one. Four is what MainActivity holds today; a change that
+        // legitimately removes one updates this number and says which. It was five
+        // until loadVSCode stopped loading the closed-folder URL itself and went
+        // through navigateToFolder, which rebuilds it with the live token.
+        assertTrue(sites.size >= 4) {
             "found ${sites.size} page-replacing functions in MainActivity, so this scan has " +
                 "stopped matching them and would pass by looking at nothing"
         }

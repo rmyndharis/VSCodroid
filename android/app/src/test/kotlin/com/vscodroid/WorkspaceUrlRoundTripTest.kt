@@ -6,6 +6,7 @@ import io.mockk.mockkStatic
 import io.mockk.unmockkAll
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Assumptions.assumeTrue
@@ -405,9 +406,8 @@ class WorkspaceUrlRoundTripTest {
      * folder fell through to the remembered folder and put the user back in the
      * workspace they had just closed.
      *
-     * Restoring the URL rather than rebuilding one is what makes this expressible
-     * at all, and it is the same reasoning `handleResumeFromBackground` already
-     * uses when it calls `reload()` instead of rebuilding.
+     * Recognising the state from the URL is what makes this expressible at all;
+     * `loadVSCode` then rebuilds it through [workbenchUrl], with the live token.
      */
     @Test
     fun `a closed folder is restored as a closed folder`() {
@@ -415,6 +415,33 @@ class WorkspaceUrlRoundTripTest {
             "http://127.0.0.1:13337/?ew=true",
             emptyWindowUrl("http://127.0.0.1:13337/?ew=true", 13337),
         )
+    }
+
+    /**
+     * And that the restore is rebuilt rather than reloaded.
+     *
+     * Every spawned server has a token of its own, so the `vscode-tkn` cookie the
+     * page holds names a server a restart may have replaced, and a closed-folder
+     * URL loaded verbatim is then answered "Forbidden.". [workbenchUrl] spells the
+     * closed state with the token, and `navigateToFolder` is the route to it.
+     */
+    @Test
+    fun `a closed folder is reloaded with the live token, not the cookie`() {
+        val load = SourceScan.withoutComments(
+            SourceScan.body(
+                SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt"),
+                "private fun loadVSCode(",
+            ),
+        )
+
+        assertTrue(load.contains("navigateToFolder(port, null)")) {
+            "loadVSCode no longer restores the closed folder through the one builder " +
+                "that carries the token"
+        }
+        assertFalse(load.contains(".loadUrl(")) {
+            "loadVSCode loads a URL itself again, so a closed folder restored after a " +
+                "server restart is sent with a dead token and answered Forbidden"
+        }
     }
 
     /**

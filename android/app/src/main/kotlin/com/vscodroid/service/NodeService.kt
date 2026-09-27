@@ -315,7 +315,7 @@ class NodeService : Service() {
     /**
      * The token the server requires on every route except `/version`,
      * `/delay-shutdown` and `/callback`, or null
-     * before the server has written it.
+     * while the server is not reported ready.
      */
     fun getConnectionToken(): String? = processManager.connectionToken
 

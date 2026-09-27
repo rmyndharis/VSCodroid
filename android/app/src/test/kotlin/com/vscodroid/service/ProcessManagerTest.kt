@@ -26,6 +26,9 @@ import kotlinx.coroutines.runBlocking
 import java.io.File
 import java.net.InetAddress
 import java.net.ServerSocket
+import java.nio.file.Files
+import java.nio.file.attribute.BasicFileAttributes
+import java.nio.file.attribute.PosixFilePermissions
 import java.util.Collections
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicBoolean
@@ -1262,6 +1265,7 @@ class ProcessManagerTest {
     @Test
     fun `reads the token the server wrote`() {
         writeTokenFile("  6f1e4c2a-token\n")
+        becomeReady()
 
         assertEquals("6f1e4c2a-token", manager.connectionToken, "surrounding whitespace must be trimmed")
     }
@@ -1269,6 +1273,7 @@ class ProcessManagerTest {
     @Test
     fun `has no token before the server has written one`() {
         every { Environment.getUserDataDir(any()) } returns File(tempDir, "empty").absolutePath
+        becomeReady()
 
         assertNull(manager.connectionToken, "an absent file must not produce a token")
     }
@@ -1278,20 +1283,49 @@ class ProcessManagerTest {
         // An empty string would otherwise be appended as `tkn=`, which the server
         // rejects like any wrong token -- a 403 that looks nothing like its cause.
         writeTokenFile("   \n")
+        becomeReady()
 
         assertNull(manager.connectionToken, "a blank file must not produce a token")
     }
 
     @Test
-    fun `reads the token file once`() {
-        val token = writeTokenFile("cached-token")
-        assertEquals("cached-token", manager.connectionToken)
+    fun `reads the token when the server becomes ready, and hands it out only while it is`() {
+        val token = writeTokenFile("first")
+        becomeReady()
+        assertEquals("first", manager.connectionToken)
 
-        assertTrue(token.delete(), "test could not remove the token file")
+        token.writeText("second")
         assertEquals(
-            "cached-token", manager.connectionToken,
+            "first", manager.connectionToken,
             "the token must be cached; the workbench asks for it on every intercepted request"
         )
+
+        manager.stopServer()
+        assertNull(
+            manager.connectionToken,
+            "a server that is not ready may not be the one on the port, and whatever " +
+                "is there would be handed the token",
+        )
+
+        becomeReady()
+        assertEquals(
+            "second", manager.connectionToken,
+            "the next readiness must read the token its own server holds",
+        )
+    }
+
+    /**
+     * Makes the manager ready the way production does, through the probe, which
+     * is also the one place the token file is read.
+     */
+    private fun becomeReady() {
+        val server = StubServer(200)
+        try {
+            manager.portField = server.port
+            assertTrue(manager.probeReadiness(), "the probe must succeed or nothing here is under test")
+        } finally {
+            server.stop()
+        }
     }
 
     /**
@@ -1353,18 +1387,6 @@ private var ProcessManager.readyField: Boolean
 private var ProcessManager.portField: Int
     get() = field("_port").getInt(this)
     set(value) = field("_port").setInt(this, value)
-
-/**
- * Reaches `ProcessManager.cachedToken`, which is private production state.
- *
- * Needed because the token is cached on first read and deliberately never
- * invalidated, correct in production, since the server reuses the file rather
- * than regenerating it, and inconvenient in a test that wants to change what the
- * file says after something has already read it.
- */
-private var ProcessManager.cachedTokenField: String?
-    get() = field("cachedToken").get(this) as String?
-    set(value) = field("cachedToken").set(this, value)
 
 /**
  * Reaches `ProcessManager.procDir`, which is private production state.
@@ -1974,8 +1996,8 @@ class HeldPortReadinessTest {
         // what `NodeService.announceReady` fires on and what sends MainActivity
         // to `?folder=...&tkn=<connection token>`, so a stranger that answers
         // here is handed the credential for every route of the editor server.
-        // The token file is generated once and reused across restarts, so the
-        // disclosure outlives the session it happened in.
+        // Each spawn writes a new token, which bounds what the holder learns to
+        // one server's lifetime; it does not make handing it over harmless.
         serving(200, reports = stranger)
         spawnOntoHeldPort()
 
@@ -2394,6 +2416,72 @@ class AdoptionTest {
             asked!!.contains("tkn"),
             "the liveness probe must not carry the connection token: $asked",
         )
+    }
+
+    /** Spawns over a holder with no note, which is not ours to adopt, and waits for the exit. */
+    private fun spawnOverStranger() {
+        serving(200)
+        val exited = CountDownLatch(1)
+        manager.onServerCrashed = { exited.countDown() }
+        assertTrue(manager.startServer(), "the spawn must happen or nothing here is under test")
+        assertTrue(exited.await(5, TimeUnit.SECONDS), "the watchdog never reported the exit")
+        assertFalse(manager.isAdopted(), "an unrecorded holder is not ours to adopt")
+    }
+
+    @Test
+    fun `a start that spawns replaces the connection token in place`() {
+        // Kills: dropping the rotation, and replacing it with a delete that leaves
+        // the server to create the file. A new file needs a free inode and block,
+        // and on a full partition the server swallows the failed write and serves
+        // with a token nothing can read, so every page load is refused.
+        val tokenPath = File(tempDir, "token").toPath()
+        val ownerOnly = PosixFilePermissions.fromString("rw-------")
+        Files.setPosixFilePermissions(tokenPath, ownerOnly)
+        val before = Files.readAttributes(tokenPath, BasicFileAttributes::class.java).fileKey()
+
+        spawnOverStranger()
+
+        val rotated = tokenPath.toFile().readText()
+        assertNotEquals(token, rotated, "a token the port holder may have been sent must not outlive the spawn")
+        assertTrue(Regex("[0-9A-Za-z_-]{36}").matches(rotated)) {
+            "the server keeps only a token matching its own format and writes a new one " +
+                "otherwise, which is the allocation this avoids: $rotated"
+        }
+        assertEquals(
+            before, Files.readAttributes(tokenPath, BasicFileAttributes::class.java).fileKey(),
+            "the file was replaced rather than rewritten, which needs space a full disk does not have",
+        )
+        assertEquals(ownerOnly, Files.getPosixFilePermissions(tokenPath), "the token must stay owner-readable only")
+    }
+
+    @Test
+    fun `a spawn never writes through a link at the token path`() {
+        val victim = File(tempDir, "victim").apply { writeText("keep me") }
+        val tokenPath = File(tempDir, "token").toPath()
+        Files.delete(tokenPath)
+        Files.createSymbolicLink(tokenPath, victim.toPath())
+
+        spawnOverStranger()
+
+        assertEquals("keep me", victim.readText(), "the rotation wrote into the file a link pointed at")
+        assertFalse(Files.isSymbolicLink(tokenPath), "the link must go, so the server mints a token of its own")
+    }
+
+    @Test
+    fun `an adopted server keeps the token it holds`() {
+        // Kills: moving the rotation above the adoption branch. The adopted server
+        // read its token when it started and never reads the file again, so a
+        // rotated file would name a token no live server accepts.
+        val holder = serving(200)
+        recordEditorServer(pid = 4242, port = holder.port)
+
+        assertTrue(manager.startServer(), "adopting is a successful start")
+        assertTrue(manager.isAdopted(), "the fixture must adopt, or nothing here is under test")
+        assertEquals(token, File(tempDir, "token").readText(), "adoption rewrote the token its server holds")
+        assertNull(manager.connectionToken, "no token may be handed out before readiness")
+
+        assertTrue(manager.probeReadiness(), "the adopted server answers, so it is ready")
+        assertEquals(token, manager.connectionToken, "readiness must load the token the adopted server holds")
     }
 
     @Test

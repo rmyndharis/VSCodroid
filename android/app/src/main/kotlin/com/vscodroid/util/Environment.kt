@@ -421,8 +421,10 @@ object Environment {
      * where nothing writes it -- the same shape of mistake as writing settings to
      * `User/settings.json`.
      *
-     * The server creates it with mode 0600 on first start and reuses it after
-     * that, so it is stable across server restarts and app updates.
+     * The server creates it with mode 0600 when it is absent.
+     * `ProcessManager.startServer` rewrites it before every spawn, so each
+     * spawned server has a token of its own, and an adopted server keeps the
+     * one it started with.
      */
     fun getConnectionTokenPath(context: Context): String =
         "${getUserDataDir(context)}/data/token"
