@@ -246,7 +246,7 @@ These plans cover risks that did not yet have dedicated sections above.
 | Indicator | Trigger | Action |
 |-----------|---------|--------|
 | Node.js build time > 2 hours | M0 build stage | Investigate build config, try Termux binary fallback |
-| Phantom process count at or above `ERROR_BUDGET` (14) | M1 integration test, and the status bar item on a device | Review process management. The app already warns the user at that count, and the details view it offers marks idle language servers and names disabling the owning extension as what frees a slot; nothing is swept or killed. The soft budget of eight sits above the idle baseline (`IDLE_BASELINE` in `process-monitor.js`), so neither threshold fires on an app that is doing nothing |
+| Phantom process count at or above `ERROR_BUDGET` (14) | M1 integration test, and the status bar item on a device | Review process management. The app already warns the user at that count, and the details view it offers marks idle language servers and names disabling the owning extension as what frees a slot; nothing is swept or killed. The soft budget (`SOFT_BUDGET`) sits above the idle baseline (`IDLE_BASELINE`), both in `process-monitor.js`, so neither threshold fires on an app that is doing nothing |
 | Patch apply failure on new VS Code | CI monthly check | Pause upstream sync, fix patches |
 | WebView crash rate > 5% | M2 testing | Profile memory, reduce WebView load |
 | Play Store rejection | M5 submission | Prepare appeal, prepare alternative distribution |

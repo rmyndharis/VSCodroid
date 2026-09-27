@@ -2289,8 +2289,8 @@ android/app/src/main/kotlin/com/vscodroid/
 8. Run backup & restore tests (Testing Strategy §3.8)
 9. SSH key and GitHub OAuth flow testing
 10. **Worker_thread verification** _(validates M5 task 1)_:
-    - [ ] Extension Host runs as worker_thread: only 1 phantom (server-main), no ExtHost in `ps`
-    - [ ] ptyHost runs as worker_thread: not visible in process list, baseline 1 phantom process
+    - [ ] Extension Host runs as worker_thread: no ExtHost in `ps`; idle phantoms at or below `IDLE_BASELINE` in `process-monitor.js` (bootstrap, editor server, file watcher)
+    - [ ] ptyHost runs as worker_thread: not visible in process list
     - [ ] Extensions activate correctly under worker_thread mode: 10 extensions loaded
 11. **Toolchain compatibility verification** _(OnePlus CPH2791, Android 16)_:
     - [ ] `go version` → Go 1.25.6 android/arm64; hello world compile+run ✓

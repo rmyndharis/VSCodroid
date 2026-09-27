@@ -5,7 +5,7 @@ for three hours. Measured on an API 33 emulator by crashing the renderer three
 times: bootstrap-fork --type=fileWatcher went 2, 3, 4, 5, one per crash, none
 reaped, all five still parented to the editor server. Android allows 32 phantom
 processes across the whole device and kills the surplus past that; this project
-idles at 5 and warns from 8.
+idles at 3 and warns from 6.
 
 The watcher's life is the management connection's life. A SessionFileWatcher is
 created per client session and disposed when the last listener on its fileChange
