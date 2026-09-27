@@ -39,16 +39,6 @@ function isStale(snapshot) {
     return !(Date.now() - snapshot.timestamp <= STALE_AFTER_MS);
 }
 
-// The workbench's own switch for chat, and the only way to stop its agent host
-// and model backend, which run from startup whether or not chat is used. Only
-// the User value does it: the same key in Machine settings hides the chat UI
-// while the agent host still starts, because the workbench decides that before
-// the remote settings arrive and never turns it back off (measured on API 33).
-// Nor does ticking it stop the pair already running, not even across a window
-// reload: they go when the server next starts.
-const HIDE_AI_SETTING = 'chat.disableAIFeatures';
-const HIDE_AI = 'Hide AI Features';
-
 let statusBarItem;
 let outputChannel;
 let pollTimer;
@@ -226,27 +216,28 @@ function updateStatusBar(snapshot) {
         vscode.window.showErrorMessage(
             'Too many phantom processes; Android may start killing them. ' +
                 'The live count is in the status bar.',
-            ...tierButtons(tree)
+            'Show Details'
         ).then(onTierChoice);
     } else if (total >= soft && !warningShownAtThreshold) {
         warningShownAtThreshold = true;
         vscode.window.showWarningMessage(
             `Phantom processes are above the target of ${idle}. ` +
                 'The live count is in the status bar.',
-            ...tierButtons(tree)
+            'Show Details'
         ).then(onTierChoice);
     } else if (total < soft) {
         // Re-arming, and each latch comes back at the tier below the one that
         // set it. This asked for `total < idle`, one BELOW the idle baseline,
         // which is the count process-monitor.js measures for a cold session
-        // left untouched: five, the bootstrap, the server, the file watcher,
-        // the agent host and the chat backend, on API 33 and API 37 alike. A
-        // session with the workbench open never has fewer than the workbench
-        // costs, so nothing on a device cleared either flag and both tiers were
-        // one-shot for the life of the extension host. Only the prompt was
-        // lost, not the information: the status item recolours on every poll
-        // and the details view is a tap away, which is why this is a quiet
-        // failure rather than a loud one.
+        // left untouched: five up to Code - OSS 1.138, the bootstrap, the
+        // server, the file watcher, the agent host and the chat backend, and
+        // three from 1.139.1, where patch 0020 keeps the last two from
+        // starting. A session with the workbench open never has fewer than the
+        // workbench costs, so nothing on a device cleared either flag and both
+        // tiers were one-shot for the life of the extension host. Only the
+        // prompt was lost, not the information: the status item recolours on
+        // every poll and the details view is a tap away, which is why this is a
+        // quiet failure rather than a loud one.
         //
         // The gap between firing and re-arming is the point, so the count
         // crossing one threshold cannot raise the same notification twice: the
@@ -267,17 +258,8 @@ function updateStatusBar(snapshot) {
     }
 }
 
-// The second button only while chat is running, since it is what it frees. It
-// opens the setting rather than writing it: ticking hides the whole chat UI.
-function tierButtons(tree) {
-    return chatProcesses(tree).length ? ['Show Details', HIDE_AI] : ['Show Details'];
-}
-
 function onTierChoice(choice) {
     if (choice === 'Show Details') showProcessTree();
-    else if (choice === HIDE_AI) {
-        vscode.commands.executeCommand('workbench.action.openSettings', `@id:${HIDE_AI_SETTING}`);
-    }
 }
 
 // The words a person reads in the status bar tooltip, one per type that
@@ -388,7 +370,9 @@ function showProcessTree() {
     const tree = s.tree || [];
     // The chat agent host's model backend is typed langserver so the monitor can
     // call it idle, but no extension starts it: the language-server advice below
-    // would send the reader looking for one to disable. Counted as chat instead.
+    // would send the reader looking for one to disable, so it is left out. Patch
+    // 0020 keeps the host from starting on Android; this covers a build where it
+    // starts again.
     const chat = chatProcesses(tree);
     const langservers = tree.filter(p => p.type === 'langserver' && !chat.includes(p));
     const terminals = tree.filter(p => p.type === 'terminal' || p.type === 'tmux');
@@ -410,13 +394,6 @@ function showProcessTree() {
             outputChannel.appendLine(
                 `  • ${langservers.length} language servers running, ${idle} idle for 5 min or more. ` +
                     'Each restarts if killed; to free its slot, disable the extension that starts it'
-            );
-        }
-        if (chat.length) {
-            outputChannel.appendLine(
-                `  • Chat holds ${chat.length} of these whether or not it is used. If you do not use it, ` +
-                    `tick "Chat: Disable AI Features" in Settings (${HIDE_AI_SETTING}); they stop the ` +
-                    'next time the server starts, such as after Stop Server in the VSCodroid notification'
             );
         }
     }
