@@ -3842,9 +3842,7 @@ class MainActivity : AppCompatActivity() {
      *
      * Patch 0015 met the same chain on the menubar and excused Android from
      * the menubar's own resize listener. `ContextView.layout` is a different
-     * listener and is not covered by it. It could be patched the same way;
-     * this fix predates [dropCacheLeftByEarlierBuild], without which a patched
-     * bundle did not reach an installed app.
+     * listener and is not covered by it. It could be patched the same way.
      *
      * The chain is broken at its first link. On a coarse pointer, while the
      * soft keyboard is up, a `focus()` call that would move focus OUT of an
