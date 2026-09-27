@@ -360,6 +360,9 @@ class KeyInjectorLatchTest {
      * and the row can go with it, and the Explorer's rename box commits the
      * half-typed name on blur. The guard cancels that press and nothing else.
      *
+     * This holds its shape only. What it decides at each caret position is run
+     * under node by `scripts/test-arrow-edge-guard.js`.
+     *
      * NEGATIVE CONTROL: deleting the listener fails the slice; registering it
      * in the capture phase, or adding Tab or Home to EDGE, fails an assertion.
      */
