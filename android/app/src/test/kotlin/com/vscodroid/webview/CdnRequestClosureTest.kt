@@ -10,6 +10,7 @@ import io.mockk.just
 import io.mockk.mockk
 import io.mockk.mockkConstructor
 import io.mockk.mockkObject
+import io.mockk.mockkStatic
 import io.mockk.unmockkAll
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertNotNull
@@ -50,6 +51,10 @@ class CdnRequestClosureTest {
         every { Logger.w(any(), any()) } just Runs
         every { Logger.w(any(), any(), any()) } just Runs
 
+        // A stub under the unit-test android.jar, reached through the token.
+        mockkStatic(Uri::class)
+        every { Uri.encode(any()) } answers { firstArg<String>() }
+
         mockkConstructor(WebResourceResponse::class)
     }
 
@@ -73,14 +78,18 @@ class CdnRequestClosureTest {
         return request
     }
 
+    /**
+     * With a token, as from a server reported ready: without one nothing is
+     * forwarded at all, and the dead port below would never be asked.
+     */
     private fun intercept(request: WebResourceRequest, port: Int) =
         VSCodroidWebViewClient.interceptCdnRequest(
-            request, port, null, emptyList(), emptyList(), { null }
+            request, port, "tok", emptyList(), emptyList(), { null }
         )
 
     /**
-     * The live one. A workbench asset requested while the server is down, which
-     * is what the watchdog's restart looks like from the page's side.
+     * The live one. A workbench asset requested after the server died and before
+     * the watchdog withdrew readiness, so the token is still attached.
      */
     @Test
     fun `a static asset is answered here when the local server is not listening`() {

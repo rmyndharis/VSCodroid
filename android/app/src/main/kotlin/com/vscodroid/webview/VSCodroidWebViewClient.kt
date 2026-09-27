@@ -1622,9 +1622,22 @@ class VSCodroidWebViewClient(
                 return notFound("CDN path too short to rewrite")
             }
 
+            // No token is how the app says its own server is not ready, and until
+            // it is, the port is anyone's: binding a loopback port needs no
+            // permission. Forwarding anyway let whatever held it serve bytes into
+            // the webview frames [isOurOrigin] trusts, `pre/index.html` among them,
+            // so nothing goes to the port until there is a token to send with it.
+            if (token.isNullOrEmpty()) {
+                Logger.d(TAG, "CDN request not forwarded, the local server is not ready: $host${uri.path}")
+                return WebResourceResponse(
+                    "text/plain", "utf-8", 503, "Service Unavailable",
+                    mapOf("Access-Control-Allow-Origin" to "*"), ByteArrayInputStream(ByteArray(0))
+                )
+            }
+
             // The proxy answers null when the local server did not answer, which is
-            // the ordinary case for the seconds around a server restart: the port is
-            // ours and unbound, and the connection is refused. The asset is lost
+            // the ordinary case between the server dying and the watchdog withdrawing
+            // readiness: the connection is refused. The asset is lost
             // either way, so 404 costs nothing that null did not, and null would
             // send the page out to the real CDN for it.
             return proxyToLocalhost(localUrl, request.method, "$host${uri.path}")

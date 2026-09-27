@@ -182,6 +182,37 @@ class CdnUrlInjectionTest {
             )
         }
     }
+
+    /**
+     * Nothing reaches the port while there is no token, which is how the app
+     * says its own server is not ready.
+     *
+     * Binding a loopback port needs no permission, so while our server is down or
+     * starting, whatever holds the port would answer, and what it answered was
+     * served into webview frames at the `*.vscode-cdn.net` origins the resource
+     * gate trusts. `an ordinary asset is still rewritten and still carries the
+     * token` is the control: with a token the same request is forwarded.
+     */
+    @Test
+    fun `nothing is forwarded to the port while the server is not ready`() {
+        Recorder().use { server ->
+            val response = VSCodroidWebViewClient.interceptCdnRequest(
+                request("/stable/deadbeef/out/vs/workbench/contrib/webview/browser/pre/index.html", null),
+                server.port, null, emptyList(), emptyList(), { null }
+            )
+
+            assertNull(
+                server.target,
+                "a request went to whatever holds the port before our server was ready: " +
+                    "${server.target}",
+            )
+            assertNotNull(
+                response,
+                "the refusal handed the address back to the WebView, which then fetches it " +
+                    "from the real CDN over the device's network",
+            )
+        }
+    }
 }
 
 /**
