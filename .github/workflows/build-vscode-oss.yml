@@ -202,15 +202,21 @@ jobs:
       # the latest pointer permanently rather than once, so no later withdrawal
       # can promote this. Nothing reads the pointer to find this tarball:
       # fetch-vscode-oss.sh asks for server-$VSCODE_VERSION by name.
+      #
+      # The notes name the commit and ref that were built because the tag does
+      # not: the release API creates a missing tag at the default branch and
+      # never moves an existing one, so server-1.139.1 named 6c5dc847 while its
+      # tarball came from bdcba46d. The action rewrites the notes on every
+      # publish, so a rebuild at the same version updates them.
       - name: Publish the server tarball
         uses: softprops/action-gh-release@efb35369e0ad2afab669f228072c1b0d510eae64 # v3.0.3
         with:
           tag_name: server-${{ needs.build.outputs.version }}
           name: Code - OSS server ${{ needs.build.outputs.version }}
           body: |
-            Code - OSS `vscode-reh-web-linux-arm64` server tree for VS Code
-            ${{ needs.build.outputs.version }}, built from source with the patches
-            and branding in this repository applied before the build.
+            Code - OSS `vscode-reh-web-linux-arm64` server tree for VS Code ${{ needs.build.outputs.version }}, built from source with the patches and branding in this repository applied before the build.
+
+            Built from `${{ github.sha }}` on `${{ github.ref_name }}`, run ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}.
 
             Consumed by `scripts/fetch-vscode-oss.sh`. Not an app release.
           make_latest: false
