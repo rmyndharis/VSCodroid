@@ -4314,12 +4314,16 @@ class MainActivity : AppCompatActivity() {
      * untouched otherwise. Not while the key row has Ctrl or Alt latched: the row
      * builds that chord from the `beforeinput` an unhandled Enter is followed by,
      * and an accepted Enter has none. Unlike the replacement, the editor is not
-     * excluded, because its rename box is such an input; the editor's own Enter
-     * and the terminal's already carry a `code`. Measured with real taps on
-     * Gboard 12.4 (API 33) and 18.2 (API 36): each of those accepts once, the
-     * Explorer commits once, the editor and terminal take one Enter each, and a
-     * latched Ctrl still gives Ctrl+Enter. A composing Enter that Gboard 12.4
-     * commits as text, with no keydown, is beyond any listener here.
+     * excluded, because its rename box is such an input. The editor's own Enter
+     * and the terminal's carry a `code` on Gboard 18.2 but not on 12.4, where
+     * they are filled too, so Enter keybindings inside the editor (suggest
+     * accept, rename accept) now match there as they already do on 18.2 and on
+     * a desktop. Measured with real taps on Gboard 12.4 (API 33) and 18.2
+     * (API 36), with this listener installed over DevTools in a debug build:
+     * each of those accepts once, the Explorer commits once, the editor and
+     * terminal take one Enter each, and a latched Ctrl still gives Ctrl+Enter.
+     * Suggest and rename accept were not run. A composing Enter that Gboard
+     * 12.4 commits as text, with no keydown, is beyond any listener here.
      *
      * `ComposingEnterWiringTest` holds the script and the bundle to it, and
      * `scripts/test-composing-enter.js` runs it.
