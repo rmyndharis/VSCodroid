@@ -33,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The editor starts on a device where Termux is installed and other apps' data directories are visible, as on some rooted phones. The bundled OpenSSL looked for its configuration in Termux's directory, was refused, and the server died before it could listen; it now reads a configuration file of its own.
 - An update removes the chat agent host's Copilot runtime that an earlier version left on the device, about 175 MB.
 - `jshell` from the Java 17 toolchain starts in the terminal instead of failing to launch its execution engine.
+- Enter on Gboard accepts in the Command Palette, Quick Open and input boxes such as Open in Browser, where it often did nothing.
 
 ### Security
 

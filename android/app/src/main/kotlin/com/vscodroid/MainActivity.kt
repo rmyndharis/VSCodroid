@@ -4242,8 +4242,8 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Makes Enter on the soft keyboard reach the workbench as Enter while a word
-     * is still being composed.
+     * Makes Enter on the soft keyboard reach the workbench as Enter, both while a
+     * word is still being composed and when it arrives without a `code`.
      *
      * After a word is typed into a workbench input box, Gboard keeps it as an
      * active composition, underlined, and its Enter key arrives as a keydown with
@@ -4303,9 +4303,26 @@ class MainActivity : AppCompatActivity() {
      * exactly one newline, and `Gam` then Enter in the Run and Debug
      * configuration dropdown selects Gamma, where before the `compositionend`
      * it kept Alpha. Gboard 18.1 types Latin letters into these boxes without a
-     * composition, so there the script is not reached for them. A multi-line
-     * setting was not run. `ComposingEnterWiringTest` holds the script and the
-     * bundle to it.
+     * composition, so there the replacement is not reached for them. A
+     * multi-line setting was not run.
+     *
+     * A non-composing Enter in a single-line input is the second case. Gboard
+     * sends its action key there (GO) as `key` Enter, `keyCode` 13 and an empty
+     * `code`, and the keybinding service resolves keys from `code`, so the
+     * Command Palette, Quick Open and every input box, which accept only through
+     * a keybinding, ignored it. The real event is given `code` Enter and goes on
+     * untouched otherwise. Not while the key row has Ctrl or Alt latched: the row
+     * builds that chord from the `beforeinput` an unhandled Enter is followed by,
+     * and an accepted Enter has none. Unlike the replacement, the editor is not
+     * excluded, because its rename box is such an input; the editor's own Enter
+     * and the terminal's already carry a `code`. Measured with real taps on
+     * Gboard 12.4 (API 33) and 18.2 (API 36): each of those accepts once, the
+     * Explorer commits once, the editor and terminal take one Enter each, and a
+     * latched Ctrl still gives Ctrl+Enter. A composing Enter that Gboard 12.4
+     * commits as text, with no keydown, is beyond any listener here.
+     *
+     * `ComposingEnterWiringTest` holds the script and the bundle to it, and
+     * `scripts/test-composing-enter.js` runs it.
      */
     private fun injectComposingEnter() {
         webView?.evaluateJavascript(
@@ -4321,6 +4338,11 @@ class MainActivity : AppCompatActivity() {
                 window.addEventListener('compositionend', function() { composing = ''; }, true);
                 var CONVERSION = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Bopomofo}]/u;
                 window.addEventListener('keydown', function(e) {
+                    if (e.key === 'Enter' && e.code === '' && !e.isComposing) {
+                        var mod = window.__vscodroid;
+                        if (!(mod && (mod.ctrl || mod.alt))) Object.defineProperty(e, 'code', { value: 'Enter' });
+                        return;
+                    }
                     if (e.key !== 'Enter' || !e.isComposing || CONVERSION.test(composing)) return;
                     var target = e.target;
                     if (!target || (target.tagName !== 'INPUT' && target.tagName !== 'TEXTAREA')) return;
