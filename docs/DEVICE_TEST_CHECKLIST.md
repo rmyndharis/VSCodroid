@@ -67,6 +67,7 @@
 | KB-27 | No chords beside menu items | Open the same menu, then the explorer's (hold a file), then the menubar's File menu | None of them shows a keyboard shortcut next to an item. Every item still runs on a tap | | |
 | KB-28 | Trackpad and navigation keys in text boxes | In turn in the Explorer rename box (hold a file, Rename), the Command Palette and the find widget: type a word, drag the trackpad left 2 and type X; latch Shift and drag left 2; press Home and End on the last page. Then serve a page with two inputs from the terminal (`python3 -m http.server 8000` in a folder holding one), open it with `Simple Browser: Show` at `http://127.0.0.1:8000/`, and repeat in its first input. Last, in the Command Palette type `rel` so that Gboard shows it underlined (composing) and drag down 3. Record the API level, the WebView version and the Gboard version, and whether Gboard showed the word underlined when each drag began | X lands two characters from the end, the Shift-drag selects two characters with the Shift badge lit until the finger lifts, and Home and End reach the ends of the text, in all four boxes. The composing drag down moves the Command Palette highlight 3, as on the previous build. Tab on the row still indents in the editor (KB-5), and in the rename box it renames nothing. Before the fix the caret did not move in any of them | | |
 | KB-29 | A drag past the edge of a text box | In the rename box with the caret at the end, drag right 4; with it at the start, drag left 4; with it in the middle, latch Alt and drag left 2, then latch Alt again and drag up 2. Repeat in the Command Palette and the find widget. Run `adb shell dumpsys input_method \| grep -E 'mServedView\|mInputShown'` after each | The box stays open and focused, the keyboard and the key row stay up, and the Explorer still shows the old name. `mServedView` names `android.webkit.WebView` and `mInputShown` is true. In a Simple Browser input (KB-28), which nothing guards, drag right past the end and record where focus goes | | |
+| KB-30 | Gboard Enter accepts in the Command Palette, Quick Open and an input box such as VSCodroid: Open in Browser | With Gboard, and nothing underlined when Enter is pressed (end the word with a space or a period): in the Command Palette type `about ` and press Gboard's Enter; in Quick Open type part of a file name and a period and press Enter; run **VSCodroid: Open in Browser**, type `abc ` and press Enter. Then latch Ctrl on the key row and repeat the Command Palette case, and in the Explorer create a file with New File the same way. Record the API level and the Gboard version | Help: About opens once, the file opens and Quick Open closes, and the Open in Browser box closes with a message that no app could open the address. With Ctrl latched, About still opens once and Ctrl clears. New File creates exactly one file. Before the fix each of the first three stayed open with nothing run, because Gboard's Enter in a one-line box reached the page with an empty `code` | | |
 
 ## 4. Screen & Orientation
 
@@ -268,7 +269,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 |----------|-------|------|------|------|
 | Device Matrix | 4 | | | |
 | Android Versions | 4 | | | |
-| Keyboard Input | 29 | | | |
+| Keyboard Input | 30 | | | |
 | Screen & Orientation | 10 | | | |
 | Editor Operations | 14 | | | |
 | Extensions | 7 | | | |
@@ -279,7 +280,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | Terminal & Tools | 13 | | | |
 | SAF & Files | 17 | | | |
 | Display Language | 6 | | | |
-| **Total** | **134** | | | |
+| **Total** | **135** | | | |
 
 **Overall Result**: [ ] PASS / [ ] FAIL
 

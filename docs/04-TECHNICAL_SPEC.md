@@ -700,6 +700,13 @@ cannot produce a press on the layout in force it returns false and the announce 
 runs instead; that preserves the keystroke but still inserts nothing, and it logs a
 warning rather than a debug line so the case is visible in a release build.
 
+The soft keyboard's own Enter is handled in the page by `MainActivity.injectComposingEnter`.
+A composing Enter is replaced with one the workbench recognises, and a non-composing Enter
+that arrives with an empty `code`, as Gboard's action key does in a one-line box, is given
+the `code` `Enter`, because keybindings resolve from `code` and the Command Palette, Quick
+Open and input boxes accept only through one; with Ctrl or Alt latched it is left empty so
+the modifier interceptor can still build the chord from the `beforeinput` that follows.
+
 ### 5.3 Visibility Control
 
 The row decides whether to show in one place, the inset listener installed by
