@@ -33,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The editor starts on a device where Termux is installed and other apps' data directories are visible, as on some rooted phones. The bundled OpenSSL looked for its configuration in Termux's directory, was refused, and the server died before it could listen; it now reads a configuration file of its own.
 - An update removes the chat agent host's Copilot runtime that an earlier version left on the device, about 175 MB.
 - `jshell` from the Java 17 toolchain starts in the terminal instead of failing to launch its execution engine.
+- Dragging the trackpad left or right and the key row's Home, End, PgUp and PgDn move the caret in text boxes such as rename, the Command Palette and find, and inside extension panels, instead of only in the editor and the terminal.
 - Enter on Gboard accepts in the Command Palette, Quick Open and input boxes such as Open in Browser, where it often did nothing.
 - Typing in the editor with a soft keyboard no longer adds reversed or repeated letters, or deletes the wrong ones, after the cursor moves, the editor regains focus or a keyboard suggestion is tapped; text such as `upgradessedargpu` could be saved.
 - Moving the cursor with a key or a tap, or accepting one of the editor's suggestions with Tab or a tap, while the soft keyboard still underlines a word no longer makes the keyboard's next edit land where that word was; text such as `alpha delta charlie charlie` could be saved.
@@ -42,8 +43,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The editor server's connection token is replaced on every server restart, and the app neither sends it nor forwards webview requests to the server's port until the server is ready, so another app that takes the port during a restart gets no usable token.
 - Saving a file in a device folder no longer overwrites changes another app made to it while the folder was open; the other app's version is kept beside yours as `<name>.device-<time>`.
 - Opening a large device folder no longer fills the phone's storage: copying stops while about 150 MB is still free, and the files left out stay unchanged in the device folder.
-- The trackpad and the key row's Home, End, PgUp and PgDn move the caret in text boxes such as rename, the Command Palette and find, and work inside extension panels, instead of only in the editor and the terminal.
-- Dragging the trackpad left or right and the key row's Home, End, PgUp and PgDn move the caret in text boxes such as rename, the Command Palette and find, and inside extension panels, instead of only in the editor and the terminal.
 
 ## [1.4.0] - 2026-09-18
 
