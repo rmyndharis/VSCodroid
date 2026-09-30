@@ -3591,16 +3591,18 @@ class MainActivity : AppCompatActivity() {
      * alone.
      *
      * It runs before the editor handles the key or the tap, except where an
-     * open suggestion list takes it. Ending a composition makes the editor
-     * refilter the list and highlight its first row again, so ending it first
-     * would make Tab accept the first suggestion instead of the highlighted
-     * one. Up, Down, PageUp and PageDown that move the list's highlight move no
-     * caret and end nothing. Tab accepting the highlighted suggestion and a tap
-     * on a row end it after the list has acted, still in the same task, from a
-     * listener added while the event is on its way down: it runs after the
-     * ones already registered where it is added, window for a key, where the
-     * workbench's keybindings run in the bubble phase, and the target for a
-     * gesture, which does not bubble. A long press on the list ends nothing.
+     * open suggestion list takes a key without modifiers, or a tap. Ending a
+     * composition makes the editor refilter the list and highlight its first
+     * row again, so ending it first would make Tab accept the first suggestion
+     * instead of the highlighted one. Up, Down, PageUp and PageDown that move
+     * the list's highlight move no caret and end nothing. Tab accepting the
+     * highlighted suggestion and a tap on a row end it after the list has
+     * acted, still in the same task, from a listener added while the event is
+     * on its way down: it runs after the ones already registered where it is
+     * added, window for a key, where the workbench's keybindings run in the
+     * bubble phase, and the target for a gesture, which does not bubble. When
+     * the event is stopped before that listener, a zero timeout ends it
+     * instead, in a later task. A long press on the list ends nothing.
      *
      * Measured on an API 33 emulator with Gboard 12.4, with this code installed
      * over DevTools rather than built in: End, Home, PageUp, the trackpad in
@@ -3613,13 +3615,16 @@ class MainActivity : AppCompatActivity() {
      *
      * What that does not cover: a caret moved by a command, such as Undo, Find
      * or Go to Line, or by an extension, which is neither a key in the list nor
-     * an editor gesture; and the textarea edit path, whose host has no
-     * `editContext`. Not measured: keyboards other than Gboard, Korean and
-     * Chinese input, and the other Monaco editors, such as the Source Control
-     * message box and the chat input. What it costs: the word is committed as
-     * typed, so on a Japanese keyboard a guarded key or tap commits the kana
-     * unconverted; and a word ended after an accept can make the editor offer
-     * the accepted word again as a one-row list.
+     * an editor gesture; Enter accepting a suggestion, which is not one of those
+     * keys; and the textarea edit path, whose host has no `editContext`. Not
+     * measured: keyboards other than Gboard, Korean and Chinese input, and the
+     * other Monaco editors, such as the Source Control message box and the chat
+     * input. What it costs: the word is committed as typed, so on a Japanese
+     * keyboard a guarded key or tap commits the kana unconverted; a word ended
+     * after an accept can make the editor offer the accepted word again as a
+     * one-row list; and a chord the suggestion list also binds, such as
+     * Shift+Tab or Ctrl+Down, ends the word first, so the list acts from its
+     * first row.
      */
     private fun injectKeyboardGuard() {
         webView?.evaluateJavascript(
@@ -3908,11 +3913,19 @@ class MainActivity : AppCompatActivity() {
                     setTimeout(finish, 0);
                 }
                 // Whether the open suggest list takes the key rather than the
-                // caret, by the editor's own keybinding conditions: Tab accepts
-                // the focused suggestion; Up, Down, PageUp and PageDown move the
-                // list's focus unless it holds a single suggestion that is
-                // already focused. The list is marked `visible` 100 ms after it
-                // opens, so a key in those first 100 ms counts as the caret's.
+                // caret, by the editor's own keybinding conditions for a key
+                // pressed alone: Tab accepts the focused suggestion; Up, Down,
+                // PageUp and PageDown move the list's focus unless it holds a
+                // single suggestion that is already focused. The list is marked
+                // `visible` 100 ms after it opens, so a key in those first
+                // 100 ms counts as the caret's. So does a chord, even one the
+                // list also binds, such as Shift+Tab or Ctrl+Down. Only the rows
+                // the list has drawn are read, so with the focused row scrolled
+                // out of view Tab counts as the caret's, and in a list drawn one
+                // row high so do Up, Down, PageUp and PageDown. Each of these
+                // ends the word first, and the list then acts from its first
+                // row. Reading the list's `element-focused` class and a row's
+                // `aria-setsize` instead would not depend on what is drawn.
                 function suggestTakes(e) {
                     var list = document.querySelector('.suggest-widget.visible');
                     if (!list || e.ctrlKey || e.altKey || e.shiftKey || e.metaKey) return false;

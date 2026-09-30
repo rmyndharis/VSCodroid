@@ -715,12 +715,13 @@ suggestion or a tap elsewhere garbled the line. `MainActivity.injectKeyboardGuar
 refocuses the composing host in the same task as the caret move, from a window capture
 `keydown` listener for the arrows, Home, End, PageUp, PageDown, Tab, Backspace and Delete,
 and from the editor's own `-monaco-gesturetap` and `-monaco-gesturecontextmenu`. It does so
-before the editor handles the key or the tap, except where an open suggestion list takes it:
-ending a composition makes the editor refilter the list and highlight its first row again,
-so Up, Down, PageUp and PageDown that move the highlight end nothing, and Tab accepting the
-highlighted suggestion or a tap on a row end the composition after the list has acted. The
-word is committed as typed, so on a Japanese keyboard the kana are committed unconverted. A
-caret moved by a command, such as Undo, Find or Go to Line, is not covered.
+before the editor handles the key or the tap, except where an open suggestion list takes a
+key without modifiers, or a tap: ending a composition makes the editor refilter the list and
+highlight its first row again, so Up, Down, PageUp and PageDown that move the highlight end
+nothing, and Tab accepting the highlighted suggestion or a tap on a row end the composition
+after the list has acted. The word is committed as typed, so on a Japanese keyboard the kana
+are committed unconverted. A caret moved by a command, such as Undo, Find or Go to Line, is
+not covered.
 
 ### 5.3 Visibility Control
 
