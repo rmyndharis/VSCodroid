@@ -23,7 +23,7 @@ VSCodroid has unique testing challenges: it's a hybrid app (Kotlin + WebView + N
 ```mermaid
 flowchart TD
   E2E["Manual / E2E Tests<br/>Real devices, UX testing<br/>14 scenarios"] --> INT["Instrumented Tests<br/>WebView + Node.js + Kotlin<br/>run by hand on a device"]
-  INT --> UNIT["Unit Tests<br/>Kotlin on the JVM, sized by the run's own XML<br/>12 node:assert scripts for the bundled JavaScript"]
+  INT --> UNIT["Unit Tests<br/>Kotlin on the JVM, sized by the run's own XML<br/>13 node:assert scripts for the bundled JavaScript"]
 ```
 
 ---
