@@ -3570,6 +3570,35 @@ class MainActivity : AppCompatActivity() {
      *
      * The terminal is left alone. It has an editing host of its own, and
      * opening a terminal is asking to type.
+     *
+     * The same script ends a word the keyboard is still composing before the
+     * editor moves the caret. Chromium keeps an EditContext composition's range
+     * where it was when the page moves the selection (crbug 379170477), so with
+     * a keyboard that composes, a key or a tap that moved the caret while a
+     * word was underlined made the keyboard rewrite that word over its old
+     * range: End while `kiwi` was underlined in `alpha delta kiwi charlie` left
+     * `alpha delta charlie charlie`, and a tap on an empty line followed by
+     * `cha` typed `cchcha`. The host is blurred and refocused in the same task
+     * as the caret move, before the editor handles it: from a window capture
+     * `keydown` for the arrows, Home, End, PageUp, PageDown, Tab, Backspace and
+     * Delete, whatever sends them, and from the editor's own
+     * `-monaco-gesturetap` and `-monaco-gesturecontextmenu` (a long press)
+     * inside `.monaco-editor`. Only for a focused host that has an
+     * `editContext` and is in the script's `composing` set, and with
+     * `reapplying` set, so the focus handler leaves the refocus and `inputmode`
+     * alone. Measured on an API 33 emulator with Gboard 12.4, with this code
+     * installed over DevTools rather than built in: End, Home, PageUp,
+     * PageDown, the trackpad in all four directions, Tab accepting a
+     * suggestion, Gboard's Backspace at the start of a line, a tap on text or
+     * on a suggestion and a long press all left the text intact, and ordinary
+     * typing never set it off. `scripts/test-keyboard-guard.js` runs this part
+     * of the script.
+     *
+     * What that does not cover: a caret moved by a command, such as Undo, Find
+     * or Go to Line, or by an extension, which is neither a key in the list nor
+     * an editor gesture; and the textarea edit path, whose host has no
+     * `editContext`. What it costs: the word is committed as typed, so on a
+     * Japanese keyboard a guarded key or tap commits the kana unconverted.
      */
     private fun injectKeyboardGuard() {
         webView?.evaluateJavascript(
@@ -3695,10 +3724,11 @@ class MainActivity : AppCompatActivity() {
                 // happens inside the gesture and is what raises the keyboard.
                 // Only when the guard was actually holding it down: a tap on
                 // text while the keyboard is already up must not reach the focus
-                // at all, because blurring an element mid-composition drops the
-                // text being composed, and composition is an ordinary path now
-                // that the editor ships in Japanese, Korean and both Chinese
-                // scripts.
+                // from here, because blurring an element mid-composition ends
+                // the composition, and composition is an ordinary path now that
+                // the editor ships in Japanese, Korean and both Chinese scripts.
+                // finishComposition() below ends one on purpose, and only where
+                // the caret is about to move.
                 function letTheKeyboardUp() {
                     aimedAtText = true;
                     var focused = document.activeElement;
@@ -3816,6 +3846,37 @@ class MainActivity : AppCompatActivity() {
                     target.focus();
                     reapplying = false;
                 }, true);
+                // An open IME composition does not follow the caret when the
+                // page moves it (Chromium's EditContext keeps the old
+                // composition range, crbug 379170477), so a keyboard that
+                // recomposes the word at the new caret writes it over the old
+                // range. Ending the composition in the same task as the key or
+                // tap that moves the caret lets the keyboard start again from
+                // the moved caret. Run as a separate step it loses: Gboard 12.4
+                // reopened the word 24 to 68 ms after the refocus.
+                function finishComposition() {
+                    var element = document.activeElement;
+                    if (!element || !element.editContext || !composing.has(element)) return;
+                    reapplying = true;
+                    element.blur();
+                    element.focus();
+                    reapplying = false;
+                }
+                // Window capture runs before the editor's own keydown handler.
+                var CARET_KEYS = /^(Arrow(Left|Right|Up|Down)|Home|End|PageUp|PageDown|Tab|Backspace|Delete)$/;
+                window.addEventListener('keydown', function(e) {
+                    if (CARET_KEYS.test(e.key)) finishComposition();
+                }, true);
+                // A touch moves the caret only in the editor's own gestures,
+                // dispatched from touchend: a tap, and a long press, which opens
+                // the context menu at the pressed position. pointerdown is too
+                // early: the keyboard reopens the word while the finger is still
+                // down.
+                function onEditorGesture(e) {
+                    if (e.target.closest && e.target.closest('.monaco-editor')) finishComposition();
+                }
+                window.addEventListener('-monaco-gesturetap', onEditorGesture, true);
+                window.addEventListener('-monaco-gesturecontextmenu', onEditorGesture, true);
                 applyAll();
             })();
             """.trimIndent(),

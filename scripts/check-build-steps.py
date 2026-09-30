@@ -109,7 +109,7 @@ SELFCHECK_WORKFLOWS = ("lint.yml", "release.yml")
 # on 20 while every APK carried 24. The major only, for the reason
 # build-native-addons.sh compares majors: the patch level is Termux's to move.
 #
-# All three workflows that set up Node: lint.yml and release.yml run the ten
+# All three workflows that set up Node: lint.yml and release.yml run the
 # self-checks, and build.yml and release.yml run the download scripts and
 # build-native-addons.sh through npm, so one major across all of them.
 NODE_MAJOR_SOURCE = ROOT / "scripts/build-native-addons.sh"

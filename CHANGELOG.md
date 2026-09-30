@@ -35,6 +35,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - `jshell` from the Java 17 toolchain starts in the terminal instead of failing to launch its execution engine.
 - Enter on Gboard accepts in the Command Palette, Quick Open and input boxes such as Open in Browser, where it often did nothing.
 - Typing in the editor with a soft keyboard no longer corrupts the line when a suggestion is tapped, the cursor moves or the editor regains focus; text such as `upgradessedargpu` or `alpha delta charlieeeee` could be saved.
+- Moving the cursor while the soft keyboard still underlines a word, with End, the trackpad, Tab, or a tap or long press elsewhere, no longer garbles the line.
 
 ### Security
 

@@ -420,6 +420,7 @@ jobs:
           node scripts/test-download-capture.js
           node scripts/test-arrow-edge-guard.js
           node scripts/test-composing-enter.js
+          node scripts/test-keyboard-guard.js
           node scripts/test-serve-network.js
           node scripts/test-welcome.js
           node scripts/test-xdg-open.js

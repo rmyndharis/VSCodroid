@@ -94,11 +94,12 @@ temporary directory, and is executed directly by `node`.
 | Download capture | The script that makes saving a file out of the Explorer possible at all | `scripts/test-download-capture.js` |
 | Arrow edge guard | That a Left or Right at the start or end of a text box is cancelled, and one that can still move the caret or that a handler already used is not | `scripts/test-arrow-edge-guard.js` |
 | Soft keyboard Enter | That a code-less Enter is given the `code` Enter unless Ctrl or Alt is latched, and that a composing Enter is still stopped and replaced outside the editor | `scripts/test-composing-enter.js` |
+| Composition finish | That a caret key or the editor's own tap or long press, while the focused EditContext host composes a word, blurs and refocuses the host before the editor's handler, once and without writing `inputmode`, and that nothing else does | `scripts/test-keyboard-guard.js` |
 | Serve on Network | The port scan and its reachable/local split | `scripts/test-serve-network.js` |
 | Welcome | That the walkthrough and side bar markers are written only after the command they record actually ran | `scripts/test-welcome.js` |
 | xdg-open | The `openExternal` message `xdg-open.js` sends over the editor's CLI socket, and that anything but an `http` or `https` address is refused rather than sent | `scripts/test-xdg-open.js` |
 
-**Run**: all twelve, one `node` invocation each, in the `Check the bundled
+**Run**: all thirteen, one `node` invocation each, in the `Check the bundled
 JavaScript runtime` step of `lint.yml`, and again in `release.yml`, on Node 24,
 the major the APK ships (`check-build-steps.py` holds the pins there). `lint.yml`
 also runs the `--self-test` entry points of `check-workflow-steps.py`,
@@ -298,7 +299,7 @@ flowchart TD
 
   PR --> LINT["lint.yml: Lint job"]
   LINT --> L1["./gradlew lint, plus the committed baseline check"]
-  LINT --> L2["node scripts/test-*.js (12 self-checks, one per script)"]
+  LINT --> L2["node scripts/test-*.js (13 self-checks, one per script)"]
   LINT --> L3["python3 scripts/check-*.py repository gates"]
   LINT --> L4["git apply --stat on every patch, and device-test.sh --self-check"]
 

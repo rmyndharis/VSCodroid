@@ -707,6 +707,18 @@ the `code` `Enter`, because keybindings resolve from `code` and the Command Pale
 Open and input boxes accept only through one; with Ctrl or Alt latched it is left empty so
 the modifier interceptor can still build the chord from the `beforeinput` that follows.
 
+A key or a touch that moves the editor's caret while the soft keyboard is still composing a
+word ends that composition first. Chromium keeps an EditContext composition's range where it
+was when the page moves the selection (crbug 379170477), so a keyboard that recomposes the
+word at the new caret wrote it over the old range, and End, a trackpad drag, Tab accepting a
+suggestion or a tap elsewhere garbled the line. `MainActivity.injectKeyboardGuard` blurs and
+refocuses the composing host in the same task as the caret move, before the editor handles
+it, from a window capture `keydown` listener for the arrows, Home, End, PageUp, PageDown,
+Tab, Backspace and Delete, and from the editor's own `-monaco-gesturetap` and
+`-monaco-gesturecontextmenu`. The word is committed as typed, so on a Japanese keyboard the
+kana are committed unconverted. A caret moved by a command, such as Undo, Find or Go to Line,
+is not covered.
+
 ### 5.3 Visibility Control
 
 The row decides whether to show in one place, the inset listener installed by
