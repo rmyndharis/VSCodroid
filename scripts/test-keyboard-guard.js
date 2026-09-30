@@ -14,7 +14,11 @@
  * the blur and refocus run in the same dispatch as the key or the editor's
  * gesture and before the editor's own handler, only while the focused
  * EditContext host is composing, and without the guard's own focusin handler
- * answering the refocus by changing `inputmode`, which restarts input.
+ * answering the refocus by changing `inputmode`, which restarts input. An
+ * open suggest list is the exception, because ending a composition makes the
+ * editor refilter the list and focus its first item again: Tab accepting a
+ * suggestion and a tap on a row are finished after the list has acted, and
+ * Up, Down, PageUp and PageDown that move the list's focus not at all.
  *
  * This extracts the real script, runs it under `vm` against a small fake DOM
  * that dispatches events through the capture, target and bubble phases, and
@@ -24,12 +28,18 @@
  * any write to `inputmode`.
  *
  * NEGATIVE CONTROL, measured: against the script as it was before the finish
- * (main at 832754c6) the 15 cases that expect a finish fail and the other 10
- * pass. Dropping `reapplying` from the finish fails the same 15, the tap
- * outside text by a second blur and refocus that writes `inputmode="none"`.
- * A keydown listener in the bubble phase fails every key case, gesture
- * listeners there every gesture case, and dropping the composing,
- * `editContext` or `.monaco-editor` test fails the cases that hold it.
+ * (main at 832754c6) 27 of the 43 cases fail, and against a finish that ends
+ * the composition before every key and tap, the 9 suggest list cases fail.
+ * Each of these changes to the finish fails at least one case: the
+ * after-listener always on window, always on the target, or added for the
+ * capture phase; no timeout; no test that the after-listener sees the same
+ * event; the list read without `visible`; no single-suggestion rule, no
+ * navigation-key rule or no modifier test; Tab taken without a focused row,
+ * finished before, or every list key finished after; the list tap finished
+ * before, or a long press on the list finished; no composing, `editContext`
+ * or `.monaco-editor` test; no `reapplying`; and the key or gesture listeners
+ * in the bubble phase. Dropping the after-listener's own removal changes
+ * nothing observable, since it acts once and only for its event.
  *
  * Extraction is deliberately strict. If the raw string moves or changes shape
  * this fails saying so, rather than quietly checking an empty string.
@@ -91,6 +101,10 @@ class Target {
     addEventListener(type, fn, capture) {
         this.listeners.push({ type, fn, capture: capture === true });
     }
+    removeEventListener(type, fn, capture) {
+        this.listeners = this.listeners.filter(
+            (l) => !(l.type === type && l.fn === fn && l.capture === (capture === true)));
+    }
 }
 
 function run(node, event, capture) {
@@ -102,14 +116,17 @@ function run(node, event, capture) {
 /** As a browser does: capture from the window down, the target, then back up if it bubbles. */
 function dispatch(page, target, init) {
     const event = { bubbles: false, ...init, target };
+    event.stopPropagation = () => { event.stopped = true; };
     const outer = [page.window, page.document];
     const ancestors = [];
     for (let n = target.parent; n; n = n.parent) ancestors.unshift(n);
     outer.push(...ancestors);
-    for (const n of outer) run(n, event, true);
-    run(target, event, true);
-    run(target, event, false);
-    if (event.bubbles) for (const n of outer.reverse()) run(n, event, false);
+    const phases = [...outer.map((n) => [n, true]), [target, true], [target, false]];
+    if (event.bubbles) phases.push(...outer.reverse().map((n) => [n, false]));
+    for (const [n, capture] of phases) {
+        run(n, event, capture);
+        if (event.stopped) return;
+    }
 }
 
 /** `tag`, `.class` and `[name="value"]`, which is all the guard's selectors use. */
@@ -146,7 +163,20 @@ class El extends Target {
         Object.assign(this, { page, tagName: tag.toUpperCase(), classes, parent, attrs: new Map() });
         page.elements.push(this);
     }
-    get classList() { return { contains: (c) => this.classes.includes(c) }; }
+    get classList() {
+        return {
+            contains: (c) => this.classes.includes(c),
+            add: (c) => { if (!this.classes.includes(c)) this.classes.push(c); },
+            remove: (c) => { this.classes = this.classes.filter((x) => x !== c); },
+        };
+    }
+    querySelectorAll(selectors) {
+        return this.page.elements.filter((e) => {
+            for (let n = e.parent; n; n = n.parent) if (n === this) return e.matches(selectors);
+            return false;
+        });
+    }
+    querySelector(selectors) { return this.querySelectorAll(selectors)[0] || null; }
     getAttribute(name) { return this.attrs.has(name) ? this.attrs.get(name) : null; }
     setAttribute(name, value) { log.push(`${this.name} ${name}=${value}`); this.attrs.set(name, String(value)); }
     removeAttribute(name) { log.push(`${this.name} -${name}`); this.attrs.delete(name); }
@@ -191,19 +221,22 @@ class FakeEditContext extends Target {
  * list, and the guard installed. The editing host is an EditContext element,
  * or with `textarea` the `textarea.inputarea` of the other edit path.
  */
-function newPage({ textarea = false } = {}) {
+function newPage({ textarea = false, keybindings = false } = {}) {
     const page = { elements: [], window: new Target('window'), document: new Target('document') };
     const doc = page.document;
     doc.body = new El(page, 'body', 'body', [], null);
     doc.activeElement = doc.body;
     doc.querySelectorAll = (selectors) => page.elements.filter((e) => e.matches(selectors));
+    doc.querySelector = (selectors) => doc.querySelectorAll(selectors)[0] || null;
 
     page.tabs = new El(page, 'tabs', 'div', ['tabs-container'], doc.body);
     page.explorer = new El(page, 'explorer', 'div', ['monaco-list-rows'], doc.body);
     const editor = new El(page, 'editor', 'div', ['monaco-editor'], doc.body);
     page.lines = new El(page, 'lines', 'div', ['lines-content'], editor);
-    const widget = new El(page, 'widget', 'div', ['suggest-widget'], editor);
-    page.suggest = new El(page, 'suggest', 'div', ['monaco-list-rows'], widget);
+    page.editor = editor;
+    page.widget = new El(page, 'widget', 'div', ['suggest-widget'], editor);
+    page.suggest = new El(page, 'suggest', 'div', ['monaco-list-rows'], page.widget);
+    page.rows = [0, 1].map((i) => new El(page, `row${i}`, 'div', ['monaco-list-row'], page.suggest));
     if (textarea) {
         page.host = new El(page, 'host', 'textarea', ['inputarea'], editor);
     } else {
@@ -217,7 +250,14 @@ function newPage({ textarea = false } = {}) {
         for (const type of GESTURES) target.addEventListener(type, () => log.push(`${target.name} ${type}`));
     }
 
-    vm.runInContext(GUARD, vm.createContext({ window: page.window, document: doc }));
+    // The workbench's keybinding service: a window listener in the bubble
+    // phase, registered long before the guard, that runs the suggest list's
+    // commands. Only where a case asks for it, so the other logs stay short.
+    if (keybindings) page.window.addEventListener('keydown', (e) => log.push(`keybinding ${e.key}`));
+
+    page.timers = [];
+    const setTimeout = (fn) => { page.timers.push(fn); };
+    vm.runInContext(GUARD, vm.createContext({ window: page.window, document: doc, setTimeout }));
     return page;
 }
 
@@ -235,8 +275,8 @@ function touch(page, target, ms, gesture) {
 }
 
 /** An editor the user has tapped into, with the keyboard up and a word underlined. */
-function typing({ textarea = false, composing = true } = {}) {
-    const page = newPage({ textarea });
+function typing({ textarea = false, composing = true, keybindings = false } = {}) {
+    const page = newPage({ textarea, keybindings });
     page.host.focus();
     touch(page, page.lines, 100, '-monaco-gesturetap');
     if (composing && textarea) dispatch(page, page.host, { type: 'compositionstart', bubbles: true });
@@ -247,6 +287,25 @@ function typing({ textarea = false, composing = true } = {}) {
         'setup: the tap on text did not let the keyboard up');
     log = [];
     return page;
+}
+
+/** The suggest list as the editor shows it: `visible`, with `rows` rows, `focused` the focused one. */
+function openList(page, { rows = 2, focused = 0 } = {}) {
+    page.widget.classList.add('visible');
+    page.rows.forEach((row, i) => {
+        if (i >= rows) row.parent = null;
+        if (i === focused) row.classList.add('focused');
+    });
+    return page;
+}
+
+function flushTimers(page) {
+    const timers = page.timers.splice(0);
+    for (const fn of timers) fn();
+}
+
+function pressWith(page, key, mods) {
+    dispatch(page, page.document.activeElement, { type: 'keydown', key, bubbles: true, ...mods });
 }
 
 const cases = [];
@@ -275,9 +334,57 @@ check('a tap on text while a word composes finishes it before the editor moves t
 check('a long press, which moves the caret and opens the menu, the same',
     typing(), (p) => touch(p, p.lines, 1000, '-monaco-gesturecontextmenu'),
     finished('lines -monaco-gesturecontextmenu'));
-check('a tap on a suggestion, a list inside the editor, the same',
+check('a tap on a suggestion finishes the word after the list has taken the tap',
     typing(), (p) => touch(p, p.suggest, 100, '-monaco-gesturetap'),
-    finished('suggest -monaco-gesturetap'));
+    ['suggest -monaco-gesturetap', 'blur host', 'focus host']);
+check('a long press on the suggest list moves nothing and is left alone',
+    typing(), (p) => touch(p, p.suggest, 1000, '-monaco-gesturecontextmenu'),
+    ['suggest -monaco-gesturecontextmenu']);
+check('Tab the open list takes finishes the word after the keybinding has run',
+    openList(typing({ keybindings: true }), { focused: 1 }), (p) => press(p, 'Tab'),
+    ['editor Tab', 'keybinding Tab', 'blur host', 'focus host']);
+check('Tab with the list open but nothing focused finishes before, as a caret key',
+    openList(typing({ keybindings: true }), { focused: -1 }), (p) => press(p, 'Tab'),
+    ['blur host', 'focus host', 'editor Tab', 'keybinding Tab']);
+for (const key of ['ArrowUp', 'ArrowDown', 'PageUp', 'PageDown']) {
+    check(`${key} the open list takes is left alone: it moves the list, not the caret`,
+        openList(typing({ keybindings: true })), (p) => press(p, key),
+        [`editor ${key}`, `keybinding ${key}`]);
+}
+check('ArrowDown with one focused suggestion moves the caret, so it finishes before',
+    openList(typing({ keybindings: true }), { rows: 1 }), (p) => press(p, 'ArrowDown'),
+    ['blur host', 'focus host', 'editor ArrowDown', 'keybinding ArrowDown']);
+check('Shift+ArrowDown with the list open selects text, so it finishes before',
+    openList(typing({ keybindings: true })), (p) => pressWith(p, 'ArrowDown', { shiftKey: true }),
+    ['blur host', 'focus host', 'editor ArrowDown', 'keybinding ArrowDown']);
+for (const key of ['ArrowLeft', 'ArrowRight', 'Home', 'End', 'Backspace', 'Delete']) {
+    check(`${key} with the list open moves the caret, so it finishes before`,
+        openList(typing({ keybindings: true })), (p) => press(p, key),
+        ['blur host', 'focus host', `editor ${key}`, `keybinding ${key}`]);
+}
+check('Tab the list takes with the key stopped before window: the timeout finishes it, once',
+    openList(typing({ keybindings: true }), { focused: 1 }), (p) => {
+        p.editor.addEventListener('keydown', (e) => { log.push(`container ${e.key}`); e.stopPropagation(); });
+        press(p, 'Tab');
+        log.push('-- timeout');
+        flushTimers(p);
+        press(p, 'a');
+    },
+    ['editor Tab', 'container Tab', '-- timeout', 'blur host', 'focus host', 'editor a', 'container a']);
+check('a key dispatched inside the Tab dispatch does not set the finish off early',
+    openList(typing({ keybindings: true }), { focused: 1 }), (p) => {
+        p.host.addEventListener('keydown', (e) => {
+            if (e.key === 'Tab') dispatch(p, p.host, { type: 'keydown', key: 'Shift', bubbles: true });
+        });
+        press(p, 'Tab');
+    },
+    ['editor Tab', 'editor Shift', 'keybinding Shift', 'keybinding Tab', 'blur host', 'focus host']);
+check('Tab with the list open and no word composing is left alone',
+    openList(typing({ keybindings: true, composing: false }), { focused: 1 }), (p) => {
+        press(p, 'Tab');
+        log.push(`timers ${p.timers.length}`);
+    },
+    ['editor Tab', 'keybinding Tab', 'timers 0']);
 check('a tap on a list outside the editor is left alone',
     typing(), (p) => touch(p, p.explorer, 100, '-monaco-gesturetap'),
     ['explorer -monaco-gesturetap']);

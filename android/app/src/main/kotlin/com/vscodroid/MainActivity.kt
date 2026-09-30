@@ -3571,34 +3571,55 @@ class MainActivity : AppCompatActivity() {
      * The terminal is left alone. It has an editing host of its own, and
      * opening a terminal is asking to type.
      *
-     * The same script ends a word the keyboard is still composing before the
-     * editor moves the caret. Chromium keeps an EditContext composition's range
-     * where it was when the page moves the selection (crbug 379170477), so with
-     * a keyboard that composes, a key or a tap that moved the caret while a
-     * word was underlined made the keyboard rewrite that word over its old
-     * range: End while `kiwi` was underlined in `alpha delta kiwi charlie` left
-     * `alpha delta charlie charlie`, and a tap on an empty line followed by
-     * `cha` typed `cchcha`. The host is blurred and refocused in the same task
-     * as the caret move, before the editor handles it: from a window capture
-     * `keydown` for the arrows, Home, End, PageUp, PageDown, Tab, Backspace and
-     * Delete, whatever sends them, and from the editor's own
+     * The same script ends a word the keyboard is still composing when a key or
+     * a tap moves the editor's caret. Chromium keeps an EditContext
+     * composition's range where it was when the page moves the selection
+     * (crbug 379170477), so with a keyboard that composes, moving the caret
+     * while a word was underlined made the keyboard's next edit land on the
+     * word's old range: End while `kiwi` was underlined in
+     * `alpha delta kiwi charlie` left `alpha delta charlie charlie`, a tap on
+     * an empty line followed by `cha` typed `cchcha`, and Tab accepting
+     * `alpha3` over `alp` left `alpha3ha3`. Blurring and refocusing the host
+     * ends the composition in the same task as the caret move, so the keyboard
+     * starts again from the new caret. That runs for the arrows, Home, End,
+     * PageUp, PageDown, Tab, Backspace and Delete from a window capture
+     * `keydown`, whatever sends them, and for the editor's own
      * `-monaco-gesturetap` and `-monaco-gesturecontextmenu` (a long press)
-     * inside `.monaco-editor`. Only for a focused host that has an
+     * inside `.monaco-editor`; only for a focused host that has an
      * `editContext` and is in the script's `composing` set, and with
      * `reapplying` set, so the focus handler leaves the refocus and `inputmode`
-     * alone. Measured on an API 33 emulator with Gboard 12.4, with this code
-     * installed over DevTools rather than built in: End, Home, PageUp,
-     * PageDown, the trackpad in all four directions, Tab accepting a
-     * suggestion, Gboard's Backspace at the start of a line, a tap on text or
-     * on a suggestion and a long press all left the text intact, and ordinary
-     * typing never set it off. `scripts/test-keyboard-guard.js` runs this part
-     * of the script.
+     * alone.
+     *
+     * It runs before the editor handles the key or the tap, except where an
+     * open suggestion list takes it. Ending a composition makes the editor
+     * refilter the list and highlight its first row again, so ending it first
+     * would make Tab accept the first suggestion instead of the highlighted
+     * one. Up, Down, PageUp and PageDown that move the list's highlight move no
+     * caret and end nothing. Tab accepting the highlighted suggestion and a tap
+     * on a row end it after the list has acted, still in the same task, from a
+     * listener added while the event is on its way down: it runs after the
+     * ones already registered where it is added, window for a key, where the
+     * workbench's keybindings run in the bubble phase, and the target for a
+     * gesture, which does not bubble. A long press on the list ends nothing.
+     *
+     * Measured on an API 33 emulator with Gboard 12.4, with this code installed
+     * over DevTools rather than built in: End, Home, PageUp, the trackpad in
+     * all four directions, Gboard's Backspace at the start of a line, a tap
+     * elsewhere in the file and a long press left the text intact; Down twice
+     * then Tab inserted the third suggestion and a tap on a row inserted that
+     * row, both intact; a double tap still selected the word; and typing, the
+     * Command Palette and the Explorer's rename box never set it off.
+     * `scripts/test-keyboard-guard.js` runs this part of the script.
      *
      * What that does not cover: a caret moved by a command, such as Undo, Find
      * or Go to Line, or by an extension, which is neither a key in the list nor
      * an editor gesture; and the textarea edit path, whose host has no
-     * `editContext`. What it costs: the word is committed as typed, so on a
-     * Japanese keyboard a guarded key or tap commits the kana unconverted.
+     * `editContext`. Not measured: keyboards other than Gboard, Korean and
+     * Chinese input, and the other Monaco editors, such as the Source Control
+     * message box and the chat input. What it costs: the word is committed as
+     * typed, so on a Japanese keyboard a guarded key or tap commits the kana
+     * unconverted; and a word ended after an accept can make the editor offer
+     * the accepted word again as a one-row list.
      */
     private fun injectKeyboardGuard() {
         webView?.evaluateJavascript(
@@ -3728,7 +3749,7 @@ class MainActivity : AppCompatActivity() {
                 // the composition, and composition is an ordinary path now that
                 // the editor ships in Japanese, Korean and both Chinese scripts.
                 // finishComposition() below ends one on purpose, and only where
-                // the caret is about to move.
+                // a key or a tap moves the caret.
                 function letTheKeyboardUp() {
                     aimedAtText = true;
                     var focused = document.activeElement;
@@ -3854,26 +3875,72 @@ class MainActivity : AppCompatActivity() {
                 // tap that moves the caret lets the keyboard start again from
                 // the moved caret. Run as a separate step it loses: Gboard 12.4
                 // reopened the word 24 to 68 ms after the refocus.
-                function finishComposition() {
+                function composingHost() {
                     var element = document.activeElement;
-                    if (!element || !element.editContext || !composing.has(element)) return;
+                    return element && element.editContext && composing.has(element) ? element : null;
+                }
+                function finishComposition() {
+                    var element = composingHost();
+                    if (!element) return;
                     reapplying = true;
                     element.blur();
                     element.focus();
                     reapplying = false;
                 }
+                // Ending a composition also makes the editor refilter an open
+                // suggest list and focus its first item again, so a Tab or tap
+                // the list takes ends it only after the list has acted, still
+                // in the same task. A listener added while the event is on its
+                // way down runs after the ones already registered where it is
+                // added: window for a key, where the workbench runs keybindings,
+                // and the target for the editor's gestures, which do not bubble.
+                // The timeout covers an event stopped before it gets there.
+                function finishAfter(e) {
+                    var node = e.bubbles ? window : e.target;
+                    var done = false;
+                    function finish(event) {
+                        if (done || (event && event !== e)) return;
+                        done = true;
+                        node.removeEventListener(e.type, finish);
+                        finishComposition();
+                    }
+                    node.addEventListener(e.type, finish);
+                    setTimeout(finish, 0);
+                }
+                // Whether the open suggest list takes the key rather than the
+                // caret, by the editor's own keybinding conditions: Tab accepts
+                // the focused suggestion; Up, Down, PageUp and PageDown move the
+                // list's focus unless it holds a single suggestion that is
+                // already focused. The list is marked `visible` 100 ms after it
+                // opens, so a key in those first 100 ms counts as the caret's.
+                function suggestTakes(e) {
+                    var list = document.querySelector('.suggest-widget.visible');
+                    if (!list || e.ctrlKey || e.altKey || e.shiftKey || e.metaKey) return false;
+                    var focused = list.querySelector('.monaco-list-row.focused');
+                    if (e.key === 'Tab') return !!focused;
+                    if (!/^(ArrowUp|ArrowDown|PageUp|PageDown)$/.test(e.key)) return false;
+                    return !focused || list.querySelectorAll('.monaco-list-row').length > 1;
+                }
                 // Window capture runs before the editor's own keydown handler.
+                // A key the open list takes moves no caret and ends nothing,
+                // except Tab, whose accept does and is finished after it.
                 var CARET_KEYS = /^(Arrow(Left|Right|Up|Down)|Home|End|PageUp|PageDown|Tab|Backspace|Delete)$/;
                 window.addEventListener('keydown', function(e) {
-                    if (CARET_KEYS.test(e.key)) finishComposition();
+                    if (!CARET_KEYS.test(e.key) || !composingHost()) return;
+                    if (!suggestTakes(e)) finishComposition();
+                    else if (e.key === 'Tab') finishAfter(e);
                 }, true);
                 // A touch moves the caret only in the editor's own gestures,
                 // dispatched from touchend: a tap, and a long press, which opens
                 // the context menu at the pressed position. pointerdown is too
                 // early: the keyboard reopens the word while the finger is still
-                // down.
+                // down. On the suggest list, which sits inside the editor, a tap
+                // accepts the row under it and a long press does nothing.
                 function onEditorGesture(e) {
-                    if (e.target.closest && e.target.closest('.monaco-editor')) finishComposition();
+                    var target = e.target;
+                    if (!target.closest || !target.closest('.monaco-editor') || !composingHost()) return;
+                    if (!target.closest('.suggest-widget')) finishComposition();
+                    else if (e.type === '-monaco-gesturetap') finishAfter(e);
                 }
                 window.addEventListener('-monaco-gesturetap', onEditorGesture, true);
                 window.addEventListener('-monaco-gesturecontextmenu', onEditorGesture, true);

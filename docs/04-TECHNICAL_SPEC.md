@@ -708,16 +708,19 @@ Open and input boxes accept only through one; with Ctrl or Alt latched it is lef
 the modifier interceptor can still build the chord from the `beforeinput` that follows.
 
 A key or a touch that moves the editor's caret while the soft keyboard is still composing a
-word ends that composition first. Chromium keeps an EditContext composition's range where it
-was when the page moves the selection (crbug 379170477), so a keyboard that recomposes the
-word at the new caret wrote it over the old range, and End, a trackpad drag, Tab accepting a
+word ends that composition. Chromium keeps an EditContext composition's range where it was
+when the page moves the selection (crbug 379170477), so a keyboard that recomposes the word
+at the new caret wrote it over the old range, and End, a trackpad drag, accepting a
 suggestion or a tap elsewhere garbled the line. `MainActivity.injectKeyboardGuard` blurs and
-refocuses the composing host in the same task as the caret move, before the editor handles
-it, from a window capture `keydown` listener for the arrows, Home, End, PageUp, PageDown,
-Tab, Backspace and Delete, and from the editor's own `-monaco-gesturetap` and
-`-monaco-gesturecontextmenu`. The word is committed as typed, so on a Japanese keyboard the
-kana are committed unconverted. A caret moved by a command, such as Undo, Find or Go to Line,
-is not covered.
+refocuses the composing host in the same task as the caret move, from a window capture
+`keydown` listener for the arrows, Home, End, PageUp, PageDown, Tab, Backspace and Delete,
+and from the editor's own `-monaco-gesturetap` and `-monaco-gesturecontextmenu`. It does so
+before the editor handles the key or the tap, except where an open suggestion list takes it:
+ending a composition makes the editor refilter the list and highlight its first row again,
+so Up, Down, PageUp and PageDown that move the highlight end nothing, and Tab accepting the
+highlighted suggestion or a tap on a row end the composition after the list has acted. The
+word is committed as typed, so on a Japanese keyboard the kana are committed unconverted. A
+caret moved by a command, such as Undo, Find or Go to Line, is not covered.
 
 ### 5.3 Visibility Control
 
