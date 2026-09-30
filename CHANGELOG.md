@@ -34,6 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - An update removes the chat agent host's Copilot runtime that an earlier version left on the device, about 175 MB.
 - `jshell` from the Java 17 toolchain starts in the terminal instead of failing to launch its execution engine.
 - Enter on Gboard accepts in the Command Palette, Quick Open and input boxes such as Open in Browser, where it often did nothing.
+- Typing in the editor with a soft keyboard no longer corrupts the line when a suggestion is tapped, the cursor moves or the editor regains focus; text such as `upgradessedargpu` or `alpha delta charlieeeee` could be saved.
 
 ### Security
 

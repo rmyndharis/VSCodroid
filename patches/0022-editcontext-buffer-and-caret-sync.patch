@@ -1,0 +1,78 @@
+Keep the EditContext buffer, the typed text and the caret in step with the IME.
+
+NativeEditContext mirrors the model line into the browser's EditContext and
+turns each textupdate back into a type command. Three places in that round
+trip assumed the buffer holds only what this class wrote, which stops being
+true as soon as an IME edits it, and each one corrupts text with a keyboard
+that reads the buffer back (Gboard on Android).
+
+_updateEditContext replaced [0, length of the previous write) with the new
+line. Blink has already applied the IME's edit when textupdate fires, so
+every character the IME added survived after the new line: typing "kiwi"
+left the buffer "kiwiiwik". A keyboard that recomposes the word under the
+caret then types that tail back into the document. The buffer is now
+compared with and replaced whole.
+
+_emitTypeEvent copied the text between Monaco's caret and the update range
+from the live buffer, at offsets of the text before the edit. Blink has
+sometimes applied the edit by then and sometimes not, so the copied prefix
+or suffix was shifted whenever the edit changed length. It now copies from
+_previousEditContextText, the line last written, which is the text those
+offsets describe.
+
+The caret delta was measured from updateRangeStart + e.text.length and
+ignored the copied prefix and suffix, so a selection-only update ("" at
+[0,0) with the caret past 0, which Gboard sends before committing a
+suggestion) put the caret past the IME's selection, and the next delete
+removed the wrong characters. It is now measured from the start and length
+of the text actually typed.
+
+Not fixed here: Chromium keeps a composition's range when the page moves
+the selection during it (crbug 379170477), so a key that moves the caret
+while a word composes still writes the recomposed word over the old range.
+
+diff --git a/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts b/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
+index 528a8e0..c654033 100644
+--- a/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
++++ b/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
+@@ -417,10 +417,12 @@ export class NativeEditContext extends AbstractEditContext {
+ 			return;
+ 		}
+ 		const newText = editContextState.text ?? ' ';
+-		if (newText !== this._previousEditContextText) {
+-			this._editContext.updateText(0, this._previousEditContextText.length, newText);
+-			this._previousEditContextText = newText;
++		// The buffer can hold IME edits this class did not write, so compare with and replace all
++		// of it: a range sized from the previous write leaves the IME's text after the new line.
++		if (newText !== this._editContext.text) {
++			this._editContext.updateText(0, this._editContext.text.length, newText);
+ 		}
++		this._previousEditContextText = newText;
+ 		if (editContextState.selectionStartOffset !== this._previousEditContextSelection.start ||
+ 			editContextState.selectionEndOffset !== this._previousEditContextSelection.endExclusive) {
+ 			this._editContext.updateSelection(editContextState.selectionStartOffset, editContextState.selectionEndOffset);
+@@ -445,17 +447,21 @@ export class NativeEditContext extends AbstractEditContext {
+ 		if (e.updateRangeStart < selectionStartOffset) {
+ 			replacePrevCharCnt = selectionStartOffset - e.updateRangeStart;
+ 		}
++		// The offsets are those of the text before the IME's edit, which Blink has often already
++		// applied to this._editContext.text when textupdate fires, so copy from the text last written.
+ 		let text = '';
+ 		if (selectionStartOffset < e.updateRangeStart) {
+-			text += this._editContext.text.substring(selectionStartOffset, e.updateRangeStart);
++			text += this._previousEditContextText.substring(selectionStartOffset, e.updateRangeStart);
+ 		}
+ 		text += e.text;
+ 		if (selectionEndOffset > e.updateRangeEnd) {
+-			text += this._editContext.text.substring(e.updateRangeEnd, selectionEndOffset);
++			text += this._previousEditContextText.substring(e.updateRangeEnd, selectionEndOffset);
+ 		}
+ 		let positionDelta = 0;
+ 		if (e.selectionStart === e.selectionEnd && selectionStartOffset === selectionEndOffset) {
+-			positionDelta = e.selectionStart - (e.updateRangeStart + e.text.length);
++			// The typed text starts at the caret or the update range, whichever is first, and can
++			// include the text between the two, so measure from the end of what is typed.
++			positionDelta = e.selectionStart - (Math.min(selectionStartOffset, e.updateRangeStart) + text.length);
+ 		}
+ 		const typeInput: ITypeData = {
+ 			text,
