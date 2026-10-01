@@ -3605,7 +3605,11 @@ class MainActivity : AppCompatActivity() {
      * added, window for a key, where the workbench's keybindings run in the
      * bubble phase, and the target for a gesture, which does not bubble. When
      * the event is stopped before that listener, a zero timeout ends it
-     * instead, in a later task. A long press on the list ends nothing.
+     * instead, in a later task. A long press on the list ends nothing. With no
+     * list open, ending a composition makes the editor schedule a quick
+     * suggestion 10 ms later, and patch 0023 cancels it when a cursor key then
+     * moves the caret: otherwise the list opened at the key's destination, such
+     * as after End on a line ending in an identifier.
      *
      * Measured on an API 33 emulator with Gboard 12.4, with this code installed
      * over DevTools rather than built in: End, Home, PageUp, the trackpad in

@@ -172,3 +172,12 @@
 0022 editcontext caret|out/vs/code/browser/workbench/workbench.js|updateRangeStart)+
 0022 editcontext pre-edit text|out/vs/code/browser/workbench/workbench.js x2|_previousEditContextText.substring(
 0022 editcontext pre-edit text kept current|out/vs/code/browser/workbench/workbench.js x2|_previousEditContextText=
+# 0023 gates on the early return it adds. Its condition is lost to minification
+# (`undefined` becomes `void 0` and the enum member a number), and the cancel
+# call alone also occurs once in cancel(), so the row needs the statement
+# boundary before `return`, which this bundle keeps (the early exit above it
+# compiles to `{this.cancel();return}`). Against the shipped 1.139.1
+# workbench.js the pattern occurs 0 times, and once in a tree built with the
+# patch. Folding the block into the else-if chain below it deletes the token;
+# the patch header says so at the call site too.
+0023 suggest caret move|out/vs/code/browser/workbench/workbench.js|this._triggerQuickSuggest.cancel();return

@@ -745,9 +745,13 @@ before the editor handles the key or the tap, except where an open suggestion li
 key without modifiers, or a tap: ending a composition makes the editor refilter the list and
 highlight its first row again, so Up, Down, PageUp and PageDown that move the highlight end
 nothing, and Tab accepting the highlighted suggestion or a tap on a row end the composition
-after the list has acted. The word is committed as typed, so on a Japanese keyboard the kana
-are committed unconverted. A caret moved by a command, such as Undo, Find or Go to Line, is
-not covered.
+after the list has acted. With no list open, ending a composition also makes the editor
+schedule a quick suggestion, which 10 ms later opens the list wherever the caret then ends a
+word. Patch 0023 cancels it when a cursor key moves the caret; without it, End on a line
+ending in an identifier, or a trackpad drag down onto one, opened the list there, and Enter
+then accepted a suggestion instead of starting a new line. The word is committed as typed,
+so on a Japanese keyboard the kana are committed unconverted. A caret moved by a command,
+such as Undo, Find or Go to Line, is not covered.
 
 ### 5.3 Visibility Control
 
@@ -792,6 +796,7 @@ flowchart TD
   P --> P20["0020 chat agent host: not started on Android"]
   P --> P21["0021 terminal hint: no Copilot CLI line on Android"]
   P --> P22["0022 EditContext: keep the IME buffer and caret in step"]
+  P --> P23["0023 suggest: drop a pending quick suggest on a caret key"]
 ```
 
 Five of these are load-bearing in ways their titles understate:

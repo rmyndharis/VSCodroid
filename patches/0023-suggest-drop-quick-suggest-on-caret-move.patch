@@ -1,0 +1,65 @@
+Drop a pending quick suggest when a cursor key moves the caret.
+
+SuggestModel answers the end of a composition with _doTriggerQuickSuggest,
+which arms a timer (editor.quickSuggestionsDelay, 10 ms by default) whose
+callback opens the suggest list wherever the caret is when it fires. A cursor
+key pressed before then moves the caret with source 'keyboard' and reason
+Explicit, and with no suggestion session active _onCursorChange let that move
+through without touching the timer, so the list opened at the key's
+destination rather than where the word ended.
+
+On Android that is the ordinary order, not a race. Chromium keeps an
+EditContext composition's range where it was when the page moves the
+selection (crbug 379170477), so VSCodroid's keyboard guard
+(MainActivity.injectKeyboardGuard) ends a composing word in the same task as
+the key that moves the caret, just before the key reaches the editor. End on
+a line ending in an identifier, or a trackpad drag down onto one, opened the
+list there; the drag's next Down then moved the list's highlight instead of
+the caret, and an Enter could accept a suggestion instead of starting a new
+line.
+
+An Explicit move with no session now cancels the pending timer. Nothing else
+changes. Typing moves the caret with reason NotSet and still arms it, and
+deleteLeft is an edit with reason NotSet as well. A move from any source
+other than 'keyboard' or 'deleteLeft', a mouse or a tap included, already
+cancelled through the early exit above the new block. With a session open an
+Explicit move still refilters it. Accepting a suggestion, by Tab or by a tap
+on a row, cancels the model before its edit, which arrives from source
+'suggest'.
+
+Verified against the built bundle, driven in headless Chromium with an
+emulated IME and the keyboard guard installed, beside the bundle without this
+patch: End from a composing word leaves no list, three synthetic Downs move
+the caret three lines where the first used to open the list and the other two
+moved its highlight, and Enter after End starts a new line instead of
+inserting a suggestion. Typing, a composition committed in place, Left with a
+list open, and Tab or a tap accepting a row behave the same in both bundles.
+
+One note for whoever tidies this later. The return ending the new block looks
+redundant, since neither branch below it can match an Explicit move with no
+session, and folding the block into that else-if chain is the tidier shape.
+It is kept because `this._triggerQuickSuggest.cancel();return` is the token
+patches/fingerprints.txt matches to prove this patch reached the packaged
+bundle: the condition does not survive minification, and the cancel alone
+also occurs in cancel(). If you fold it, move that row to something the new
+shape introduces and check the replacement occurs zero times in an unpatched
+bundle first.
+
+diff --git a/src/vs/editor/contrib/suggest/browser/suggestModel.ts b/src/vs/editor/contrib/suggest/browser/suggestModel.ts
+index c85f338..69dc36a 100644
+--- a/src/vs/editor/contrib/suggest/browser/suggestModel.ts
++++ b/src/vs/editor/contrib/suggest/browser/suggestModel.ts
+@@ -361,6 +361,13 @@ export class SuggestModel implements IDisposable {
+ 			return;
+ 		}
+ 
++		if (this._triggerState === undefined && e.reason === CursorChangeReason.Explicit) {
++			// suggest is not active and something like cursor keys are used to move
++			// the cursor. a quick suggest that is still pending, such as the one armed
++			// when a composition ended just before the move, belongs to the old position
++			this._triggerQuickSuggest.cancel();
++			return;
++		}
+ 
+ 		if (this._triggerState === undefined && e.reason === CursorChangeReason.NotSet) {
+ 			if (prevSelection.containsRange(this._currentSelection) || prevSelection.getEndPosition().isBeforeOrEqual(this._currentSelection.getPosition())) {
