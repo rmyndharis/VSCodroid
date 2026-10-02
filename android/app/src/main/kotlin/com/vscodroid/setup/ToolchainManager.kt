@@ -2821,14 +2821,17 @@ class ToolchainManager(private val context: Context) {
                     }
                     if (!isElfFile(File(context.filesDir, relPath))) continue
                     if (command == "jshell") {
-                        // jshell's default engine runs snippets in a second JVM, and no
-                        // launch mechanism can exec its bin/java under filesDir, so it
-                        // fails to launch; `--execution local` keeps them in jshell's
-                        // own JVM. jshell refuses a repeated --execution and accepts
-                        // abbreviations of it, hence the guard. It reads each argument
-                        // on its own: matching " -ex" in the joined "$*" took a path
-                        // holding that for an engine choice, and missed a later
-                        // --execution under an IFS that does not start with a space.
+                        // jshell's default engine runs snippets in a second JVM that it
+                        // execs by absolute path. Under filesDir that exec is refused
+                        // wherever the exec interceptor is not preloaded, and this file
+                        // is sourced there too (BASH_ENV, a terminal with LD_PRELOAD
+                        // switched off), so jshell fails to launch; `--execution local`
+                        // keeps the snippets in jshell's own JVM. jshell refuses a
+                        // repeated --execution and accepts abbreviations of it, hence
+                        // the guard. It reads each argument on its own: matching " -ex"
+                        // in the joined "$*" took a path holding that for an engine
+                        // choice, and missed a later --execution under an IFS that does
+                        // not start with a space.
                         // An option value that itself starts with -ex still reads as
                         // one; telling them apart means repeating jshell's parser.
                         // VFORK lets jline start stty, without which Tab and ArrowUp

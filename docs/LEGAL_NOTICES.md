@@ -401,13 +401,14 @@ is what these packages are built from, rather than from upstream project pages
 that may describe a different version. `scripts/check-termux-licenses.py` reads
 that field back on every release and reports where this column and Termux
 disagree, so the sentence before this one is measured rather than promised for
-every package Termux states a licence for and that upstream answered for. Two
-rows come from elsewhere and carry the licence of the package they do come from:
-musl's loader is an Alpine package (`scripts/download-musl-loader.sh`), and
+every package Termux states a licence for and that upstream answered for. Three
+rows come from elsewhere and carry the licence of the source they do come from:
+musl's loader is an Alpine package (`scripts/download-musl-loader.sh`),
 `libripgrep.so` is the `rg` from the Code - OSS server tree, copied into
-`jniLibs` by `scripts/fetch-vscode-oss.sh`. That same gate prints both of them as
-entries no Termux package accounts for, so the exception is named by the run and
-not only here.
+`jniLibs` by `scripts/fetch-vscode-oss.sh`, and `libtermux-exec.so` is compiled
+here from termux-exec's own repositories (`scripts/build-termux-exec.sh`). That
+same gate prints the three of them as entries no Termux package accounts for, so
+the exception is named by the run and not only here.
 
 bzip2 is the one row Termux cannot settle: it declares plain `BSD`, which names
 no variant. This document said `BSD-4-Clause` until 2026-08-23, and that variant
@@ -494,6 +495,25 @@ lets a downloaded toolchain command start from a bare name on `PATH`. So are
 freestanding and links against no library at all, so there is nothing in it to
 attribute but this project's own source.
 
+One row below is built here rather than downloaded: `libtermux-exec.so` is
+compiled by `scripts/build-termux-exec.sh` from termux-exec-package 2.5.0 and
+the termux-core-package commit it links in statically, both fetched as pinned
+upstream tarballs, with the changes in `scripts/termux-exec.patch` applied
+first. Upstream's DEP-5 `LICENSE` files make termux-exec Apache-2.0 and
+termux-core MIT unless a file says otherwise, and three of the files linked in
+do: termux-core's `Canonicalize.c`, which comes from AOSP's libcore (Oracle and
+stargateoss), is GPL-2.0-only with the Classpath Exception, so the component
+has a source offer below; its `UnixSafeStrerror.c` (The Chromium Authors) and
+termux-exec's `ExecVariantsIntercept.c` (The Regents of the University of
+California) are BSD-3-Clause. All of it ships at `usr/share/doc/termux-exec`:
+the Apache-2.0 text and the two MIT notices beside the `LICENSE` files that say
+which covers what (their relative links are upstream's and do not resolve
+there; the licence each names is readable in the link text), the three files'
+own headers as written, and the Chromium `LICENSE` that `UnixSafeStrerror.c`
+refers to. Each patched source file opens with the modification notice
+Apache-2.0 section 4(b) asks for, and the build stops if the set of linked
+files that carry terms of their own changes.
+
 | Component | Licence | Copyleft | Files shipped |
 |---|---|---|---|
 | [Bash](https://www.gnu.org/software/bash/) | GPL-3.0 | **yes** | `libbash.so` |
@@ -531,6 +551,7 @@ attribute but this project's own source.
 | [readline](https://tiswww.case.edu/php/chet/readline/rltop.html) | GPL-3.0 | **yes** | `libreadline.so.8` |
 | [ripgrep](https://github.com/BurntSushi/ripgrep) | MIT | no | `libripgrep.so` |
 | [SQLite](https://sqlite.org) | Public Domain | no | `libsqlite3.so` |
+| [termux-exec](https://github.com/termux/termux-exec-package) | Apache-2.0, MIT, BSD-3-Clause, GPL-2.0-only WITH Classpath-exception-2.0 | **yes** | `libtermux-exec.so` |
 | [tmux](https://github.com/tmux/tmux) | ISC | no | `libtmux.so` |
 | [xz / liblzma](https://tukaani.org/xz/) | LGPL-2.1, GPL-2.0, GPL-3.0 | **yes** | `liblzma.so.5` |
 | [zlib](https://zlib.net) | Zlib | no | `libz.so.1` |
@@ -646,6 +667,7 @@ VSCodroid bundles binaries licensed under the GNU General Public License (GPL). 
 - **GMP** (LGPL-3.0): Source available at https://github.com/termux/termux-packages (package: `libgmp`). Shipped inside the Ruby toolchain pack, not the base app, so it reaches only devices where Ruby was installed
 - **OpenJDK 17** (GPL-2.0 with the Classpath Exception): Source available at https://github.com/termux/termux-packages (package: `openjdk-17`), built from https://github.com/openjdk/jdk17u. Shipped inside the Java toolchain pack, not the base app, so it reaches only devices where Java was installed. The Classpath Exception grants an additional permission and removes none of the obligations above.
 - **zeromq.js** (MIT; the libzmq linked into it is LGPL-3.0-or-later with libzmq's static linking exception): Source available at https://github.com/zeromq/libzmq/archive/20de92ac0a2b2b9a1869782a429df68f93c3625e.tar.gz and https://registry.npmjs.org/zeromq/-/zeromq-6.0.0-beta.16.tgz; the build options and compile command are `scripts/build-native-addons.sh` in this repository, which pins both by sha256. Shipped in the base app.
+- **termux-exec** (Apache-2.0 and MIT; the termux-core `Canonicalize.c` linked into it is GPL-2.0-only with the Classpath Exception, and two other files are BSD-3-Clause): Source available at https://github.com/termux/termux-exec-package/archive/refs/tags/v2.5.0.tar.gz and https://github.com/termux/termux-core-package/archive/63bf9286ad86603f9a58de73e4c740926c88f5e3.tar.gz, with `scripts/termux-exec.patch` in this repository applied to the first; `scripts/build-termux-exec.sh` pins both by sha256 and holds the compile and link commands. Shipped in the base app. The Classpath Exception grants an additional permission and removes none of the obligations above.
 
 Every entry from readline to GMP reaches the app as a dependency of something
 else rather than as a tool of its own, and each is dynamically linked and
@@ -656,8 +678,11 @@ be linked with an independent module and the result distributed under terms of
 the distributor's choice, provided each linked module's own licence is met,
 relieving LGPL-3.0 sections 4 and 5 and GPL-3.0 section 6. A modified libzmq
 must carry the same exception; the one here is configured with CMake options
-and not patched. The written offer in this section applies to all of them
-regardless.
+and not patched. `Canonicalize.c` in `libtermux-exec.so` is the other static
+case, and the Classpath Exception is what permits it: it lets the file be
+linked with independent modules and the result distributed under terms of the
+distributor's choice, provided each module's own licence is met. The written
+offer in this section applies to all of them regardless.
 
 You may also request a copy of the source code by contacting us (see contact information below). Source code will be provided for a period of three years from the date of distribution of the corresponding binary, for a charge no more than the cost of physically performing the distribution.
 
@@ -669,7 +694,7 @@ The offer above is one obligation; a copy of the licence itself is the other. GP
 
 | Licence | Text | Components it covers |
 |---|---|---|
-| GPL-2.0 | `licenses/COPYING.GPLv2` | Git, `git-remote-curl`, Zstandard, xz / liblzma, Java (OpenJDK) |
+| GPL-2.0 | `licenses/COPYING.GPLv2` | Git, `git-remote-curl`, Zstandard, xz / liblzma, Java (OpenJDK), termux-exec (its `Canonicalize.c`) |
 | GPL-3.0 | `licenses/COPYING.GPLv3` | Bash, GNU Make, readline, gdbm, libiconv, xz / liblzma |
 | LGPL-2.1 | `licenses/COPYING.LGPLv2.1` | libiconv, xz / liblzma |
 | LGPL-3.0 | `licenses/COPYING.LGPLv3` | GMP (Ruby toolchain pack), libzmq (inside zeromq.js) |
@@ -763,4 +788,4 @@ For questions about licenses, trademarks, or legal notices:
 
 ---
 
-_This document was last updated on September 28, 2026._
+_This document was last updated on October 1, 2026._

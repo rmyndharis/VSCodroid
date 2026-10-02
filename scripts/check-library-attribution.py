@@ -170,6 +170,18 @@ LIBRARIES = {
     "liblzma.so": ("xz / liblzma", "LGPL-2.1, GPL-2.0, GPL-3.0"),
     "liblzma.so.5": ("xz / liblzma", "LGPL-2.1, GPL-2.0, GPL-3.0"),
     "libzstd.so.1": ("Zstandard", "GPL-2.0"),
+    # Built here from pinned upstream source by build-termux-exec.sh, so it is
+    # attributed as upstream's rather than as VSCodroid's. termux-exec-package
+    # is Apache-2.0 and the termux-core-package it links in statically is MIT,
+    # except where a file says otherwise, and three linked files do:
+    # termux-core's Canonicalize.c is GPL-2.0-only with the Classpath
+    # exception, its UnixSafeStrerror.c (Chromium) and termux-exec's
+    # ExecVariantsIntercept.c (UC Regents) are BSD-3-Clause. The script stops
+    # if that set of files changes.
+    "libtermux-exec.so": (
+        "termux-exec",
+        "Apache-2.0, MIT, BSD-3-Clause, GPL-2.0-only WITH Classpath-exception-2.0",
+    ),
     # --- permissive: attribution only ---
     "libnode.so": ("Node.js", "MIT"),
     "libpython.so": ("Python", "PSF-2.0"),
@@ -260,13 +272,17 @@ TOOLCHAIN_LIBRARIES = {
 #
 # Almost every entry is `usr/share/doc/<termux package>`, which is where
 # `termux_copy_notices` (scripts/lib/termux-packages.sh) places what upstream
-# ships. Two are not, and both are measured rather than assumed:
+# ships. Three are not, the first two measured rather than assumed:
 #
 #   * ripgrep arrives with the server tree rather than from Termux, and
 #     @vscode/ripgrep-universal already carries its LICENSE inside the package;
 #   * musl's Alpine .apk carries no notice at all (three entries: the loader,
 #     the libc symlink, the metadata), so download-musl-loader.sh places
-#     licenses/COPYRIGHT.musl instead.
+#     licenses/COPYRIGHT.musl instead;
+#   * termux-exec never passes through a package here: build-termux-exec.sh
+#     compiles it from the upstream tarballs and copies both LICENSE files, the
+#     texts they point at, the headers of the three files with terms of their
+#     own and Chromium's LICENSE into usr/share/doc/termux-exec itself.
 #
 # Keyed by component rather than by file, because that is the unit the two
 # attribution documents and LIBRARIES are written in, and because one package's
@@ -283,6 +299,7 @@ NOTICE_DIRS = {
     "xz / liblzma": "usr/share/doc/liblzma",
     "Zstandard": "usr/share/doc/zstd",
     "GMP": "usr/share/doc/libgmp",
+    "termux-exec": "usr/share/doc/termux-exec",
     # --- permissive ---
     "Node.js": "usr/share/doc/nodejs-lts",
     "Python": "usr/share/doc/python",

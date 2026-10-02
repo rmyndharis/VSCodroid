@@ -63,14 +63,24 @@ int main(int argc, char **argv) {
     }
 
     // One argument, `--preload=<list>`, so the path is never read as the program
-    // to run. The option replaces LD_PRELOAD in musl's loader rather than adding
-    // to it, so a preload the caller set is carried into the list, ahead of the
-    // shim, and the variable itself is left in the environment as it arrived.
-    const char *existing = getenv("LD_PRELOAD");
-    char preload[PATH_MAX * 2];
-    int len = existing && *existing
-        ? snprintf(preload, sizeof(preload), "--preload=%s:%s", existing, shim)
-        : snprintf(preload, sizeof(preload), "--preload=%s", shim);
+    // to run, and the list names the shim alone. The option replaces LD_PRELOAD
+    // in musl's loader rather than adding to it, and an LD_PRELOAD found in the
+    // environment is deliberately not carried into the list. It used to be, on
+    // the premise that a caller-set preload is something musl can load. The one
+    // value a terminal exports is a Bionic library, the exec interceptor, and
+    // musl's loader cannot relocate a Bionic object: forwarded into the list, it
+    // printed eleven "Error relocating ...: symbol not found" lines and exited
+    // 127 before main(), so the CLI could not start from any terminal that had
+    // the interceptor. Given `--preload=<shim>` alone, the loader ignores the
+    // environment variable and the CLI runs while LD_PRELOAD still names the
+    // Bionic library. Measured on API 33 and 36 emulators, 2026-09-22/23, with
+    // CLI 2.1.216. So the forwarding gained nothing and broke the CLI whenever a
+    // Bionic preload was exported. The variable itself is left in the
+    // environment as it arrived, so the Bionic processes the CLI starts (bash,
+    // node, git) still load it; an unsetenv() here would take that away from
+    // them.
+    char preload[PATH_MAX + sizeof("--preload=")];
+    int len = snprintf(preload, sizeof(preload), "--preload=%s", shim);
     if (len < 0 || len >= (int)sizeof(preload)) {
         fprintf(stderr, "claude-launch: preload list too long\n");
         return 1;

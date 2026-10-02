@@ -86,10 +86,11 @@ jobs:
     # before the first tag rather than after one times out at 90%.
     timeout-minutes: 90
     env:
-      # The addons, the glibc shim, the trampoline and the Claude shim in a
-      # release are compiled with this one. build.yml pins the same version, and
-      # check-build-steps.py fails the two drifting apart: an APK built against
-      # another NDK is a different binary from the one every gate ran over.
+      # The addons, the glibc shim, the exec interceptor, the trampoline and
+      # the Claude shim in a release are compiled with this one. build.yml pins
+      # the same version, and check-build-steps.py fails the two drifting
+      # apart: an APK built against another NDK is a different binary from the
+      # one every gate ran over.
       NDK_VERSION: "27.2.12479018"
 
     steps:
@@ -543,6 +544,15 @@ jobs:
             --scan android/app/src/main/assets/vscode-reh \
             --scan android/app/src/main/assets/extensions
 
+      # The library the terminals preload so a program under the app's own
+      # storage, which SELinux will not execve, starts through the system
+      # linker instead. Built from termux-exec's source with the repository's
+      # patch, into assets/usr/lib, so after the wipe like the shim.
+      - name: Build the exec interceptor
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
+        run: bash scripts/build-termux-exec.sh
+
       # The one binary this repository compiles for the app itself. It is what
       # puts a downloaded toolchain's commands on PATH as real files, so anything
       # that resolves a bare name and execve's the result -- an extension
@@ -846,11 +856,12 @@ jobs:
       # entries that are not integrity-checked.
       #
       # What AGP finds is read back out of the finished bundle and joined
-      # with the glibc shim, the one native library compiled here, which
-      # ships as an asset AGP never sees and now carries the GNU build-id
-      # its link stamps for the console's pairing. The result is a
-      # standalone zip for the console's manual upload; the bundle itself
-      # leaves this step untouched.
+      # with the glibc shim, which ships as an asset AGP never sees and now
+      # carries the GNU build-id its link stamps for the console's pairing.
+      # The exec interceptor, also compiled here into the assets, is not in
+      # the zip: only programs a terminal starts load it, never the app's
+      # own process. The result is a standalone zip for the console's
+      # manual upload; the bundle itself leaves this step untouched.
       - name: Package the native debug symbols
         run: |
           set -euxo pipefail
