@@ -698,7 +698,10 @@ commit the typed name when they lose it; Escape because under spatial navigation
 unhandled real Escape blurs the focused element. Up and Down stay because they are the
 quick pick's list keys: a real key pressed while the soft keyboard composes a word carries
 `isComposing`, and the workbench dispatches no keybinding for it, so the Command Palette
-highlight would stop moving. With no real vertical arrow sent, spatial navigation never
+highlight would stop moving. PageUp, PageDown, Ctrl+Home, Ctrl+End and Right, which the
+quick pick binds as well, are pressed for real anyway, because their default is what a text
+box and an extension panel need, and the page lets them reach the quick pick's bindings
+while a word composes (below). With no real vertical arrow sent, spatial navigation never
 gets one either, and Blink's editing on Android has no command for Alt+Up or Alt+Down,
 which would otherwise leave a text box wherever the caret sat. Values going into that
 script are escaped by `KeyMapping.jsQuote`.
@@ -714,7 +717,21 @@ A composing Enter is replaced with one the workbench recognises, and a non-compo
 that arrives with an empty `code`, as Gboard's action key does in a one-line box, is given
 the `code` `Enter`, because keybindings resolve from `code` and the Command Palette, Quick
 Open and input boxes accept only through one; with Ctrl or Alt latched it is left empty so
-the modifier interceptor can still build the chord from the `beforeinput` that follows.
+the modifier interceptor can still build the chord from the `beforeinput` that follows. With
+Shift alone latched the latch is spent there, because the interceptor spends a lone Shift in
+that `beforeinput` and an Enter a binding accepts has none. It is not applied, which is the
+interceptor's rule for a lone Shift, and applied it would change the key: on Shift+Enter
+Quick Open does not open the highlighted file but adds it to the last focused chat input,
+and on Gboard 12.4, whose editor Enter is filled too, Enter in a Python file would run the
+line in the terminal.
+
+The same script clears `isComposing` on a real PageUp, PageDown, Ctrl+Home, Ctrl+End or
+Right pressed in the quick input while a word composes. The workbench dispatches no
+keybinding for a composing key, and in the quick input those keys work only through one:
+they page the list, go to its first and last item, and open Quick Open's highlighted item
+without closing it. Every other target keeps `isComposing`, because there the key's default
+does the work. An editor inside the quick input, such as Quick Chat's, keeps it too, like
+any other editor.
 
 A key or a touch that moves the editor's caret while the soft keyboard is still composing a
 word ends that composition. Chromium keeps an EditContext composition's range where it was

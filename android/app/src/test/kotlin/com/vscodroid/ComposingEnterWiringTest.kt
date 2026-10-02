@@ -11,7 +11,7 @@ import java.io.File
  * workbench recognises is installed where every page load passes, leaves the
  * editor, the terminal and a Chinese or Japanese conversion alone, ends the
  * composition before the replacement, and still matches how the shipped
- * workbench reads a key and filters a picker.
+ * workbench reads a key, filters a picker and binds the quick input's keys.
  *
  * Source-level, like [ListEditKeeperWiringTest], with the same ceiling: it cannot
  * see whether Gboard's Enter commits a rename on a device, only that the script
@@ -27,6 +27,17 @@ class ComposingEnterWiringTest {
     /** Comments blanked, because the KDoc names everything the cases look for. */
     private fun mainActivity(): String =
         SourceScan.withoutComments(SourceScan.read(MAIN_ACTIVITY))
+
+    /** The packaged workbench, or the case is skipped where there is none. */
+    private fun shippedWorkbench(): String {
+        val workbench = File(WORKBENCH)
+        assumeTrue(
+            workbench.isFile,
+            "no packaged workbench at ${workbench.path}; run scripts/fetch-vscode-oss.sh and " +
+                "scripts/package-assets.sh to check the mapping against the shipped bundle",
+        )
+        return workbench.readText()
+    }
 
     @Test
     fun `the script is installed from the path every page load takes`() {
@@ -105,13 +116,7 @@ class ComposingEnterWiringTest {
 
     @Test
     fun `the shipped workbench still ignores a composing key and reads keyCode`() {
-        val workbench = File(WORKBENCH)
-        assumeTrue(
-            workbench.isFile,
-            "no packaged workbench at ${workbench.path}; run scripts/fetch-vscode-oss.sh and " +
-                "scripts/package-assets.sh to check the mapping against the shipped bundle",
-        )
-        val bundle = workbench.readText()
+        val bundle = shippedWorkbench()
         val mapping = Regex("""this\.keyCode=(\w+)\.isComposing\?114:([\w$]+)\(\1\)""").find(bundle)
         assertTrue(
             mapping != null,
@@ -142,5 +147,28 @@ class ComposingEnterWiringTest {
             "the action list's filter no longer catches up on compositionend, so ending the " +
                 "composition before the replacement Enter may not filter the picker",
         )
+    }
+
+    @Test
+    fun `the shipped quick input still binds the keys the script lets through`() {
+        val bundle = shippedWorkbench()
+        assertTrue(
+            bundle.contains("\".quick-input-widget"),
+            "the quick input is no longer built as `.quick-input-widget`, so the script no " +
+                "longer finds the box whose keys it lets through while a word is composing",
+        )
+        listOf(
+            """id:"quickInput\.pageNext",primary:12,""" to "PageDown",
+            """id:"quickInput\.pagePrevious",primary:11,""" to "PageUp",
+            """id:"quickInput\.first",primary:[\w$]+\+14,""" to "Ctrl+Home",
+            """id:"quickInput\.last",primary:[\w$]+\+13,""" to "Ctrl+End",
+            """id:"quickInput\.acceptInBackground",[^}]*primary:17,""" to "Right",
+        ).forEach { (binding, key) ->
+            assertTrue(
+                Regex(binding).containsMatchIn(bundle),
+                "the quick input no longer binds $key as the script expects (`$binding`). " +
+                    "Check which keys it binds now and update the list the script lets through.",
+            )
+        }
     }
 }

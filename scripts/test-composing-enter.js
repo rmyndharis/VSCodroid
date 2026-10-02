@@ -1,6 +1,7 @@
 /**
  * Self-check for the script that makes a soft keyboard's Enter reach the
- * workbench as Enter.
+ * workbench as Enter, and the quick pick's keys reach its keybindings while
+ * a word is composing.
  *
  *   node scripts/test-composing-enter.js
  *
@@ -14,17 +15,35 @@
  * input box ignore it; the script fills the `code` in. Which Enter takes
  * which branch, and that a latched Ctrl or Alt keeps the empty `code` so the
  * key row can still build its chord from the `beforeinput` that follows, is
- * the kind of thing that stays textually present while being wrong.
+ * the kind of thing that stays textually present while being wrong. So is
+ * what happens to a Shift latched alone: the filled Enter spends it, because
+ * an Enter a keybinding accepts has no `beforeinput` to spend it in, and does
+ * not carry it, because Quick Open and the editor read Shift+Enter as
+ * something else.
+ *
+ * It also clears `isComposing` on a real PageUp, PageDown, Ctrl+Home,
+ * Ctrl+End or Right pressed in the quick input while a word composes, which
+ * the workbench otherwise answers with no keybinding at all, and leaves every
+ * other key, target and synthetic event as it is.
  *
  * This extracts the real script, runs it under `vm` against a stub window, and
- * drives the keydown listener it installs with fake events. `code` is a
- * read-only accessor on the fake event, as it is on a real KeyboardEvent, so
- * assigning it does nothing and only `Object.defineProperty` changes it.
+ * drives the keydown listener it installs with fake events. `code`,
+ * `shiftKey` and `isComposing` are read-only accessors on the fake event, as
+ * they are on a real KeyboardEvent, so assigning one does nothing and only
+ * `Object.defineProperty` changes it. `isTrusted` is an own property, as on a
+ * real one.
  *
  * NEGATIVE CONTROL, measured: against the script as it was before the fill
- * (main at 2ff780ca) the three cases that expect code Enter fail and the other
- * six pass. Writing `e.code = 'Enter'` in place of the `defineProperty` fails
- * the same three.
+ * (main at 2ff780ca) the three cases that expect code Enter fail, with the
+ * Shift case and the five that expect `isComposing` cleared, and the other
+ * fifteen pass. Against main at 42ab78ed, which filled the code but spent no
+ * Shift and cleared no `isComposing`, those last six fail and eighteen pass.
+ * Writing `e.code = 'Enter'` in place of the `defineProperty` fails the three
+ * and the Shift case; defining `shiftKey` on the filled Enter, or leaving the
+ * latch standing, fails the Shift case; spending the latch on an Enter that
+ * already has a code fails the case that expects it kept; assigning
+ * `isComposing` instead of defining it fails the five; and dropping the
+ * editor exclusion from the quick input's keys fails the Quick Chat case.
  *
  * Extraction is deliberately strict. If the raw string moves or changes shape
  * this fails saying so, rather than quietly checking an empty string.
@@ -79,6 +98,8 @@ class FakeKeyboardEvent {
     get key() { return this.init.key || ''; }
     get code() { return this.init.code || ''; }
     get keyCode() { return this.init.keyCode || 0; }
+    get ctrlKey() { return !!this.init.ctrlKey; }
+    get shiftKey() { return !!this.init.shiftKey; }
     get isComposing() { return !!this.init.isComposing; }
 }
 
@@ -107,16 +128,18 @@ const onKeydown = keydowns[0].fn;
 const onCompositionUpdate = listeners.find((l) => l.type === 'compositionupdate').fn;
 
 /**
- * What the listener did to one keydown: its `code` afterwards, whether that
- * is now an own property (defined by the script), whether the real key was
- * stopped or cancelled, and what was dispatched in its place.
+ * What the listener did to one keydown: its `code`, `shiftKey` and
+ * `isComposing` afterwards, whether `code` is now an own property (defined by
+ * the script), whether the real key was stopped or cancelled, what was
+ * dispatched in its place, and the key row's latch state it left.
  */
-function press(init, { latched, inEditor = false } = {}) {
+function press(init, { latched, inEditor = false, inQuickInput = false, trusted = true } = {}) {
     win.__vscodroid = latched && { ctrl: false, alt: false, shift: false, ...latched };
     const dispatched = [];
     const target = {
         tagName: 'INPUT',
-        closest: () => (inEditor ? {} : null),
+        closest: (selector) => ((inEditor && selector.includes('.monaco-editor')) ||
+            (inQuickInput && selector.includes('.quick-input-widget')) ? {} : null),
         dispatchEvent: (ev) => {
             dispatched.push(ev.type === 'keydown'
                 ? `keydown ${ev.key} ${ev.code} ${ev.keyCode}`
@@ -127,6 +150,7 @@ function press(init, { latched, inEditor = false } = {}) {
     const e = new FakeKeyboardEvent('keydown', { keyCode: 13, ...init });
     let stopped = false;
     let prevented = false;
+    Object.defineProperty(e, 'isTrusted', { value: trusted });
     e.target = target;
     e.stopImmediatePropagation = () => { stopped = true; };
     e.preventDefault = () => { prevented = true; };
@@ -134,49 +158,111 @@ function press(init, { latched, inEditor = false } = {}) {
     return {
         code: e.code,
         defined: Object.prototype.hasOwnProperty.call(e, 'code'),
+        shiftKey: e.shiftKey,
+        isComposing: e.isComposing,
         stopped,
         prevented,
         dispatched,
+        latch: win.__vscodroid ? { ...win.__vscodroid } : null,
     };
 }
 
 const NO_LATCH = {};
-const filled = { code: 'Enter', defined: true, stopped: false, prevented: false, dispatched: [] };
-const untouched = (code) =>
-    ({ code, defined: false, stopped: false, prevented: false, dispatched: [] });
+const CLEAR = { ctrl: false, alt: false, shift: false };
+/** A key the script left alone, with no latch on the row, changed by `over`. */
+const outcome = (over) => ({
+    code: '',
+    defined: false,
+    shiftKey: false,
+    isComposing: false,
+    stopped: false,
+    prevented: false,
+    dispatched: [],
+    latch: CLEAR,
+    ...over,
+});
+const filled = outcome({ code: 'Enter', defined: true });
 const gboardEnter = { key: 'Enter', code: '' };
 
 const cases = [
     ['a code-less Enter gets code Enter and goes on to the workbench',
         press(gboardEnter, { latched: NO_LATCH }), filled],
     ['the same before the key row has set up its latch state',
-        press(gboardEnter), filled],
+        press(gboardEnter), { ...filled, latch: null }],
     ['the same inside the editor, where its rename box lives',
         press(gboardEnter, { latched: NO_LATCH, inEditor: true }), filled],
     ['with Ctrl latched it keeps code "" for the key row to chord',
-        press(gboardEnter, { latched: { ctrl: true } }), untouched('')],
+        press(gboardEnter, { latched: { ctrl: true } }), outcome({ latch: { ...CLEAR, ctrl: true } })],
     ['with Alt latched it keeps code "" for the key row to chord',
-        press(gboardEnter, { latched: { alt: true } }), untouched('')],
+        press(gboardEnter, { latched: { alt: true } }), outcome({ latch: { ...CLEAR, alt: true } })],
+    ['with Shift latched it gets code Enter but not Shift, and spends the latch',
+        press(gboardEnter, { latched: { shift: true } }), filled],
+    ['with Ctrl and Shift latched it keeps code "" and all of the latch for the chord',
+        press(gboardEnter, { latched: { ctrl: true, shift: true } }),
+        outcome({ latch: { ...CLEAR, ctrl: true, shift: true } })],
     ['an Enter that already has code Enter is left alone',
-        press({ key: 'Enter', code: 'Enter' }, { latched: NO_LATCH }), untouched('Enter')],
+        press({ key: 'Enter', code: 'Enter' }, { latched: NO_LATCH }), outcome({ code: 'Enter' })],
+    ['so is one with Shift latched, latch and all',
+        press({ key: 'Enter', code: 'Enter' }, { latched: { shift: true } }),
+        outcome({ code: 'Enter', latch: { ...CLEAR, shift: true } })],
     ['a code-less key that is not Enter is left alone',
-        press({ key: 'Unidentified', code: '', keyCode: 229 }, { latched: NO_LATCH }),
-        untouched('')],
+        press({ key: 'Unidentified', code: '', keyCode: 229 }, { latched: NO_LATCH }), outcome({})],
 ];
 
 onCompositionUpdate({ data: 'alpha' });
 cases.push(['a composing Enter is still stopped and replaced',
     press({ ...gboardEnter, isComposing: true }, { latched: NO_LATCH }),
-    {
-        code: '',
-        defined: false,
+    outcome({
+        isComposing: true,
         stopped: true,
-        prevented: false,
         dispatched: ['compositionend alpha', 'keydown Enter Enter 13'],
-    }]);
+    })]);
+cases.push(['a composing Enter with Shift latched is replaced and spends the latch',
+    press({ ...gboardEnter, isComposing: true }, { latched: { shift: true } }),
+    outcome({
+        isComposing: true,
+        stopped: true,
+        dispatched: ['compositionend alpha', 'keydown Enter Enter 13'],
+    })]);
+cases.push(['a composing Enter with Ctrl and Shift latched leaves the latch for the row',
+    press({ ...gboardEnter, isComposing: true }, { latched: { ctrl: true, shift: true } }),
+    outcome({
+        isComposing: true,
+        stopped: true,
+        dispatched: ['compositionend alpha', 'keydown Enter Enter 13'],
+        latch: { ...CLEAR, ctrl: true, shift: true },
+    })]);
 cases.push(['a composing Enter inside the editor is left alone',
     press({ ...gboardEnter, isComposing: true }, { latched: NO_LATCH, inEditor: true }),
-    untouched('')]);
+    outcome({ isComposing: true })]);
+
+// The row's real keys while a word composes. Only the keys the quick input
+// binds, pressed for real inside it, lose `isComposing`; every other key,
+// target and synthetic event keeps it.
+const composingKey = (key, more) => ({ key, code: key, isComposing: true, ...more });
+const inQuickInput = { latched: NO_LATCH, inQuickInput: true };
+const reachesBindings = (key) => outcome({ code: key });
+const keepsComposing = (key) => outcome({ code: key, isComposing: true });
+for (const key of ['PageDown', 'PageUp', 'ArrowRight']) {
+    cases.push([`a composing ${key} in the quick input reaches its keybinding`,
+        press(composingKey(key), inQuickInput), reachesBindings(key)]);
+}
+for (const key of ['Home', 'End']) {
+    cases.push([`a composing Ctrl+${key} in the quick input reaches its keybinding`,
+        press(composingKey(key, { ctrlKey: true }), inQuickInput), reachesBindings(key)]);
+    cases.push([`a composing ${key} without Ctrl, which the quick input does not bind, is left alone`,
+        press(composingKey(key), inQuickInput), keepsComposing(key)]);
+}
+cases.push(['a composing ArrowLeft, which the quick input does not bind, is left alone',
+    press(composingKey('ArrowLeft'), inQuickInput), keepsComposing('ArrowLeft')]);
+cases.push(['a composing PageDown in a text box outside the quick input is left alone',
+    press(composingKey('PageDown'), { latched: NO_LATCH }), keepsComposing('PageDown')]);
+cases.push(['a composing PageDown inside the editor is left alone',
+    press(composingKey('PageDown'), { latched: NO_LATCH, inEditor: true }), keepsComposing('PageDown')]);
+cases.push(['a composing PageDown in an editor inside the quick input, as Quick Chat has, is left alone',
+    press(composingKey('PageDown'), { ...inQuickInput, inEditor: true }), keepsComposing('PageDown')]);
+cases.push(['a composing PageDown that a script built is left alone',
+    press(composingKey('PageDown'), { ...inQuickInput, trusted: false }), keepsComposing('PageDown')]);
 
 let failed = 0;
 for (const [name, got, want] of cases) {

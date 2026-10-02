@@ -3354,7 +3354,8 @@ class MainActivity : AppCompatActivity() {
         injectTouchContextMenu()
         // Keeps an inline list edit (New File, Rename) in view when the keyboard rises
         injectListEditKeeper()
-        // Makes Enter on the soft keyboard commit an inline edit or a Quick Open pick
+        // Makes Enter on the soft keyboard commit an inline edit or a Quick Open pick,
+        // and the quick input's keys work while a word is composing
         injectComposingEnter()
         // Fix #7: Override window.open() to route through AndroidBridge
         injectWindowOpenOverride()
@@ -4386,7 +4387,9 @@ class MainActivity : AppCompatActivity() {
 
     /**
      * Makes Enter on the soft keyboard reach the workbench as Enter, both while a
-     * word is still being composed and when it arrives without a `code`.
+     * word is still being composed and when it arrives without a `code`, and
+     * lets the quick input's keys reach their keybindings while a word is
+     * composed.
      *
      * After a word is typed into a workbench input box, Gboard keeps it as an
      * active composition, underlined, and its Enter key arrives as a keydown with
@@ -4453,8 +4456,8 @@ class MainActivity : AppCompatActivity() {
      * sends its action key there (GO) as `key` Enter, `keyCode` 13 and an empty
      * `code`, and the keybinding service resolves keys from `code`, so the
      * Command Palette, Quick Open and every input box, which accept only through
-     * a keybinding, ignored it. The real event is given `code` Enter and goes on
-     * untouched otherwise. Not while the key row has Ctrl or Alt latched: the row
+     * a keybinding, ignored it. The real event is given `code` Enter and goes on,
+     * not replaced. Not while the key row has Ctrl or Alt latched: the row
      * builds that chord from the `beforeinput` an unhandled Enter is followed by,
      * and an accepted Enter has none. Unlike the replacement, the editor is not
      * excluded, because its rename box is such an input. The editor's own Enter
@@ -4467,6 +4470,63 @@ class MainActivity : AppCompatActivity() {
      * terminal take one Enter each, and a latched Ctrl still gives Ctrl+Enter.
      * Suggest and rename accept were not run. A composing Enter that Gboard
      * 12.4 commits as text, with no keydown, is beyond any listener here.
+     *
+     * A Shift latched alone is spent on that Enter and not applied to it, which
+     * is how [KeyInjector.setupModifierInterceptor] treats a lone Shift on any
+     * soft keyboard edit. That interceptor spends it in the `beforeinput` an
+     * unhandled Enter is followed by, and an accepted Enter has none, so the
+     * latch stood and the next key on the row went out shifted, `/` as `?` and
+     * a trackpad drag as a selection. Applying it as well is the obvious shape
+     * and changes what the Enter does. The quick input reads Shift off the key
+     * event into the state its pickers act on, and on Shift Quick Open and the
+     * `#` symbol search do not open the highlighted item: they add it to the
+     * last chat input that had focus, if any, and stay open. On Gboard 12.4,
+     * whose editor Enter is filled here too, it would reach the editor's
+     * Shift+Enter bindings: in a Python file the bundled Python extension runs
+     * the line in the terminal instead of inserting a newline, and the find box
+     * goes to the previous match. An Enter that arrives with a `code` is not
+     * touched, and a binding that accepts it still leaves the latch standing.
+     * Read from the 1.139.1 bundle; not measured on a device. The replacement of
+     * a composing Enter spends a lone Shift the same way: it is built without
+     * Shift, and once a binding accepts it no `beforeinput` follows either, so
+     * on Gboard 12.4 a Shift latched over Quick Open's composing file name stood
+     * after the file opened (measured on API 33, two runs of three).
+     *
+     * The third case is not Enter. The key row presses PageUp, PageDown, Home,
+     * End and the trackpad's Left and Right as real keys (`NAVIGATION_KEYS` in
+     * `TextEntry.kt`), and a real key pressed while an input holds a
+     * composition carries `isComposing`, which `StandardKeyboardEvent` maps to
+     * KeyCode 114 as it does for Enter, and the keybinding service dispatches
+     * nothing for that. The quick input does the following through keybindings
+     * and nothing else, so while Gboard underlined the typed word none of it
+     * happened: PageDown and PageUp, alone or with Alt or Ctrl, page the list
+     * (`quickInput.pageNext`, `quickInput.pagePrevious`); Ctrl+Home and
+     * Ctrl+End go to its first and last item (`quickInput.first`,
+     * `quickInput.last`); and Right with the caret at the end of the box opens
+     * Quick Open's highlighted item without closing it
+     * (`quickInput.acceptInBackground`). So a real keydown of one of those,
+     * composing, on an element inside `.quick-input-widget` and outside any
+     * editor there has `isComposing` defined false in the capture phase, and
+     * the keybinding service dispatches it as it does when nothing is composed.
+     * The composition is left alone. Home and End without Ctrl, and Left, are
+     * bound to nothing there, and their default, moving the caret, runs whether
+     * or not the key is composing. Up and Down are announced, and an announced
+     * key is never composing.
+     *
+     * Every other target keeps `isComposing`, and with it the workbench's rule
+     * that a composing key runs no binding, which on a desktop keeps a key the
+     * IME is using from also running a command. There the key's default is what
+     * it is pressed for, and it runs anyway; in the quick input these keys do
+     * nothing except through a binding, which is why it is the exception. The
+     * exception is the quick input's own box: an editor inside the widget,
+     * which is where Quick Chat puts its chat input, keeps the rule like any
+     * other editor, and is excluded as it is from the Enter replacement. A
+     * Chinese or Japanese composition is not excluded, as it is for Enter: the
+     * row sends these keys to the WebView directly, so the keyboard never sees
+     * them and none is meant for its candidates. A key a script built is left
+     * as built, since only a real key carries a real composition. Read from the
+     * 1.139.1 bundle and run by `scripts/test-composing-enter.js`; not measured
+     * on a device.
      *
      * `ComposingEnterWiringTest` holds the script and the bundle to it, and
      * `scripts/test-composing-enter.js` runs it.
@@ -4484,10 +4544,25 @@ class MainActivity : AppCompatActivity() {
                 window.addEventListener('compositionupdate', track, true);
                 window.addEventListener('compositionend', function() { composing = ''; }, true);
                 var CONVERSION = /[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Bopomofo}]/u;
+                // The keys the quick input binds, of those the key row presses
+                // for real. See the KDoc for each.
+                function quickInputBinds(e) {
+                    var key = e.key;
+                    return key === 'PageUp' || key === 'PageDown' || key === 'ArrowRight' ||
+                        (e.ctrlKey && (key === 'Home' || key === 'End'));
+                }
                 window.addEventListener('keydown', function(e) {
                     if (e.key === 'Enter' && e.code === '' && !e.isComposing) {
-                        var mod = window.__vscodroid;
-                        if (!(mod && (mod.ctrl || mod.alt))) Object.defineProperty(e, 'code', { value: 'Enter' });
+                        var mod = window.__vscodroid || {};
+                        if (mod.ctrl || mod.alt) return;
+                        Object.defineProperty(e, 'code', { value: 'Enter' });
+                        // Spent, never applied. See the KDoc.
+                        mod.shift = false;
+                        return;
+                    }
+                    if (e.isComposing && e.isTrusted && quickInputBinds(e) &&
+                        e.target.closest('.quick-input-widget') && !e.target.closest('.monaco-editor')) {
+                        Object.defineProperty(e, 'isComposing', { value: false });
                         return;
                     }
                     if (e.key !== 'Enter' || !e.isComposing || CONVERSION.test(composing)) return;
@@ -4495,6 +4570,10 @@ class MainActivity : AppCompatActivity() {
                     if (!target || (target.tagName !== 'INPUT' && target.tagName !== 'TEXTAREA')) return;
                     if (target.closest('.monaco-editor, .xterm')) return;
                     e.stopImmediatePropagation();
+                    // The replacement carries no Shift either, so a lone latched
+                    // Shift is spent here too. See the KDoc.
+                    var latch = window.__vscodroid;
+                    if (latch && !latch.ctrl && !latch.alt) latch.shift = false;
                     target.dispatchEvent(new CompositionEvent('compositionend', { data: composing, bubbles: true }));
                     var enter = new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true });
                     Object.defineProperty(enter, 'keyCode', { value: 13 });

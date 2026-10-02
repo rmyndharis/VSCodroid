@@ -88,10 +88,14 @@ internal fun virtualKeyboardEvents(text: String): List<KeyEvent>? {
  * announced. Up and Down are the quick pick's list keys, in the Command Palette
  * and Go to File, and a real key pressed while the soft keyboard is composing a
  * word carries `isComposing`, for which the workbench dispatches no keybinding
- * at all; the announced event carries none and moves the highlight. Keeping
- * them announced also means no real vertical arrow is ever sent: Blink's
- * editing on Android has no command for Alt+Up or Alt+Down, so a real one
- * would go straight to spatial navigation, below, wherever the caret is. A
+ * at all; the announced event carries none and moves the highlight. The quick
+ * pick also binds PageUp, PageDown, Ctrl+Home, Ctrl+End and Right, which are
+ * pressed for real all the same, because their default is what a text box and
+ * an extension panel need; in the quick pick, where a binding is all they have,
+ * the page clears `isComposing` on them (`MainActivity.injectComposingEnter`).
+ * Keeping Up and Down announced also means no real vertical arrow is ever sent:
+ * Blink's editing on Android has no command for Alt+Up or Alt+Down, so a real
+ * one would go straight to spatial navigation, below, wherever the caret is. A
  * real Tab moves focus, and the Explorer's rename and New File boxes commit the
  * typed name when they lose it. A real arrow turns on WebView spatial
  * navigation until the next touch on the page, and under it an unhandled real

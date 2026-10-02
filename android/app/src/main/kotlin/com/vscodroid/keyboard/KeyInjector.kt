@@ -215,7 +215,10 @@ class KeyInjector(
      * of its own below so the latch is still spent: a composition on the
      * EditContext path, which Chromium reports to the `EditContext` object and
      * never to the element, and typing inside a frame, which no event in this
-     * document can see.
+     * document can see. A third is the soft keyboard's Enter when a keybinding
+     * accepts it. `MainActivity.injectComposingEnter` spends a lone Shift on
+     * the Enter whose empty `code` it fills, without applying it, as here; an
+     * Enter that arrives with a `code` is not covered.
      *
      * The same script guards Left and Right, the only arrows pressed for real,
      * at the edge of a text box. A real arrow turns WebView spatial navigation
@@ -304,8 +307,10 @@ class KeyInjector(
                     // latch does not outlive the character it was meant for.
                     // The only other things that clear it while the keyboard is
                     // up are the two hooks below, for a composition and for
-                    // focus entering a frame, and a latch that survives no
-                    // longer produces nothing: injectKey
+                    // focus entering a frame, and the soft keyboard Enter script
+                    // in MainActivity, on the code-less Enter it fills, which a
+                    // keybinding may accept with no beforeinput to follow. A
+                    // latch that survives no longer produces nothing: injectKey
                     // resolves it into a DIFFERENT character, so a Shift the
                     // user has forgotten turns a later tap on `/` into `?`,
                     // `;` into `:` and `[` into `{`. Ctrl and Alt are cleared

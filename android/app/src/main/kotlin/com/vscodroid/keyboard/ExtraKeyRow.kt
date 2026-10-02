@@ -184,10 +184,10 @@ class ExtraKeyRow @JvmOverloads constructor(
      * JS flags. This runnable detects that and syncs the Kotlin visual state.
      *
      * Shift is spent by the same listener without being intercepted, so it arrives
-     * here too. It has to: nothing else clears a Shift while the keyboard is up,
-     * and the poll only stops once every modifier is idle, so a latch that never
-     * came back false would leave this round trip running for as long as the
-     * keyboard was open.
+     * here too. It has to: the row itself clears a Shift only after one of its own
+     * keys and when it hides, and the poll only stops once every modifier is idle,
+     * so a latch that never came back false would leave this round trip running
+     * for as long as the keyboard was open.
      */
     private val modifierSyncRunnable: Runnable = object : Runnable {
         /**
