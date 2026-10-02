@@ -753,6 +753,25 @@ then accepted a suggestion instead of starting a new line. The word is committed
 so on a Japanese keyboard the kana are committed unconverted. A caret moved by a command,
 such as Undo, Find or Go to Line, is not covered.
 
+The same script decides when the soft keyboard comes up for the editor. It holds it down
+with `inputmode="none"` on the editor's editing host and lets it up only for a tap on text,
+anywhere inside an editor or in a text box, decided at `pointerup` so that a drag to scroll
+never raises it; text boxes themselves are not held. A tap anywhere inside an editor
+counts, the margin and the space under the last line included, because the editor moves the
+caret there. When the keyboard goes away, by Back, the navigation bar's hide key or
+anything else, `ExtraKeyRow`'s inset listener reports it and
+`window.__vscodroidKeyboardDismissed` puts the hold back, so the next scroll of the file
+leaves it down; without that the host kept no `inputmode` and Chromium raised the keyboard
+again for any touch on it. A read-only editor never lets it up: its EditContext host
+carries `aria-autocomplete="none"`, which the editor writes while it is read-only, so with
+File: Toggle Active Editor Read-only in Session a tap only moves the caret;
+`files.readonlyInclude` reaches the same editor option (read from the bundle, not
+measured). That marker is an accessibility attribute rather than an API. The Output panel's
+own `setAriaOptions` call runs before its editor has a model and writes nothing, so the
+Output editor is held too (read from the bundle, not measured). On the textarea edit path
+the marker is written only when the host is created, so that path is not gated and a
+read-only editor behaves there as before.
+
 ### 5.3 Visibility Control
 
 The row decides whether to show in one place, the inset listener installed by

@@ -772,6 +772,15 @@ on screen says so. These are the ones that work.
 In a file:
 
 - Tap to place the caret. **Double-tap** to select the word under your finger.
+- The soft keyboard comes up for a tap on the text, a line number or the space
+  under the last line, and stays down while you swipe to scroll. Put it away
+  with Back or the hide key in the navigation bar and it stays down until you
+  tap the text again.
+- To read a file without the keyboard coming up at all, run **File: Toggle
+  Active Editor Read-only in Session** from the Command Palette, or list the
+  files in the `files.readonlyInclude` setting. A tap then only moves the
+  caret, and pressing and holding still offers Copy. Run the command again to
+  edit.
 - **Press and hold** for about a second, then lift, to open the menu: Cut, Copy,
   Paste, Format Document, Rename Symbol, Go to Definition and the rest. Every
   item runs on a tap.

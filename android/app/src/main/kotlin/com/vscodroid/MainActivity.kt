@@ -2204,8 +2204,11 @@ class MainActivity : AppCompatActivity() {
         extraKeyRow?.hiddenByUser = workspacePrefs.getBoolean(KEY_EXTRA_KEY_ROW_HIDDEN, false)
         // The touch menu script refuses a menu focus only while the soft keyboard
         // is up, which is the one state where moving focus resizes the window.
+        // The keyboard guard holds the keyboard down again once it has gone.
         extraKeyRow?.onImeVisibilityChanged = { visible ->
-            webView?.evaluateJavascript("window.__vscodroidImeVisible = $visible;", null)
+            val dismissed = if (visible) "" else
+                " if (window.__vscodroidKeyboardDismissed) window.__vscodroidKeyboardDismissed();"
+            webView?.evaluateJavascript("window.__vscodroidImeVisible = $visible;$dismissed", null)
         }
     }
 
@@ -3564,12 +3567,66 @@ class MainActivity : AppCompatActivity() {
      * scroll a file: was true, now false. Tapping a word: true, with the caret
      * on it and the keyboard up.
      *
-     * What it deliberately does not do is raise the keyboard where the editor
-     * itself would not take focus. A tap inside the editor but off the text
-     * lands on a container Monaco ignores, and the keyboard now follows the
-     * focus rather than the touch: measured, focusin never fires for that tap.
-     * The version before this one raised it anyway, which is a keyboard over a
-     * file with no caret in it.
+     * A tap anywhere inside the editor counts as one on text, the margin and the
+     * empty space under the last line included, because Monaco moves the caret
+     * there. With the editor already focused, the usual state after a file is
+     * opened, such a tap raises the keyboard: the refocus answers whatever was
+     * under the finger. Measured on an API 33 emulator with Gboard 12.4, a tap
+     * under the last line put the caret on it with the keyboard up. A touch that
+     * takes focus out of the editor first leaves the keyboard down, which the
+     * scrollbar does: after a tap on it focus was on the workbench, not the
+     * editor.
+     *
+     * The hold comes back when the keyboard goes away. A user who puts it away
+     * with Back or the navigation bar's hide key leaves the editor focused and
+     * without `inputmode`, and Chromium raises the keyboard again for any touch
+     * on a focused editable element, so the next scroll of the file brought it
+     * back. [ExtraKeyRow] reports the keyboard going down from its inset
+     * listener, and `window.__vscodroidKeyboardDismissed` puts the hold back on
+     * every host that is not composing, which leaves a tap on text as the only
+     * way up again. A keyboard that went down because this script held it, or
+     * because a touch outside text took focus away, finds nothing to change,
+     * except a host that was still composing at that touch: apply() skipped it
+     * then, and it gets the hold now, which the focus returning would give it
+     * anyway.
+     * Measured on the same emulator with the guard built in: a tap on a word,
+     * then Back or the hide key, then a drag and a fling left the keyboard
+     * down and a tap on a word raised it; the same scroll with the hook
+     * replaced over DevTools raised it. Back while a word was underlined
+     * ended the word first and the hold came back. Turning the phone with the
+     * keyboard up never reported it down there, so on that emulator a
+     * rotation does not reach the hook. On an API 36 emulator with Gboard 18.2
+     * it does: each turn reports the keyboard down and, about 350 ms later, up
+     * again, so the hook puts the hold back on the focused host in between.
+     * Measured there, the keyboard was up again after turning to landscape and
+     * back, and the next letter landed at the caret. Not measured: switching
+     * keyboards with the globe key and leaving the app with the keyboard up,
+     * either of which may report the same down and up; a hardware keyboard; a
+     * floating or split keyboard; and keyboards other than Gboard.
+     *
+     * A read-only editor never lets the keyboard up, so a file made read-only
+     * with File: Toggle Active Editor Read-only in Session or matched by
+     * `files.readonlyInclude` can be read and scrolled with taps that only move
+     * the caret. The marker is Monaco's: it writes `aria-autocomplete="none"` on
+     * the EditContext host while its editor is read-only and `"both"` otherwise,
+     * again on every option change (`ScreenReaderSupport._updateDomAttributes`
+     * in the 1.139.1 bundle). Measured on the same emulator: with the session
+     * toggle on, a tap on a word moved the caret and left the keyboard down and
+     * a long press opened the menu with Copy and Select All; toggled off, a tap
+     * on a word raised it. `files.readonlyInclude` goes through the same
+     * read-only check to the same option (read from the bundle, not measured).
+     *
+     * The marker is an accessibility attribute, not an API, so it has limits.
+     * Anything that calls the editor's `setAriaOptions` writes `"both"`, or
+     * `"list"` when it names an active descendant, until the next option change. The Output panel's own call runs before its
+     * editor has a model, when there is no host yet, and writes nothing, so
+     * the Output editor, which is always read-only, is held like any other
+     * (read from the bundle, not measured). On the textarea host nothing
+     * rewrites the value from the read-only option after the host is created,
+     * so on that path the gate is not applied at all and a read-only editor
+     * behaves as before. `KeyboardGuardWiringTest`
+     * checks the marker against the packaged bundle wherever the tree is
+     * present, the release build's unit run included.
      *
      * The terminal is left alone. It has an editing host of its own, and
      * opening a terminal is asking to type.
@@ -3653,15 +3710,18 @@ class MainActivity : AppCompatActivity() {
                 // keyboard away in the middle of typing, which is worse than the
                 // problem this guard exists to solve.
                 //
-                // The trade, stated rather than discovered later: the scrollbar,
-                // sticky scroll, CodeLens, the minimap for anyone who turns it
-                // on, and the find widget's buttons are all inside an editor
-                // too, so touching them raises the keyboard. That is what every
-                // build before this guard did for those targets and for every
-                // other one, so it is where this change leaves them rather than
-                // something it introduces; the alternative is a selector that
-                // has to name each of them and be corrected on every VS Code
-                // bump that renames one.
+                // The trade, stated rather than discovered later: sticky scroll,
+                // CodeLens, the minimap for anyone who turns it on, and the find
+                // widget's buttons are all inside an editor too, so a tap on one
+                // raises the keyboard when it leaves the editor focused. The
+                // scrollbar does not: it takes focus out of the editor, so the
+                // refocus in letTheKeyboardUp() has nothing to act on, measured
+                // on an API 33 emulator. That is what every build before this
+                // guard did for those targets and for every other one, so it is
+                // where this change leaves them rather than something it
+                // introduces; the alternative is a selector that has to name
+                // each of them and be corrected on every VS Code bump that
+                // renames one.
                 var TEXT = '.monaco-editor, textarea, input, [contenteditable="true"], .native-edit-context';
                 var EDITING_HOST = '.native-edit-context, .monaco-editor textarea.inputarea';
                 var aimedAtText = false;
@@ -3740,10 +3800,22 @@ class MainActivity : AppCompatActivity() {
                 document.addEventListener('focusout', function(e) {
                     composing.delete(e.target);
                 }, true);
+                // A read-only editor takes no typing, so touching one is reading
+                // it, and its host never loses the hold. Monaco writes
+                // aria-autocomplete="none" on the EditContext host of a read-only
+                // editor, again on every option change; the KDoc says where that
+                // falls short. On the textarea host nothing rewrites the value
+                // from the read-only option after the host is created, so it
+                // would keep the keyboard from an editor made writable later,
+                // and is left out: a read-only editor on that path behaves as
+                // before.
+                function writable(element) {
+                    return !element.editContext || element.getAttribute('aria-autocomplete') !== 'none';
+                }
                 function apply(element) {
                     watch(element);
                     if (composing.has(element)) return;
-                    if (aimedAtText) element.removeAttribute('inputmode');
+                    if (aimedAtText && writable(element)) element.removeAttribute('inputmode');
                     else if (element.getAttribute('inputmode') !== 'none') element.setAttribute('inputmode', 'none');
                 }
                 function applyAll() {
@@ -3768,7 +3840,7 @@ class MainActivity : AppCompatActivity() {
                     var wasHeldDown = !!(focused && focused.getAttribute &&
                         focused.getAttribute('inputmode') === 'none');
                     applyAll();
-                    if (wasHeldDown && focused.matches && focused.matches(EDITING_HOST)) {
+                    if (wasHeldDown && focused.matches && focused.matches(EDITING_HOST) && writable(focused)) {
                         reapplying = true;
                         focused.blur();
                         focused.focus();
@@ -3871,7 +3943,7 @@ class MainActivity : AppCompatActivity() {
                     // answering it here would raise it for a scroll.
                     if (pendingTap) return;
                     if (!target || !target.matches || !target.matches(EDITING_HOST)) return;
-                    if (aimedAtText) { target.removeAttribute('inputmode'); return; }
+                    if (aimedAtText && writable(target)) { target.removeAttribute('inputmode'); return; }
                     if (target.getAttribute('inputmode') === 'none') return;
                     target.setAttribute('inputmode', 'none');
                     reapplying = true;
@@ -3964,6 +4036,15 @@ class MainActivity : AppCompatActivity() {
                 }
                 window.addEventListener('-monaco-gesturetap', onEditorGesture, true);
                 window.addEventListener('-monaco-gesturecontextmenu', onEditorGesture, true);
+                // Called from Kotlin when the soft keyboard goes away. Without
+                // it a keyboard put away with Back left the focused host without
+                // inputmode, and the next touch on it, a scroll included, raised
+                // the keyboard again. A host still composing is left to apply()'s
+                // usual rule.
+                window.__vscodroidKeyboardDismissed = function() {
+                    aimedAtText = false;
+                    applyAll();
+                };
                 applyAll();
             })();
             """.trimIndent(),

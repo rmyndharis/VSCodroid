@@ -1,5 +1,6 @@
 /**
- * Self-check for the keyboard guard's composition finish.
+ * Self-check for the keyboard guard: its composition finish, and when it
+ * lets the keyboard up.
  *
  *   node scripts/test-keyboard-guard.js
  *
@@ -40,6 +41,13 @@
  * or `.monaco-editor` test; no `reapplying`; and the key or gesture listeners
  * in the bubble phase. Dropping the after-listener's own removal changes
  * nothing observable, since it acts once and only for its event.
+ *
+ * The cases after those check when the guard lets the keyboard up at all: the
+ * hold put back when the keyboard goes away, which Kotlin reports through
+ * `window.__vscodroidKeyboardDismissed`, and a read-only editor, whose
+ * EditContext host Monaco marks with `aria-autocomplete="none"`, never lifting
+ * it. Against main at 353ede38, before both, 8 of the 53 cases fail; the two
+ * that pass there are the controls, a writable editor and the textarea path.
  *
  * Extraction is deliberately strict. If the raw string moves or changes shape
  * this fails saying so, rather than quietly checking an empty string.
@@ -392,6 +400,83 @@ check('after a tap outside text, End finishes the word once and never writes inp
     typing(), (p) => { touch(p, p.tabs, 100); press(p, 'End'); }, finished('editor End'));
 check('the textarea edit path, which has no EditContext, is left alone',
     typing({ textarea: true }), (p) => press(p, 'End'), ['editor End']);
+
+// When the keyboard comes up. The guard holds it down with inputmode="none" on
+// the editing host; Chromium raises it for a touch on a focused host without
+// that attribute, a scroll included, so the attribute is what these read.
+const inputmode = (p, el = p.host) => log.push(`inputmode ${el.getAttribute('inputmode')}`);
+
+/** The editor as Monaco marks a read-only one, focused and held down. */
+function readOnly({ textarea = false } = {}) {
+    const page = newPage({ textarea });
+    page.host.attrs.set('aria-autocomplete', 'none');
+    page.host.focus();
+    log = [];
+    return page;
+}
+
+/** What Kotlin runs when the soft keyboard goes away. */
+function keyboardGone(p) {
+    const hook = p.window.__vscodroidKeyboardDismissed;
+    if (typeof hook !== 'function') log.push('no dismissal hook');
+    else hook();
+}
+
+function drag(p, target) {
+    const at = { bubbles: true, pointerId: 1, clientX: 20 };
+    dispatch(p, target, { ...at, type: 'pointerdown', clientY: 20, timeStamp: 1000 });
+    dispatch(p, target, { ...at, type: 'pointerup', clientY: 300, timeStamp: 1300 });
+}
+
+check('a tap on text in a read-only editor moves the caret and leaves the keyboard down',
+    readOnly(), (p) => { touch(p, p.lines, 100, '-monaco-gesturetap'); inputmode(p); },
+    ['lines -monaco-gesturetap', 'inputmode none']);
+check('focus returning to a read-only editor after typing in a text box keeps the keyboard down',
+    readOnly(), (p) => {
+        const palette = new El(p, 'palette', 'input', [], p.document.body);
+        palette.focus();
+        touch(p, palette, 100);
+        log = [];
+        p.host.focus();
+        inputmode(p);
+    },
+    ['focus host', 'inputmode none']);
+check('the same editor made writable again lets the keyboard up for a tap on text',
+    readOnly(), (p) => {
+        p.host.attrs.set('aria-autocomplete', 'both');
+        touch(p, p.lines, 100);
+    },
+    ['host -inputmode', 'blur host', 'focus host']);
+check('a read-only editor on the textarea path, whose marker is not kept current, raises it as before',
+    readOnly({ textarea: true }), (p) => touch(p, p.lines, 100),
+    ['host -inputmode', 'blur host', 'focus host']);
+
+check('the keyboard put away by the user is held down again, so a scroll leaves it down',
+    typing({ composing: false }), (p) => { keyboardGone(p); drag(p, p.lines); inputmode(p); },
+    ['host inputmode=none', 'inputmode none']);
+check('after the keyboard was put away, a tap on text lets it up again',
+    typing({ composing: false }), (p) => { keyboardGone(p); log = []; touch(p, p.lines, 100); },
+    ['host -inputmode', 'blur host', 'focus host']);
+check('a second report of the keyboard going away writes nothing',
+    typing({ composing: false }), (p) => { keyboardGone(p); keyboardGone(p); },
+    ['host inputmode=none']);
+check('the keyboard going away after a tap outside text writes nothing',
+    typing({ composing: false }), (p) => { touch(p, p.tabs, 100); log = []; keyboardGone(p); },
+    []);
+check('the keyboard going away under a word still composing leaves inputmode alone',
+    typing(), (p) => { keyboardGone(p); inputmode(p); },
+    ['inputmode null']);
+check('the keyboard going away from a text box leaves the box alone, and a tap brings it back',
+    newPage(), (p) => {
+        const rename = new El(p, 'rename', 'input', [], p.explorer);
+        rename.focus();
+        touch(p, rename, 100);
+        log = [];
+        keyboardGone(p);
+        touch(p, rename, 100);
+        inputmode(p, rename);
+    },
+    ['host inputmode=none', 'host -inputmode', 'inputmode null']);
 
 let failed = 0;
 for (const [name, got, want] of cases) {

@@ -18,6 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The editor is now Code - OSS 1.139.1, up from 1.133.0.
 - The editor no longer carries Windows, macOS, x86 and desktop Linux helper programs that cannot run on Android, which saves about 30 MB of storage on new installs and updates alike.
 - With a hardware keyboard, Left and Right no longer move the caret in a number box such as a number setting, which keeps them from moving focus out of the box at either end; Home, End and a tap still move it.
+- A tap on a read-only file, such as one set with File: Toggle Active Editor Read-only in Session or `files.readonlyInclude`, moves the cursor without raising the soft keyboard.
 
 ### Removed
 
@@ -42,6 +43,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Moving the cursor with a key or a tap, or accepting one of the editor's suggestions with Tab or a tap, while the soft keyboard still underlines a word no longer makes the keyboard's next edit land where that word was; text such as `alpha delta charlie charlie` could be saved.
 - Saving a file in a device folder no longer overwrites changes another app made to it while the folder was open; the other app's version is normally kept beside yours as `<name>.device-<time>`.
 - Opening a large device folder no longer fills the phone's storage: copying stops while about 150 MB is still free, and the files left out stay unchanged in the device folder.
+- The soft keyboard, once put away with Back or the navigation bar's hide key, no longer comes back when the file is scrolled.
 
 ### Security
 

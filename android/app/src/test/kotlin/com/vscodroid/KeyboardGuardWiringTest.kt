@@ -16,10 +16,11 @@ import java.io.File
  * EditContext API and matched no element at all. Aimed too widely, or installed
  * where a page does not get it, and the editor is one you cannot type into.
  *
- * Source-level, like the rest of this suite, and that is the limit worth
- * stating: it can hold the selector to the name the workbench uses today, and
- * it cannot notice the workbench changing that name in a VS Code bump. What
- * catches that is the device row in `docs/DEVICE_TEST_CHECKLIST.md` (KB-21),
+ * Mostly source-level, and that is the limit worth stating. Two cases read the
+ * packaged `workbench.js` wherever the server tree is present, the selector
+ * and the read-only marker, and those catch the workbench renaming either in a
+ * VS Code bump; where the tree is absent they are skipped, and what catches a
+ * rename then is the device row in `docs/DEVICE_TEST_CHECKLIST.md` (KB-21),
  * which is why that row exists.
  */
 class KeyboardGuardWiringTest {
@@ -185,6 +186,43 @@ class KeyboardGuardWiringTest {
         )
     }
 
+    /**
+     * That putting the keyboard away puts the hold back, and only that.
+     *
+     * Once a tap on text has let the keyboard up, the editing host is left
+     * without `inputmode`, and Chromium raises the keyboard for any touch on a
+     * focused editable element: a user who hid it with Back had it back with the
+     * next scroll of the file. `scripts/test-keyboard-guard.js` runs the guard's
+     * half; this holds the call from the inset listener's report, which that
+     * script cannot see. Made on the keyboard coming up as well, the same call
+     * would put `inputmode="none"` on the host the user had just tapped into.
+     */
+    @Test
+    fun `the keyboard going away restores the hold`() {
+        val source = mainActivity()
+        val guard = SourceScan.body(source, "private fun injectKeyboardGuard(")
+        assertTrue(
+            guard.contains("window.__vscodroidKeyboardDismissed = function"),
+            "the guard no longer defines __vscodroidKeyboardDismissed, so a keyboard put away " +
+                "with Back comes back on the next scroll of the file.",
+        )
+        val wiring = SourceScan.body(source, "private fun setupExtraKeyRow(")
+        assertTrue(
+            Regex("""if \(visible\) "" else\s*"[^"]*__vscodroidKeyboardDismissed\(\)""").containsMatchIn(wiring),
+            "setupExtraKeyRow no longer calls __vscodroidKeyboardDismissed when the keyboard " +
+                "goes away, and only then. Without the call a keyboard put away with Back comes " +
+                "back on the next scroll; made when it comes up, the call holds down the " +
+                "keyboard the user just raised.",
+        )
+        // The call is built into a string above; this holds the string being sent,
+        // so dropping it from evaluateJavascript cannot leave the case green.
+        assertTrue(
+            Regex("evaluateJavascript\\(\"[^\"]*\\\$dismissed").containsMatchIn(wiring),
+            "setupExtraKeyRow builds the __vscodroidKeyboardDismissed call but no longer sends " +
+                "it with evaluateJavascript, so the hold never comes back.",
+        )
+    }
+
     @Test
     fun `a scroll is not a tap`() {
         val source = mainActivity()
@@ -210,25 +248,69 @@ class KeyboardGuardWiringTest {
         )
 
         // The other direction: that the name still describes the workbench in
-        // the tree. Skipped rather than failed when the tree is absent, because
-        // it is a gitignored artifact and a fresh clone has none. Stated as an
-        // assumption rather than an `if`, so a run that cannot make this check
-        // says so: the unit-test job in build.yml stubs `assets/vscode-reh`, and
-        // a silent skip there reads as a green check of something nothing ran.
+        // the tree.
+        assertTrue(
+            packagedWorkbench().contains("native-edit-context"),
+            "the packaged workbench no longer mentions `native-edit-context`, so the " +
+                "selector in MainActivity now matches nothing. Open the editor over the " +
+                "DevTools protocol, read `document.activeElement` with the caret in a " +
+                "file, and point the guard at what it answers.",
+        )
+    }
+
+    /**
+     * That the packaged editor still marks a read-only editor the way the guard
+     * reads it.
+     *
+     * The guard never lets the keyboard up for an EditContext host carrying
+     * `aria-autocomplete="none"`, which Monaco's ScreenReaderSupport writes from
+     * the readOnly option when the host is built and again on every option
+     * change. A bump that writes it from anything else could make every editor
+     * one the soft keyboard never comes up for; one that stops rewriting it
+     * leaves a file made writable in a session without a keyboard.
+     */
+    @Test
+    fun `the workbench still marks a read-only editor`() {
+        val workbench = packagedWorkbench()
+        val readOnly = Regex("""\((\d+),"readOnly",""").findAll(workbench).map { it.groupValues[1] }.toList()
+        assertTrue(
+            readOnly.size == 1,
+            "the packaged workbench declares the readOnly editor option ${readOnly.size} times " +
+                "rather than once, so the check below cannot tell which option the marker follows.",
+        )
+        assertTrue(
+            Regex("""_updateDomAttributes\(\)\{[^}]*"aria-autocomplete",\w+\.get\(${readOnly[0]}\)\?"none":"both"\)""")
+                .containsMatchIn(workbench),
+            "the packaged workbench no longer writes aria-autocomplete from the readOnly option " +
+                "in _updateDomAttributes, which writable() in injectKeyboardGuard reads. Find what " +
+                "marks a read-only EditContext host now and gate on that.",
+        )
+        assertTrue(
+            workbench.contains("_screenReaderSupport.onConfigurationChanged(") &&
+                Regex("""onConfigurationChanged\(\w+\)\{this\._instantiateScreenReaderContent\(\)[^}]*this\._updateDomAttributes\(\)""")
+                    .containsMatchIn(workbench),
+            "the packaged workbench no longer rewrites the EditContext host's aria-autocomplete " +
+                "on an option change, so an editor made writable in a session keeps \"none\" and " +
+                "the guard never lets the keyboard up for it.",
+        )
+    }
+
+    /**
+     * The packaged workbench, or a skip when the tree is absent.
+     *
+     * Skipped rather than failed, because the tree is a gitignored artifact and
+     * a fresh clone has none. Stated as an assumption rather than an `if`, so a
+     * run that cannot make the check says so: the unit-test job in build.yml
+     * stubs `assets/vscode-reh`, and a silent skip there reads as a green check
+     * of something nothing ran.
+     */
+    private fun packagedWorkbench(): String {
         val workbench = File(WORKBENCH)
         assumeTrue(
             workbench.isFile,
             "no packaged workbench at ${workbench.path}; run scripts/fetch-vscode-oss.sh and " +
-                "scripts/package-assets.sh to check the selector against the shipped bundle",
+                "scripts/package-assets.sh to check the guard against the shipped bundle",
         )
-        run {
-            assertTrue(
-                workbench.readText().contains("native-edit-context"),
-                "the packaged workbench no longer mentions `native-edit-context`, so the " +
-                    "selector in MainActivity now matches nothing. Open the editor over the " +
-                    "DevTools protocol, read `document.activeElement` with the caret in a " +
-                    "file, and point the guard at what it answers.",
-            )
-        }
+        return workbench.readText()
     }
 }
