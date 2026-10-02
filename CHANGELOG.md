@@ -44,6 +44,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Saving a file in a device folder no longer overwrites changes another app made to it while the folder was open; the other app's version is normally kept beside yours as `<name>.device-<time>`.
 - Opening a large device folder no longer fills the phone's storage: copying stops while about 150 MB is still free, and the files left out stay unchanged in the device folder.
 - The soft keyboard, once put away with Back or the navigation bar's hide key, no longer comes back when the file is scrolled.
+- `npm install` installs the Android builds that Rollup, Rolldown, Lightning CSS and oxlint publish; without them Vite 8 stopped at "Cannot find native binding".
 
 ### Security
 

@@ -498,9 +498,12 @@ Host myserver
 
 ```bash
 # React with Vite
-mkdir my-react-app && cd my-react-app
-npm init vite@latest . -- --template react
+cd ~/projects
+npm install -g create-vite
+node "$(npm root -g)/create-vite/index.js" my-react-app --template react --no-interactive
+cd my-react-app
 npm install
+npm pkg set scripts.dev="node node_modules/vite/bin/vite.js" scripts.build="node node_modules/vite/bin/vite.js build"
 npm run dev
 
 # Express API
@@ -509,12 +512,21 @@ npm init -y
 npm install express
 ```
 
+The React steps avoid `npm create vite@latest` and the template's own `vite` scripts,
+which stop with `bad interpreter: Permission denied`; [npm and npx](#npm-and-npx) says
+why. The template's `lint` and `preview` scripts need the same change:
+
+```bash
+npm pkg set scripts.lint="node node_modules/oxlint/bin/oxlint" scripts.preview="node node_modules/vite/bin/vite.js preview"
+```
+
 ### Dev Server Preview
 
 When running a local dev server (Vite, Next.js, Express, Flask, etc.), you can preview it
 **inside the editor**, in a tab beside your code:
 
-1. Start the dev server in the terminal:
+1. Start the dev server in the terminal, from a `dev` script that runs it through
+   `node` as the React steps above set it up:
    ```bash
    npm run dev
    # Output: Local: http://localhost:5173/
@@ -559,14 +571,24 @@ currently on screen instead of just the last one.
 
 ### npm and npx
 
-npm and npx work as expected. A few notes specific to VSCodroid:
+npm installs packages as usual, including the Android builds that packages such as
+Rollup, Rolldown, Lightning CSS and oxlint publish for their native part:
 
 ```bash
 npm init -y                    # Create package.json
 npm install express            # Install a package
-npm run dev                    # Run a script from package.json
-npx create-react-app my-app   # Use npx to scaffold projects
+npm run start                  # Run a script from package.json
 ```
+
+Starting a package's program by name does not work: `npx <tool>`, `npm create` and
+`npm init <initializer>`, and a `package.json` script such as `"dev": "vite"`, all exit
+with status 126 and `Permission denied`; when the program is a JavaScript file the
+message reads `/usr/bin/env: bad interpreter: Permission denied`. npm starts those
+through the file in `node_modules/.bin`, and Android refuses to execute a file inside
+the app's storage. Run the program's JavaScript file with `node` instead, such as
+`node node_modules/vite/bin/vite.js` for `vite`; the package's `package.json` names that
+file under `bin`. A script that starts with `node`, like `"start": "node server.js"`,
+works as it is.
 
 npm uses `--prefer-offline` by default to speed up installs by using cached packages when available.
 
@@ -980,9 +1002,12 @@ data directory.
 `npm install --ignore-scripts` installs the rest of the tree, so everything that
 does not need that particular binary works. What needs it does not run.
 
-This is not every package with a native part. Rollup and esbuild publish Android
-builds and install normally, which is why VSCodroid reports the platform it
-actually is rather than pretending to be Linux.
+This is not every package with a native part. Rollup, Rolldown, Lightning CSS and
+oxlint publish Android builds that Node loads as libraries, and npm installs them,
+which is why VSCodroid reports the platform it actually is rather than pretending
+to be Linux. esbuild publishes one too, but as a program: its install step runs
+it, Android refuses to execute it from the app's storage, and the install fails.
+Vite 8 does not need esbuild; Vite 7 and older depend on it and do not install.
 
 ### Toolchains Must Be Started by Name
 

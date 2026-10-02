@@ -586,28 +586,73 @@ __vscodroid_pip_note() {
             "the stale script-shell survived, so npm would still reach a bash that moved: $lines",
         )
         assertEquals(
-            1, lines.count { it == "os[]=linux" }, "os[]=linux is duplicated or missing: $lines",
-        )
-        assertEquals(
-            1, lines.count { it == "os[]=android" }, "os[]=android is missing: $lines",
+            1, lines.count { it == "os=android" }, "os=android is duplicated or missing: $lines",
         )
     }
 
     /**
-     * A file the app has never seen has to come out in the shape it always had.
-     * Anything else means every existing install takes one rewrite on the launch
-     * after this ships, for no reason a user could see.
+     * `os` is one string to npm, and earlier releases wrote it as two.
+     *
+     * `os[]=linux` and `os[]=android` reach npm as the array `linux,android`,
+     * which npm-install-checks compares with each entry of a package's own `os`
+     * list by `===`. An array equals no entry, so every optional dependency
+     * whose `os` list names a platform it supports is skipped, the
+     * android-arm64 bindings of rollup, rolldown and lightningcss included, and
+     * Vite stops at "Cannot find native binding".
+     * The old lines have to go on the first launch after an upgrade, because
+     * npm appends a plain `os=` to an array already opened by `os[]=`. The last
+     * line is what `npm config set os android` left once the next launch had
+     * put the old lines back in front of it, which read as `linux,android,android`.
      */
     @Test
-    fun `a fresh npmrc is byte for byte the shape it was before`() {
+    fun `an npmrc from an earlier release comes out with the one os npm can match`() {
+        bundleNpm()
+        val npmrc = File(filesDir, "home/.npmrc").apply {
+            writeText(
+                "script-shell=/old/bash\nos[]=linux\nos[]=android\n" +
+                    "registry=https://x.example/\nos=android\n",
+            )
+        }
+
+        FirstRunSetup(context).createNpmWrappers()
+
+        assertEquals(
+            "script-shell=/data/app/~~hash==/com.vscodroid-hash==/lib/arm64/libbash.so\n" +
+                "os=android\nregistry=https://x.example/\n",
+            npmrc.readText(),
+        )
+    }
+
+    /**
+     * Only the exact `os=android` line is the app's. npm reads a plain key given
+     * twice as its last value, so an `os=` the user set is carried through below
+     * the owned one and still decides. Owning every `os=` line would discard it
+     * on the next launch, which is the loss the carry-through exists to prevent.
+     */
+    @Test
+    fun `an os the user chose is carried through after the owned one`() {
+        bundleNpm()
+        val npmrc = File(filesDir, "home/.npmrc").apply { writeText("script-shell=/old/bash\nos=linux\n") }
+
+        FirstRunSetup(context).createNpmWrappers()
+
+        assertTrue(
+            npmrc.readText().endsWith("\nos=android\nos=linux\n"),
+            "the user's os is gone or no longer last, so it no longer wins: ${npmrc.readText()}",
+        )
+    }
+
+    /** A file the app has never seen comes out as the owned lines and nothing else. */
+    @Test
+    fun `a fresh npmrc is the owned lines and nothing else`() {
         bundleNpm()
 
         FirstRunSetup(context).createNpmWrappers()
 
         val after = File(filesDir, "home/.npmrc").readText()
         assertTrue(
-            Regex("""^script-shell=\S*libbash\.so\nos\[]=linux\nos\[]=android\n$""").matches(after),
-            "a fresh .npmrc is no longer the three owned lines and nothing else: $after",
+            Regex("""^script-shell=\S*libbash\.so\nos=android\n$""").matches(after),
+            "a fresh .npmrc is no longer the two owned lines and nothing else: $after",
         )
     }
 

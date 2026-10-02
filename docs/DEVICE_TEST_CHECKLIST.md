@@ -164,7 +164,7 @@ fresh.
 | PF-6 | Battery (1hr session) | Use normally for 1hr, check battery usage | <15% | | | |
 | PF-7 | npm install (cached) | Run `npm install` on cached project | <5s | | | |
 | PF-8 | npm install (fresh) | Run `npm install` on new project | <60s | | | |
-| PF-9 | Vite dev server start | Run `npx vite` | <500ms | | | |
+| PF-9 | Vite dev server start | In a Vite project, run `node node_modules/vite/bin/vite.js` (`npx vite` exits 126) | <500ms | | | |
 | PF-10 | File open (small) | Open a <100 line file | <1s | | | |
 
 ## 10. Toolchains (On-Demand)

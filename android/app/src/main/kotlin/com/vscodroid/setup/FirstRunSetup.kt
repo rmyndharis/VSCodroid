@@ -1713,8 +1713,8 @@ class FirstRunSetup(
         val bashPath = "$nativeLibDir/libbash.so"
         // script-shell: use bundled bash for npm lifecycle scripts, because
         // npm's fallback is a POSIX shell and this app's scripts assume bash
-        // os[]: install optional deps for both linux and android so tools like
-        // @rollup/rollup-android-arm64 get installed alongside linux fallbacks
+        // os: the platform optional dependencies are picked for, so packages
+        // that publish an android build, @rollup/rollup-android-arm64, get it
         //
         // Reconciled rather than rewritten, and that is the whole point of the
         // shape below. This used to build the three lines and write them over
@@ -1728,15 +1728,29 @@ class FirstRunSetup(
         // So only the two keys this app owns are replaced. `script-shell` is
         // owned because it has to track nativeLibraryDir, which Android moves on
         // every reinstall, and because npm's fallback is a POSIX shell while this
-        // app's scripts assume bash. `os[]=linux` and `os[]=android` are owned so
-        // optional dependencies resolve for both, which is what gets
-        // @rollup/rollup-android-arm64 installed beside the linux fallback. Every
-        // other line is carried through untouched, in the order it was written.
+        // app's scripts assume bash. `os=android` is owned because npm itself runs
+        // with process.platform reading "linux" (VSCODROID_PLATFORM_FIX in
+        // [npmBashFunctions]), and with no `os` set that is the platform it picks
+        // optional dependencies for. Rollup, rolldown and lightningcss ship their
+        // native part as android-arm64 packages, and Vite stops at "Cannot find
+        // native binding" without them. Every other line is carried through
+        // untouched, in the order it was written.
         //
-        // The owned lines go first so the file still reads exactly as it did when
-        // nothing else is present, which keeps existing installs from seeing a
-        // rewrite on the launch after this ships.
-        val ownedLine = Regex("""^\s*(script-shell\s*=|os\[]\s*=\s*(linux|android)\s*$)""")
+        // One value, because `os` is one string to npm. This used to write
+        // `os[]=linux` and `os[]=android`, meant as both, which npm reads as an
+        // array that npm-install-checks compares with each entry of a package's
+        // `os` list by `===`. An array equals no entry, so every optional package
+        // whose `os` list names a platform it supports was skipped, the android
+        // ones included, and only a list that merely excludes platforms let a
+        // package through: measured with npm 10.8.2, and 11.16.0 has the same
+        // check. Those two lines stay owned so an upgrade removes them, since npm
+        // appends a plain `os=` to an array an `os[]=` opened.
+        //
+        // The owned lines go first, and for `os` the order matters: npm takes the
+        // last of a plain key given twice, so an `os=` the user set with
+        // `npm config set` is carried through below this one and still decides.
+        // That is also why only the exact line this app writes is owned.
+        val ownedLine = Regex("""^\s*(script-shell\s*=|os\s*=\s*android\s*$|os\[]\s*=\s*(linux|android)\s*$)""")
         // Latin-1, not UTF-8, and the charset is load-bearing for the reason
         // [ensurePromptFix] gives: it maps all 256 byte values one to one, so
         // every byte read here comes back out unchanged. `.npmrc` is where npm
@@ -1745,15 +1759,15 @@ class FirstRunSetup(
         // byte that is not with U+FFFD. That would destroy the credential this
         // carry-through exists to preserve, on the first launch after the user
         // set it, with nothing on screen and nothing in the log to say so. The
-        // three owned lines are ASCII, so encoding the result back through the
-        // same mapping is lossless as well.
+        // owned lines are ASCII, so encoding the result back through the same
+        // mapping is lossless as well.
         val existing = if (npmrc.exists()) String(npmrc.readBytes(), Charsets.ISO_8859_1) else ""
         val carriedOver = existing
             .lines()
             .filterNot { ownedLine.containsMatchIn(it) }
             .dropLastWhile { it.isBlank() }
         val expectedContent =
-            (listOf("script-shell=$bashPath", "os[]=linux", "os[]=android") + carriedOver)
+            (listOf("script-shell=$bashPath", "os=android") + carriedOver)
                 .joinToString("\n", postfix = "\n")
         // Compared against that same decoding rather than a second `readText`.
         // A file holding one byte that is not valid UTF-8 would never compare
