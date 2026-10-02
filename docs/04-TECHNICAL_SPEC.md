@@ -670,11 +670,20 @@ because Chromium derives `KeyboardEvent.code` from it, and Home and End use
 `KEYCODE_MOVE_HOME`/`KEYCODE_MOVE_END`, not the system Home key. A press the WebView
 refuses falls back to the announce route. A real arrow turns WebView spatial navigation on
 until the next touch on the page, so a Left or Right that leaves a collapsed caret at the
-start or end of a text box would move focus out of it. A `keydown` listener installed with
-the modifier interceptor cancels such a press when no handler used it, and cancels any
-Alt+Left or Alt+Right on a collapsed caret, because on Android those move to a line end
-the script cannot locate in a wrapped text area. Spatial navigation ignores an arrow held
-with Ctrl, Shift or Meta and acts on no key but the four arrows, so Home, End, PageUp and
+start or end of a text box would move focus out of it. A guard installed with the modifier
+interceptor cancels such a press when none of the box's own handlers used it. It decides
+on the box itself: a capture `keydown` listener on the window adds a one-shot listener to
+the event's innermost target, which runs after the box's own listeners and before the key
+bubbles to any container, so a box or container that calls `stopPropagation` on the key in
+the bubble phase, as the Problems, Output, Debug Console and Comments filters and the chat
+model picker's filter do, cannot hide it. A number or email box has no selection API, so
+its caret cannot be read and every unmodified Left and Right there is cancelled. Before
+Chromium 149, Blink on Android has no command for Alt+Left or Alt+Right, so the press
+reaches spatial navigation wherever the caret is; below 149, read from the user agent, the
+guard cancels it in any text box and on the editor's EditContext host. From 149 they move
+to the start and end of the line, which Blink counts as handled even where the caret
+already is, and the guard leaves them alone. Spatial navigation ignores an arrow held with
+Ctrl, Shift or Meta and acts on no key but the four arrows, so Home, End, PageUp and
 PageDown need no guard. It reaches the workbench document only, not a text box inside an
 extension webview. `ExtraKeyRow` sets `FOCUS_BLOCK_DESCENDANTS`, because an arrow the page
 leaves unused makes the WebView hand Android focus to the nearest focusable view, and

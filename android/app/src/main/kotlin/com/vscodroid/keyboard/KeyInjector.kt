@@ -228,20 +228,31 @@ class KeyInjector(
      * ends it where a desktop would.
      *
      * Spatial navigation ignores an arrow held with Ctrl, Shift or Meta, and a
-     * selection that collapses has moved, so those are left alone. Alt is not
-     * ignored. On Android, Alt+Left and Alt+Right move to the start and end of
-     * the line, so one already there can fall through to spatial navigation,
-     * and in a wrapped text area a line can end anywhere. An Alt press on a
-     * collapsed caret is therefore always cancelled; the announced arrow it
-     * replaced did nothing in a text box either. Home, End, PageUp and PageDown
-     * are not arrows, and spatial navigation never moves focus for them. A key
-     * a handler already cancelled is left alone. Cancelling stops no binding:
-     * the workbench's keybinding service also listens on the window and does
-     * not read `defaultPrevented`. It covers this document only, so a text box
-     * inside an extension webview, a frame of another origin, is not guarded.
-     * It applies to a hardware keyboard's Left and Right too. The edges are
-     * read in logical order, which is the screen's order for left-to-right
-     * text.
+     * selection that collapses has moved, so those are left alone. A number or
+     * email box takes text but has no selection API, so its caret cannot be
+     * read and every unmodified Left and Right there is cancelled, as the
+     * announced arrow they replaced did nothing there either; Home, End and a
+     * tap still move it. Alt is not ignored. Before Chromium 149, Blink on
+     * Android has no command for Alt+Left or Alt+Right, so the press reaches
+     * spatial navigation wherever the caret is, in a text box and on the
+     * editor's EditContext host alike, and below 149, read from the user agent,
+     * it is cancelled on both. From 149 they move to the start and end of the
+     * line, which Blink counts as handled even where the caret already is, so
+     * they are left to it. Home, End, PageUp and PageDown are not arrows, and
+     * spatial navigation never moves focus for them.
+     *
+     * The press is decided on the box itself, after the box's own listeners,
+     * and a key one of them already cancelled is left alone. A box whose own
+     * handler or container stops the key's propagation, as the Problems,
+     * Output, Debug Console and Comments filters and the chat model picker's
+     * filter do, hides it from a listener on the window, and its default action
+     * and spatial navigation run all the same. Cancelling stops no binding: the
+     * workbench's keybinding service listens on the window, after the box, and
+     * does not read `defaultPrevented`. It covers this document only, so a text
+     * box inside an extension webview, a frame of another origin, is not
+     * guarded. It applies to a hardware keyboard's Left and Right too. The
+     * edges are read in logical order, which is the screen's order for
+     * left-to-right text.
      *
      * Call once after the page finishes loading.
      */
@@ -496,18 +507,37 @@ class KeyInjector(
 
                 // A Left or Right at the edge of a text box ends there instead
                 // of moving focus. See the KDoc for why the edge is dangerous.
-                // Bubble phase on the window, so every handler on the box and
-                // above it has had the key first.
                 var EDGE = { ArrowLeft: -1, ArrowRight: 1 };
-                window.addEventListener('keydown', function(e) {
-                    if (e.defaultPrevented || !EDGE.hasOwnProperty(e.key)) return;
-                    if (e.ctrlKey || e.shiftKey || e.metaKey) return;
-                    var t = e.composedPath()[0];
-                    if (!t || (t.tagName !== 'INPUT' && t.tagName !== 'TEXTAREA')) return;
+                // Alt+Left and Alt+Right have no command on Android before
+                // Chromium 149. A user agent with no version counts as older:
+                // a lost line move costs less than lost focus.
+                var version = /Chrome\/(\d+)/.exec(navigator.userAgent);
+                var altUnhandled = !version || +version[1] < 149;
+                // Whether the press goes on to spatial navigation from `t`. A
+                // number or email box takes text but reports no caret, so any
+                // press there may be the one at its edge.
+                function leaves(e, t) {
                     var at = t.selectionStart;
-                    if (at === null || at !== t.selectionEnd) return;
-                    if (e.altKey || at === (EDGE[e.key] < 0 ? 0 : t.value.length)) e.preventDefault();
-                });
+                    var box = t.tagName === 'TEXTAREA' || (t.tagName === 'INPUT' && at !== null);
+                    var blind = t.tagName === 'INPUT' && (t.type === 'number' || t.type === 'email');
+                    if (e.altKey) return altUnhandled && (box || blind || !!t.editContext);
+                    return blind || (box && at === t.selectionEnd && at === (EDGE[e.key] < 0 ? 0 : t.value.length));
+                }
+                // Decided on the innermost target, by a listener added there
+                // while the key is on its way down. It runs after the target's
+                // own listeners and before the key bubbles to any container,
+                // so neither can hide the key with stopPropagation in the
+                // bubble phase.
+                // Once, and only for its own event: a key stopped before it
+                // reaches the target leaves nothing that acts on the next one.
+                window.addEventListener('keydown', function(e) {
+                    if (!EDGE.hasOwnProperty(e.key) || e.ctrlKey || e.shiftKey || e.metaKey) return;
+                    var t = e.composedPath()[0];
+                    if (!t) return;
+                    t.addEventListener('keydown', function(ev) {
+                        if (ev === e && !e.defaultPrevented && leaves(e, t)) e.preventDefault();
+                    }, { once: true });
+                }, true);
             })();
         """.trimIndent()
 

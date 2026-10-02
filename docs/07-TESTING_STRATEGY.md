@@ -92,7 +92,7 @@ temporary directory where it needs files, and is executed directly by `node`.
 | DNS proxy | The Basic-auth token on the loopback proxy every musl DNS lookup goes through | `scripts/test-dns-proxy.js` |
 | Bridge relay | The BroadcastChannel relay injected into the workbench | `scripts/test-bridge-relay.js` |
 | Download capture | The script that makes saving a file out of the Explorer possible at all | `scripts/test-download-capture.js` |
-| Arrow edge guard | That a Left or Right at the start or end of a text box is cancelled, and one that can still move the caret or that a handler already used is not | `scripts/test-arrow-edge-guard.js` |
+| Arrow edge guard | That a Left or Right at the start or end of a text box, in a number box, or with Alt below WebView 149 is cancelled, also where the box stops the key's propagation, and one that can still move the caret or that a handler already used is not | `scripts/test-arrow-edge-guard.js` |
 | Soft keyboard Enter | That a code-less Enter is given the `code` Enter unless Ctrl or Alt is latched, and that a composing Enter is still stopped and replaced outside the editor | `scripts/test-composing-enter.js` |
 | Composition finish | That a caret key or the editor's own tap or long press, while the focused EditContext host composes a word, blurs and refocuses the host once and without writing `inputmode`: before the editor's handler, except that with a suggestion list open, Tab accepting a suggestion and a tap on a row do it after the list's handler, and the keys that move the list's highlight not at all; and that nothing else does | `scripts/test-keyboard-guard.js` |
 | Serve on Network | The port scan and its reachable/local split | `scripts/test-serve-network.js` |

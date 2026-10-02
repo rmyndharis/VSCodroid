@@ -362,10 +362,12 @@ class KeyInjectorLatchTest {
      *
      * This holds its shape, and that it covers exactly the arrows pressed for
      * real, which only the Kotlin side can see. What it decides at each caret
-     * position is run under node by `scripts/test-arrow-edge-guard.js`.
+     * position, and in which phase, is run under node by
+     * `scripts/test-arrow-edge-guard.js`.
      *
-     * NEGATIVE CONTROL: deleting the listener fails the slice; registering it
-     * in the capture phase, adding Tab or Home to EDGE, or putting ArrowUp back
+     * NEGATIVE CONTROL: deleting the window listener, or registering it in the
+     * bubble phase, fails the slice; deciding there rather than in a one-shot
+     * listener on the box, adding Tab or Home to EDGE, or putting ArrowUp back
      * into NAVIGATION_KEYS without guarding it, fails an assertion.
      */
     @Test
@@ -373,9 +375,9 @@ class KeyInjectorLatchTest {
         val installed = installedListener()
         val start = installed.indexOf("var EDGE =")
         assertTrue(start >= 0, "nothing guards an arrow at the edge of a text box. It reads:\n$installed")
-        val end = installed.indexOf("});", start)
-        assertTrue(end > start, "the edge guard's listener is never closed")
-        val guard = installed.substring(start, end + "});".length)
+        val end = installed.indexOf("}, true);", start)
+        assertTrue(end > start, "the edge guard has no capture listener on the window, or it is never closed")
+        val guard = installed.substring(start, end + "}, true);".length)
 
         val edge = Regex("""var EDGE = \{([^}]*)\}""").find(guard)!!.groupValues[1]
         assertEquals(
@@ -384,12 +386,15 @@ class KeyInjectorLatchTest {
             "the guard does not cover exactly the arrows pressed for real. It reads: $guard",
         )
         assertTrue(
-            guard.contains("window.addEventListener('keydown', function(e) {") && !guard.contains("}, true)"),
-            "the guard is not a bubble-phase keydown listener, so it can cancel an arrow " +
-                "before the editor or the quick input has used it. It reads: $guard",
+            guard.contains("window.addEventListener('keydown', function(e) {") &&
+                guard.contains("t.addEventListener('keydown', function(ev) {") &&
+                guard.contains("}, { once: true });"),
+            "the guard does not decide on the box itself, after the box's own listeners, so " +
+                "a box or container that stops the key's propagation hides it while spatial " +
+                "navigation still moves focus. It reads: $guard",
         )
         assertTrue(
-            guard.contains("if (e.defaultPrevented"),
+            guard.contains("!e.defaultPrevented"),
             "the guard acts on an arrow a handler already used. It reads: $guard",
         )
         assertTrue(

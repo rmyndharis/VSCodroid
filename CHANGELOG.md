@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The editor is now Code - OSS 1.139.1, up from 1.133.0.
 - The editor no longer carries Windows, macOS, x86 and desktop Linux helper programs that cannot run on Android, which saves about 30 MB of storage on new installs and updates alike.
+- With a hardware keyboard, Left and Right no longer move the caret in a number box such as a number setting, which keeps them from moving focus out of the box at either end; Home, End and a tap still move it.
 
 ### Removed
 

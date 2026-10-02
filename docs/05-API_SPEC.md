@@ -133,15 +133,16 @@ key press is the only way into it from Kotlin.
 
 The trackpad's Left and Right, `Home`, `End`, `PageUp` and `PageDown` are
 **pressed** the same way, as real `KeyEvent`s listed in `NAVIGATION_KEYS`, with
-any latched modifier as meta state, so they move the caret in text boxes and
-reach extension webviews.
+any latched modifier as meta state, so they move the caret in text boxes, except
+an unmodified Left or Right in a number or email box, and reach extension
+webviews.
 
 Everything else is **announced**: a key spelled out rather than typed (`Tab`,
 `Escape`, `F7`, the trackpad's Up and Down), and any character held with Ctrl,
 Alt or Meta, becomes the `KeyboardEvent` below, because that is what the
-workbench resolves its bindings from. `isTextEntry` and `NAVIGATION_KEYS` decide which route a press takes and
-`typeCharacter` is the first of them; all three live in the `keyboard` package
-beside `KeyInjector`.
+workbench resolves its bindings from. `isTextEntry` and `NAVIGATION_KEYS`, both
+in `TextEntry.kt` in the `keyboard` package, decide which route a press takes;
+the first route is `typeCharacter`, a private member of `KeyInjector`.
 
 Nothing needs to be defined on the page for any route to work, and defining a
 hook by that name (which is what following the old text led to) leaves a function
