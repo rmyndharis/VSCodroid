@@ -20,9 +20,13 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
+import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.EnumSource
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.IOException
+import java.io.OutputStream
 
 /**
  * A save while the folder is open, meeting an edit another app made to the same document
@@ -35,8 +39,9 @@ import java.io.File
  * moved, keeps the device copy beside the mirror file as `.device-<time>` before writing.
  *
  * The device here is one document, `notes.txt`, whose text, time and size the cases move
- * by hand. A write through `"wt"` lands like a real provider's: it replaces the text and
- * advances the time.
+ * by hand. A write through `"wt"` lands like the platform provider's: it replaces the text
+ * and advances the time before close() returns. [LateStamp] is the other kind of provider,
+ * which reports a write's final time and size only after that.
  */
 class SafLiveDeviceEditTest {
 
@@ -54,7 +59,43 @@ class SafLiveDeviceEditTest {
     private var deviceSize = 2L
     private var deviceHasClock = true
     private var writes = 0
+
+    /** How many times the device document was opened for reading. */
+    private var reads = 0
     private val failed = mutableListOf<File>()
+
+    /** Whether the device holds `notes.txt` at all; the editor can delete and make it again. */
+    private var deviceHasDocument = true
+
+    /** Set to make the provider fail the first query after the next write lands. */
+    private var failStampAfterNextWrite = false
+    private var failNextQuery = false
+
+    /** Set to make the next `"wt"` stream fail at its first byte, before anything lands. */
+    private var failNextWriteStream = false
+
+    /** How the provider reports a write; null for one whose stamp is final at close(). */
+    private var lateStamp: LateStamp? = null
+
+    /** What a [lateStamp] provider reports once it has finished the last write. */
+    private var settled: Pair<Long, Long>? = null
+
+    /**
+     * Providers that finish what they report for a write after its stream has closed. Each
+     * entry says what is reported right after close() and once the provider is done; no
+     * other app writes in between. A FAT card behind the FUSE cache rounds the time the
+     * way [WHOLE_SECONDS] does, and Round Sync's cache moves the way [ROW] does.
+     */
+    enum class LateStamp {
+        /** MTP: the row, time and size, is rewritten once the object reaches the device. */
+        ROW,
+
+        /** Nextcloud: the close stamps milliseconds, the finished upload whole seconds. */
+        WHOLE_SECONDS,
+
+        /** MTP to an Android phone, which keeps the old time: only the size moves, later. */
+        SIZE,
+    }
 
     @BeforeEach
     fun setUp() {
@@ -76,20 +117,41 @@ class SafLiveDeviceEditTest {
         every { DocumentsContract.getDocumentId(any()) } answers {
             uris.entries.first { it.value === firstArg<Uri>() }.key
         }
+        every { DocumentsContract.deleteDocument(any(), any()) } answers {
+            deviceHasDocument = false
+            true
+        }
+        // A new document is empty and stamped with the time it was made.
+        every { DocumentsContract.createDocument(any(), any(), any(), any()) } answers {
+            deviceHasDocument = true
+            deviceText = ""
+            deviceSize = 0
+            deviceModified = CREATED_AT
+            uris.getOrPut("doc:notes.txt") { mockk(relaxed = true) }
+        }
 
         resolver = mockk(relaxed = true)
-        every { resolver.query(any(), any(), any(), any(), any()) } answers { deviceCursor() }
+        every { resolver.query(any(), any(), any(), any(), any()) } answers {
+            if (failNextQuery) {
+                failNextQuery = false
+                throw IllegalStateException("the provider did not answer")
+            }
+            deviceCursor()
+        }
         // A real stream: a relaxed one answers 0 from `read`, and `copyTo` spins on it.
         every { resolver.openInputStream(any()) } answers {
+            reads++
             ByteArrayInputStream(deviceText.toByteArray())
         }
         every { resolver.openOutputStream(any(), "wt") } answers {
-            object : ByteArrayOutputStream() {
-                override fun close() {
-                    deviceText = String(toByteArray())
-                    deviceSize = size().toLong()
-                    deviceModified += 1_000
-                    writes++
+            if (failNextWriteStream) {
+                failNextWriteStream = false
+                object : OutputStream() {
+                    override fun write(b: Int) = throw IOException("cut short")
+                }
+            } else {
+                object : ByteArrayOutputStream() {
+                    override fun close() = land(toByteArray())
                 }
             }
         }
@@ -113,8 +175,8 @@ class SafLiveDeviceEditTest {
     private fun deviceCursor(): Cursor {
         val cursor = mockk<Cursor>(relaxed = true)
         var row = -1
-        every { cursor.moveToNext() } answers { ++row == 0 }
-        every { cursor.moveToFirst() } returns true
+        every { cursor.moveToNext() } answers { deviceHasDocument && ++row == 0 }
+        every { cursor.moveToFirst() } answers { deviceHasDocument }
         every { cursor.getColumnIndexOrThrow(any()) } answers {
             when (firstArg<String>()) {
                 DocumentsContract.Document.COLUMN_DOCUMENT_ID -> 0
@@ -137,6 +199,39 @@ class SafLiveDeviceEditTest {
         every { cursor.getLong(3) } answers { deviceSize }
         every { cursor.getLong(4) } answers { deviceModified }
         return cursor
+    }
+
+    /** A write reaching the device, reported the way [lateStamp] says. */
+    private fun land(bytes: ByteArray) {
+        deviceText = String(bytes)
+        writes++
+        val size = bytes.size.toLong()
+        when (lateStamp) {
+            null -> {
+                deviceSize = size
+                deviceModified += 1_000
+            }
+            LateStamp.ROW -> settled = deviceModified + 1_000 to size
+            LateStamp.WHOLE_SECONDS -> {
+                deviceSize = size
+                deviceModified += 1_234
+                settled = deviceModified / 1_000 * 1_000 to size
+            }
+            LateStamp.SIZE -> settled = deviceModified to size
+        }
+        if (failStampAfterNextWrite) {
+            failStampAfterNextWrite = false
+            failNextQuery = true
+        }
+    }
+
+    /** The provider finishes the last write; nothing else touches the document. */
+    private fun settle() {
+        settled?.let { (time, size) ->
+            deviceModified = time
+            deviceSize = size
+        }
+        settled = null
     }
 
     private fun open(mirrorDir: File = mirror, tree: Uri = treeUri) =
@@ -191,6 +286,117 @@ class SafLiveDeviceEditTest {
         assertEquals("second save", deviceText)
     }
 
+    /**
+     * The same saves on a provider that finishes a write after its stream has closed, so
+     * the time and size read right after this app's write are not the ones the next save
+     * sees. The movement is this app's own write settling, and a copy of it is a duplicate
+     * of the previous save, put into the user's folder on every save.
+     */
+    @ParameterizedTest(name = "own saves leave no copy: {0}")
+    @EnumSource(LateStamp::class)
+    fun `saves to a provider that settles its stamp late leave no device copy`(shape: LateStamp) {
+        lateStamp = shape
+        open()
+
+        save("first save")
+        settle()
+        save("second save, longer")
+        settle()
+        save("third")
+        settle()
+
+        assertEquals(
+            emptyMap<String, String>(), deviceCopies(),
+            "this app's own earlier saves were kept as if another app had written them",
+        )
+        assertEquals("third", deviceText)
+        assertEquals(3, writes)
+    }
+
+    /**
+     * The first save after an open that fetched a write the provider had not finished: this
+     * app's save from an earlier session, or a file another app has just put there. The
+     * stamp then settles over the very copy the editor shows, and nothing but the open
+     * read it, so the bytes the open fetched have to vouch for it as a write's do.
+     */
+    @ParameterizedTest(name = "first save after an open leaves no copy: {0}")
+    @EnumSource(LateStamp::class)
+    fun `the first save after an open that fetched a settling write leaves no device copy`(shape: LateStamp) {
+        lateStamp = shape
+        land("written just before the folder was opened".toByteArray())
+        open()
+        settle()
+
+        save("first save after the open")
+
+        assertEquals(
+            emptyMap<String, String>(), deviceCopies(),
+            "the copy the open fetched was kept as if another app had written it",
+        )
+        assertEquals("first save after the open", deviceText)
+    }
+
+    /**
+     * The same saves with free space below the floor, where no device copy can be fetched
+     * into the app's storage. Telling this app's own write apart must not need one, or on
+     * such a provider every save after the first stays inside the app for the session.
+     */
+    @Test
+    fun `saves to a provider that settles its stamp late still land below the space floor`() {
+        lateStamp = LateStamp.ROW
+        open()
+        engine.usableSpaceOf = { SafSyncEngine.OPEN_SPACE_FLOOR_BYTES - 1 }
+
+        save("first save")
+        settle()
+        save("second save, longer")
+        settle()
+        save("third")
+
+        assertEquals(3, writes, "a save of this app's own settling write was held back")
+        assertEquals("third", deviceText)
+        assertEquals(emptyList<File>(), failed)
+    }
+
+    /** What the guard is for still holds on such a provider: another app's edit is kept. */
+    @ParameterizedTest(name = "a device edit is kept: {0}")
+    @EnumSource(LateStamp::class)
+    fun `a device edit is still set aside on a provider that settles its stamp late`(shape: LateStamp) {
+        lateStamp = shape
+        open()
+        save("first save")
+        settle()
+        editOnDevice("changed by another app")
+
+        save("typed in the editor")
+
+        assertEquals(
+            listOf("changed by another app"), deviceCopies().values.toList(),
+            "another app's edit was taken for this app's own write and replaced",
+        )
+        assertEquals("typed in the editor", deviceText)
+    }
+
+    /**
+     * Without the device copy in hand a moved stamp cannot be told from another app's edit,
+     * so the save is held back even where the movement may be this app's own write still
+     * settling. Nextcloud offline is the case: a read asks its server first.
+     */
+    @Test
+    fun `a moved stamp whose device copy cannot be read holds the save back`() {
+        lateStamp = LateStamp.WHOLE_SECONDS
+        open()
+        save("first save")
+        settle()
+        every { resolver.openInputStream(any()) } throws IOException("offline")
+
+        save("second save")
+
+        assertEquals(1, writes, "a save went over a device copy nothing could read")
+        assertEquals("first save", deviceText)
+        assertEquals(listOf(File(mirror, "notes.txt").absolutePath), failed.map { it.absolutePath })
+    }
+
     @Test
     fun `a device edit that cannot be set aside holds the save back`() {
         open()
@@ -207,6 +413,26 @@ class SafLiveDeviceEditTest {
         assertEquals("typed in the editor", File(mirror, "notes.txt").readText())
     }
 
+    /**
+     * A length other than the one this app last wrote or fetched is another app's edit
+     * whatever its bytes hash to, so the guard does not read the document to find out. A
+     * document grown past the copy limit is held back at every save, and was read in full
+     * at each one.
+     */
+    @Test
+    fun `a device edit grown past the copy limit is not read at each save`() {
+        open()
+        editOnDevice("too large to copy", size = SafSyncEngine.MAX_FILE_SIZE + 1)
+        val readsBefore = reads
+
+        save("typed in the editor")
+        save("typed in the editor, and more")
+
+        assertEquals(readsBefore, reads, "a device copy of another length was read to hash it")
+        assertEquals(0, writes, "the save overwrote a device edit it could not keep")
+        assertEquals(listOf(File(mirror, "notes.txt").absolutePath), failed.map { it.absolutePath })
+    }
+
     /** `mv` over the name arrives as MOVED_TO, which writes into the existing document. */
     @Test
     fun `a file replaced by rename keeps a device edit`() {
@@ -219,6 +445,75 @@ class SafLiveDeviceEditTest {
 
         assertEquals(listOf("changed by another app"), deviceCopies().values.toList())
         assertEquals("moved over it", deviceText)
+    }
+
+    /**
+     * A file deleted in the editor and then made again gets a new, empty document, while
+     * the entry the deleted one left still stands. Asked about the new document, the guard
+     * would read its emptiness as a device edit and set it aside, which is why a document
+     * the write itself has just created is not asked about at all.
+     */
+    @Test
+    fun `a file deleted and made again in the editor leaves no device copy`() {
+        open()
+        val file = File(mirror, "notes.txt")
+        file.delete()
+        engine.handleMirrorEvent(FileObserver.DELETE, file, mirror, treeUri)
+        engine.runWriteBackLoop { false }
+
+        file.writeText("brand new")
+        engine.handleMirrorEvent(FileObserver.CREATE, file, mirror, treeUri)
+        engine.runWriteBackLoop { false }
+
+        assertEquals(
+            emptyMap<String, String>(), deviceCopies(),
+            "the empty document the save itself created was kept as another app's edit",
+        )
+        assertEquals("brand new", deviceText)
+    }
+
+    /**
+     * A write whose stamp cannot be read back leaves no entry, so the next save fails open.
+     * Keeping the entry from before the write instead reads this app's own write as a device
+     * edit at the next save, and keeps a copy of it.
+     */
+    @Test
+    fun `a save after a write whose stamp could not be read leaves no device copy`() {
+        open()
+        failStampAfterNextWrite = true
+        save("first save")
+
+        save("second save")
+
+        assertEquals(
+            emptyMap<String, String>(), deviceCopies(),
+            "this app's own earlier save was kept as if another app had written it",
+        )
+        assertEquals("second save", deviceText)
+    }
+
+    /**
+     * A write that lands on its second attempt is vouched for by what that attempt
+     * streamed. The failed first attempt had already read the mirror file, so a digest
+     * carried over from it holds the bytes twice, matches nothing the device can hold, and
+     * the next save after the stamp settles keeps a copy of this app's own write.
+     */
+    @Test
+    fun `a write that lands on its second attempt leaves no device copy`() {
+        lateStamp = LateStamp.ROW
+        open()
+        failNextWriteStream = true
+        save("first save")
+        settle()
+
+        save("second save")
+
+        assertEquals(
+            emptyMap<String, String>(), deviceCopies(),
+            "this app's own retried save was kept as if another app had written it",
+        )
+        assertEquals("second save", deviceText)
+        assertEquals(2, writes)
     }
 
     /**
@@ -259,5 +554,6 @@ class SafLiveDeviceEditTest {
 
     private companion object {
         const val OPENED_AT = 1_700_000_000_000L
+        const val CREATED_AT = 1_800_000_000_000L
     }
 }

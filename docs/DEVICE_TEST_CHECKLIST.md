@@ -251,6 +251,8 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | SF-15 | A second window is this window | Run **New Window** from the Command Palette, then **Open Folder in New Window** | The editor reuses its own window. The device browser must not come to the front, and no popup-blocked message appears over the editor | | |
 | SF-16 | An external link still leaves the app | With a dev server running on another port, follow a link to it from the editor | The device browser opens it. This is the branch the window reuse above must not swallow | | |
 | SF-17 | Conflicting edits while open | Open a folder; save a file once in the editor; change the same file with another app; edit and save it again in the editor | The first save adds no copy. After the second, the editor's version is on the device and the other app's version is beside it as `<name>.device-<time>`, in the Explorer and in the device folder. A further save with no change from the other app adds no second copy | | |
+| SF-18 | Saves to a folder that settles them late | Open a folder on a phone or camera attached over USB (MTP), or a Nextcloud folder; save one file three times in the editor, with no other app involved; then change it with another app on this phone, working through the same folder, so that its length changes, and save it once more | Each of the first three saves reaches the device, and none adds a `<name>.device-<time>` copy of an earlier save or of the file as it was opened. After the last save the other app's version is beside the file as `<name>.device-<time>`. These providers report a save's final time and size only after the save has ended, which must not read as another app's edit. An Android phone attached over MTP keeps a file's old modification time, so there only a change of length shows the other app's edit. An edit made on the attached device itself is not seen until the folder is listed again | | |
+| SF-19 | Reopening after a low-storage open | Open a folder and save one of its files in the editor; close the app, change a different file of the folder with another app, and fill the phone's storage until less than 150 MB is free; open the folder and save the first file again; then free the space and open the folder once more | The low-storage open says one file could not be copied, and the second save of the first file reaches the device. The last open shows the other app's version, and no `<name>.local-<number>` file appears in the Explorer or in the device folder | | |
 
 ---
 
@@ -280,9 +282,9 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | Performance | 10 | | | |
 | Toolchains | 7 | | | |
 | Terminal & Tools | 13 | | | |
-| SAF & Files | 17 | | | |
+| SAF & Files | 19 | | | |
 | Display Language | 6 | | | |
-| **Total** | **137** | | | |
+| **Total** | **139** | | | |
 
 **Overall Result**: [ ] PASS / [ ] FAIL
 

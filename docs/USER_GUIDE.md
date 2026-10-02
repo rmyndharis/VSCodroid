@@ -61,9 +61,15 @@ VSCodroid is VS Code. If you have used VS Code on desktop, everything works the 
   as you make it. Changes another app makes while the folder is open do not
   reach the editor until you open the folder again. If you save a file that
   another app changed since you opened the folder or last saved that file, the
-  other app's version is kept beside yours as `<name>.device-<time>`, in the
-  editor and in the device folder. If that version cannot be copied, your save
-  stays inside VSCodroid and a notice says so.
+  other app's version is normally kept beside yours as `<name>.device-<time>`,
+  in the editor and in the device folder. The check goes by the time and size
+  the device folder reports for the file: in a folder that reports no times, or
+  keeps a file's old time when the file changes, as some USB and network folders
+  do, a change that keeps the file's size goes unnoticed, and a folder that
+  changes a file's time on its own can occasionally leave such a copy holding
+  the file as you opened it. If the device folder's version cannot be copied, as
+  can happen in a network folder while it is offline even when no other app
+  changed the file, your save stays inside VSCodroid and a notice says so.
 - A `.code-workspace` file opens as a multi-root workspace: open the file and
   choose **Open Workspace**. On a device folder its roots have to sit inside the
   folder you granted, because nothing outside that folder is reachable.

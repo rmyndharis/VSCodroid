@@ -37,12 +37,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Enter on Gboard accepts in the Command Palette, Quick Open and input boxes such as Open in Browser, where it often did nothing.
 - Typing in the editor with a soft keyboard no longer adds reversed or repeated letters, or deletes the wrong ones, after the cursor moves, the editor regains focus or a keyboard suggestion is tapped; text such as `upgradessedargpu` could be saved.
 - Moving the cursor with a key or a tap, or accepting one of the editor's suggestions with Tab or a tap, while the soft keyboard still underlines a word no longer makes the keyboard's next edit land where that word was; text such as `alpha delta charlie charlie` could be saved.
+- Saving a file in a device folder no longer overwrites changes another app made to it while the folder was open; the other app's version is normally kept beside yours as `<name>.device-<time>`.
+- Opening a large device folder no longer fills the phone's storage: copying stops while about 150 MB is still free, and the files left out stay unchanged in the device folder.
 
 ### Security
 
 - The editor server's connection token is replaced on every server restart, and the app neither sends it nor forwards webview requests to the server's port until the server is ready, so another app that takes the port during a restart gets no usable token.
-- Saving a file in a device folder no longer overwrites changes another app made to it while the folder was open; the other app's version is kept beside yours as `<name>.device-<time>`.
-- Opening a large device folder no longer fills the phone's storage: copying stops while about 150 MB is still free, and the files left out stay unchanged in the device folder.
 
 ## [1.4.0] - 2026-09-18
 

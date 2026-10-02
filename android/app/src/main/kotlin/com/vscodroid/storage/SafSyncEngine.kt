@@ -11,6 +11,8 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
+import java.security.DigestInputStream
+import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 import kotlin.concurrent.thread
@@ -173,7 +175,8 @@ class SafSyncEngine(private val context: Context) {
     /**
      * What the device reported for each document, as (COLUMN_LAST_MODIFIED, COLUMN_SIZE)
      * by absolute mirror path, when this engine last read it ([initialSync] phase 2) or
-     * wrote it (every write-back). A save may replace exactly that and nothing newer;
+     * wrote it (every write-back), with the SHA-256 of what phase 2 fetched or a landed
+     * write streamed, where one did. A save may replace exactly that and nothing newer;
      * [keepsDeviceEdit] is what asks.
      *
      * In memory only, never in the `.synced` record, because a record line licenses a
@@ -181,7 +184,7 @@ class SafSyncEngine(private val context: Context) {
      * [unfetched], and for the same reason: a switch that fails partway restores the
      * previous folder's watcher on this engine, and its entries must survive that.
      */
-    private val deviceSeen = ConcurrentHashMap<String, Pair<Long, Long>>()
+    private val deviceSeen = ConcurrentHashMap<String, DeviceState>()
 
     /**
      * The tree [docIdCache]'s entries were resolved against. The cache is cleared
@@ -312,9 +315,10 @@ class SafSyncEngine(private val context: Context) {
         var keptLocal = 0
         var setAside = 0
         /*
-         * What the mirror holds, for the files this sync can vouch for. Filled at the two
-         * points below that know the mirror copy corresponds to the device document (it
-         * was just written, or it was found identical), and nowhere else.
+         * What the mirror holds, for the files this sync can vouch for. Filled only where
+         * the mirror copy is known to correspond to the device document (it was just
+         * written, or it was found identical), and where a fetch that did not happen left
+         * the copy an earlier sync vouched for exactly as it was, whose line is carried.
          *
          * An allowlist, and that is the whole point. The previous version recorded every
          * enumerated path and then subtracted the ways that could be wrong, which meant a
@@ -432,7 +436,7 @@ class SafSyncEngine(private val context: Context) {
                 // First, so it covers every arm below: each one either arms `unfetched`,
                 // which blocks writes on its own, leaves the device as enumerated, or
                 // writes it, and the write refreshes this entry.
-                deviceSeen[localPath.absolutePath] = doc.lastModified to doc.size
+                deviceSeen[localPath.absolutePath] = DeviceState(doc.lastModified to doc.size)
                 // The one thing no timestamp comparison can see: this app was
                 // writing this path back when it stopped. A newer, shorter
                 // document here is CONSISTENT with this app's own truncated copy,
@@ -675,7 +679,7 @@ class SafSyncEngine(private val context: Context) {
                         // second mirror edit before the next open fetches this app's
                         // own older bytes, which differ, and keeps them beside the
                         // file. That is the known false positive [setAsideDivergedMirror]
-                        // already names for the three other producers of silence.
+                        // already names for the two other producers of silence.
                         //
                         // A copy that fails leaves both sides as they are: the mirror
                         // keeps its edit, unvouched, and the next open tries again. The
@@ -687,7 +691,21 @@ class SafSyncEngine(private val context: Context) {
                             previouslyRecorded?.let { deviceChangedSinceRecord(it, doc) } == true
                         val deviceCopy =
                             if (deviceChanged) setAsideDeviceCopy(doc, localPath) else null
-                        if (deviceCopy == DeviceCopyOutcome.UNAVAILABLE) {
+                        if (deviceCopy == DeviceCopyOutcome.UNAVAILABLE &&
+                            usableSpaceOf(mirrorDir) < OPEN_SPACE_FLOOR_BYTES &&
+                            deviceMatchesMirror(doc.uri, localPath, doc.size)
+                        ) {
+                            // The floor held back the fetch the set-aside needed, and a
+                            // read says there was nothing to set aside or write back: the
+                            // device holds the mirror's bytes. The ordinary case is a save
+                            // the watcher delivered to a provider whose clock is coarser
+                            // than the mirror's, which rounds the write-back's time to
+                            // before the save. Settled like phase 2's own held-back fetch
+                            // below, stamped with the device's time and recorded, so it is
+                            // neither announced nor refused its saves for the session.
+                            localPath.setLastModified(doc.lastModified)
+                            recordIdentity(recorded, doc.relativePath, localPath)
+                        } else if (deviceCopy == DeviceCopyOutcome.UNAVAILABLE) {
                             // Unread, exactly as in the repair branch above, and armed
                             // for the same reason: this declines to touch the device
                             // copy now, and nothing else would stop the next save
@@ -779,8 +797,11 @@ class SafSyncEngine(private val context: Context) {
                     onProgress(filesDone, totalFiles)
                     continue
                 }
+                val fetchedDigest = MessageDigest.getInstance("SHA-256")
                 val copied = try {
-                    copyDocumentToLocal(doc.uri, localPath, doc.lastModified) { fetched ->
+                    copyDocumentToLocal(
+                        doc.uri, localPath, doc.lastModified, fetchedDigest,
+                    ) { fetched ->
                         val moved =
                             setAsideDivergedMirror(doc, localPath, fetched) { previouslyRecorded }
                         if (moved) setAside++
@@ -789,13 +810,55 @@ class SafSyncEngine(private val context: Context) {
                     mirrorCopiesInFlight.remove(localPath.absolutePath)
                 }
                 if (copied) {
+                    // What the open fetched vouches for the device copy as a landed write's
+                    // bytes do in [keepsDeviceEdit]. Without it a provider that settles its
+                    // stamp after the open, a FAT card once the cached inode is evicted or
+                    // Nextcloud after its upload, had the first save of the session keep a
+                    // `.device-` copy of the very document the editor shows.
+                    deviceSeen[localPath.absolutePath] = DeviceState(
+                        doc.lastModified to doc.size, fetchedDigest.digest(), localPath.length(),
+                    )
+                    recordIdentity(recorded, doc.relativePath, localPath)
+                } else if (localPath.isFile &&
+                    usableSpaceOf(mirrorDir) < OPEN_SPACE_FLOOR_BYTES &&
+                    deviceMatchesMirror(doc.uri, localPath, doc.size)
+                ) {
+                    // Held back by the floor, and nothing was missed by it: the device
+                    // document holds the mirror's bytes, which a read settles without
+                    // spending disk. Two ordinary cases land here: on a provider with no
+                    // clock every file the record vouches for, which the unknown-time
+                    // branch fetches again on every open, and a file the editor saved and
+                    // the watcher delivered where the device stamped that write-back after
+                    // the save, newer on the device by time alone. A clock coarse enough
+                    // to stamp it before the save takes the strictly-newer arm above, which
+                    // settles it the same way. Taken as failed copies, each was announced
+                    // as not copied and refused every save of the session while the editor
+                    // showed it as the device holds it.
+                    //
+                    // Stamped with the device's time, as the copy would have been, so the
+                    // next open finds it current rather than fetching it again.
+                    if (doc.lastModified > 0) localPath.setLastModified(doc.lastModified)
+                    keptLocal++
                     recordIdentity(recorded, doc.relativePath, localPath)
                 } else {
-                    // The mirror has no copy and the device does. Counted as well
-                    // as recorded: a failed copy had no counter at all, so the
-                    // summary reported a clean sync for a folder it did not read.
+                    // Nothing says the mirror holds what the device holds now. Counted as
+                    // well as guarded: a failed copy had no counter at all, so the summary
+                    // reported a clean sync for a folder it did not read.
                     failedCopies++
                     unfetched.add(localPath.absolutePath)
+                    // What the previous record vouched for still stands while the mirror
+                    // copy is exactly the copy it vouched for: nothing landed on it since,
+                    // so the device held these bytes when that line was written, whether or
+                    // not it has moved on. Dropped, the next open read it as an edit nobody
+                    // synced, set it aside as a `.local-` file that phase 2b put into the
+                    // device folder, or with no clock kept it over every later device
+                    // change, and the reclaim and the storage screen called it work the
+                    // device folder lacks. Carried rather than made, so not through
+                    // [recordIdentity], whose precondition is that the device holds these
+                    // bytes now; the line goes on saying only what it said when it was
+                    // written.
+                    val line = identityLine(doc.relativePath, localPath)
+                    if (localPath.isFile && line in previouslyRecorded.orEmpty()) recorded += line
                 }
                 filesDone++
                 onProgress(filesDone, totalFiles)
@@ -894,15 +957,17 @@ class SafSyncEngine(private val context: Context) {
      *   has just finished writing beside the destination, so this is a local comparison
      *   and not a second read of the document.
      *
-     * Three ordinary branches of phase 2 also leave a path out of the record, and each
-     * is a known false positive here: a copy that failed, a document skipped for size,
-     * and a document whose destination directory resolved outside the mirror. If the
-     * device copy of such a file later changes, the stale sync-written mirror copy is
-     * set aside under a `.local-` name and [uploadMirrorOnlyDocuments] then puts that
-     * name onto the device folder. Nothing is lost, and both folders gain a file
-     * nothing removes. Narrowing the test would need the reason a path went unrecorded
-     * to survive to the next sync, which nothing on disk carries today: `unfetched` is
-     * this sync's own set, and every path in it took a branch that never reaches here.
+     * Two ordinary branches of phase 2 also leave a path out of the record, and each is
+     * a known false positive here: a document skipped for size, and a document whose
+     * destination directory resolved outside the mirror. If the device copy of such a
+     * file later changes, the stale sync-written mirror copy is set aside under a
+     * `.local-` name and [uploadMirrorOnlyDocuments] then puts that name onto the device
+     * folder. Nothing is lost, and both folders gain a file nothing removes. Narrowing
+     * the test would need the reason a path went unrecorded to survive to the next sync,
+     * which nothing on disk carries today: `unfetched` is this sync's own set, and every
+     * path in it took a branch that never reaches here. A copy that failed, or that the
+     * free-space floor held back, is not among them: phase 2 carries the previous
+     * record's line for a mirror copy still exactly as that record described it.
      *
      * The copy is renamed rather than duplicated, so the space cost is nothing and what
      * the sync then finds at the original name is absent, which is where the fetched copy
@@ -977,7 +1042,7 @@ class SafSyncEngine(private val context: Context) {
      * whenever the bytes differ, which includes the case where the device holds this
      * app's own earlier push and the mirror has been edited again since: that copy is a
      * stale duplicate of the user's own file, and it is the same known false positive
-     * [setAsideDivergedMirror] already names for the other three producers of silence.
+     * [setAsideDivergedMirror] already names for the other two producers of silence.
      * And a fetch that fails withholds the write-back, which defers the user's save
      * rather than losing it. False costs the user someone else's edit outright, which is
      * why true is still the right answer.
@@ -1099,15 +1164,53 @@ class SafSyncEngine(private val context: Context) {
      * - A copy that cannot be made holds the save back without arming [unfetched], so the
      *   next save asks again.
      *
+     * A moved stamp is not yet another app's edit. Several providers finish what they
+     * report for a write after its stream has closed: MTP rewrites its row once the object
+     * reaches the device, Nextcloud stamps the close and later stores the server's whole
+     * seconds, a FAT card behind the FUSE cache reports a rounded time once its cached
+     * inode is evicted, and Round Sync answers from a cache. The stamp read right after
+     * this app's write is then not the one a save sees once the provider has settled, and a
+     * stamp alone kept a `.device-` copy of the previous save: at every save after the
+     * first on MTP and Nextcloud, and on the other two at a save made after they settled.
+     * The same holds for a copy phase 2 fetched while its provider was still settling a
+     * write, which a stamp alone set aside at the first save of the session. So a landed
+     * write leaves the SHA-256 of what it streamed beside its stamp, and phase 2's fetch
+     * the SHA-256 of what it copied, and a device copy that reads back as exactly that is
+     * the version the mirror was made from: the stamp is re-baselined and the save goes
+     * ahead. Hashed as it is read rather than fetched, so it spends no disk and neither
+     * the free-space floor nor the size cap a fetch obeys can hold such a save back. That
+     * costs one read of the document per save whose stamp moved, and none where the
+     * provider reports a length other than the digested one, which is another app's edit
+     * whatever the bytes would hash to. Where the read fails, as a Nextcloud read does
+     * offline, nothing tells that version from another app's edit, and the save goes on to
+     * the set-aside, which holds it back for as long as its own fetch fails too.
+     *
      * Ceilings: a provider reporting neither column; a same-size edit inside one clock
-     * tick; a foreign edit in the window between a landed write and its refresh; entries
-     * not following a directory rename; and on a provider with no clock, every copy after
-     * the first carries its counter as a time, which is cosmetic.
+     * tick, or at any time on a provider with no clock or one that keeps a document's old
+     * time, as an Android phone attached over MTP does; a foreign edit in the window
+     * between a landed write and its refresh, or between this check and the write, which
+     * SAF has no conditional write to close; a stamp that cannot be read back after a
+     * write, which drops the entry so the next save fails open; entries not following a
+     * directory rename; a stamp a provider moves after the folder was opened, over a copy
+     * the open kept rather than fetched (its times agreed, or a read found the bytes
+     * equal) and this app has not written since, which keeps one spare copy of the
+     * unchanged document, since only this app's writes and phase 2's fetches leave a
+     * digest; a provider that reports a write's new time while still reporting the old
+     * length, which keeps one spare copy of the previous save; and on a provider with no
+     * clock, every copy after the first carries its counter as a time, which is cosmetic.
      */
     private fun keepsDeviceEdit(localFile: File, docUri: Uri): Boolean {
         val seen = deviceSeen[localFile.absolutePath] ?: return false
         val now = deviceStamp(docUri) ?: return false
-        if (now == seen) return false
+        if (now == seen.stamp) return false
+        // Not read at another length: a document another app grew past [MAX_FILE_SIZE] was
+        // otherwise read in full at every save, and each save was held back anyway.
+        if (seen.sha256 != null && (now.second <= 0 || now.second == seen.length) &&
+            seen.sha256.contentEquals(deviceSha256(docUri))
+        ) {
+            deviceSeen[localFile.absolutePath] = DeviceState(now, seen.sha256, seen.length)
+            return false
+        }
         var time = now.first
         while (File(localFile.parentFile, "${localFile.name}$DEVICE_COPY_SUFFIX$time").exists()) {
             time++
@@ -1571,7 +1674,10 @@ class SafSyncEngine(private val context: Context) {
      * "The device holds it" rather than "this app copied it", and the difference is not
      * pedantry. A file the editor wrote and the watcher delivered is recorded too, once a
      * sync has read both sides and found them equal. It was never copied here, and it is
-     * still disposable, because deleting the mirror does not destroy it.
+     * still disposable, because deleting the mirror does not destroy it. So is a file
+     * whose line a held-back or failed fetch carried forward: the mirror holds the copy an
+     * earlier record vouched for, which nobody edited since, of a document the device still
+     * holds, in that version or a newer one.
      *
      * Fails closed, in three directions, all deliberate. A missing record, a record whose
      * first line is not [RECORD_HEADER], and an unreadable directory each return false
@@ -2018,18 +2124,22 @@ class SafSyncEngine(private val context: Context) {
      *   holds an edit of the user's that no sync wrote. Callers that record what the
      *   mirror holds have to know the difference. False also when free space is below
      *   [OPEN_SPACE_FLOOR_BYTES], decided before anything is read.
+     * @param digest updated with every byte fetched, so a caller learns what the copy
+     *   holds without reading it again. Meaningful only after a true answer.
      */
     private fun copyDocumentToLocal(
         docUri: Uri,
         dest: File,
         sourceModified: Long,
+        digest: MessageDigest? = null,
         onReplacing: (fetched: File) -> Unit = {},
     ): Boolean {
         // The only floor, and here because both fetches into filesDir pass through this
         // function: phase 2's copy and [setAsideDeviceCopy]. Both already read false as a
         // copy that did not happen and turn it into [unfetched] or UNAVAILABLE, so a
-        // document held back is guarded exactly like one that failed. Measured before
-        // every fetch rather than latched, so copies resume if space comes back mid-open.
+        // document held back is guarded exactly like one that failed, unless phase 2 can
+        // read that the mirror already holds it. Measured before every fetch rather than
+        // latched, so copies resume if space comes back mid-open.
         if (usableSpaceOf(dest.parentFile ?: dest) < OPEN_SPACE_FLOOR_BYTES) {
             // Logger.d: a folder of twenty thousand documents would otherwise put twenty
             // thousand lines into a release logcat. The sync logs one line at the end.
@@ -2051,7 +2161,7 @@ class SafSyncEngine(private val context: Context) {
                 Logger.w(tag, "No stream for ${dest.name}")
                 return false
             }
-            source.use { input ->
+            (if (digest != null) DigestInputStream(source, digest) else source).use { input ->
                 FileOutputStream(partial).use { output ->
                     input.copyTo(output, COPY_BUFFER_SIZE)
                 }
@@ -2172,7 +2282,8 @@ class SafSyncEngine(private val context: Context) {
      * path needs. When the watcher has already carried an edit to the device, the two
      * agree in content while the record still describes what was there before, and
      * that mismatch is what froze the file: nothing else ever brings the bookkeeping
-     * back into step.
+     * back into step. Phase 2 also asks it of a fetch the free-space floor held back,
+     * where a read spends no disk and the fetch would have.
      *
      * Reads the device document, so lengths are compared first: unequal lengths cannot
      * hold equal bytes, and skipping the read there is what keeps this off the common
@@ -2189,8 +2300,10 @@ class SafSyncEngine(private val context: Context) {
      * decision, and says why.
      *
      * A read that fails answers false. That is the safe direction: false leaves the
-     * mirror kept and unrecorded, which is what happens today, while a true this could
-     * not justify would vouch for bytes nobody compared.
+     * mirror kept and vouches for nothing new, while a true this could not justify would
+     * vouch for bytes nobody compared. After a fetch the floor held back, a false still
+     * lets phase 2 carry the line the previous record held for a copy nobody has touched
+     * since, which says no more than it said before.
      */
     private fun deviceMatchesMirror(safDocUri: Uri, localFile: File, deviceSize: Long): Boolean {
         if (deviceSize != localFile.length()) return false
@@ -2304,19 +2417,25 @@ class SafSyncEngine(private val context: Context) {
         // write ran, and the failing path retires the line for that alone; see
         // [releaseUploadClaim].
         var landed = false
+        // Digested on the way out, so it is exactly what the provider was handed whatever
+        // the mirror file holds by the time [keepsDeviceEdit] asks.
+        var written: ByteArray? = null
+        var writtenLength = 0L
         try {
             var attempts = 0
             while (true) {
                 try {
+                    val digest = MessageDigest.getInstance("SHA-256")
                     val copied = context.contentResolver.openOutputStream(safDocUri, "wt")
                         ?.use { output ->
-                            localFile.inputStream().use { input ->
+                            DigestInputStream(localFile.inputStream(), digest).use { input ->
                                 input.copyTo(output, COPY_BUFFER_SIZE)
                             }
-                            true
-                        } ?: false
-                    if (copied) {
+                        }
+                    if (copied != null) {
                         landed = true
+                        written = digest.digest()
+                        writtenLength = copied
                         return
                     }
                     attempts++
@@ -2343,9 +2462,10 @@ class SafSyncEngine(private val context: Context) {
             if (landed) clearUploadInFlight(claim)
             else releaseUploadClaim(claim)
             // Landed or not: the device now holds this app's own bytes, whole or
-            // truncated, and the next save may replace them without keeping a copy.
+            // truncated, and the next save may replace them without keeping a copy. The
+            // digest only where they are whole: a write cut short left an unknown prefix.
             val stamp = deviceStamp(safDocUri)
-            if (stamp != null) deviceSeen[localFile.absolutePath] = stamp
+            if (stamp != null) deviceSeen[localFile.absolutePath] = DeviceState(stamp, written, writtenLength)
             else deviceSeen.remove(localFile.absolutePath)
         }
     }
@@ -3147,6 +3267,25 @@ class SafSyncEngine(private val context: Context) {
             }
             val size = if (sizeIndex >= 0) cursor.getLong(sizeIndex) else 0L
             modified to size
+        }
+    } catch (e: Exception) {
+        null
+    }
+
+    /**
+     * The SHA-256 of what the device holds for [docUri], read without keeping a copy, or
+     * null when the provider will not give it.
+     */
+    private fun deviceSha256(docUri: Uri): ByteArray? = try {
+        context.contentResolver.openInputStream(docUri)?.use { input ->
+            val digest = MessageDigest.getInstance("SHA-256")
+            val buffer = ByteArray(COPY_BUFFER_SIZE)
+            var read = input.read(buffer)
+            while (read >= 0) {
+                digest.update(buffer, 0, read)
+                read = input.read(buffer)
+            }
+            digest.digest()
         }
     } catch (e: Exception) {
         null
@@ -4913,6 +5052,19 @@ internal enum class DeviceCopyOutcome {
      */
     UNAVAILABLE,
 }
+
+/**
+ * What [SafSyncEngine] last knew of one device document: the (COLUMN_LAST_MODIFIED,
+ * COLUMN_SIZE) its provider reported, and the SHA-256 of what the open fetched from it or
+ * this app's last write streamed into it, with the length of those bytes. That digest is
+ * null for a document the open kept without fetching until a write of this app lands
+ * there, and after a write that does not land.
+ */
+private class DeviceState(
+    val stamp: Pair<Long, Long>,
+    val sha256: ByteArray? = null,
+    val length: Long = 0,
+)
 
 /**
  * What [SafSyncEngine.uploadPlan] found under a directory, and whether the cap stopped
