@@ -22,6 +22,9 @@
  * - vscodroid.manageToolchains     : Opens the Android Toolchains screen
  * - vscodroid.toggleExtraKeyRow    : Hides or shows the key row above the keyboard
  * - vscodroid.about                : Opens the Android About dialog
+ *
+ * It also warns about a workspace folder opened by path on shared storage, and
+ * offers Open Folder from Device instead.
  */
 
 const vscode = require('vscode');
@@ -547,7 +550,62 @@ function activate(context) {
         }
     });
 
+    // -- Shared storage opened by path --
+
+    // The app holds no storage permission, so Android lets it list every
+    // directory on shared storage and hides every file another app saved there.
+    // The workbench's own Open Folder and Add Folder to Workspace dialogs reach
+    // those directories by path, and the folder then opens with its subfolders
+    // and none of its files, with nothing on screen to say why. Run once here,
+    // which covers every route that loads the page (Open Folder, Open Recent,
+    // the folder reopened at launch, a workspace file), and again when a folder
+    // is added to an open workspace in place. Once per folder: the set lives as
+    // long as this extension host, which a page load replaces. Don't Show Again
+    // silences a folder for good, by path, for a user who works there knowingly,
+    // such as in a folder whose files this app made and can see.
+    /** @type {Set<string>} */
+    const warnedSharedStorage = new Set();
+    const silencedSharedStorage = () =>
+        /** @type {string[]} */ (context.globalState.get(SILENCED_SHARED_STORAGE, []));
+    const warnSharedStorage = () => {
+        for (const folder of vscode.workspace.workspaceFolders || []) {
+            const folderPath = folder.uri.path;
+            const below = sharedStorageSubpath(folderPath);
+            if (below === null || warnedSharedStorage.has(folderPath) ||
+                silencedSharedStorage().includes(folderPath)) continue;
+            warnedSharedStorage.add(folderPath);
+            const name = below ? folder.name : 'your device storage';
+            // From Android 11 the folder picker will not grant the top of a volume,
+            // its Download folder or its Android folder, so the button cannot reach
+            // these as they are. A USB drive's top is the exception, and a folder
+            // inside it works there too.
+            const route = /^(Download|Android)?$/i.test(below)
+                ? 'Android does not let an app open this folder itself from the device, ' +
+                  'so pick a folder inside it with Open Folder from Device, which shows them'
+                : 'Open Folder from Device shows them';
+            vscode.window.showWarningMessage(
+                `Android hides the files other apps saved in ${name}, so they do not ` +
+                    `show here and cannot be opened. ${route}, apart from files over ` +
+                    '50 MB and folders such as .git and node_modules.',
+                OPEN_FROM_DEVICE,
+                DONT_SHOW_AGAIN
+            ).then((action) => {
+                if (action === OPEN_FROM_DEVICE) {
+                    vscode.commands.executeCommand('vscodroid.openFolderFromDevice');
+                } else if (action === DONT_SHOW_AGAIN) {
+                    context.globalState.update(
+                        SILENCED_SHARED_STORAGE, [...silencedSharedStorage(), folderPath]
+                    );
+                }
+            });
+        }
+    };
+    warnSharedStorage();
+    const workspaceFoldersListener =
+        vscode.workspace.onDidChangeWorkspaceFolders(warnSharedStorage);
+
     context.subscriptions.push(
+        workspaceFoldersListener,
         openFolderCmd,
         recentFolderCmd,
         openInBrowserCmd,
@@ -570,6 +628,39 @@ function deactivate() {
 }
 
 // -- Helpers --
+
+/** The shared-storage warning's buttons, compared against the choice it returns. */
+const OPEN_FROM_DEVICE = 'Open Folder from Device';
+const DONT_SHOW_AGAIN = "Don't Show Again";
+
+/** The globalState key holding the paths Don't Show Again silenced. */
+const SILENCED_SHARED_STORAGE = 'sharedStorageWarning.silenced';
+
+/**
+ * Where a workspace folder sits on shared storage, where this app sees the
+ * directories and not the files other apps saved: its path below the storage
+ * volume, '' at the top of the volume, or null for a folder the app sees in full.
+ *
+ * `/sdcard`, `/mnt/sdcard` and `/storage/self/primary` lead to
+ * `/storage/emulated/<user>`, and the workbench keeps whichever spelling the
+ * user typed; any other `/storage/<name>` is an SD card or a USB drive. A
+ * device folder's copy never matches: it lives in the app's files directory
+ * under `/data`. Nor does `Android/data/<package>/` at the top of a volume, the
+ * old home of `~/projects`, whose files the app created and can see; any
+ * package there is this one, since Android 11 keeps an app out of every other
+ * app's directory there. Below the volume, shared storage ignores case, and so
+ * does that match.
+ * @param {string} folderPath
+ * @returns {string | null}
+ */
+function sharedStorageSubpath(folderPath) {
+    const volume =
+        /^\/(?:storage\/emulated\/\d+|storage\/self\/primary|storage\/[^/]+|sdcard|mnt\/sdcard)(?:\/(.*))?$/
+            .exec(folderPath);
+    if (!volume) return null;
+    const below = (volume[1] || '').replace(/\/+$/, '');
+    return /^Android\/data\/[^/]+(\/|$)/i.test(below) ? null : below;
+}
 
 /**
  * Human names for the keys StorageManager.getStorageBreakdown returns. A key with no

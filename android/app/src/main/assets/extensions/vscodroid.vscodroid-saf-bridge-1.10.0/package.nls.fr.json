@@ -11,5 +11,6 @@
   "command.clearCaches": "VSCodroid: Vider les caches",
   "command.manageToolchains": "VSCodroid: Gérer les chaînes d'outils",
   "command.toggleExtraKeyRow": "VSCodroid: Afficher ou masquer la rangée de touches supplémentaires",
-  "command.about": "VSCodroid: À propos"
+  "command.about": "VSCodroid: À propos",
+  "viewsWelcome.explorer.deviceFolder": "Pour travailler sur un dossier du stockage de l'appareil, par exemple un dossier dans Documents ou Download, ouvrez-le depuis l'appareil afin que les fichiers que d'autres applications y ont enregistrés s'affichent aussi.\n[Ouvrir un dossier de l'appareil](command:vscodroid.openFolderFromDevice)"
 }

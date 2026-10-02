@@ -11,5 +11,6 @@
   "command.clearCaches": "VSCodroid: Vymazat mezipaměti",
   "command.manageToolchains": "VSCodroid: Spravovat sady nástrojů",
   "command.toggleExtraKeyRow": "VSCodroid: Zobrazit nebo skrýt řádek doplňkových kláves",
-  "command.about": "VSCodroid: O aplikaci"
+  "command.about": "VSCodroid: O aplikaci",
+  "viewsWelcome.explorer.deviceFolder": "Chcete-li pracovat se složkou v úložišti zařízení, například se složkou v Documents nebo Download, otevřete ji ze zařízení, aby se zobrazily i soubory, které do ní uložily jiné aplikace.\n[Otevřít složku ze zařízení](command:vscodroid.openFolderFromDevice)"
 }

@@ -206,8 +206,13 @@ const AndroidBridge = {
 };
 
 // ---- the vscode API, stubbed ---------------------------------------------
-const shown = { info: [], error: [] };
+const shown = { info: [], error: [], warning: [] };
 let inputBoxAnswer = null;
+// The folders the extension activates into, the listeners it leaves for a folder
+// added afterwards, and the commands it runs on its own.
+let workspaceFolders = [];
+const folderListeners = [];
+const executed = [];
 // What the user does at each prompt of the device-folder flow. Null is the
 // dismissal, which is what every case that does not reach a removal wants.
 let quickPickChoice = null;
@@ -216,15 +221,24 @@ const commands = new Map();
 const vscodeStub = {
     commands: {
         registerCommand: (id, fn) => { commands.set(id, fn); return { dispose() {} }; },
-        executeCommand: async () => {},
+        executeCommand: async (id) => { executed.push(id); },
     },
     window: {
         showInputBox: async () => inputBoxAnswer,
         showInformationMessage: (m) => { shown.info.push(m); },
         showErrorMessage: (m) => { shown.error.push(m); },
-        showWarningMessage: async () => warningChoice || undefined,
+        // Answers only with a button the call offered, as the workbench does, so a
+        // warning that loses its button loses the action behind it too.
+        showWarningMessage: async (m, ...items) => {
+            shown.warning.push(m);
+            return items.includes(warningChoice) ? warningChoice : undefined;
+        },
         showQuickPick: async (items) => (quickPickChoice ? quickPickChoice(items) : undefined),
         createStatusBarItem: () => ({ show() {}, hide() {}, dispose() {} }),
+    },
+    workspace: {
+        get workspaceFolders() { return workspaceFolders; },
+        onDidChangeWorkspaceFolders: (fn) => { folderListeners.push(fn); return { dispose() {} }; },
     },
     env: { clipboard: { writeText: async () => {} } },
     Uri: { parse: (s) => ({ toString: () => s }) },
@@ -337,8 +351,102 @@ async function main() {
         'extension\'s two-minute deadline and report that the app may not be on Android.',
     );
 
-    const context = { subscriptions: [] };
+    // ---- shared storage opened by path -------------------------------------
+    //
+    // Android lists the directories on shared storage for this app and hides
+    // every file another app saved there, so a folder opened there through the
+    // workbench's own dialog shows its subfolders and nothing else. The
+    // extension has to say so once per folder, and its button has to reach the
+    // route that shows the files. Folders the app can see in full must stay
+    // quiet: its own directory under Android/data on any volume and in any
+    // case, a device folder's copy, and anything in its home.
+    const folder = (p) => ({ uri: { path: p }, name: p.slice(p.lastIndexOf('/') + 1) });
+    workspaceFolders = [
+        folder('/storage/emulated/0/Documents/notes'),
+        folder('/storage/emulated/0/Android/data/com.vscodroid/files/projects/app'),
+        folder('/storage/1A2B-3C4D/Android/data/com.vscodroid/files/card'),
+        folder('/storage/self/primary/Android/data/com.vscodroid/files/self'),
+        folder('/storage/emulated/0/android/data/com.vscodroid/files/lower'),
+        folder('/data/user/0/com.vscodroid/files/saf-mirrors/8e440ff38c8e'),
+        folder('/data/user/0/com.vscodroid/files/home/projects/site'),
+        folder('/storagebox/drafts'),
+        folder('/storage/emulated/0/Documents/silenced'),
+    ];
+    warningChoice = 'Open Folder from Device';
+
+    // Extension state as the workbench keeps it, holding one folder an earlier
+    // session silenced with Don't Show Again.
+    const state = new Map([['sharedStorageWarning.silenced', ['/storage/emulated/0/Documents/silenced']]]);
+    const context = {
+        subscriptions: [],
+        globalState: {
+            get: (key, fallback) => (state.has(key) ? state.get(key) : fallback),
+            update: async (key, value) => { state.set(key, value); },
+        },
+    };
     require(bridgeExtension()).activate(context);
+    await settle();
+
+    assert.ok(
+        shown.warning.length === 1 && shown.warning[0].includes('notes'),
+        'a folder opened by path on shared storage must raise exactly one warning naming it, ' +
+        'and no folder the app can see in full may raise one: ' + JSON.stringify(shown.warning),
+    );
+    assert.deepStrictEqual(
+        executed, ['vscodroid.openFolderFromDevice'],
+        'the warning\'s button did not run Open Folder from Device: ' + JSON.stringify(executed),
+    );
+
+    // A folder added to the open workspace in place, which reloads nothing, so
+    // only the listener can see it. Every spelling of shared storage counts, an
+    // SD card included, as does an Android/data that is not at the top of a
+    // volume, and the folder already warned about stays quiet. The picker will
+    // not grant the top of a volume or its Download folder, so those two are
+    // sent to a folder inside, and the top is not named by its last segment.
+    shown.warning.length = 0; executed.length = 0; warningChoice = null;
+    workspaceFolders = [
+        ...workspaceFolders,
+        folder('/sdcard/Download/proj'),
+        folder('/mnt/sdcard/Music/beats'),
+        folder('/storage/self/primary/Projects/web'),
+        folder('/storage/1A2B-3C4D/Code/game'),
+        folder('/storage/emulated/0/Documents/backup/Android/data/old'),
+        folder('/storage/emulated/0'),
+        folder('/sdcard/Download'),
+    ];
+    assert.strictEqual(folderListeners.length, 1, 'the extension does not listen for added folders');
+    folderListeners[0]();
+    await settle();
+    assert.deepStrictEqual(
+        shown.warning.map((m) => (/saved in (.+?), so /.exec(m) || [, m])[1]),
+        ['proj', 'beats', 'web', 'game', 'old', 'your device storage', 'Download'],
+        'an added shared-storage folder must be warned about once, and an earlier one not ' +
+        'again: ' + JSON.stringify(shown.warning),
+    );
+    assert.deepStrictEqual(
+        shown.warning.map((m) => m.includes('pick a folder inside it')),
+        [false, false, false, false, false, true, true],
+        'only a folder the picker refuses may be sent to a folder inside it: ' +
+        JSON.stringify(shown.warning),
+    );
+    assert.ok(
+        shown.warning.every((m) => m.includes('50 MB') && m.includes('.git')),
+        'a warning promises files the device copy leaves out: ' + JSON.stringify(shown.warning),
+    );
+    assert.deepStrictEqual(executed, [], 'a dismissed warning ran a command: ' + JSON.stringify(executed));
+
+    // Don't Show Again keeps the folder quiet in every later session, and adds
+    // it to the ones silenced before rather than replacing them.
+    shown.warning.length = 0; warningChoice = 'Don\'t Show Again';
+    workspaceFolders = [...workspaceFolders, folder('/sdcard/Documents/mine')];
+    folderListeners[0]();
+    await settle();
+    assert.deepStrictEqual(
+        [shown.warning.length, executed, state.get('sharedStorageWarning.silenced')],
+        [1, [], ['/storage/emulated/0/Documents/silenced', '/sdcard/Documents/mine']],
+        'Don\'t Show Again did not silence the folder for later sessions',
+    );
+    shown.warning.length = 0; warningChoice = null;
 
     const openInBrowser = commands.get('vscodroid.openInBrowser');
     assert.ok(openInBrowser, 'the bundled extension no longer registers vscodroid.openInBrowser');
@@ -795,6 +903,8 @@ async function main() {
         'and window.open claims only the clicks the bridge opened; a device-folder listing ' +
         'and a removal each hand back before their work is done and are answered by reply ' +
         'id, and a refusal on either road reaches the user in the bridge\'s own words; ' +
+        'a shared-storage folder opened by path is warned about once, with a button to ' +
+        'Open Folder from Device and one that silences it for later sessions; ' +
         `all ${coverage.sent} commands sent by an extension have a relay branch${unused}\n`,
     );
 }

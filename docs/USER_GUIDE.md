@@ -48,17 +48,26 @@ VSCodroid is VS Code. If you have used VS Code on desktop, everything works the 
 ### Opening Files and Folders
 
 - Use **File > Open Folder** or the Explorer sidebar for projects inside the app.
-  That dialog browses the app's own storage and cannot reach Documents, Downloads
-  or an SD card.
-- For a folder anywhere else on the device, tap the remote indicator at the left
-  end of the status bar and choose **VSCodroid: Open Recent Folder**. The first
-  time there are no recent folders, so it offers **Open Folder**, which opens
-  Android's folder picker; after that the same command lists the folders you have
-  granted, with **Browse device...** at the end to add another. Android grants
-  access one folder at a time.
+  Typing a path such as `/storage/emulated/0/...` or `/sdcard/...` into that
+  dialog reaches Documents, Downloads or an SD card, but VSCodroid holds no
+  storage permission, so Android shows it the folders there and hides every file
+  another app saved in them. Such a folder opens with its subfolders and none of
+  those files; the editor then warns and offers the route below.
+- For a folder anywhere else on the device, run **VSCodroid: Open Folder from
+  Device**: tap the remote indicator at the left end of the status bar, tap the
+  button in the empty Explorer, or use the Command Palette. It opens Android's
+  folder picker; pick the folder and allow access, and the files other apps
+  saved in it show as well, apart from what the copy below leaves out. Android
+  grants access one folder at a time, and not to the top of the storage, the
+  top of an SD card or the Download folder itself, so pick a folder inside
+  those. **VSCodroid: Open Recent Folder**, in the same menu, lists the folders
+  you have granted, with **Browse device...** at the end to add another.
 - A device folder is edited as a copy inside the app. The copy is read from the
   device when you open the folder, and each save is written back to the device
-  as you make it. Changes another app makes while the folder is open do not
+  as you make it. It leaves out files over 50 MB, and the directories `.git`,
+  `node_modules`, `.gradle`, `.idea`, `venv`, `.env` and `__pycache__` are
+  neither read in nor written back, so a git repository opened this way has no
+  history here. Changes another app makes while the folder is open do not
   reach the editor until you open the folder again. If you save a file that
   another app changed since you opened the folder or last saved that file, the
   other app's version is normally kept beside yours as `<name>.device-<time>`,
@@ -321,16 +330,20 @@ Run **Extensions: Install from VSIX...** from the Command Palette
 (**Ctrl+Shift+P**) to install an extension you already hold as a `.vsix` file.
 
 The picker it opens is the editor's own, not Android's. It starts in your home
-folder, lists only files ending in `.vsix`, and reaches only what VSCodroid can
-see: not Downloads, not Documents, not an SD card, for the same reason **File >
-Open Folder** cannot. So bring the file inside first:
+folder, lists only files ending in `.vsix`, and shows only what VSCodroid can
+see. A path typed into it reaches Downloads, Documents or an SD card, but a
+file the browser or another app saved there is hidden from it, for the same
+reason a folder opened there with **File > Open Folder** shows none of those
+files. So bring the file inside first:
 
 1. Download the `.vsix` with the phone's browser.
 2. Run **VSCodroid: Open Folder from Device** and grant the folder it landed in;
-   the file appears in the Explorer. A device folder is copied into the app for
-   as long as it is open, so pick a folder holding little else rather than a
-   Downloads folder with a year of files in it. Files over 50 MB are not carried
-   in at all, so a very large VSIX has to arrive another way.
+   the file appears in the Explorer. Android does not grant the Download folder
+   itself, which is where a browser usually saves, so first move the file into
+   a folder of its own, such as a new one inside Download, with the phone's
+   Files app. A device folder is copied into the app for as long as it is open,
+   so pick a folder holding little else. Files over 50 MB are not carried in at
+   all, so a very large VSIX has to arrive another way.
 3. Open a terminal (**Ctrl+`**), which starts in that folder, and copy it
    across: `cp name.vsix ~/`.
 4. Run **Extensions: Install from VSIX...**, pick the file, and choose **Reload

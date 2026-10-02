@@ -11,5 +11,6 @@
   "command.clearCaches": "VSCodroid: Clear Caches",
   "command.manageToolchains": "VSCodroid: Manage Toolchains",
   "command.toggleExtraKeyRow": "VSCodroid: Toggle Extra Key Row",
-  "command.about": "VSCodroid: About"
+  "command.about": "VSCodroid: About",
+  "viewsWelcome.explorer.deviceFolder": "To work on a folder in your device's storage, such as one in Documents or Download, open it from the device so that the files other apps saved in it show as well.\n[Open Folder from Device](command:vscodroid.openFolderFromDevice)"
 }

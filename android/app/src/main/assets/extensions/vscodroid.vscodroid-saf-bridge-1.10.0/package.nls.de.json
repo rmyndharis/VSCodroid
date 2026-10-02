@@ -11,5 +11,6 @@
   "command.clearCaches": "VSCodroid: Zwischenspeicher leeren",
   "command.manageToolchains": "VSCodroid: Toolchains verwalten",
   "command.toggleExtraKeyRow": "VSCodroid: Zusatztastenleiste ein- oder ausblenden",
-  "command.about": "VSCodroid: Info"
+  "command.about": "VSCodroid: Info",
+  "viewsWelcome.explorer.deviceFolder": "Um mit einem Ordner im Gerätespeicher zu arbeiten, etwa einem Ordner in Documents oder Download, öffnen Sie ihn vom Gerät, damit auch die Dateien angezeigt werden, die andere Apps darin gespeichert haben.\n[Ordner vom Gerät öffnen](command:vscodroid.openFolderFromDevice)"
 }

@@ -116,4 +116,33 @@ class SafBridgeManifestTest {
                 "back; found $commands",
         )
     }
+
+    /**
+     * Open Folder from Device is the only way to a phone folder that shows the files
+     * other apps saved in it. The workbench's own Open Folder dialog reaches the same
+     * directories by path and opens them with their subfolders and none of their
+     * files, so the route has to be offered where a user looks first: the empty
+     * Explorer and the remote indicator, not only the palette.
+     */
+    @Test
+    fun `the device folder route is offered in the empty Explorer and the remote indicator`() {
+        val contributes = manifest().getJSONObject("contributes")
+        val indicator = contributes.getJSONObject("menus").getJSONArray("statusBar/remoteIndicator")
+        val commands = (0 until indicator.length()).map { indicator.getJSONObject(it).getString("command") }
+        assertTrue(
+            "vscodroid.openFolderFromDevice" in commands,
+            "the remote indicator no longer offers Open Folder from Device; found $commands",
+        )
+
+        val english = JSONObject(File(extensionDir(), "package.nls.json").readText())
+        val welcome = contributes.optJSONArray("viewsWelcome")
+        val explorer = (0 until (welcome?.length() ?: 0))
+            .map { welcome!!.getJSONObject(it) }
+            .filter { it.getString("view") == "explorer" }
+            .map { english.optString(it.getString("contents").trim('%'), it.getString("contents")) }
+        assertTrue(
+            explorer.any { "(command:vscodroid.openFolderFromDevice)" in it },
+            "the empty Explorer no longer links to Open Folder from Device; found $explorer",
+        )
+    }
 }
