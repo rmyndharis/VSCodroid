@@ -504,12 +504,13 @@ def main(tree):
               "naming an armed request id would be accepted")
 
     # server.js appends its own <script> to workbench.html at every start, by
-    # matching the configuration element the page carries, and two things reach
+    # matching the configuration element the page carries, and three things reach
     # the editor only that way: the trusted-domain list that decides whether a
-    # link opens without a confirmation, and the extension recommendation that
-    # offers the Python formatter. Neither can travel in product.json, because
-    # the product the workbench consults is inlined into its bundle at build
-    # time and the one the server hands the page at runtime carries three keys.
+    # link opens without a confirmation, the extension recommendation that offers
+    # the Python formatter, and the theme a page load starts on. None can travel
+    # in product.json, because the product the workbench consults is inlined into
+    # its bundle at build time and the one the server hands the page at runtime
+    # carries three keys; the theme is read from the page's own storage.
     #
     # The match is a literal, so a page whose element is written differently is
     # left untouched, and the failure is silent by design: the bootstrap logs and
@@ -530,9 +531,10 @@ def main(tree):
     else:
         check(carries_anchor,
               "workbench.html carries the configuration element server.js extends",
-              "server.js could not add its script, so github.com would open behind a "
-              "confirmation dialog and no formatter would ever be recommended; update "
-              "the anchor in extendWorkbenchPage in assets/server.js to match the page")
+              "server.js could not add its scripts, so github.com would open behind a "
+              "confirmation dialog, no formatter would ever be recommended and every "
+              "page load would show white first; update the anchor in "
+              "extendWorkbenchPage in assets/server.js to match the page")
 
     check_default_theme(tree)
 

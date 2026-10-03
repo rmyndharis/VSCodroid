@@ -80,6 +80,26 @@ const EXTENSION_RECOMMENDATIONS = {
 // above so either script can be added to a page that already has the other.
 const RECOMMENDATIONS_MARKER = 'vscodroid-extension-recommendations';
 
+// What says the page already starts on the last theme; see the block that adds it.
+const INITIAL_THEME_MARKER = 'vscodroid-initial-theme';
+
+// The theme type for each base theme the workbench saves in its splash.
+const SPLASH_THEME_TYPES = { 'vs': 'light', 'vs-dark': 'dark', 'hc-black': 'hcDark', 'hc-light': 'hcLight' };
+
+// The splash colours the starting theme is given, keyed to the colour id each is.
+// The parts that fill the screen, and no more: everything else takes the registry
+// default for the theme type until the real theme arrives a few seconds later.
+const SPLASH_COLOR_IDS = {
+    foreground: 'foreground',
+    editorBackground: 'editor.background',
+    titleBarBackground: 'titleBar.activeBackground',
+    activityBarBackground: 'activityBar.background',
+    sideBarBackground: 'sideBar.background',
+    panelBackground: 'panel.background',
+    statusBarBackground: 'statusBar.background',
+    statusBarNoFolderBackground: 'statusBar.noFolderBackground',
+};
+
 /**
  * Replaces a file in one step, the way the product.json rewrite below does.
  *
@@ -429,6 +449,65 @@ if (!fs.existsSync(rehEntryPoint)) {
     } catch (e) {
         log('error', `Could not add the extension recommendations: ${e.message}`);
         log('error', 'The editor still works; a formatter is just never suggested.');
+    }
+
+    // Start every page load on the theme the last one ended on.
+    //
+    // Two gaps, both on every reload, folder switch and cold start. The page paints
+    // nothing of its own until the 18 MB workbench.js has loaded and applied a
+    // theme, and the WebView shows white behind it: about a second, measured on an
+    // API 36 emulator. And a load that cannot use the theme the workbench stored
+    // starts on the web default, the light one, until the extensions register: on
+    // a fresh install, which has none stored, and on the first load after an
+    // update that renamed the configured default, which is read from a cache
+    // holding the old name until then.
+    //
+    // The workbench records what it last painted in localStorage, the base theme
+    // and the colours of each part, and nothing in the web page reads it back: that
+    // splash is drawn only by the desktop bootstrap. So this reads it before the
+    // first paint, colours the root with it, and hands the same theme to the
+    // workbench as `initialColorTheme`, which it uses only when its stored theme is
+    // unusable. Without a splash (a first start) it is the dark default this app
+    // configures. Hex colours only, because the workbench parses each one with
+    // Color.fromHex, which turns anything else into red, and the splash writes a
+    // translucent colour as rgba(). Always with a colours object, an empty one
+    // included: without it the workbench colours the theme it starts on from the
+    // light map of "Light 2026", the web build's own default, which is the
+    // setting's value until the extensions register.
+    //
+    // The theme is not handed over when the device has switched between light and
+    // dark since the last load. With window.autoDetectColorScheme on, the stored
+    // theme is unusable on exactly that load because the workbench is following
+    // the device, and the type it picks for itself is then the right one, where
+    // the splash holds the other. The page cannot read that setting, so the switch
+    // is what this goes by, and each load records the device's mode for the next
+    // one to compare. The root is still coloured from the splash, which is right
+    // for everyone the setting does not apply to.
+    //
+    // Anything that throws in here leaves the page as upstream ships it.
+    try {
+        const added = extendWorkbenchPage(workbenchHtmlPath, INITIAL_THEME_MARKER, [
+            "\t\t\t\t\tvar splash = JSON.parse(localStorage.getItem('monaco-parts-splash')) || {};",
+            '\t\t\t\t\tvar info = splash.colorInfo || {};',
+            `\t\t\t\t\tvar type = ${JSON.stringify(SPLASH_THEME_TYPES)}[splash.baseTheme] || 'dark';`,
+            '\t\t\t\t\tvar hex = /^#[0-9a-f]{6}([0-9a-f]{2})?$/i;',
+            "\t\t\t\t\tvar scheme = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';",
+            "\t\t\t\t\tvar last = localStorage.getItem('vscodroid-device-scheme');",
+            "\t\t\t\t\tlocalStorage.setItem('vscodroid-device-scheme', scheme);",
+            "\t\t\t\t\tvar blank = type === 'light' || type === 'hcLight' ? '#ffffff' : '#1e1e1e';",
+            '\t\t\t\t\tdocument.documentElement.style.backgroundColor = hex.test(info.background) ? info.background : blank;',
+            '\t\t\t\t\tif (!settings.initialColorTheme && (last === null || last === scheme)) {',
+            `\t\t\t\t\t\tvar ids = ${JSON.stringify(SPLASH_COLOR_IDS)}, colors = {};`,
+            '\t\t\t\t\t\tfor (var key in ids) { if (hex.test(info[key])) { colors[ids[key]] = info[key]; } }',
+            '\t\t\t\t\t\tsettings.initialColorTheme = { themeType: type, colors: colors };',
+            '\t\t\t\t\t}',
+        ]);
+        if (added) {
+            log('info', 'The workbench page starts on the last theme');
+        }
+    } catch (e) {
+        log('error', `Could not give the workbench page its starting theme: ${e.message}`);
+        log('error', 'The editor still works; a page load may show white and the light theme first.');
     }
 
     // Build server arguments.

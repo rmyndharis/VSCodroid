@@ -112,6 +112,9 @@ function boot(dir) {
 // The formatter a marketplace search cannot surface; see EXTENSION_RECOMMENDATIONS.
 const BLACK_FORMATTER = 'ms-python.black-formatter';
 
+// The script that starts the page on the last theme; see INITIAL_THEME_MARKER.
+const INITIAL_THEME_MARKER = 'vscodroid-initial-theme';
+
 const UPSTREAM = JSON.stringify({ nameShort: 'Code - OSS', version: '1.133.0', quality: 'oss' }, null, 2);
 
 // 1. A valid file is rewritten with the overrides, and nothing is left beside it.
@@ -507,7 +510,7 @@ async function stoppingTakesTheEditorServerWithIt() {
     // server.js, where nothing else would notice a missing bracket until a device
     // silently stopped applying the list.
     const bodies = [...once.matchAll(/<script>\n([\s\S]*?)\n\t\t<\/script>/g)].map((m) => m[1]);
-    assert.strictEqual(bodies.length, 2, `expected the two injected scripts, got ${bodies.length}`);
+    assert.strictEqual(bodies.length, 3, `expected the three injected scripts, got ${bodies.length}`);
     bodies.forEach((b) => new Function(b)); // eslint-disable-line no-new-func -- a parse check
 
     // The page is also given the extension recommendations, and they have to land
@@ -518,7 +521,8 @@ async function stoppingTakesTheEditorServerWithIt() {
 
     // Run both scripts the way the page would, rather than trusting the text. A
     // recommendation that parses but writes to the wrong key would pass a string
-    // check and reach a device suggesting nothing.
+    // check and reach a device suggesting nothing. The starting theme reads the
+    // page's storage and has a case of its own below.
     {
         const settings = { additionalTrustedDomains: ['https://example.invalid'] };
         const el = {
@@ -526,7 +530,9 @@ async function stoppingTakesTheEditorServerWithIt() {
             setAttribute: (_name, value) => Object.assign(settings, JSON.parse(value)),
         };
         const document = { getElementById: (id) => (id === 'vscode-workbench-web-configuration' ? el : null) };
-        bodies.forEach((b) => new Function('document', b)(document)); // eslint-disable-line no-new-func
+        bodies
+            .filter((b) => !b.includes(INITIAL_THEME_MARKER))
+            .forEach((b) => new Function('document', b)(document)); // eslint-disable-line no-new-func
 
         assert.ok(
             settings.additionalTrustedDomains.includes('https://example.invalid'),
@@ -570,6 +576,142 @@ async function stoppingTakesTheEditorServerWithIt() {
     fs.rmSync(dir, { recursive: true, force: true });
 }
 
+// Every page load starts on the theme the last one ended on, read from the splash
+// the workbench saves in localStorage. Without it the page is white until the
+// workbench has loaded, and a load that cannot use the stored theme (the first
+// start, the first load after an update renamed the configured default) shows
+// the light theme before a dark one.
+//
+// NEGATIVE CONTROL: without the script in server.js the first assertion fails;
+// with `initialColorTheme` always taken from the splash, the case of a device that
+// switched to light mode fails.
+{
+    const anchor =
+        '<meta id="vscode-workbench-web-configuration" data-settings="{{WORKBENCH_WEB_CONFIGURATION}}">';
+    const dir = fixture(UPSTREAM);
+    const pagePath = path.join(dir, 'vscode-reh', 'out', 'vs', 'code', 'browser', 'workbench', 'workbench.html');
+    fs.mkdirSync(path.dirname(pagePath), { recursive: true });
+    fs.writeFileSync(pagePath, `<!DOCTYPE html>\n<html>\n\t<head>\n\t\t${anchor}\n\t</head>\n</html>\n`);
+    const run = boot(dir);
+    assert.strictEqual(run.status, 0, `a tree carrying a workbench page should boot cleanly:\n${run.output}`);
+    const body = [...fs.readFileSync(pagePath, 'utf8').matchAll(/<script>\n([\s\S]*?)\n\t\t<\/script>/g)]
+        .map((m) => m[1])
+        .find((b) => b.includes(INITIAL_THEME_MARKER));
+    assert.ok(body, 'the page was not given a script that starts it on the last theme');
+
+    // What Dark Modern's splash holds, measured on a device, with one colour made
+    // translucent: the workbench reads every colour with Color.fromHex, which
+    // turns rgba() into red.
+    const darkModern = {
+        baseTheme: 'vs-dark',
+        colorInfo: {
+            foreground: '#cccccc', background: '#1f1f1f', editorBackground: '#1f1f1f',
+            titleBarBackground: '#181818', activityBarBackground: '#181818', sideBarBackground: '#181818',
+            panelBackground: 'rgba(24, 24, 24, 0.5)', statusBarBackground: '#181818',
+            statusBarNoFolderBackground: '#1f1f1f', editorGroupBorder: 'rgba(255, 255, 255, 0.09)',
+        },
+    };
+
+    /**
+     * Runs the script the way the page does, before the workbench reads its
+     * settings. Answers what the workbench is then handed, what the page paints
+     * before anything else, and what is left in storage for the next load.
+     */
+    const load = ({ splash, last, dark, settings = {}, refuse = false }) => {
+        const items = {};
+        if (splash) items['monaco-parts-splash'] = JSON.stringify(splash);
+        if (last) items['vscodroid-device-scheme'] = last;
+        const localStorage = {
+            getItem: (k) => { if (refuse) throw new Error('SecurityError'); return k in items ? items[k] : null; },
+            setItem: (k, v) => { items[k] = String(v); },
+        };
+        let data = JSON.stringify(settings);
+        const el = { getAttribute: () => data, setAttribute: (_name, value) => { data = value; } };
+        const root = { style: {} };
+        const document = {
+            getElementById: (id) => (id === 'vscode-workbench-web-configuration' ? el : null),
+            documentElement: root,
+        };
+        const matchMedia = (query) => ({ matches: query === '(prefers-color-scheme: dark)' && dark });
+        // eslint-disable-next-line no-new-func
+        new Function('document', 'localStorage', 'matchMedia', body)(document, localStorage, matchMedia);
+        return { settings: JSON.parse(data), painted: root.style.backgroundColor, recorded: items['vscodroid-device-scheme'] };
+    };
+
+    // The first load after this update, on a phone in light mode, running the
+    // default dark theme: the stored theme is unusable once, and the workbench
+    // has to start dark rather than on the web default.
+    {
+        const page = load({ splash: darkModern, last: undefined, dark: false });
+        assert.deepStrictEqual(page.settings.initialColorTheme, {
+            themeType: 'dark',
+            colors: {
+                foreground: '#cccccc', 'editor.background': '#1f1f1f', 'titleBar.activeBackground': '#181818',
+                'activityBar.background': '#181818', 'sideBar.background': '#181818',
+                'statusBar.background': '#181818', 'statusBar.noFolderBackground': '#1f1f1f',
+            },
+        }, 'a load that cannot use the stored theme does not start on the dark one the splash recorded, ' +
+            'or it was handed a colour that is not hex');
+        assert.strictEqual(page.painted, '#1f1f1f', 'the page is not coloured before the workbench paints');
+        assert.strictEqual(page.recorded, 'light', "the device's mode is not recorded for the next load");
+    }
+
+    // A light theme starts light, and the blank page is the light background.
+    {
+        const page = load({
+            splash: { baseTheme: 'vs', colorInfo: { background: '#ffffff', statusBarBackground: '#f8f8f8' } },
+            last: 'dark', dark: true,
+        });
+        assert.deepStrictEqual(page.settings.initialColorTheme,
+            { themeType: 'light', colors: { 'statusBar.background': '#f8f8f8' } },
+            'a light theme does not start light');
+        assert.strictEqual(page.painted, '#ffffff', 'a light theme does not get a light blank page');
+    }
+
+    // Both high-contrast types, and a splash without its background colour.
+    for (const [baseTheme, themeType, painted] of [['hc-black', 'hcDark', '#1e1e1e'], ['hc-light', 'hcLight', '#ffffff']]) {
+        const page = load({ splash: { baseTheme }, last: 'light', dark: false });
+        assert.strictEqual(page.settings.initialColorTheme.themeType, themeType, `${baseTheme} does not start as ${themeType}`);
+        assert.strictEqual(page.painted, painted, `${baseTheme} without a background colour is not given ${painted}`);
+    }
+
+    // A first start has no splash, and this app's default theme is dark. The
+    // colours object is there even empty: without one the workbench colours the
+    // theme it starts on from "Light 2026", the setting's value at that moment.
+    {
+        const page = load({ splash: undefined, last: undefined, dark: false });
+        assert.deepStrictEqual(page.settings.initialColorTheme, { themeType: 'dark', colors: {} },
+            'a first start does not start dark, or starts without a colours object');
+        assert.strictEqual(page.painted, '#1e1e1e', 'a first start is not given the dark blank page');
+    }
+
+    // The device switched to light mode since the last load. With
+    // window.autoDetectColorScheme on, the workbench is following the device and
+    // its own pick is right, so it is left to make it.
+    {
+        const page = load({ splash: darkModern, last: 'dark', dark: false });
+        assert.strictEqual(page.settings.initialColorTheme, undefined,
+            'the last theme is imposed on a load after the device changed mode, which the workbench ' +
+            'follows by itself when window.autoDetectColorScheme is on');
+        assert.strictEqual(page.recorded, 'light', 'the switch is not recorded, so the next load would see it again');
+    }
+
+    // A starting theme the page was already given is not replaced.
+    {
+        const own = { themeType: 'light', colors: { 'editor.background': '#fafafa' } };
+        const page = load({ splash: darkModern, last: 'dark', dark: true, settings: { initialColorTheme: own } });
+        assert.deepStrictEqual(page.settings.initialColorTheme, own, 'a starting theme the page already carried was replaced');
+    }
+
+    // Storage that refuses leaves the page as upstream ships it.
+    {
+        const page = load({ splash: darkModern, last: 'dark', dark: true, refuse: true });
+        assert.deepStrictEqual(page.settings, {}, 'a page whose storage refused was still changed');
+        assert.strictEqual(page.painted, undefined, 'a page whose storage refused was still painted');
+    }
+    fs.rmSync(dir, { recursive: true, force: true });
+}
+
 // From 1.138 the page's policy trusts inline scripts by a per-request nonce and
 // no longer hashes bare ones, so the injected scripts have to carry the page's
 // own nonce placeholder, which the server fills in on every request.
@@ -594,7 +736,7 @@ async function stoppingTakesTheEditorServerWithIt() {
     const page = fs.readFileSync(pagePath, 'utf8');
     const injected = [...page.matchAll(/<script nonce="\{\{WORKBENCH_SCRIPT_NONCE\}\}">\n(\t\t\t\/\* vscodroid-[\s\S]*?)\n\t\t<\/script>/g)];
     assert.strictEqual(
-        injected.length, 2,
+        injected.length, 3,
         `the injected scripts do not carry the page's nonce, so its policy refuses them:\n${page}`,
     );
     assert.ok(!/\n\t\t<script>\n/.test(page), 'a bare <script> was injected into a page trusted by nonce');
@@ -678,7 +820,8 @@ preloadRidesAsOneToken()
             'ok -- product.json survives a truncated file and an unwritable directory, a missing ' +
                 'server tree is a failed start rather than a healthy one, the workbench page is ' +
                 'given the trusted-domain list once and a page without the element it extends is ' +
-                'reported rather than thrown, the sign-in callback intent is pinned once per start, a proxy that does not parse costs only DNS, the ' +
+                'reported rather than thrown, the page starts on the theme the last load ended on, ' +
+                'the sign-in callback intent is pinned once per start, a proxy that does not parse costs only DNS, the ' +
                 'preload rides as one token, the DNS proxy outlives the bootstrap, and a stop ' +
                 'takes the editor server with it',
         );
