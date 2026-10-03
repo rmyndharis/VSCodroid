@@ -86,7 +86,9 @@ VSCodroid is VS Code. If you have used VS Code on desktop, everything works the 
   stays inside VSCodroid and a notice says so. While the folder is open
   VSCodroid tries the save again by itself, at least every five minutes, and it
   goes through, without a second notice, once that version can be read or
-  copied; opening the folder again tries it too.
+  copied. Opening the folder again tries it too; if that version cannot be read
+  or copied then either, saves of the file wait inside VSCodroid until an open
+  can.
 - The Explorer and the title bar show a device folder under its own name. A
   folder opened in an earlier version is shown under a twelve-character code
   such as `8e440ff38c8e`, the name of its copy, and offers to reopen under its
