@@ -419,8 +419,9 @@ async function main() {
     serverNotePath = `${FILES}${filesSubdir('getServerDir')}/${noteName[1]}`;
 
     // Extension state as the workbench keeps it, which outlives a page load,
-    // holding one folder an earlier session silenced with Don't Show Again.
-    const state = new Map([['sharedStorageWarning.silenced', ['/storage/emulated/0/Documents/silenced']]]);
+    // holding one folder an earlier session silenced with Don't Show Again. It
+    // is kept by its key, the volume and the path below it in lower case.
+    const state = new Map([['sharedStorageWarning.silenced', ['primary:documents/silenced']]]);
 
     /** A page load: a new extension host activates the extension over the same state. */
     async function pageLoad(folders) {
@@ -453,7 +454,9 @@ async function main() {
         folder('/data/user/0/com.vscodroid/files/saf-mirrors/8e440ff38c8e'),
         folder('/data/user/0/com.vscodroid/files/home/projects/site'),
         folder('/storagebox/drafts'),
-        folder('/storage/emulated/0/Documents/silenced'),
+        // The silenced folder, spelled another way: another volume path, another
+        // case and a trailing slash.
+        folder('/sdcard/documents/Silenced/'),
     ];
     serverNote = '{"pid":4242,"port":13337}';
     warningChoice = OPEN;
@@ -498,7 +501,8 @@ async function main() {
     // A folder added to the open workspace in place, which reloads nothing, so
     // only the listener can see it. Every spelling of shared storage counts, an
     // SD card included, as does an Android/data that is not at the top of a
-    // volume, and the folder already warned about stays quiet. The picker will
+    // volume, and the folder already warned about stays quiet, however its
+    // path is spelled this time. The picker will
     // not grant the top of a volume, its Download folder or its Android folder,
     // so those are sent to a folder inside, a trailing slash included, and the
     // top is not named by its last segment. Android/data itself is no app's own
@@ -515,6 +519,8 @@ async function main() {
         folder('/sdcard/Download'),
         folder('/storage/emulated/0/Android/'),
         folder('/sdcard/Android/data'),
+        folder('/sdcard/Documents/notes/'),
+        folder('/storage/self/primary/documents/NOTES'),
     ];
     assert.strictEqual(folderListeners.length, 1, 'the extension does not listen for added folders');
     folderListeners[0]();
@@ -547,19 +553,21 @@ async function main() {
     await settle();
     assert.deepStrictEqual(
         [warnings.length, executed, state.get('sharedStorageWarning.silenced')],
-        [1, [], ['/storage/emulated/0/Documents/silenced', '/sdcard/Documents/mine']],
-        'Don\'t Show Again did not silence the folder for later sessions',
+        [1, [], ['primary:documents/silenced', 'primary:documents/mine']],
+        'Don\'t Show Again did not silence the folder by its key for later sessions',
     );
 
     // A new editor server is a new start of the app: the folders it has not
-    // warned about yet include the one the last server did.
+    // warned about yet include the one the last server did, and a silenced
+    // folder stays silenced under any spelling.
     warningChoice = null;
     serverNote = '{"pid":5151,"port":13337}';
-    await pageLoad([notes]);
+    await pageLoad([notes, folder('/storage/emulated/0/documents/Mine')]);
     assert.deepStrictEqual(
         warnedNames(), ['notes'],
-        'a restarted editor server did not warn about a folder the previous one had, so the ' +
-        'warning is once per install rather than once per start: ' + JSON.stringify(warnings),
+        'a restarted editor server must warn about a folder the previous one had, so that ' +
+        'the warning is once per start rather than once per install, and must leave a ' +
+        'silenced folder alone however it is spelled: ' + JSON.stringify(warnings),
     );
 
     // With no note to tie them to, the warnings last as long as the page, as

@@ -575,8 +575,9 @@ function activate(context) {
     // open the toast is up while the user is reading the Explorer for the
     // missing files. Shown once per folder per start, stopping the user once
     // costs less than files that seem to be gone. Don't Show Again silences a
-    // folder for good, by path, for a user who works there knowingly, such as in
-    // a folder whose files this app made and can see.
+    // folder for good, for a user who works there knowingly, such as in a folder
+    // whose files this app made and can see. Both remember a folder by its key,
+    // so neither is undone by opening it again under another spelling.
     const warnedThisServer = (async () => {
         let server = '';
         try {
@@ -600,25 +601,24 @@ function activate(context) {
     const warnSharedStorage = async () => {
         const warned = await warnedThisServer;
         for (const folder of vscode.workspace.workspaceFolders || []) {
-            const folderPath = folder.uri.path;
-            const below = sharedStorageSubpath(folderPath);
-            if (below === null || warned.folders.has(folderPath) ||
-                silencedSharedStorage().includes(folderPath)) continue;
+            const where = sharedStorageFolder(folder.uri.path);
+            if (!where || warned.folders.has(where.key) ||
+                silencedSharedStorage().includes(where.key)) continue;
             // Marked before the dialog, which stays up for as long as the user
             // takes and may end in a page load: Open Folder from Device opens
             // the device folder in place of this one.
-            warned.folders.add(folderPath);
+            warned.folders.add(where.key);
             if (warned.server) {
                 context.globalState.update(
                     SHOWN_SHARED_STORAGE, { server: warned.server, folders: [...warned.folders] }
                 );
             }
-            const name = below ? folder.name : 'your device storage';
+            const name = where.below ? folder.name : 'your device storage';
             // From Android 11 the folder picker will not grant the top of a volume,
             // its Download folder or its Android folder, so the button cannot reach
             // these as they are. A USB drive's top is the exception, and a folder
             // inside it works there too.
-            const route = /^(Download|Android)?$/i.test(below)
+            const route = /^(Download|Android)?$/i.test(where.below)
                 ? 'Android does not let an app open this folder itself from the device, ' +
                   'so pick a folder inside it with Open Folder from Device, which shows them'
                 : 'Open Folder from Device shows them';
@@ -636,7 +636,7 @@ function activate(context) {
                 vscode.commands.executeCommand('vscodroid.openFolderFromDevice');
             } else if (action === DONT_SHOW_AGAIN) {
                 context.globalState.update(
-                    SILENCED_SHARED_STORAGE, [...silencedSharedStorage(), folderPath]
+                    SILENCED_SHARED_STORAGE, [...silencedSharedStorage(), where.key]
                 );
             }
         }
@@ -674,7 +674,7 @@ function deactivate() {
 const OPEN_FROM_DEVICE = 'Open Folder from Device';
 const DONT_SHOW_AGAIN = "Don't Show Again";
 
-/** The globalState key holding the paths Don't Show Again silenced. */
+/** The globalState key holding the folders Don't Show Again silenced, by key. */
 const SILENCED_SHARED_STORAGE = 'sharedStorageWarning.silenced';
 
 /**
@@ -696,28 +696,34 @@ const EDITOR_SERVER_NOTE = ['..', '..', '..', '..', 'server', 'editor-server.pid
 
 /**
  * Where a workspace folder sits on shared storage, where this app sees the
- * directories and not the files other apps saved: its path below the storage
- * volume, '' at the top of the volume, or null for a folder the app sees in full.
+ * directories and not the files other apps saved, or null for a folder the app
+ * sees in full. `below` is its path below the storage volume, '' at the top of
+ * the volume, and `key` names the folder however its path was spelled.
  *
  * `/sdcard`, `/mnt/sdcard` and `/storage/self/primary` lead to
  * `/storage/emulated/<user>`, and the workbench keeps whichever spelling the
- * user typed; any other `/storage/<name>` is an SD card or a USB drive. A
- * device folder's copy never matches: it lives in the app's files directory
+ * user typed, a trailing slash included; any other `/storage/<name>` is an SD
+ * card or a USB drive. Below the volume, shared storage ignores case. So the key
+ * is the volume and the path below it in lower case: `/sdcard/Documents/notes`
+ * and `/storage/emulated/0/documents/notes/` are one folder, and the folders
+ * already warned about and the ones silenced are matched by it.
+ *
+ * A device folder's copy never matches: it lives in the app's files directory
  * under `/data`. Nor does `Android/data/<package>/` at the top of a volume, the
  * old home of `~/projects`, whose files the app created and can see; any
  * package there is this one, since Android 11 keeps an app out of every other
- * app's directory there. Below the volume, shared storage ignores case, and so
- * does that match.
+ * app's directory there.
  * @param {string} folderPath
- * @returns {string | null}
+ * @returns {{ key: string, below: string } | null}
  */
-function sharedStorageSubpath(folderPath) {
+function sharedStorageFolder(folderPath) {
     const volume =
-        /^\/(?:storage\/emulated\/\d+|storage\/self\/primary|storage\/[^/]+|sdcard|mnt\/sdcard)(?:\/(.*))?$/
+        /^\/(?:(storage\/emulated\/\d+|storage\/self\/primary|sdcard|mnt\/sdcard)|storage\/([^/]+))(?:\/(.*))?$/
             .exec(folderPath);
     if (!volume) return null;
-    const below = (volume[1] || '').replace(/\/+$/, '');
-    return /^Android\/data\/[^/]+(\/|$)/i.test(below) ? null : below;
+    const below = (volume[3] || '').replace(/\/+$/, '');
+    if (/^Android\/data\/[^/]+(\/|$)/i.test(below)) return null;
+    return { key: `${volume[1] ? 'primary' : volume[2]}:${below}`.toLowerCase(), below };
 }
 
 /**
