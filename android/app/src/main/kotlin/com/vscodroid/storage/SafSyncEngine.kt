@@ -3672,6 +3672,12 @@ class SafSyncEngine(private val context: Context) {
                 // The claims are what keep this off a path somebody is streaming
                 // into right now; see [consumeStaleUploadRecord].
                 consumeStaleUploadRecord(job.localPath)
+                // A save held back for this path has nothing left to send, and a file
+                // made again under the name is a new document that its own create
+                // writes. Left standing, the hold was tried against the deleted
+                // document, which on a provider whose ids are not paths fails and
+                // reports the new file's save as lost.
+                heldBack.remove(job.localPath)
             }
             SyncType.RENAME -> {
                 // safDocUri is the document under the *old* name here, and localPath the

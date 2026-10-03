@@ -673,6 +673,36 @@ class SafLiveDeviceEditTest {
         assertEquals(1, writes, "a save was written into a folder no watcher is on")
     }
 
+    /**
+     * A file deleted in the editor and made again is a new document, which its own create
+     * writes. The save held back for the deleted one has nothing left to send, and a try of
+     * it went to the deleted document: here that is the same one, so it only writes again,
+     * while a provider whose ids are not paths fails the write and reports a save as lost.
+     */
+    @Test
+    fun `a held-back save of a file deleted and made again is not tried`() {
+        lateStamp = LateStamp.WHOLE_SECONDS
+        open()
+        save("first save")
+        settle()
+        deviceReadable = false
+        save("second save")
+        val file = File(mirror, "notes.txt").apply { delete() }
+        engine.handleMirrorEvent(FileObserver.DELETE, file, mirror, treeUri)
+        engine.runWriteBackLoop { false }
+        file.writeText("brand new")
+        engine.handleMirrorEvent(FileObserver.CREATE, file, mirror, treeUri)
+        engine.runWriteBackLoop { false }
+        val writesBefore = writes
+        deviceReadable = true
+        clock += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+
+        retryWhileWatching()
+
+        assertEquals(writesBefore, writes, "the deleted file's held-back save was tried")
+        assertEquals("brand new", deviceText)
+    }
+
     /** A save whose file has left the mirror has nothing to send, and queuing it spun the loop. */
     @Test
     fun `a held-back save whose file is gone is dropped rather than tried`() {
