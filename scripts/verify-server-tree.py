@@ -532,8 +532,8 @@ def main(tree):
         check(carries_anchor,
               "workbench.html carries the configuration element server.js extends",
               "server.js could not add its scripts, so github.com would open behind a "
-              "confirmation dialog, no formatter would ever be recommended and every "
-              "page load would show white first; update the anchor in "
+              "confirmation dialog, no formatter would ever be recommended and a "
+              "light theme would start every page load dark; update the anchor in "
               "extendWorkbenchPage in assets/server.js to match the page")
 
     check_default_theme(tree)

@@ -577,10 +577,11 @@ async function stoppingTakesTheEditorServerWithIt() {
 }
 
 // Every page load starts on the theme the last one ended on, read from the splash
-// the workbench saves in localStorage. Without it the page is white until the
-// workbench has loaded, and a load that cannot use the stored theme (the first
-// start, the first load after an update renamed the configured default) shows
-// the light theme before a dark one.
+// the workbench saves in localStorage. Without it the page shows the WebView's
+// own background until the workbench has loaded, the dark window colour whatever
+// the theme, and a load that cannot use the stored theme (the first start, the
+// first load after an update renamed the configured default) shows the light
+// theme before a dark one.
 //
 // NEGATIVE CONTROL: without the script in server.js the first assertion fails;
 // with `initialColorTheme` always taken from the splash, the case of a device that

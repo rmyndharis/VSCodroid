@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.view.MotionEvent
 import android.webkit.WebSettings
 import android.webkit.WebView
+import com.vscodroid.R
 import com.vscodroid.util.Logger
 
 object VSCodroidWebView {
@@ -92,6 +93,16 @@ object VSCodroidWebView {
         webView.isVerticalScrollBarEnabled = false
         webView.isHorizontalScrollBarEnabled = false
         webView.overScrollMode = WebView.OVER_SCROLL_NEVER
+
+        // What shows wherever no page has painted yet, which is white unless set:
+        // the first frames of a new view, before the loading page, and longest on
+        // the first launch after an update, when dropCacheLeftByEarlierBuild in
+        // MainActivity runs first. Measured on an API 36 emulator as two white
+        // frames fading in over the dark splash. The window behind every screen
+        // here and the loading page are this colour. It does not leave a light
+        // theme dark: the workbench page colours itself from the theme it last
+        // showed before its first paint (INITIAL_THEME_MARKER in assets/server.js).
+        webView.setBackgroundColor(webView.context.getColor(R.color.colorBackground))
 
         if (Logger.debugEnabled) {
             WebView.setWebContentsDebuggingEnabled(true)

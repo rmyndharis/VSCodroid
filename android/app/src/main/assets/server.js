@@ -453,14 +453,16 @@ if (!fs.existsSync(rehEntryPoint)) {
 
     // Start every page load on the theme the last one ended on.
     //
-    // Two gaps, both on every reload, folder switch and cold start. The page paints
+    // Two gaps. On every reload, folder switch and cold start the page paints
     // nothing of its own until the 18 MB workbench.js has loaded and applied a
-    // theme, and the WebView shows white behind it: about a second, measured on an
-    // API 36 emulator. And a load that cannot use the theme the workbench stored
-    // starts on the web default, the light one, until the extensions register: on
-    // a fresh install, which has none stored, and on the first load after an
-    // update that renamed the configured default, which is read from a cache
-    // holding the old name until then.
+    // theme, about a second on an API 36 emulator, and the WebView's own
+    // background shows through, which VSCodroidWebView.configure makes the dark
+    // window colour: right for a dark theme, wrong for a light one. And a load that
+    // cannot use the theme the workbench stored starts on the web default, the
+    // light one, for the one to three seconds until the extensions register: on a
+    // fresh install, which has none stored, and on the first load after an update
+    // that renamed the configured default, which is read from a cache holding the
+    // old name until then.
     //
     // The workbench records what it last painted in localStorage, the base theme
     // and the colours of each part, and nothing in the web page reads it back: that
@@ -507,7 +509,7 @@ if (!fs.existsSync(rehEntryPoint)) {
         }
     } catch (e) {
         log('error', `Could not give the workbench page its starting theme: ${e.message}`);
-        log('error', 'The editor still works; a page load may show white and the light theme first.');
+        log('error', 'The editor still works; a page load may show another theme for a moment first.');
     }
 
     // Build server arguments.
