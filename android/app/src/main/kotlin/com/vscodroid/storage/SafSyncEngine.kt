@@ -11,6 +11,7 @@ import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
+import java.io.InputStream
 import java.security.DigestInputStream
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
@@ -1179,11 +1180,11 @@ class SafSyncEngine(private val context: Context) {
      * the version the mirror was made from: the stamp is re-baselined and the save goes
      * ahead. Hashed as it is read rather than fetched, so it spends no disk and neither
      * the free-space floor nor the size cap a fetch obeys can hold such a save back. That
-     * costs one read of the document per save whose stamp moved, and none where the
-     * provider reports a length other than the digested one, which is another app's edit
-     * whatever the bytes would hash to. Where the read fails, as a Nextcloud read does
-     * offline, nothing tells that version from another app's edit, and the save goes on to
-     * the set-aside, which holds it back for as long as its own fetch fails too.
+     * costs one read per save whose stamp moved, of no more than the digested length and a
+     * buffer, and none for a document reported past [MAX_FILE_SIZE] at another length,
+     * which a set-aside could not keep either. Where the read fails, as a Nextcloud read
+     * does offline, nothing tells that version from another app's edit, and the save goes
+     * on to the set-aside, which holds it back for as long as its own fetch fails too.
      *
      * Ceilings: a provider reporting neither column; a same-size edit inside one clock
      * tick, or at any time on a provider with no clock or one that keeps a document's old
@@ -1195,18 +1196,24 @@ class SafSyncEngine(private val context: Context) {
      * the open kept rather than fetched (its times agreed, or a read found the bytes
      * equal) and this app has not written since, which keeps one spare copy of the
      * unchanged document, since only this app's writes and phase 2's fetches leave a
-     * digest; a provider that reports a write's new time while still reporting the old
-     * length, which keeps one spare copy of the previous save; and on a provider with no
-     * clock, every copy after the first carries its counter as a time, which is cosmetic.
+     * digest; a document reported past [MAX_FILE_SIZE] at a length other than the digested
+     * one, which is held back unread even where it holds this app's own bytes; and on a
+     * provider with no clock, every copy after the first carries its counter as a time,
+     * which is cosmetic.
      */
     private fun keepsDeviceEdit(localFile: File, docUri: Uri): Boolean {
         val seen = deviceSeen[localFile.absolutePath] ?: return false
         val now = deviceStamp(docUri) ?: return false
         if (now == seen.stamp) return false
-        // Not read at another length: a document another app grew past [MAX_FILE_SIZE] was
-        // otherwise read in full at every save, and each save was held back anyway.
-        if (seen.sha256 != null && (now.second <= 0 || now.second == seen.length) &&
-            seen.sha256.contentEquals(deviceSha256(docUri))
+        // Read at any length a set-aside could still keep, a missing size column's 0
+        // included: a reported length can lag the bytes, as on a provider that reports a
+        // write's new time before its new length, and skipping the read there kept a copy
+        // of the previous save. Past [MAX_FILE_SIZE] only at the digested length, because a
+        // document another app grew that far was read in full at every save and each save
+        // was held back anyway.
+        if (seen.sha256 != null &&
+            (now.second == seen.length || now.second <= MAX_FILE_SIZE) &&
+            seen.sha256.contentEquals(deviceSha256(docUri, seen.length))
         ) {
             deviceSeen[localFile.absolutePath] = DeviceState(now, seen.sha256, seen.length)
             return false
@@ -3274,19 +3281,11 @@ class SafSyncEngine(private val context: Context) {
 
     /**
      * The SHA-256 of what the device holds for [docUri], read without keeping a copy, or
-     * null when the provider will not give it.
+     * null when the provider will not give it or holds more than [limit] bytes, where the
+     * read stops: more bytes than a digest covers cannot hash to it.
      */
-    private fun deviceSha256(docUri: Uri): ByteArray? = try {
-        context.contentResolver.openInputStream(docUri)?.use { input ->
-            val digest = MessageDigest.getInstance("SHA-256")
-            val buffer = ByteArray(COPY_BUFFER_SIZE)
-            var read = input.read(buffer)
-            while (read >= 0) {
-                digest.update(buffer, 0, read)
-                read = input.read(buffer)
-            }
-            digest.digest()
-        }
+    private fun deviceSha256(docUri: Uri, limit: Long): ByteArray? = try {
+        context.contentResolver.openInputStream(docUri)?.use { sha256(it, limit)?.first }
     } catch (e: Exception) {
         null
     }
@@ -4878,6 +4877,24 @@ class SafSyncEngine(private val context: Context) {
             } catch (e: Exception) {
                 false
             }
+        }
+
+        /**
+         * The SHA-256 of what [input] holds and how many bytes that is, or null as soon as
+         * it holds more than [limit].
+         */
+        private fun sha256(input: InputStream, limit: Long): Pair<ByteArray, Long>? {
+            val digest = MessageDigest.getInstance("SHA-256")
+            val buffer = ByteArray(COPY_BUFFER_SIZE)
+            var total = 0L
+            var read = input.read(buffer)
+            while (read >= 0) {
+                total += read
+                if (total > limit) return null
+                digest.update(buffer, 0, read)
+                read = input.read(buffer)
+            }
+            return digest.digest() to total
         }
 
         /**

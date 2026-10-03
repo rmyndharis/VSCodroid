@@ -17,6 +17,7 @@ import io.mockk.unmockkAll
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -62,6 +63,9 @@ class SafLiveDeviceEditTest {
 
     /** How many times the device document was opened for reading. */
     private var reads = 0
+
+    /** How many bytes were read from the device document, over all opens. */
+    private var bytesRead = 0L
     private val failed = mutableListOf<File>()
 
     /** Whether the device holds `notes.txt` at all; the editor can delete and make it again. */
@@ -95,6 +99,9 @@ class SafLiveDeviceEditTest {
 
         /** MTP to an Android phone, which keeps the old time: only the size moves, later. */
         SIZE,
+
+        /** The time moves first and the length later, and the next save comes in between. */
+        TIME_BEFORE_SIZE,
     }
 
     @BeforeEach
@@ -141,7 +148,12 @@ class SafLiveDeviceEditTest {
         // A real stream: a relaxed one answers 0 from `read`, and `copyTo` spins on it.
         every { resolver.openInputStream(any()) } answers {
             reads++
-            ByteArrayInputStream(deviceText.toByteArray())
+            object : ByteArrayInputStream(deviceText.toByteArray()) {
+                override fun read(b: ByteArray, off: Int, len: Int) =
+                    super.read(b, off, len).also { if (it > 0) bytesRead += it }
+
+                override fun read() = super.read().also { if (it >= 0) bytesRead++ }
+            }
         }
         every { resolver.openOutputStream(any(), "wt") } answers {
             if (failNextWriteStream) {
@@ -218,6 +230,7 @@ class SafLiveDeviceEditTest {
                 settled = deviceModified / 1_000 * 1_000 to size
             }
             LateStamp.SIZE -> settled = deviceModified to size
+            LateStamp.TIME_BEFORE_SIZE -> settled = deviceModified + 1_000 to deviceSize
         }
         if (failStampAfterNextWrite) {
             failStampAfterNextWrite = false
@@ -431,6 +444,25 @@ class SafLiveDeviceEditTest {
         assertEquals(readsBefore, reads, "a device copy of another length was read to hash it")
         assertEquals(0, writes, "the save overwrote a device edit it could not keep")
         assertEquals(listOf(File(mirror, "notes.txt").absolutePath), failed.map { it.absolutePath })
+    }
+
+    /**
+     * A moved document is hashed only as far as the bytes this app last wrote and a buffer
+     * more, since a longer one cannot be that write. Another app's edit that grew it is then
+     * read in full once, by the set-aside that keeps it, rather than twice.
+     */
+    @Test
+    fun `a device edit that grew the document is read no further than this app's own bytes`() {
+        open()
+        save("first save")
+        val grown = "x".repeat(100_000)
+        editOnDevice(grown)
+        bytesRead = 0
+
+        save("typed in the editor")
+
+        assertEquals(listOf(grown), deviceCopies().values.toList())
+        assertTrue(bytesRead < 2L * grown.length, "the grown document was read twice in full: $bytesRead bytes")
     }
 
     /** `mv` over the name arrives as MOVED_TO, which writes into the existing document. */
