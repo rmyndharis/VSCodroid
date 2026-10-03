@@ -83,6 +83,13 @@ VSCodroid is VS Code. If you have used VS Code on desktop, everything works the 
   the file as you opened it. If the device folder's version cannot be copied, as
   can happen in a network folder while it is offline even when no other app
   changed the file, your save stays inside VSCodroid and a notice says so.
+- The Explorer and the title bar show a device folder under its own name. A
+  folder opened in an earlier version is shown under a twelve-character code
+  such as `8e440ff38c8e`, the name of its copy, and offers to reopen under its
+  own name. While a file has unsaved changes or a terminal is open, **Reopen**
+  asks you to save or close them first, since they would stay with the code;
+  the files that were open come back with the folder. **Don't Ask Again** keeps
+  the code for that folder.
 - A `.code-workspace` file opens as a multi-root workspace: open the file and
   choose **Open Workspace**. On a device folder its roots have to sit inside the
   folder you granted, because nothing outside that folder is reachable.

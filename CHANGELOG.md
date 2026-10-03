@@ -46,6 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Moving the cursor with a key or a tap, or accepting one of the editor's suggestions with Tab or a tap, while the soft keyboard still underlines a word no longer makes the keyboard's next edit land where that word was; text such as `alpha delta charlie charlie` could be saved.
 - Saving a file in a device folder no longer overwrites changes another app made to it while the folder was open; the other app's version is normally kept beside yours as `<name>.device-<time>`.
 - Opening a large device folder no longer fills the phone's storage: copying stops while about 150 MB is still free, and the files left out stay unchanged in the device folder.
+- A device folder shows its own name in the Explorer and the title bar instead of a code such as `8e440ff38c8e`. One opened in an earlier version offers to reopen under its name, with its open files.
 - The soft keyboard, once put away with Back or the navigation bar's hide key, no longer comes back when the file is scrolled.
 - `npm install` installs the Android builds that Rollup, Rolldown, Lightning CSS and oxlint publish; without them Vite 8 stopped at "Cannot find native binding".
 - The warning at launch about an outdated Android System WebView now appears below version 125, where Markdown previews and extension panels stay blank, instead of only below 105.

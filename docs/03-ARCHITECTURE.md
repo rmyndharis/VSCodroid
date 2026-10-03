@@ -500,6 +500,7 @@ flowchart TD
   B5 --> B5b["server.js, process-monitor.js, platform-fix.js, dns-proxy.js, xdg-open.js"]
   B5 --> B5c["editor-server.pid (pid and port of the running server)"]
   B --> B6["saf-mirrors/ (one hash-named local copy per granted device folder)"]
+  B6 --> B6a["by-name/ (a link to each copy, named after its folder,<br/>which the editor opens so the folder shows its own name)"]
   B --> B7["projects/ (default workspace on a new install)"]
   A --> C["lib/ (nativeLibraryDir, read-only)"]
   C --> C1["libnode.so"]
