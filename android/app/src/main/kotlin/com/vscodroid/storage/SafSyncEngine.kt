@@ -188,6 +188,28 @@ class SafSyncEngine(private val context: Context) {
     private val deviceSeen = ConcurrentHashMap<String, DeviceState>()
 
     /**
+     * Saves [keepsDeviceEdit] held back, by absolute mirror path: the document each was
+     * going to, and when [retryHeldBack] queues it again.
+     *
+     * A held-back save used to wait for the next save of that file or the next open of the
+     * folder, so on a provider that reads only while it is online, Nextcloud among them, the
+     * save stayed inside the app for as long as the user did neither, long after the network
+     * came back. Tried again as the save it was, so the answer is [keepsDeviceEdit]'s every
+     * time: what decides is the bytes, never the time that has passed.
+     *
+     * Scoped per mirror in [initialSync] like [deviceSeen]: the next open of the folder
+     * takes the mirror's newer copy like any save the watcher did not deliver. Tried only by
+     * the loop watching that mirror, so nothing is written into a folder that is closed.
+     */
+    private val heldBack = ConcurrentHashMap<String, HeldBackSave>()
+
+    /**
+     * What [heldBack]'s waits are measured by. A seam because no JVM test can wait out a
+     * held-back save's wait.
+     */
+    internal var retryClock: () -> Long = { System.currentTimeMillis() }
+
+    /**
      * The tree [docIdCache]'s entries were resolved against. The cache is cleared
      * and refilled per folder, and a write-back drain can outlive its folder, so
      * anything resolving at processing time has to know whether the cache still
@@ -270,6 +292,7 @@ class SafSyncEngine(private val context: Context) {
         unfetched.removeAll { it.startsWith(mirrorDir.absolutePath + File.separator) }
         refusalsAnnounced.removeAll { it.startsWith(mirrorDir.absolutePath + File.separator) }
         deviceSeen.keys.removeAll { it.startsWith(mirrorDir.absolutePath + File.separator) }
+        heldBack.keys.removeAll { it.startsWith(mirrorDir.absolutePath + File.separator) }
 
         // Phase 1: Enumerate all documents in the tree
         val documents = mutableListOf<DocumentInfo>()
@@ -1230,7 +1253,7 @@ class SafSyncEngine(private val context: Context) {
      *   destination, and a provider with no clock names every copy `.device-0`, so a
      *   second foreign edit in one session would otherwise destroy the first.
      * - A copy that cannot be made holds the save back without arming [unfetched], so the
-     *   next save asks again.
+     *   next save asks again, and so does [retryHeldBack] once the save's wait is over.
      *
      * A moved stamp is not yet another app's edit. Several providers finish what they
      * report for a write after its stream has closed: MTP rewrites its row once the object
@@ -1252,7 +1275,9 @@ class SafSyncEngine(private val context: Context) {
      * buffer, and none for a document reported past [MAX_FILE_SIZE] at another length,
      * which a set-aside could not keep either. Where the read fails, as a Nextcloud read
      * does offline, nothing tells that version from another app's edit, and the save goes
-     * on to the set-aside, which holds it back for as long as its own fetch fails too.
+     * on to the set-aside, which holds it back while its own fetch fails too. A save held
+     * back is tried again by itself while the folder is watched, so it lands once the
+     * device copy can be read, decided by the bytes like any other.
      *
      * Ceilings: a provider reporting neither column; a same-size edit inside one clock
      * tick, or at any time on a provider with no clock or one that keeps a document's old
@@ -1265,11 +1290,15 @@ class SafSyncEngine(private val context: Context) {
      * equal) past the first [KEPT_COPY_DIGEST_BYTES] of such copies, newest first, and not
      * written by this app since, which keeps one spare copy of the unchanged document; a
      * document reported past [MAX_FILE_SIZE] at a length other than the digested one,
-     * which is held back unread even where it holds this app's own bytes; and on a
+     * which is held back unread even where it holds this app's own bytes; a held-back save
+     * whose folder is closed before a try lands, which waits for the next open; and on a
      * provider with no clock, every copy after the first carries its counter as a time,
      * which is cosmetic.
      */
     private fun keepsDeviceEdit(localFile: File, docUri: Uri): Boolean {
+        // Settled again by whatever this answers: a save that goes ahead ends the hold, and
+        // one held back once more waits longer before it is tried again.
+        val held = heldBack.remove(localFile.absolutePath)
         val seen = deviceSeen[localFile.absolutePath] ?: return false
         val now = deviceStamp(docUri) ?: return false
         if (now == seen.stamp) return false
@@ -1301,7 +1330,38 @@ class SafSyncEngine(private val context: Context) {
                 "last read or wrote it and could not be set aside",
         )
         announceLost(localFile)
+        val wait =
+            held?.let { minOf(it.wait * 2, HELD_BACK_RETRY_MAX_MS) } ?: HELD_BACK_RETRY_FIRST_MS
+        heldBack[localFile.absolutePath] = HeldBackSave(docUri, retryClock() + wait, wait)
         return true
+    }
+
+    /**
+     * Queues again, as the saves they were, the saves [keepsDeviceEdit] held back under
+     * [session]'s mirror whose wait is over, and answers whether it queued any.
+     *
+     * The write-back loop asks whenever its queue is empty, so a held-back save lands once
+     * its device copy can be read, still by [keepsDeviceEdit]'s comparison of the bytes, and
+     * the waits bound what a provider that stays unreadable costs: per held-back file, a
+     * stamp query and the reads that fail, after [HELD_BACK_RETRY_FIRST_MS] and then at
+     * waits that double up to [HELD_BACK_RETRY_MAX_MS]. A file the mirror no longer holds
+     * is dropped rather than tried, which would spin the loop on a save with nothing left
+     * to send.
+     */
+    internal fun retryHeldBack(session: WatchSession): Boolean {
+        val prefix = (session.root ?: return false).absolutePath + File.separator
+        val now = retryClock()
+        var queued = false
+        for ((path, held) in heldBack) {
+            if (!path.startsWith(prefix) || held.dueAt > now) continue
+            if (!File(path).isFile) {
+                heldBack.remove(path, held)
+                continue
+            }
+            session.queue.offer(SyncJob(SyncType.MODIFY, path, held.docUri, null, null, now))
+            queued = true
+        }
+        return queued
     }
 
     /**
@@ -1855,7 +1915,7 @@ class SafSyncEngine(private val context: Context) {
 
             // Published before any observer exists, because an observer fires into whatever
             // session is current and this is the one its jobs belong to.
-            val opening = WatchSession()
+            val opening = WatchSession(mirrorDir)
             session = opening
             isWatching = true
             watchTree(mirrorDir, mirrorDir, safUri)
@@ -1876,7 +1936,8 @@ class SafSyncEngine(private val context: Context) {
 
     /**
      * Processes queued write-backs until [isRunning] goes false or the thread is
-     * interrupted, then sends out whatever is still queued.
+     * interrupted, then sends out whatever is still queued. Whenever the queue runs empty
+     * it queues the held-back saves whose wait is over; see [retryHeldBack].
      *
      * Drives whichever session is current, which is what a test without a live watcher
      * needs: no JVM test can call [startWatching], because registering a watch builds a
@@ -1896,7 +1957,7 @@ class SafSyncEngine(private val context: Context) {
                 val job = session.queue.poll()
                 if (job != null) {
                     processWriteBack(session, job)
-                } else {
+                } else if (!retryHeldBack(session)) {
                     Thread.sleep(WRITEBACK_POLL_MS)
                 }
             }
@@ -4277,6 +4338,15 @@ class SafSyncEngine(private val context: Context) {
         private const val DRAIN_GRACE_MS = 2000L
 
         /**
+         * How long a save [keepsDeviceEdit] holds back waits before [retryHeldBack] queues
+         * it again. Each hold after that doubles the wait, up to [HELD_BACK_RETRY_MAX_MS].
+         */
+        internal const val HELD_BACK_RETRY_FIRST_MS = 30_000L
+
+        /** The longest a held-back save waits between tries. */
+        internal const val HELD_BACK_RETRY_MAX_MS = 5 * 60_000L
+
+        /**
          * Suffix for a copy still being written; moved into place when complete.
          *
          * Internal because the reclaim pass has to recognise the one of these that
@@ -5171,6 +5241,12 @@ private class DeviceState(
 )
 
 /**
+ * A save [SafSyncEngine] held back: the document it was going to, when it is next tried,
+ * and how long it waited for that try.
+ */
+private class HeldBackSave(val docUri: Uri, val dueAt: Long, val wait: Long)
+
+/**
  * What [SafSyncEngine] fetched into the mirror: the copy's modification time as the
  * filesystem kept it, and how many bytes the fetch streamed.
  */
@@ -5230,7 +5306,13 @@ private class UploadClaim(var path: String)
  * somewhere the departing thread cannot reach, and the thread started for that folder
  * polls a queue nothing else polls.
  */
-internal class WatchSession {
+internal class WatchSession(
+    /**
+     * The mirror this session's observers watch, whose held-back saves its loop tries
+     * again; null for a session no watcher serves.
+     */
+    val root: File? = null,
+) {
     val queue = ConcurrentLinkedQueue<SyncJob>()
 
     /** Cleared by [SafSyncEngine.stopWatching]; the loop's own termination condition. */

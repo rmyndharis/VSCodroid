@@ -71,6 +71,12 @@ class SafLiveDeviceEditTest {
 
     /** How many bytes were read from the device document, over all opens. */
     private var bytesRead = 0L
+
+    /** False for a provider that will not open the document for reading, as offline. */
+    private var deviceReadable = true
+
+    /** What the engine's held-back saves are timed by. */
+    private var clock = 0L
     private val failed = mutableListOf<File>()
 
     /** Whether the device holds `notes.txt` at all; the editor can delete and make it again. */
@@ -153,6 +159,7 @@ class SafLiveDeviceEditTest {
         // A real stream: a relaxed one answers 0 from `read`, and `copyTo` spins on it.
         every { resolver.openInputStream(any()) } answers {
             reads++
+            if (!deviceReadable) throw IOException("offline")
             object : ByteArrayInputStream(deviceText.toByteArray()) {
                 override fun read(b: ByteArray, off: Int, len: Int) =
                     super.read(b, off, len).also { if (it > 0) bytesRead += it }
@@ -178,6 +185,7 @@ class SafLiveDeviceEditTest {
         every { context.filesDir } returns File(root, "files").apply { mkdirs() }
         engine = SafSyncEngine(context)
         engine.onWriteBackFailed = { failed += it }
+        engine.retryClock = { clock }
         treeUri = mockk(relaxed = true)
         mirror = File(root, "mirror-a").apply { mkdirs() }
     }
@@ -263,6 +271,12 @@ class SafLiveDeviceEditTest {
         val file = File(mirrorDir, "notes.txt").apply { writeText(text) }
         engine.handleMirrorEvent(FileObserver.MODIFY, file, mirrorDir, tree)
         engine.runWriteBackLoop { false }
+    }
+
+    /** One turn of the write-back loop of a watcher on [mirrorDir], then its drain. */
+    private fun retryWhileWatching(mirrorDir: File = mirror) {
+        var turns = 0
+        engine.runWriteBackLoop(WatchSession(mirrorDir)) { turns++ == 0 }
     }
 
     private fun editOnDevice(text: String, size: Long = text.length.toLong()) {
@@ -569,6 +583,111 @@ class SafLiveDeviceEditTest {
         assertEquals(1, writes, "a save went over a device copy nothing could read")
         assertEquals("first save", deviceText)
         assertEquals(listOf(File(mirror, "notes.txt").absolutePath), failed.map { it.absolutePath })
+    }
+
+    /**
+     * A save held back because its device copy could not be read is tried again by itself,
+     * and lands once the copy can be read. It waited for the next save of that file or the
+     * next open of the folder, so on Nextcloud the save stayed in the app after the network
+     * came back for as long as the user did neither.
+     */
+    @Test
+    fun `a held-back save lands once its device copy can be read again`() {
+        lateStamp = LateStamp.WHOLE_SECONDS
+        open()
+        save("first save")
+        settle()
+        deviceReadable = false
+        save("second save")
+        assertEquals(1, writes, "a save went over a device copy nothing could read")
+        deviceReadable = true
+        clock += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+
+        retryWhileWatching()
+
+        assertEquals(2, writes, "the held-back save did not land once its device copy could be read")
+        assertEquals("second save", deviceText)
+        assertEquals(emptyMap<String, String>(), deviceCopies())
+    }
+
+    /** The try is the guard's own question, so another app's edit made meanwhile is kept. */
+    @Test
+    fun `a held-back save that lands over another app's edit keeps that edit`() {
+        lateStamp = LateStamp.WHOLE_SECONDS
+        open()
+        save("first save")
+        settle()
+        deviceReadable = false
+        save("second save")
+        editOnDevice("changed by another app")
+        deviceReadable = true
+        clock += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+
+        retryWhileWatching()
+
+        assertEquals(listOf("changed by another app"), deviceCopies().values.toList())
+        assertEquals("second save", deviceText)
+    }
+
+    /**
+     * What a provider that stays unreadable costs: one try per held-back save per wait, the
+     * wait doubling from the first to the longest and staying there.
+     */
+    @Test
+    fun `a held-back save is tried only once its wait is over, and waits longer each time`() {
+        lateStamp = LateStamp.WHOLE_SECONDS
+        open()
+        save("first save")
+        settle()
+        deviceReadable = false
+        save("second save")
+
+        var wait = SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+        repeat(6) {
+            clock += wait - 1
+            val before = reads
+            retryWhileWatching()
+            assertEquals(before, reads, "tried before its wait of $wait ms was over")
+            clock += 1
+            retryWhileWatching()
+            assertEquals(before + 2, reads, "not hashed and fetched once its wait of $wait ms was over")
+            wait = minOf(wait * 2, SafSyncEngine.HELD_BACK_RETRY_MAX_MS)
+        }
+        assertEquals(1, writes)
+    }
+
+    /** Only the loop watching the save's own folder tries it, so a closed folder is not written. */
+    @Test
+    fun `a held-back save is not tried by a watcher on another folder`() {
+        lateStamp = LateStamp.WHOLE_SECONDS
+        open()
+        save("first save")
+        settle()
+        deviceReadable = false
+        save("second save")
+        deviceReadable = true
+        clock += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+
+        retryWhileWatching(File(root, "mirror-b").apply { mkdirs() })
+
+        assertEquals(1, writes, "a save was written into a folder no watcher is on")
+    }
+
+    /** A save whose file has left the mirror has nothing to send, and queuing it spun the loop. */
+    @Test
+    fun `a held-back save whose file is gone is dropped rather than tried`() {
+        lateStamp = LateStamp.WHOLE_SECONDS
+        open()
+        save("first save")
+        settle()
+        deviceReadable = false
+        save("second save")
+        File(mirror, "notes.txt").delete()
+        clock += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+
+        assertEquals(false, engine.retryHeldBack(WatchSession(mirror)), "a save with no file was queued")
+        File(mirror, "notes.txt").writeText("made again")
+        assertEquals(false, engine.retryHeldBack(WatchSession(mirror)), "a dropped save came back")
     }
 
     @Test
