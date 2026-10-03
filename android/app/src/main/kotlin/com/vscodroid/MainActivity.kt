@@ -2135,6 +2135,7 @@ class MainActivity : AppCompatActivity() {
         override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
             Logger.e(tag, "Render process gone before the workbench loaded: " +
                 "didCrash=${detail.didCrash()}")
+            CrashReporter.recordRendererDeath(view.context, detail)
             recreateWebView()
             return true
         }

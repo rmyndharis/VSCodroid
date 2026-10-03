@@ -3,6 +3,8 @@ package com.vscodroid.util
 import android.app.ActivityManager
 import android.app.ApplicationExitInfo
 import android.content.Context
+import android.webkit.RenderProcessGoneDetail
+import android.webkit.WebView
 import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
@@ -714,6 +716,66 @@ class CrashReporterTest {
                 "$report",
             )
             assertTrue(report.contains("the crash that can still be read"), "$report")
+        }
+
+        private fun death(crashed: Boolean, priority: Int): RenderProcessGoneDetail = mockk {
+            every { didCrash() } returns crashed
+            every { rendererPriorityAtExit() } returns priority
+        }
+
+        /**
+         * A renderer death the app recovers from shows the loading page for a
+         * few seconds and then the editor again, which a user can only describe
+         * as a freeze, and it reached logcat and nothing else.
+         *
+         * NEGATIVE CONTROL, run: with the Renderer Deaths section deleted from
+         * `generateBugReport`, or with `recordRendererDeath` writing nothing,
+         * this case reddens.
+         */
+        @Test
+        fun `a renderer death the app recovered from reaches the report`() {
+            initCrashDir()
+            CrashReporter.recordRendererDeath(
+                context, death(crashed = false, WebView.RENDERER_PRIORITY_IMPORTANT),
+            ).join()
+            CrashReporter.recordRendererDeath(
+                context, death(crashed = true, WebView.RENDERER_PRIORITY_BOUND),
+            ).join()
+            CrashReporter.recordRendererDeath(
+                context, death(crashed = false, WebView.RENDERER_PRIORITY_WAIVED),
+            ).join()
+
+            val report = CrashReporter.generateBugReport(context)
+
+            val section = report.substringAfter("--- Renderer Deaths (newest first) ---\n", "")
+                .substringBefore("\n\n")
+                .lines()
+                .drop(1)
+            assertEquals(3, section.size, "one line per death:\n$report")
+            assertTrue(
+                section[0].endsWith(" killed by the system, priority waived") &&
+                    section[1].endsWith(" crashed, priority bound") &&
+                    section[2].endsWith(" killed by the system, priority important"),
+                "each death says whether it was a crash or a kill, with its priority, " +
+                    "newest first:\n$report",
+            )
+            assertTrue(
+                Regex("""^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{4} """).containsMatchIn(section[0]),
+                "a death has to say when it happened, to be read beside the exits:\n$report",
+            )
+        }
+
+        @Test
+        fun `the renderer section says so when no death was recorded`() {
+            initCrashDir()
+
+            val report = CrashReporter.generateBugReport(context)
+
+            assertTrue(
+                report.contains("--- Renderer Deaths (newest first) ---\n(each time ") &&
+                    report.contains(" died)\n(none recorded)\n"),
+                "$report",
+            )
         }
     }
 

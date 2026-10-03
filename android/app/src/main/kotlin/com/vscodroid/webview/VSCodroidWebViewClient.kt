@@ -23,6 +23,7 @@ import com.vscodroid.bridge.authRequestIdsIn
 import com.vscodroid.bridge.encodeCallbackState
 import com.vscodroid.isExtensionCallback
 import com.vscodroid.service.RESTART_DELAY_MS
+import com.vscodroid.util.CrashReporter
 import com.vscodroid.util.EditorLocale
 import com.vscodroid.util.Environment
 import com.vscodroid.util.Logger
@@ -1305,6 +1306,7 @@ class VSCodroidWebViewClient(
 
     override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
         Logger.e(tag, "Render process gone! didCrash=${detail.didCrash()}")
+        CrashReporter.recordRendererDeath(view.context, detail)
         onCrash()
         return true
     }

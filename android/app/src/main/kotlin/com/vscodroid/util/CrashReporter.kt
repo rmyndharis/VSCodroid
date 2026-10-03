@@ -3,6 +3,7 @@ package com.vscodroid.util
 import android.app.ActivityManager
 import android.app.ApplicationExitInfo
 import android.content.Context
+import android.webkit.RenderProcessGoneDetail
 import com.vscodroid.webview.redactToken
 import java.io.File
 import java.io.PrintWriter
@@ -10,6 +11,7 @@ import java.io.StringWriter
 import java.text.SimpleDateFormat
 import java.util.Date
 import java.util.Locale
+import kotlin.concurrent.thread
 
 /**
  * Captures uncaught exceptions and writes them to a local crash log.
@@ -25,6 +27,12 @@ object CrashReporter {
 
     /** How many of the system's exit records a report quotes. */
     private const val RECENT_EXITS = 10
+
+    /** The file [recordRendererDeath] writes, beside `server.log`. */
+    private const val RENDERER_LOG = "renderer.log"
+
+    /** How many renderer deaths a report quotes. */
+    private const val RENDERER_DEATHS = 20
 
     private lateinit var crashDir: File
     private var defaultHandler: Thread.UncaughtExceptionHandler? = null
@@ -76,11 +84,49 @@ object CrashReporter {
     }
 
     /**
+     * Notes for [generateBugReport] that the editor's renderer process died.
+     *
+     * Called from both `onRenderProcessGone` overrides, before the WebView is
+     * rebuilt. A death the app recovers from shows the user the loading page for
+     * a few seconds and then the editor again, and until now it reached logcat
+     * and nothing else, so no report could show it. The system's exit records
+     * cover this app's own processes; whether they also cover the WebView's
+     * sandboxed renderer is not established, so the app keeps its own line.
+     *
+     * The line holds the time, whether the renderer crashed or the system
+     * killed it (most likely for memory, by the platform's account of
+     * `didCrash`), and its priority at exit, and nothing about what the page
+     * was showing. It is composed here, at the death, and written on a thread of
+     * its own, because both callers are on the main thread. Kept beside
+     * `server.log` so that Clear Caches removes it with the other logs.
+     *
+     * @return the thread doing the write, which no caller needs to wait for.
+     */
+    fun recordRendererDeath(context: Context, detail: RenderProcessGoneDetail): Thread {
+        val priority = detail.rendererPriorityAtExit()
+        val line = SimpleDateFormat("yyyy-MM-dd HH:mm:ss Z", Locale.US).format(Date()) +
+            (if (detail.didCrash()) " crashed" else " killed by the system") +
+            ", priority " + RENDERER_PRIORITIES.getOrElse(priority) { "$priority" }
+        return thread(name = "renderer-death-note", isDaemon = true) {
+            rendererLog(context).append(line)
+        }
+    }
+
+    /**
+     * [ServerLog] reused for a second file rather than imitated: it already
+     * caps the file, swallows an I/O failure and makes a reader wait out a
+     * writer, which is everything this log needs.
+     */
+    private fun rendererLog(context: Context) =
+        ServerLog(File(Environment.getLogsDir(context), RENDERER_LOG))
+
+    /**
      * Generates a bug report bundle containing:
      * - Device info (model, Android version, app version)
      * - Memory usage
      * - How the system recorded the end of this app's recent processes, from
      *   `ActivityManager.getHistoricalProcessExitReasons`
+     * - The editor's renderer deaths, as [recordRendererDeath] noted them
      * - How many crash logs exist, plus the text of the three most recent
      * - The last 200 lines of the Node server's output, from the `server.log`
      *   that [ServerLog] writes off `ProcessManager.startOutputReader`
@@ -179,6 +225,14 @@ object CrashReporter {
                 sb.appendLine(redactSecrets(redactToken(exitLine(it, dateFormat))))
             }
         }
+        sb.appendLine()
+
+        // Newest first, as the exits above are, so the two read side by side.
+        sb.appendLine("--- Renderer Deaths (newest first) ---")
+        sb.appendLine("(each time the process that draws the editor died)")
+        val deaths = rendererLog(context).tail(RENDERER_DEATHS)
+        if (deaths.isEmpty()) sb.appendLine("(none recorded)")
+        deaths.asReversed().forEach { sb.appendLine(redactSecrets(redactToken(it))) }
         sb.appendLine()
 
         // Crash logs
@@ -379,6 +433,9 @@ private fun exitLine(exit: ApplicationExitInfo, dateFormat: SimpleDateFormat): S
  */
 internal fun exitReasonName(reason: Int): String =
     EXIT_REASONS.getOrElse(reason) { "REASON_$reason" }
+
+/** `WebView.RENDERER_PRIORITY_WAIVED`, `_BOUND` and `_IMPORTANT`, which are 0, 1 and 2. */
+private val RENDERER_PRIORITIES = listOf("waived", "bound", "important")
 
 private val EXIT_REASONS = listOf(
     "UNKNOWN", "EXIT_SELF", "SIGNALED", "LOW_MEMORY", "CRASH", "CRASH_NATIVE", "ANR",
