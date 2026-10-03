@@ -981,10 +981,11 @@ class SafSyncEngine(private val context: Context) {
      * does not, the device's bytes miss the digest and the save goes to the set-aside
      * exactly as it did with none.
      *
-     * Newest first and within [KEPT_COPY_DIGEST_BYTES], rather than the whole folder on
-     * every open: a provider moves a stamp after a write, so the recent copies are the ones
-     * it moves. What that leaves is a late stamp over a kept copy past the budget, which
-     * still keeps one spare copy of the unchanged document.
+     * Newest first, because a provider moves a stamp after a write and the recent copies are
+     * the ones it moves, and at most [KEPT_COPY_DIGEST_BYTES] per open, so a folder past
+     * that is not read in full on every open; a typical source tree, which fits, is. What
+     * that leaves is a late stamp over a kept copy past the budget, which still keeps one
+     * spare copy of the unchanged document.
      */
     private fun digestKeptCopies(
         mirrorDir: File,
