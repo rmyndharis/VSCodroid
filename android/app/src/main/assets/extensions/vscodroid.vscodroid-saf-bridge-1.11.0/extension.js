@@ -613,24 +613,9 @@ function activate(context) {
                     SHOWN_SHARED_STORAGE, { server: warned.server, folders: [...warned.folders] }
                 );
             }
-            const name = where.below ? folder.name : 'your device storage';
-            // From Android 11 the folder picker will not grant the top of a volume,
-            // its Download folder or its Android folder, so the button cannot reach
-            // these as they are. A USB drive's top is the exception, and a folder
-            // inside it works there too.
-            const route = /^(Download|Android)?$/i.test(where.below)
-                ? 'Android does not let an app open this folder itself from the device, ' +
-                  'so pick a folder inside it with Open Folder from Device, which shows them'
-                : 'Open Folder from Device shows them';
+            const { message, detail, buttons } = sharedStorageWarning(where, folder.name);
             const action = await vscode.window.showWarningMessage(
-                `Android hides the files other apps saved in ${name}.`,
-                {
-                    modal: true,
-                    detail: `They do not show here and cannot be opened. ${route}, apart ` +
-                        'from files over 50 MB and folders such as .git and node_modules.',
-                },
-                OPEN_FROM_DEVICE,
-                DONT_SHOW_AGAIN
+                message, { modal: true, detail }, ...buttons
             );
             if (action === OPEN_FROM_DEVICE) {
                 vscode.commands.executeCommand('vscodroid.openFolderFromDevice');
@@ -703,10 +688,19 @@ const EDITOR_SERVER_NOTE = ['..', '..', '..', '..', 'server', 'editor-server.pid
  * `/sdcard`, `/mnt/sdcard` and `/storage/self/primary` lead to
  * `/storage/emulated/<user>`, and the workbench keeps whichever spelling the
  * user typed, a trailing slash included; any other `/storage/<name>` is an SD
- * card or a USB drive. Below the volume, shared storage ignores case. So the key
- * is the volume and the path below it in lower case: `/sdcard/Documents/notes`
- * and `/storage/emulated/0/documents/notes/` are one folder, and the folders
- * already warned about and the ones silenced are matched by it.
+ * card or a USB drive, which a path cannot tell apart (`removable`).
+ * `/storage/emulated` and `/storage/self` themselves are neither. Below the
+ * volume, shared storage ignores case. So the key is the volume and the path
+ * below it in lower case: `/sdcard/Documents/notes` and
+ * `/storage/emulated/0/documents/notes/` are one folder, and the folders already
+ * warned about and the ones silenced are matched by it.
+ *
+ * `picker` is what Android's folder picker does with the folder, in
+ * ExternalStorageProvider from Android 11: on the device's storage and on an SD
+ * card it does not grant the top of the volume, its Download folder or its
+ * Android folder, though it grants a folder inside them ('inside'), and it does
+ * not even list Android/data, Android/obb or Android/sandbox, so nothing in
+ * those can be granted ('none'). A USB drive is granted whole, its top included.
  *
  * A device folder's copy never matches: it lives in the app's files directory
  * under `/data`. Nor does `Android/data/<package>/` at the top of a volume, the
@@ -714,16 +708,58 @@ const EDITOR_SERVER_NOTE = ['..', '..', '..', '..', 'server', 'editor-server.pid
  * package there is this one, since Android 11 keeps an app out of every other
  * app's directory there.
  * @param {string} folderPath
- * @returns {{ key: string, below: string } | null}
+ * @returns {{ key: string, below: string, removable: boolean, picker: 'open' | 'inside' | 'none' } | null}
  */
 function sharedStorageFolder(folderPath) {
     const volume =
-        /^\/(?:(storage\/emulated\/\d+|storage\/self\/primary|sdcard|mnt\/sdcard)|storage\/([^/]+))(?:\/(.*))?$/
+        /^\/(?:(storage\/emulated\/\d+|storage\/self\/primary|sdcard|mnt\/sdcard)|storage\/(?!(?:emulated|self)(?:\/|$))([^/]+))(?:\/(.*))?$/
             .exec(folderPath);
     if (!volume) return null;
     const below = (volume[3] || '').replace(/\/+$/, '');
     if (/^Android\/data\/[^/]+(\/|$)/i.test(below)) return null;
-    return { key: `${volume[1] ? 'primary' : volume[2]}:${below}`.toLowerCase(), below };
+    return {
+        key: `${volume[1] ? 'primary' : volume[2]}:${below}`.toLowerCase(),
+        below,
+        removable: !volume[1],
+        picker: /^Android\/(data|obb|sandbox)(\/|$)/i.test(below) ? 'none'
+            : /^(Download|Android)?$/i.test(below) ? 'inside' : 'open',
+    };
+}
+
+/**
+ * What the shared-storage warning says about a folder, and the buttons it offers.
+ *
+ * Open Folder from Device is offered wherever it can show the files, which is
+ * not in Android/data, Android/obb or Android/sandbox. The wording for an SD
+ * card or a USB drive covers both, since the path cannot say which it is.
+ * @param {{ below: string, removable: boolean, picker: string }} where
+ * @param {string} folderName
+ * @returns {{ message: string, detail: string, buttons: string[] }}
+ */
+function sharedStorageWarning(where, folderName) {
+    const place = where.below ? `in ${folderName}`
+        : where.removable ? 'on this SD card or USB drive' : 'on your device storage';
+    const message = `Android hides the files other apps saved ${place}.`;
+    const hidden = 'They do not show here and cannot be opened.';
+    const leftOut = 'apart from files over 50 MB and folders such as .git and node_modules';
+    if (where.picker === 'none') {
+        return {
+            message,
+            detail: `${hidden} Android keeps each folder in Android/data, Android/obb and ` +
+                'Android/sandbox private to the app it belongs to, and on the device\'s ' +
+                'storage and SD cards, Open Folder from Device cannot open them either.',
+            buttons: [DONT_SHOW_AGAIN],
+        };
+    }
+    const detail = where.picker === 'open'
+        ? `${hidden} Open Folder from Device shows them, ${leftOut}.`
+        : where.removable
+            ? `${hidden} Open Folder from Device shows them, ${leftOut}. It can open this ` +
+              'folder itself on a USB drive; on an SD card Android does not allow that, so ' +
+              'pick a folder inside it.'
+            : `${hidden} Android does not let an app open this folder itself from the device, ` +
+              `so pick a folder inside it with Open Folder from Device, which shows them, ${leftOut}.`;
+    return { message, detail, buttons: [OPEN_FROM_DEVICE, DONT_SHOW_AGAIN] };
 }
 
 /**

@@ -440,7 +440,7 @@ async function main() {
         });
         await settle();
     }
-    const warnedNames = () => warnings.map((w) => (/saved in (.+)\.$/.exec(w.message) || [, w.message])[1]);
+    const warnedNames = () => warnings.map((w) => (/saved (?:in|on) (.+)\.$/.exec(w.message) || [, w.message])[1]);
 
     const OPEN = 'Open Folder from Device';
     const QUIET = 'Don\'t Show Again';
@@ -454,6 +454,9 @@ async function main() {
         folder('/data/user/0/com.vscodroid/files/saf-mirrors/8e440ff38c8e'),
         folder('/data/user/0/com.vscodroid/files/home/projects/site'),
         folder('/storagebox/drafts'),
+        // Not volumes: the parents of the primary storage's own spellings.
+        folder('/storage/emulated'),
+        folder('/storage/self'),
         // The silenced folder, spelled another way: another volume path, another
         // case and a trailing slash.
         folder('/sdcard/documents/Silenced/'),
@@ -502,11 +505,18 @@ async function main() {
     // only the listener can see it. Every spelling of shared storage counts, an
     // SD card included, as does an Android/data that is not at the top of a
     // volume, and the folder already warned about stays quiet, however its
-    // path is spelled this time. The picker will
-    // not grant the top of a volume, its Download folder or its Android folder,
-    // so those are sent to a folder inside, a trailing slash included, and the
-    // top is not named by its last segment. Android/data itself is no app's own
-    // folder: only a package directory below it is, so it is warned about.
+    // path is spelled this time.
+    //
+    // What the warning says follows what Android's folder picker does with the
+    // folder. On the device's storage it will not grant the top, Download or
+    // Android, a trailing slash included, so those are sent to a folder inside,
+    // and the top is not named by its last segment. On an SD card the same
+    // holds, while a USB drive is granted whole, and a path cannot tell the two
+    // apart, so a removable volume's top and its Download say both. The picker
+    // does not even list Android/data, Android/obb and Android/sandbox, so for
+    // those there is no button to offer and the files left out are beside the
+    // point. Android/data itself is no app's own folder: only a package
+    // directory below it is, so it is warned about.
     warnings.length = 0; executed.length = 0; warningChoice = null;
     workspaceFolders = [
         ...openedFolders,
@@ -518,7 +528,11 @@ async function main() {
         folder('/storage/emulated/0'),
         folder('/sdcard/Download'),
         folder('/storage/emulated/0/Android/'),
+        folder('/storage/1A2B-3C4D'),
+        folder('/storage/1A2B-3C4D/download/'),
         folder('/sdcard/Android/data'),
+        folder('/storage/emulated/0/Android/obb/com.example.game'),
+        folder('/sdcard/android/Sandbox'),
         folder('/sdcard/Documents/notes/'),
         folder('/storage/self/primary/documents/NOTES'),
     ];
@@ -527,20 +541,36 @@ async function main() {
     await settle();
     assert.deepStrictEqual(
         warnedNames(),
-        ['proj', 'beats', 'web', 'game', 'old', 'your device storage', 'Download', 'Android', 'data'],
+        [
+            'proj', 'beats', 'web', 'game', 'old', 'your device storage', 'Download', 'Android',
+            'this SD card or USB drive', 'download', 'data', 'com.example.game', 'Sandbox',
+        ],
         'an added shared-storage folder must be warned about once, and an earlier one not ' +
         'again: ' + JSON.stringify(warnings),
     );
+    const kindOf = (w) => {
+        const d = w.options.detail || '';
+        if (w.options.modal !== true) return 'not a dialog';
+        if (w.items.join() === QUIET) {
+            return /Android\/obb/.test(d) && /cannot open them either/.test(d) && !/50 MB/.test(d)
+                ? 'not in the picker' : 'no button, no reason';
+        }
+        if (w.items.join() !== [OPEN, QUIET].join() || !d.includes('50 MB') || !d.includes('.git')) {
+            return 'button or the files left out missing';
+        }
+        if (d.includes('pick a folder inside it')) {
+            return d.includes('USB drive') ? 'inside, unless a USB drive' : 'inside';
+        }
+        return d.includes('Open Folder from Device shows them') ? 'open' : 'no route';
+    };
     assert.deepStrictEqual(
-        warnings.map((w) => w.options.detail.includes('pick a folder inside it')),
-        [false, false, false, false, false, true, true, true, false],
-        'only a folder the picker refuses may be sent to a folder inside it: ' +
-        JSON.stringify(warnings),
-    );
-    assert.ok(
-        warnings.every((w) => w.options.modal === true &&
-            w.options.detail.includes('50 MB') && w.options.detail.includes('.git')),
-        'every warning is a dialog, and promises files the device copy leaves out: ' +
+        warnings.map(kindOf),
+        [
+            'open', 'open', 'open', 'open', 'open', 'inside', 'inside', 'inside',
+            'inside, unless a USB drive', 'inside, unless a USB drive',
+            'not in the picker', 'not in the picker', 'not in the picker',
+        ],
+        'each warning must say what the folder picker does with that folder: ' +
         JSON.stringify(warnings),
     );
     assert.deepStrictEqual(executed, [], 'a dismissed warning ran a command: ' + JSON.stringify(executed));

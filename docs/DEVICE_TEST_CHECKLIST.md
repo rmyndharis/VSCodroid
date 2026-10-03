@@ -256,6 +256,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | SF-19 | Reopening after a low-storage open | Open a folder and save one of its files in the editor; close the app, change a different file of the folder with another app, and fill the phone's storage until less than 150 MB is free; open the folder and save the first file again; then free the space and open the folder once more | The low-storage open says one file could not be copied, and the second save of the first file reaches the device. The last open shows the other app's version, and no `<name>.local-<number>` file appears in the Explorer or in the device folder | | |
 | SF-20 | A phone folder opened by path | Save a file into `Documents/<folder>` with another app. In the editor, run **File > Open Folder**, type `/sdcard/Download` and open it, and cancel the dialog. Open `/storage/emulated/0/Documents/<folder>` the same way; tap **Open Folder from Device** in the dialog, then cancel the picker. Run **Developer: Reload Window**, then open the same folder as `/sdcard/documents/<folder>/`. Force-stop the app and relaunch it, and tap **Don't Show Again**; then force-stop and relaunch once more | The folder shows its subfolders and not the file. Each folder raises one dialog naming it, and for `/sdcard/Download` it says to pick a folder inside it; its button opens Android's folder picker. The reload and the second spelling raise none, the first relaunch raises the folder's dialog once more, and after **Don't Show Again** the second relaunch raises none. A device folder's copy never raises one | | |
 | SF-21 | The device route is in view | Tap the remote indicator at the left end of the status bar; then run **File: Close Folder** and look at the Explorer | The menu lists **VSCodroid: Open Folder from Device**, and the empty Explorer shows a button for it below the text about folders in the device's storage; both open Android's folder picker | | |
+| SF-22 | Folders the picker treats differently | With **File > Open Folder**, open `/sdcard/Android/data`, then a folder under `/sdcard/Android/obb` if one exists. With an SD card or a USB drive attached, open its top, `/storage/<id>`, tap **Open Folder from Device** in the dialog and try to use that top folder in the picker | For `Android/data` and the `Android/obb` folder the dialog says Android keeps those folders to the app they belong to and that Open Folder from Device cannot open them, and offers only **Don't Show Again**. For the volume's top it names the SD card or USB drive and says a USB drive can be opened as it is, while on an SD card a folder inside has to be picked; the picker grants a USB drive's top and refuses an SD card's | | |
 
 ---
 
@@ -285,9 +286,9 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | Performance | 10 | | | |
 | Toolchains | 7 | | | |
 | Terminal & Tools | 13 | | | |
-| SAF & Files | 21 | | | |
+| SAF & Files | 22 | | | |
 | Display Language | 6 | | | |
-| **Total** | **142** | | | |
+| **Total** | **143** | | | |
 
 **Overall Result**: [ ] PASS / [ ] FAIL
 

@@ -59,10 +59,13 @@ VSCodroid is VS Code. If you have used VS Code on desktop, everything works the 
   button in the empty Explorer, or use the Command Palette. It opens Android's
   folder picker; pick the folder and allow access, and the files other apps
   saved in it show as well, apart from what the copy below leaves out. Android
-  grants access one folder at a time, and not to the top of the storage, the
-  top of an SD card or the Download folder itself, so pick a folder inside
-  those. **VSCodroid: Open Recent Folder**, in the same menu, lists the folders
-  you have granted, with **Browse device...** at the end to add another.
+  grants access one folder at a time, and not to the top of the storage or of an
+  SD card, nor to the Download or Android folder itself, so pick a folder inside
+  those. Nothing in `Android/data`, `Android/obb` or `Android/sandbox` can be
+  granted, since Android keeps each app's folder there to that app. A USB drive
+  can be granted whole. **VSCodroid: Open Recent Folder**, in the same menu,
+  lists the folders you have granted, with **Browse device...** at the end to
+  add another.
 - A device folder is edited as a copy inside the app. The copy is read from the
   device when you open the folder, and each save is written back to the device
   as you make it. It leaves out files over 50 MB, and the directories `.git`,
