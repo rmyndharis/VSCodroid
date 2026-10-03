@@ -39,6 +39,12 @@ const ANDROID_BRIDGE = path.join(
 const STRINGS_XML = path.join(
     ROOT, 'android/app/src/main/res/values/strings.xml',
 );
+const ENVIRONMENT_KT = path.join(
+    ROOT, 'android/app/src/main/kotlin/com/vscodroid/util/Environment.kt',
+);
+const PROCESS_MANAGER = path.join(
+    ROOT, 'android/app/src/main/kotlin/com/vscodroid/service/ProcessManager.kt',
+);
 
 /**
  * One of the user-facing decline reasons, read from where it now lives.
@@ -206,13 +212,20 @@ const AndroidBridge = {
 };
 
 // ---- the vscode API, stubbed ---------------------------------------------
-const shown = { info: [], error: [], warning: [] };
+const shown = { info: [], error: [] };
+// Every warning shown, with the options and the buttons it was shown with.
+const warnings = [];
 let inputBoxAnswer = null;
 // The folders the extension activates into, the listeners it leaves for a folder
 // added afterwards, and the commands it runs on its own.
 let workspaceFolders = [];
 const folderListeners = [];
 const executed = [];
+// The files the extension reads through the editor, and the one file there is:
+// the editor server's note, by path, holding `serverNote`, or nothing when null.
+const fileReads = [];
+let serverNotePath = null;
+let serverNote = null;
 // What the user does at each prompt of the device-folder flow. Null is the
 // dismissal, which is what every case that does not reach a removal wants.
 let quickPickChoice = null;
@@ -228,10 +241,12 @@ const vscodeStub = {
         showInformationMessage: (m) => { shown.info.push(m); },
         showErrorMessage: (m) => { shown.error.push(m); },
         // Answers only with a button the call offered, as the workbench does, so a
-        // warning that loses its button loses the action behind it too.
-        showWarningMessage: async (m, ...items) => {
-            shown.warning.push(m);
-            return items.includes(warningChoice) ? warningChoice : undefined;
+        // warning that loses its button loses the action behind it too. The
+        // options come first when there are any, as in the API.
+        showWarningMessage: async (message, ...rest) => {
+            const options = rest.length && typeof rest[0] === 'object' ? rest.shift() : {};
+            warnings.push({ message, options, items: rest });
+            return rest.includes(warningChoice) ? warningChoice : undefined;
         },
         showQuickPick: async (items) => (quickPickChoice ? quickPickChoice(items) : undefined),
         createStatusBarItem: () => ({ show() {}, hide() {}, dispose() {} }),
@@ -239,9 +254,22 @@ const vscodeStub = {
     workspace: {
         get workspaceFolders() { return workspaceFolders; },
         onDidChangeWorkspaceFolders: (fn) => { folderListeners.push(fn); return { dispose() {} }; },
+        fs: {
+            readFile: async (uri) => {
+                fileReads.push(uri.path);
+                if (serverNote === null || uri.path !== serverNotePath) {
+                    throw new Error(`ENOENT: ${uri.path}`);
+                }
+                return new TextEncoder().encode(serverNote);
+            },
+        },
     },
     env: { clipboard: { writeText: async () => {} } },
-    Uri: { parse: (s) => ({ toString: () => s }) },
+    Uri: {
+        parse: (s) => ({ toString: () => s }),
+        // Resolves `..` the way the API documents for joinPath.
+        joinPath: (uri, ...parts) => ({ ...uri, path: path.posix.join(uri.path, ...parts) }),
+    },
     StatusBarAlignment: { Left: 1, Right: 2 },
 };
 
@@ -356,15 +384,68 @@ async function main() {
     // Android lists the directories on shared storage for this app and hides
     // every file another app saved there, so a folder opened there through the
     // workbench's own dialog shows its subfolders and nothing else. The
-    // extension has to say so once per folder, and its button has to reach the
-    // route that shows the files. Folders the app can see in full must stay
-    // quiet: its own directory under Android/data on any volume and in any
-    // case, a device folder's copy, and anything in its home.
+    // extension has to say so once per folder each time the editor server
+    // starts, in a dialog, and its button has to reach the route that shows the
+    // files. Folders the app can see in full must stay quiet: its own directory
+    // under Android/data on any volume and in any case, a device folder's copy,
+    // and anything in its home.
     // Named the way the workbench names a folder, by the last segment of its
     // path, which a trailing slash does not empty.
     const folder = (p) => ({ uri: { path: p }, name: path.posix.basename(p) });
-    workspaceFolders = [
-        folder('/storage/emulated/0/Documents/notes'),
+
+    // Where the extension finds the editor server's note. Its own directory is
+    // the server's --extensions-dir, and the note sits in the server directory,
+    // both under the app's files directory, so the path it asks for is built
+    // here from the sources that decide each part. Moving either directory then
+    // fails here, where it would otherwise bring the warning back on every page
+    // load with nothing to show for it.
+    const FILES = '/data/user/0/com.vscodroid/files';
+    const environment = fs.readFileSync(ENVIRONMENT_KT, 'utf8');
+    const filesSubdir = (fn) => {
+        const found = new RegExp(
+            'fun ' + fn + '\\(context: Context\\): String =\\s*"\\$\\{context\\.filesDir\\}([^"]+)"',
+        ).exec(environment);
+        assert.ok(found, `Environment.${fn} is gone or changed shape, so this check cannot ` +
+            'say where the extension and the editor server note live');
+        return found[1];
+    };
+    const noteName = /const val EDITOR_PID_FILE = "([^"]+)"/.exec(fs.readFileSync(PROCESS_MANAGER, 'utf8'));
+    assert.ok(noteName, 'EDITOR_PID_FILE is gone from ProcessManager.kt; point this at the note\'s name');
+    const extensionUri = {
+        scheme: 'vscode-remote',
+        authority: '127.0.0.1:13337',
+        path: `${FILES}${filesSubdir('getExtensionsDir')}/${path.basename(path.dirname(bridgeExtension()))}`,
+    };
+    serverNotePath = `${FILES}${filesSubdir('getServerDir')}/${noteName[1]}`;
+
+    // Extension state as the workbench keeps it, which outlives a page load,
+    // holding one folder an earlier session silenced with Don't Show Again.
+    const state = new Map([['sharedStorageWarning.silenced', ['/storage/emulated/0/Documents/silenced']]]);
+
+    /** A page load: a new extension host activates the extension over the same state. */
+    async function pageLoad(folders) {
+        workspaceFolders = folders;
+        folderListeners.length = 0;
+        warnings.length = 0;
+        executed.length = 0;
+        fileReads.length = 0;
+        require(bridgeExtension()).activate({
+            subscriptions: [],
+            extensionUri,
+            globalState: {
+                get: (key, fallback) => (state.has(key) ? state.get(key) : fallback),
+                update: async (key, value) => { state.set(key, value); },
+            },
+        });
+        await settle();
+    }
+    const warnedNames = () => warnings.map((w) => (/saved in (.+)\.$/.exec(w.message) || [, w.message])[1]);
+
+    const OPEN = 'Open Folder from Device';
+    const QUIET = 'Don\'t Show Again';
+    const notes = folder('/storage/emulated/0/Documents/notes');
+    const openedFolders = [
+        notes,
         folder('/storage/emulated/0/Android/data/com.vscodroid/files/projects/app'),
         folder('/storage/1A2B-3C4D/Android/data/com.vscodroid/files/card'),
         folder('/storage/self/primary/Android/data/com.vscodroid/files/self'),
@@ -374,29 +455,44 @@ async function main() {
         folder('/storagebox/drafts'),
         folder('/storage/emulated/0/Documents/silenced'),
     ];
-    warningChoice = 'Open Folder from Device';
+    serverNote = '{"pid":4242,"port":13337}';
+    warningChoice = OPEN;
+    await pageLoad(openedFolders);
 
-    // Extension state as the workbench keeps it, holding one folder an earlier
-    // session silenced with Don't Show Again.
-    const state = new Map([['sharedStorageWarning.silenced', ['/storage/emulated/0/Documents/silenced']]]);
-    const context = {
-        subscriptions: [],
-        globalState: {
-            get: (key, fallback) => (state.has(key) ? state.get(key) : fallback),
-            update: async (key, value) => { state.set(key, value); },
-        },
-    };
-    require(bridgeExtension()).activate(context);
-    await settle();
-
+    assert.deepStrictEqual(
+        fileReads, [serverNotePath],
+        'the extension did not read the editor server note where server.js writes it: ' +
+        JSON.stringify(fileReads),
+    );
     assert.ok(
-        shown.warning.length === 1 && shown.warning[0].includes('notes'),
+        warnings.length === 1 && warnedNames()[0] === 'notes',
         'a folder opened by path on shared storage must raise exactly one warning naming it, ' +
-        'and no folder the app can see in full may raise one: ' + JSON.stringify(shown.warning),
+        'and no folder the app can see in full may raise one: ' + JSON.stringify(warnings),
+    );
+    assert.ok(
+        warnings[0].options.modal === true && /cannot be opened/.test(warnings[0].options.detail || ''),
+        'the warning must be a dialog that says why, since a notification hides itself after ' +
+        '12 seconds: ' + JSON.stringify(warnings[0]),
+    );
+    assert.deepStrictEqual(
+        warnings[0].items, [OPEN, QUIET],
+        'the warning must offer Open Folder from Device and Don\'t Show Again: ' +
+        JSON.stringify(warnings[0].items),
     );
     assert.deepStrictEqual(
         executed, ['vscodroid.openFolderFromDevice'],
         'the warning\'s button did not run Open Folder from Device: ' + JSON.stringify(executed),
+    );
+
+    // A reload, or a switch to another folder and back, loads a new page on the
+    // same server: the folder was warned about while that server runs, and
+    // stays quiet.
+    warningChoice = null;
+    await pageLoad(openedFolders);
+    assert.deepStrictEqual(
+        warnings, [],
+        'a page load on the same editor server warned about the same folder again, which is ' +
+        'every reload and every folder switch: ' + JSON.stringify(warnings),
     );
 
     // A folder added to the open workspace in place, which reloads nothing, so
@@ -407,9 +503,9 @@ async function main() {
     // so those are sent to a folder inside, a trailing slash included, and the
     // top is not named by its last segment. Android/data itself is no app's own
     // folder: only a package directory below it is, so it is warned about.
-    shown.warning.length = 0; executed.length = 0; warningChoice = null;
+    warnings.length = 0; executed.length = 0; warningChoice = null;
     workspaceFolders = [
-        ...workspaceFolders,
+        ...openedFolders,
         folder('/sdcard/Download/proj'),
         folder('/mnt/sdcard/Music/beats'),
         folder('/storage/self/primary/Projects/web'),
@@ -424,35 +520,60 @@ async function main() {
     folderListeners[0]();
     await settle();
     assert.deepStrictEqual(
-        shown.warning.map((m) => (/saved in (.+?), so /.exec(m) || [, m])[1]),
+        warnedNames(),
         ['proj', 'beats', 'web', 'game', 'old', 'your device storage', 'Download', 'Android', 'data'],
         'an added shared-storage folder must be warned about once, and an earlier one not ' +
-        'again: ' + JSON.stringify(shown.warning),
+        'again: ' + JSON.stringify(warnings),
     );
     assert.deepStrictEqual(
-        shown.warning.map((m) => m.includes('pick a folder inside it')),
+        warnings.map((w) => w.options.detail.includes('pick a folder inside it')),
         [false, false, false, false, false, true, true, true, false],
         'only a folder the picker refuses may be sent to a folder inside it: ' +
-        JSON.stringify(shown.warning),
+        JSON.stringify(warnings),
     );
     assert.ok(
-        shown.warning.every((m) => m.includes('50 MB') && m.includes('.git')),
-        'a warning promises files the device copy leaves out: ' + JSON.stringify(shown.warning),
+        warnings.every((w) => w.options.modal === true &&
+            w.options.detail.includes('50 MB') && w.options.detail.includes('.git')),
+        'every warning is a dialog, and promises files the device copy leaves out: ' +
+        JSON.stringify(warnings),
     );
     assert.deepStrictEqual(executed, [], 'a dismissed warning ran a command: ' + JSON.stringify(executed));
 
     // Don't Show Again keeps the folder quiet in every later session, and adds
     // it to the ones silenced before rather than replacing them.
-    shown.warning.length = 0; warningChoice = 'Don\'t Show Again';
+    warnings.length = 0; warningChoice = QUIET;
     workspaceFolders = [...workspaceFolders, folder('/sdcard/Documents/mine')];
     folderListeners[0]();
     await settle();
     assert.deepStrictEqual(
-        [shown.warning.length, executed, state.get('sharedStorageWarning.silenced')],
+        [warnings.length, executed, state.get('sharedStorageWarning.silenced')],
         [1, [], ['/storage/emulated/0/Documents/silenced', '/sdcard/Documents/mine']],
         'Don\'t Show Again did not silence the folder for later sessions',
     );
-    shown.warning.length = 0; warningChoice = null;
+
+    // A new editor server is a new start of the app: the folders it has not
+    // warned about yet include the one the last server did.
+    warningChoice = null;
+    serverNote = '{"pid":5151,"port":13337}';
+    await pageLoad([notes]);
+    assert.deepStrictEqual(
+        warnedNames(), ['notes'],
+        'a restarted editor server did not warn about a folder the previous one had, so the ' +
+        'warning is once per install rather than once per start: ' + JSON.stringify(warnings),
+    );
+
+    // With no note to tie them to, the warnings last as long as the page, as
+    // they did before there was one, rather than going quiet for good.
+    serverNote = null;
+    await pageLoad([notes]);
+    const firstWithoutNote = warnedNames();
+    await pageLoad([notes]);
+    assert.deepStrictEqual(
+        [firstWithoutNote, warnedNames()], [['notes'], ['notes']],
+        'without the editor server note the warning must still be shown on each page load: ' +
+        JSON.stringify(warnings),
+    );
+    warnings.length = 0; warningChoice = null; serverNote = null;
 
     const openInBrowser = commands.get('vscodroid.openInBrowser');
     assert.ok(openInBrowser, 'the bundled extension no longer registers vscodroid.openInBrowser');
@@ -909,8 +1030,9 @@ async function main() {
         'and window.open claims only the clicks the bridge opened; a device-folder listing ' +
         'and a removal each hand back before their work is done and are answered by reply ' +
         'id, and a refusal on either road reaches the user in the bridge\'s own words; ' +
-        'a shared-storage folder opened by path is warned about once, with a button to ' +
-        'Open Folder from Device and one that silences it for later sessions; ' +
+        'a shared-storage folder opened by path is warned about in a dialog once per editor ' +
+        'server, with a button to Open Folder from Device and one that silences it for ' +
+        'later sessions; ' +
         `all ${coverage.sent} commands sent by an extension have a relay branch${unused}\n`,
     );
 }

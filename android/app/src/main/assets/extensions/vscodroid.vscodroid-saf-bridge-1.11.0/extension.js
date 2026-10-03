@@ -559,21 +559,60 @@ function activate(context) {
     // and none of its files, with nothing on screen to say why. Run once here,
     // which covers every route that loads the page (Open Folder, Open Recent,
     // the folder reopened at launch, a workspace file), and again when a folder
-    // is added to an open workspace in place. Once per folder: the set lives as
-    // long as this extension host, which a page load replaces. Don't Show Again
-    // silences a folder for good, by path, for a user who works there knowingly,
-    // such as in a folder whose files this app made and can see.
-    /** @type {Set<string>} */
-    const warnedSharedStorage = new Set();
+    // is added to an open workspace in place.
+    //
+    // Once per folder each time the editor server starts. Every reload and every
+    // folder switch loads a new page, and with it a new extension host, so a set
+    // kept here alone raised the same warning on each of them. The server
+    // outlives its pages, and server.js notes the pid and port of every editor
+    // server it starts, so the folders already warned about are kept in global
+    // state with that note and forgotten once it changes. A server adopted after
+    // its bootstrap died keeps its note, and it is the same server.
+    //
+    // A dialog, not a notification. The warning matters at the moment the folder
+    // opens, and a warning toast hides itself after 12 seconds and is then only
+    // a dot on the bell, which a phone user has no reason to open; on a first
+    // open the toast is up while the user is reading the Explorer for the
+    // missing files. Shown once per folder per start, stopping the user once
+    // costs less than files that seem to be gone. Don't Show Again silences a
+    // folder for good, by path, for a user who works there knowingly, such as in
+    // a folder whose files this app made and can see.
+    const warnedThisServer = (async () => {
+        let server = '';
+        try {
+            server = new TextDecoder().decode(await vscode.workspace.fs.readFile(
+                vscode.Uri.joinPath(context.extensionUri, ...EDITOR_SERVER_NOTE)
+            ));
+        } catch (_) {
+            // No note to tie the warnings to, so they last as long as this page,
+            // which is no worse than before there was one.
+        }
+        const shown = /** @type {{ server?: string, folders?: string[] } | undefined} */ (
+            context.globalState.get(SHOWN_SHARED_STORAGE)
+        );
+        return {
+            server,
+            folders: new Set(server && shown && shown.server === server ? shown.folders : []),
+        };
+    })();
     const silencedSharedStorage = () =>
         /** @type {string[]} */ (context.globalState.get(SILENCED_SHARED_STORAGE, []));
-    const warnSharedStorage = () => {
+    const warnSharedStorage = async () => {
+        const warned = await warnedThisServer;
         for (const folder of vscode.workspace.workspaceFolders || []) {
             const folderPath = folder.uri.path;
             const below = sharedStorageSubpath(folderPath);
-            if (below === null || warnedSharedStorage.has(folderPath) ||
+            if (below === null || warned.folders.has(folderPath) ||
                 silencedSharedStorage().includes(folderPath)) continue;
-            warnedSharedStorage.add(folderPath);
+            // Marked before the dialog, which stays up for as long as the user
+            // takes and may end in a page load: Open Folder from Device opens
+            // the device folder in place of this one.
+            warned.folders.add(folderPath);
+            if (warned.server) {
+                context.globalState.update(
+                    SHOWN_SHARED_STORAGE, { server: warned.server, folders: [...warned.folders] }
+                );
+            }
             const name = below ? folder.name : 'your device storage';
             // From Android 11 the folder picker will not grant the top of a volume,
             // its Download folder or its Android folder, so the button cannot reach
@@ -583,21 +622,23 @@ function activate(context) {
                 ? 'Android does not let an app open this folder itself from the device, ' +
                   'so pick a folder inside it with Open Folder from Device, which shows them'
                 : 'Open Folder from Device shows them';
-            vscode.window.showWarningMessage(
-                `Android hides the files other apps saved in ${name}, so they do not ` +
-                    `show here and cannot be opened. ${route}, apart from files over ` +
-                    '50 MB and folders such as .git and node_modules.',
+            const action = await vscode.window.showWarningMessage(
+                `Android hides the files other apps saved in ${name}.`,
+                {
+                    modal: true,
+                    detail: `They do not show here and cannot be opened. ${route}, apart ` +
+                        'from files over 50 MB and folders such as .git and node_modules.',
+                },
                 OPEN_FROM_DEVICE,
                 DONT_SHOW_AGAIN
-            ).then((action) => {
-                if (action === OPEN_FROM_DEVICE) {
-                    vscode.commands.executeCommand('vscodroid.openFolderFromDevice');
-                } else if (action === DONT_SHOW_AGAIN) {
-                    context.globalState.update(
-                        SILENCED_SHARED_STORAGE, [...silencedSharedStorage(), folderPath]
-                    );
-                }
-            });
+            );
+            if (action === OPEN_FROM_DEVICE) {
+                vscode.commands.executeCommand('vscodroid.openFolderFromDevice');
+            } else if (action === DONT_SHOW_AGAIN) {
+                context.globalState.update(
+                    SILENCED_SHARED_STORAGE, [...silencedSharedStorage(), folderPath]
+                );
+            }
         }
     };
     warnSharedStorage();
@@ -635,6 +676,23 @@ const DONT_SHOW_AGAIN = "Don't Show Again";
 
 /** The globalState key holding the paths Don't Show Again silenced. */
 const SILENCED_SHARED_STORAGE = 'sharedStorageWarning.silenced';
+
+/**
+ * The globalState key holding the folders warned about while one editor server
+ * runs, with that server's note: `{ server, folders }`.
+ */
+const SHOWN_SHARED_STORAGE = 'sharedStorageWarning.shown';
+
+/**
+ * The editor server's note, from this extension's own directory.
+ *
+ * Bundled extensions live in the server's `--extensions-dir`,
+ * `<files>/home/.vscodroid/extensions/<this one>`, and server.js writes the pid
+ * and port of each editor server it starts to `<files>/server/editor-server.pid`
+ * (`Environment.getExtensionsDir`, `Environment.getServerDir`, `EDITOR_PID_FILE`).
+ * Read through the editor's own file access, which reaches the server's files.
+ */
+const EDITOR_SERVER_NOTE = ['..', '..', '..', '..', 'server', 'editor-server.pid'];
 
 /**
  * Where a workspace folder sits on shared storage, where this app sees the

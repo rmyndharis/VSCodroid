@@ -52,7 +52,8 @@ VSCodroid is VS Code. If you have used VS Code on desktop, everything works the 
   dialog reaches Documents, Downloads or an SD card, but VSCodroid holds no
   storage permission, so Android shows it the folders there and hides every file
   another app saved in them. Such a folder opens with its subfolders and none of
-  those files; the editor then warns and offers the route below.
+  those files; the editor then says so in a dialog, once per folder each time the
+  app starts, and offers the route below.
 - For a folder anywhere else on the device, run **VSCodroid: Open Folder from
   Device**: tap the remote indicator at the left end of the status bar, tap the
   button in the empty Explorer, or use the Command Palette. It opens Android's
