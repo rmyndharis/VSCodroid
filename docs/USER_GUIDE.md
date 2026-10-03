@@ -78,11 +78,14 @@ VSCodroid is VS Code. If you have used VS Code on desktop, everything works the 
   in the editor and in the device folder. The check goes by the time and size
   the device folder reports for the file: in a folder that reports no times, or
   keeps a file's old time when the file changes, as some USB and network folders
-  do, a change that keeps the file's size goes unnoticed, and a folder that
-  changes a file's time on its own can occasionally leave such a copy holding
-  the file as you opened it. If the device folder's version cannot be copied, as
-  can happen in a network folder while it is offline even when no other app
-  changed the file, your save stays inside VSCodroid and a notice says so.
+  do, a change that keeps the file's size goes unnoticed, and a folder over
+  64 MB that changes a file's time on its own can occasionally leave such a copy
+  holding the file as you opened it. If the device folder's version cannot be
+  copied, as can happen in a network folder while it is offline even when no
+  other app changed the file, your save stays inside VSCodroid and a notice says
+  so. While the folder is open VSCodroid tries the save again by itself, at
+  least every five minutes, until it goes through, and opening the folder again
+  tries it too.
 - The Explorer and the title bar show a device folder under its own name. A
   folder opened in an earlier version is shown under a twelve-character code
   such as `8e440ff38c8e`, the name of its copy, and offers to reopen under its

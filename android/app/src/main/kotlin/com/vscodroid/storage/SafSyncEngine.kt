@@ -199,7 +199,9 @@ class SafSyncEngine(private val context: Context) {
      *
      * Scoped per mirror in [initialSync] like [deviceSeen]: the next open of the folder
      * takes the mirror's newer copy like any save the watcher did not deliver. Tried only by
-     * the loop watching that mirror, so nothing is written into a folder that is closed.
+     * the loop watching that mirror, so nothing is written into a folder that is closed. A
+     * hold ends at [keepsDeviceEdit]'s next answer for its file, or once the file is deleted
+     * or gone from the mirror.
      */
     private val heldBack = ConcurrentHashMap<String, HeldBackSave>()
 
@@ -1296,10 +1298,11 @@ class SafSyncEngine(private val context: Context) {
      * equal) past the first [KEPT_COPY_DIGEST_BYTES] of such copies, newest first, and not
      * written by this app since, which keeps one spare copy of the unchanged document; a
      * document reported past [MAX_FILE_SIZE] at a length other than the digested one,
-     * which is held back unread even where it holds this app's own bytes; a held-back save
-     * whose folder is closed before a try lands, which waits for the next open; and on a
-     * provider with no clock, every copy after the first carries its counter as a time,
-     * which is cosmetic.
+     * which is held back unread, even where it holds this app's own bytes, until it is
+     * reported at that length; a held-back save whose folder is closed before a try lands,
+     * which waits for the next open, or whose directory is renamed, which waits for that or
+     * for the next save of the file; and on a provider with no clock, every copy after the
+     * first carries its counter as a time, which is cosmetic.
      */
     private fun keepsDeviceEdit(localFile: File, docUri: Uri): Boolean {
         // Settled again by whatever this answers: a save that goes ahead ends the hold, and

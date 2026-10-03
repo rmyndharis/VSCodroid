@@ -754,10 +754,10 @@ class SafLiveDeviceEditTest {
     }
 
     /**
-     * A length other than the one this app last wrote or fetched is another app's edit
-     * whatever its bytes hash to, so the guard does not read the document to find out. A
-     * document grown past the copy limit is held back at every save, and was read in full
-     * at each one.
+     * Past the copy limit, a length other than the one this app last wrote or fetched is not
+     * read to find out what it holds: no set-aside could keep the document, so the save is
+     * held back whatever its bytes hash to. A document grown that far is held back at every
+     * save, and was read in full at each one.
      */
     @Test
     fun `a device edit grown past the copy limit is not read at each save`() {
