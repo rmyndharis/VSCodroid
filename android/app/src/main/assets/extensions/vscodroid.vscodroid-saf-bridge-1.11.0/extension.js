@@ -576,9 +576,10 @@ function activate(context) {
     // missing files. Shown once per folder per start, stopping the user once
     // costs less than files that seem to be gone. Don't Show Again silences a
     // folder for good, for a user who works there knowingly, such as in a folder
-    // whose files this app made and can see. Both remember a folder by its key,
-    // so neither is undone by opening it again under another spelling.
-    const warnedThisServer = (async () => {
+    // whose files this app made and can see. The folders warned about and the
+    // ones silenced are both kept by the key sharedStorageFolder gives them, so
+    // opening a folder again under another spelling undoes neither.
+    const readWarnedThisServer = async () => {
         let server = '';
         try {
             server = new TextDecoder().decode(await vscode.workspace.fs.readFile(
@@ -595,15 +596,19 @@ function activate(context) {
             server,
             folders: new Set(server && shown && shown.server === server ? shown.folders : []),
         };
-    })();
+    };
+    // Read when the first folder on shared storage turns up, not on every page
+    // load: most never open one.
+    /** @type {ReturnType<typeof readWarnedThisServer> | undefined} */
+    let warnedThisServer;
     const silencedSharedStorage = () =>
         /** @type {string[]} */ (context.globalState.get(SILENCED_SHARED_STORAGE, []));
     const warnSharedStorage = async () => {
-        const warned = await warnedThisServer;
         for (const folder of vscode.workspace.workspaceFolders || []) {
             const where = sharedStorageFolder(folder.uri.path);
-            if (!where || warned.folders.has(where.key) ||
-                silencedSharedStorage().includes(where.key)) continue;
+            if (!where || silencedSharedStorage().includes(where.key)) continue;
+            const warned = await (warnedThisServer = warnedThisServer || readWarnedThisServer());
+            if (warned.folders.has(where.key)) continue;
             // Marked before the dialog, which stays up for as long as the user
             // takes and may end in a page load: Open Folder from Device opens
             // the device folder in place of this one.

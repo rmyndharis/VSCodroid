@@ -462,6 +462,15 @@ async function main() {
         folder('/sdcard/documents/Silenced/'),
     ];
     serverNote = '{"pid":4242,"port":13337}';
+
+    // A page with no folder on shared storage, the usual case, reads nothing.
+    await pageLoad([folder('/data/user/0/com.vscodroid/files/home/projects/site')]);
+    assert.deepStrictEqual(
+        [fileReads, warnings], [[], []],
+        'a page load with no shared-storage folder read a file or warned: ' +
+        JSON.stringify({ fileReads, warnings }),
+    );
+
     warningChoice = OPEN;
     await pageLoad(openedFolders);
 
