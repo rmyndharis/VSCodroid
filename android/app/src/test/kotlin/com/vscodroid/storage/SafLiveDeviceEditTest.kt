@@ -518,6 +518,23 @@ class SafLiveDeviceEditTest {
     }
 
     /**
+     * What bounds the reads an open spends on the copies it kept: one past the budget is
+     * not read, so a stamp moved over it still keeps one spare copy of the unchanged
+     * document. Without the bound every open read the whole folder.
+     */
+    @Test
+    fun `a kept copy past the open's digest budget is not read`() {
+        open()
+        engine.keptCopyDigestBytes = 1
+        open()
+        deviceModified -= 337
+
+        save("typed in the editor")
+
+        assertEquals(listOf("v1"), deviceCopies().values.toList(), "a kept copy past the budget was read")
+    }
+
+    /**
      * A copy the reopen vouched for that another sync over the same mirror replaces before
      * it is digested, the two syncs an activity recreated mid-open leaves. The newer device
      * copy that sync fetched is not the kept one, and its digest taken for the kept copy's

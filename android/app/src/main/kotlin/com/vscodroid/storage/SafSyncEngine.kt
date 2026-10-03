@@ -210,6 +210,12 @@ class SafSyncEngine(private val context: Context) {
     internal var retryClock: () -> Long = { System.currentTimeMillis() }
 
     /**
+     * How many bytes [digestKeptCopies] reads per open, [KEPT_COPY_DIGEST_BYTES]. A seam
+     * because no JVM test can hold that much in kept copies.
+     */
+    internal var keptCopyDigestBytes = KEPT_COPY_DIGEST_BYTES
+
+    /**
      * The tree [docIdCache]'s entries were resolved against. The cache is cleared
      * and refilled per folder, and a write-back drain can outlive its folder, so
      * anything resolving at processing time has to know whether the cache still
@@ -979,7 +985,7 @@ class SafSyncEngine(private val context: Context) {
         recorded: List<String>,
     ) {
         val vouched = recorded.toHashSet()
-        var budget = KEPT_COPY_DIGEST_BYTES
+        var budget = keptCopyDigestBytes
         for (doc in documents.sortedByDescending { it.lastModified }) {
             if (doc.isDirectory) continue
             val file = File(mirrorDir, doc.relativePath)
