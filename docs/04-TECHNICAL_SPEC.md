@@ -488,6 +488,17 @@ first so that a file that cannot parse costs musl clients their DNS rather than
 costing the app its editor server, and it is passed as one token, because
 `process-monitor.js` names a process by its first non-option argument.
 
+The bootstrap also adds three scripts to the workbench page template,
+`vscode-reh/out/vs/code/browser/workbench/workbench.html`, through `extendWorkbenchPage`,
+because the page cannot take them from `product.json`: the trusted link domains, the extension
+recommendations, and the theme a page load starts on. The last reads the splash the workbench
+saves in `localStorage` (`monaco-parts-splash`), paints the page background from it before the
+first paint, and hands the same theme to the workbench as `initialColorTheme`, which the
+workbench uses only when it cannot use the theme it stored. It keeps that stored theme only
+while `workbench.colorTheme` equals the theme's id, so the default the welcome extension sets
+must be an id the server tree contributes, not an older name upstream migrates;
+`verify-server-tree.py` checks it.
+
 Readiness is `GET /version`, and only a `200` counts. There is no `/healthz`:
 what used to serve one was a fallback server in `assets/server.js` that bound the
 port when `vscode-reh/out/server-main.js` was missing and answered 200 to every
@@ -556,6 +567,12 @@ Read `VSCodroidWebView.configure` for the live set. Three notes on what is **not
   `android:windowSoftInputMode="adjustResize"` on the activity in `AndroidManifest.xml`.
 - **`textZoom = 100` is a pin, not a default.** It is why changing the system font size has no
   effect on editor text, which is a live accessibility gap rather than a setting anyone tuned.
+
+Outside the settings block, `configure` gives the view the window background,
+`R.color.colorBackground` (#1E1E1E). An unset WebView paints white wherever no page has
+painted yet, which showed before the loading placeholder on the first launch after an update.
+The workbench page paints its own background from the theme it last showed (§3.1), so a light
+theme still starts light.
 
 ### 4.2 Crash Recovery
 
