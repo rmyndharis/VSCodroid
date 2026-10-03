@@ -1349,21 +1349,23 @@ class SafSyncEngine(private val context: Context) {
     }
 
     /**
-     * Queues again, as the saves they were, the saves [keepsDeviceEdit] held back under
-     * [session]'s mirror whose wait is over, and answers whether it queued any.
+     * Queues again, as the save it was, one save [keepsDeviceEdit] held back under
+     * [session]'s mirror whose wait is over, and answers whether it queued one.
      *
      * The write-back loop asks whenever its queue is empty, so a held-back save lands once
      * its device copy can be read, still by [keepsDeviceEdit]'s comparison of the bytes, and
      * the waits bound what a provider that stays unreadable costs: per held-back file, a
      * stamp query and the reads that fail, after [HELD_BACK_RETRY_FIRST_MS] and then at
-     * waits that double up to [HELD_BACK_RETRY_MAX_MS]. A file the mirror no longer holds
+     * waits that double up to [HELD_BACK_RETRY_MAX_MS]. One per call, because the loop polls
+     * its queue before it asks again: queued all at once, a save made meanwhile waited
+     * behind every try that was due, which on a server that takes long to refuse a read is
+     * long for a save that has nothing to do with them. A file the mirror no longer holds
      * is dropped rather than tried, which would spin the loop on a save with nothing left
      * to send.
      */
     internal fun retryHeldBack(session: WatchSession): Boolean {
         val prefix = (session.root ?: return false).absolutePath + File.separator
         val now = SystemClock.elapsedRealtime()
-        var queued = false
         for ((path, held) in heldBack) {
             if (!path.startsWith(prefix) || held.dueAt > now) continue
             if (!File(path).isFile) {
@@ -1374,9 +1376,9 @@ class SafSyncEngine(private val context: Context) {
             // debounce compares the two.
             val stamp = System.currentTimeMillis()
             session.queue.offer(SyncJob(SyncType.MODIFY, path, held.docUri, null, null, stamp))
-            queued = true
+            return true
         }
-        return queued
+        return false
     }
 
     /**
@@ -1952,7 +1954,7 @@ class SafSyncEngine(private val context: Context) {
     /**
      * Processes queued write-backs until [isRunning] goes false or the thread is
      * interrupted, then sends out whatever is still queued. Whenever the queue runs empty
-     * it queues the held-back saves whose wait is over; see [retryHeldBack].
+     * it queues a held-back save whose wait is over; see [retryHeldBack].
      *
      * Drives whichever session is current, which is what a test without a live watcher
      * needs: no JVM test can call [startWatching], because registering a watch builds a

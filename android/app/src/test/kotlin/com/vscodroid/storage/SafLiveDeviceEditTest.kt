@@ -691,6 +691,34 @@ class SafLiveDeviceEditTest {
         assertEquals(1, writes)
     }
 
+    /**
+     * Held-back saves that are due go back on the queue one per idle turn of the loop,
+     * which polls its queue before it asks again. Queued all at once, a save made meanwhile
+     * waited behind every try that was due, each a stamp query and the reads that fail.
+     * Here a second file, made in the editor, goes to the same device document.
+     */
+    @Test
+    fun `held-back saves that are due are tried one per idle turn`() {
+        open()
+        val other = File(mirror, "other.txt").apply { writeText("other") }
+        engine.handleMirrorEvent(FileObserver.CREATE, other, mirror, treeUri)
+        engine.runWriteBackLoop { false }
+        deviceReadable = false
+        editOnDevice("changed by another app")
+        save("typed in the editor")
+        other.writeText("other, typed in the editor")
+        engine.handleMirrorEvent(FileObserver.MODIFY, other, mirror, treeUri)
+        engine.runWriteBackLoop { false }
+        assertEquals(1, writes, "a save went over a device copy nothing could read")
+        clock += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+        val before = reads
+
+        retryWhileWatching()
+        assertEquals(before + 2, reads, "more than one held-back save was tried in one turn")
+        retryWhileWatching()
+        assertEquals(before + 4, reads, "the other held-back save was not tried at the next turn")
+    }
+
     /** Only the loop watching the save's own folder tries it, so a closed folder is not written. */
     @Test
     fun `a held-back save is not tried by a watcher on another folder`() {
