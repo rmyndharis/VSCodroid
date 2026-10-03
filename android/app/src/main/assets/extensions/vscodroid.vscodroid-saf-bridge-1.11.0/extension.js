@@ -26,7 +26,8 @@
  * - vscodroid.copyBugReport        : Opens a bug report to read, then copies it
  *
  * It also warns about a workspace folder opened by path on shared storage, and
- * offers Open Folder from Device instead.
+ * offers Open Folder from Device instead; and it offers to reopen a device
+ * folder still shown by its copy's hash under the folder's own name.
  */
 
 const vscode = require('vscode');
@@ -717,6 +718,72 @@ function activate(context) {
     const workspaceFoldersListener =
         vscode.workspace.onDidChangeWorkspaceFolders(warnSharedStorage);
 
+    // -- A device folder shown by its copy's hash --
+
+    // A device folder is copied to saf-mirrors/<hash>, and the workbench names a
+    // folder after the last segment of its path, so a copy opened there showed
+    // the hash in the Explorer and the title. The app opens a copy through
+    // saf-mirrors/by-name/<hash>/<the folder's name> instead, a link to it. A
+    // copy made before that still opens by its hash, as the folder reopened at
+    // launch after an update does, and moving it is not the app's to do
+    // unasked: the workbench keeps a folder's open editors, unsaved changes and
+    // terminals under the path it was opened by, so whatever was left unsaved
+    // under the hash would stay there, out of sight. So the move is offered, and
+    // made once nothing unsaved is held and no terminal is open; the editors
+    // that were open are opened again under the new path.
+    const offerNamedPath = async () => {
+        const open = copyOpenByHash();
+        if (!open) return;
+        const hash = open.copy.slice(open.copy.lastIndexOf('/') + 1);
+        const declined = /** @type {string[]} */ (context.globalState.get(DECLINED_NAMED_PATH, []));
+        if (declined.includes(hash)) return;
+        const named = await namedPathOf(open);
+        if (!named) return;
+        const name = named.slice(named.lastIndexOf('/') + 1);
+        const action = await vscode.window.showInformationMessage(
+            `This device folder is shown as ${hash}, the name of its copy in VSCodroid. ` +
+                `Reopen it as ${name}?`,
+            REOPEN, DONT_ASK_AGAIN
+        );
+        if (action === DONT_ASK_AGAIN) {
+            context.globalState.update(DECLINED_NAMED_PATH, [...declined, hash]);
+            return;
+        }
+        if (action !== REOPEN) return;
+        if (moveWouldLose() || (await holdsBackups(context))) {
+            vscode.window.showWarningMessage(
+                `Save or close the files with unsaved changes and close the terminals first, ` +
+                    `or they stay behind with ${hash}. The folder offers this again the next ` +
+                    'time it opens.'
+            );
+            return;
+        }
+        const target = open.uri.with({ path: open.file ? `${named}/${open.file}` : named });
+        await context.globalState.update(CARRIED_EDITORS, {
+            to: target.path, root: named, files: editorsUnder(open.copy), at: Date.now()
+        });
+        await vscode.commands.executeCommand('vscode.openFolder', target, { forceReuseWindow: true });
+    };
+    // The page the move lands on opens the editors carried to it.
+    const reopenCarriedEditors = async () => {
+        const carried = context.globalState.get(CARRIED_EDITORS);
+        if (!carried) return;
+        await context.globalState.update(CARRIED_EDITORS, undefined);
+        const here = vscode.workspace.workspaceFile ||
+            ((vscode.workspace.workspaceFolders || [])[0] || {}).uri;
+        if (!here || here.path !== carried.to || !(Date.now() - carried.at < CARRY_MS)) return;
+        for (const file of carried.files) {
+            try {
+                await vscode.window.showTextDocument(
+                    here.with({ path: `${carried.root}/${file}` }), { preview: false }
+                );
+            } catch (_) {
+                // Deleted since the move: nothing to open.
+            }
+        }
+    };
+    reopenCarriedEditors().then(offerNamedPath).catch(() => {});
+
     context.subscriptions.push(
         workspaceFoldersListener,
         openFolderCmd,
@@ -852,6 +919,120 @@ function sharedStorageWarning(where, folderName) {
             : `${hidden} Android does not let an app open this folder itself from the device, ` +
               `so pick a folder inside it with Open Folder from Device, which shows them, ${leftOut}.`;
     return { message, detail, buttons: [OPEN_FROM_DEVICE, DONT_SHOW_AGAIN] };
+}
+
+/** The named path offer's buttons, compared against the choice it returns. */
+const REOPEN = 'Reopen';
+const DONT_ASK_AGAIN = "Don't Ask Again";
+
+/** The globalState key holding the copies whose move to a named path was declined. */
+const DECLINED_NAMED_PATH = 'namedPath.declined';
+
+/**
+ * The globalState key carrying the open editors across that move:
+ * `{ to, root, files, at }`, the path moved to, the named path the files are
+ * relative to, the files, the active one last, and when.
+ */
+const CARRIED_EDITORS = 'namedPath.carried';
+
+/** How long carried editors wait for their page, which a slow start can delay. */
+const CARRY_MS = 120000;
+
+/** Where the copies' named paths live under saf-mirrors: SafStorageManager.NAMED_DIR. */
+const NAMED_DIR = 'by-name';
+
+/**
+ * The device folder copy this page has open by its hash: the folder itself, or
+ * a workspace file at the top of one. `uri` is what is open, `copy` the copy's
+ * path and `file` the workspace file's name, or '' for the folder. Null for
+ * anything else, a workspace of several folders included.
+ * @returns {{ uri: *, copy: string, file: string } | null}
+ */
+function copyOpenByHash() {
+    const workspaceFile = vscode.workspace.workspaceFile;
+    if (workspaceFile) {
+        const m = /^(.*\/saf-mirrors\/[0-9a-f]{12})\/([^/]+\.code-workspace)$/.exec(workspaceFile.path);
+        return m ? { uri: workspaceFile, copy: m[1], file: m[2] } : null;
+    }
+    const folders = vscode.workspace.workspaceFolders || [];
+    if (folders.length !== 1 || !/\/saf-mirrors\/[0-9a-f]{12}$/.test(folders[0].uri.path)) return null;
+    return { uri: folders[0].uri, copy: folders[0].uri.path, file: '' };
+}
+
+/**
+ * The copy's named path, `saf-mirrors/by-name/<hash>/<name>`, which the app
+ * makes when a page opens the copy, or null while there is not exactly one.
+ * @param {{ uri: *, copy: string }} open
+ * @returns {Promise<string | null>}
+ */
+async function namedPathOf(open) {
+    const at = open.copy.lastIndexOf('/');
+    const dir = open.uri.with({
+        path: `${open.copy.slice(0, at)}/${NAMED_DIR}/${open.copy.slice(at + 1)}`
+    });
+    try {
+        const links = (await vscode.workspace.fs.readDirectory(dir)).filter(([, type]) =>
+            (type & vscode.FileType.SymbolicLink) && (type & vscode.FileType.Directory));
+        return links.length === 1 ? `${dir.path}/${links[0][0]}` : null;
+    } catch (_) {
+        return null;
+    }
+}
+
+/** Whether moving this page would lose a terminal or unsaved changes it shows. */
+function moveWouldLose() {
+    return vscode.window.terminals.length > 0 ||
+        vscode.workspace.textDocuments.some((d) => d.isDirty) ||
+        (vscode.workspace.notebookDocuments || []).some((d) => d.isDirty) ||
+        vscode.window.tabGroups.all.some((g) => g.tabs.some((t) => t.isDirty));
+}
+
+/**
+ * Whether the workbench holds a backup of unsaved changes for this page's folder.
+ *
+ * The editors with unsaved changes are reopened by the workbench after this
+ * extension starts, so `moveWouldLose` can miss them for a moment, and a Reopen
+ * chosen then would leave them behind. Their backups can be asked for at once:
+ * the workbench keeps them under `Backups/<id>`, beside `workspaceStorage/<id>`,
+ * which holds this extension's storageUri for the folder. A layout that moves
+ * reads as no such directory, which leaves the check above as the guard it was.
+ * Any other failure reads as yes.
+ * @param {vscode.ExtensionContext} context
+ * @returns {Promise<boolean>}
+ */
+async function holdsBackups(context) {
+    const storage = context.storageUri;
+    if (!storage) return true;
+    const id = storage.path.split('/').slice(-2)[0];
+    const backups = vscode.Uri.joinPath(storage, '..', '..', '..', 'Backups', id);
+    try {
+        for (const [name, type] of await vscode.workspace.fs.readDirectory(backups)) {
+            if (!(type & vscode.FileType.Directory)) return true;
+            if ((await vscode.workspace.fs.readDirectory(vscode.Uri.joinPath(backups, name))).length) {
+                return true;
+            }
+        }
+        return false;
+    } catch (/** @type {*} */ err) {
+        return !(err && err.code === 'FileNotFound');
+    }
+}
+
+/**
+ * The files open in text editors under `copy`, as paths relative to it, each
+ * once, with the active editor's file last so that it ends up in front.
+ * @param {string} copy
+ * @returns {string[]}
+ */
+function editorsUnder(copy) {
+    const groups = vscode.window.tabGroups;
+    const active = groups.activeTabGroup && groups.activeTabGroup.activeTab;
+    const tabs = groups.all.flatMap((g) => g.tabs).filter((t) => t !== active);
+    const files = [...tabs, active]
+        .map((t) => (t && t.input instanceof vscode.TabInputText ? t.input.uri.path : ''))
+        .filter((p) => p.startsWith(`${copy}/`))
+        .map((p) => p.slice(copy.length + 1));
+    return files.filter((f, i) => files.lastIndexOf(f) === i);
 }
 
 /**

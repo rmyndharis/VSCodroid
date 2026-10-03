@@ -45,6 +45,9 @@ const ENVIRONMENT_KT = path.join(
 const PROCESS_MANAGER = path.join(
     ROOT, 'android/app/src/main/kotlin/com/vscodroid/service/ProcessManager.kt',
 );
+const SAF_STORAGE_MANAGER = path.join(
+    ROOT, 'android/app/src/main/kotlin/com/vscodroid/storage/SafStorageManager.kt',
+);
 
 /**
  * One of the user-facing decline reasons, read from where it now lives.
@@ -247,11 +250,27 @@ let infoChoice = null;
 const openedDocs = [];
 const shownDocs = [];
 const clipboard = [];
+// Every command run, with its arguments, for the ones whose arguments matter.
+const ranWith = [];
+// What the editor shows besides folders: the workspace file, the documents, the
+// tabs and the terminals, and the directories the extension lists, by path. A
+// listing that is absent throws as the workbench does for a missing directory.
+let workspaceFile;
+let textDocuments = [];
+let notebookDocuments = [];
+let tabGroups = { all: [], activeTabGroup: undefined };
+let terminals = [];
+let directories = new Map();
+class TabInputText { constructor(uri) { this.uri = uri; } }
+/** A Uri with the one method the extension calls on it. */
+function uriOf(scheme, authority, p) {
+    return { scheme, authority, path: p, with(change) { return uriOf(scheme, authority, change.path); } };
+}
 const commands = new Map();
 const vscodeStub = {
     commands: {
         registerCommand: (id, fn) => { commands.set(id, fn); return { dispose() {} }; },
-        executeCommand: async (id) => { executed.push(id); },
+        executeCommand: async (id, ...args) => { executed.push(id); ranWith.push([id, ...args]); },
     },
     window: {
         showInputBox: async () => inputBoxAnswer,
@@ -271,9 +290,14 @@ const vscodeStub = {
         },
         showQuickPick: async (items) => (quickPickChoice ? quickPickChoice(items) : undefined),
         createStatusBarItem: () => ({ show() {}, hide() {}, dispose() {} }),
+        get tabGroups() { return tabGroups; },
+        get terminals() { return terminals; },
     },
     workspace: {
         get workspaceFolders() { return workspaceFolders; },
+        get workspaceFile() { return workspaceFile; },
+        get textDocuments() { return textDocuments; },
+        get notebookDocuments() { return notebookDocuments; },
         openTextDocument: async (options) => {
             const doc = { options, text: options.content, getText() { return this.text; } };
             openedDocs.push(doc);
@@ -288,6 +312,12 @@ const vscodeStub = {
                 }
                 return new TextEncoder().encode(serverNote);
             },
+            readDirectory: async (uri) => {
+                const listing = directories.get(uri.path);
+                if (listing instanceof Error) throw listing;
+                if (!listing) throw Object.assign(new Error(`ENOENT: ${uri.path}`), { code: 'FileNotFound' });
+                return listing;
+            },
         },
     },
     env: { clipboard: { writeText: async (text) => { clipboard.push(text); } } },
@@ -297,6 +327,8 @@ const vscodeStub = {
         joinPath: (uri, ...parts) => ({ ...uri, path: path.posix.join(uri.path, ...parts) }),
     },
     StatusBarAlignment: { Left: 1, Right: 2 },
+    FileType: { Unknown: 0, File: 1, Directory: 2, SymbolicLink: 64 },
+    TabInputText,
 };
 
 const realLoad = Module._load;
@@ -1167,6 +1199,190 @@ async function main() {
         JSON.stringify({ openedDocs, clipboard, refusedReport }),
     );
 
+    // ---- a device folder shown by its copy's hash ---------------------------
+    //
+    // A copy lives at saf-mirrors/<hash>, and the workbench names a folder after
+    // the last segment of its path, so the app opens a copy through
+    // saf-mirrors/by-name/<hash>/<name>, a link to it. A page still on a copy's
+    // hash, as the folder reopened at launch after an update is, has to be
+    // offered the move and moved only when nothing is left behind: the workbench
+    // keeps unsaved changes and terminals under the path a folder was opened by,
+    // so after a move they would be out of sight. The editors that were open come
+    // back on the page the move lands on.
+    const kotlinNamedDir = /const val NAMED_DIR = "([^"]+)"/.exec(fs.readFileSync(SAF_STORAGE_MANAGER, 'utf8'));
+    const jsNamedDir = /const NAMED_DIR = '([^']+)'/.exec(fs.readFileSync(bridgeExtension(), 'utf8'));
+    assert.ok(kotlinNamedDir && jsNamedDir, 'NAMED_DIR is gone from SafStorageManager.kt or the extension');
+    assert.strictEqual(
+        jsNamedDir[1], kotlinNamedDir[1],
+        'the extension looks for named paths where the app does not make them, so a page on a ' +
+        'copy\'s hash is never offered its name',
+    );
+
+    const remote = (p) => uriOf('vscode-remote', '127.0.0.1:13337', p);
+    const COPY = `${FILES}/saf-mirrors/8e440ff38c8e`;
+    const NAMES = `${FILES}/saf-mirrors/by-name/8e440ff38c8e`;
+    const NAMED = `${NAMES}/reviewtest2`;
+    const LINK = vscodeStub.FileType.Directory | vscodeStub.FileType.SymbolicLink;
+    // The extension's storage for the folder, which names the workbench's id for it,
+    // and the backups the workbench keeps under that id.
+    const STORAGE = uriOf('vscode-userdata', '', '/User/workspaceStorage/a1b2c3/vscodroid.vscodroid-saf-bridge');
+    const BACKUPS = '/User/Backups/a1b2c3';
+    const CARRIED = 'namedPath.carried';
+    const DECLINED = 'namedPath.declined';
+    const tab = (p, extra = {}) => ({ input: new TabInputText(remote(p)), isDirty: false, ...extra });
+
+    /** A page on [folders] (and [file]), with what the editor shows set up first. */
+    async function namedPageLoad({ folders, file, tabs = [], active, docs = [], books = [], terms = [] }) {
+        workspaceFile = file;
+        textDocuments = docs;
+        notebookDocuments = books;
+        terminals = terms;
+        tabGroups = { all: [{ tabs }], activeTabGroup: { activeTab: active } };
+        shown.info.length = 0; ranWith.length = 0; shownDocs.length = 0;
+        workspaceFolders = folders;
+        folderListeners.length = 0;
+        warnings.length = 0;
+        executed.length = 0;
+        require(bridgeExtension()).activate({
+            subscriptions: [],
+            extensionUri,
+            storageUri: STORAGE,
+            globalState: {
+                get: (key, fallback) => (state.has(key) ? state.get(key) : fallback),
+                update: async (key, value) => { state.set(key, value); },
+            },
+        });
+        await settle();
+    }
+    const onCopy = [{ uri: remote(COPY), name: '8e440ff38c8e' }];
+    const moved = () => ranWith.filter(([id]) => id === 'vscode.openFolder');
+    const reopen = (items) => (items.includes('Reopen') ? 'Reopen' : undefined);
+
+    directories = new Map([[NAMES, [['reviewtest2', LINK]]]]);
+    infoChoice = reopen;
+    const readme = tab(`${COPY}/README.md`);
+    const app = tab(`${COPY}/src/app.js`);
+    await namedPageLoad({
+        folders: onCopy,
+        tabs: [app, readme, tab('/data/user/0/com.vscodroid/files/home/projects/x.js'), { input: {}, isDirty: false }],
+        active: app,
+        docs: [{ isDirty: false }],
+    });
+    assert.ok(
+        shown.info.length === 1 && shown.info[0].includes('8e440ff38c8e') && shown.info[0].includes('reviewtest2'),
+        'a page on a copy\'s hash was not offered the folder\'s name: ' + JSON.stringify(shown.info),
+    );
+    assert.deepStrictEqual(
+        moved().map(([, target, options]) => [target.scheme, target.path, options]),
+        [['vscode-remote', NAMED, { forceReuseWindow: true }]],
+        'Reopen did not open the folder by its name in this window: ' + JSON.stringify(ranWith),
+    );
+    assert.deepStrictEqual(
+        state.get(CARRIED) && [state.get(CARRIED).to, state.get(CARRIED).root, state.get(CARRIED).files],
+        [NAMED, NAMED, ['README.md', 'src/app.js']],
+        'the editors open under the copy were not carried, the active one last: ' +
+        JSON.stringify(state.get(CARRIED)),
+    );
+
+    // The page the move lands on opens them, in that order, and forgets them.
+    infoChoice = null;
+    await namedPageLoad({ folders: [{ uri: remote(NAMED), name: 'reviewtest2' }] });
+    assert.deepStrictEqual(
+        shownDocs.map((u) => u.path), [`${NAMED}/README.md`, `${NAMED}/src/app.js`],
+        'the editors carried across the move were not opened again under the new path: ' +
+        JSON.stringify(shownDocs),
+    );
+    assert.ok(
+        state.get(CARRIED) === undefined && shown.info.length === 0 && moved().length === 0,
+        'the page reached by name kept the carried editors or was offered a move again',
+    );
+
+    // Carried editors are for the page they were carried to, and not long after.
+    for (const [why, carried] of [
+        ['long ago', { to: NAMED, root: NAMED, files: ['README.md'], at: Date.now() - 600000 }],
+        ['to another page', { to: `${NAMES}/other`, root: `${NAMES}/other`, files: ['README.md'], at: Date.now() }],
+    ]) {
+        state.set(CARRIED, carried);
+        await namedPageLoad({ folders: [{ uri: remote(NAMED), name: 'reviewtest2' }] });
+        assert.ok(
+            shownDocs.length === 0 && state.get(CARRIED) === undefined,
+            `editors carried ${why} were opened here, or kept: ` + JSON.stringify(shownDocs),
+        );
+    }
+
+    // Nothing left behind, or no move. Each of these keeps the page where it is
+    // and says what to do first, with nothing carried.
+    infoChoice = reopen;
+    const keeps = async (why, setup) => {
+        state.delete(CARRIED);
+        await namedPageLoad({ folders: onCopy, ...setup });
+        assert.ok(
+            moved().length === 0 && state.get(CARRIED) === undefined &&
+                warnings.length === 1 && /unsaved changes/.test(warnings[0].message),
+            `the page was moved, or not told why it was not, with ${why}: ` +
+            JSON.stringify({ ranWith, warnings }),
+        );
+    };
+    await keeps('an unsaved document', { docs: [{ isDirty: true }] });
+    await keeps('an unsaved tab', { tabs: [tab(`${COPY}/a.txt`, { isDirty: true })] });
+    await keeps('an unsaved notebook', { books: [{ isDirty: true }] });
+    await keeps('a terminal', { terms: [{}] });
+    // A backup of unsaved changes the workbench has not reopened yet.
+    directories.set(BACKUPS, [['vscode-remote', vscodeStub.FileType.Directory]]);
+    directories.set(`${BACKUPS}/vscode-remote`, [['1a2b3c', vscodeStub.FileType.File]]);
+    await keeps('a backup of unsaved changes', {});
+    directories.set(`${BACKUPS}/vscode-remote`, []);
+    await namedPageLoad({ folders: onCopy });
+    assert.strictEqual(moved().length, 1, 'an emptied backup directory still kept the page where it was');
+    // Backups that cannot be read are not known to be absent.
+    directories.set(BACKUPS, Object.assign(new Error('no access'), { code: 'NoPermissions' }));
+    await keeps('backups that could not be read', {});
+    directories.delete(BACKUPS);
+
+    // No offer without exactly one named path to go to, nor for any other page.
+    const offersMove = async (setup) => {
+        await namedPageLoad({ folders: onCopy, ...setup });
+        return shown.info.length > 0 || moved().length > 0;
+    };
+    directories.delete(NAMES);
+    const noNames = await offersMove({});
+    directories.set(NAMES, [['old', LINK], ['new', LINK]]);
+    const twoNames = await offersMove({});
+    directories.set(NAMES, [['reviewtest2', vscodeStub.FileType.Directory]]);
+    const notALink = await offersMove({});
+    directories.set(NAMES, [['reviewtest2', LINK]]);
+    const severalFolders = await offersMove({
+        folders: [...onCopy, { uri: remote(`${FILES}/home/projects/site`), name: 'site' }],
+    });
+    const ordinary = await offersMove({ folders: [{ uri: remote(`${FILES}/home/projects/site`), name: 'site' }] });
+    assert.deepStrictEqual(
+        [noNames, twoNames, notALink, severalFolders, ordinary], [false, false, false, false, false],
+        'a move was offered with no single named path to go to, or for a page not on one copy',
+    );
+
+    // A workspace file at the top of a copy moves to the same file by name.
+    state.delete(CARRIED);
+    await namedPageLoad({ folders: onCopy, file: remote(`${COPY}/app.code-workspace`) });
+    assert.deepStrictEqual(
+        moved().map(([, target]) => target.path), [`${NAMED}/app.code-workspace`],
+        'a workspace file in the copy was not reopened through the named path: ' + JSON.stringify(ranWith),
+    );
+    workspaceFile = undefined;
+
+    // Don't Ask Again is kept, and that copy is not offered again.
+    infoChoice = (items) => (items.includes('Don\'t Ask Again') ? 'Don\'t Ask Again' : undefined);
+    await namedPageLoad({ folders: onCopy });
+    const declinedNow = state.get(DECLINED);
+    infoChoice = reopen;
+    await namedPageLoad({ folders: onCopy });
+    assert.ok(
+        JSON.stringify(declinedNow) === '["8e440ff38c8e"]' && shown.info.length === 0 && moved().length === 0,
+        'Don\'t Ask Again was not kept for the copy, or the move was offered again: ' +
+        JSON.stringify({ declinedNow, info: shown.info }),
+    );
+    state.delete(DECLINED); state.delete(CARRIED);
+    infoChoice = null; directories = new Map(); tabGroups = { all: [], activeTabGroup: undefined };
+
     const unused = coverage.unused.length
         ? `; ${coverage.unused.length} relay branches have no sender (${coverage.unused.join(', ')})`
         : '';
@@ -1178,6 +1394,8 @@ async function main() {
         'a shared-storage folder opened by path is warned about in a dialog once per editor ' +
         'server, with a button to Open Folder from Device and one that silences it for ' +
         'later sessions; the bug report opens in an editor before Copy takes what it holds; ' +
+        'a page on a device folder copy\'s hash is offered the folder\'s name and moved there ' +
+        'only with nothing unsaved and no terminal, its editors following; ' +
         `all ${coverage.sent} commands sent by an extension have a relay branch${unused}\n`,
     );
 }
