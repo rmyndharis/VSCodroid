@@ -3703,9 +3703,10 @@ class SafSyncEngine(private val context: Context) {
                 consumeStaleUploadRecord(job.localPath)
                 // A save held back for this path has nothing left to send, and a file
                 // made again under the name is a new document that its own create
-                // writes. Left standing, the hold was tried against the deleted
-                // document, which on a provider whose ids are not paths fails and
-                // reports the new file's save as lost.
+                // writes, which ends a hold too. Left standing until then, the hold was
+                // tried against the deleted document whenever the loop found its queue
+                // empty before the create's event arrived, which on a provider whose
+                // ids are not paths fails and reports the new file's save as lost.
                 heldBack.remove(job.localPath)
             }
             SyncType.RENAME -> {
