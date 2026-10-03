@@ -1172,8 +1172,12 @@ class MainActivity : AppCompatActivity() {
             // lookup asks the system server for every persisted grant and prunes
             // the recent list against the answer, and a cold start whose remembered
             // workspace is a mirror reaches it with the workbench already drawn.
+            //
+            // The note is disk work beside it: a page on the copy's named path is
+            // recorded, and a page on its hash path gets a named path to move to.
             val folder = withContext(Dispatchers.IO) {
                 safManager.folderForOpenedPath(folderPath)
+                    ?.also { safManager.noteOpened(folderPath, it) }
             }
             val mirror = SafStorageManager.mirrorNameFor(
                 folderPath, Environment.getSafMirrorsDir(this@MainActivity),
@@ -1295,9 +1299,12 @@ class MainActivity : AppCompatActivity() {
                 // missing from the recent list with nothing to explain it. The sync
                 // below must still be skipped in that case, which the ordinary hop
                 // after this one does by throwing.
-                val displayName = withContext(NonCancellable + Dispatchers.IO) {
+                val (displayName, copyIsNew) = withContext(NonCancellable + Dispatchers.IO) {
                     safManager.persistPermission(uri)
-                    safManager.getDisplayName(uri)
+                    // Asked before the sync below makes the copy. A copy older than this
+                    // open may have been opened by its hash path, which the workbench
+                    // keeps its own state under; see deviceFolderTarget.
+                    safManager.getDisplayName(uri) to !safManager.getMirrorDir(uri).exists()
                 }
                 dialog.setMessage(getString(R.string.saf_sync_message, displayName))
 
@@ -1376,19 +1383,27 @@ class MainActivity : AppCompatActivity() {
 
                 dialog.dismiss()
 
-                // Reload VS Code with the mirror, or with the workspace it holds.
-                // The listing is off the main thread for the reason every other
-                // disk read here is: `MainThreadWatch` installs a policy that
-                // logs one, and `folderOpenTarget` stats each candidate.
+                // Reload VS Code with the mirror, or with the workspace it holds,
+                // by the folder's own name where that is safe. The listing and the
+                // link are off the main thread for the reason every other disk
+                // read here is: `MainThreadWatch` installs a policy that logs one,
+                // and `folderOpenTarget` stats each candidate.
                 if (navigate && serverPort > 0) {
                     val target = withContext(Dispatchers.IO) {
-                        folderOpenTarget(
+                        val opened = folderOpenTarget(
                             mirrorDir.absolutePath,
                             mirrorDir.list()?.asList().orEmpty(),
                         )
-                    }
-                    if (target != mirrorDir.absolutePath) {
-                        Logger.i(tag, "The granted folder holds a workspace; opening that")
+                        if (opened != mirrorDir.absolutePath) {
+                            Logger.i(tag, "The granted folder holds a workspace; opening that")
+                        }
+                        deviceFolderTarget(
+                            target = opened,
+                            mirrorPath = mirrorDir.absolutePath,
+                            namedPath = safManager.namedPathFor(mirrorDir, displayName)?.path,
+                            byName = copyIsNew || safManager.wasShownByName(mirrorDir),
+                            openNow = openWorkspaceFolder,
+                        )
                     }
                     // Readiness rather than the port, for the reason recreateWebView
                     // gives: a device-folder sync can run for minutes, and a server
@@ -6795,6 +6810,48 @@ internal fun folderOpenTarget(
         .filter(isFile)
         .singleOrNull()
         ?: folderPath
+
+/**
+ * Where to send the workbench for a device folder that has just been synced: [target],
+ * the copy at [mirrorPath] or a workspace file in it, spelled through [namedPath] or
+ * left on the copy's hash path.
+ *
+ * The workbench names a folder after the last segment of its path, so the named path,
+ * `saf-mirrors/by-name/<hash>/<name>` (`SafStorageManager.namedPathFor`), is what shows
+ * the folder's own name in place of the hash. But it keeps open editors, unsaved changes
+ * and terminals per path, so moving a folder from one spelling to the other leaves all
+ * of that behind under the first, where nothing would bring it back. Hence three rules,
+ * in order:
+ *
+ * - A folder the page already has open keeps the spelling it is open under. Picking it
+ *   again is how fresh content is pulled down, and it must come back with its editors.
+ * - Otherwise the named path is used when [byName]: the copy was made by this open, or a
+ *   page has opened it by name before, so its state is there or nowhere.
+ * - Otherwise the hash path: a copy older than named paths, whose state may be under its
+ *   hash. The bundled extension offers the move from there, where it can see whether
+ *   anything would be left behind.
+ *
+ * [openNow] is the folder the page has open, as the page spells it.
+ */
+internal fun deviceFolderTarget(
+    target: String,
+    mirrorPath: String,
+    namedPath: String?,
+    byName: Boolean,
+    openNow: String?,
+): String {
+    val mirror = File(mirrorPath)
+    val onScreen = openNow?.let { open ->
+        if (open == mirrorPath || open.startsWith(mirrorPath + File.separator)) {
+            mirrorPath
+        } else {
+            SafStorageManager.namedRootOf(open, mirror.parent.orEmpty())
+                ?.takeIf { (_, hash) -> hash == mirror.name }?.first
+        }
+    }
+    val root = onScreen ?: namedPath?.takeIf { byName } ?: mirrorPath
+    return root + target.removePrefix(mirrorPath)
+}
 
 /**
  * Whether a folder switch that failed should leave the previous folder watched.

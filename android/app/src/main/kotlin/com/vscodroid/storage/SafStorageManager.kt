@@ -12,6 +12,11 @@ import com.vscodroid.util.StorageManager
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.IOException
+import java.nio.file.FileAlreadyExistsException
+import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.Paths
 import java.util.concurrent.atomic.AtomicLong
 import kotlin.concurrent.thread
 import androidx.core.content.edit
@@ -583,10 +588,36 @@ class SafStorageManager(context: Context) {
 
             if (discardEntry(root, name)) removed++
         }
+        forgetNamesOfGoneCopies(root, ::liveMirrorNames)
         if (removed > 0) {
             Logger.i(tag, "Reclaimed $removed mirror entr(ies) without a live permission")
         }
         return removed
+    }
+
+    /**
+     * Removes the named paths ([namedPathFor]) and the mark of every copy that has gone.
+     *
+     * They hold nothing, but each spells a folder's name, so they are not left behind
+     * once the folder's copy is deleted. A copy is gone when its directory is and no
+     * grant is held for it: a folder granted again keeps them, and its next open makes
+     * any that are missing. Only what [namedPathFor] and [noteOpened] make is removed,
+     * links and the mark: a directory holding anything else is kept. Not counted as
+     * reclaimed, since no disk to speak of comes back.
+     */
+    private fun forgetNamesOfGoneCopies(root: File, liveMirrorNames: () -> Set<String>) {
+        File(root, NAMED_DIR).listFiles()?.forEach { entry ->
+            val hash = entry.name.removeSuffix(SHOWN_SUFFIX)
+            if (!isMirrorDirectoryName(hash) || File(root, hash).exists() || hash in liveMirrorNames()) {
+                return@forEach
+            }
+            // A directory only, never through a link put in its place, which would
+            // lead the deletion out of `saf-mirrors`.
+            if (entry.name == hash && !Files.isSymbolicLink(entry.toPath())) {
+                entry.listFiles()?.filter { Files.isSymbolicLink(it.toPath()) }?.forEach { it.delete() }
+            }
+            entry.delete()
+        }
     }
 
     /**
@@ -951,6 +982,94 @@ class SafStorageManager(context: Context) {
     }
 
     /**
+     * A path to [mirrorDir] whose last segment is the device folder's own name, or null
+     * when none can be made.
+     *
+     * The workbench names a folder after the last segment of its path, in the Explorer
+     * and in the window title, so a copy opened at `saf-mirrors/<hash>` was shown as its
+     * hash. The copy itself stays where it is: the reclaim pass, the sync record beside
+     * it and the upload journal all name it by that hash, and a folder renamed on a
+     * provider whose ids are stable keeps its grant, so a copy named after the folder
+     * would have to move under a running watcher. This makes
+     * `saf-mirrors/by-name/<hash>/<name>`, a link to the copy, for the workbench to open
+     * instead. The hash one level up keeps two folders of the same name apart, and
+     * [mirrorNameFor] and [folderForOpenedPath] read the copy back out of the path.
+     *
+     * Relative, `../../<hash>`, so it still resolves if the app's data is moved to other
+     * storage. An existing link to this copy is answered as it stands; anything else
+     * under that name is left alone and answered with null, which keeps the folder on
+     * its hash path. A folder renamed on the device gets a link for its new name beside
+     * the old one rather than in place of it, because the old one may be the path the
+     * page is on. The launch pass removes both once the copy has gone.
+     *
+     * ⚠️ Disk work, so not on the main thread.
+     */
+    fun namedPathFor(mirrorDir: File, displayName: String): File? {
+        val name = nameSegment(displayName) ?: return null
+        val link = File(File(File(mirrorDir.parentFile, NAMED_DIR), mirrorDir.name), name)
+        val path = link.toPath()
+        val target = Paths.get("..", "..", mirrorDir.name)
+        fun ours(): File? =
+            link.takeIf { Files.isSymbolicLink(path) && Files.readSymbolicLink(path) == target }
+        return try {
+            when {
+                Files.isSymbolicLink(path) -> ours()
+                Files.exists(path, LinkOption.NOFOLLOW_LINKS) -> null
+                else -> {
+                    Files.createDirectories(path.parent)
+                    try {
+                        Files.createSymbolicLink(path, target)
+                    } catch (e: FileAlreadyExistsException) {
+                        // A page load and a picked folder can name the same copy at once.
+                        return ours()
+                    }
+                    link
+                }
+            }
+        } catch (e: Exception) {
+            // The digest and the exception's type only: the path holds the folder's name.
+            Logger.w(tag, "Could not name the copy ${mirrorDir.name}: ${e.javaClass.simpleName}")
+            null
+        }
+    }
+
+    /**
+     * Records how the workbench has [folder]'s copy open, from [opened], the path it
+     * opened.
+     *
+     * A page on the named path is noted, which [wasShownByName] answers from then on. A
+     * page on the hash path gets a named path made for it, so that the bundled
+     * extension can offer to move the page there.
+     */
+    fun noteOpened(opened: String, folder: SafFolderInfo) {
+        val mirror = File(folder.mirrorPath)
+        if (namedRootOf(opened, mirror.parent.orEmpty()) == null) {
+            namedPathFor(mirror, folder.displayName)
+            return
+        }
+        try {
+            shownMark(mirror).createNewFile()
+        } catch (e: IOException) {
+            Logger.w(tag, "Could not note that ${mirror.name} opened by name: ${e.javaClass.simpleName}")
+        }
+    }
+
+    /**
+     * Whether a page has opened [mirrorDir]'s copy by its named path.
+     *
+     * The workbench keeps open editors, unsaved changes and terminals per path, so the
+     * same folder under its hash path and under its named path is two workspaces to it.
+     * A copy made before named paths existed may hold unsaved changes under its hash
+     * path, and opening it straight by name would leave them behind there with nothing
+     * to say so. This is what lets [com.vscodroid.MainActivity] open such a copy by its
+     * hash, where the extension offers the move, until the folder has been seen by name.
+     */
+    fun wasShownByName(mirrorDir: File): Boolean = shownMark(mirrorDir).exists()
+
+    private fun shownMark(mirrorDir: File): File =
+        File(File(mirrorDir.parentFile, NAMED_DIR), mirrorDir.name + SHOWN_SUFFIX)
+
+    /**
      * Resolves a human-readable display name for a SAF tree URI.
      */
     fun getDisplayName(safUri: Uri): String {
@@ -1225,8 +1344,75 @@ class SafStorageManager(context: Context) {
         internal fun mirrorNameFor(path: String?, mirrorsRoot: String): String? {
             val prefix = mirrorsRoot + File.separator
             if (path == null || !path.startsWith(prefix)) return null
-            return path.removePrefix(prefix).substringBefore(File.separatorChar)
+            // A named path is that same copy, and the guard that refuses to remove
+            // the folder the workbench has open has to see it as such.
+            return mirrorSpelling(path, mirrorsRoot).removePrefix(prefix)
+                .substringBefore(File.separatorChar)
                 .takeIf { it.isNotEmpty() }
+        }
+
+        /**
+         * Where the copies' named paths live, inside `saf-mirrors` and beside the copies:
+         * `by-name/<hash>/<name>`, a link to `../../<hash>`. See [namedPathFor].
+         *
+         * Inside rather than in a directory of its own, so that a reader of a workspace
+         * path that has not learned about named paths still sees one under `saf-mirrors`
+         * and treats it as a copy: `rememberedFolderToReopen` then asks for its grant
+         * rather than reopening it as an ordinary project. The reclaim pass, the storage
+         * screen and the removal sweep pass over it, since it is not a name of the shape
+         * a copy has.
+         */
+        internal const val NAMED_DIR = "by-name"
+
+        /**
+         * The mark beside a copy's named paths, `by-name/<hash>.shown`, saying that a page
+         * has opened the copy by name. See [wasShownByName].
+         */
+        internal const val SHOWN_SUFFIX = ".shown"
+
+        /** The longest name the filesystems Android keeps app data on take, in bytes. */
+        private const val MAX_NAME_BYTES = 255
+
+        /**
+         * [displayName] as one segment of a path, or null when it cannot be one.
+         *
+         * A name is shown by the workbench and spelled into URLs, terminals and tools, so
+         * a control character is replaced and the name is cut to what a filesystem takes.
+         * The part after the last `/` is used: a provider whose name query fails is
+         * answered with the tree's document id, `primary:Documents/notes`, and that is
+         * the folder `notes`. `.` and `..` name other directories, so they cannot be used.
+         */
+        internal fun nameSegment(displayName: String): String? {
+            val name = buildString {
+                displayName.substringAfterLast('/').forEach { append(if (it.isISOControl()) '_' else it) }
+            }
+            if (name.isBlank() || name == "." || name == "..") return null
+            var cut = name
+            while (cut.toByteArray(Charsets.UTF_8).size > MAX_NAME_BYTES) {
+                cut = cut.substring(0, cut.offsetByCodePoints(cut.length, -1))
+            }
+            return cut
+        }
+
+        /**
+         * The named path [path] lies on, with the copy it names, or null when it lies on
+         * none: `<mirrorsRoot>/by-name/<hash>/<name>` and `<hash>`.
+         */
+        internal fun namedRootOf(path: String, mirrorsRoot: String): Pair<String, String>? {
+            val prefix = mirrorsRoot + File.separator + NAMED_DIR + File.separator
+            if (!path.startsWith(prefix)) return null
+            val parts = path.removePrefix(prefix).split(File.separatorChar, limit = 3)
+            if (parts.size < 2 || !isMirrorDirectoryName(parts[0]) || parts[1].isEmpty()) return null
+            return prefix + parts[0] + File.separator + parts[1] to parts[0]
+        }
+
+        /**
+         * [path] spelled through the copy itself when it lies on a named path, and as it
+         * stands otherwise. Textual, so it answers for a link that is not there.
+         */
+        internal fun mirrorSpelling(path: String, mirrorsRoot: String): String {
+            val (root, hash) = namedRootOf(path, mirrorsRoot) ?: return path
+            return mirrorsRoot + File.separator + hash + path.removePrefix(root)
         }
 
         /**
@@ -1256,12 +1442,16 @@ class SafStorageManager(context: Context) {
          * The separator matters for the same reason it does in the reclaim gate:
          * mirror names are a hash prefix, so one being a prefix of another is
          * ordinary, and a bare `startsWith` would match the wrong folder.
+         *
+         * A named path ([namedPathFor]) is read as the copy it names. Missing it would
+         * leave a folder opened by name with no watcher, every save staying in the copy.
          */
         internal fun folderForOpenedPath(
             folders: List<SafFolderInfo>,
             opened: String,
         ): SafFolderInfo? = folders.firstOrNull {
-            opened == it.mirrorPath || opened.startsWith(it.mirrorPath + File.separator)
+            val path = mirrorSpelling(opened, File(it.mirrorPath).parent.orEmpty())
+            path == it.mirrorPath || path.startsWith(it.mirrorPath + File.separator)
         }
 
         /**
