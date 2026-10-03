@@ -810,16 +810,23 @@ class SafSyncEngine(private val context: Context) {
                 } finally {
                     mirrorCopiesInFlight.remove(localPath.absolutePath)
                 }
-                if (copied) {
+                if (copied != null) {
                     // What the open fetched vouches for the device copy as a landed write's
                     // bytes do in [keepsDeviceEdit]. Without it a provider that settles its
                     // stamp after the open, a FAT card once the cached inode is evicted or
                     // Nextcloud after its upload, had the first save of the session keep a
                     // `.device-` copy of the very document the editor shows.
+                    //
+                    // Both from the copy as it landed rather than from the mirror file a
+                    // moment later, which is whatever an editor saved into it since: that
+                    // length beside this digest made the read at the next save stop short
+                    // of the fetched copy and keep a duplicate of it, and that identity in
+                    // the record vouched for an edit the device never received, which the
+                    // reclaim and phase 3 read as disposable.
                     deviceSeen[localPath.absolutePath] = DeviceState(
-                        doc.lastModified to doc.size, fetchedDigest.digest(), localPath.length(),
+                        doc.lastModified to doc.size, fetchedDigest.digest(), copied.length,
                     )
-                    recordIdentity(recorded, doc.relativePath, localPath)
+                    recorded += identityLine(doc.relativePath, copied.lastModified, copied.length)
                 } else if (localPath.isFile &&
                     usableSpaceOf(mirrorDir) < OPEN_SPACE_FLOOR_BYTES &&
                     deviceMatchesMirror(doc.uri, localPath, doc.size)
@@ -1123,7 +1130,7 @@ class SafSyncEngine(private val context: Context) {
         } finally {
             mirrorCopiesInFlight.remove(preserved.absolutePath)
         }
-        if (!fetched) return DeviceCopyOutcome.UNAVAILABLE
+        if (fetched == null) return DeviceCopyOutcome.UNAVAILABLE
         // A changed time is not a changed file. This app's own delivered
         // write-back moves the device time and the record never learns the new
         // one, and a provider with coarse stamps (FAT32 at two seconds, cloud
@@ -1624,10 +1631,12 @@ class SafSyncEngine(private val context: Context) {
      * would make the user's only copy match, and match is what licenses the delete.
      *
      * So the precondition is about the DEVICE, not about who authored the bytes: call
-     * this only where the device is known to hold what is on disk here. A landed copy
-     * establishes that. So does a comparison that read both sides and found them equal,
-     * which is how a file the editor wrote and the watcher delivered gets recorded
-     * without any copy having happened.
+     * this only where the device is known to hold what is on disk here. A comparison that
+     * read both sides and found them equal establishes that, which is how a file the
+     * editor wrote and the watcher delivered gets recorded without any copy having
+     * happened. A landed copy does too, but only for the bytes it landed with, so phase 2
+     * records the identity [copyDocumentToLocal] reports rather than reading the file
+     * again, which an editor can have written in between.
      */
     private fun recordIdentity(into: MutableList<String>, path: String, file: File) {
         if (!file.isFile) return
@@ -1654,7 +1663,11 @@ class SafSyncEngine(private val context: Context) {
      * sides come through here.
      */
     internal fun identityLine(path: String, file: File): String =
-        "${escapeRecordPath(path)}\t${file.lastModified()}\t${file.length()}"
+        identityLine(path, file.lastModified(), file.length())
+
+    /** The same line for a copy whose time and length are already known. */
+    private fun identityLine(path: String, lastModified: Long, length: Long): String =
+        "${escapeRecordPath(path)}\t$lastModified\t$length"
 
     /**
      * Whether every file under [mirrorDir] is one this app can prove it copied from the
@@ -2126,13 +2139,14 @@ class SafSyncEngine(private val context: Context) {
     /**
      * Copies a single SAF document to a local file.
      *
-     * @return whether [dest] now holds this document. False means [dest] was left exactly
-     *   as it was, which, because of the partial-and-rename below, can mean it still
-     *   holds an edit of the user's that no sync wrote. Callers that record what the
-     *   mirror holds have to know the difference. False also when free space is below
-     *   [OPEN_SPACE_FLOOR_BYTES], decided before anything is read.
+     * @return what [dest] now holds of this document, or null when [dest] was left exactly
+     *   as it was, which, because of the partial-and-rename below, can mean it still holds
+     *   an edit of the user's that no sync wrote. Callers that record what the mirror holds
+     *   have to know the difference. Null also when free space is below
+     *   [OPEN_SPACE_FLOOR_BYTES], decided before anything is read. Taken before the rename,
+     *   not from [dest] afterwards, which an editor can have written by then.
      * @param digest updated with every byte fetched, so a caller learns what the copy
-     *   holds without reading it again. Meaningful only after a true answer.
+     *   holds without reading it again. Meaningful only after an answer that is not null.
      */
     private fun copyDocumentToLocal(
         docUri: Uri,
@@ -2140,9 +2154,9 @@ class SafSyncEngine(private val context: Context) {
         sourceModified: Long,
         digest: MessageDigest? = null,
         onReplacing: (fetched: File) -> Unit = {},
-    ): Boolean {
+    ): LandedCopy? {
         // The only floor, and here because both fetches into filesDir pass through this
-        // function: phase 2's copy and [setAsideDeviceCopy]. Both already read false as a
+        // function: phase 2's copy and [setAsideDeviceCopy]. Both already read null as a
         // copy that did not happen and turn it into [unfetched] or UNAVAILABLE, so a
         // document held back is guarded exactly like one that failed, unless phase 2 can
         // read that the mirror already holds it. Measured before every fetch rather than
@@ -2151,7 +2165,7 @@ class SafSyncEngine(private val context: Context) {
             // Logger.d: a folder of twenty thousand documents would otherwise put twenty
             // thousand lines into a release logcat. The sync logs one line at the end.
             Logger.d(tag, "Not copying into ${dest.name}: free space is below the floor")
-            return false
+            return null
         }
         // Written beside the destination and moved into place only once the stream
         // finished. Writing straight to dest would truncate it first, so a copy cut
@@ -2166,16 +2180,20 @@ class SafSyncEngine(private val context: Context) {
                 // composes that from the user's own path, and this level ships. See
                 // SafStorageManager.persistPermission for the whole of that reasoning.
                 Logger.w(tag, "No stream for ${dest.name}")
-                return false
+                return null
             }
-            (if (digest != null) DigestInputStream(source, digest) else source).use { input ->
-                FileOutputStream(partial).use { output ->
-                    input.copyTo(output, COPY_BUFFER_SIZE)
+            val copied = (if (digest != null) DigestInputStream(source, digest) else source)
+                .use { input ->
+                    FileOutputStream(partial).use { output ->
+                        input.copyTo(output, COPY_BUFFER_SIZE)
+                    }
                 }
-            }
             // Stamp with the source's own time so later syncs compare two timestamps
             // from the same clock rather than a provider's against the filesystem's.
             if (sourceModified > 0) partial.setLastModified(sourceModified)
+            // Read back from the scratch file, which nothing else writes, so the time is
+            // the one the filesystem kept.
+            val landed = LandedCopy(partial.lastModified(), copied)
             // The one moment anything can act on the copy this is about to replace, and
             // the only one where replacing it is already certain: the stream finished, so
             // the caller is not being asked to judge a copy that may yet fail and leave
@@ -2185,9 +2203,9 @@ class SafSyncEngine(private val context: Context) {
             if (!partial.renameTo(dest)) {
                 partial.delete()
                 Logger.w(tag, "Could not move ${partial.name} into place")
-                return false
+                return null
             }
-            return true
+            return landed
         } catch (e: Exception) {
             partial.delete()
             // The class rather than the message, and it takes both halves to be
@@ -2196,7 +2214,7 @@ class SafSyncEngine(private val context: Context) {
             // dropping the interpolation alone would put the same string in logcat by
             // the other route.
             Logger.w(tag, "Failed to copy into ${dest.name}: ${e.javaClass.simpleName}")
-            return false
+            return null
         }
     }
 
@@ -5082,6 +5100,12 @@ private class DeviceState(
     val sha256: ByteArray? = null,
     val length: Long = 0,
 )
+
+/**
+ * What [SafSyncEngine] fetched into the mirror: the copy's modification time as the
+ * filesystem kept it, and how many bytes the fetch streamed.
+ */
+private class LandedCopy(val lastModified: Long, val length: Long)
 
 /**
  * What [SafSyncEngine.uploadPlan] found under a directory, and whether the cap stopped

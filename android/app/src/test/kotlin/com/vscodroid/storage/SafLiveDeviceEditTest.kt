@@ -29,6 +29,7 @@ import java.io.File
 import java.io.IOException
 import java.io.OutputStream
 import java.nio.file.Files
+import java.security.MessageDigest
 
 /**
  * A save while the folder is open, meeting an edit another app made to the same document
@@ -426,6 +427,54 @@ class SafLiveDeviceEditTest {
         assertEquals(readsAfterMatch, reads, "the device copy was read again at a stamp it was matched at")
         assertEquals("second save", deviceText)
         assertEquals(emptyMap<String, String>(), deviceCopies())
+    }
+
+    /**
+     * What the open records for a fetched copy is the copy as it landed. Read off the mirror
+     * file a moment later, it was whatever an editor saved into the file in that instant:
+     * the record then vouched for an edit the device never received, as if the mirror could
+     * be reclaimed, and the read at the next save stopped at the edit's shorter length, so
+     * it missed the copy the open had fetched and kept a duplicate of it. The editor's save
+     * is simulated in the digest the fetch takes right then, the one step in between.
+     */
+    @Test
+    fun `a fetched copy is recorded as it landed when an editor saves at once`() {
+        val file = File(mirror, "notes.txt")
+        var editorSaved = false
+        mockkStatic(MessageDigest::class)
+        every { MessageDigest.getInstance("SHA-256") } answers {
+            val real = callOriginal()
+            object : MessageDigest("SHA-256") {
+                override fun engineUpdate(input: Byte) = real.update(input)
+                override fun engineUpdate(input: ByteArray, offset: Int, len: Int) =
+                    real.update(input, offset, len)
+
+                override fun engineReset() = real.reset()
+                override fun engineDigest(): ByteArray {
+                    if (!editorSaved && file.isFile) {
+                        editorSaved = true
+                        file.writeText("x")
+                    }
+                    return real.digest()
+                }
+            }
+        }
+        open()
+        assertEquals(true, editorSaved, "the simulated save never ran")
+        assertEquals(
+            false, engine.holdsOnlyVouchedCopies(mirror),
+            "the record vouched for an edit the device never received",
+        )
+        // The same bytes at another time, as a FAT card reports once its cached inode goes.
+        deviceModified -= 337
+
+        save("typed in the editor")
+
+        assertEquals(
+            emptyMap<String, String>(), deviceCopies(),
+            "the copy the open fetched was kept as if another app had written it",
+        )
+        assertEquals("typed in the editor", deviceText)
     }
 
     /** What the guard is for still holds on such a provider: another app's edit is kept. */
