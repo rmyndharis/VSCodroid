@@ -28,6 +28,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
 import java.io.OutputStream
+import java.nio.file.Files
 
 /**
  * A save while the folder is open, meeting an edit another app made to the same document
@@ -59,6 +60,9 @@ class SafLiveDeviceEditTest {
     private var deviceModified = OPENED_AT
     private var deviceSize = 2L
     private var deviceHasClock = true
+
+    /** False for a provider whose size column is null, which reads back as 0. */
+    private var deviceHasSize = true
     private var writes = 0
 
     /** How many times the device document was opened for reading. */
@@ -208,7 +212,7 @@ class SafLiveDeviceEditTest {
         every { cursor.getString(0) } returns "doc:notes.txt"
         every { cursor.getString(1) } returns "notes.txt"
         every { cursor.getString(2) } returns "text/plain"
-        every { cursor.getLong(3) } answers { deviceSize }
+        every { cursor.getLong(3) } answers { if (deviceHasSize) deviceSize else 0L }
         every { cursor.getLong(4) } answers { deviceModified }
         return cursor
     }
@@ -369,6 +373,59 @@ class SafLiveDeviceEditTest {
         assertEquals(3, writes, "a save of this app's own settling write was held back")
         assertEquals("third", deviceText)
         assertEquals(emptyList<File>(), failed)
+    }
+
+    /**
+     * A provider whose size column is null reports every length as 0, which is never the
+     * length this app digested, so a stamp it settles late has to be read at that length
+     * too, or each save after the first keeps a copy of the one before.
+     */
+    @Test
+    fun `saves to a provider with no size column that settles late leave no device copy`() {
+        deviceHasSize = false
+        lateStamp = LateStamp.WHOLE_SECONDS
+        open()
+
+        save("first save")
+        settle()
+        save("second save, longer")
+        settle()
+        save("third")
+
+        assertEquals(
+            emptyMap<String, String>(), deviceCopies(),
+            "this app's own earlier saves were kept as if another app had written them",
+        )
+        assertEquals(3, writes)
+    }
+
+    /**
+     * The stamp a moved document was matched to this app's bytes at is what the next save
+     * compares, whether or not a write followed the match. None follows where the mirror
+     * file is a link, which is never written out, and without the match being kept each
+     * later save read the document again to match the same bytes.
+     */
+    @Test
+    fun `a device copy matched to this app's bytes is not read again at the same stamp`() {
+        lateStamp = LateStamp.WHOLE_SECONDS
+        open()
+        save("first save")
+        settle()
+        val file = File(mirror, "notes.txt").apply { delete() }
+        Files.createSymbolicLink(
+            file.toPath(),
+            File(root, "elsewhere.txt").apply { writeText("outside the folder") }.toPath(),
+        )
+        engine.handleMirrorEvent(FileObserver.MODIFY, file, mirror, treeUri)
+        engine.runWriteBackLoop { false }
+        val readsAfterMatch = reads
+        file.delete()
+
+        save("second save")
+
+        assertEquals(readsAfterMatch, reads, "the device copy was read again at a stamp it was matched at")
+        assertEquals("second save", deviceText)
+        assertEquals(emptyMap<String, String>(), deviceCopies())
     }
 
     /** What the guard is for still holds on such a provider: another app's edit is kept. */
