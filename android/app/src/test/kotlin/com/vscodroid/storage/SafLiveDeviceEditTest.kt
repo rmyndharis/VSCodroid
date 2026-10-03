@@ -252,8 +252,11 @@ class SafLiveDeviceEditTest {
         settled = null
     }
 
-    private fun open(mirrorDir: File = mirror, tree: Uri = treeUri) =
-        runBlocking { engine.initialSync(tree, mirrorDir) { _, _ -> } }
+    private fun open(
+        mirrorDir: File = mirror,
+        tree: Uri = treeUri,
+        onProgress: (Int, Int) -> Unit = { _, _ -> },
+    ) = runBlocking { engine.initialSync(tree, mirrorDir, onProgress) }
 
     /** An editor save: the mirror file is written in place, and the watcher's job runs. */
     private fun save(text: String, mirrorDir: File = mirror, tree: Uri = treeUri) {
@@ -473,6 +476,58 @@ class SafLiveDeviceEditTest {
         assertEquals(
             emptyMap<String, String>(), deviceCopies(),
             "the copy the open fetched was kept as if another app had written it",
+        )
+        assertEquals("typed in the editor", deviceText)
+    }
+
+    /**
+     * A copy a reopen kept rather than fetched, under a stamp the provider moves afterwards
+     * with the bytes unchanged, as a FAT card behind the FUSE cache does once its cached
+     * inode is evicted. The document is the one the editor shows, so the first save must not
+     * keep a copy of it, and nothing but that reopen read it.
+     */
+    @Test
+    fun `a stamp moved after a reopen over a kept copy leaves no device copy`() {
+        open()
+        val readsBeforeReopen = reads
+        open()
+        assertEquals(readsBeforeReopen, reads, "the reopen fetched the document instead of keeping it")
+        deviceModified -= 337
+
+        save("typed in the editor")
+
+        assertEquals(
+            emptyMap<String, String>(), deviceCopies(),
+            "the copy the reopen kept was taken for another app's edit",
+        )
+        assertEquals("typed in the editor", deviceText)
+    }
+
+    /**
+     * A copy the reopen vouched for that another sync over the same mirror replaces before
+     * it is digested, the two syncs an activity recreated mid-open leaves. The newer device
+     * copy that sync fetched is not the kept one, and its digest taken for the kept copy's
+     * let the next save replace another app's edit without keeping it.
+     */
+    @Test
+    fun `a newer copy another sync renames in during a reopen is not taken for the kept one`() {
+        open()
+        var replaced = false
+        open { _, _ ->
+            if (replaced) return@open
+            replaced = true
+            editOnDevice("changed by another app")
+            File(mirror, "notes.txt").apply {
+                writeText(deviceText)
+                setLastModified(deviceModified)
+            }
+        }
+
+        save("typed in the editor")
+
+        assertEquals(
+            listOf("changed by another app"), deviceCopies().values.toList(),
+            "another app's edit was taken for the copy the reopen kept and replaced",
         )
         assertEquals("typed in the editor", deviceText)
     }

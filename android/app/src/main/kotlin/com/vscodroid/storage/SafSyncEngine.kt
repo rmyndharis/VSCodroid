@@ -176,9 +176,9 @@ class SafSyncEngine(private val context: Context) {
     /**
      * What the device reported for each document, as (COLUMN_LAST_MODIFIED, COLUMN_SIZE)
      * by absolute mirror path, when this engine last read it ([initialSync] phase 2) or
-     * wrote it (every write-back), with the SHA-256 of what phase 2 fetched or a landed
-     * write streamed, where one did. A save may replace exactly that and nothing newer;
-     * [keepsDeviceEdit] is what asks.
+     * wrote it (every write-back), with the SHA-256 of what phase 2 fetched, of the mirror
+     * copy it kept within [digestKeptCopies]'s budget, or of what a landed write streamed.
+     * A save may replace exactly that and nothing newer; [keepsDeviceEdit] is what asks.
      *
      * In memory only, never in the `.synced` record, because a record line licenses a
      * deletion (see [deviceChangedSinceRecord]). Scoped per mirror in [initialSync] like
@@ -873,6 +873,8 @@ class SafSyncEngine(private val context: Context) {
             }
         }
 
+        digestKeptCopies(mirrorDir, documents, recorded)
+
         // Read here, where phase 2 stopped fetching, rather than beside the notice: phase
         // 2b writes into the device folder, which for internal storage is this same
         // partition, and phase 3 frees mirror files, so either could change the answer.
@@ -927,6 +929,64 @@ class SafSyncEngine(private val context: Context) {
                 )
             }
             onDocumentsNotCopied(failedCopies, outOfRoom || belowFloor)
+        }
+    }
+
+    /**
+     * Gives the copies this open kept rather than fetched the digest a fetch leaves, so
+     * that [keepsDeviceEdit] can tell a stamp their provider moves afterwards from another
+     * app's edit.
+     *
+     * Kept means recorded without being fetched: the device's time agreed with the record,
+     * or a read found the device holding the mirror's bytes. With no digest, the first save
+     * after such a move kept a `.device-` copy of a document nobody had changed; a FAT card
+     * behind the FUSE cache is the ordinary case, reporting a rounded time once its cached
+     * inode is evicted. The mirror is what is read, locally, because it holds what the
+     * device holds as far as this open can tell, and where it does not, the device's bytes
+     * miss the digest and the save goes to the set-aside exactly as it did with none.
+     *
+     * Newest first and within [KEPT_COPY_DIGEST_BYTES], rather than the whole folder on
+     * every open: a provider moves a stamp after a write, so the recent copies are the ones
+     * it moves. What that leaves is a late stamp over a kept copy past the budget, which
+     * still keeps one spare copy of the unchanged document.
+     */
+    private fun digestKeptCopies(
+        mirrorDir: File,
+        documents: List<DocumentInfo>,
+        recorded: List<String>,
+    ) {
+        val vouched = recorded.toHashSet()
+        var budget = KEPT_COPY_DIGEST_BYTES
+        for (doc in documents.sortedByDescending { it.lastModified }) {
+            if (doc.isDirectory) continue
+            val file = File(mirrorDir, doc.relativePath)
+            val seen = deviceSeen[file.absolutePath] ?: continue
+            val length = file.length()
+            // A name that is no regular file any more could be a pipe that never ends a read.
+            if (seen.sha256 != null || length > budget || !file.isFile ||
+                file.absolutePath in unfetched
+            ) {
+                continue
+            }
+            val hashed = try {
+                file.inputStream().use { input ->
+                    // Vouched for, and asked with the file already open, because the bytes
+                    // read are the kept copy's only while the name still is: another sync
+                    // over this mirror, an activity recreated mid-open, renames a newer
+                    // device copy into place, whose digest would match that device copy
+                    // and skip the set-aside meant to keep it. A rename after this leaves
+                    // the open stream on the copy that was asked about.
+                    if (identityLine(doc.relativePath, file) !in vouched) return@use null
+                    budget -= length
+                    sha256(input, length)
+                }
+            } catch (e: Exception) {
+                null
+            } ?: continue
+            // Only over the entry the open left, never one a write has replaced since.
+            deviceSeen.replace(
+                file.absolutePath, seen, DeviceState(seen.stamp, hashed.first, hashed.second),
+            )
         }
     }
 
@@ -1181,11 +1241,12 @@ class SafSyncEngine(private val context: Context) {
      * stamp alone kept a `.device-` copy of the previous save: at every save after the
      * first on MTP and Nextcloud, and on the other two at a save made after they settled.
      * The same holds for a copy phase 2 fetched while its provider was still settling a
-     * write, which a stamp alone set aside at the first save of the session. So a landed
-     * write leaves the SHA-256 of what it streamed beside its stamp, and phase 2's fetch
-     * the SHA-256 of what it copied, and a device copy that reads back as exactly that is
-     * the version the mirror was made from: the stamp is re-baselined and the save goes
-     * ahead. Hashed as it is read rather than fetched, so it spends no disk and neither
+     * write, which a stamp alone set aside at the first save of the session, and for a
+     * copy phase 2 kept whose stamp moves later. So a landed write leaves the SHA-256 of
+     * what it streamed beside its stamp, phase 2's fetch the SHA-256 of what it copied, and
+     * [digestKeptCopies] that of a copy kept, and a device copy that reads back as exactly
+     * that is the version the mirror was made from: the stamp is re-baselined and the save
+     * goes ahead. Hashed as it is read rather than fetched, so it spends no disk and neither
      * the free-space floor nor the size cap a fetch obeys can hold such a save back. That
      * costs one read per save whose stamp moved, of no more than the digested length and a
      * buffer, and none for a document reported past [MAX_FILE_SIZE] at another length,
@@ -1201,10 +1262,10 @@ class SafSyncEngine(private val context: Context) {
      * write, which drops the entry so the next save fails open; entries not following a
      * directory rename; a stamp a provider moves after the folder was opened, over a copy
      * the open kept rather than fetched (its times agreed, or a read found the bytes
-     * equal) and this app has not written since, which keeps one spare copy of the
-     * unchanged document, since only this app's writes and phase 2's fetches leave a
-     * digest; a document reported past [MAX_FILE_SIZE] at a length other than the digested
-     * one, which is held back unread even where it holds this app's own bytes; and on a
+     * equal) past the first [KEPT_COPY_DIGEST_BYTES] of such copies, newest first, and not
+     * written by this app since, which keeps one spare copy of the unchanged document; a
+     * document reported past [MAX_FILE_SIZE] at a length other than the digested one,
+     * which is held back unread even where it holds this app's own bytes; and on a
      * provider with no clock, every copy after the first carries its counter as a time,
      * which is cosmetic.
      */
@@ -4540,6 +4601,13 @@ class SafSyncEngine(private val context: Context) {
         internal const val OPEN_SPACE_FLOOR_BYTES = StorageManager.LOW_STORAGE_BYTES + MAX_FILE_SIZE
 
         /**
+         * How many bytes of the copies an open kept rather than fetched it reads to digest
+         * them, newest first; see [digestKeptCopies]. A typical source tree fits, and a
+         * folder of photos or data does not cost a full read on every open.
+         */
+        internal const val KEPT_COPY_DIGEST_BYTES = 64L * 1024 * 1024
+
+        /**
          * How many entries one directory-create is allowed to copy to the device.
          *
          * A rename normally moves a handful of files, but nothing stops it moving a
@@ -5091,9 +5159,10 @@ internal enum class DeviceCopyOutcome {
 /**
  * What [SafSyncEngine] last knew of one device document: the (COLUMN_LAST_MODIFIED,
  * COLUMN_SIZE) its provider reported, and the SHA-256 of what the open fetched from it or
- * this app's last write streamed into it, with the length of those bytes. That digest is
- * null for a document the open kept without fetching until a write of this app lands
- * there, and after a write that does not land.
+ * this app's last write streamed into it, or of the mirror copy the open kept, with the
+ * length of those bytes. That digest is null for a kept copy past the open's budget,
+ * [SafSyncEngine.KEPT_COPY_DIGEST_BYTES], until a write of this app lands there, and after
+ * a write that does not land.
  */
 private class DeviceState(
     val stamp: Pair<Long, Long>,
