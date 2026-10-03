@@ -59,6 +59,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The process monitor's status bar item stays in place when an extension that runs in the page adds an unnamed status bar item of its own; the two used to share one slot.
 - A swipe across the key row that starts slowly turns the page without pressing the key it started on or leaving that key's alternates open.
 - Two quick taps on a key row key press it twice instead of once.
+- An Alt chord from the key row no longer leaves toolbar buttons on their Alt action, such as Split Editor Down in place of Split Editor Right, where a tap ran it.
 
 ### Security
 

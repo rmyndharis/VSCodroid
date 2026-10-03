@@ -55,8 +55,10 @@ const KEY_INJECTOR = path.join(
 
 /**
  * The body of the raw string in `setupModifierInterceptor()`, with the
- * indentation `trimIndent()` removes taken off. `$keyLookup` is the one
- * interpolation, and the guard does not read it, so an empty table stands in.
+ * indentation `trimIndent()` removes taken off. `$keyLookup` and
+ * `$RELEASE_MODIFIERS_JS` are its interpolations, and the guard reads neither,
+ * so an empty table and an empty function stand in;
+ * `scripts/test-modifier-release.js` runs the real function.
  */
 function extractInterceptor() {
     const lines = fs.readFileSync(KEY_INJECTOR, 'utf8').split('\n');
@@ -78,7 +80,8 @@ function extractInterceptor() {
     );
     const js = body.map((l) => (l.trim() ? l.slice(indent) : '')).join('\n');
 
-    const substituted = js.split('$keyLookup').join('{}');
+    const substituted = js.split('$keyLookup').join('{}')
+        .split('$RELEASE_MODIFIERS_JS').join('function releaseModifiers() {}');
     assert.ok(!substituted.includes('$'),
         'the interceptor gained a Kotlin interpolation this check does not know how to fill');
     assert.ok(substituted.includes('var EDGE'),

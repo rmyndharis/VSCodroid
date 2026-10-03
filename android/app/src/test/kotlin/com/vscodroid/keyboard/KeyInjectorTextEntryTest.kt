@@ -1,11 +1,14 @@
 package com.vscodroid.keyboard
 
+import android.os.SystemClock
 import android.view.KeyEvent
 import android.webkit.WebView
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.mockkStatic
+import io.mockk.unmockkAll
 import io.mockk.verify
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
@@ -51,6 +54,12 @@ class KeyInjectorTextEntryTest {
         every { android.util.Log.w(any(), any<String>()) } returns 0
         every { android.util.Log.d(any(), any()) } returns 0
         every { webView.dispatchKeyEvent(any()) } returns true
+    }
+
+    /** Uniform across this package; [KeyInjectorShiftTest] gives the reason. */
+    @AfterEach
+    fun tearDown() {
+        unmockkAll()
     }
 
     private fun injector(events: List<KeyEvent>? = listOf(down, up)) =
@@ -124,6 +133,49 @@ class KeyInjectorTextEntryTest {
         assertTrue(pressed.isEmpty(), "a vertical arrow was pressed as a real key: $pressed")
         verify(exactly = 0) { webView.dispatchKeyEvent(any()) }
         verify(exactly = 2) { webView.evaluateJavascript(any(), any()) }
+    }
+
+    /**
+     * The release a hardware keyboard sends once a chord's key is up, and the
+     * only sign the page gets that a latched modifier is no longer held: without
+     * it the workbench went on showing, and running, the Alt variant of the
+     * editor's split button after Alt+Left from the row. See [modifierReleases].
+     *
+     * NEGATIVE CONTROL, measured: with `navigationKeyEvents` building the press
+     * alone, as it did at 54352514, the second case dispatches 2 events, not 3.
+     */
+    @Test
+    fun `a chord's modifiers come up after its key, Alt first, each leaving the rest held`() {
+        val ctrl = KeyEvent.META_CTRL_ON or KeyEvent.META_CTRL_LEFT_ON
+        val shift = KeyEvent.META_SHIFT_ON or KeyEvent.META_SHIFT_LEFT_ON
+        assertEquals(emptyList<Triple<Int, Int, Int>>(), modifierReleases(0), "a plain press released a modifier")
+        assertEquals(
+            listOf(Triple(KeyEvent.KEYCODE_ALT_LEFT, 56, 0)),
+            modifierReleases(navigationMetaState(ctrl = false, alt = true, shift = false, meta = false)),
+        )
+        assertEquals(
+            listOf(
+                Triple(KeyEvent.KEYCODE_ALT_LEFT, 56, ctrl or shift),
+                Triple(KeyEvent.KEYCODE_CTRL_LEFT, 29, shift),
+                Triple(KeyEvent.KEYCODE_SHIFT_LEFT, 42, 0),
+            ),
+            modifierReleases(navigationMetaState(ctrl = true, alt = true, shift = true, meta = false)),
+        )
+    }
+
+    @Test
+    fun `the press the row sends for a navigation key releases what it held`() {
+        // The real builder, not the fake: KeyEvent's constructor does nothing on
+        // the JVM, so the events can be counted though not read. What each one
+        // is, is the case above and TextEntryInstrumentedTest on a device.
+        mockkStatic(SystemClock::class)
+        every { SystemClock.uptimeMillis() } returns 1000L
+
+        KeyInjector(webView).injectKey("ArrowLeft", altKey = true)
+        verify(exactly = 3) { webView.dispatchKeyEvent(any()) }
+
+        KeyInjector(webView).injectKey("ArrowRight")
+        verify(exactly = 5) { webView.dispatchKeyEvent(any()) }
     }
 
     @Test

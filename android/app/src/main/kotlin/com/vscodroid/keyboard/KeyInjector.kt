@@ -30,7 +30,8 @@ class KeyInjector(
      * character held with Ctrl, Alt or Meta, is announced as a DOM event,
      * because that is what the workbench resolves its bindings from;
      * [NAVIGATION_KEYS] says why the trackpad's Up and Down, Tab and Escape
-     * stay there.
+     * stay there. Either way the modifiers a press carried come up after it,
+     * on the same route ([modifierReleases] says why).
      */
     fun injectKey(
         key: String,
@@ -128,6 +129,7 @@ class KeyInjector(
 
         val js = """
             (function() {
+                $RELEASE_MODIFIERS_JS
                 var target = document.activeElement || document.body;
                 var eventInit = {
                     key: ${jsKey},
@@ -144,6 +146,7 @@ class KeyInjector(
                 };
                 target.dispatchEvent(new KeyboardEvent('keydown', eventInit));
                 target.dispatchEvent(new KeyboardEvent('keyup', eventInit));
+                releaseModifiers(target, eventInit);
                 return target === document.body ? 'body' : (target.tagName || 'unknown');
             })();
         """.trimIndent()
@@ -186,7 +189,8 @@ class KeyInjector(
     /**
      * Installs a JS `beforeinput` listener that intercepts soft keyboard text input
      * when ExtraKeyRow modifiers (Ctrl/Alt) are active. Instead of inserting text,
-     * it dispatches modified KeyboardEvents so VS Code shortcuts work.
+     * it dispatches modified KeyboardEvents so VS Code shortcuts work, then a keyup
+     * for each modifier the chord carried ([modifierReleases] says why).
      *
      * The listener resolves each character through [KeyMapping]'s table, serialized in
      * here as a lookup object, so it answers from the same definitions [injectKey] uses
@@ -275,6 +279,8 @@ class KeyInjector(
 
                 var KEYS = $keyLookup;
 
+                $RELEASE_MODIFIERS_JS
+
                 // The edits a soft keyboard reports instead of a key, and the
                 // key each one stands for. Built once rather than per event.
                 //
@@ -356,6 +362,7 @@ class KeyInjector(
                         };
                         target.dispatchEvent(new KeyboardEvent('keydown', init));
                         target.dispatchEvent(new KeyboardEvent('keyup', init));
+                        releaseModifiers(target, init);
                         mod.ctrl = false;
                         mod.alt = false;
                         mod.shift = false;
@@ -447,6 +454,7 @@ class KeyInjector(
                     };
                     target.dispatchEvent(new KeyboardEvent('keydown', init));
                     target.dispatchEvent(new KeyboardEvent('keyup', init));
+                    releaseModifiers(target, init);
 
                     mod.ctrl = false;
                     mod.alt = false;
@@ -595,3 +603,37 @@ class KeyInjector(
         }
     }
 }
+
+/**
+ * `releaseModifiers(target, init)`, defined in each script that sends a chord
+ * and called right after the chord's own keyup: a keyup at `target` for each
+ * modifier `init` holds, as a hardware keyboard sends one when the key comes
+ * up. Alt, Ctrl, Shift and Meta, in that order and each with the flags still
+ * held, which is what [modifierReleases] gives a real press; it says why a
+ * chord needs them.
+ *
+ * At the chord's own target, not at whatever has focus by then, so that the
+ * window hears the release exactly when it heard the chord's keyup. A chord
+ * that takes its target out of the document goes unheard from there on, and a
+ * release heard after an Alt chord whose keyup was not reads as an Alt pressed
+ * and released alone, which focuses the menu bar. It also keeps a picker the
+ * chord opens, such as Ctrl+Tab's, from taking the release as its cue to
+ * accept (read from the bundle, not measured).
+ *
+ * Called from the chord's script, so it reaches the page after the chord, and
+ * defined in each of the two rather than shared on `window`: an announced
+ * chord works without the modifier interceptor, and so should its release.
+ */
+private val RELEASE_MODIFIERS_JS = """
+    function releaseModifiers(target, init) {
+        var held = { altKey: init.altKey, ctrlKey: init.ctrlKey, shiftKey: init.shiftKey, metaKey: init.metaKey };
+        [['altKey', 'Alt', 'AltLeft', 18], ['ctrlKey', 'Control', 'ControlLeft', 17],
+            ['shiftKey', 'Shift', 'ShiftLeft', 16], ['metaKey', 'Meta', 'MetaLeft', 91]].forEach(function(m) {
+            if (!held[m[0]]) return;
+            held[m[0]] = false;
+            target.dispatchEvent(new KeyboardEvent('keyup', { key: m[1], code: m[2], keyCode: m[3], which: m[3],
+                location: 1, altKey: held.altKey, ctrlKey: held.ctrlKey, shiftKey: held.shiftKey,
+                metaKey: held.metaKey, bubbles: true, cancelable: true, composed: true }));
+        });
+    }
+""".trimIndent()

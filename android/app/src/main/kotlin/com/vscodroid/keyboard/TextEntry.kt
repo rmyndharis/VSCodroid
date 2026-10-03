@@ -120,15 +120,56 @@ internal fun navigationMetaState(ctrl: Boolean, alt: Boolean, shift: Boolean, me
 
 /**
  * One press of a [NAVIGATION_KEYS] entry, down then up, stamped and addressed
- * the way [virtualKeyboardEvents] stamps a typed character.
+ * the way [virtualKeyboardEvents] stamps a typed character, then the release of
+ * each modifier [metaState] holds ([modifierReleases]).
+ *
+ * The releases go in the same list, so the same dispatch delivers them after the
+ * key; the page's order between a key event and a script is not guaranteed.
  */
 internal fun navigationKeyEvents(keyCode: Int, scanCode: Int, metaState: Int): List<KeyEvent> {
     val now = SystemClock.uptimeMillis()
-    return listOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP).map { action ->
-        KeyEvent(
-            now, now, action, keyCode, 0, metaState,
-            KeyCharacterMap.VIRTUAL_KEYBOARD, scanCode, 0,
-            InputDevice.SOURCE_KEYBOARD,
-        )
+    fun event(action: Int, code: Int, scan: Int, meta: Int) = KeyEvent(
+        now, now, action, code, 0, meta,
+        KeyCharacterMap.VIRTUAL_KEYBOARD, scan, 0,
+        InputDevice.SOURCE_KEYBOARD,
+    )
+    val press = listOf(KeyEvent.ACTION_DOWN, KeyEvent.ACTION_UP).map { action ->
+        event(action, keyCode, scanCode, metaState)
+    }
+    return press + modifierReleases(metaState).map { (code, scan, meta) ->
+        event(KeyEvent.ACTION_UP, code, scan, meta)
     }
 }
+
+/**
+ * The modifier keys that come up after a chord held with [metaState], in the
+ * order a hardware keyboard would release them: each one's left-hand key code
+ * and evdev scan code, and the meta state still held once it is up.
+ *
+ * The row's modifiers are latches rather than keys, so without these the page
+ * sees a modifier go down with the chord and never come up. The workbench tells
+ * its toolbars about a modifier when one goes down or comes up and at no other
+ * key: after Alt+Left from the row, the editor's split button went on showing
+ * Split Editor Down, and running it on a tap, until a Ctrl chord replaced Alt
+ * with Ctrl. Measured on an API 36 emulator.
+ *
+ * Nothing presses a modifier to match, at the latch or later. Latching Alt and
+ * unlatching it would then reach the page as an Alt pressed and released with
+ * nothing between, which the workbench takes as a request to focus the menu
+ * bar; a release after a chord has the chord between.
+ */
+internal fun modifierReleases(metaState: Int): List<Triple<Int, Int, Int>> {
+    var held = metaState
+    return MODIFIER_KEYS.filter { (metaState and it.first) != 0 }.map { (mask, keyCode, scanCode) ->
+        held = held and mask.inv()
+        Triple(keyCode, scanCode, held)
+    }
+}
+
+/** Each modifier's meta bits, with the key code and evdev scan code of its left-hand key. */
+private val MODIFIER_KEYS = listOf(
+    Triple(KeyEvent.META_ALT_MASK, KeyEvent.KEYCODE_ALT_LEFT, 56),
+    Triple(KeyEvent.META_CTRL_MASK, KeyEvent.KEYCODE_CTRL_LEFT, 29),
+    Triple(KeyEvent.META_SHIFT_MASK, KeyEvent.KEYCODE_SHIFT_LEFT, 42),
+    Triple(KeyEvent.META_META_MASK, KeyEvent.KEYCODE_META_LEFT, 125),
+)

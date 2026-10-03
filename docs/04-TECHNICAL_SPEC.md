@@ -671,7 +671,12 @@ dispatch as real `KeyEvent` pairs, with any latched Ctrl, Alt or Shift as meta s
 they move the caret and select in text boxes and reach extension webviews, where an
 announced key did nothing. Each carries the evdev scan code a hardware keyboard sends,
 because Chromium derives `KeyboardEvent.code` from it, and Home and End use
-`KEYCODE_MOVE_HOME`/`KEYCODE_MOVE_END`, not the system Home key. A press the WebView
+`KEYCODE_MOVE_HOME`/`KEYCODE_MOVE_END`, not the system Home key. Each latched modifier then
+comes up as a real `ACTION_UP` of its left-hand key, in the same dispatch
+(`modifierReleases`): the row's modifiers are latches, so without it the page saw a
+modifier go down and never come up, and the workbench, which tells its toolbars about a
+modifier only when one goes down or comes up, left the editor's split button on Split
+Editor Down after Alt+Left. A press the WebView
 refuses falls back to the announce route. A real arrow turns WebView spatial navigation on
 until the next touch on the page, so a Left or Right that leaves a collapsed caret at the
 start or end of a text box would move focus out of it. A guard installed with the modifier
@@ -698,7 +703,11 @@ ViewPager2's RecyclerView is one.
 **Everything else is announced.** A key that names a command rather than a character
 (`Tab`, `Escape`, `F7`), the trackpad's Up and Down, and any character held with Ctrl, Alt
 or Meta, is sent as a `keydown`/`keyup` pair built by `evaluateJavascript` at
-`document.activeElement`, since that is what the workbench resolves its key bindings from.
+`document.activeElement`, since that is what the workbench resolves its key bindings from,
+followed by a `keyup` for each modifier it carried, at the same element; the modifier
+interceptor's chords from the soft keyboard end the same way. No modifier `keydown` is sent,
+at the latch or later: a latch undone would then read as Alt pressed and released alone,
+which focuses the menu bar.
 Tab stays here because a real one moves focus, and the Explorer's rename and New File boxes
 commit the typed name when they lose it; Escape because under spatial navigation an
 unhandled real Escape blurs the focused element. Up and Down stay because they are the
