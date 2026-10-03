@@ -57,6 +57,10 @@
         "title": "%command.toggleExtraKeyRow%"
       },
       {
+        "command": "vscodroid.uiScale",
+        "title": "%command.uiScale%"
+      },
+      {
         "command": "vscodroid.about",
         "title": "%command.about%"
       },

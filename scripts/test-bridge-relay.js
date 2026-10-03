@@ -390,7 +390,7 @@ async function main() {
     // Held rather than written inline, because the relay installs the reply hook
     // ON this object. That hook is the road a late answer takes back into the
     // page, so a test that cannot reach it cannot drive any command that answers
-    // by id, which is four of the fifteen.
+    // by id, which is four of the seventeen.
     const relayWindow = { __vscodroid: { authToken: 'test-token' } };
     vm.runInNewContext(relay, {
         AndroidBridge,

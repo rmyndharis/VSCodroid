@@ -21,6 +21,7 @@
  * - vscodroid.clearCaches          : Deletes cached data, reports bytes freed
  * - vscodroid.manageToolchains     : Opens the Android Toolchains screen
  * - vscodroid.toggleExtraKeyRow    : Hides or shows the key row above the keyboard
+ * - vscodroid.uiScale              : Sets the size of the whole interface
  * - vscodroid.about                : Opens the Android About dialog
  * - vscodroid.copyBugReport        : Opens a bug report to read, then copies it
  *
@@ -541,6 +542,49 @@ function activate(context) {
         }
     );
 
+    // -- UI scale --
+
+    // The editor and terminal font sizes reach those two and nothing else, and
+    // the side bar, tabs, menus and status bar are drawn at a fixed size that is
+    // small on a phone. This sets the size of the whole page, which the page
+    // keeps and applies on every load. The page also says which sizes to offer,
+    // since it is the side that knows the screen: those that leave the page at
+    // least 320 pixels wide.
+    const uiScaleCmd = vscode.commands.registerCommand('vscodroid.uiScale', async () => {
+        try {
+            const { scale, choices } = /** @type {{ scale: number, choices: number[] }} */ (
+                await sendBridgeCommand('getUiScale')
+            );
+            if (choices.length < 2) {
+                vscode.window.showInformationMessage(
+                    'This screen is too narrow to show the interface any larger.'
+                );
+                return;
+            }
+            const picked = await vscode.window.showQuickPick(
+                choices.map((s) => ({
+                    label: `${Math.round(s * 100)}%`,
+                    description: s === scale ? 'current' : undefined,
+                    scale: s
+                })),
+                { placeHolder: 'Size of the whole interface: side bar, tabs, menus and editor' }
+            );
+            if (!picked || picked.scale === scale) return;
+            // The page answers with the size in force, which is 100% when the one
+            // picked did not take effect on this device.
+            const now = await sendBridgeCommand('setUiScale', { scale: picked.scale });
+            if (now === picked.scale) {
+                vscode.window.showInformationMessage(`UI scale set to ${picked.label}.`);
+            } else {
+                vscode.window.showWarningMessage(
+                    `${picked.label} did not take effect on this device, so the UI scale is back at 100%.`
+                );
+            }
+        } catch (/** @type {*} */ err) {
+            vscode.window.showErrorMessage(`Could not change the UI scale: ${err.message}`);
+        }
+    });
+
     // -- About --
 
     const aboutCmd = vscode.commands.registerCommand('vscodroid.about', async () => {
@@ -685,6 +729,7 @@ function activate(context) {
         clearCachesCmd,
         toolchainsCmd,
         toggleKeyRowCmd,
+        uiScaleCmd,
         aboutCmd,
         bugReportCmd
     );

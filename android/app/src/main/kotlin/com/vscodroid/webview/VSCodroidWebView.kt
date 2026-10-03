@@ -20,6 +20,9 @@ object VSCodroidWebView {
             builtInZoomControls = false
             displayZoomControls = false
             textZoom = 100
+            // useWideViewPort stays at its default, false. The UI scale depends on
+            // it: without a wide viewport, a page is laid out at the view's width
+            // divided by its initial scale (addUiScaleScript in MainActivity.kt).
             // Kept, and not because nothing was asked of it. Every webview
             // document this app renders sits on an https origin, and not because
             // anything here configures one: `branding/product.json` lists

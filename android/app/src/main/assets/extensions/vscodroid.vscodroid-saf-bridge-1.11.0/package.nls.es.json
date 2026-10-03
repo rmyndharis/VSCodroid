@@ -11,6 +11,7 @@
   "command.clearCaches": "VSCodroid: Vaciar las cachés",
   "command.manageToolchains": "VSCodroid: Administrar cadenas de herramientas",
   "command.toggleExtraKeyRow": "VSCodroid: Mostrar u ocultar la fila de teclas extra",
+  "command.uiScale": "VSCodroid: Escala de la interfaz",
   "command.about": "VSCodroid: Acerca de",
   "command.copyBugReport": "VSCodroid: Copiar el informe de error",
   "viewsWelcome.explorer.deviceFolder": "Para trabajar con una carpeta del almacenamiento del dispositivo, como una dentro de Documents o Download, ábrala desde el dispositivo para que también se muestren los archivos que otras aplicaciones guardaron en ella.\n[Abrir una carpeta del dispositivo](command:vscodroid.openFolderFromDevice)"
