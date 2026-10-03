@@ -1517,7 +1517,7 @@ android/app/src/main/kotlin/com/vscodroid/
 
 2. **Day 2** (validation):
    - Test: `npm --version`, `npm init -y`, `npm install express`
-   - Test: `npx create-vite-app test-app`
+   - Test: `npx create-vite-app test-app`. This has failed in every release so far: see the last acceptance criterion below
    - Verify npm cache directory is properly configured
 
 > **Android exec note**: this is SELinux, not a `noexec` mount, and the difference is load-bearing. SELinux denies `execute_no_trans` on `app_data_file` for targetSdk >= 29, so a shim script under `filesDir` cannot be exec'd, while `dlopen` of a `.node` addon from the same directory is still allowed and is what `pty.node` relies on. A `noexec` mount would block both. Bash functions defined in `.bashrc` and in the `BASH_ENV` file work around the exec side by invoking Node.js with the npm CLI entry point as an argument.
@@ -1527,7 +1527,7 @@ android/app/src/main/kotlin/com/vscodroid/
 - [ ] `npm --version` works
 - [ ] `npm init -y` creates package.json
 - [ ] `npm install express` installs successfully
-- [ ] `npx` works for running packages
+- [ ] `npx` works for running packages. No release has met this so far. `npx` itself starts, as the shell function above, but it runs a package's program through the program's file in `node_modules/.bin`, and Android refuses to execute a file inside the app's storage, for the reason the exec note above gives. So `npx <tool>`, `npm create` and `npm init <initializer>` exit 126 with `Permission denied`. The npm and npx section of `docs/USER_GUIDE.md` gives the way round it: run the program's JavaScript file with `node`
 
 ---
 
