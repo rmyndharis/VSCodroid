@@ -1254,7 +1254,7 @@ If `node`, `python3`, `git`, or other tools show "command not found":
 
 If `npm install` fails with errors:
 
-- **EACCES / permission errors** -- make sure you are working inside `~/projects/` or your home directory, not in a system path.
+- **EACCES / permission errors** can mean an install step tried to run a program the package downloaded, which Android does not allow inside the app's storage; esbuild is one such package (see [Known Limitations](#packages-with-prebuilt-binaries)). If it is about writing a file or folder (`mkdir`, `open`) rather than running a program, make sure you are working inside `~/projects/` or your home directory, not in a system path.
 - **node-gyp / compilation errors** -- the package requires native compilation. Use a pure JS alternative (see [Known Limitations](#native-npm-packages)).
 - **Unsupported platform errors** come from a package whose prebuilt binaries have no Android build, so there is nothing to install (see [Known Limitations](#packages-with-prebuilt-binaries)).
 - **Network timeout** -- check your internet connection. npm uses `--prefer-offline` by default, so cached packages install without network.
