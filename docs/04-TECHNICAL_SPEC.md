@@ -494,10 +494,12 @@ because the page cannot take them from `product.json`: the trusted link domains,
 recommendations, and the theme a page load starts on. The last reads the splash the workbench
 saves in `localStorage` (`monaco-parts-splash`), paints the page background from it before the
 first paint, and hands the same theme to the workbench as `initialColorTheme`, which the
-workbench uses only when it cannot use the theme it stored. It keeps that stored theme only
-while `workbench.colorTheme` equals the theme's id, so the default the welcome extension sets
-must be an id the server tree contributes, not an older name upstream migrates;
-`verify-server-tree.py` checks it.
+workbench uses only when it cannot use the theme it stored. After that it keeps the background
+on the editor colour of the theme the workbench shows, because the background also fills the
+space the soft keyboard gives back until the workbench lays itself out again. The workbench
+keeps its stored theme only while `workbench.colorTheme` equals the theme's id, so the default
+the welcome extension sets must be an id the server tree contributes, not an older name
+upstream migrates; `verify-server-tree.py` checks it.
 
 Readiness is `GET /version`, and only a `200` counts. There is no `/healthz`:
 what used to serve one was a fallback server in `assets/server.js` that bound the

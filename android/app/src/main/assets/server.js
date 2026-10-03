@@ -486,6 +486,18 @@ if (!fs.existsSync(rehEntryPoint)) {
     // one to compare. The root is still coloured from the splash, which is right
     // for everyone the setting does not apply to.
     //
+    // The root shows again after the first paint. When the window grows, as it
+    // does when the soft keyboard goes down, the space given back shows the root
+    // until the workbench has laid itself out again, a tenth of a second or more
+    // on an API 36 emulator: the usual case when a folder is opened from a box
+    // that had the keyboard up. So the root follows the theme the workbench shows
+    // rather than keeping the one the page started on. A theme change rewrites a
+    // style element in the head, so each change to the head takes the editor
+    // background from the workbench again; the head is otherwise left alone after
+    // start (six changes in about five minutes of use, measured). Taking it as
+    // the page is left was tried and is too late: the keyboard starts to go down
+    // before the workbench navigates.
+    //
     // Anything that throws in here leaves the page as upstream ships it.
     try {
         const added = extendWorkbenchPage(workbenchHtmlPath, INITIAL_THEME_MARKER, [
@@ -503,6 +515,11 @@ if (!fs.existsSync(rehEntryPoint)) {
             '\t\t\t\t\t\tfor (var key in ids) { if (hex.test(info[key])) { colors[ids[key]] = info[key]; } }',
             '\t\t\t\t\t\tsettings.initialColorTheme = { themeType: type, colors: colors };',
             '\t\t\t\t\t}',
+            '\t\t\t\t\tnew MutationObserver(function () {',
+            "\t\t\t\t\t\tvar wb = document.querySelector('.monaco-workbench');",
+            "\t\t\t\t\t\tvar now = wb ? getComputedStyle(wb).getPropertyValue('--vscode-editor-background').trim() : '';",
+            '\t\t\t\t\t\tif (now) { document.documentElement.style.backgroundColor = now; }',
+            '\t\t\t\t\t}).observe(document.head, { childList: true, subtree: true });',
         ]);
         if (added) {
             log('info', 'The workbench page starts on the last theme');

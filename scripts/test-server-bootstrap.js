@@ -585,7 +585,8 @@ async function stoppingTakesTheEditorServerWithIt() {
 //
 // NEGATIVE CONTROL: without the script in server.js the first assertion fails;
 // with `initialColorTheme` always taken from the splash, the case of a device that
-// switched to light mode fails.
+// switched to light mode fails; without the observer of the head, the case of a
+// theme changed while the page is open fails.
 {
     const anchor =
         '<meta id="vscode-workbench-web-configuration" data-settings="{{WORKBENCH_WEB_CONFIGURATION}}">';
@@ -629,14 +630,43 @@ async function stoppingTakesTheEditorServerWithIt() {
         let data = JSON.stringify(settings);
         const el = { getAttribute: () => data, setAttribute: (_name, value) => { data = value; } };
         const root = { style: {} };
+        // The workbench the page builds later, holding the theme it shows in a CSS
+        // variable the way its own stylesheet does.
+        const workbench = { vars: {} };
+        const head = {};
         const document = {
             getElementById: (id) => (id === 'vscode-workbench-web-configuration' ? el : null),
+            querySelector: (selector) => (selector === '.monaco-workbench' && workbench.built ? workbench : null),
             documentElement: root,
+            head,
         };
         const matchMedia = (query) => ({ matches: query === '(prefers-color-scheme: dark)' && dark });
+        const observers = [];
+        class MutationObserver {
+            constructor(callback) { this.callback = callback; }
+            observe(target, options) { observers.push({ target, options, callback: this.callback }); }
+        }
+        const getComputedStyle = (node) => ({ getPropertyValue: (name) => node.vars[name] || '' });
         // eslint-disable-next-line no-new-func
-        new Function('document', 'localStorage', 'matchMedia', body)(document, localStorage, matchMedia);
-        return { settings: JSON.parse(data), painted: root.style.backgroundColor, recorded: items['vscodroid-device-scheme'] };
+        new Function('document', 'localStorage', 'matchMedia', 'MutationObserver', 'getComputedStyle', body)(
+            document, localStorage, matchMedia, MutationObserver, getComputedStyle);
+        return {
+            settings: JSON.parse(data),
+            painted: root.style.backgroundColor,
+            recorded: items['vscodroid-device-scheme'],
+            /**
+             * The head changes the way a theme change rewrites its style element,
+             * with the workbench then showing an editor background of `editor`, or
+             * not built yet when that is undefined. Answers the root's colour after.
+             */
+            changeHead: (editor) => {
+                Object.assign(workbench, { built: editor !== undefined, vars: { '--vscode-editor-background': editor } });
+                observers
+                    .filter((o) => o.target === head && o.options.childList && o.options.subtree)
+                    .forEach((o) => o.callback([]));
+                return root.style.backgroundColor;
+            },
+        };
     };
 
     // The first load after this update, on a phone in light mode, running the
@@ -702,6 +732,23 @@ async function stoppingTakesTheEditorServerWithIt() {
         const own = { themeType: 'light', colors: { 'editor.background': '#fafafa' } };
         const page = load({ splash: darkModern, last: 'dark', dark: true, settings: { initialColorTheme: own } });
         assert.deepStrictEqual(page.settings.initialColorTheme, own, 'a starting theme the page already carried was replaced');
+    }
+
+    // The theme changes while the page is open, here Light Modern to Dark Modern.
+    // The root fills the space the soft keyboard gives back until the workbench
+    // lays itself out again, so it has to follow: without the observer of the
+    // head it stays white under the dark theme.
+    {
+        const page = load({ splash: { baseTheme: 'vs', colorInfo: { background: '#ffffff' } }, last: 'light', dark: false });
+        assert.strictEqual(page.painted, '#ffffff', 'a light theme does not get a light blank page');
+        assert.strictEqual(page.changeHead(' #1f1f1f'), '#1f1f1f',
+            'the root keeps the theme the page started on after the theme changed');
+    }
+
+    // A head that changes before the workbench is built leaves the colour the page started with.
+    {
+        const page = load({ splash: darkModern, last: 'light', dark: false });
+        assert.strictEqual(page.changeHead(undefined), '#1f1f1f', 'the root lost its colour before the workbench existed');
     }
 
     // Storage that refuses leaves the page as upstream ships it.
