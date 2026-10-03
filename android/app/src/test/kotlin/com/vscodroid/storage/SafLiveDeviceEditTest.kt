@@ -821,6 +821,34 @@ class SafLiveDeviceEditTest {
         assertEquals(false, engine.retryHeldBack(WatchSession(mirror)), "a refused save was left to be tried again")
     }
 
+    /**
+     * A reopen settles a save held back before it as it settles any save the watcher did
+     * not deliver, and starts the folder's holds afresh. Here the device keeps no times, so
+     * the reopen, finding the two copies different, leaves both as they are and takes the
+     * device's size as what it last saw. A hold left over from before it was tried against
+     * that, matched it, and wrote over the device copy without keeping it.
+     */
+    @Test
+    fun `a held-back save from before a reopen is not tried against what that open found`() {
+        deviceHasClock = false
+        open()
+        save("first save")
+        editOnDevice("changed by another app")
+        deviceReadable = false
+        save("second save")
+        assertEquals(1, writes, "precondition: the second save was held back")
+        deviceReadable = true
+        open()
+        clock += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+
+        retryWhileWatching()
+
+        assertEquals(
+            "changed by another app", deviceText,
+            "a save held back before the reopen was tried against what the reopen found",
+        )
+    }
+
     /** A save whose file has left the mirror has nothing to send, and queuing it spun the loop. */
     @Test
     fun `a held-back save whose file is gone is dropped rather than tried`() {
