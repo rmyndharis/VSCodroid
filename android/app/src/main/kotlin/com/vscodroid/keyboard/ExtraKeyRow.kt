@@ -596,6 +596,20 @@ class ExtraKeyRow @JvmOverloads constructor(
                 // The call is inert when no service is listening.
                 dotContainer.announceForAccessibility(pageIndicatorText(position))
             }
+
+            override fun onPageScrollStateChanged(state: Int) {
+                if (state != ViewPager2.SCROLL_STATE_DRAGGING) return
+                // A swipe that starts slowly on a key with alternates opens them
+                // before the pager takes the drag, and the page then slides away
+                // from under a popup that is a window of its own. Measured on an
+                // API 36 emulator: `{}` held 0.6 s, then swiped, left `[` and `<`
+                // over the editor on the next page until a tap outside them.
+                // No later drag can meet an open popup: it is focusable and
+                // touch modal, so the next touch anywhere goes to it and closes
+                // it. Only the gesture that opened it is still the row's.
+                longPressPopup?.dismiss()
+                longPressPopup = null
+            }
         })
     }
 

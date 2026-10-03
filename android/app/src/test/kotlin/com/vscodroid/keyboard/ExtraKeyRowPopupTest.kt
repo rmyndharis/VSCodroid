@@ -139,6 +139,40 @@ class ExtraKeyRowPopupTest {
         )
     }
 
+    /**
+     * A swipe that starts on a key with alternates and turns the page leaves no
+     * popup behind.
+     *
+     * The key's long press fires once the finger has stayed inside the touch
+     * slop for the long-press timeout, which a swipe that starts slowly does,
+     * and the pager takes the drag only after that. Measured on an API 36
+     * emulator: `{}` held 0.6 s and then swiped left `[` and `<` over the
+     * editor on the next page until a tap outside them.
+     *
+     * NEGATIVE CONTROL, measured: the row as it was at 54352514, which had no
+     * scroll-state callback, fails at the slice; dropping the dismiss fails the
+     * assertion.
+     */
+    @Test
+    fun `a drag on the pager closes the popup`() {
+        val source = SourceScan.withoutComments(
+            SourceScan.read("src/main/kotlin/com/vscodroid/keyboard/ExtraKeyRow.kt"),
+        )
+        val callback = SourceScan.body(source, "private fun setupPageChangeCallback(")
+        assertTrue(
+            callback.contains("registerOnPageChangeCallback("),
+            "the block read is not the pager's callback. It reads:\n$callback",
+        )
+        val scrollState = SourceScan.body(callback, "override fun onPageScrollStateChanged(")
+        assertTrue(
+            scrollState.contains("if (state != ViewPager2.SCROLL_STATE_DRAGGING) return") &&
+                scrollState.contains("longPressPopup?.dismiss()") &&
+                scrollState.contains("longPressPopup = null"),
+            "the pager can take a drag with the alternates open and slide the page away from " +
+                "under them. It reads:\n$scrollState",
+        )
+    }
+
     @Test
     fun `a row leaving its window takes the popup with it`() {
         val lines = code()

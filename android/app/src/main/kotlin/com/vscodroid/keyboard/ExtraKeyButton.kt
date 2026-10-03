@@ -42,6 +42,17 @@ class ExtraKeyButton @JvmOverloads constructor(
             // false: offering an action that opens nothing is the defect this
             // pair exists to remove, not a second copy of it.
             isLongClickable = value.isNotEmpty()
+            // The touch half of the same fact. The detector's long press fires
+            // once a finger has stayed inside the touch slop for the long-press
+            // timeout, and a key with nothing to open used to press itself
+            // there. A swipe that starts slowly does exactly that, so the key
+            // went out and the pager then took the drag and turned the page;
+            // the ACTION_CANCEL it sends cannot take back a key already sent.
+            // Measured on an API 36 emulator: F7 held 0.5 s, then swiped, moved
+            // the caret and turned the page. With the long press off, a hold
+            // presses on release, through onSingleTapUp, and a drag the pager
+            // takes presses nothing.
+            gestureDetector.setIsLongpressEnabled(value.isNotEmpty())
         }
     var onLongPressAction: ((ExtraKeyButton, List<AlternateKey>) -> Unit)? = null
 
@@ -60,59 +71,44 @@ class ExtraKeyButton @JvmOverloads constructor(
                 return true
             }
 
+            // Only a key with alternates gets here: [alternates] turns the long
+            // press off for every other key, so a hold on one of those presses
+            // it once, on release. Nothing repeats, on purpose. The keys that
+            // would want repeating, Backspace and the arrows, are not on the
+            // row: the soft keyboard owns Backspace and the trackpad's drag
+            // already sends arrows continuously. Repeating Tab, Esc or a `;`
+            // would only spray a source file from one hold that ran long.
             override fun onLongPress(e: MotionEvent) {
                 this@ExtraKeyButton.alpha = 1.0f
-                if (alternates.isNotEmpty()) {
-                    performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
-                    onLongPressAction?.invoke(this@ExtraKeyButton, alternates)
-                    return
-                }
-                // A key with no alternates delivers one press, the same one a tap
-                // delivers, through the same call below.
-                //
-                // The comment here used to read "treat as repeated key press"
-                // while the body did exactly one invoke, and the two cannot both
-                // be right: GestureDetector fires onLongPress once per hold and
-                // sends nothing on release, so there is no repeat here and never
-                // was. What is written now is what happens.
-                //
-                // It stays that way on purpose, because no key on this row wants
-                // repeating. The two that would -- Backspace and the arrows --
-                // are not ExtraKeyButtons at all: KeyPages carries neither, the
-                // soft keyboard owns backspace (KeyInjector's beforeinput
-                // listener already turns Ctrl+Backspace into delete-word), and
-                // the arrows come from GesturePad, whose drag emits them
-                // continuously through three acceleration gears -- a better
-                // answer than key repeat, and the reason those buttons were
-                // removed. What is left with no alternates is Tab, Esc and
-                // punctuation, where repeating is not a feature but a way to
-                // spray `;;;;;;;;` into a source file from one hold that ran
-                // long. A repeat loop here would add a timer whose stop path has
-                // to survive ACTION_CANCEL, pager swipes, detach and the row
-                // being hidden with the IME -- real failure modes, bought for a
-                // key that wants none of it.
-                emitPress()
+                performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
+                onLongPressAction?.invoke(this@ExtraKeyButton, alternates)
             }
-        })
+        }).apply {
+        // Off until [alternates] gives this key something to open.
+        setIsLongpressEnabled(false)
+        // No double taps. The listener above is also an OnDoubleTapListener,
+        // which makes the detector look for them: a second tap within 300 ms
+        // of the first went to onDoubleTap, which this listener does not
+        // override, and never became a press. Measured on an API 36
+        // emulator: two taps on F7 about 200 ms apart moved the caret once.
+        setOnDoubleTapListener(null)
+    }
 
     /**
-     * Delivers one press of this key.
+     * Delivers one press of this key, for a tap, a hold and an assistive click.
      *
-     * One path for a tap and for a long press, and being one path is the fix
-     * rather than tidiness. They used to differ: `onSingleTapUp` flipped
-     * `isToggleActive` and reported the new value, while the long-press branch
-     * reported a bare `true` and flipped nothing. Ctrl, Alt and Shift are
-     * toggles with no alternates, so they are the only toggles that reach that
-     * branch -- and holding one a moment too long switched the modifier on
-     * inside [ExtraKeyRow] while the button carried on looking off. The next tap
-     * then read as "switch on" from the button's side and arrived as "switch
-     * off" on the row's, so the modifier the user could see and the modifier
-     * being applied were inverted from each other until something reset them.
+     * One path for every press, and being one path is the fix rather than
+     * tidiness. A hold used to press from its own branch in `onLongPress`, which
+     * reported a bare `true` and flipped nothing where `onSingleTapUp` flipped
+     * `isToggleActive` and reported the new value. Ctrl, Alt and Shift are
+     * toggles with no alternates, so holding one a moment too long switched the
+     * modifier on inside [ExtraKeyRow] while the button carried on looking off,
+     * and the next tap arrived inverted. That branch is gone: a key with no
+     * alternates has no long press at all, so a hold ends in `onSingleTapUp`
+     * like a tap.
      *
-     * With one call site the two cannot diverge again, which is a stronger
-     * guarantee than a test: this is a `View` callback, so nothing in the JVM
-     * unit suite can invoke it. [pressedState] carries the part that can be
-     * pinned.
+     * This is a `View` callback, so nothing in the JVM unit suite can invoke
+     * it. [pressedState] carries the part that can be pinned.
      */
     private fun emitPress() {
         val state = pressedState(isToggle, isToggleActive)
@@ -300,8 +296,8 @@ class ExtraKeyButton @JvmOverloads constructor(
  * button's appearance.
  *
  * Be plain about the limit. This pins what a press should report; it cannot pin
- * that both gesture callbacks ask. That wiring is held by there being exactly
- * one caller rather than by a test.
+ * that every press asks. That wiring is held by [ExtraKeyButton]'s `emitPress`
+ * being the only caller rather than by a test.
  */
 internal fun pressedState(isToggle: Boolean, isActive: Boolean): Boolean =
     if (isToggle) !isActive else true
