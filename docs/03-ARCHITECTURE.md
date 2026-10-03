@@ -563,6 +563,9 @@ rotated to its last lines once it outgrows a byte cap, so it cannot grow without
 That directory holds more than this app writes: `ProcessManager.startServer` points the
 server's `--logsPath` at it, and the server's own log service writes `remoteagent.log`
 there, Extension Host output included. Nothing writes `exthost.log` under any name.
+`renderer.log` there is this app's own: both `onRenderProcessGone` overrides note each
+renderer death in it through `CrashReporter.recordRendererDeath`, since the death otherwise
+reaches Logcat alone, and a report quotes the last 20 lines.
 
 ### 8.3 Configuration
 

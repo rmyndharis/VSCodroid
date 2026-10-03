@@ -1307,6 +1307,7 @@ This is usually caused by Android's memory management killing background process
 2. Reduce the number of open terminal tabs.
 3. Check the process monitor in the status bar -- if phantom count is high, close unused terminals.
 4. On devices with 4 GB RAM or less, consider keeping only one project open at a time.
+5. If it keeps happening, send a report; see [Sending a Bug Report](#sending-a-bug-report).
 
 ### Dev Server Not Accessible in Browser
 
@@ -1326,6 +1327,12 @@ If the preview tab or the device browser opens but the page does not load:
 If the editor UI crashes but the app stays open, VSCodroid automatically recovers the WebView and reconnects to the running server. Your terminal sessions and unsaved work in the editor state are preserved.
 
 Recovery is bounded, because reloading a page that is itself the cause only repeats the crash. Three crashes inside a minute are recovered from as normal; a fourth stops the automatic reload and puts up a page saying so, with a **Try again** button that reloads the editor when you are ready. The server keeps running behind it either way, so nothing needs force-closing.
+
+### Sending a Bug Report
+
+If the editor freezes, reloads by itself or the app closes, run **VSCodroid: Copy Bug Report** from the Command Palette once the editor is back. The report opens in a new editor tab: the device and app version, how Android recorded the app's recent exits (one it declared not responding shows as `ANR`, one closed to free memory as `LOW_MEMORY`), each time the process that draws the editor died, the newest crash logs and the last 200 lines of the server log. Nothing is sent anywhere.
+
+Read it before you share it. The server log can name your files and folders, and you can delete any line you want kept private. Then tap **Copy** in the notification that comes with it, or select all in the editor and copy, and paste the report into an issue at [github.com/rmyndharis/VSCodroid/issues](https://github.com/rmyndharis/VSCodroid/issues).
 
 ---
 

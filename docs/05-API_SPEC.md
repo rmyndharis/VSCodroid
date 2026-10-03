@@ -224,7 +224,9 @@ registered, which is why the toolchain install, removal and cancel calls have no
 `openToolchainSettings` is on the list and now has a sender as well: the bundled
 saf-bridge extension contributes **VSCodroid: Manage Toolchains**, so the Toolchains
 screen has a route from inside the editor and the launcher long-press shortcut is one of
-two ways in rather than the only one.
+two ways in rather than the only one. `generateBugReport` has one too:
+**VSCodroid: Copy Bug Report** opens its answer in an untitled editor and copies what that
+editor holds when the user chooses Copy.
 
 Adding a method to `AndroidBridge` does not publish it; the relay branch is a second,
 separate edit. Forgetting it is now reported rather than silent: the chain's final branch
@@ -690,11 +692,20 @@ fun generateBugReport(authToken: String): String
 // Generates a bug report containing:
 // - Device info (model, Android version, app version)
 // - Memory usage
+// - The system's record of how this app's ten most recent processes ended
+//   (ActivityManager.getHistoricalProcessExitReasons): time, process,
+//   reason by name (ANR, LOW_MEMORY, CRASH_NATIVE, ...), status,
+//   importance, pss and rss, and the system's description
+// - The last 20 renderer deaths, from renderer.log under
+//   Environment.getLogsDir, which both onRenderProcessGone overrides write
+//   through CrashReporter.recordRendererDeath: time, crashed or killed by
+//   the system, and the renderer priority at exit
 // - How many crash logs exist, plus the text of the three most recent
 // - The last 200 lines of the Node server's output, read from `server.log`
 //   under Environment.getLogsDir. ProcessManager.startOutputReader mirrors
 //   every line the server prints into that file through ServerLog, in every
 //   build, so the section is present rather than silently empty.
+// Answers the empty string only when the session token is refused.
 // Everything read off disk has the connection token replaced wherever it
 // appears as a `tkn=` parameter, and the server log is redacted a second
 // time on the way in so the token never lands in the file at all; that pass
