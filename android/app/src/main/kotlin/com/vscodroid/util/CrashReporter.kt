@@ -1,5 +1,7 @@
 package com.vscodroid.util
 
+import android.app.ActivityManager
+import android.app.ApplicationExitInfo
 import android.content.Context
 import com.vscodroid.webview.redactToken
 import java.io.File
@@ -20,6 +22,10 @@ object CrashReporter {
     private const val TAG = "CrashReporter"
     private const val CRASH_DIR = "crash-logs"
     private const val MAX_LOGS = 10
+
+    /** How many of the system's exit records a report quotes. */
+    private const val RECENT_EXITS = 10
+
     private lateinit var crashDir: File
     private var defaultHandler: Thread.UncaughtExceptionHandler? = null
 
@@ -73,6 +79,8 @@ object CrashReporter {
      * Generates a bug report bundle containing:
      * - Device info (model, Android version, app version)
      * - Memory usage
+     * - How the system recorded the end of this app's recent processes, from
+     *   `ActivityManager.getHistoricalProcessExitReasons`
      * - How many crash logs exist, plus the text of the three most recent
      * - The last 200 lines of the Node server's output, from the `server.log`
      *   that [ServerLog] writes off `ProcessManager.startOutputReader`
@@ -109,8 +117,9 @@ object CrashReporter {
      * boundary the text crosses and a file written by an older build is still on
      * the device.
      *
-     * Blocking, and not only on its own reads. Three crash files are read whole,
-     * and [ServerLog.tail] reads all of `server.log`, up to its 256 KiB cap,
+     * Blocking, and not only on its own reads. The exit records are a binder
+     * call into the system, three crash files are read whole, and
+     * [ServerLog.tail] reads all of `server.log`, up to its 256 KiB cap,
      * under the lock a rotation holds; a rotation is a full read and a full
      * write of that file on the thread draining the server's stdout, so a call
      * that lands during one waits it out. That is the right trade for the report
@@ -147,6 +156,29 @@ object CrashReporter {
         sb.appendLine("--- Memory ---")
         sb.appendLine("Max heap: ${rt.maxMemory() / 1_048_576} MB")
         sb.appendLine("Used: ${(rt.totalMemory() - rt.freeMemory()) / 1_048_576} MB")
+        sb.appendLine()
+
+        // How the app's recent processes ended, as the system recorded it. The
+        // crash logs below come from an uncaught Kotlin exception and from
+        // nothing else, so the endings a user calls a freeze or a crash left no
+        // trace in a report: an app Android declared not responding (ANR), one
+        // killed to free memory (LOW_MEMORY), a native fault (CRASH_NATIVE).
+        sb.appendLine("--- Recent Exits (newest first) ---")
+        val exits = try {
+            context.getSystemService(ActivityManager::class.java)
+                ?.getHistoricalProcessExitReasons(context.packageName, 0, RECENT_EXITS)
+        } catch (_: Exception) {
+            null
+        }
+        when {
+            exits == null -> sb.appendLine("(could not be read)")
+            exits.isEmpty() -> sb.appendLine("(none recorded)")
+            // Through both scrubbers like everything else here: the description
+            // is the system's own text, and this report goes to a stranger.
+            else -> exits.forEach {
+                sb.appendLine(redactSecrets(redactToken(exitLine(it, dateFormat))))
+            }
+        }
         sb.appendLine()
 
         // Crash logs
@@ -322,3 +354,35 @@ object CrashReporter {
  */
 internal fun threadIdentity(thread: Thread): String =
     "Thread: ${thread.name} (id=${thread.id})"
+
+/**
+ * One exit record as a line of the report.
+ *
+ * Status is the exit code or, for a signal, its number; importance is the
+ * process's `RunningAppProcessInfo` importance when it ended (100 foreground,
+ * 125 foreground service, 400 cached); pss and rss are what it held when last
+ * measured. The description is the system's own text, which for an ANR names
+ * what timed out.
+ */
+private fun exitLine(exit: ApplicationExitInfo, dateFormat: SimpleDateFormat): String =
+    "${dateFormat.format(Date(exit.timestamp))} ${exit.processName} " +
+        "${exitReasonName(exit.reason)} (status ${exit.status}, importance ${exit.importance}, " +
+        "pss ${exit.pss / 1024} MB, rss ${exit.rss / 1024} MB)" +
+        (exit.description?.let { ": $it" } ?: "")
+
+/**
+ * The name of an `ApplicationExitInfo.REASON_*` value. The platform numbers
+ * them from 0 with no gap, so the list is indexed by the value, and
+ * `CrashReporterTest` holds it to the constants. Written out rather than read
+ * off the constants because the last two are API 34 and minSdk is 33; a value
+ * newer than the list is printed as its number.
+ */
+internal fun exitReasonName(reason: Int): String =
+    EXIT_REASONS.getOrElse(reason) { "REASON_$reason" }
+
+private val EXIT_REASONS = listOf(
+    "UNKNOWN", "EXIT_SELF", "SIGNALED", "LOW_MEMORY", "CRASH", "CRASH_NATIVE", "ANR",
+    "INITIALIZATION_FAILURE", "PERMISSION_CHANGE", "EXCESSIVE_RESOURCE_USAGE",
+    "USER_REQUESTED", "USER_STOPPED", "DEPENDENCY_DIED", "OTHER", "FREEZER",
+    "PACKAGE_STATE_CHANGE", "PACKAGE_UPDATED",
+)
