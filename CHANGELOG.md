@@ -14,6 +14,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **VSCodroid: Open Folder from Device** is offered in the remote indicator menu and the empty Explorer as well as the Command Palette.
 - **VSCodroid: Copy Bug Report** opens the bug report in an editor, to check before copying it into an issue.
 - Bug reports list the app's recent exits as Android recorded them, such as an ANR or a low-memory kill, and each renderer death the app recovered from.
+- **VSCodroid: UI Scale** sets the size of the whole interface, up to 150% where the screen has room, and keeps it across restarts.
 
 ### Changed
 

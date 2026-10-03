@@ -363,6 +363,7 @@ sequenceDiagram
 sequenceDiagram
   participant K as Kotlin Native Shell
   participant W as WebView
+  K->>W: addDocumentStartJavaScript() (the UI scale, applied as each page is parsed)
   K->>W: injectBridgeToken() to trusted workbench context
   K->>W: evaluateJavascript() (announce a key chord, memory pressure, a late reply)
   W->>K: @JavascriptInterface: copyToClipboard()

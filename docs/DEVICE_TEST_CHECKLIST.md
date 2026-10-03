@@ -86,6 +86,7 @@
 | SC-8 | Side bar stays open on a tablet | Same steps on a device wider than 600dp | Side bar stays where it was; `settings.json` has `vscodroid.layout.compactScreen` false and no `vscodroid.layout.autoHideSideBar` at all | | |
 | SC-10 | The side bar setting has a control | Settings, search `autoHideSideBar` | The row draws a dropdown offering auto, on and off, not an "Edit in settings.json" link. Pick `on` on a tablet and `off` on a phone and check each one overrides the screen | | |
 | SC-9 | A setting you change is the one that applies | Settings, User tab, set `editor.minimap.enabled` true, reopen a file, then restart the app | The minimap appears and is still there after the restart. It is the app's own defaults that must not win here | | |
+| SC-11 | UI scale | Command Palette, **VSCodroid: UI Scale**, note the sizes offered and pick the largest. Tap a file in the Explorer, place the caret in a word, type, open a context menu, the Command Palette, a hover and a terminal, rotate, then reload the window and restart the app. Finish with 100% | The offer stops where the page would be under 320 CSS px wide (125% on a 411 dp phone). The whole interface is larger and fills the screen with nothing cut off at the right; taps, the caret, menus, the keyboard and the key row land where they should; the terminal is legible; the size survives the rotation, the reload and the restart, with no flash at 100% on load; 100% restores the original layout | | |
 
 ## 5. Editor Operations
 
@@ -279,7 +280,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | Device Matrix | 4 | | | |
 | Android Versions | 4 | | | |
 | Keyboard Input | 33 | | | |
-| Screen & Orientation | 10 | | | |
+| Screen & Orientation | 11 | | | |
 | Editor Operations | 14 | | | |
 | Extensions | 7 | | | |
 | Background/Foreground | 9 | | | |
@@ -289,7 +290,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | Terminal & Tools | 13 | | | |
 | SAF & Files | 22 | | | |
 | Display Language | 6 | | | |
-| **Total** | **144** | | | |
+| **Total** | **145** | | | |
 
 **Overall Result**: [ ] PASS / [ ] FAIL
 

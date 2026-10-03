@@ -118,6 +118,14 @@ VSCodroid stores settings in `~/.vscodroid/`. Key defaults:
 
 To edit settings as JSON, use the Command Palette: `Preferences: Open User Settings (JSON)`.
 
+### Text Size
+
+**VSCodroid: UI Scale**, in the Command Palette, sets the size of the whole interface: the side bar, tabs, menus, status bar, panels and editor together. It offers 100%, 110%, 125% and 150%, but only the sizes that leave the screen at least 320 pixels wide, so most phones go up to 110% or 125% and tablets to 150%. The size is kept when the window reloads and when the app restarts. A size that does not take effect on your device is put back to 100%, and the command says so when you pick it.
+
+To change the text in one place only, use the `editor.fontSize` and `terminal.integrated.fontSize` settings, which are remembered. **Increase Editor Font Size** in the Command Palette also works, but it is not bound to a key and it resets when the window reloads.
+
+Android's Font size setting does not reach the editor's interface. Its Display size setting does, and it enlarges every app on the device.
+
 ### Extra Key Row
 
 When the soft keyboard is visible, a row of extra keys appears above it. Swipe it
@@ -828,7 +836,7 @@ In the file tree:
 
 - Connect a Bluetooth keyboard for the best experience with complex editing.
 - Without an external keyboard, rely heavily on the Command Palette (**Ctrl+Shift+P**) and the Extra Key Row.
-- Pinch-to-zoom is disabled to prevent layout issues. Change text size with the `editor.fontSize` and `terminal.integrated.fontSize` settings, which are remembered. **Increase Editor Font Size** in the Command Palette also works, but it is not bound to a key and it resets when the window reloads.
+- Pinch-to-zoom is disabled to prevent layout issues; [Text Size](#text-size) lists what makes things larger.
 
 ---
 
