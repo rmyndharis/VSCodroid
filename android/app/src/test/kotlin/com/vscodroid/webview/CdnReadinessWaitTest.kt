@@ -1,6 +1,8 @@
 package com.vscodroid.webview
 
 import android.net.Uri
+import android.webkit.ServiceWorkerClient
+import android.webkit.ServiceWorkerController
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import com.vscodroid.service.restartBackoffMs
@@ -12,6 +14,7 @@ import io.mockk.mockk
 import io.mockk.mockkConstructor
 import io.mockk.mockkObject
 import io.mockk.mockkStatic
+import io.mockk.slot
 import io.mockk.unmockkAll
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -53,7 +56,10 @@ import kotlin.concurrent.thread
  * refused at once, which is what the interception did before, the first three
  * cases fail. With the wait kept and the limit on waiters removed, the third
  * fails on its refusal; with the token first asked only once a place is taken,
- * it fails on the ready request.
+ * it fails on the ready request. With either caller handing over a token read
+ * once on arrival, the case for that caller fails; with a place given back only
+ * when a wait runs out, the case for places fails whatever order the cases run
+ * in.
  */
 class CdnReadinessWaitTest {
 
@@ -233,6 +239,97 @@ class CdnReadinessWaitTest {
                 forwarded,
                 server.target,
                 "waiting request $i was not forwarded once the server was ready",
+            )
+        }
+    }
+
+    /**
+     * A place is held only while its request waits. One that is never given back
+     * refuses at once every webview of every later restart, from the third wait in
+     * the life of the process, and the case above only notices when it happens to
+     * run after the waits that took them.
+     */
+    @Test
+    fun `a place is given back when its wait ends`() {
+        repeat(VSCodroidWebViewClient.TOKEN_WAITERS + 1) {
+            Recorder().use { server -> intercept(server, { null }, waitMs = 150) }
+        }
+        repeat(VSCodroidWebViewClient.TOKEN_WAITERS + 1) { i ->
+            Recorder().use { server ->
+                // Missing when the request arrives and there at the first question
+                // inside the wait, so each of these takes a place and ends its wait
+                // with the token.
+                val asked = AtomicInteger()
+                intercept(server, { if (asked.incrementAndGet() > 1) token else null }, waitMs = 3_000)
+
+                assertEquals(
+                    forwarded,
+                    server.target,
+                    "wait ${i + 1} after ${VSCodroidWebViewClient.TOKEN_WAITERS + 1} that ran out " +
+                        "was refused at once: an earlier wait never gave its place back",
+                )
+            }
+        }
+    }
+
+    /**
+     * The page's own requests reach the interception through the client, which
+     * has to hand over the supplier itself. A token read once on arrival is null
+     * for the whole of a restart, so the wait would spend its time asking a value
+     * that cannot change and refuse the webview after it.
+     */
+    @Test
+    fun `the client's requests wait on the live token`() {
+        Recorder().use { server ->
+            val readyAt = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(300)
+            val client = VSCodroidWebViewClient(
+                allowedPort = server.port,
+                resourceRoots = emptyList(),
+                sensitiveLocations = emptyList(),
+                openFolder = { null },
+                connectionToken = { if (System.nanoTime() >= readyAt) token else null },
+                onCrash = {},
+                onPageLoaded = {},
+                onRetryServer = {},
+            )
+
+            client.shouldInterceptRequest(mockk(relaxed = true), request())
+
+            assertEquals(
+                forwarded,
+                server.target,
+                "the client handed the interception a token read once, so a webview shown " +
+                    "during a restart is refused although the server came back inside the wait",
+            )
+        }
+    }
+
+    /** And the second way a resource request gets there, for the same reason. */
+    @Test
+    fun `a service worker's requests wait on the live token`() {
+        val controller = mockk<ServiceWorkerController>(relaxed = true)
+        val registered = slot<ServiceWorkerClient>()
+        every { controller.setServiceWorkerClient(capture(registered)) } just Runs
+        mockkStatic(ServiceWorkerController::class)
+        every { ServiceWorkerController.getInstance() } returns controller
+        // The stub android.jar's constructor throws, and the registration's own
+        // catch would then leave nothing registered.
+        mockkConstructor(ServiceWorkerClient::class)
+
+        Recorder().use { server ->
+            val readyAt = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(300)
+            VSCodroidWebViewClient.setupServiceWorkerInterception(
+                server.port, emptyList(), emptyList(), { null },
+            ) { if (System.nanoTime() >= readyAt) token else null }
+            assertTrue(registered.isCaptured, "no ServiceWorkerClient was registered")
+
+            registered.captured.shouldInterceptRequest(request())
+
+            assertEquals(
+                forwarded,
+                server.target,
+                "the service worker client handed the interception a token read once, so " +
+                    "its requests during a restart are refused although the server came back",
             )
         }
     }
