@@ -22,6 +22,7 @@
  * - vscodroid.manageToolchains     : Opens the Android Toolchains screen
  * - vscodroid.toggleExtraKeyRow    : Hides or shows the key row above the keyboard
  * - vscodroid.about                : Opens the Android About dialog
+ * - vscodroid.copyBugReport        : Opens a bug report to read, then copies it
  *
  * It also warns about a workspace folder opened by path on shared storage, and
  * offers Open Folder from Device instead.
@@ -550,6 +551,43 @@ function activate(context) {
         }
     });
 
+    // -- Bug report --
+
+    // The relay has answered generateBugReport all along and nothing sent it,
+    // so a user whose editor froze or reloaded by itself had no report to send.
+    // Opened in an editor rather than put straight on the clipboard: the report
+    // quotes the server's output, which can name the user's files and folders,
+    // and asks to be read before it is shared. Copy then takes what the editor
+    // holds, so a line the user deleted stays out of what they paste.
+    const bugReportCmd = vscode.commands.registerCommand(
+        'vscodroid.copyBugReport',
+        async () => {
+            /** @type {vscode.TextDocument} */
+            let doc;
+            try {
+                const report = /** @type {string} */ (await sendBridgeCommand('generateBugReport'));
+                // Empty only when the bridge refused the session token.
+                if (!report) {
+                    throw new Error('VSCodroid did not accept the request. Reload the window and try again.');
+                }
+                // Plain text, so the editor does not run language detection on it.
+                doc = await vscode.workspace.openTextDocument({ content: report, language: 'plaintext' });
+                await vscode.window.showTextDocument(doc);
+            } catch (/** @type {*} */ err) {
+                vscode.window.showErrorMessage(`Could not create the bug report: ${err.message}`);
+                return;
+            }
+            const action = await vscode.window.showInformationMessage(
+                'Read the bug report before you share it: the server log can name your files ' +
+                    'and folders. Delete what you want kept private, then copy it.',
+                COPY
+            );
+            if (action !== COPY) return;
+            await vscode.env.clipboard.writeText(doc.getText());
+            vscode.window.showInformationMessage('Bug report copied.');
+        }
+    );
+
     // -- Shared storage opened by path --
 
     // The app holds no storage permission, so Android lets it list every
@@ -647,7 +685,8 @@ function activate(context) {
         clearCachesCmd,
         toolchainsCmd,
         toggleKeyRowCmd,
-        aboutCmd
+        aboutCmd,
+        bugReportCmd
     );
 }
 
@@ -659,6 +698,9 @@ function deactivate() {
 }
 
 // -- Helpers --
+
+/** The bug report notice's button, compared against the choice it returns. */
+const COPY = 'Copy';
 
 /** The shared-storage warning's buttons, compared against the choice it returns. */
 const OPEN_FROM_DEVICE = 'Open Folder from Device';

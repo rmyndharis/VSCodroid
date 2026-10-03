@@ -188,6 +188,11 @@ const breakdownCalls = [];
 let toggleAnswer = false;
 const toggleCalls = [];
 
+// The bug report is answered inline too, with the report, or with the empty
+// string when the session token was refused.
+let reportAnswer = '';
+const reportCalls = [];
+
 const AndroidBridge = {
     openExternalUrl(url, token) {
         bridgeCalls.push({ url, token });
@@ -208,6 +213,10 @@ const AndroidBridge = {
     toggleExtraKeyRow(token) {
         toggleCalls.push({ token });
         return toggleAnswer;
+    },
+    generateBugReport(token) {
+        reportCalls.push({ token });
+        return reportAnswer;
     },
 };
 
@@ -230,6 +239,14 @@ let serverNote = null;
 // dismissal, which is what every case that does not reach a removal wants.
 let quickPickChoice = null;
 let warningChoice = null;
+// What the user picks from an information message's buttons, given them.
+let infoChoice = null;
+// The untitled documents the extension opens, the ones it shows in an editor,
+// and what it puts on the clipboard. A document holds what the user sees, which
+// they may edit before choosing anything.
+const openedDocs = [];
+const shownDocs = [];
+const clipboard = [];
 const commands = new Map();
 const vscodeStub = {
     commands: {
@@ -238,7 +255,11 @@ const vscodeStub = {
     },
     window: {
         showInputBox: async () => inputBoxAnswer,
-        showInformationMessage: (m) => { shown.info.push(m); },
+        showInformationMessage: async (m, ...items) => {
+            shown.info.push(m);
+            return infoChoice ? infoChoice(items) : undefined;
+        },
+        showTextDocument: async (doc) => { shownDocs.push(doc); return {}; },
         showErrorMessage: (m) => { shown.error.push(m); },
         // Answers only with a button the call offered, as the workbench does, so a
         // warning that loses its button loses the action behind it too. The
@@ -253,6 +274,11 @@ const vscodeStub = {
     },
     workspace: {
         get workspaceFolders() { return workspaceFolders; },
+        openTextDocument: async (options) => {
+            const doc = { options, text: options.content, getText() { return this.text; } };
+            openedDocs.push(doc);
+            return doc;
+        },
         onDidChangeWorkspaceFolders: (fn) => { folderListeners.push(fn); return { dispose() {} }; },
         fs: {
             readFile: async (uri) => {
@@ -264,7 +290,7 @@ const vscodeStub = {
             },
         },
     },
-    env: { clipboard: { writeText: async () => {} } },
+    env: { clipboard: { writeText: async (text) => { clipboard.push(text); } } },
     Uri: {
         parse: (s) => ({ toString: () => s }),
         // Resolves `..` the way the API documents for joinPath.
@@ -1070,6 +1096,77 @@ async function main() {
         'a toggle that brought the row back did not say so: ' + JSON.stringify(restored),
     );
 
+    // ---- the bug report -------------------------------------------------
+    //
+    // The relay answered generateBugReport from the start and no extension sent
+    // it, so nothing in the editor could hand a user the report. The command
+    // has to put the report in an editor before anything reaches the
+    // clipboard, because it quotes server output that can name the user's files
+    // and folders, and Copy has to take what the editor then holds, so a line
+    // the user deleted stays out of what they paste.
+    const copyBugReport = commands.get('vscodroid.copyBugReport');
+    assert.ok(copyBugReport, 'the bundled extension no longer registers vscodroid.copyBugReport');
+
+    async function bugReport(answer, choose) {
+        shown.info.length = 0; shown.error.length = 0; reportCalls.length = 0;
+        openedDocs.length = 0; shownDocs.length = 0; clipboard.length = 0;
+        reportAnswer = answer;
+        infoChoice = choose;
+        await copyBugReport();
+        infoChoice = null;
+        return { info: [...shown.info], error: [...shown.error] };
+    }
+
+    const PRIVATE = '/storage/emulated/0/Documents/client-project\n';
+    const REPORT = '=== VSCodroid Bug Report ===\n' + PRIVATE + '--- Server Log (last 200 lines) ---\n';
+    let onScreenWhenAsked = 0;
+    const copied = await bugReport(REPORT, (items) => {
+        onScreenWhenAsked = shownDocs.length;
+        // The user reads the report and deletes the line naming their folder.
+        openedDocs[0].text = openedDocs[0].text.replace(PRIVATE, '');
+        return items.includes('Copy') ? 'Copy' : undefined;
+    });
+    assert.deepStrictEqual(
+        reportCalls, [{ token: 'test-token' }],
+        'the relay did not ask the bridge for the report with the session token: ' +
+        JSON.stringify(reportCalls),
+    );
+    assert.deepStrictEqual(
+        openedDocs.map((d) => d.options), [{ content: REPORT, language: 'plaintext' }],
+        'the report was not opened as a plain-text document holding exactly what the ' +
+        'bridge answered: ' + JSON.stringify(openedDocs.map((d) => d.options)),
+    );
+    assert.strictEqual(
+        onScreenWhenAsked, 1,
+        'the user was offered Copy before the report was on screen to be read',
+    );
+    assert.ok(
+        copied.error.length === 0 && /before you share it/.test(copied.info[0] || ''),
+        'the user is not asked to read the report before sharing it: ' + JSON.stringify(copied),
+    );
+    assert.deepStrictEqual(
+        clipboard, [REPORT.replace(PRIVATE, '')],
+        'Copy did not take what the editor holds, so a line the user deleted is pasted ' +
+        'anyway: ' + JSON.stringify(clipboard),
+    );
+
+    const dismissed = await bugReport(REPORT, () => undefined);
+    assert.deepStrictEqual(
+        [clipboard, dismissed.error], [[], []],
+        'a report whose notice was dismissed still reached the clipboard: ' + JSON.stringify(clipboard),
+    );
+
+    // The bridge answers a refused session token with the empty string, which
+    // is no report at all: an empty editor would read as a device with nothing
+    // to report.
+    const refusedReport = await bugReport('', () => 'Copy');
+    assert.ok(
+        openedDocs.length === 0 && clipboard.length === 0 && refusedReport.error.length === 1 &&
+            /did not accept the request/.test(refusedReport.error[0]),
+        'a refused report must say so and open nothing: ' +
+        JSON.stringify({ openedDocs, clipboard, refusedReport }),
+    );
+
     const unused = coverage.unused.length
         ? `; ${coverage.unused.length} relay branches have no sender (${coverage.unused.join(', ')})`
         : '';
@@ -1080,7 +1177,7 @@ async function main() {
         'id, and a refusal on either road reaches the user in the bridge\'s own words; ' +
         'a shared-storage folder opened by path is warned about in a dialog once per editor ' +
         'server, with a button to Open Folder from Device and one that silences it for ' +
-        'later sessions; ' +
+        'later sessions; the bug report opens in an editor before Copy takes what it holds; ' +
         `all ${coverage.sent} commands sent by an extension have a relay branch${unused}\n`,
     );
 }

@@ -1079,7 +1079,9 @@ class AndroidBridge(
     }
 
     /**
-     * Generates a full bug report (device info + crash logs + server logs).
+     * The bug report [CrashReporter.generateBugReport] builds, which the bundled
+     * saf-bridge extension opens in an editor for **VSCodroid: Copy Bug Report**.
+     * Empty only when the session token is refused: a report always has its header.
      */
     @JavascriptInterface
     fun generateBugReport(authToken: String): String {

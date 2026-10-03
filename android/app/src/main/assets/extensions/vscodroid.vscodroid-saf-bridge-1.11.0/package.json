@@ -59,6 +59,10 @@
       {
         "command": "vscodroid.about",
         "title": "%command.about%"
+      },
+      {
+        "command": "vscodroid.copyBugReport",
+        "title": "%command.copyBugReport%"
       }
     ],
     "menus": {

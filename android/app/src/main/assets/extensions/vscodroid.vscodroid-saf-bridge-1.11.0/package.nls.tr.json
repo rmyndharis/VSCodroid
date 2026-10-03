@@ -12,5 +12,6 @@
   "command.manageToolchains": "VSCodroid: Araç zincirlerini yönet",
   "command.toggleExtraKeyRow": "VSCodroid: Ek tuş satırını göster veya gizle",
   "command.about": "VSCodroid: Hakkında",
+  "command.copyBugReport": "VSCodroid: Hata raporunu kopyala",
   "viewsWelcome.explorer.deviceFolder": "Documents veya Download içindeki bir klasör gibi cihaz depolamasındaki bir klasörde çalışmak için, diğer uygulamaların oraya kaydettiği dosyaların da görünmesi amacıyla klasörü cihazdan açın.\n[Cihazdan klasör aç](command:vscodroid.openFolderFromDevice)"
 }

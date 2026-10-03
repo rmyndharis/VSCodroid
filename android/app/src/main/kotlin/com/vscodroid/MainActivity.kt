@@ -5244,9 +5244,12 @@ class MainActivity : AppCompatActivity() {
      *    can open a terminal and run anything as this app's uid, so every reading
      *    command here (`getRecentFolders`, `getStorageBreakdown`, `listSafMirrors`,
      *    `getSshPublicKey`, `listSshKeys`, `generateBugReport`) discloses what the
-     *    caller could already read off the filesystem. They stay, and what changes
-     *    instead is that they hand over no more than they must: `listSshKeys` no
-     *    longer reports a key's comment, which is conventionally an email address.
+     *    caller could already read off the filesystem, apart from the system's
+     *    record of how this app's own processes ended, which `generateBugReport`
+     *    quotes: times, reasons and memory, nothing of the user's. They stay, and
+     *    what changes instead is that they hand over no more than they must:
+     *    `listSshKeys` no longer reports a key's comment, which is conventionally
+     *    an email address.
      *  - Commands that put an Android surface on screen (`openFolderPicker`,
      *    `openToolchainSettings`, `showAboutDialog`) are visible and dismissible,
      *    and none of them changes anything on its own. They stay.

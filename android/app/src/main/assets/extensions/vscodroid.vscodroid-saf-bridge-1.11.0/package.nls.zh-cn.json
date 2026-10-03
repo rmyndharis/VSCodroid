@@ -12,5 +12,6 @@
   "command.manageToolchains": "VSCodroid: 管理工具链",
   "command.toggleExtraKeyRow": "VSCodroid: 切换额外按键行",
   "command.about": "VSCodroid: 关于",
+  "command.copyBugReport": "VSCodroid: 复制错误报告",
   "viewsWelcome.explorer.deviceFolder": "要处理设备存储中的文件夹（例如 Documents 或 Download 中的文件夹），请从设备打开它，这样其他应用保存在其中的文件也会显示。\n[打开设备上的文件夹](command:vscodroid.openFolderFromDevice)"
 }

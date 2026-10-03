@@ -12,5 +12,6 @@
   "command.manageToolchains": "VSCodroid: Gestisci le toolchain",
   "command.toggleExtraKeyRow": "VSCodroid: Mostra o nascondi la riga di tasti extra",
   "command.about": "VSCodroid: Informazioni",
+  "command.copyBugReport": "VSCodroid: Copia il report di errore",
   "viewsWelcome.explorer.deviceFolder": "Per lavorare su una cartella della memoria del dispositivo, ad esempio una cartella in Documents o Download, aprila dal dispositivo in modo che vengano mostrati anche i file che altre app vi hanno salvato.\n[Apri una cartella dal dispositivo](command:vscodroid.openFolderFromDevice)"
 }
