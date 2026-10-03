@@ -22,7 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The editor no longer carries Windows, macOS, x86 and desktop Linux helper programs that cannot run on Android, which saves about 30 MB of storage on new installs and updates alike.
 - With a hardware keyboard, Left and Right no longer move the caret in a number box such as a number setting, which keeps them from moving focus out of the box at either end; Home, End and a tap still move it.
 - A tap on a read-only file, such as one set with File: Toggle Active Editor Read-only in Session or `files.readonlyInclude`, moves the cursor without raising the soft keyboard.
-- A save to a network device folder while it is offline can now wait inside VSCodroid, with a notice, until the folder's version of the file can be read, and then goes through by itself.
+- A save to a network device folder while it is offline can now wait inside VSCodroid, with a notice, until the folder's version of the file can be read, and is then sent while the folder stays open, or when it is next opened.
 
 ### Removed
 

@@ -970,13 +970,14 @@ class SafSyncEngine(private val context: Context) {
      * that [keepsDeviceEdit] can tell a stamp their provider moves afterwards from another
      * app's edit.
      *
-     * Kept means recorded without being fetched: the device's time agreed with the record,
-     * or a read found the device holding the mirror's bytes. With no digest, the first save
-     * after such a move kept a `.device-` copy of a document nobody had changed; a FAT card
-     * behind the FUSE cache is the ordinary case, reporting a rounded time once its cached
-     * inode is evicted. The mirror is what is read, locally, because it holds what the
-     * device holds as far as this open can tell, and where it does not, the device's bytes
-     * miss the digest and the save goes to the set-aside exactly as it did with none.
+     * Kept means recorded without being fetched: the mirror copy's time equalled the one
+     * the device reported, or a read found the device holding the mirror's bytes. With no
+     * digest, the first save after such a move kept a `.device-` copy of a document nobody
+     * had changed; a FAT card behind the FUSE cache is the ordinary case, reporting a
+     * rounded time once its cached inode is evicted. The mirror is what is read, locally,
+     * because it holds what the device holds as far as this open can tell, and where it
+     * does not, the device's bytes miss the digest and the save goes to the set-aside
+     * exactly as it did with none.
      *
      * Newest first and within [KEPT_COPY_DIGEST_BYTES], rather than the whole folder on
      * every open: a provider moves a stamp after a write, so the recent copies are the ones
@@ -1293,18 +1294,19 @@ class SafSyncEngine(private val context: Context) {
      * tick, or at any time on a provider with no clock or one that keeps a document's old
      * time, as an Android phone attached over MTP does; a foreign edit in the window
      * between a landed write and its refresh, or between this check and the write, which
-     * SAF has no conditional write to close; a stamp that cannot be read back after a
-     * write, which drops the entry so the next save fails open; entries not following a
-     * directory rename; a stamp a provider moves after the folder was opened, over a copy
-     * the open kept rather than fetched (its times agreed, or a read found the bytes
-     * equal) past the first [KEPT_COPY_DIGEST_BYTES] of such copies, newest first, and not
-     * written by this app since, which keeps one spare copy of the unchanged document; a
-     * document reported past [MAX_FILE_SIZE] at a length other than the digested one,
-     * which is held back unread, even where it holds this app's own bytes, until it is
-     * reported at that length; a held-back save whose folder is closed before a try lands,
-     * which waits for the next open, or whose directory is renamed, which waits for that or
-     * for the next save of the file; and on a provider with no clock, every copy after the
-     * first carries its counter as a time, which is cosmetic.
+     * SAF has no conditional write to close; a stamp the provider will not report, which
+     * lets the save go ahead unguarded, a held-back save's retry too, and after a write
+     * drops the entry so the next save fails open; entries not following a directory
+     * rename; a stamp a provider moves after the folder was opened, over a copy the open
+     * kept rather than fetched (its times agreed, or a read found the bytes equal) past
+     * the first [KEPT_COPY_DIGEST_BYTES] of such copies, newest first, and not written by
+     * this app since, which keeps one spare copy of the unchanged document; a document
+     * reported past [MAX_FILE_SIZE] at a length other than the digested one, which is held
+     * back unread, even where it holds this app's own bytes, until it is reported at that
+     * length; a held-back save whose folder is closed before a try lands, which waits for
+     * the next open, or whose directory is renamed, which waits for that or for the next
+     * save of the file; and on a provider with no clock, every copy after the first
+     * carries its counter as a time, which is cosmetic.
      */
     private fun keepsDeviceEdit(localFile: File, docUri: Uri): Boolean {
         // Settled again by whatever this answers: a save that goes ahead ends the hold, and
