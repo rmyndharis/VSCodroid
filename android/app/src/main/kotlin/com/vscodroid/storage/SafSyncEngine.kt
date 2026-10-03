@@ -200,8 +200,10 @@ class SafSyncEngine(private val context: Context) {
      * Scoped per mirror in [initialSync] like [deviceSeen]: the next open of the folder
      * takes the mirror's newer copy like any save the watcher did not deliver. Tried only by
      * the loop watching that mirror, so nothing is written into a folder that is closed. A
-     * hold ends at [keepsDeviceEdit]'s next answer for its file, or once the file is deleted
-     * or gone from the mirror.
+     * hold ends at [keepsDeviceEdit]'s next answer for its file, at any write of the file,
+     * which sends what the hold was waiting to send (a create writes a document it has just
+     * made without asking [keepsDeviceEdit]), or once the file is deleted or gone from the
+     * mirror.
      */
     private val heldBack = ConcurrentHashMap<String, HeldBackSave>()
 
@@ -2554,6 +2556,16 @@ class SafSyncEngine(private val context: Context) {
 
     /** The copy itself, with the document already claimed by the caller. */
     private fun writeLocalToSafHoldingDocument(localFile: File, safDocUri: Uri) {
+        // What a hold was waiting to send goes out now, as the file stands, so the hold ends
+        // here whatever this write comes to: one that fails is reported and kept in the
+        // journal like any other. Nearly every write comes after [keepsDeviceEdit], which
+        // has settled the hold already, but a create writes a document it has just made
+        // without asking it. A hold left standing there named the document before, which
+        // another app may have deleted: its next try reported this save as lost, kept a
+        // journal line that refuses the mirror's reclaim, and dropped what the new document
+        // was read as, so the save after it went over another app's edit of that document
+        // unguarded.
+        heldBack.remove(localFile.absolutePath)
         val claim = markUploadInFlight(localFile.absolutePath)
         // Released in a finally rather than at each exit, and this is not style.
         // The claim taken above was originally dropped at the one exit its author

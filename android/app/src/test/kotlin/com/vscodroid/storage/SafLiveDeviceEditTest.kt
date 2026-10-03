@@ -23,9 +23,11 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import org.junit.jupiter.params.ParameterizedTest
 import org.junit.jupiter.params.provider.EnumSource
+import org.junit.jupiter.params.provider.ValueSource
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.FileNotFoundException
 import java.io.IOException
 import java.io.OutputStream
 import java.nio.file.Files
@@ -82,12 +84,21 @@ class SafLiveDeviceEditTest {
     /** Whether the device holds `notes.txt` at all; the editor can delete and make it again. */
     private var deviceHasDocument = true
 
+    /** The id the device gives `notes.txt` now. */
+    private var docId = "doc:notes.txt"
+
+    /**
+     * Documents another app deleted, on a provider whose ids are not paths: a query finds no
+     * row, nothing opens them, and the document a create makes next gets an id of its own.
+     */
+    private val gone = mutableSetOf<Uri>()
+
     /** Set to make the provider fail the first query after the next write lands. */
     private var failStampAfterNextWrite = false
     private var failNextQuery = false
 
-    /** Set to make the next `"wt"` stream fail at its first byte, before anything lands. */
-    private var failNextWriteStream = false
+    /** How many of the next `"wt"` streams fail at their first byte, before anything lands. */
+    private var failWriteStreams = 0
 
     /** How the provider reports a write; null for one whose stamp is final at close(). */
     private var lateStamp: LateStamp? = null
@@ -145,11 +156,13 @@ class SafLiveDeviceEditTest {
             deviceText = ""
             deviceSize = 0
             deviceModified = CREATED_AT
-            uris.getOrPut("doc:notes.txt") { mockk(relaxed = true) }
+            if (uris[docId] in gone) docId += "+"
+            uris.getOrPut(docId) { mockk(relaxed = true) }
         }
 
         resolver = mockk(relaxed = true)
         every { resolver.query(any(), any(), any(), any(), any()) } answers {
+            if (firstArg<Uri>() in gone) return@answers mockk<Cursor>(relaxed = true)
             if (failNextQuery) {
                 failNextQuery = false
                 throw IllegalStateException("the provider did not answer")
@@ -159,6 +172,7 @@ class SafLiveDeviceEditTest {
         // A real stream: a relaxed one answers 0 from `read`, and `copyTo` spins on it.
         every { resolver.openInputStream(any()) } answers {
             reads++
+            if (firstArg<Uri>() in gone) throw FileNotFoundException("deleted by another app")
             if (!deviceReadable) throw IOException("offline")
             object : ByteArrayInputStream(deviceText.toByteArray()) {
                 override fun read(b: ByteArray, off: Int, len: Int) =
@@ -168,8 +182,9 @@ class SafLiveDeviceEditTest {
             }
         }
         every { resolver.openOutputStream(any(), "wt") } answers {
-            if (failNextWriteStream) {
-                failNextWriteStream = false
+            if (firstArg<Uri>() in gone) throw FileNotFoundException("deleted by another app")
+            if (failWriteStreams > 0) {
+                failWriteStreams--
                 object : OutputStream() {
                     override fun write(b: Int) = throw IOException("cut short")
                 }
@@ -218,7 +233,7 @@ class SafLiveDeviceEditTest {
             }
         }
         every { cursor.isNull(any()) } returns false
-        every { cursor.getString(0) } returns "doc:notes.txt"
+        every { cursor.getString(0) } answers { docId }
         every { cursor.getString(1) } returns "notes.txt"
         every { cursor.getString(2) } returns "text/plain"
         every { cursor.getLong(3) } answers { if (deviceHasSize) deviceSize else 0L }
@@ -693,8 +708,10 @@ class SafLiveDeviceEditTest {
     /**
      * A file deleted in the editor and made again is a new document, which its own create
      * writes. The save held back for the deleted one has nothing left to send, and a try of
-     * it went to the deleted document: here that is the same one, so it only writes again,
-     * while a provider whose ids are not paths fails the write and reports a save as lost.
+     * it, which the watcher's loop makes whenever its queue is empty and so can make before
+     * the create's event arrives, went to the deleted document: here that is the same one,
+     * so it only writes again, while a provider whose ids are not paths fails the write and
+     * reports a save as lost.
      */
     @Test
     fun `a held-back save of a file deleted and made again is not tried`() {
@@ -708,8 +725,6 @@ class SafLiveDeviceEditTest {
         engine.handleMirrorEvent(FileObserver.DELETE, file, mirror, treeUri)
         engine.runWriteBackLoop { false }
         file.writeText("brand new")
-        engine.handleMirrorEvent(FileObserver.CREATE, file, mirror, treeUri)
-        engine.runWriteBackLoop { false }
         val writesBefore = writes
         deviceReadable = true
         clock += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
@@ -717,6 +732,8 @@ class SafLiveDeviceEditTest {
         retryWhileWatching()
 
         assertEquals(writesBefore, writes, "the deleted file's held-back save was tried")
+        engine.handleMirrorEvent(FileObserver.CREATE, file, mirror, treeUri)
+        engine.runWriteBackLoop { false }
         assertEquals("brand new", deviceText)
     }
 
@@ -735,6 +752,52 @@ class SafLiveDeviceEditTest {
         assertEquals(false, engine.retryHeldBack(WatchSession(mirror)), "a save with no file was queued")
         File(mirror, "notes.txt").writeText("made again")
         assertEquals(false, engine.retryHeldBack(WatchSession(mirror)), "a dropped save came back")
+    }
+
+    /**
+     * A save held back over a document another app then deletes, a delete on the server
+     * that Nextcloud syncs down among them, before the editor's file is replaced by a
+     * rename, as git checkout, git stash and mv do. The create writes the file into a new
+     * document, and that write is the save, whether it lands or is reported as failed. A
+     * hold left standing was tried against the deleted document: it reported the save as
+     * lost again, kept a journal line that refuses the mirror's reclaim, and dropped what
+     * the new document was read as, so the next save replaced another app's edit of it
+     * with no copy kept.
+     */
+    @ParameterizedTest(name = "the create lands: {0}")
+    @ValueSource(booleans = [true, false])
+    fun `a held-back save ends when its file is written into a new document`(createLands: Boolean) {
+        lateStamp = LateStamp.WHOLE_SECONDS
+        open()
+        save("first save")
+        settle()
+        deviceReadable = false
+        save("second save")
+        assertEquals(1, writes, "a save went over a device copy nothing could read")
+        gone += uris.getValue(docId)
+        deviceHasDocument = false
+        deviceReadable = true
+        val file = File(mirror, "notes.txt")
+        File(mirror, "notes.txt.tmp").apply { writeText("third") }.renameTo(file)
+        if (!createLands) failWriteStreams = 2
+        engine.handleMirrorEvent(FileObserver.MOVED_TO, file, mirror, treeUri)
+        engine.runWriteBackLoop { false }
+        val lost = failed.size
+        clock += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+
+        retryWhileWatching()
+
+        assertEquals(lost, failed.size, "the hold was tried against the deleted document")
+        if (createLands) {
+            assertEquals(emptySet<String>(), engine.uploadsInFlight(), "a delivered save is on record as not")
+        }
+        editOnDevice("changed by another app")
+        save("fourth")
+        assertEquals(
+            listOf("changed by another app"), deviceCopies().values.toList(),
+            "another app's edit of the new document was replaced with no copy kept",
+        )
+        assertEquals("fourth", deviceText)
     }
 
     @Test
@@ -861,7 +924,7 @@ class SafLiveDeviceEditTest {
     fun `a write that lands on its second attempt leaves no device copy`() {
         lateStamp = LateStamp.ROW
         open()
-        failNextWriteStream = true
+        failWriteStreams = 1
         save("first save")
         settle()
 
