@@ -360,7 +360,9 @@ async function main() {
     // route that shows the files. Folders the app can see in full must stay
     // quiet: its own directory under Android/data on any volume and in any
     // case, a device folder's copy, and anything in its home.
-    const folder = (p) => ({ uri: { path: p }, name: p.slice(p.lastIndexOf('/') + 1) });
+    // Named the way the workbench names a folder, by the last segment of its
+    // path, which a trailing slash does not empty.
+    const folder = (p) => ({ uri: { path: p }, name: path.posix.basename(p) });
     workspaceFolders = [
         folder('/storage/emulated/0/Documents/notes'),
         folder('/storage/emulated/0/Android/data/com.vscodroid/files/projects/app'),
@@ -401,8 +403,10 @@ async function main() {
     // only the listener can see it. Every spelling of shared storage counts, an
     // SD card included, as does an Android/data that is not at the top of a
     // volume, and the folder already warned about stays quiet. The picker will
-    // not grant the top of a volume or its Download folder, so those two are
-    // sent to a folder inside, and the top is not named by its last segment.
+    // not grant the top of a volume, its Download folder or its Android folder,
+    // so those are sent to a folder inside, a trailing slash included, and the
+    // top is not named by its last segment. Android/data itself is no app's own
+    // folder: only a package directory below it is, so it is warned about.
     shown.warning.length = 0; executed.length = 0; warningChoice = null;
     workspaceFolders = [
         ...workspaceFolders,
@@ -413,19 +417,21 @@ async function main() {
         folder('/storage/emulated/0/Documents/backup/Android/data/old'),
         folder('/storage/emulated/0'),
         folder('/sdcard/Download'),
+        folder('/storage/emulated/0/Android/'),
+        folder('/sdcard/Android/data'),
     ];
     assert.strictEqual(folderListeners.length, 1, 'the extension does not listen for added folders');
     folderListeners[0]();
     await settle();
     assert.deepStrictEqual(
         shown.warning.map((m) => (/saved in (.+?), so /.exec(m) || [, m])[1]),
-        ['proj', 'beats', 'web', 'game', 'old', 'your device storage', 'Download'],
+        ['proj', 'beats', 'web', 'game', 'old', 'your device storage', 'Download', 'Android', 'data'],
         'an added shared-storage folder must be warned about once, and an earlier one not ' +
         'again: ' + JSON.stringify(shown.warning),
     );
     assert.deepStrictEqual(
         shown.warning.map((m) => m.includes('pick a folder inside it')),
-        [false, false, false, false, false, true, true],
+        [false, false, false, false, false, true, true, true, false],
         'only a folder the picker refuses may be sent to a folder inside it: ' +
         JSON.stringify(shown.warning),
     );
