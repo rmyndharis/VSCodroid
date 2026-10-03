@@ -549,7 +549,7 @@ if $SELF_CHECK; then
     WRAP_RENDERED=$(printf '%s\n' "$WRAP_SAMPLE" | grep -c . || true)
     # The jshell wrapper is assembled from several string literals, so the
     # renderer above cannot read it; its shape is written out here instead.
-    WRAP_JSHELL='jshell() { local arg chosen=; for arg in "$@"; do case "$arg" in -ex*|--ex*) chosen=1 ;; esac; done; [ -n "$chosen" ] || set -- --execution local "$@"; /system/bin/loader "$PREFIX/../usr/lib/sample/bin/jsample" -J-Djdk.lang.Process.launchMechanism=VFORK -J-Duser.home="$HOME" "$@"; }'
+    WRAP_JSHELL='jshell() { local arg skip= chosen=; for arg in "$@"; do case "$arg" in -J*) continue ;; esac; if [ -n "$skip" ]; then skip=; continue; fi; case "$arg" in --) break ;; -ex*|--ex*) chosen=1; break ;; *=*) ;; --c*|--m*|--add-[em]*|--st*|--fe*|--[RC]|-add-[em]*|-st*|-fe*) skip=1 ;; -c*) case class-path in "${arg#-}"*) skip=1 ;; esac ;; -m*) case module-path in "${arg#-}"*) skip=1 ;; esac ;; -*[RCcm]) case "${arg%?}" in -*[!nqsvhX?]*) ;; *) skip=1 ;; esac ;; esac; done; [ -n "$chosen" ] || set -- --execution local "$@"; /system/bin/loader "$PREFIX/../usr/lib/sample/bin/jsample" -J-Djdk.lang.Process.launchMechanism=VFORK -J-Duser.home="$HOME" "$@"; }'
     WRAP_INPUT=$(printf '%s\n%s\nexport RUBYLIB="$PREFIX/../usr/lib/ruby/3.4.0:$PREFIX/../usr/lib/ruby/3.4.0/aarch64-linux-android"\nexport PATH="$PREFIX/../usr/bin:$PATH"\n' "$WRAP_SAMPLE" "$WRAP_JSHELL")
     WRAP_GOT=$(printf '%s\n' "$WRAP_INPUT" | extract_wrapper_targets | tr '\n' ' ' | sed 's/ *$//')
     if [ "$WRAP_RENDERED" -eq 0 ]; then

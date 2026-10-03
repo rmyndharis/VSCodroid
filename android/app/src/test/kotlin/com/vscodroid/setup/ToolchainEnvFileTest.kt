@@ -405,11 +405,80 @@ class ToolchainEnvFileTest {
     }
 
     /**
+     * An option's value is not an option. jshell's parser hands an option that
+     * takes a value the next argument whatever it looks like, so a value starting
+     * with `-ex` read as an engine choice and jshell lost the local engine:
+     * `--startup -extras.jsh` names a startup file. Each spelling that parser
+     * accepts for such an option is here: the name with two dashes or one, an
+     * abbreviation (`--st`, `-cl`, `-mo`, `-add-m`, `-add-e`, `-fe`, and `-c`,
+     * the shortest for --class-path), `--R`, `--C` and `-R`, and each of `-R`,
+     * `-C`, `-c` and `-m` closing a cluster of the flags `n`, `q`, `s` and `v`.
+     * So is the launcher's rule for `-J` arguments: it hands them to the JVM, so
+     * the argument after one is still the value. After `--` nothing is an option.
+     * The last four lines are the controls: an option takes one value and no
+     * more, and none at all when it is attached by `=` or written on after `-c`
+     * or `-m`, so the engine choice after it still counts. Every expectation was
+     * checked against the options jshell 17 declares, parsed by its own copy of
+     * jopt-simple.
+     */
+    @Test
+    fun `jshell steps over the value of an option that takes one`() {
+        val out = runJavaWrappers(
+            """jshell --startup -extras.jsh; jshell -startup -ex.jsh; jshell --st -ex.jsh; """ +
+                """jshell --class-path -ex.jar; jshell -c -ex.jar; jshell -cl -ex.jar; """ +
+                """jshell --module-path -ex; jshell -mo -ex; jshell --add-modules -ex; """ +
+                """jshell -add-m -ex; jshell --add-exports -ex/p=ALL-UNNAMED; """ +
+                """jshell -add-e -ex/p=ALL-UNNAMED; jshell --feedback -ex; jshell -fe -ex; """ +
+                """jshell --R -exx; jshell --C -exx; jshell -R -exx; """ +
+                """jshell -qC -exx; jshell -nR -exx; jshell -sc -ex.jar; jshell -vm -ex; """ +
+                """jshell --startup -J-Dx=1 -ex.jsh; jshell -- -ex.jsh; """ +
+                """jshell --startup a.jsh --exec=jdi; jshell --startup=a.jsh --exec=jdi; """ +
+                """jshell -cfoo -ex jdi; jshell -mfoo -ex jdi"""
+        )
+
+        assertEquals(
+            listOf(
+                "$jshell<--execution><local><--startup><-extras.jsh>",
+                "$jshell<--execution><local><-startup><-ex.jsh>",
+                "$jshell<--execution><local><--st><-ex.jsh>",
+                "$jshell<--execution><local><--class-path><-ex.jar>",
+                "$jshell<--execution><local><-c><-ex.jar>",
+                "$jshell<--execution><local><-cl><-ex.jar>",
+                "$jshell<--execution><local><--module-path><-ex>",
+                "$jshell<--execution><local><-mo><-ex>",
+                "$jshell<--execution><local><--add-modules><-ex>",
+                "$jshell<--execution><local><-add-m><-ex>",
+                "$jshell<--execution><local><--add-exports><-ex/p=ALL-UNNAMED>",
+                "$jshell<--execution><local><-add-e><-ex/p=ALL-UNNAMED>",
+                "$jshell<--execution><local><--feedback><-ex>",
+                "$jshell<--execution><local><-fe><-ex>",
+                "$jshell<--execution><local><--R><-exx>",
+                "$jshell<--execution><local><--C><-exx>",
+                "$jshell<--execution><local><-R><-exx>",
+                "$jshell<--execution><local><-qC><-exx>",
+                "$jshell<--execution><local><-nR><-exx>",
+                "$jshell<--execution><local><-sc><-ex.jar>",
+                "$jshell<--execution><local><-vm><-ex>",
+                "$jshell<--execution><local><--startup><-J-Dx=1><-ex.jsh>",
+                "$jshell<--execution><local><--><-ex.jsh>",
+                "$jshell<--startup><a.jsh><--exec=jdi>",
+                "$jshell<--startup=a.jsh><--exec=jdi>",
+                "$jshell<-cfoo><-ex><jdi>",
+                "$jshell<-mfoo><-ex><jdi>",
+            ),
+            out,
+            "the jshell wrapper read an option's value as an engine choice, so jshell " +
+                "lost the local engine, or took an engine choice for a value and was " +
+                "handed --execution twice:\n" + envFile.readText(),
+        )
+    }
+
+    /**
      * The guard keeps nothing from one call to the next. The function is sourced
      * into every bash, scripts included, so a flag that outlived its call would
      * let one `jshell --execution jdi` take the local engine away from every
-     * later `jshell` in that shell, and a global `arg` would overwrite the
-     * caller's own. `set -u` is what a strict-mode script runs under, and there
+     * later `jshell` in that shell, and a global `arg` or `skip` would overwrite
+     * the caller's own. `set -u` is what a strict-mode script runs under, and there
      * a flag declared without a value is unbound and ends the script. That last
      * one shows only where bash leaves such a flag unset, as bash 5 on CI and on
      * the device does; the bash 3.2 macOS ships gives it an empty value.
@@ -418,14 +487,14 @@ class ToolchainEnvFileTest {
     fun `jshell keeps nothing from one call to the next`() {
         val out = runJavaWrappers(
             """set -u; jshell --execution jdi; jshell x.jsh; """ +
-                """argv "${'$'}{arg-unset}" "${'$'}{chosen-unset}""""
+                """argv "${'$'}{arg-unset}" "${'$'}{chosen-unset}" "${'$'}{skip-unset}""""
         )
 
         assertEquals(
             listOf(
                 "$jshell<--execution><jdi>",
                 "$jshell<--execution><local><x.jsh>",
-                "<unset><unset>",
+                "<unset><unset><unset>",
             ),
             out,
             "the jshell wrapper's engine check outlived its call or failed under " +

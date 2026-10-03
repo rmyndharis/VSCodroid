@@ -2829,15 +2829,37 @@ class ToolchainManager(private val context: Context) {
                         // on its own: matching " -ex" in the joined "$*" took a path
                         // holding that for an engine choice, and missed a later
                         // --execution under an IFS that does not start with a space.
-                        // An option value that itself starts with -ex still reads as
-                        // one; telling them apart means repeating jshell's parser.
+                        // It also steps over the value of each option that takes one,
+                        // because jshell's parser (jopt-simple, in jdk.internal.opt)
+                        // hands such an option the next argument whatever it looks
+                        // like: in `--startup -extras.jsh` that is a file name. The
+                        // patterns follow that parser's grammar: one dash or two, any
+                        // unambiguous abbreviation (`--st`, and `-c` or `-m` alone for
+                        // --class-path and --module-path), `-R` or `-C` alone, and any
+                        // of `-R`, `-C`, `-c` and `-m` closing a cluster of flags such
+                        // as `-qR`. A value given with `=`, or written on after the
+                        // letter as in `-cfoo` and `-R-Dx`, takes nothing more. `--`
+                        // ends the options. `-J` arguments are the launcher's: it
+                        // hands them to the JVM before jshell parses, so they are
+                        // nobody's value. A class path that itself starts with `-J`
+                        // is not modelled: right after an exact `-cp`, `-classpath`
+                        // or `--class-path` the launcher also passes such an
+                        // argument on to jshell, and then drops the last argument of
+                        // the line.
                         // VFORK lets jline start stty, without which Tab and ArrowUp
                         // do not work, and user.home replaces Termux's compiled-in
                         // home, where the preferences store cannot be written and
                         // exit stalls.
                         lines.add(
-                            "jshell() { local arg chosen=; for arg in \"\$@\"; do " +
-                                "case \"\$arg\" in -ex*|--ex*) chosen=1 ;; esac; done; " +
+                            "jshell() { local arg skip= chosen=; for arg in \"\$@\"; do " +
+                                "case \"\$arg\" in -J*) continue ;; esac; " +
+                                "if [ -n \"\$skip\" ]; then skip=; continue; fi; " +
+                                "case \"\$arg\" in --) break ;; -ex*|--ex*) chosen=1; break ;; *=*) ;; " +
+                                "--c*|--m*|--add-[em]*|--st*|--fe*|--[RC]|-add-[em]*|-st*|-fe*) skip=1 ;; " +
+                                "-c*) case class-path in \"\${arg#-}\"*) skip=1 ;; esac ;; " +
+                                "-m*) case module-path in \"\${arg#-}\"*) skip=1 ;; esac ;; " +
+                                "-*[RCcm]) case \"\${arg%?}\" in -*[!nqsvhX?]*) ;; *) skip=1 ;; esac ;; " +
+                                "esac; done; " +
                                 "[ -n \"\$chosen\" ] || set -- --execution local \"\$@\"; " +
                                 "$systemLoader \"\$PREFIX/../$relPath\" " +
                                 "-J-Djdk.lang.Process.launchMechanism=VFORK " +
