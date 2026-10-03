@@ -961,7 +961,7 @@ class SafUnfetchedDocumentTest {
      *
      * Two claims, and they fail differently. The message having one home says that a
      * second refusal cannot have been written that forgets to announce. The call count
-     * says both refusals are still there: the sentence can sit in the file, spelt exactly
+     * says every refusal is still there: the sentence can sit in the file, spelt exactly
      * once, while the site that reaches it has been commented out. That site is the
      * destructive one (with the call gone, `createOneInSaf` falls through to the write
      * and truncates a device document this sync never read), and no behavioural test in
@@ -974,7 +974,7 @@ class SafUnfetchedDocumentTest {
      * spelling, and a doc comment naming the helper.
      */
     @Test
-    fun `the refusal message has one home, so both sites announce`() {
+    fun `the refusal message has one home, so every site announces`() {
         val engineSource =
             File("../../android/app/src/main/kotlin/com/vscodroid/storage/SafSyncEngine.kt")
         assertTrue(engineSource.isFile, "SafSyncEngine.kt is not where this test expects it")
@@ -992,13 +992,13 @@ class SafUnfetchedDocumentTest {
                 "private fun " !in before
         }
         assertEquals(
-            2,
+            3,
             callSites,
-            "the two write paths that can find a document this sync never read are the " +
-                "event path and the directory walk, and each has to refuse through the " +
-                "announcing helper. If a third path legitimately grew one, raise this " +
-                "number; if one went away, the write it used to refuse now replaces a " +
-                "document the user has no other copy of",
+            "the three write paths that can find a document this sync never read are the " +
+                "event path, the write-back of a queued save and the directory walk, and " +
+                "each has to refuse through the announcing helper. If another path " +
+                "legitimately grew one, raise this number; if one went away, the write it " +
+                "used to refuse now replaces a document the user has no other copy of",
         )
     }
 }

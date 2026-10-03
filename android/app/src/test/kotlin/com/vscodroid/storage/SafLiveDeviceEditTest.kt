@@ -33,6 +33,8 @@ import java.io.IOException
 import java.io.OutputStream
 import java.nio.file.Files
 import java.security.MessageDigest
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /**
  * A save while the folder is open, meeting an edit another app made to the same document
@@ -766,6 +768,57 @@ class SafLiveDeviceEditTest {
         engine.handleMirrorEvent(FileObserver.CREATE, file, mirror, treeUri)
         engine.runWriteBackLoop { false }
         assertEquals("brand new", deviceText)
+    }
+
+    /**
+     * A reopen of the folder while its closing drain is inside a read the provider takes
+     * longer than the stop waits to refuse, as a server slow to fail does offline. The
+     * reopen can neither read nor keep the device copy either, so it refuses the file's saves
+     * until an open can, and it takes the device's listed stamp as what it last saw. The
+     * drain went on from there: the hold it recorded after the reopen had cleared the holds
+     * was tried, and a save queued behind the read ran, each finding that stamp unchanged
+     * and writing over a device copy nothing had read.
+     */
+    @ParameterizedTest(name = "another save queued behind the read: {0}")
+    @ValueSource(booleans = [false, true])
+    fun `a reopen during a slow failing read leaves no save to go over what it could not read`(queuedBehind: Boolean) {
+        open()
+        save("first save")
+        editOnDevice("changed by another app")
+        val file = File(mirror, "notes.txt").apply { writeText("second save") }
+        engine.handleMirrorEvent(FileObserver.MODIFY, file, mirror, treeUri)
+        val closing = engine.session
+        val inRead = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val drain = Thread { engine.runWriteBackLoop(closing) { false } }
+        every { resolver.openInputStream(any()) } answers {
+            reads++
+            if (Thread.currentThread() === drain && inRead.count > 0) {
+                inRead.countDown()
+                release.await(5, TimeUnit.SECONDS)
+            }
+            throw IOException("offline")
+        }
+        drain.start()
+        assertTrue(inRead.await(5, TimeUnit.SECONDS), "the drain never reached the device copy")
+        if (queuedBehind) {
+            file.writeText("third save")
+            engine.handleMirrorEvent(FileObserver.MODIFY, file, mirror, treeUri)
+        }
+        open { _, _ ->
+            release.countDown()
+            drain.join(5_000)
+        }
+        clock += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+
+        retryWhileWatching()
+
+        assertEquals(
+            "changed by another app", deviceText,
+            "a save went over a device copy the reopen could neither read nor keep",
+        )
+        assertEquals(1, writes)
+        assertEquals(false, engine.retryHeldBack(WatchSession(mirror)), "a refused save was left to be tried again")
     }
 
     /** A save whose file has left the mirror has nothing to send, and queuing it spun the loop. */

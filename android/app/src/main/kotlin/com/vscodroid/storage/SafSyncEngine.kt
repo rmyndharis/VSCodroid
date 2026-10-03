@@ -198,13 +198,15 @@ class SafSyncEngine(private val context: Context) {
      * came back. Tried again as the save it was, so the answer is [keepsDeviceEdit]'s every
      * time: what decides is the bytes, never the time that has passed.
      *
-     * Scoped per mirror in [initialSync] like [deviceSeen]: the next open of the folder
-     * takes the mirror's newer copy like any save the watcher did not deliver. Tried only by
-     * the loop watching that mirror, so nothing is written into a folder that is closed. A
-     * hold ends at [keepsDeviceEdit]'s next answer for its file, at any write of the file,
-     * which sends what the hold was waiting to send (a create writes a document it has just
-     * made without asking [keepsDeviceEdit]), or once the file is deleted or gone from the
-     * mirror.
+     * Scoped per mirror in [initialSync] like [deviceSeen], because the next open settles the
+     * mirror's newer copy as it settles any save the watcher did not deliver. A hold the
+     * closing folder's drain records after that, its read having outlasted the stop, is
+     * refused like a save of the file where the open could not read the device copy; see
+     * [processWriteBack]. Tried only by the loop watching that mirror, so nothing is written
+     * into a folder that is closed. A hold ends at [keepsDeviceEdit]'s next answer for its
+     * file, at any write of the file, which sends what the hold was waiting to send (a create
+     * writes a document it has just made without asking [keepsDeviceEdit]), at a refusal of
+     * it, or once the file is deleted or gone from the mirror.
      *
      * The waits are read off the monotonic clock, never wall time, for the reason
      * `SafStorageManager.onWriteBackFailed` gives about its throttle: a wall clock corrected
@@ -1363,7 +1365,8 @@ class SafSyncEngine(private val context: Context) {
      * behind every try that was due, which on a server that takes long to refuse a read is
      * long for a save that has nothing to do with them. A file the mirror no longer holds
      * is dropped rather than tried, which would spin the loop on a save with nothing left
-     * to send.
+     * to send. A try runs as a save does, so one of a file the folder's last open could not
+     * read is refused like a save of it.
      */
     internal fun retryHeldBack(session: WatchSession): Boolean {
         val prefix = (session.root ?: return false).absolutePath + File.separator
@@ -2753,12 +2756,13 @@ class SafSyncEngine(private val context: Context) {
      * Declines to write [localFile] out, because the device holds a document under that
      * name this sync never read, and says so once per file.
      *
-     * Both file-level refusal sites come through here, and the message living in one
-     * place is what keeps them saying the same thing: [createOneInSaf] asks the same
-     * question while
-     * walking into a directory, and no JVM test can reach it, because delivering a
-     * directory event builds a `FileObserver` and its static initializer needs native
-     * code. One of them is the only thing holding the two together.
+     * Every file-level refusal site comes through here, and the message living in one
+     * place is what keeps them saying the same thing: [handleMirrorEvent] asks before it
+     * queues a job, [processWriteBack] asks again before a queued save is written, and
+     * [createOneInSaf] asks the same question while walking into a directory, which no JVM
+     * test can reach, because delivering a directory event builds a `FileObserver` and its
+     * static initializer needs native code. One helper is the only thing holding that site
+     * to the others.
      *
      * The notice is [onWriteBackFailed]'s and it fits: the file did not reach the device
      * folder, and the copy inside the app is the only one of it that exists. What the
@@ -3629,7 +3633,24 @@ class SafSyncEngine(private val context: Context) {
                 val localFile = File(job.localPath)
                 if (!localFile.exists()) return
                 if (job.safDocUri != null) {
-                    if (!keepsDeviceEdit(localFile, job.safDocUri)) {
+                    // [handleMirrorEvent]'s unread-document guard again, where the write
+                    // happens, because a job can outlive the answer it was queued under. A
+                    // reopen while the closing drain is still inside a slow provider read
+                    // can find the device copy unreadable and leave the listed stamp as
+                    // what [keepsDeviceEdit] compares against, so a save queued before
+                    // the reopen, or the hold that read leaves once it fails, went over a
+                    // document nothing had read. A [retryHeldBack] job never passes that
+                    // guard at all. Asked of the document the job writes into, the one
+                    // "wt" would replace. The hold ends with the refusal, or the loop would
+                    // queue it again on every idle turn.
+                    if (job.localPath in unfetched &&
+                        writeWouldReplaceUnreadDocument(
+                            job.localPath, deviceStamp(job.safDocUri) != null, unfetched,
+                        )
+                    ) {
+                        heldBack.remove(job.localPath)
+                        refuseUnreadDocument(localFile, localFile.name)
+                    } else if (!keepsDeviceEdit(localFile, job.safDocUri)) {
                         writeLocalToSaf(localFile, job.safDocUri)
                     }
                 } else if (job.safParentUri != null && job.safTreeUri != null) {
