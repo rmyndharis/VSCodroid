@@ -5,6 +5,7 @@ import android.content.Context
 import android.database.Cursor
 import android.net.Uri
 import android.os.FileObserver
+import android.os.SystemClock
 import android.provider.DocumentsContract
 import com.vscodroid.util.Logger
 import io.mockk.Runs
@@ -77,7 +78,7 @@ class SafLiveDeviceEditTest {
     /** False for a provider that will not open the document for reading, as offline. */
     private var deviceReadable = true
 
-    /** What the engine's held-back saves are timed by. */
+    /** What the engine's held-back saves are timed by, `SystemClock.elapsedRealtime()`. */
     private var clock = 0L
     private val failed = mutableListOf<File>()
 
@@ -135,6 +136,9 @@ class SafLiveDeviceEditTest {
         every { Logger.w(any(), any(), any()) } just Runs
         every { Logger.e(any(), any()) } just Runs
         every { Logger.e(any(), any(), any()) } just Runs
+
+        mockkStatic(SystemClock::class)
+        every { SystemClock.elapsedRealtime() } answers { clock }
 
         mockkStatic(DocumentsContract::class)
         every { DocumentsContract.getTreeDocumentId(any()) } returns "root"
@@ -200,7 +204,6 @@ class SafLiveDeviceEditTest {
         every { context.filesDir } returns File(root, "files").apply { mkdirs() }
         engine = SafSyncEngine(context)
         engine.onWriteBackFailed = { failed += it }
-        engine.retryClock = { clock }
         treeUri = mockk(relaxed = true)
         mirror = File(root, "mirror-a").apply { mkdirs() }
     }

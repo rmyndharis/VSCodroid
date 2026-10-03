@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.Context
 import android.net.Uri
 import android.os.FileObserver
+import android.os.SystemClock
 import android.provider.DocumentsContract
 import com.vscodroid.util.Logger
 import com.vscodroid.util.StorageManager
@@ -204,14 +205,13 @@ class SafSyncEngine(private val context: Context) {
      * which sends what the hold was waiting to send (a create writes a document it has just
      * made without asking [keepsDeviceEdit]), or once the file is deleted or gone from the
      * mirror.
+     *
+     * The waits are read off the monotonic clock, never wall time, for the reason
+     * `SafStorageManager.onWriteBackFailed` gives about its throttle: a wall clock corrected
+     * backwards, by NTP after a drifted RTC or by the user setting the date, left every wait
+     * unfinished until the clock caught up, and the save inside the app until then.
      */
     private val heldBack = ConcurrentHashMap<String, HeldBackSave>()
-
-    /**
-     * What [heldBack]'s waits are measured by. A seam because no JVM test can wait out a
-     * held-back save's wait.
-     */
-    internal var retryClock: () -> Long = { System.currentTimeMillis() }
 
     /**
      * How many bytes [digestKeptCopies] reads per open, [KEPT_COPY_DIGEST_BYTES]. A seam
@@ -1343,7 +1343,8 @@ class SafSyncEngine(private val context: Context) {
         announceLost(localFile)
         val wait =
             held?.let { minOf(it.wait * 2, HELD_BACK_RETRY_MAX_MS) } ?: HELD_BACK_RETRY_FIRST_MS
-        heldBack[localFile.absolutePath] = HeldBackSave(docUri, retryClock() + wait, wait)
+        heldBack[localFile.absolutePath] =
+            HeldBackSave(docUri, SystemClock.elapsedRealtime() + wait, wait)
         return true
     }
 
@@ -1361,7 +1362,7 @@ class SafSyncEngine(private val context: Context) {
      */
     internal fun retryHeldBack(session: WatchSession): Boolean {
         val prefix = (session.root ?: return false).absolutePath + File.separator
-        val now = retryClock()
+        val now = SystemClock.elapsedRealtime()
         var queued = false
         for ((path, held) in heldBack) {
             if (!path.startsWith(prefix) || held.dueAt > now) continue
@@ -1369,7 +1370,10 @@ class SafSyncEngine(private val context: Context) {
                 heldBack.remove(path, held)
                 continue
             }
-            session.queue.offer(SyncJob(SyncType.MODIFY, path, held.docUri, null, null, now))
+            // Stamped with the wall clock, like every job the observers queue, because the
+            // debounce compares the two.
+            val stamp = System.currentTimeMillis()
+            session.queue.offer(SyncJob(SyncType.MODIFY, path, held.docUri, null, null, stamp))
             queued = true
         }
         return queued
