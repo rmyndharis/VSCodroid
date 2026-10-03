@@ -22,6 +22,7 @@ import com.vscodroid.bridge.authCallbackNonceIn
 import com.vscodroid.bridge.authRequestIdsIn
 import com.vscodroid.bridge.encodeCallbackState
 import com.vscodroid.isExtensionCallback
+import com.vscodroid.service.RESTART_DELAY_MS
 import com.vscodroid.util.EditorLocale
 import com.vscodroid.util.Environment
 import com.vscodroid.util.Logger
@@ -36,6 +37,8 @@ import java.net.URI
 import java.net.URISyntaxException
 import java.net.URL
 import java.net.URLDecoder
+import java.util.concurrent.Semaphore
+import java.util.concurrent.TimeUnit
 import android.annotation.SuppressLint
 import androidx.core.net.toUri
 
@@ -1098,7 +1101,7 @@ class VSCodroidWebViewClient(
             return interfaceBundleResponse(requested)
         }
         return interceptCdnRequest(
-            request, allowedPort, connectionToken(), resourceRoots, sensitiveLocations, openFolder
+            request, allowedPort, connectionToken, resourceRoots, sensitiveLocations, openFolder
         )
     }
 
@@ -1493,7 +1496,7 @@ class VSCodroidWebViewClient(
                 swController.setServiceWorkerClient(object : ServiceWorkerClient() {
                     override fun shouldInterceptRequest(request: WebResourceRequest): WebResourceResponse? {
                         return interceptCdnRequest(
-                            request, port, connectionToken(),
+                            request, port, connectionToken,
                             resourceRoots, sensitiveLocations, openFolder
                         )
                     }
@@ -1511,14 +1514,19 @@ class VSCodroidWebViewClient(
          * 1. main.vscode-cdn.net: Microsoft resources → empty JSON
          * 2. *.vscode-resource.vscode-cdn.net: extension webview resources → local file or 404
          * 3. HASH.vscode-cdn.net: VS Code static assets → rewrite to localhost
+         *
+         * [connectionToken] is asked rather than read once by the caller, because
+         * the third arm waits for it, for up to [tokenWaitMs]: a parameter only so
+         * the suite does not spend [TOKEN_WAIT_MS] on every case.
          */
         internal fun interceptCdnRequest(
             request: WebResourceRequest,
             port: Int,
-            token: String?,
+            connectionToken: () -> String?,
             resourceRoots: List<String>,
             sensitiveLocations: List<String>,
-            openFolder: () -> String?
+            openFolder: () -> String?,
+            tokenWaitMs: Long = TOKEN_WAIT_MS,
         ): WebResourceResponse? {
             val uri = request.url
             val host = uri.host ?: return null
@@ -1607,7 +1615,7 @@ class VSCodroidWebViewClient(
             // therefore answers with a response, the way the resource arm above
             // does.
             val path = uri.path ?: return notFound("No path")
-            val localUrl = rewriteCdnUrl(path, uri.query, port, token)
+            val localUrl = rewriteCdnUrl(path, uri.query, port)
 
             if (localUrl == null) {
                 // The whole URI, so its query comes with it, and the workbench
@@ -1629,18 +1637,22 @@ class VSCodroidWebViewClient(
             // the webview frames [isOurOrigin] trusts, `pre/index.html` among them,
             // so nothing goes to the port until there is a token to send with it.
             //
-            // The cost, accepted rather than overlooked: readiness is also
+            // Waited for rather than refused at once, because readiness is also
             // withdrawn for the seconds it takes to adopt back a server that
-            // outlived its bootstrap, while the page stays connected to it. A
-            // webview opened or re-shown in that window gets this 503 and stays
-            // blank until it is shown again after that window, or closed and
-            // reopened if it keeps its content while hidden: the workbench drops
-            // the frame of a hidden webview and builds a new one when it is shown,
-            // unless the webview was opened with `retainContextWhenHidden`.
-            // `onServerReady` does not reload a page whose server was adopted
-            // back, on purpose: reloading the workbench to repair one webview
-            // would cost the open editor that adoption exists to keep.
-            if (token.isNullOrEmpty()) {
+            // outlived its bootstrap, while the page stays connected to it. An
+            // immediate 503 left a webview opened or re-shown in that window
+            // blank: the workbench asks for a webview's host document only when
+            // it builds the webview's frame, which it does again each time a
+            // hidden webview is shown unless it was opened with
+            // `retainContextWhenHidden`. `onServerReady` does not reload a page
+            // whose server was adopted back, on purpose: reloading the workbench
+            // to repair one webview would cost the open editor that adoption
+            // exists to keep. A request the wait does not cover, see
+            // [awaitConnectionToken], is still refused, and its webview stays
+            // blank until it is shown again or, if it keeps its content while
+            // hidden, closed and reopened.
+            val token = awaitConnectionToken(connectionToken, tokenWaitMs)
+            if (token == null) {
                 Logger.d(TAG, "CDN request not forwarded, the local server is not ready: $host${uri.path}")
                 return WebResourceResponse(
                     "text/plain", "utf-8", 503, "Service Unavailable",
@@ -1653,8 +1665,76 @@ class VSCodroidWebViewClient(
             // readiness: the connection is refused. The asset is lost
             // either way, so 404 costs nothing that null did not, and null would
             // send the page out to the real CDN for it.
-            return proxyToLocalhost(localUrl, request.method, "$host${uri.path}")
+            return proxyToLocalhost(withToken(localUrl, token), request.method, "$host${uri.path}")
                 ?: notFound("the local server did not answer")
+        }
+
+        /**
+         * How long a webview request waits for the local server to be ready.
+         *
+         * Twice the backoff before the first restart, [RESTART_DELAY_MS]: that
+         * backoff is most of what an adoption takes, and the rest is the
+         * adoption's own check of the port, which allows a second each to connect
+         * and to read, and the readiness probe after it. A later restart in the
+         * same episode waits four seconds or more before it even starts
+         * (`restartBackoffMs`), so a request made early in that pause is refused
+         * when this runs out rather than holding a worker of the WebView's thread
+         * pool for the whole of it: see [TOKEN_WAITERS].
+         */
+        internal const val TOKEN_WAIT_MS = 2 * RESTART_DELAY_MS
+
+        /**
+         * How many webview requests may wait for the server at once. The next
+         * one is refused at once.
+         *
+         * Each waits on the thread it was asked on, and both callers of
+         * [interceptCdnRequest] are asked on a worker of Chromium's browser
+         * thread pool, never on the main thread:
+         * `AwContentsIoThreadClient::ShouldInterceptRequestAsync` posts every
+         * call there. On a phone that pool has 6 foreground workers
+         * (`content/browser/startup_helper.cc`: 0.6 of the cores, at least 6 and
+         * at most 8), and they serve every other request the page makes, the
+         * workbench's own included. WebView marks the call as blocking, so the
+         * pool adds a worker for one that has waited a second; WebView 134 and
+         * early 135 builds lacked that mark (crbug.com/404563944). Two leave four
+         * workers either way, and a webview being shown asks for one document
+         * at a time, so two cover two of them shown at once.
+         */
+        internal const val TOKEN_WAITERS = 2
+
+        /** How often a waiting request asks again. */
+        private const val TOKEN_POLL_MS = 100L
+
+        private val tokenWaiters = Semaphore(TOKEN_WAITERS)
+
+        /**
+         * The connection token, waited for while there is none: null when none
+         * came within [waitMs], or when [TOKEN_WAITERS] requests are already
+         * waiting.
+         *
+         * A token is only handed out while our server reports ready, so waiting
+         * for one is waiting for readiness, and the token this returns is the
+         * one that server holds. A request that finds one is never held up and
+         * takes no place among the waiting.
+         */
+        private fun awaitConnectionToken(connectionToken: () -> String?, waitMs: Long): String? {
+            connectionToken()?.takeIf { it.isNotEmpty() }?.let { return it }
+            if (!tokenWaiters.tryAcquire()) {
+                Logger.d(TAG, "Not waiting for the local server: $TOKEN_WAITERS requests already are")
+                return null
+            }
+            try {
+                val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(waitMs)
+                while (System.nanoTime() < deadline) {
+                    Thread.sleep(TOKEN_POLL_MS)
+                    connectionToken()?.takeIf { it.isNotEmpty() }?.let { return it }
+                }
+            } catch (e: InterruptedException) {
+                Thread.currentThread().interrupt()
+            } finally {
+                tokenWaiters.release()
+            }
+            return null
         }
 
         /**
@@ -2406,7 +2486,7 @@ class VSCodroidWebViewClient(
          * outside the constructor is what that would take, and that hands `#`, CR
          * and LF straight through to `HttpURLConnection`.
          */
-        private fun rewriteCdnUrl(path: String, query: String?, port: Int, token: String?): String? {
+        private fun rewriteCdnUrl(path: String, query: String?, port: Int): String? {
             val segments = path.removePrefix("/").split("/", limit = 3)
             if (segments.size < 2) return null
 
@@ -2419,15 +2499,16 @@ class VSCodroidWebViewClient(
             val localPath = "/$quality-$commit/static/$rest"
             // Empty and absent are one case here, as they were for the `?` this
             // replaces: `URI` writes a bare `?` for an empty query, which [withToken]
-            // would then read as a query to extend.
-            val localUrl = try {
+            // would then read as a query to extend. Signed by the caller, once the
+            // server is ready, and not here: an address this refuses is answered at
+            // once rather than after waiting for a token it would never be sent with.
+            return try {
                 URI(
                     "http", null, "127.0.0.1", port, localPath, query?.ifEmpty { null }, null
                 ).toASCIIString()
             } catch (e: URISyntaxException) {
-                return null
+                null
             }
-            return withToken(localUrl, token)
         }
 
         /**

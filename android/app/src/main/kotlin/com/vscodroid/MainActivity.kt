@@ -119,9 +119,9 @@ class MainActivity : AppCompatActivity() {
      * resource-interception thread, through the connection-token suppliers
      * [initBridge] hands to the client and to the service worker.
      * `shouldInterceptRequest` performs synchronous HTTP, so it cannot be on the
-     * UI thread. A stale null there is a proxied request that goes out without the
-     * connection token, which the server answers 403: a workbench asset that fails
-     * to load with nothing anywhere saying why.
+     * UI thread. A stale null there reads as a server that is not ready: the
+     * request waits for a token that this read would never see and is refused,
+     * a webview that stays blank with nothing anywhere saying why.
      */
     @Volatile
     private var nodeService: NodeService? = null
@@ -2382,7 +2382,8 @@ class MainActivity : AppCompatActivity() {
                     // Only the bootstrap died, and the page is still connected to
                     // the editor server that was adopted back. A reload would
                     // restart the extension host to repair at most a webview opened
-                    // while readiness was withdrawn: see the 503 in
+                    // while readiness was withdrawn, and such a webview's request
+                    // waits for readiness instead: see
                     // VSCodroidWebViewClient.interceptCdnRequest.
                     Logger.i(tag, "Adopted the server the page is connected to; not reloading")
                 } else {

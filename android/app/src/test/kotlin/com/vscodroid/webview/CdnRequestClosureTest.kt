@@ -36,7 +36,8 @@ import java.net.ServerSocket
  * readiness being withdrawn. For a server this app spawned that is the gap
  * between two statements; for one it adopted it is up to two missed polls of
  * the adoption watch, about ten seconds. For the rest of a restart there is no
- * token, and those requests are answered 503 before the proxy is asked. The
+ * token, and those requests wait a few seconds for one before the proxy is
+ * asked, and are answered 503 if none comes (`CdnReadinessWaitTest`). The
  * asset is lost either way; what the null added was an attempt to fetch it from
  * the real CDN, invisible except for one warning.
  *
@@ -88,7 +89,7 @@ class CdnRequestClosureTest {
      */
     private fun intercept(request: WebResourceRequest, port: Int) =
         VSCodroidWebViewClient.interceptCdnRequest(
-            request, port, "tok", emptyList(), emptyList(), { null }
+            request, port, { "tok" }, emptyList(), emptyList(), { null }
         )
 
     /**

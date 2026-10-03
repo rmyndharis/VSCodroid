@@ -11,10 +11,11 @@ import org.junit.jupiter.api.Test
  *
  * That arm is handed the rewritten URL, not a path, and every such URL has ended
  * in `tkn=<hex>` since the editor server began requiring a connection token
- * (`rewriteCdnUrl` closes with `withToken`). A plain `endsWith(".js")` over that
- * string is false for every asset there is, so both fallbacks had quietly stopped
- * being answerable: no caller changed and no branch was deleted, the question
- * simply became one the string could not answer.
+ * (the CDN arm signs what `rewriteCdnUrl` builds with `withToken`). A plain
+ * `endsWith(".js")` over that string is false for every asset there is, so both
+ * fallbacks had quietly stopped being answerable: no caller changed and no
+ * branch was deleted, the question simply became one the string could not
+ * answer.
  *
  * Nothing user-visible rested on it, and that is stated rather than glossed: the
  * `/{quality}-{commit}/static/...` route this arm proxies answers with a
