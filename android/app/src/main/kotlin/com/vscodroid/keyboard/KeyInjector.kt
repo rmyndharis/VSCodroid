@@ -249,7 +249,10 @@ class KeyInjector(
      * handler or container stops the key's propagation, as the Problems,
      * Output, Debug Console and Comments filters and the chat model picker's
      * filter do, hides it from a listener on the window, and its default action
-     * and spatial navigation run all the same. Cancelling stops no binding: the
+     * and spatial navigation run all the same. The listener that decides is
+     * added to the box for that one key and removed by a timer once the key is
+     * over, so a box that stops the key before it, as the terminal's textarea
+     * does with every arrow, keeps none. Cancelling stops no binding: the
      * workbench's keybinding service listens on the window, after the box, and
      * does not read `defaultPrevented`. It covers this document only, so a text
      * box inside an extension webview, a frame of another origin, is not
@@ -533,15 +536,25 @@ class KeyInjector(
                 // own listeners and before the key bubbles to any container,
                 // so neither can hide the key with stopPropagation in the
                 // bubble phase.
-                // Once, and only for its own event: a key stopped before it
-                // reaches the target leaves nothing that acts on the next one.
+                // Only for its own event, and removed by a timer once that
+                // event is over, whether or not it ran. A key stopped before
+                // the listener's turn never runs it, so removing it from
+                // inside, as `once` did, left it there: the terminal's textarea
+                // stops every arrow in its own capture listener, and each
+                // trackpad step in a terminal left one more behind. The timer
+                // runs in a later task, after the whole dispatch. A microtask
+                // would not: the browser runs microtasks between the listeners
+                // of a key it dispatches itself, so one queued here would
+                // remove the listener before the key reached the box.
                 window.addEventListener('keydown', function(e) {
                     if (!EDGE.hasOwnProperty(e.key) || e.ctrlKey || e.shiftKey || e.metaKey) return;
                     var t = e.composedPath()[0];
                     if (!t) return;
-                    t.addEventListener('keydown', function(ev) {
+                    function decide(ev) {
                         if (ev === e && !e.defaultPrevented && leaves(e, t)) e.preventDefault();
-                    }, { once: true });
+                    }
+                    t.addEventListener('keydown', decide);
+                    setTimeout(function() { t.removeEventListener('keydown', decide); }, 0);
                 }, true);
             })();
         """.trimIndent()

@@ -366,9 +366,10 @@ class KeyInjectorLatchTest {
      * `scripts/test-arrow-edge-guard.js`.
      *
      * NEGATIVE CONTROL: deleting the window listener, or registering it in the
-     * bubble phase, fails the slice; deciding there rather than in a one-shot
-     * listener on the box, adding Tab or Home to EDGE, or putting ArrowUp back
-     * into NAVIGATION_KEYS without guarding it, fails an assertion.
+     * bubble phase, fails the slice; deciding there rather than in a listener on
+     * the box, leaving that listener on the box once the key is over, adding Tab
+     * or Home to EDGE, or putting ArrowUp back into NAVIGATION_KEYS without
+     * guarding it, fails an assertion.
      */
     @Test
     fun `an arrow at the edge of a text box ends there instead of moving focus`() {
@@ -387,11 +388,16 @@ class KeyInjectorLatchTest {
         )
         assertTrue(
             guard.contains("window.addEventListener('keydown', function(e) {") &&
-                guard.contains("t.addEventListener('keydown', function(ev) {") &&
-                guard.contains("}, { once: true });"),
+                guard.contains("t.addEventListener('keydown', decide);"),
             "the guard does not decide on the box itself, after the box's own listeners, so " +
                 "a box or container that stops the key's propagation hides it while spatial " +
                 "navigation still moves focus. It reads: $guard",
+        )
+        assertTrue(
+            guard.contains("setTimeout(function() { t.removeEventListener('keydown', decide); }, 0);"),
+            "nothing removes the listener once the key is over, so a box that stops the key " +
+                "before the listener's turn, as the terminal does for every arrow, keeps one " +
+                "per key. It reads: $guard",
         )
         assertTrue(
             guard.contains("!e.defaultPrevented"),

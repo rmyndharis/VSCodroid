@@ -672,13 +672,15 @@ refuses falls back to the announce route. A real arrow turns WebView spatial nav
 until the next touch on the page, so a Left or Right that leaves a collapsed caret at the
 start or end of a text box would move focus out of it. A guard installed with the modifier
 interceptor cancels such a press when none of the box's own handlers used it. It decides
-on the box itself: a capture `keydown` listener on the window adds a one-shot listener to
-the event's innermost target, which runs after the box's own listeners and before the key
+on the box itself: a capture `keydown` listener on the window adds a listener for that key
+to the event's innermost target, which runs after the box's own listeners and before the key
 bubbles to any container, so a box or container that calls `stopPropagation` on the key in
 the bubble phase, as the Problems, Output, Debug Console and Comments filters and the chat
-model picker's filter do, cannot hide it. A number or email box has no selection API, so
-its caret cannot be read and every unmodified Left and Right there is cancelled. Before
-Chromium 149, Blink on Android has no command for Alt+Left or Alt+Right, so the press
+model picker's filter do, cannot hide it. A zero timeout removes that listener once the key
+is over, because a box that stops the key before it, as the terminal's textarea does with
+every arrow in its capture listener, never runs it. A number or email box has no selection
+API, so its caret cannot be read and every unmodified Left and Right there is cancelled.
+Before Chromium 149, Blink on Android has no command for Alt+Left or Alt+Right, so the press
 reaches spatial navigation wherever the caret is; below 149, read from the user agent, the
 guard cancels it in any text box and on the editor's EditContext host. From 149 they move
 to the start and end of the line, which Blink counts as handled even where the caret
