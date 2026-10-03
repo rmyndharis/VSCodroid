@@ -389,8 +389,9 @@ async function main() {
     // files. Folders the app can see in full must stay quiet: its own directory
     // under Android/data on any volume and in any case, a device folder's copy,
     // and anything in its home.
-    // Named the way the workbench names a folder, by the last segment of its
-    // path, which a trailing slash does not empty.
+    //
+    // A folder is named the way the workbench names one, by the last segment of
+    // its path, which a trailing slash does not empty.
     const folder = (p) => ({ uri: { path: p }, name: path.posix.basename(p) });
 
     // Where the extension finds the editor server's note. Its own directory is
