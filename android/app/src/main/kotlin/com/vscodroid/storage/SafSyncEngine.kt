@@ -195,8 +195,8 @@ class SafSyncEngine(private val context: Context) {
      * A held-back save used to wait for the next save of that file or the next open of the
      * folder, so on a provider that reads only while it is online, Nextcloud among them, the
      * save stayed inside the app for as long as the user did neither, long after the network
-     * came back. Tried again as the save it was, so the answer is [keepsDeviceEdit]'s every
-     * time: what decides is the bytes, never the time that has passed.
+     * came back. Tried again as the save it was, through every guard a save goes through, so
+     * what decides is what is known of the device's bytes, never the time that has passed.
      *
      * Scoped per mirror in [initialSync] like [deviceSeen], because the next open settles the
      * mirror's newer copy as it settles any save the watcher did not deliver. A hold the
