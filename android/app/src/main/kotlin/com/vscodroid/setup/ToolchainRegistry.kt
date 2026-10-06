@@ -92,15 +92,12 @@ object ToolchainRegistry {
             displayName = "Ruby",
             shortLabel = "Ruby",
             descriptionRes = R.string.toolchain_ruby_description,
-            // 36,736 KiB measured with `du -sk` over the pack's `usr/` tree,
-            // which is 37.6 MB. 2,403 files, so the block rounding is most of
-            // the gap between that and the 31.6 MB the file contents sum to.
-            // Termux moved ruby from 3.4.1 to 4.0.6 and the tree grew past the
-            // 36,000,000 recorded here, which package-toolchains.sh refuses
-            // rather than shipping a card that admits a device to an install it
-            // cannot finish. The ZIP that tree packs into is 10,421,167 bytes.
+            // Shared conservative figures cover both native targets. ARM's usr/
+            // tree is 36,736 KiB and its ZIP is 10,421,167 bytes; x86_64 measures
+            // 36,916 KiB and 10,589,902 bytes. The rounded unpacked estimate and
+            // transfer fallback cover the larger build of each.
             estimatedSize = 39_000_000,
-            downloadSize = 10_500_000,
+            downloadSize = 10_700_000,
             downloadUrl = "https://github.com/rmyndharis/VSCodroid/releases/latest/download/toolchain_ruby.zip",
         ),
         ToolchainInfo(
@@ -108,14 +105,11 @@ object ToolchainRegistry {
             displayName = "Java 17",
             shortLabel = "Java 17",
             descriptionRes = R.string.toolchain_java_description,
-            // 151,840 KiB measured with `du -sk` over the pack's `usr/` tree,
-            // which is 155.5 MB; the file contents sum to 154.8 MB. This read
-            // 146,000,000 until the JDK grew past it: `download-java.sh` stopped
-            // deleting OpenJDK's `legal/` and began copying with `-RL`, which
-            // dereferences 208 symlinks, and the constant every gate reads did
-            // not move with it. Two comments in ToolchainManager were updated to
-            // say "about 155 MB" while this stayed at 146.
-            estimatedSize = 156_000_000,
+            // Shared conservative figures cover both native targets. ARM's usr/
+            // tree is 151,840 KiB and x86_64 is 153,192 KiB; 158 MB reserves
+            // enough for the larger rounded tree before the copy starts. The
+            // x86_64 ZIP measures 53.7 MB; the 56.5 MB fallback still covers it.
+            estimatedSize = 158_000_000,
             downloadSize = 56_500_000,
             downloadUrl = "https://github.com/rmyndharis/VSCodroid/releases/latest/download/toolchain_java.zip",
         ),

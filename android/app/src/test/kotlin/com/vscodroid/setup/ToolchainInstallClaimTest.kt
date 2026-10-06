@@ -4,6 +4,7 @@ import android.content.Context
 import com.google.android.play.core.assetpacks.AssetPackManager
 import com.google.android.play.core.assetpacks.AssetPackManagerFactory
 import com.google.android.play.core.assetpacks.model.AssetPackStatus
+import com.vscodroid.BuildConfig
 import com.vscodroid.util.Logger
 import io.mockk.Runs
 import io.mockk.every
@@ -143,7 +144,7 @@ class ToolchainInstallClaimTest {
     /** A pack whose `usr/` tree has one file, so a copy leaves a trace. */
     private fun packDirectory(): File {
         val dir = File(filesDir, "delivered-$pack").apply { mkdirs() }
-        File(dir, "$pack.json").writeText("""{"name":"java","installRoot":"usr/opt/java"}""")
+        File(dir, "$pack.json").writeText("""{"name":"java","abi":"${BuildConfig.VSCODROID_ABI}","installRoot":"usr/opt/java"}""")
         File(dir, "usr/opt/java/bin").mkdirs()
         File(dir, "usr/opt/java/bin/java").writeText("payload")
         return dir

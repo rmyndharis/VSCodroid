@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- VSCodroid can be built for an x86_64 Android device, such as a Lenovo Chromebook, as its own install. Phones still receive the ARM64 build. That x86_64 build has not been run on a device.
 - The screen shown when the development server will not start now shows the last lines of the server log, including how each attempt ended, and offers Copy Report. The reason was written only to a file the editor could reach, and the editor was what had failed to open.
 - Opening a phone folder such as Documents with File > Open Folder or Add Folder to Workspace now warns that Android hides the files other apps saved there, and offers **VSCodroid: Open Folder from Device**, which shows them.
 - **VSCodroid: Open Folder from Device** is offered in the remote indicator menu and the empty Explorer as well as the Command Palette.

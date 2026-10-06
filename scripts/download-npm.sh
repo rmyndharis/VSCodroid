@@ -10,8 +10,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+. "$SCRIPT_DIR/lib/android-target.sh"
 ASSETS_DIR="$ROOT_DIR/android/app/src/main/assets"
-WORK_DIR="$ROOT_DIR/toolchains/build/npm"
+android_target_require_staging "$ASSETS_DIR"
+WORK_DIR="$ROOT_DIR/toolchains/build/npm/$ANDROID_ABI"
 
 # Read from the version the native addons are compiled against. The runtime has
 # to equal that -- an addon built for one Node and loaded by another is the
@@ -38,7 +40,7 @@ NODE_VERSION="v$NODE_MAJOR_MINOR_PATCH"
 # it when a checkout has no assets tree -- and it is asserted against the tarball
 # below, so it cannot quietly disagree with what ships.
 NPM_VERSION="11.16.0"
-NODE_TARBALL="node-${NODE_VERSION}-linux-arm64.tar.xz"
+NODE_TARBALL="node-${NODE_VERSION}-linux-${NODE_ARCH}.tar.xz"
 NODE_URL="https://nodejs.org/dist/${NODE_VERSION}/${NODE_TARBALL}"
 
 # What that file must hash to, recorded here rather than read from
@@ -59,7 +61,10 @@ NODE_URL="https://nodejs.org/dist/${NODE_VERSION}/${NODE_TARBALL}"
 # and this is the one furthest from the number, so it is the one that gets
 # forgotten. The published file is still fetched below, as the cross-check that
 # says which of the two is stale.
-NODE_TARBALL_SHA256="58c9520501f6ae2b52d5b210444e24b9d0c029a58c5011b797bc1fe7105886f6"
+case "$NODE_ARCH" in
+    arm64) NODE_TARBALL_SHA256="58c9520501f6ae2b52d5b210444e24b9d0c029a58c5011b797bc1fe7105886f6" ;;
+    x64) NODE_TARBALL_SHA256="55aa7153f9d88f28d765fcdad5ae6945b5c0f98a36881703817e4c450fa76742" ;;
+esac
 
 DEST_DIR="$ASSETS_DIR/usr/lib/node_modules/npm"
 
@@ -128,7 +133,7 @@ mkdir -p "$WORK_DIR/extracted"
 tar xf "$WORK_DIR/$NODE_TARBALL" \
     -C "$WORK_DIR/extracted" \
     --strip-components=1 \
-    "node-${NODE_VERSION}-linux-arm64/lib/node_modules/npm"
+    "node-${NODE_VERSION}-linux-${NODE_ARCH}/lib/node_modules/npm"
 
 NPM_SRC="$WORK_DIR/extracted/lib/node_modules/npm"
 

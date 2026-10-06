@@ -10,6 +10,7 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+. "$SCRIPT_DIR/lib/android-target.sh"
 PACK_ASSETS="$ROOT_DIR/android/toolchain_java/src/main/assets"
 WORK_DIR="$ROOT_DIR/toolchains/termux-packages"
 
@@ -183,8 +184,8 @@ NDK_BIN="$NDK_DIR/toolchains/llvm/prebuilt/$HOST_TAG/bin"
 
 (
     cd "$SPAWN_SRC"
-    "$NDK_BIN/aarch64-linux-android33-clang++" -O2 -fPIC -I. -c posix_spawn.cpp -o posix_spawn.o
-    "$NDK_BIN/aarch64-linux-android33-clang++" -shared posix_spawn.o -o libandroid-spawn.so \
+    "$NDK_BIN/${NDK_TARGET}33-clang++" -O2 -fPIC -I. -c posix_spawn.cpp -o posix_spawn.o
+    "$NDK_BIN/${NDK_TARGET}33-clang++" -shared posix_spawn.o -o libandroid-spawn.so \
         -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384
     "$NDK_BIN/llvm-strip" --strip-unneeded libandroid-spawn.so
 )
@@ -320,6 +321,7 @@ SYMLINKS+='}'
 
 cat > "$PACK_ASSETS/toolchain_java.json" << EOF
 {
+    "abi": "$ANDROID_ABI",
     "name": "java",
     "displayName": "Java 17",
     "version": "$JAVA_VERSION",

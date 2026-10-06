@@ -27,11 +27,16 @@ are reported, never enforced.
 import argparse
 import hashlib
 import pathlib
+import os
 import re
 import subprocess
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+ANDROID_ABI = os.environ.get("VSCODROID_ABI", "arm64-v8a")
+if ANDROID_ABI not in {"arm64-v8a", "x86_64"}:
+    raise SystemExit(f"Unsupported VSCODROID_ABI: {ANDROID_ABI}")
+NODE_ARCH = "x64" if ANDROID_ABI == "x86_64" else "arm64"
 
 # Filled by resolved_entries() when two scripts disagree about a package.
 _CONFLICTS: list[tuple[str, tuple[str, str], tuple[str, str]]] = []
@@ -136,7 +141,7 @@ def resolved_entries() -> list[tuple[str, str, str]]:
     through the shared library rather than in the script itself; without it the
     grep reports two writers out of seven and looks like an answer.
     """
-    work = ROOT / "toolchains" / "termux-packages"
+    work = ROOT / "toolchains" / "termux-packages" / ANDROID_ABI
     # Cleared per call rather than appended to: collect() may be called more than
     # once in a process, and a module-level list would report each disagreement
     # again every time.
@@ -164,6 +169,7 @@ def resolved_entries() -> list[tuple[str, str, str]]:
 
 def collect() -> list[str]:
     lines = [
+        f"target\tabi\t{ANDROID_ABI}",
         "# VSCodroid build manifest",
         "# What this build resolved. A record, not a lock -- see",
         "# scripts/write-build-manifest.py for why.",
@@ -178,7 +184,8 @@ def collect() -> list[str]:
         f"vscode-loc-commit\t{read_text('VSCODE_LOC_COMMIT')}",
     ]
 
-    tarballs = sorted((ROOT / "server").glob("*.tar.gz")) if (ROOT / "server").is_dir() else []
+    server_cache = ROOT / "server" / ANDROID_ABI
+    tarballs = sorted(server_cache.glob("*.tar.gz"))
     for t in tarballs:
         lines.append(f"vscode-server\t{sha256(t)}\t{t.name}")
     if not tarballs:
@@ -190,15 +197,19 @@ def collect() -> list[str]:
     # reads Debian names and would report "-" for it. Its version is resolved from
     # a live index like everything else here, which is what makes the record worth
     # having: it was the only bundled download the manifest could not name.
-    musl = ROOT / "toolchains" / "musl" / "resolved-musl.tsv"
+    musl = ROOT / "toolchains" / "musl" / ANDROID_ABI / "resolved-musl.tsv"
     fields = musl.read_text().split() if musl.is_file() else []
     lines.append(f"musl-loader\t{fields[1]}\t{fields[2]}" if len(fields) >= 3
                  else "musl-loader\t-")
 
+    source_record = musl.parent / "resolved-musl-source.tsv"
+    if source_record.is_file():
+        lines.extend(source_record.read_text().strip().splitlines())
+
     # The index is signature-verified by verify-termux-index.sh before anything
     # reads a digest out of it, so recording its hash pins the whole set of
     # filenames and digests this build resolved, not just the files it kept.
-    index = ROOT / "toolchains" / "termux-packages" / "Packages"
+    index = ROOT / "toolchains" / "termux-packages" / ANDROID_ABI / "Packages"
     lines.append(f"termux-index\t{sha256(index) if index.is_file() else '-'}")
     lines.append("")
 

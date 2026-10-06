@@ -29,11 +29,14 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
-OUT_DIR="${OUT_DIR:-$ROOT_DIR/android/app/src/main/jniLibs/arm64-v8a}"
+source "$SCRIPT_DIR/lib/android-target.sh"
+OUT_DIR="${OUT_DIR:-$ROOT_DIR/android/app/src/main/jniLibs/$ANDROID_ABI}"
+if [ "$OUT_DIR" = "$ROOT_DIR/android/app/src/main/jniLibs/$ANDROID_ABI" ]; then
+    android_target_require_staging "$ROOT_DIR/android/app/src/main/assets"
+fi
 SHIM_OUT="$OUT_DIR/libseccomp-shim.so"
 LAUNCH_OUT="$OUT_DIR/libclaude-launch.so"
 
-TARGET=aarch64-linux-android
 API=33
 
 echo "=== Claude Code seccomp shim ==="
@@ -50,7 +53,7 @@ if [ -z "$NDK" ] || [ ! -d "$NDK" ]; then
     exit 1
 fi
 
-CC="$NDK/toolchains/llvm/prebuilt/$HOST_TAG/bin/${TARGET}${API}-clang"
+CC="$NDK/toolchains/llvm/prebuilt/$HOST_TAG/bin/${NDK_TARGET}${API}-clang"
 if [ ! -x "$CC" ]; then
     echo "  ERROR: no compiler at $CC" >&2
     exit 1
@@ -119,5 +122,5 @@ echo "  launch : $(wc -c < "$LAUNCH_OUT" | tr -d ' ') bytes"
 
 echo ""
 echo "=== Verify ==="
-python3 "$SCRIPT_DIR/verify-android-elf.py" "$LAUNCH_OUT" --lib-dir "$OUT_DIR"
-python3 "$SCRIPT_DIR/verify-android-elf.py" "$SHIM_OUT" --lib-dir "$OUT_DIR"
+python3 "$SCRIPT_DIR/verify-android-elf.py" "$LAUNCH_OUT" --abi "$ANDROID_ABI" --lib-dir "$OUT_DIR"
+python3 "$SCRIPT_DIR/verify-android-elf.py" "$SHIM_OUT" --abi "$ANDROID_ABI" --lib-dir "$OUT_DIR"

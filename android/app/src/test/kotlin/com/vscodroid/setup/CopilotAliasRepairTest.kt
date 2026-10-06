@@ -3,6 +3,7 @@ package com.vscodroid.setup
 import android.content.Context
 import android.system.Os
 import android.system.StructStat
+import com.vscodroid.BuildConfig
 import com.vscodroid.util.Logger
 import io.mockk.Runs
 import io.mockk.every
@@ -32,7 +33,7 @@ import java.nio.file.Path
  * platform-named paths from that with no fallback, so what the tree ships under
  * a linux name is invisible on device unless these links exist. They are rebuilt
  * on every launch because AAPT flattens asset symlinks into copies. The alias
- * exercised here is the Copilot extension's `copilot-android-arm64/sdk`.
+ * exercised here is the Copilot extension's ABI-specific Android SDK alias.
  *
  * Presence was the whole test, which is what the three sibling writers
  * (`setupToolSymlinks`, `setupGitCore`, `setupRipgrepVscodeSymlink`) all read the
@@ -56,7 +57,9 @@ class CopilotAliasRepairTest {
 
     private val reh by lazy { File(filesDir, "server/vscode-reh") }
     private val extensionGh by lazy { File(reh, "extensions/copilot/node_modules/@github") }
-    private val alias by lazy { File(extensionGh, "copilot-android-arm64") }
+    private val nodeArch by lazy { nodeArchForAbi(BuildConfig.VSCODROID_ABI) }
+    private val aliasName by lazy { "copilot-android-$nodeArch" }
+    private val alias by lazy { File(extensionGh, aliasName) }
 
     @BeforeEach
     fun setUp() {
@@ -111,7 +114,7 @@ class CopilotAliasRepairTest {
         assertEquals("../copilot/sdk", aliasTarget())
         val manifest = File(alias, "package.json").readText()
         assertTrue(
-            manifest.contains("\"@github/copilot-android-arm64\"") && manifest.contains("\"1.0.73\""),
+            manifest.contains("\"@github/$aliasName\"") && manifest.contains("\"1.0.73\""),
             "the alias manifest does not name the android package at the extension's SDK version: $manifest",
         )
     }
@@ -136,7 +139,7 @@ class CopilotAliasRepairTest {
         FirstRunSetup(context).setupCopilotAndroidAliases()
 
         assertFalse(
-            Files.exists(File(gh, "copilot-android-arm64").toPath(), LinkOption.NOFOLLOW_LINKS),
+            Files.exists(File(gh, aliasName).toPath(), LinkOption.NOFOLLOW_LINKS),
             "an alias was built over the agent host's runtime, which nothing loads",
         )
     }

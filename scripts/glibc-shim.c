@@ -569,7 +569,8 @@ ssize_t copy_file_range(int fd_in, off64_t *off_in, int fd_out, off64_t *off_out
 #include <sys/socket.h>
 
 /*
- * struct sigaction, and the two libcs could hardly disagree more on arm64.
+ * struct sigaction, and the two libcs could hardly disagree more on both
+ * supported 64-bit ABIs.
  *
  *   Bionic (32 bytes)   int sa_flags; union{handler}; sigset_t sa_mask (8);
  *                       void (*sa_restorer)(void);
@@ -580,7 +581,9 @@ ssize_t copy_file_range(int fd_in, off64_t *off_in, int fd_out, off64_t *off_out
  * pointer as sa_flags and takes the handler itself out of the first word of the
  * mask. It then installs that as a signal handler. Nothing reports an error.
  *
- * Only the low 64 bits of glibc's mask carry anything: there are 64 signals and
+ * On x86_64 Bionic's sigset_t is an unsigned long; on arm64 it is a one-word
+ * union. Both carry the same 64-bit kernel mask. Only the low 64 bits of
+ * glibc's mask carry anything: there are 64 signals and
  * the kernel's own sigset is 64 bits wide. The remaining 120 bytes exist so the
  * structure can outlive that limit, and are copied as zero.
  */
@@ -591,18 +594,31 @@ struct glibc_sigaction {
     void (*restorer)(void);
 };
 
+/* Bionic represents x86_64 sigset_t as one unsigned long. Its arm64 header
+ * wraps the same 64-bit kernel mask in a union with a `sig[]` member. Keep the
+ * boundary conversion in terms of the single kernel word on both ABIs. */
+#if defined(__aarch64__)
+#define BIONIC_SIGSET_STORE(dst, value) ((dst).sig[0] = (value))
+#define BIONIC_SIGSET_LOAD(src) ((src).sig[0])
+#elif defined(__x86_64__)
+#define BIONIC_SIGSET_STORE(dst, value) ((dst) = (value))
+#define BIONIC_SIGSET_LOAD(src) (src)
+#else
+#error "glibc shim supports Android arm64-v8a and x86_64 only"
+#endif
+
 static void from_glibc_sigaction(const struct glibc_sigaction *g, struct sigaction *b) {
     b->sa_flags = g->flags;
     b->sa_handler = (sighandler_t)g->handler;
     memset(&b->sa_mask, 0, sizeof(b->sa_mask));
-    b->sa_mask.sig[0] = g->mask[0];
+    BIONIC_SIGSET_STORE(b->sa_mask, g->mask[0]);
     b->sa_restorer = g->restorer;
 }
 
 static void to_glibc_sigaction(const struct sigaction *b, struct glibc_sigaction *g) {
     memset(g, 0, sizeof(*g));
     g->handler = (void *)b->sa_handler;
-    g->mask[0] = b->sa_mask.sig[0];
+    g->mask[0] = BIONIC_SIGSET_LOAD(b->sa_mask);
     g->flags = b->sa_flags;
     g->restorer = b->sa_restorer;
 }
@@ -652,22 +668,22 @@ int __shim_sigismember(const unsigned long *set, int signum) {
 
 int __shim_sigprocmask(int how, const unsigned long *set, unsigned long *oldset) {
     sigset_t b_set, b_old;
-    if (set) { memset(&b_set, 0, sizeof(b_set)); b_set.sig[0] = set[0]; }
+    if (set) { memset(&b_set, 0, sizeof(b_set)); BIONIC_SIGSET_STORE(b_set, set[0]); }
     int rc = sigprocmask(how, set ? &b_set : 0, oldset ? &b_old : 0);
     if (rc == 0 && oldset) {
         memset(oldset, 0, 128);
-        oldset[0] = b_old.sig[0];
+        oldset[0] = BIONIC_SIGSET_LOAD(b_old);
     }
     return rc;
 }
 
 int __shim_pthread_sigmask(int how, const unsigned long *set, unsigned long *oldset) {
     sigset_t b_set, b_old;
-    if (set) { memset(&b_set, 0, sizeof(b_set)); b_set.sig[0] = set[0]; }
+    if (set) { memset(&b_set, 0, sizeof(b_set)); BIONIC_SIGSET_STORE(b_set, set[0]); }
     int rc = pthread_sigmask(how, set ? &b_set : 0, oldset ? &b_old : 0);
     if (rc == 0 && oldset) {
         memset(oldset, 0, 128);
-        oldset[0] = b_old.sig[0];
+        oldset[0] = BIONIC_SIGSET_LOAD(b_old);
     }
     return rc;
 }

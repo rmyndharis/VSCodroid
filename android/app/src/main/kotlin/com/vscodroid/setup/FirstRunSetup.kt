@@ -25,6 +25,13 @@ import java.util.concurrent.TimeUnit
 import androidx.core.content.edit
 import android.annotation.SuppressLint
 
+/** Node's architecture token for the ABI this APK bundles, never the host's supported ABI list. */
+internal fun nodeArchForAbi(abi: String): String = when (abi) {
+    "arm64-v8a" -> "arm64"
+    "x86_64" -> "x64"
+    else -> throw IllegalArgumentException("Unsupported VSCodroid ABI: $abi")
+}
+
 /**
  * @param assetBytes how much the APK's asset tree weighs, and [largestAssetBytes]
  *   the biggest single file in it. Both are measured at build time, see
@@ -67,6 +74,7 @@ class FirstRunSetup(
     private val bundledExtensionBytes: Long = BuildConfig.BUNDLED_EXTENSION_BYTES,
 ) {
     private val tag = "FirstRunSetup"
+    private val nodeArch = nodeArchForAbi(BuildConfig.VSCODROID_ABI)
     private val prefs = context.getSharedPreferences("vscodroid_setup", Context.MODE_PRIVATE)
 
     /**
@@ -1450,7 +1458,7 @@ class FirstRunSetup(
         val target = rgBinary.absolutePath
         val serverDir = File(context.filesDir, "server/vscode-reh/node_modules")
         val binDirs = listOf(
-            File(serverDir, "@vscode/ripgrep-universal/bin/linux-arm64"),
+            File(serverDir, "@vscode/ripgrep-universal/bin/linux-$nodeArch"),
             File(serverDir, "@vscode/ripgrep/bin"),
         )
 
@@ -1541,14 +1549,15 @@ class FirstRunSetup(
             try {
                 val version = org.json.JSONObject(File(extCopilot, "package.json").readText())
                     .getString("version")
-                val alias = File(extCopilot.parentFile, "copilot-android-arm64")
+                val aliasName = "copilot-android-$nodeArch"
+                val alias = File(extCopilot.parentFile, aliasName)
                 alias.mkdirs()
                 linkTo(File(alias, "sdk"), "../copilot/sdk")
-                val manifest = """{"name":"@github/copilot-android-arm64","version":"$version","type":"module","exports":{"./sdk":{"import":"./sdk/index.js"}}}"""
+                val manifest = """{"name":"@github/$aliasName","version":"$version","type":"module","exports":{"./sdk":{"import":"./sdk/index.js"}}}"""
                 val aliasManifest = File(alias, "package.json")
                 if (!aliasManifest.exists() || aliasManifest.readText() != manifest) {
                     aliasManifest.writeText(manifest)
-                    Logger.i(tag, "copilot alias: extension copilot-android-arm64 pinned to $version")
+                    Logger.i(tag, "copilot alias: extension $aliasName pinned to $version")
                 }
             } catch (e: Exception) {
                 Logger.d(tag, "copilot extension alias failed: ${e.message}")
@@ -1557,8 +1566,8 @@ class FirstRunSetup(
 
         // ripgrep-universal directory alias; its rg is the Bionic symlink.
         val rgBin = File(serverRoot, "node_modules/@vscode/ripgrep-universal/bin")
-        if (File(rgBin, "linux-arm64").isDirectory) {
-            linkTo(File(rgBin, "android-arm64"), "linux-arm64")
+        if (File(rgBin, "linux-$nodeArch").isDirectory) {
+            linkTo(File(rgBin, "android-$nodeArch"), "linux-$nodeArch")
         }
     }
 
@@ -2493,7 +2502,7 @@ __vscodroid_pip_explain() {
         val runtime = pythonRuntimeInAssets() ?: return
         val minor = runtime.removePrefix("libpython").removeSuffix(".so")
         val conf = File(context.filesDir, "home/.pip/pip.conf")
-        val content = pipConfigContent(minor)
+        val content = pipConfigContent(minor, BuildConfig.VSCODROID_ABI)
         val existing = if (conf.exists()) {
             // A file that cannot be read may be the user's, and is left alone.
             runCatching { conf.readText() }.getOrElse {
@@ -6013,17 +6022,23 @@ private fun rootBraceIndex(content: String): Int {
  * and GitHub moves `latest` onto the newest non-prerelease whenever the release
  * holding it is withdrawn, whatever `make_latest` said when it was created.
  */
-internal fun wheelhouseUrl(pythonMinor: String) =
-    "https://rmyndharis.github.io/VSCodroid/wheels/$pythonMinor/wheels.html"
+internal fun wheelhouseUrl(pythonMinor: String, abi: String = "arm64-v8a"): String {
+    val page = when (abi) {
+        "arm64-v8a" -> "wheels.html"
+        "x86_64" -> "wheels-x86_64.html"
+        else -> throw IllegalArgumentException("Unsupported VSCodroid ABI: $abi")
+    }
+    return "https://rmyndharis.github.io/VSCodroid/wheels/$pythonMinor/$page"
+}
 
 /** First line of the pip.conf this app owns; a file without it is the user's. */
 internal const val PIP_CONF_HEADER = "# Written by VSCodroid on every launch."
 
-internal fun pipConfigContent(pythonMinor: String): String = """$PIP_CONF_HEADER
+internal fun pipConfigContent(pythonMinor: String, abi: String = "arm64-v8a"): String = """$PIP_CONF_HEADER
 # Your own settings belong in ~/.config/pip/pip.conf, which pip reads after this
 # file and which overrides any key set here.
 [global]
-find-links = ${wheelhouseUrl(pythonMinor)}
+find-links = ${wheelhouseUrl(pythonMinor, abi)}
 prefer-binary = true
 """
 

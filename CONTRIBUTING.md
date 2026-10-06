@@ -40,7 +40,7 @@ This project follows the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.
 | Git               | Any recent version             | -                                            |
 | GnuPG (`gpg`)     | Any recent version             | `brew install gnupg` / `apt-get install gnupg`. The bundled-tool download scripts verify the Termux package index against its signature and refuse to run without it |
 | adb               | Via Android SDK platform-tools | For deploying to device                      |
-| ARM64 device or emulator | Android 13+ (API 33+)   | The bundled binaries are arm64-only, so an x86_64 emulator will not work; an arm64 emulator (the default on Apple Silicon) works fine |
+| ARM64 or x86_64 device or emulator | Android 13+ (API 33+) | Prepare and package the matching ABI; ARM64 remains the default |
 
 ### Clone and Initial Setup
 
@@ -1003,3 +1003,52 @@ Use the [Feature Request template](https://github.com/rmyndharis/VSCodroid/issue
 ---
 
 Thank you for helping make VSCodroid better.
+
+
+## Native x86_64 Android builds
+
+The port uses separate single-ABI APKs. Set `VSCODROID_ABI=x86_64` for
+preparation scripts and `-PvscodroidAbi=x86_64` for Gradle; ARM64 remains the
+default. See [implementation plan](docs/X86_64_IMPLEMENTATION_PLAN.md).
+Generated `assets/.vscodroid-abi` prevents packaging a staged tree for the other
+architecture. Use a fresh checkout/worktree when changing ABI: ordinary assets
+are shared staging paths, while download/build caches are target-specific.
+
+The published server release may contain only ARM64. Build the pinned patched
+server on Linux x64 with `VSCODROID_ABI=x86_64`, `VSCODE_VERSION` and
+`VSCODE_COMMIT` read from the repository files, and `WORK` set to an empty build
+directory. Supply its tarball to `build-all.sh` through `VSCODE_OSS_URL=file://...`
+and `VSCODE_OSS_SHA256` (the file's SHA-256). Docker on Apple Silicon needs
+`--platform linux/amd64` for both image build and run. Mount `scripts/` (including
+`lib/`), `patches/`, and `branding/` as described in `build-vscode-oss.sh`.
+
+```sh
+export VSCODROID_ABI=x86_64
+export ANDROID_NDK_HOME=/path/to/android-ndk
+# With a verified x64 server artifact available:
+./scripts/build-all.sh
+# For already-prepared x64 assets:
+cd android
+./gradlew assembleDebug -PvscodroidAbi=x86_64
+```
+
+The manual **Build native x86_64 Android APK** workflow builds the server from
+source and then the app, without depending on a published x64 server tarball.
+It uploads the debug APK and target-specific provenance; it does not publish a
+release. Optional language packs are packaged as `toolchain_<name>-x86_64.zip`
+with ABI metadata. Hardware validation on the Googlebook is still required.
+
+Alpine's prebuilt x86_64 musl loader has 4 KB ELF alignment. The x64 download
+step therefore calls `build-musl-loader.sh` to rebuild musl 1.2.5-r23 and its
+maintenance patches from a digest-verified, pinned Alpine source recipe with
+16 KB alignment. It uses Linux x86_64 GCC, because Android's long-double ABI
+differs from musl's. On macOS it uses the Docker image built with:
+
+```sh
+docker build --platform linux/amd64 -f docker/codeoss-build.Dockerfile \
+  -t vscodroid-codeoss-build:x86_64 docker/
+```
+
+`MUSL_BUILD_IMAGE` can select an existing Linux x64 image with GCC, make, and
+Bash. The source recipe is read as data and never executed. A newer Alpine musl
+revision requires reviewing and updating the source pin before building.

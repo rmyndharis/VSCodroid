@@ -1,0 +1,68 @@
+name: Build native x86_64 Android APK
+
+on:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+jobs:
+  build:
+    runs-on: ubuntu-24.04
+    timeout-minutes: 120
+    env:
+      VSCODROID_ABI: x86_64
+      NDK_VERSION: 27.2.12479018
+    steps:
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1
+        with:
+          persist-credentials: false
+      - uses: actions/setup-java@de7274f081f381c8f8158605e0321c36c376e2e6
+        with:
+          distribution: temurin
+          java-version: "17"
+      - uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd
+      - name: Install native build tools
+        run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends build-essential cmake \
+            libkrb5-dev libsecret-1-dev libx11-dev libxkbfile-dev pkg-config \
+            python3 python3-setuptools libarchive-tools gnupg bc zip
+          sdkmanager "ndk;${NDK_VERSION}" --channel=0
+          echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+      - name: Resolve pinned server build runtime
+        id: pin
+        run: |
+          commit=$(cat VSCODE_COMMIT)
+          echo "node=$(curl -fsSL https://raw.githubusercontent.com/microsoft/vscode/$commit/.nvmrc)" >> "$GITHUB_OUTPUT"
+      - uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020
+        with:
+          node-version: ${{ steps.pin.outputs.node }}
+      - uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb
+        with:
+          cache-provider: basic
+      - name: Build patched x64 server and native Android APK
+        run: |
+          export VSCODE_VERSION=$(cat VSCODE_VERSION)
+          export VSCODE_COMMIT=$(cat VSCODE_COMMIT)
+          export WORK="$RUNNER_TEMP/codeoss-x86_64"
+          mkdir -p "$WORK"
+          bash scripts/build-vscode-oss.sh
+          tarball="$WORK/vscode-reh-web-linux-x64-$VSCODE_VERSION.tar.gz"
+          export VSCODE_OSS_URL="file://$tarball"
+          export VSCODE_OSS_SHA256=$(sha256sum "$tarball" | cut -d' ' -f1)
+          python3 scripts/test-target-packaging.py
+          bash scripts/build-all.sh
+          (cd android && ./gradlew :app:testDebugUnitTest -PvscodroidAbi=x86_64)
+          python3 scripts/check-library-attribution.py
+          python3 scripts/check-wheelhouse-abi.py
+          python3 scripts/check-binary-lists.py
+          python3 scripts/write-build-manifest.py -o build-manifest-x86_64.txt
+      - name: Upload APK and provenance
+        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a
+        with:
+          name: vscodroid-x86_64-debug
+          path: |
+            android/app/build/outputs/apk/debug/*.apk
+            build-manifest-x86_64.txt
+          if-no-files-found: error

@@ -2,6 +2,7 @@ package com.vscodroid.setup
 
 import android.content.Context
 import android.content.res.AssetManager
+import com.vscodroid.BuildConfig
 import com.vscodroid.util.Logger
 import io.mockk.Runs
 import io.mockk.every
@@ -38,7 +39,7 @@ class PipConfigTest {
     private val owned get() = File(filesDir, "home/.pip/pip.conf")
     private val users get() = File(filesDir, "home/.config/pip/pip.conf")
 
-    private val url = wheelhouseUrl("3.14")
+    private val url = wheelhouseUrl("3.14", BuildConfig.VSCODROID_ABI)
 
     @BeforeEach
     fun setUp() {
@@ -75,7 +76,7 @@ class PipConfigTest {
 
         FirstRunSetup(context).ensurePipConfig()
 
-        assertEquals(pipConfigContent("3.14"), owned.readText())
+        assertEquals(pipConfigContent("3.14", BuildConfig.VSCODROID_ABI), owned.readText())
     }
 
     @Test
@@ -118,7 +119,8 @@ class PipConfigTest {
      */
     @Test
     fun `the page named is the one for the bundled interpreter`() {
-        assertEquals("https://rmyndharis.github.io/VSCodroid/wheels/3.14/wheels.html", url)
+        val page = if (BuildConfig.VSCODROID_ABI == "x86_64") "wheels-x86_64.html" else "wheels.html"
+        assertEquals("https://rmyndharis.github.io/VSCodroid/wheels/3.14/$page", url)
     }
 
     /** What a first write cut short by power loss leaves; skipping it would be forever. */
@@ -129,7 +131,7 @@ class PipConfigTest {
 
         FirstRunSetup(context).ensurePipConfig()
 
-        assertEquals(pipConfigContent("3.14"), owned.readText())
+        assertEquals(pipConfigContent("3.14", BuildConfig.VSCODROID_ABI), owned.readText())
     }
 
     @Test
@@ -139,7 +141,7 @@ class PipConfigTest {
 
         FirstRunSetup(context).ensurePipConfig()
 
-        assertEquals(pipConfigContent("3.14"), owned.readText())
+        assertEquals(pipConfigContent("3.14", BuildConfig.VSCODROID_ABI), owned.readText())
     }
 
     @Test

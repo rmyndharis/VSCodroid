@@ -11,16 +11,16 @@ on:
         description: VS Code tag to build (defaults to the VSCODE_VERSION file)
         default: ""
         type: string
+      abi:
+        description: Android target ABI (build host must match)
+        default: arm64-v8a
+        type: choice
+        options:
+          - arm64-v8a
+          - x86_64
       runner:
-        # Not a preference. Every native module in the tree is built for the
-        # build host and only four are replaced afterwards; @vscode/ripgrep's
-        # postinstall in particular downloads a binary for whatever the host
-        # reports. On an x64 runner the tree builds green and then fails at exec
-        # on the device, with Search quietly returning nothing. The build script
-        # refuses to package an x86-64 tree, so a wrong runner fails the job
-        # rather than shipping.
-        description: Runner to build on (must be arm64)
-        default: ubuntu-24.04-arm
+        description: Optional runner override (must match target CPU)
+        default: ""
         type: string
 
 # Read by default; the one job that publishes raises it, the way release.yml
@@ -36,10 +36,13 @@ permissions:
 
 jobs:
   build:
-    runs-on: ${{ inputs.runner }}
+    runs-on: ${{ inputs.runner || (inputs.abi == 'x86_64' && 'ubuntu-24.04' || 'ubuntu-24.04-arm') }}
+    env:
+      VSCODROID_ABI: ${{ inputs.abi || 'arm64-v8a' }}
     timeout-minutes: 120
     outputs:
       version: ${{ steps.pin.outputs.version }}
+      arch: ${{ steps.pin.outputs.arch }}
 
     steps:
       # No persisted push token either: nothing here pushes, and a persisted one
@@ -57,6 +60,8 @@ jobs:
           # shell is concerned, and this one lands in a URL and a tag name.
           INPUT_VERSION: ${{ inputs.vscode_version }}
         run: |
+          . scripts/lib/android-target.sh
+          echo "arch=$NODE_ARCH" >> "$GITHUB_OUTPUT"
           version="${INPUT_VERSION:-$(cat VSCODE_VERSION)}"
           case "$version" in
             *[!0-9.]*|"") echo "refusing version: $version" >&2; exit 1 ;;
@@ -133,7 +138,7 @@ jobs:
         with:
           path: ~/.npm
           key: codeoss-npm-${{ steps.pin.outputs.version }}-${{ runner.arch }}
-          restore-keys: codeoss-npm-${{ steps.pin.outputs.version }}-
+          restore-keys: codeoss-npm-${{ steps.pin.outputs.version }}-${{ runner.arch }}-
 
       - name: Build
         env:
@@ -155,8 +160,8 @@ jobs:
       - name: Upload server tree
         uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
         with:
-          name: vscode-reh-web-linux-arm64-${{ steps.pin.outputs.version }}
-          path: ${{ runner.temp }}/codeoss/vscode-reh-web-linux-arm64-${{ steps.pin.outputs.version }}.tar.gz
+          name: vscode-reh-web-linux-${{ steps.pin.outputs.arch }}-${{ steps.pin.outputs.version }}
+          path: ${{ runner.temp }}/codeoss/vscode-reh-web-linux-${{ steps.pin.outputs.arch }}-${{ steps.pin.outputs.version }}.tar.gz
           retention-days: 7
           if-no-files-found: error
 
@@ -186,7 +191,7 @@ jobs:
       - name: Download server tree
         uses: actions/download-artifact@3e5f45b2cfb9172054b4087a40e8e0b5a5461e7c # v8.0.1
         with:
-          name: vscode-reh-web-linux-arm64-${{ needs.build.outputs.version }}
+          name: vscode-reh-web-linux-${{ needs.build.outputs.arch }}-${{ needs.build.outputs.version }}
           path: ${{ runner.temp }}/codeoss
 
       # The artifact above expires; this does not. build.yml and release.yml both
@@ -224,14 +229,14 @@ jobs:
           target_commitish: ${{ github.sha }}
           name: Code - OSS server ${{ needs.build.outputs.version }}
           body: |
-            Code - OSS `vscode-reh-web-linux-arm64` server tree for VS Code ${{ needs.build.outputs.version }}, built from source with the patches and branding in this repository applied before the build.
+            Code - OSS `vscode-reh-web-linux-${{ needs.build.outputs.arch }}` server tree for VS Code ${{ needs.build.outputs.version }}, built from source with the patches and branding in this repository applied before the build.
 
             Built from `${{ github.sha }}` on `${{ github.ref_name }}`, run ${{ github.server_url }}/${{ github.repository }}/actions/runs/${{ github.run_id }}.
 
             Consumed by `scripts/fetch-vscode-oss.sh`. Not an app release.
           make_latest: false
           prerelease: true
-          files: ${{ runner.temp }}/codeoss/vscode-reh-web-linux-arm64-${{ needs.build.outputs.version }}.tar.gz
+          files: ${{ runner.temp }}/codeoss/vscode-reh-web-linux-${{ needs.build.outputs.arch }}-${{ needs.build.outputs.version }}.tar.gz
 
       # The release API never moves an existing tag, so a rebuild at a version
       # already published left the tag on the commit that first published it:

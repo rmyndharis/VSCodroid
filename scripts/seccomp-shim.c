@@ -28,6 +28,7 @@
 // to the next millisecond rather than truncated: a caller polling with a
 // sub-millisecond timeout gets a slightly longer wait, where truncation to zero
 // would turn its wait into a spin.
+#define _GNU_SOURCE 1
 #include <errno.h>
 #include <linux/signal.h>
 #include <signal.h>
@@ -36,14 +37,22 @@
 #include <time.h>
 #include <ucontext.h>
 
+#if defined(__aarch64__)
 #define SYS_epoll_pwait   22
 #define SYS_rt_sigaction  134
+#elif defined(__x86_64__)
+#define SYS_epoll_pwait   281
+#define SYS_rt_sigaction  13
+#else
+#error "seccomp shim supports Android arm64-v8a and x86_64 only"
+#endif
 
 #ifndef __NR_epoll_pwait2
 #define __NR_epoll_pwait2 441
 #endif
 
 static inline long sys6(long nr, long a, long b, long c, long d, long e, long f) {
+#if defined(__aarch64__)
     register long x8 __asm__("x8") = nr;
     register long x0 __asm__("x0") = a;
     register long x1 __asm__("x1") = b;
@@ -56,6 +65,20 @@ static inline long sys6(long nr, long a, long b, long c, long d, long e, long f)
                      : "r"(x1), "r"(x2), "r"(x3), "r"(x4), "r"(x5), "r"(x8)
                      : "memory", "cc");
     return x0;
+#else
+    register long rax __asm__("rax") = nr;
+    register long rdi __asm__("rdi") = a;
+    register long rsi __asm__("rsi") = b;
+    register long rdx __asm__("rdx") = c;
+    register long r10 __asm__("r10") = d;
+    register long r8 __asm__("r8") = e;
+    register long r9 __asm__("r9") = f;
+    __asm__ volatile("syscall"
+                     : "+a"(rax)
+                     : "D"(rdi), "S"(rsi), "d"(rdx), "r"(r10), "r"(r8), "r"(r9)
+                     : "rcx", "r11", "memory", "cc");
+    return rax;
+#endif
 }
 
 /**
@@ -70,6 +93,18 @@ struct kernel_sigaction {
     unsigned long mask;
 };
 
+#if defined(__x86_64__)
+#define KERNEL_SA_RESTORER 0x04000000UL
+__attribute__((visibility("hidden"))) void signal_restorer(void);
+__asm__(".text\n"
+        ".globl signal_restorer\n"
+        ".hidden signal_restorer\n"
+        ".align 16\n"
+        "signal_restorer:\n"
+        "mov $15, %rax\n"
+        "syscall\n");
+#endif
+
 /**
  * Answers one refused epoll_pwait2 and lets the thread carry on.
  *
@@ -81,31 +116,49 @@ struct kernel_sigaction {
  * process the way the platform meant it to. It is not raised again. Read from
  * the kernel sources rather than measured here: for SECCOMP_RET_TRAP,
  * kernel/seccomp.c rolls the registers back, raises the signal and skips the
- * call, and arm64's syscall_rollback is `regs[0] = orig_x0`, so the instruction
- * is not retried and a bare return hands the caller its own first argument as
- * the syscall's result. The disposition change also disarmed this handler for
+ * call, and the kernel restores the syscall's original first argument in the
+ * return register (x0 on arm64, RAX on x86_64), so the instruction is not
+ * retried and a bare return hands the caller its own first argument as the
+ * syscall's result. The disposition change also disarmed this handler for
  * the rest of the process, so the next epoll_pwait2, the call this file exists
  * for, would kill the process instead of being answered.
  */
 static void on_sigsys(int sig, siginfo_t *info, void *ctx) {
     (void)sig;
     ucontext_t *uc = (ucontext_t *)ctx;
+#if defined(__aarch64__)
     unsigned long *regs = (unsigned long *)uc->uc_mcontext.regs;
+#define REG(n) regs[n]
+#define RETREG regs[0]
+#else
+    greg_t *regs = uc->uc_mcontext.gregs;
+#define REG(n) regs[n]
+#define RETREG regs[REG_RAX]
+#endif
 
     if (info->si_syscall != __NR_epoll_pwait2) {
         // Not ours, and the call did not run. Answer it rather than leaving the
         // caller with whatever the rollback left in x0, and leave the handler in
         // place so the one call this file is for is still answered afterwards.
-        regs[0] = (unsigned long)-ENOSYS;
+        RETREG = (unsigned long)-ENOSYS;
         return;
     }
 
-    int fd = (int)regs[0];
-    struct epoll_event *events = (struct epoll_event *)regs[1];
-    int maxevents = (int)regs[2];
-    const struct timespec *ts = (const struct timespec *)regs[3];
-    const void *sigmask = (const void *)regs[4];
-    unsigned long setsize = (unsigned long)regs[5];
+#if defined(__aarch64__)
+    int fd = (int)REG(0);
+    struct epoll_event *events = (struct epoll_event *)REG(1);
+    int maxevents = (int)REG(2);
+    const struct timespec *ts = (const struct timespec *)REG(3);
+    const void *sigmask = (const void *)REG(4);
+    unsigned long setsize = (unsigned long)REG(5);
+#else
+    int fd = (int)uc->uc_mcontext.gregs[REG_RDI];
+    struct epoll_event *events = (struct epoll_event *)uc->uc_mcontext.gregs[REG_RSI];
+    int maxevents = (int)uc->uc_mcontext.gregs[REG_RDX];
+    const struct timespec *ts = (const struct timespec *)uc->uc_mcontext.gregs[REG_R10];
+    const void *sigmask = (const void *)uc->uc_mcontext.gregs[REG_R8];
+    unsigned long setsize = (unsigned long)uc->uc_mcontext.gregs[REG_R9];
+#endif
 
     // A null timespec is "wait forever", which epoll_pwait spells -1. Rounded
     // up, for the reason the file header gives.
@@ -119,7 +172,7 @@ static void on_sigsys(int sig, siginfo_t *info, void *ctx) {
 
     long r = sys6(SYS_epoll_pwait, fd, (long)events, maxevents, timeout_ms,
                   (long)sigmask, (long)setsize);
-    regs[0] = (unsigned long)r;   // already -errno on failure, which is the ABI
+    RETREG = (unsigned long)r;   // already -errno on failure, which is the ABI
 }
 
 /**
@@ -127,7 +180,8 @@ static void on_sigsys(int sig, siginfo_t *info, void *ctx) {
  *
  * SA_NODEFER so a refusal raised from inside the handler is not held back, and
  * SA_SIGINFO because si_syscall is the only thing that says which call was
- * refused. No restorer: arm64 returns from a signal through the vDSO.
+ * refused. Arm64 returns through the vDSO; x86_64 requires SA_RESTORER and the
+ * tiny rt_sigreturn restorer above.
  */
 /**
  * musl's own `struct sigaction`, which is not the kernel's: the mask comes
@@ -188,6 +242,10 @@ __attribute__((constructor)) static void install(void) {
     struct kernel_sigaction sa = { 0 };
     sa.handler = on_sigsys;
     sa.flags = SA_SIGINFO | SA_NODEFER;
+#if defined(__x86_64__)
+    sa.flags |= KERNEL_SA_RESTORER;
+    sa.restorer = signal_restorer;
+#endif
     sa.mask = 0;
     sys6(SYS_rt_sigaction, SIGSYS, (long)&sa, 0, 8, 0, 0);
 }

@@ -84,13 +84,18 @@ and from a tree whose packs were never recorded print the same otherwise.
 import fnmatch
 import json
 import pathlib
+import os
 import re
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
+ANDROID_ABI = os.environ.get("VSCODROID_ABI", "arm64-v8a")
+if ANDROID_ABI not in {"arm64-v8a", "x86_64"}:
+    raise SystemExit(f"Unsupported VSCODROID_ABI: {ANDROID_ABI}")
+NODE_ARCH = "x64" if ANDROID_ABI == "x86_64" else "arm64"
 ASSETS = ROOT / "android/app/src/main/assets"
 USR_LIB = ROOT / "android/app/src/main/assets/usr/lib"
-JNILIBS = ROOT / "android/app/src/main/jniLibs/arm64-v8a"
+JNILIBS = ROOT / "android/app/src/main/jniLibs" / ANDROID_ABI
 LEGAL_NOTICES = ROOT / "docs/LEGAL_NOTICES.md"
 # The second attribution document, and the one that says out loud that this
 # script guards it. Both are read for attribution; the copyleft source offer
@@ -154,6 +159,7 @@ LIBRARIES = {
     "libresolv.so.2": ("VSCodroid", "MIT"),
     "libcrypt.so.1": ("VSCodroid", "MIT"),
     "ld-linux-aarch64.so.1": ("VSCodroid", "MIT"),
+    "ld-linux-x86-64.so.2": ("VSCodroid", "MIT"),
     "libgcc_s.so.1": ("VSCodroid", "MIT"),
     "libexec-trampoline.so": ("VSCodroid", "MIT"),
     "libclaude-launch.so": ("VSCodroid", "MIT"),
@@ -410,7 +416,7 @@ NESTED_LIBRARIES = {
     "vscode-reh/node_modules/@vscode/ripgrep-universal/*": ("ripgrep", "MIT"),
     # Only in server trees built before 1.139.1, like the Copilot runtime entry
     # further down; see there.
-    "vscode-reh/node_modules/@github/copilot-linux-arm64/ripgrep/*": ("ripgrep", "MIT"),
+    f"vscode-reh/node_modules/@github/copilot-linux-{NODE_ARCH}/ripgrep/*": ("ripgrep", "MIT"),
     "vscode-reh/extensions/copilot/node_modules/@github/copilot/sdk/ripgrep/*":
         ("ripgrep", "MIT"),
     # --- WebAssembly the editor loads at run time ---
@@ -445,7 +451,7 @@ NESTED_LIBRARIES = {
     # without the package both match nothing and are not reported, because
     # `stale_anchor` asks for a directory that is no longer there. Delete both
     # once no tree this script is run against carries it.
-    "vscode-reh/node_modules/@github/copilot-linux-arm64/*":
+    f"vscode-reh/node_modules/@github/copilot-linux-{NODE_ARCH}/*":
         ("@github/copilot (GitHub Copilot CLI)", "GitHub Copilot CLI License (proprietary)"),
     "vscode-reh/extensions/copilot/node_modules/@github/copilot/*":
         ("@github/copilot (GitHub Copilot CLI)", "GitHub Copilot CLI License (proprietary)"),

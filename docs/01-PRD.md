@@ -237,7 +237,7 @@ flowchart TD
 | 2 | Node.js version to target? | Binary size, compatibility | **Resolved**: not a preference. `remote/.npmrc` `target` at the pinned VS Code tag names the Node the server ships and its native modules are built against, and Termux's `nodejs-lts` package supplies it (24.18.0 today) |
 | 3 | Python version? | Size, package compat | **Resolved**: not pinned here. `scripts/download-python.sh` reads the version from the Termux package index at build time, so the bundled `usr/lib/libpython*.so` is the authority (3.14 today) |
 | 4 | Monetization strategy? (Free, freemium, paid?) | Revenue, feature gating | **Resolved**: Free and Open Source (MIT license) |
-| 5 | Support x86_64 emulators for development? | Dev workflow | **Resolved**: No. The app is `arm64-v8a` only, so an x86_64 image cannot load the bundled `.so` files. A physical device is **not** required, though: an arm64 emulator works, and is the default on Apple silicon. See the prerequisites table in `CONTRIBUTING.md` and `android/app/src/androidTest/README.md` for why CI cannot run one |
+| 5 | Support x86_64 emulators for development? | Dev workflow | **Resolved**: The phone build stays `arm64-v8a`, and an x86_64 emulator still cannot load that APK. A separate x86_64 APK is built with `VSCODROID_ABI=x86_64` for x86_64 Android devices. An arm64 emulator remains the way to exercise the phone build without a handset. See [CONTRIBUTING.md](../CONTRIBUTING.md#native-x86_64-android-builds). |
 
 ## 12. Timeline
 

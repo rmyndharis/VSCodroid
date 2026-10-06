@@ -253,7 +253,7 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 |----|------------|--------|----------|
 | NFR-COMPAT-01 | Minimum Android version | 13 (API 33) | P0 |
 | NFR-COMPAT-02 | Target Android version | 16 (API 36) | P0 |
-| NFR-COMPAT-03 | Architecture | arm64-v8a only | P0 |
+| NFR-COMPAT-03 | Architecture | arm64-v8a by default; a separate single-ABI APK when `VSCODROID_ABI=x86_64` | P0 |
 | NFR-COMPAT-04 | Minimum WebView version | Chrome 105+ | P0 |
 | NFR-COMPAT-05 | Device compatibility | Pixel, Samsung, Xiaomi, OnePlus tested | P1 |
 | NFR-COMPAT-06 | Screen sizes | Phone (5-7"), Tablet (8-13") | P1 |

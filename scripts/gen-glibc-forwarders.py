@@ -43,6 +43,7 @@ on a device, not trust.
 """
 
 import argparse
+import os
 import pathlib
 import re
 import struct
@@ -101,7 +102,10 @@ TOLERATED_BLOCKED = {"kerberos.node"}
 # The glibc loader appears in DT_NEEDED of objects built against it. Bionic's
 # linker is already the one running, so a stub carrying the name is enough to
 # satisfy the entry.
-LOADER_SONAME = "ld-linux-aarch64.so.1"
+ABI = "arm64-v8a"
+ABI_MAP = {"arm64-v8a": (0xB7, "ld-linux-aarch64.so.1"),
+           "x86_64": (0x3E, "ld-linux-x86-64.so.2")}
+LOADER_SONAME = ABI_MAP[ABI][1]
 
 SHT_DYNSYM, SHT_GNU_VERNEED, SHT_GNU_VERSYM = 11, 0x6FFFFFFE, 0x6FFFFFFF
 SHT_GNU_VERDEF = 0x6FFFFFFD
@@ -129,8 +133,9 @@ LINKER_PROVIDED = {
 # nothing to connect it back. These point at translating wrappers in
 # glibc-shim.c instead of at Bionic.
 #
-# Every entry here was measured on both sides -- glibc 2.36 on aarch64 Debian and
-# Bionic on an arm64 device -- rather than inherited from a list:
+# Every entry here was measured on both sides -- glibc 2.36 on aarch64 Debian
+# and x86_64 Debian, and Bionic headers for arm64-v8a and x86_64 -- rather than
+# inherited from a list:
 #   sigaction     Bionic puts sa_flags first and uses an 8-byte mask; glibc puts
 #                 the handler first and uses 128 bytes (bits/signal_types.h)
 #   addrinfo      Bionic orders ai_canonname before ai_addr; glibc is the other
@@ -167,9 +172,11 @@ TRANSLATED = {
 # (sigaction, stat, statfs, dirent, termios, sockaddr, msghdr, passwd, utsname,
 # rlimit and more), and that list was the starting point here. Each was then
 # printed by a program compiled twice -- glibc 2.36 on aarch64 Debian, Bionic on
-# an arm64 device -- and the two outputs diffed: struct stat, dirent, statfs,
-# msghdr, passwd, utsname, rlimit, sockaddr and stack_t agree on size and on
-# every field offset. Bionic and glibc both follow the same Linux kernel ABI,
+# an arm64 device -- and the two outputs diffed: on x86_64 as on arm64, struct
+# stat, dirent, statfs, msghdr, passwd, utsname, rlimit, sockaddr and stack_t
+# agree on size and on every field offset. (The x86_64 comparison used the
+# x86_64 Debian build container and NDK r27.3.13750724's x86_64 Android sysroot.)
+# Bionic and glibc both follow the same Linux kernel ABI,
 # where FreeBSD does not.
 #
 # struct termios is the exception, and an earlier version of this comment put it
@@ -196,7 +203,7 @@ TRANSLATED = {
 #
 # Before adding a name: read the struct in
 #   $ANDROID_NDK_HOME/toolchains/llvm/prebuilt/*/sysroot/usr/include
-# and compare it against glibc's for aarch64. An entry added on suspicion turns
+# and compare it against glibc's for the selected ABI. An entry added on suspicion turns
 # a working call into an abort.
 NEEDS_TRANSLATION = set()
 
@@ -231,6 +238,7 @@ class Elf:
         self.path = path
         if self.data[:4] != b"\x7fELF" or self.data[4] != 2:
             raise ValueError(f"{path.name} is not a 64-bit ELF file")
+        self.machine, = struct.unpack_from("<H", self.data, 18)
 
         e_shoff, = struct.unpack_from("<Q", self.data, 40)
         e_shentsize, e_shnum, e_shstrndx = struct.unpack_from("<HHH", self.data, 58)
@@ -647,17 +655,28 @@ def generate(inputs, out_dir: pathlib.Path):
             # directly instead of going through the GOT.
             lines.append(f'__attribute__((used, visibility("hidden")))')
             lines.append(f'static const char {nsym}[] = "{name}";')
-            lines.append(
-                f'__asm__(".globl {fwd}\\n"\n'
-                f'        "{fwd}:\\n"\n'
-                f'        "  adrp x16, {ptr}\\n"\n'
-                f'        "  ldr  x16, [x16, :lo12:{ptr}]\\n"\n'
-                f'        "  cbz  x16, {label}\\n"\n'
-                f'        "  br   x16\\n"\n'
-                f'        "{label}:\\n"\n'
-                f'        "  adrp x0, {nsym}\\n"\n'
-                f'        "  add  x0, x0, :lo12:{nsym}\\n"\n'
-                f'        "  b    __fwd_missing\\n");')
+            if ABI == "arm64-v8a":
+                    asm = (f'__asm__(".globl {fwd}\\n"\n'
+                           f'        "{fwd}:\\n"\n'
+                           f'        "  adrp x16, {ptr}\\n"\n'
+                           f'        "  ldr  x16, [x16, :lo12:{ptr}]\\n"\n'
+                           f'        "  cbz  x16, {label}\\n"\n'
+                           f'        "  br   x16\\n"\n'
+                           f'        "{label}:\\n"\n'
+                           f'        "  adrp x0, {nsym}\\n"\n'
+                           f'        "  add  x0, x0, :lo12:{nsym}\\n"\n'
+                           f'        "  b    __fwd_missing\\n");')
+            else:
+                    asm = (f'__asm__(".globl {fwd}\\n"\n'
+                           f'        "{fwd}:\\n"\n'
+                           f'        "  movq {ptr}(%rip), %r11\\n"\n'
+                           f'        "  testq %r11, %r11\\n"\n'
+                           f'        "  je {label}\\n"\n'
+                           f'        "  jmp *%r11\\n"\n'
+                           f'        "{label}:\\n"\n'
+                           f'        "  leaq {nsym}(%rip), %rdi\\n"\n'
+                           f'        "  jmp __fwd_missing\\n");')
+            lines.append(asm)
 
         lines.append("")
         lines.append("__PLACEHOLDER_EXTERNS__")
@@ -750,7 +769,10 @@ def scan(roots):
             if not path.is_file() or not needs_glibc(path):
                 continue
             try:
-                libs = {so for so, _, _, _, _ in Elf(path).imports() if so}
+                elf = Elf(path)
+                if elf.machine != ABI_MAP[ABI][0]:
+                    continue  # another vendored platform's inert copy
+                libs = {so for so, _, _, _, _ in elf.imports() if so}
             except (ValueError, IndexError, struct.error):
                 continue
             hard = libs & UNSUPPORTED_LIBS
@@ -762,6 +784,7 @@ def scan(roots):
 
 
 def main():
+    global ABI, LOADER_SONAME
     ap = argparse.ArgumentParser()
     ap.add_argument("inputs", nargs="*", type=pathlib.Path)
     # Not required in --verify-against mode, which reads and writes nothing.
@@ -777,7 +800,11 @@ def main():
                          "libglibc-shim.so")
     ap.add_argument("--self-test", action="store_true",
                     help="check that a forwarder with no target is refused, and exit")
+    ap.add_argument("--abi", choices=sorted(ABI_MAP), default=os.environ.get("VSCODROID_ABI", "arm64-v8a"),
+                    help="target Android ABI (default: VSCODROID_ABI or arm64-v8a)")
     args = ap.parse_args()
+    ABI = args.abi
+    LOADER_SONAME = ABI_MAP[ABI][1]
 
     if args.self_test:
         return self_test()
@@ -803,6 +830,20 @@ def main():
     if missing:
         print("  ERROR: no such file: " + ", ".join(str(p) for p in missing),
               file=sys.stderr)
+        return 1
+    wrong_abi = []
+    for path in inputs:
+        try:
+            machine = Elf(path).machine
+        except (OSError, ValueError, IndexError, struct.error) as e:
+            print(f"  ERROR: cannot read ELF machine from {path}: {e}", file=sys.stderr)
+            return 1
+        if machine != ABI_MAP[ABI][0]:
+            wrong_abi.append((path, machine))
+    if wrong_abi:
+        print(f"  ERROR: forwarder inputs must be {ABI} ELF objects:", file=sys.stderr)
+        for path, machine in wrong_abi:
+            print(f"    {path}: e_machine {machine:#x}", file=sys.stderr)
         return 1
     if not inputs:
         return 0

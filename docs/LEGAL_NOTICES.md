@@ -500,6 +500,7 @@ attribute but this project's own source.
 | [bzip2](https://sourceware.org/bzip2/) | bzip2-1.0.6 | no | `libbz2.so.1.0` |
 | [c-ares](https://c-ares.org) | MIT | no | `libcares.so` |
 | [Expat](https://libexpat.github.io) | MIT | no | `libexpat.so.1` |
+| [GCC runtime](https://gcc.gnu.org/onlinedocs/libgcc/) | GPL-3.0 with GCC Runtime Library Exception | runtime exception | statically linked into the rebuilt x86_64 `libldmusl.so` |
 | [gdbm](https://www.gnu.org.ua/software/gdbm/) | GPL-3.0 | **yes** | `libgdbm.so`, `libgdbm_compat.so` |
 | [Git](https://git-scm.com) | GPL-2.0 | **yes** | `libgit-remote-curl.so`, `libgit.so` |
 | [GNU Make](https://www.gnu.org/software/make/) | GPL-3.0 | **yes** | `libmake.so` |
@@ -535,6 +536,12 @@ attribute but this project's own source.
 | [xz / liblzma](https://tukaani.org/xz/) | LGPL-2.1, GPL-2.0, GPL-3.0 | **yes** | `liblzma.so.5` |
 | [zlib](https://zlib.net) | Zlib | no | `libz.so.1` |
 | [Zstandard](https://facebook.github.io/zstd/) | GPL-2.0 | **yes** | `libzstd.so.1` |
+
+The x86_64 musl rebuild uses Linux GCC's runtime helper for complex long-double
+arithmetic. Its GPLv3 text and GCC Runtime Library Exception accompany musl's
+copyright in `usr/share/doc/musl/`. GCC runtime sources are available from
+[GNU GCC releases](https://gcc.gnu.org/releases.html); the musl source recipe
+and patch digests are recorded by `build-musl-loader.sh`.
 
 ---
 
@@ -763,4 +770,4 @@ For questions about licenses, trademarks, or legal notices:
 
 ---
 
-_This document was last updated on September 28, 2026._
+_This document was last updated on October 6, 2026._

@@ -26,6 +26,7 @@ This is the half that runs on every build that packages assets.
 """
 
 import json
+import os
 import pathlib
 import re
 import sys
@@ -34,23 +35,32 @@ REPO = pathlib.Path(__file__).resolve().parent.parent
 MANIFEST = REPO / "wheelhouse.json"
 LIB_DIR = REPO / "android/app/src/main/assets/usr/lib"
 RELEASES = "https://github.com/rmyndharis/VSCodroid/releases/download"
+ANDROID_ABI = os.environ.get("VSCODROID_ABI", "arm64-v8a")
+if ANDROID_ABI not in ("arm64-v8a", "x86_64"):
+    sys.exit(f"FAIL unsupported VSCODROID_ABI {ANDROID_ABI!r}; expected arm64-v8a or x86_64")
+WHEEL_ARCH = "arm64_v8a" if ANDROID_ABI == "arm64-v8a" else "x86_64"
 
 
 def page_problems(manifest, declared):
     """What is wrong with the committed page for this manifest, if anything."""
-    page = REPO / "docs/site/wheels" / declared / "wheels.html"
+    page_name = "wheels.html" if ANDROID_ABI == "arm64-v8a" else "wheels-x86_64.html"
+    page = REPO / "docs/site/wheels" / declared / page_name
     if not page.is_file():
         return [f"{page.relative_to(REPO)} is missing, so pip on a {declared} device is pointed at nothing"]
     abi = "cp" + declared.replace(".", "")
-    tag = f"{abi}-{abi}-android_24_arm64_v8a"
+    tag = f"{abi}-{abi}-android_24_{WHEEL_ARCH}"
     expected = set()
     problems = []
     for package in manifest.get("packages", []):
         url = package["url"]
         if url.endswith(".deb"):
+            if ANDROID_ABI == "x86_64" and "_x86_64.deb" not in url:
+                problems.append(f"{package['name']} Termux source is not an x86_64 package: {url}")
             name = re.sub(r"[-_.]+", "_", package["name"]).lower()
             filename = f"{name}-{package['version']}-{tag}.whl"
         else:
+            if f"android_24_{WHEEL_ARCH}.whl" not in url:
+                problems.append(f"{package['name']} URL is not tagged for {ANDROID_ABI}: {url}")
             filename = url.rsplit("/", 1)[-1]
             # The manifest's `version` is otherwise decoration for a mirrored
             # wheel: the filename comes from the URL, the digest is taken of
@@ -94,7 +104,18 @@ def main() -> int:
         print(f"FAIL {MANIFEST.name} is missing, so nothing pins what pip is offered", file=sys.stderr)
         return 1
 
-    manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    root_manifest = json.loads(MANIFEST.read_text(encoding="utf-8"))
+    manifest = root_manifest.get("targets", {}).get(ANDROID_ABI)
+    if manifest is None:
+        if ANDROID_ABI != "arm64-v8a":
+            print(
+                f"FAIL {MANIFEST.name} has no targets.{ANDROID_ABI} entry; refusing to use ARM wheels",
+                file=sys.stderr,
+            )
+            return 1
+        manifest = root_manifest
+    else:
+        manifest = {**root_manifest, **manifest}
     declared = manifest.get("python-version")
     if not declared:
         print(f"FAIL {MANIFEST.name} does not name a python-version", file=sys.stderr)

@@ -11,6 +11,7 @@ import com.google.android.play.core.assetpacks.AssetPackLocation
 import com.google.android.play.core.assetpacks.AssetPackManager
 import com.google.android.play.core.assetpacks.AssetPackManagerFactory
 import com.google.android.play.core.assetpacks.model.AssetPackStatus
+import com.vscodroid.BuildConfig
 import com.vscodroid.util.Logger
 import io.mockk.Runs
 import io.mockk.every
@@ -131,7 +132,7 @@ class PackReleaseOutcomeTest {
      */
     private fun deliver(pack: String, name: String) {
         val dir = File(filesDir, "delivered/$pack").apply { mkdirs() }
-        File(dir, "$pack.json").writeText("""{"name":"$name","installRoot":"usr/opt/$name"}""")
+        File(dir, "$pack.json").writeText("""{"name":"$name","abi":"${BuildConfig.VSCODROID_ABI}","installRoot":"usr/opt/$name"}""")
         File(dir, "usr/opt/$name/bin").mkdirs()
         File(dir, "usr/opt/$name/bin/$name").writeText("payload")
     }

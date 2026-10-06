@@ -37,6 +37,13 @@
 # error naming the cause.
 TERMUX_LIB_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 TERMUX_SCRIPTS_DIR="$(dirname "$TERMUX_LIB_DIR")"
+. "$TERMUX_LIB_DIR/android-target.sh"
+
+# Every architecture gets an independent signed index, resolved record, and
+# package cache. This also isolates callers that pass a temporary WORK_DIR.
+if [ -n "${WORK_DIR:-}" ] && [ "$(basename "$WORK_DIR")" != "$ANDROID_ABI" ]; then
+    WORK_DIR="$WORK_DIR/$ANDROID_ABI"
+fi
 
 # The mirror the whole family uses. packages.termux.dev was the default in some
 # of these scripts and is frequently down, and the inconsistency was worse than
@@ -51,7 +58,7 @@ TERMUX_SCRIPTS_DIR="$(dirname "$TERMUX_LIB_DIR")"
 # verify-termux-index.sh anchors the index to Termux's own signature, so a
 # mirror cannot pick both the payload and the digest it is measured by.
 TERMUX_REPO="${TERMUX_MIRROR:-https://mirror.mwt.me/termux/main}"
-PACKAGES_URL="$TERMUX_REPO/dists/stable/main/binary-aarch64/Packages"
+PACKAGES_URL="$TERMUX_REPO/dists/stable/main/binary-$TERMUX_ARCH/Packages"
 
 # Set by termux_resolve_packages, read by the lookups under it.
 TERMUX_RECORD_FILE=""

@@ -17,7 +17,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+. "$SCRIPT_DIR/lib/android-target.sh"
 ASSETS="$ROOT_DIR/android/app/src/main/assets"
+android_target_require_staging "$ASSETS"
 
 echo "========================================="
 echo "  VSCodroid Full Build"
@@ -79,7 +81,7 @@ if [ ! -f gradlew ]; then
     echo "  ERROR: Gradle wrapper not found. Run: cd android && gradle wrapper" >&2
     exit 1
 fi
-./gradlew assembleDebug
+./gradlew assembleDebug "-PvscodroidAbi=$ANDROID_ABI"
 
 APK_PATH="$ROOT_DIR/android/app/build/outputs/apk/debug/app-debug.apk"
 echo

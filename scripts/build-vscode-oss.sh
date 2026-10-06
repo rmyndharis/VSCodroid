@@ -46,11 +46,12 @@ set -euo pipefail
 # the tree targets for the DEVICE are different numbers. They coincided at 1.133.0
 # and do not at 1.139.1 (.nvmrc 24.18.0, remote/.npmrc `target` 24.20.0).
 #
-# Run it on an arm64 host. Every native module in the tree is built for the build
-# host, and only four of them are replaced afterwards by build-native-addons.sh:
-# ripgrep in particular is downloaded by its own postinstall for whatever
-# os.platform()/arch() reports. The Verify stage refuses to finish an x86-64
-# tree rather than let one reach a device, where it fails at exec.
+# Run it on Linux matching the selected target: arm64 for arm64-v8a, x64 for
+# x86_64. Upstream installs native modules for the build host; the Android addon
+# stage replaces the runtime-critical modules with Bionic builds. The server
+# verifier checks the selected ELF machine before the tarball can be used.
+# On Apple Silicon, Linux x64 builds need Docker --platform linux/amd64.
+# Emulated compiler/build tasks need substantially more memory than native CI.
 #
 # Patches and branding are both applied to the source before gulp runs, so their
 # effects are baked in wherever the build inlines them rather than only where a
@@ -88,7 +89,12 @@ esac
     echo "VSCODE_COMMIT must be the full 40-character SHA, got ${#VSCODE_COMMIT}: $VSCODE_COMMIT" >&2
     exit 1
 }
-ARCH="${ARCH:-arm64}"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/android-target.sh"
+ARCH="${ARCH:-$NODE_ARCH}"
+if [ "$ARCH" != "$NODE_ARCH" ]; then
+    echo "ERROR: ARCH=$ARCH conflicts with VSCODROID_ABI=$ANDROID_ABI" >&2
+    exit 1
+fi
 # Resolved here, before any stage runs, because the Source stage cd's into the
 # checkout and BASH_SOURCE is relative when CI invokes the script as
 # `bash scripts/build-vscode-oss.sh` -- computing it later resolves against the
@@ -110,6 +116,12 @@ OUT="$WORK/vscode-reh-web-linux-$ARCH"
 step() { printf '\n=== %s ===\n' "$1"; }
 elapsed() { printf '  took %dm%02ds\n' $(( $1 / 60 )) $(( $1 % 60 )); }
 
+# Upstream installs host-native modules; cross-host builds need a separate
+# toolchain, so refuse them before cloning rather than packaging wrong binaries.
+if [ "$(uname -s)" != Linux ] || [ "$(node -p 'process.arch')" != "$NODE_ARCH" ]; then
+    echo "ERROR: build Code OSS on Linux $NODE_ARCH (selected $ANDROID_ABI)." >&2
+    exit 1
+fi
 step "Environment"
 echo "  vscode      : $VSCODE_VERSION"
 echo "  target arch : linux-$ARCH"
@@ -766,6 +778,21 @@ step "Debug adapter"
 # where the system is.
 python3 "$SCRIPT_DIR/patch-js-debug-env.py" "$OUT"
 
+step "Prepare Android extension runtimes"
+# Keep the built-in Copilot chat implementation and its SDK JavaScript entry
+# point, but disable the optional Copilot CLI session on Android. That route
+# eagerly initializes native CLI/PTY helpers; the regular chat provider does
+# not. The same preparation forces MSAL's supported browser OAuth path and
+# removes its optional native broker. Fetches run this identical step before
+# verification, so the packaged tree and locally built tree agree.
+python3 "$SCRIPT_DIR/prepare-android-runtime.py" "$OUT"
+
+step "Align native pages"
+# linux-x64 prebuilds record 4 KB LOAD alignment. Android 16 will not map
+# those files. This raises them to 16 KB without moving virtual addresses.
+# Fetches run the same step, so a cached tarball and a fresh build agree.
+python3 "$SCRIPT_DIR/align-android-pages.py" --abi "$ANDROID_ABI" "$OUT"
+
 step "Patch manifest"
 # What the fingerprints cannot see. A fingerprint row proves a patch arrived, not
 # which version of it did: editing an already-matching patch leaves every gate
@@ -790,7 +817,7 @@ fail=0
 # into an APK. The build-specific checks (that each patch survived into the
 # packaged bundles, and that the product.json key set has not drifted) stay here,
 # because only this side has the patches and the expectation file.
-python3 "$SCRIPT_DIR/verify-server-tree.py" "$OUT" || fail=1
+python3 "$SCRIPT_DIR/verify-server-tree.py" "$OUT" --abi "$ANDROID_ABI" || fail=1
 
 # Every patch has to be proven present in the packaged output, not merely
 # applied to the source. The expectations and the reasoning live in

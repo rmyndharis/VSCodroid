@@ -4,6 +4,25 @@ plugins {
     alias(libs.plugins.android.application)
 }
 
+// A build selects one native target for the packaged assets and jniLibs.
+// Keep ARM64 as the historical default; command line wins over the environment
+// so the selected target is visible in the Gradle invocation and CI logs.
+val vscodroidAbi = providers.gradleProperty("vscodroidAbi")
+    .orElse(providers.environmentVariable("VSCODROID_ABI"))
+    .orElse("arm64-v8a")
+    .get()
+    .trim()
+val supportedVscodroidAbis = setOf("arm64-v8a", "x86_64")
+if (vscodroidAbi !in supportedVscodroidAbis) {
+    throw GradleException(
+        "Unsupported VSCodroid ABI '$vscodroidAbi'. Choose arm64-v8a or x86_64 " +
+            "with -PvscodroidAbi=<abi> or VSCODROID_ABI=<abi>."
+    )
+}
+fun Exec.useSelectedAbi() {
+    environment("VSCODROID_ABI", vscodroidAbi)
+}
+
 // Load signing config from signing.properties (local) or env vars (CI)
 val signingProps = Properties()
 rootProject.file("signing.properties").takeIf { it.exists() }?.inputStream()?.use { signingProps.load(it) }
@@ -144,8 +163,10 @@ android {
         testInstrumentationRunner = "androidx.test.runner.AndroidJUnitRunner"
 
         ndk {
-            abiFilters += "arm64-v8a"
+            abiFilters += vscodroidAbi
         }
+
+        buildConfigField("String", "VSCODROID_ABI", "\"$vscodroidAbi\"")
 
         // How much room first-run extraction needs is the size of the asset tree,
         // and that number cannot be written by hand: it moves with every VS Code
@@ -871,11 +892,13 @@ val verifyNativeAddons = tasks.register<Exec>("verifyNativeAddons") {
     workingDir = rootProject.projectDir.parentFile
     commandLine(
         "python3", "scripts/gen-glibc-forwarders.py",
+        "--abi", vscodroidAbi,
         "--scan", "android/app/src/main/assets/vscode-reh",
         "--scan", "android/app/src/main/assets/extensions",
         "--scan", "android/app/src/main/assets/usr/lib/node-addons",
         "--verify-against", "android/app/src/main/assets/usr/lib",
     )
+    useSelectedAbi()
 
     // Same reasoning as verifyServerTree: the lint and unit-test jobs stub an
     // empty assets tree so Gradle can configure, and a tree that was never
@@ -951,8 +974,10 @@ val verifyPackagedAlignment = tasks.register<Exec>("verifyPackagedAlignment") {
     workingDir = rootProject.projectDir.parentFile
     commandLine(
         "python3", "scripts/verify-android-elf.py",
+        "--abi", vscodroidAbi,
         "--tree", "android/app/src/main/assets",
     )
+    useSelectedAbi()
 
     onlyIf { entryPoint.isFile }
 
@@ -999,7 +1024,8 @@ val verifyServerTree = tasks.register<Exec>("verifyServerTree") {
     val entryPoint = file("src/main/assets/vscode-reh/out/server-main.js")
 
     workingDir = rootProject.projectDir.parentFile
-    commandLine("python3", "scripts/verify-server-tree.py", serverTree)
+    commandLine("python3", "scripts/verify-server-tree.py", "--abi", vscodroidAbi, serverTree)
+    useSelectedAbi()
 
     // Absent is not stale, for the same reason as the task above: the lint and
     // unit-test jobs create assets/vscode-reh/out as an empty stub purely so
@@ -1046,7 +1072,7 @@ val jniLibsStubCeiling = 1000L
 // answer rather than on two copies of it: a tree worth examining for one is
 // worth examining for the other, and a placeholder tree is neither's business.
 fun jniLibsHoldsRealBinary(): Boolean =
-    file("src/main/jniLibs/arm64-v8a").listFiles()
+    file("src/main/jniLibs/$vscodroidAbi").listFiles()
         ?.any { it.name.endsWith(".so") && it.length() >= jniLibsStubCeiling } == true
 
 // Every binary in jniLibs, checked where it is packaged rather than only where
@@ -1056,7 +1082,7 @@ fun jniLibsHoldsRealBinary(): Boolean =
 // it had just installed and that was the only time any of them was examined:
 // nothing asked the question about the directory as a whole at the moment it went
 // into an APK. Two paths reach that moment without a download having run: a build.yml
-// assets-cache hit restores jniLibs/arm64-v8a/ wholesale with every download step
+// assets-cache hit restores the selected jniLibs ABI wholesale with every download step
 // skipped by `if: cache-hit != 'true'`, and a local `./gradlew assembleDebug`
 // after an old fetch never re-downloads anything. scripts/verify-android-elf.py
 // is hashed into three CI cache keys: build.yml's `downloads-` and `assets-`,
@@ -1080,7 +1106,8 @@ val verifyBundledBinaries = tasks.register<Exec>("verifyBundledBinaries") {
     workingDir = rootProject.projectDir.parentFile
     commandLine(
         "python3", "scripts/verify-android-elf.py",
-        "--dir", "android/app/src/main/jniLibs/arm64-v8a",
+        "--abi", vscodroidAbi,
+        "--dir", "android/app/src/main/jniLibs/$vscodroidAbi",
         // Both directories, matching what every installer passes -- see the
         // --lib-dir pairs in download-node.sh, download-python.sh and
         // download-termux-tools.sh. jniLibs is the second one for a reason that is
@@ -1091,8 +1118,9 @@ val verifyBundledBinaries = tasks.register<Exec>("verifyBundledBinaries") {
         // reject at packaging what the installer had just accepted -- then send
         // the developer back to re-run the script that passed.
         "--lib-dir", "android/app/src/main/assets/usr/lib",
-        "--lib-dir", "android/app/src/main/jniLibs/arm64-v8a",
+        "--lib-dir", "android/app/src/main/jniLibs/$vscodroidAbi",
     )
+    useSelectedAbi()
 
     // Runs when jniLibs holds at least one real binary. Keyed on "any", not on
     // libnode.so: the binary this gate most earns its keep on is ripgrep, which
@@ -1202,7 +1230,7 @@ val verifyRequiredBinaries = tasks.register("verifyRequiredBinaries") {
     group = "verification"
     description = "Checks every binary the app resolves by name is in jniLibs."
 
-    val jniLibsDir = file("src/main/jniLibs/arm64-v8a")
+    val jniLibsDir = file("src/main/jniLibs/$vscodroidAbi")
     val required = requiredJniLibs
     val producers = jniLibProducers
 
@@ -1249,8 +1277,9 @@ val verifyBundledShellPaths = tasks.register<Exec>("verifyBundledShellPaths") {
     workingDir = rootProject.projectDir.parentFile
     commandLine(
         "python3", "scripts/patch-default-shell.py",
-        "--check", "android/app/src/main/jniLibs/arm64-v8a",
+        "--check", "android/app/src/main/jniLibs/$vscodroidAbi",
     )
+    useSelectedAbi()
 
     onlyIf { jniLibsHoldsRealBinary() }
 
@@ -1486,6 +1515,33 @@ val verifyRubyPackShellPaths = tasks.register<Exec>("verifyRubyPackShellPaths") 
     )
 }
 
+// Main assets are a single-target staging area. The staging marker prevents a
+// previous target's binaries from being packaged under a new Gradle ABI. Keep
+// legacy unmarked ARM checkouts buildable, while requiring every x86_64 tree to
+// prove which target produced it.
+val verifyStagedAbi = tasks.register("verifyStagedAbi") {
+    group = "verification"
+    description = "Checks the staged native assets match the selected Android ABI."
+
+    doLast {
+        val assetRoot = file("src/main/assets")
+        val marker = File(assetRoot, ".vscodroid-abi")
+        val hasRealAssets = File(assetRoot, "vscode-reh/out/server-main.js").isFile ||
+            jniLibsHoldsRealBinary()
+        if (!hasRealAssets) return@doLast
+
+        val stagedAbi = marker.takeIf { it.isFile }?.readText()?.trim()
+        if (stagedAbi == null && vscodroidAbi == "arm64-v8a") return@doLast
+        if (stagedAbi != vscodroidAbi) {
+            throw GradleException(
+                "The staged native assets target '${stagedAbi ?: "(unmarked)"}', but this build " +
+                    "selects '$vscodroidAbi'. Main assets are a single-target staging area. " +
+                    "Re-run scripts/build-all.sh with VSCODROID_ABI=$vscodroidAbi before packaging."
+            )
+        }
+    }
+}
+
 
 // Lint's own tasks read the asset directories by path rather than through the
 // source set, so naming the task above does not reach them and they have to be
@@ -1510,7 +1566,7 @@ tasks.matching { it.name.contains("Lint") || it.name.contains("lint") }
 // forget the other list, and the new gate is wired but never verified, which is
 // the state the check exists to make impossible.
 val packagingGates = listOf(
-    checkPatchFingerprints, verifyServerTree, verifyBundledBinaries,
+    checkPatchFingerprints, verifyStagedAbi, verifyServerTree, verifyBundledBinaries,
     verifyRequiredBinaries, verifyBundledShellPaths, verifyRubyPackShellPaths,
     verifyNativeAddons, verifyPackagedAlignment, checkPackOverlap,
     verifyPythonPlatform, verifyVenvHome,

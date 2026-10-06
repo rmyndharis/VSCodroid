@@ -26,7 +26,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
-WORK_DIR="${WORK_DIR:-$ROOT_DIR/.build/native-addons}"
+source "$SCRIPT_DIR/lib/android-target.sh"
+WORK_DIR="${WORK_DIR:-$ROOT_DIR/.build/native-addons/$ANDROID_ABI}"
 OUTPUT_ROOT="${OUTPUT_ROOT:-$ROOT_DIR/android/app/src/main/assets/vscode-reh}"
 # Not derived from OUTPUT_ROOT: that is the server tree, which can be redirected
 # and which package-assets.sh replaces wholesale. This path is also the value of
@@ -55,7 +56,6 @@ NODE_VERSION="${NODE_VERSION:-24.18.0}"
 # version bump.
 NODE_HEADERS_SHA256="6c7d41d83c3481d2301115b8ce4a44b7d4fbfa52859b1aac14f445d460137887"
 
-TARGET=aarch64-linux-android
 API=33
 
 # Android 16 requires 16 KB-aligned segments. NDK r28+ defaults to this and r27
@@ -64,7 +64,11 @@ API=33
 # rather than trusting the default.
 PAGE_SIZE_FLAGS=(-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384)
 
-echo "=== Building native addons for Android ARM64 (Bionic) ==="
+echo "=== Building native addons for Android $ANDROID_ABI (Bionic) ==="
+if [ "$OUTPUT_ROOT" = "$ROOT_DIR/android/app/src/main/assets/vscode-reh" ] \
+        || [ "$ZEROMQ_OUTPUT" = "$ROOT_DIR/android/app/src/main/assets/usr/lib/node-addons/zeromq" ]; then
+    android_target_require_staging "$ROOT_DIR/android/app/src/main/assets"
+fi
 
 # --- Toolchain -------------------------------------------------------------
 
@@ -92,8 +96,8 @@ TOOLCHAIN="$NDK_DIR/toolchains/llvm/prebuilt/$HOST_TAG"
 [ -d "$TOOLCHAIN" ] || TOOLCHAIN="$NDK_DIR/toolchains/llvm/prebuilt/linux-x86_64"
 [ -d "$TOOLCHAIN" ] || { echo "ERROR: no NDK host toolchain in $NDK_DIR" >&2; exit 1; }
 
-CXX="$TOOLCHAIN/bin/$TARGET$API-clang++"
-CC="$TOOLCHAIN/bin/$TARGET$API-clang"
+CXX="$TOOLCHAIN/bin/$NDK_TARGET$API-clang++"
+CC="$TOOLCHAIN/bin/$NDK_TARGET$API-clang"
 STRIP="$TOOLCHAIN/bin/llvm-strip"
 READELF="$TOOLCHAIN/bin/llvm-readelf"
 [ -x "$CXX" ] || { echo "ERROR: $CXX not found" >&2; exit 1; }
@@ -114,7 +118,7 @@ fi
 }
 
 echo "  NDK    : $NDK_DIR"
-echo "  target : $TARGET$API"
+echo "  target : $NDK_TARGET$API ($ANDROID_ABI)"
 echo "  node   : v$NODE_VERSION headers"
 echo "  output : $OUTPUT_ROOT"
 echo "  zeromq : $ZEROMQ_OUTPUT"
@@ -189,7 +193,9 @@ fi
 # purpose: NODE_MODULE_VERSION, which is what actually breaks addon loading,
 # moves with the major, and a full-triple match would fail builds over a
 # harmless patch bump.
-JNILIBS="$ROOT_DIR/android/app/src/main/jniLibs/arm64-v8a"
+JNILIBS="${JNILIBS:-$ROOT_DIR/android/app/src/main/jniLibs/$ANDROID_ABI}"
+python3 "$SCRIPT_DIR/verify-android-elf.py" "$JNILIBS/libnode.so" \
+    --abi "$ANDROID_ABI" --lib-dir "$ROOT_DIR/android/app/src/main/assets/usr/lib"
 runtime_version=""
 if [ -f "$JNILIBS/.libnode-version" ]; then
     runtime_version=$(cat "$JNILIBS/.libnode-version")
@@ -363,7 +369,7 @@ verify() {
     # Shared with download-node.sh rather than reimplemented against the NDK's
     # readelf: an addon and the runtime that loads it have to agree about what
     # "loads on Android" means, and two copies of that judgement drift.
-    python3 "$SCRIPT_DIR/verify-android-elf.py" "$out" || return 1
+    python3 "$SCRIPT_DIR/verify-android-elf.py" "$out" --abi "$ANDROID_ABI" || return 1
     printf '  ok   %-24s %8s bytes\n' "$name" "$(wc -c < "$out" | tr -d ' ')"
 }
 
@@ -544,7 +550,7 @@ tar xzf "$LIBZMQ_TGZ" -C "$WORK_DIR/src"
 # which CMake 4 refuses to configure; CMake 3.x ignores the variable.
 "$CMAKE" -S "$LIBZMQ_SRC" -B "$LIBZMQ_BUILD" \
     -DCMAKE_TOOLCHAIN_FILE="$NDK_DIR/build/cmake/android.toolchain.cmake" \
-    -DANDROID_ABI=arm64-v8a -DANDROID_PLATFORM="android-$API" \
+    -DANDROID_ABI="$ANDROID_ABI" -DANDROID_PLATFORM="android-$API" \
     -DCMAKE_BUILD_TYPE=Release -DCMAKE_POSITION_INDEPENDENT_CODE=ON \
     -DCMAKE_POLICY_VERSION_MINIMUM=3.5 \
     -DCMAKE_INSTALL_PREFIX="$LIBZMQ_PREFIX" -DCMAKE_INSTALL_LIBDIR=lib \

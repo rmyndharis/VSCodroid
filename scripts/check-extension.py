@@ -11,11 +11,15 @@ the build that shipped it went green.
 """
 
 import json
+import os
 import pathlib
 import re
 import sys
 
-ELF_AARCH64 = 0xB7
+ANDROID_ABI = os.environ.get("VSCODROID_ABI", "arm64-v8a")
+if ANDROID_ABI not in {"arm64-v8a", "x86_64"}:
+    raise SystemExit(f"Unsupported VSCODROID_ABI: {ANDROID_ABI}")
+ELF_MACHINE = 62 if ANDROID_ABI == "x86_64" else 183
 
 
 def main(ext: pathlib.Path, version_file: pathlib.Path) -> int:
@@ -63,10 +67,10 @@ def main(ext: pathlib.Path, version_file: pathlib.Path) -> int:
             damaged.append((f.relative_to(ext),
                             f"{len(head)} bytes, truncated before e_machine"))
             continue
-        if head[18] == ELF_AARCH64:
+        if int.from_bytes(head[18:20], "little") == ELF_MACHINE:
             natives.append(f.relative_to(ext))
     for rel in natives:
-        print(f"  note   carries an aarch64 native: {rel}")
+        print(f"  note   carries a {ANDROID_ABI} native: {rel}")
     for rel, why in damaged:
         print(f"  FAIL   {rel} could not be read as a binary: {why}")
 

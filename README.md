@@ -177,7 +177,7 @@ flowchart TD
 | Requirement  | Minimum                            |
 | ------------ | ---------------------------------- |
 | Android      | 13 (API 33)                        |
-| Architecture | arm64-v8a                          |
+| Architecture | arm64-v8a on phones. An x86_64 Android device needs the separate source build in [CONTRIBUTING.md](CONTRIBUTING.md#native-x86_64-android-builds). |
 | WebView      | Chrome 105+                        |
 | RAM          | 4 GB recommended                   |
 | Storage      | ~738 MB free to install            |
@@ -228,7 +228,7 @@ adb install android/app/build/outputs/apk/debug/app-debug.apk
 ```
 
 > [!WARNING]
-> **The steps above build the Android shell only.** A runnable app also needs the server tree,
+> **The steps above build the ARM64 Android shell only.** An x86_64 device needs `VSCODROID_ABI=x86_64` and `-PvscodroidAbi=x86_64`, described under [Native x86_64 Android builds](CONTRIBUTING.md#native-x86_64-android-builds). A runnable app also needs the server tree,
 > the Node runtime and the bundled tools, which the `scripts/download-*.sh` scripts fetch.
 > Four scripts cross-compile with the Android NDK: `scripts/build-native-addons.sh` (which also
 > needs CMake), `scripts/build-glibc-shim.sh`, `scripts/build-exec-trampoline.sh` and

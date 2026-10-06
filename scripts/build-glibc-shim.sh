@@ -31,17 +31,17 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+source "$SCRIPT_DIR/lib/android-target.sh"
 OUT_DIR="${OUT_DIR:-$ROOT_DIR/android/app/src/main/assets/usr/lib}"
-WORK_DIR="${WORK_DIR:-$ROOT_DIR/.build/glibc-shim}"
+WORK_DIR="${WORK_DIR:-$ROOT_DIR/.build/glibc-shim/$ANDROID_ABI}"
 
-TARGET=aarch64-linux-android
 API=33
 
 # The names a glibc-linked binary carries in DT_NEEDED. Every stub finds its
 # targets through the shim's resolver, whichever Bionic library holds them, so
 # the stubs differ only in the names they carry.
 STUBS=(libc.so.6 libdl.so.2 libpthread.so.0 libm.so.6 librt.so.1 libutil.so.1
-       libgcc_s.so.1 libresolv.so.2 libcrypt.so.1 ld-linux-aarch64.so.1)
+       libgcc_s.so.1 libresolv.so.2 libcrypt.so.1 "$GLIBC_LOADER")
 
 echo "=== glibc compatibility shim ==="
 
@@ -57,12 +57,15 @@ if [ -z "$NDK" ] || [ ! -d "$NDK" ]; then
     exit 1
 fi
 
-CC="$NDK/toolchains/llvm/prebuilt/$HOST_TAG/bin/${TARGET}${API}-clang"
+CC="$NDK/toolchains/llvm/prebuilt/$HOST_TAG/bin/${NDK_TARGET}${API}-clang"
 if [ ! -x "$CC" ]; then
     echo "  ERROR: no compiler at $CC" >&2
     exit 1
 fi
 echo "  ndk    : $NDK"
+if [ "$OUT_DIR" = "$ROOT_DIR/android/app/src/main/assets/usr/lib" ]; then
+    android_target_require_staging "$ROOT_DIR/android/app/src/main/assets"
+fi
 
 mkdir -p "$WORK_DIR" "$OUT_DIR"
 
@@ -106,7 +109,7 @@ echo "--- forwarders ---"
 GEN_DIR="$WORK_DIR/generated"
 rm -rf "$GEN_DIR"
 if [ "$#" -gt 0 ]; then
-    python3 "$SCRIPT_DIR/gen-glibc-forwarders.py" "$@" --out "$GEN_DIR"
+    python3 "$SCRIPT_DIR/gen-glibc-forwarders.py" "$@" --abi "$ANDROID_ABI" --out "$GEN_DIR"
 else
     echo "  no addons given, so the stubs will carry names but no symbols"
     echo "  pass objects directly, or --scan a directory to search"
@@ -177,7 +180,7 @@ echo "=== Verify ==="
 # question. NO_UNDEFINED_FLAG on both links above answers that one.
 for lib in libglibc-shim.so "${STUBS[@]}"; do
     echo "  --- $lib ---"
-    python3 "$SCRIPT_DIR/verify-android-elf.py" "$OUT_DIR/$lib" --lib-dir "$OUT_DIR"
+        python3 "$SCRIPT_DIR/verify-android-elf.py" "$OUT_DIR/$lib" --abi "$ANDROID_ABI" --lib-dir "$OUT_DIR"
 done
 
 # And the question the loop above cannot ask. Everything up to here verifies
@@ -191,6 +194,6 @@ done
 # It runs only when addons were given, because with none there is nothing to
 # check and the stubs are deliberately empty.
 if [ "$#" -gt 0 ]; then
-    python3 "$SCRIPT_DIR/gen-glibc-forwarders.py" "$@" --verify-against "$OUT_DIR" \
-        --bionic-dir "$NDK/toolchains/llvm/prebuilt/$HOST_TAG/sysroot/usr/lib/$TARGET/$API"
+    python3 "$SCRIPT_DIR/gen-glibc-forwarders.py" "$@" --abi "$ANDROID_ABI" --verify-against "$OUT_DIR" \
+        --bionic-dir "$NDK/toolchains/llvm/prebuilt/$HOST_TAG/sysroot/usr/lib/$NDK_TARGET/$API"
 fi

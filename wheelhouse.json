@@ -84,5 +84,46 @@
       "source-sha256": "61147cf1b656b58e61f0293d25ecde85ca1a20b25f8d57338d424b649cddbef0",
       "sha256": "489f05c321aa0eaa81165b22116c92f22eae4391661f147ea2996765cf9dbbde"
     }
-  ]
+  ],
+  "targets": {
+    "x86_64": {
+      "release-tag": "wheels-3.14-x86_64-1",
+      "packages": [
+        {
+          "name": "numpy",
+          "version": "2.5.0",
+          "url": "https://github.com/tur-pypi-dists/python3.14-numpy/releases/download/v2.5.0/numpy-2.5.0-cp314-cp314-android_24_x86_64.whl",
+          "sha256": "87692deb8f5095e11dd6f56b761052572e79515511d1087386d0951cbbb90e00"
+        },
+        {
+          "name": "pandas",
+          "version": "3.0.5",
+          "url": "https://github.com/tur-pypi-dists/python3.14-pandas/releases/download/v3.0.5/pandas-3.0.5-cp314-cp314-android_24_x86_64.whl",
+          "sha256": "153f929e4ee599d23ed39cb9a4d6a4399ec4598d2e95a677bca69a5045afe600",
+          "notices": {
+            "url": "https://files.pythonhosted.org/packages/be/4f/5f3422a2afec5ffc46308b79e53291365a93748b498ac2e58bead0197916/pandas-3.0.5.tar.gz",
+            "paths": [
+              "LICENSE",
+              "LICENSES/"
+            ],
+            "source-sha256": "dca3734d6ab7c906e6730f0788b0a1dbb9f2467731f9711f77995c8e9d62d712",
+            "sha256": "399626e6cc0f619b5517edfa298242828bdf7df577dc977d6fdb3eeb7dc54753"
+          }
+        },
+        {
+          "name": "pydantic-core",
+          "version": "2.41.5",
+          "url": "https://github.com/tur-pypi-dists/python3.14-pydantic_core/releases/download/v2.41.5/pydantic_core-2.41.5-cp314-cp314-android_24_x86_64.whl",
+          "sha256": "2876ec979b90cc2c0085f48cf79395cb6c47e4127aa85e505a24dfe237a98323"
+        },
+        {
+          "name": "psutil",
+          "version": "7.2.2",
+          "url": "https://mirror.mwt.me/termux/main/pool/main/p/python-psutil/python-psutil_7.2.2-2_x86_64.deb",
+          "source-sha256": "b1bbf9feb23a58ecb03e1f08b9615a48146e467e70f96ec98f1b14635872d111",
+          "sha256": "230723b579c24360acac29d38c63b6a54afdbf43113a2872962d27dc5b3be0c7"
+        }
+      ]
+    }
+  }
 }

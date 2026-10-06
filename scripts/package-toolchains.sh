@@ -29,6 +29,9 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+. "$SCRIPT_DIR/lib/android-target.sh"
+PACK_SUFFIX=""
+[ "$ANDROID_ABI" = arm64-v8a ] || PACK_SUFFIX="-$ANDROID_ABI"
 OUTPUT_DIR="$ROOT_DIR/toolchain-zips"
 
 REGISTRY="$ROOT_DIR/android/app/src/main/kotlin/com/vscodroid/setup/ToolchainRegistry.kt"
@@ -116,7 +119,7 @@ if [ $# -eq 0 ]; then
         zip_name="$(basename "$zip_path" .zip)"
         known=false
         for tc in "${ALL_TOOLCHAINS[@]}"; do
-            if [ "$zip_name" = "toolchain_$tc" ]; then
+            if [ "$zip_name" = "toolchain_$tc" ] || [ "$zip_name" = "toolchain_$tc-x86_64" ]; then
                 known=true
                 break
             fi
@@ -136,7 +139,16 @@ for tc in "${REQUESTED[@]}"; do
     assets_dir="$(get_assets_dir "$tc")"
     manifest="$assets_dir/toolchain_$tc.json"
     usr_dir="$assets_dir/usr"
-    zip_file="$OUTPUT_DIR/toolchain_$tc.zip"
+    if [ -f "$manifest" ]; then
+        python3 - "$manifest" "$ANDROID_ABI" <<'PYABI'
+import json, sys
+manifest = json.load(open(sys.argv[1]))
+actual = manifest.get('abi', 'arm64-v8a')
+if actual != sys.argv[2]:
+    raise SystemExit(f"Toolchain ABI {actual} does not match {sys.argv[2]}")
+PYABI
+    fi
+    zip_file="$OUTPUT_DIR/toolchain_$tc$PACK_SUFFIX.zip"
 
     echo "--- $tc ---"
 
@@ -237,7 +249,7 @@ print(m.group(1).replace('_', '') if m else '')
     TOTAL_BYTES=$((TOTAL_BYTES + zip_bytes))
     PACKAGED=$((PACKAGED + 1))
 
-    echo "  Output: toolchain_$tc.zip (${zip_mb} MB)"
+    echo "  Output: toolchain_$tc$PACK_SUFFIX.zip (${zip_mb} MB)"
     echo ""
 done
 

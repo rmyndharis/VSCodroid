@@ -9,8 +9,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+. "$SCRIPT_DIR/lib/android-target.sh"
 ASSETS_DIR="$ROOT_DIR/android/app/src/main/assets"
-JNILIBS_DIR="$ROOT_DIR/android/app/src/main/jniLibs/arm64-v8a"
+android_target_require_staging "$ASSETS_DIR"
+JNILIBS_DIR="$ROOT_DIR/android/app/src/main/jniLibs/$ANDROID_ABI"
 WORK_DIR="$ROOT_DIR/toolchains/termux-packages"
 
 # The index fetch, its signature check, package resolution and the digest check
@@ -271,6 +273,9 @@ SHIM_STUBS=$(
         | grep -E '^(lib|ld-)[A-Za-z0-9._+-]+$' \
         | sort -u
 )
+# The target loader stub is expressed through the shared target variable in the
+# builder, so resolve that one name here rather than parsing a shell expression.
+SHIM_STUBS="$(printf '%s\n%s' "$SHIM_STUBS" "$GLIBC_LOADER")"
 SHIM_STUB_COUNT=$(printf '%s\n' "$SHIM_STUBS" | grep -c . || true)
 # The count is asserted rather than assumed. An extraction that silently reads
 # half the array is the failure this whole block exists to prevent, wearing the

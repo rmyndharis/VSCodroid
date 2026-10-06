@@ -9,6 +9,7 @@ other gate and only show up on a device.
     verify-server-tree.py <tree>
 """
 
+import argparse
 import json
 import os
 import pathlib
@@ -17,8 +18,9 @@ import sys
 
 # e_machine values from the ELF spec. The tree also carries Windows PE addons for
 # extensions that never load here; those are skipped rather than flagged.
-AARCH64 = 0xB7
-MACHINES = {0x3E: "x86-64", AARCH64: "aarch64", 0x28: "arm", 0xF3: "riscv"}
+ABI_MAP = {"arm64-v8a": (0xB7, "arm64", "aarch64"),
+           "x86_64": (0x3E, "x64", "x86-64")}
+MACHINES = {0x3E: "x86-64", 0xB7: "aarch64", 0x28: "arm", 0xF3: "riscv"}
 
 # The paths VSCodroid loads by name. server.js:57 forks the first, rewrites the
 # second on every start, and the Search service execs into the third.
@@ -32,7 +34,7 @@ REQUIRED = [
     "extensions/ms-vscode.js-debug/src/extension.js",
     # Moved in 1.133: @vscode/ripgrep became @vscode/ripgrep-universal, which
     # ships one binary per platform instead of one per install.
-    "node_modules/@vscode/ripgrep-universal/bin/linux-arm64/rg",
+    "node_modules/@vscode/ripgrep-universal/bin/linux-{node_arch}/rg",
     # Code - OSS is MIT and this tree is redistributed inside every APK, so the
     # copyright notice has to travel with it. product.json names it too.
     # Presence is not enough here, the contents are read further down.
@@ -167,8 +169,14 @@ def check_branded_artwork(tree):
         print(f"  ok      {len(BRANDED_ARTWORK)} branded files match branding/")
 
 
-def main(tree):
-    for rel in REQUIRED:
+def main(tree, abi=None):
+    abi = abi or os.environ.get("VSCODROID_ABI", "arm64-v8a")
+    if abi not in ABI_MAP:
+        print(f"  FAIL   unsupported ABI {abi!r}; expected arm64-v8a or x86_64")
+        return 2
+    expected_machine, node_arch, machine_name = ABI_MAP[abi]
+    for rel_template in REQUIRED:
+        rel = rel_template.format(node_arch=node_arch)
         found = present(tree / rel, rel)
         if found is not None:
             check(found, rel)
@@ -237,8 +245,10 @@ def main(tree):
         # executed -- so flagging them would only report upstream's packaging.
         # The check still catches what it is for: a binary on the path this
         # device actually loads, built for the wrong architecture.
-        if any(part in str(path) for part in
-               ("/linux-x64/", "/darwin-", "/win32-", "-x64-", "/x64/")):
+        rel_path = path.relative_to(tree).as_posix()
+        other_linux_arch = "/linux-x64/" if node_arch == "arm64" else "/linux-arm64/"
+        if other_linux_arch in f"/{rel_path}" or any(part in f"/{rel_path}" for part in
+               ("/darwin-", "/win32-")):
             continue
         # A file the build cannot read, or cannot read far enough, is a failed
         # check rather than a crash. Without this the walk raises straight out of
@@ -270,11 +280,11 @@ def main(tree):
             check(False, f"{path.relative_to(tree)} could not be read", str(e))
             continue
         checked += 1
-        if machine != AARCH64:
+        if machine != expected_machine:
             wrong.append((path.relative_to(tree), MACHINES.get(machine, hex(machine))))
 
     for rel, arch in wrong:
-        check(False, f"{rel} is {arch}, not aarch64", "build on an arm64 host")
+        check(False, f"{rel} is {arch}, not {machine_name}", f"build for {abi}")
     if not checked:
         # Zero examined is not a pass. This printed "ok 0 native binaries are
         # aarch64", which reads exactly like a clean verdict and is the same
@@ -285,7 +295,7 @@ def main(tree):
         check(False, "no native binaries found to check",
               "a server tree carries node-pty, the file watcher and ripgrep at least")
     elif not wrong:
-        check(True, f"{checked} native binaries are aarch64")
+        check(True, f"{checked} native binaries are {machine_name}")
 
     product_path = tree / "product.json"
     # exists() inside the try as well -- it stats, and product.json sits at the tree
@@ -738,7 +748,7 @@ def main(tree):
     return 1 if failed else 0
 
 
-def self_test() -> int:
+def self_test(abi="arm64-v8a") -> int:
     """Hand main() a tree missing the Copilot CLI licence, then one carrying it;
     then a tree without the helpers the Prune stage removes, and one with them.
 
@@ -768,7 +778,7 @@ def self_test() -> int:
             out = io.StringIO()
             failed = False
             with contextlib.redirect_stdout(out):
-                main(tree)
+                main(tree, abi)
             if want not in out.getvalue():
                 print(f"  FAIL   self-test: with the licence "
                       f"{'present' if present else 'absent'}, no line read {want!r}")
@@ -785,24 +795,49 @@ def self_test() -> int:
             out = io.StringIO()
             failed = False
             with contextlib.redirect_stdout(out):
-                main(tree)
+                main(tree, abi)
             unread = [verdict + rel for rel in PRUNED if verdict + rel not in out.getvalue()]
             if unread:
                 print(f"  FAIL   self-test: with the pruned helpers "
                       f"{'present' if carrying else 'absent'}, no line read {unread[0]!r}")
                 return 1
     print("  ok     self-test: a tree still carrying the pruned helpers is refused")
+
+    # A selected x86_64 build must inspect an x64-specific payload path. The old
+    # broad `/x64/` skip hid wrong-machine binaries under precisely that path.
+    with tempfile.TemporaryDirectory() as tmp:
+        tree = pathlib.Path(tmp)
+        path = tree / "node_modules/test/x64/wrong.node"
+        path.parent.mkdir(parents=True)
+        header = bytearray(64)
+        header[:4] = b"\x7fELF"
+        header[4:6] = bytes((2, 1))
+        struct.pack_into("<H", header, 18, ABI_MAP["arm64-v8a"][0])
+        path.write_bytes(header)
+        out = io.StringIO()
+        failed = False
+        with contextlib.redirect_stdout(out):
+            main(tree, "x86_64")
+        if "node_modules/test/x64/wrong.node is aarch64, not x86-64" not in out.getvalue():
+            print("  FAIL   self-test: an ARM ELF under /x64/ was not rejected")
+            return 1
+    print("  ok     self-test: a wrong-ABI ELF under /x64/ is rejected")
     return 0
 
 
 if __name__ == "__main__":
-    if sys.argv[1:] == ["--self-test"]:
-        sys.exit(self_test())
-    if len(sys.argv) != 2:
-        print("usage: verify-server-tree.py <tree> | --self-test", file=sys.stderr)
-        sys.exit(2)
-    root = pathlib.Path(sys.argv[1])
+    ap = argparse.ArgumentParser()
+    ap.add_argument("tree", type=pathlib.Path, nargs="?")
+    ap.add_argument("--abi", choices=sorted(ABI_MAP),
+                    default=os.environ.get("VSCODROID_ABI", "arm64-v8a"))
+    ap.add_argument("--self-test", action="store_true")
+    args = ap.parse_args()
+    if args.self_test:
+        sys.exit(self_test(args.abi))
+    if args.tree is None:
+        ap.error("give a tree or --self-test")
+    root = args.tree
     if not root.is_dir():
         print(f"  FAIL    {root} is not a directory", file=sys.stderr)
         sys.exit(1)
-    sys.exit(main(root))
+    sys.exit(main(root, args.abi))

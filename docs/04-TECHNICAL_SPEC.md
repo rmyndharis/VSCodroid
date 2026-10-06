@@ -253,7 +253,8 @@ android {
                                    // changing re-runs the whole of first-run extraction
 
         ndk {
-            abiFilters += "arm64-v8a"
+            // -PvscodroidAbi or VSCODROID_ABI. Default arm64-v8a. One ABI per APK.
+            abiFilters += vscodroidAbi
         }
     }
 

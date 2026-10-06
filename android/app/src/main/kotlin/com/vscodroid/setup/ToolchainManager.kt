@@ -596,7 +596,9 @@ class ToolchainManager(private val context: Context) {
         Logger.i(tag, "Requesting install of ${info.displayName} (${info.packName})")
 
         if (shouldUseHttpFallback()) {
-            val url = info.downloadUrl
+            val url = info.downloadUrl?.let {
+                toolchainUrlForAbi(it, info.packName, BuildConfig.VSCODROID_ABI)
+            }
             if (url == null) {
                 Logger.e(tag, "No downloadUrl for ${info.packName}: Play Store required")
                 fail(info.packName, ToolchainFailure.PLAY_REQUIRED)
@@ -1419,6 +1421,16 @@ class ToolchainManager(private val context: Context) {
         val name = manifest.optString("name", "")
         if (name.isEmpty()) {
             Logger.e(tag, "Invalid manifest.json in $packName: missing 'name'")
+            fail(packName, ToolchainFailure.CORRUPT)
+            return true
+        }
+        val packAbi = manifest.optString("abi", "")
+        if (!toolchainManifestMatchesAbi(packName, packAbi, BuildConfig.VSCODROID_ABI)) {
+            Logger.e(
+                tag,
+                "Refusing $packName for ABI '${BuildConfig.VSCODROID_ABI}': " +
+                    "the pack manifest declares '${packAbi.ifEmpty { "(missing)" }}'",
+            )
             fail(packName, ToolchainFailure.CORRUPT)
             return true
         }
@@ -4611,6 +4623,33 @@ internal fun sha256Of(file: File): String {
  */
 internal fun toolchainShortName(nameOrPack: String): String =
     ToolchainRegistry.find(nameOrPack)?.packName?.removePrefix("toolchain_") ?: nameOrPack
+
+/** Selects the release asset matching the APK's bundled native ABI. */
+internal fun toolchainUrlForAbi(url: String, packName: String, abi: String): String {
+    if (packName != "toolchain_ruby" && packName != "toolchain_java") return url
+    if (abi == "arm64-v8a") return url
+    require(abi == "x86_64") { "Unsupported VSCodroid ABI: $abi" }
+    val marker = ".zip"
+    val index = url.lastIndexOf(marker)
+    require(index >= 0 && index + marker.length == url.length) {
+        "Toolchain URL does not end in .zip: $url"
+    }
+    return url.substring(0, index) + "-x86_64" + url.substring(index)
+}
+
+/**
+ * Toolchain payloads that contain native binaries must declare their ABI.
+ * Older ARM packs predate the field and remain accepted; x86_64 always requires
+ * an explicit match so an ARM pack can never be installed under an x86 APK.
+ */
+internal fun toolchainManifestMatchesAbi(packName: String, manifestAbi: String, targetAbi: String): Boolean {
+    if (packName != "toolchain_ruby" && packName != "toolchain_java") return true
+    return when (targetAbi) {
+        "arm64-v8a" -> manifestAbi.isEmpty() || manifestAbi == "arm64-v8a"
+        "x86_64" -> manifestAbi == "x86_64"
+        else -> false
+    }
+}
 
 /**
  * Names the manifest `libs` entries an uninstall may delete from the shared

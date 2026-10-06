@@ -3,14 +3,20 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+. "$SCRIPT_DIR/lib/android-target.sh"
 ASSETS_DIR="$ROOT_DIR/android/app/src/main/assets"
-JNILIBS_DIR="$ROOT_DIR/android/app/src/main/jniLibs/arm64-v8a"
+android_target_require_staging "$ASSETS_DIR"
+JNILIBS_DIR="$ROOT_DIR/android/app/src/main/jniLibs/$ANDROID_ABI"
 
 echo "=== Packaging Assets ==="
 
 # VS Code server. The reh-web download carries the web client inside it, so this
 # one tree is both halves; there is no separate vscode-web to copy.
-REH_SRC="$ROOT_DIR/server/vscode-reh"
+REH_SRC="$ROOT_DIR/server/$ANDROID_ABI/vscode-reh"
+# Preserve the historical ARM64 staging path for existing local builds.
+if [ "$ANDROID_ABI" = arm64-v8a ] && [ ! -d "$REH_SRC" ]; then
+    REH_SRC="$ROOT_DIR/server/vscode-reh"
+fi
 if [ -d "$REH_SRC" ]; then
     echo "Copying vscode-reh..."
     rm -rf "$ASSETS_DIR/vscode-reh"

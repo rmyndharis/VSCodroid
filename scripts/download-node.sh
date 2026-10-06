@@ -28,11 +28,14 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
-JNILIBS_DIR="$ROOT_DIR/android/app/src/main/jniLibs/arm64-v8a"
-WORK_DIR="$ROOT_DIR/toolchains/termux-packages"
+. "$SCRIPT_DIR/lib/android-target.sh"
+ASSETS_DIR="$ROOT_DIR/android/app/src/main/assets"
+android_target_require_staging "$ASSETS_DIR"
+JNILIBS_DIR="$ROOT_DIR/android/app/src/main/jniLibs/$ANDROID_ABI"
+WORK_DIR="$ROOT_DIR/toolchains/termux-packages/$ANDROID_ABI"
 
 TERMUX_REPO="${TERMUX_MIRROR:-https://mirror.mwt.me/termux/main}"
-PACKAGES_URL="$TERMUX_REPO/dists/stable/main/binary-aarch64/Packages"
+PACKAGES_URL="$TERMUX_REPO/dists/stable/main/binary-$TERMUX_ARCH/Packages"
 
 # nodejs-lts, not nodejs: the LTS package tracks the line VS Code targets, while
 # the plain one runs ahead of it. Check what a VS Code version wants with

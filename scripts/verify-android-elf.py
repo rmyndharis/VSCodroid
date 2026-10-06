@@ -10,13 +10,13 @@ Four things of one file, named directly or reached by `--dir`, each of which
 fails the same quiet way at runtime (the file is present, the build is green,
 and the process dies or the addon refuses to load with a message nobody sees):
 
-  * aarch64, so it matches the only ABI this app ships;
+  * the requested Android ABI, so it cannot silently accept another CPU;
   * every DT_NEEDED library is one Bionic provides or one we bundle, since a
     glibc or musl dependency has no loader here;
   * every LOAD segment aligned to at least 16 KB, which Android 16 requires and
     NDK 27 does not do by default;
-  * PT_INTERP, when there is one, names Android's loader. An aarch64 executable
-    naming any other program interpreter came out of a glibc toolchain and
+  * PT_INTERP, when there is one, names Android's loader. An executable naming
+    any other program interpreter came out of a glibc toolchain and
     nothing on the device can start it, and the second question stopped
     catching that on its own the day the glibc shim gave every glibc soname a
     file to resolve to.
@@ -44,7 +44,15 @@ import struct
 import sys
 
 ELF_MAGIC = b"\x7fELF"
-EM_AARCH64 = 0xB7
+ABI_DEFAULT = "arm64-v8a"
+ABI_MAP = {
+    "arm64-v8a": (0xB7, "/system/bin/linker64", "aarch64"),
+    "x86_64": (0x3E, "/system/bin/linker64", "x86-64"),
+}
+ABI = os.environ.get("VSCODROID_ABI", ABI_DEFAULT)
+if ABI not in ABI_MAP:
+    raise SystemExit(f"unsupported VSCODROID_ABI {ABI!r}; expected arm64-v8a or x86_64")
+EM_MACHINE, ANDROID_INTERP, ABI_LABEL = ABI_MAP[ABI]
 # A relocatable object, which is the one ELF the loader never maps: it has no
 # LOAD segment to align, and the alignment sweep would read that absence as an
 # alignment of zero. Python's build ships one, usr/lib/python3.x/config-*/
@@ -59,7 +67,6 @@ MIN_ALIGN = 16384
 # the sweep below reads it as; a binary naming a glibc loader is unstartable here
 # whichever way something tries, since the path is absent from the device and the
 # loader indirection that does start a payload under filesDir supplies this one.
-ANDROID_INTERP = "/system/bin/linker64"
 
 # The aarch64 executables in the packaged tree that name a glibc loader, kept by
 # path because they ship and cannot run. A path belongs here only if it ships,
@@ -212,7 +219,7 @@ def verify(path: pathlib.Path, bundled: set) -> bool:
         print(f"  {'ok    ' if ok else 'FAIL  '} {label}{'' if ok else '  ' + detail}")
         failed = failed or not ok
 
-    check(machine == EM_AARCH64, "aarch64", f"e_machine = {machine:#x}")
+    check(machine == EM_MACHINE, ABI_LABEL, f"e_machine = {machine:#x}")
 
     missing = [lib for lib in needed if lib not in BIONIC and lib not in bundled]
     check(not missing, f"{len(needed)} linked libraries resolvable",
@@ -242,8 +249,8 @@ def verify(path: pathlib.Path, bundled: set) -> bool:
     return not failed
 
 
-def synthetic_elf(interp) -> bytes:
-    """The smallest aarch64 ELF verify() will read: one 16 KB-aligned LOAD, no
+def synthetic_elf(interp, machine=None) -> bytes:
+    """The smallest target-ABI ELF verify() will read: one 16 KB-aligned LOAD, no
     dynamic section, and a PT_INTERP naming `interp`, or none when it is None."""
     ehsize, phentsize = 64, 56
     phnum = 2 if interp else 1
@@ -254,8 +261,9 @@ def synthetic_elf(interp) -> bytes:
     if interp:
         phdrs += struct.pack("<IIQQQQQQ", PT_INTERP, 4, data_off, data_off, data_off,
                              len(path), len(path), 1)
+    machine = EM_MACHINE if machine is None else machine
     ehdr = ELF_MAGIC + bytes([2, 1, 1, 0]) + b"\0" * 8 + struct.pack(
-        "<HHIQQQIHHHHHH", 2, EM_AARCH64, 1, 0, ehsize, 0, 0,
+        "<HHIQQQIHHHHHH", 2, machine, 1, 0, ehsize, 0, 0,
         ehsize, phentsize, phnum, 0, 0, 0)
     return ehdr + phdrs + path
 
@@ -269,19 +277,22 @@ def self_test() -> int:
     """
     import tempfile
 
-    cases = (("glibc", "/lib/ld-linux-aarch64.so.1", False),
-             ("android", ANDROID_INTERP, True),
-             ("shared", None, True))
+    foreign_interp = "/lib/ld-linux-aarch64.so.1" if ABI == "arm64-v8a" else "/lib64/ld-linux-x86-64.so.2"
+    wrong_machine = 0x3E if ABI == "arm64-v8a" else 0xB7
+    cases = (("glibc", foreign_interp, False, EM_MACHINE),
+             ("android", ANDROID_INTERP, True, EM_MACHINE),
+             ("shared", None, True, EM_MACHINE),
+             ("wrong-abi", ANDROID_INTERP, False, wrong_machine))
     with tempfile.TemporaryDirectory() as tmp:
-        for name, interp, expected in cases:
+        for name, interp, expected, machine in cases:
             path = pathlib.Path(tmp) / f"lib{name}.so"
-            path.write_bytes(synthetic_elf(interp))
+            path.write_bytes(synthetic_elf(interp, machine))
             print(f"  {path.name}")
             if verify(path, set()) != expected:
                 print(f"  FAIL   self-test: PT_INTERP {interp} was "
                       f"{'accepted' if expected is False else 'refused'}")
                 return 1
-    print("  ok     self-test: a foreign program interpreter is refused")
+    print("  ok     self-test: foreign loaders and ELF machines are refused")
     return 0
 
 
@@ -362,8 +373,8 @@ def alignment_sweep(root: pathlib.Path) -> int:
                 print(f"  FAIL   {path}: {e}")
                 rejected.add(path)
                 continue
-            if machine != EM_AARCH64 or e_type == ET_REL:
-                skipped.append((path, "another ABI" if machine != EM_AARCH64
+            if machine != EM_MACHINE or e_type == ET_REL:
+                skipped.append((path, "another ABI" if machine != EM_MACHINE
                                 else "relocatable, never mapped"))
                 continue
             checked += 1
@@ -392,7 +403,7 @@ def alignment_sweep(root: pathlib.Path) -> int:
                     rejected.add(path)
 
     if not checked:
-        print(f"  FAIL   no aarch64 ELF under {root}; nothing was examined")
+        print(f"  FAIL   no {ABI_LABEL} ELF under {root}; nothing was examined")
         return 1
     # An allowlist entry has to earn its place by winning for a real file.
     # Entries are paths inside a tree the app build does not build and fetches
@@ -418,13 +429,14 @@ def alignment_sweep(root: pathlib.Path) -> int:
     if stale:
         plural = "y" if len(stale) == 1 else "ies"
         stale_note = f", {len(stale)} allowlist entr{plural} matching nothing"
-    print(f"  {'FAIL  ' if rejected or stale else 'ok    '} {checked} aarch64 binaries under {root}, "
+    print(f"  {'FAIL  ' if rejected or stale else 'ok    '} {checked} {ABI_LABEL} binaries under {root}, "
           f"{len(rejected)} rejected, {len(skipped)} skipped as another ABI or not loadable"
           f"{stale_note}")
     return 1 if rejected or stale else 0
 
 
 def main() -> int:
+    global EM_MACHINE, ANDROID_INTERP, ABI_LABEL, ABI
     ap = argparse.ArgumentParser()
     # Optional so --dir can stand in for it. The nine existing callers each pass
     # exactly one path and are unaffected.
@@ -448,9 +460,14 @@ def main() -> int:
                     help="check LOAD alignment on every aarch64 ELF under this tree")
     ap.add_argument("--lib-dir", type=pathlib.Path, action="append", default=[],
                     help="directory whose libraries ship with the app")
+    ap.add_argument("--abi", choices=sorted(ABI_MAP), default=ABI,
+                    help="expected Android ABI (default: VSCODROID_ABI or arm64-v8a)")
     ap.add_argument("--self-test", action="store_true",
                     help="check that a glibc-built executable is refused")
     args = ap.parse_args()
+
+    ABI = args.abi
+    EM_MACHINE, ANDROID_INTERP, ABI_LABEL = ABI_MAP[ABI]
 
     if args.self_test:
         return self_test()

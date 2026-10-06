@@ -39,18 +39,24 @@ VSCODE_VERSION="${VSCODE_VERSION:-$(cat "$ROOT_DIR/VSCODE_VERSION")}"
 # version bump, so on the side that actually produces an APK it was a file
 # nothing read.
 VSCODE_COMMIT="${VSCODE_COMMIT:-$(cat "$ROOT_DIR/VSCODE_COMMIT")}"
-ARCH="${ARCH:-arm64}"
+. "$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)/lib/android-target.sh"
+ARCH="${ARCH:-$NODE_ARCH}"
+if [ "$ARCH" != "$NODE_ARCH" ]; then
+    echo "ERROR: ARCH=$ARCH conflicts with VSCODROID_ABI=$ANDROID_ABI" >&2
+    exit 1
+fi
 REPO="${REPO:-rmyndharis/VSCodroid}"
 
 TARBALL_NAME="vscode-reh-web-linux-$ARCH-$VSCODE_VERSION.tar.gz"
-TARBALL="$ROOT_DIR/server/$TARBALL_NAME"
-DEST="$ROOT_DIR/server/vscode-reh"
+SERVER_CACHE="$ROOT_DIR/server/$ANDROID_ABI"
+TARBALL="$SERVER_CACHE/$TARBALL_NAME"
+DEST="$SERVER_CACHE/vscode-reh"
 
 echo "=== Fetch Code - OSS server ==="
 echo "  version : $VSCODE_VERSION"
 echo "  tarball : $TARBALL_NAME"
 
-mkdir -p "$ROOT_DIR/server"
+mkdir -p "$SERVER_CACHE"
 
 # What the release says this tarball should hash to, into `expected`.
 #
@@ -419,12 +425,24 @@ EOF
 fi
 
 echo
+echo "=== Prepare Android extension runtimes ==="
+# Apply the same runtime guards and optional-native pruning as source builds.
+# This must run before the shared tree and ELF verifier see the fetched server.
+python3 "$ROOT_DIR/scripts/prepare-android-runtime.py" "$DEST"
+
+echo
+echo "=== Align native pages ==="
+# The published linux-x64 prebuilds are 4 KB aligned. Android 16 refuses to
+# map them. Source builds run this same step before they pack the tarball.
+python3 "$ROOT_DIR/scripts/align-android-pages.py" --abi "$ANDROID_ABI" "$DEST"
+
+echo
 echo "=== Verify ==="
 # The same script the build ran on its own output. Running it again here is not
 # redundant: the tarball may predate a change to that script, and this is the
 # last point before the tree is copied into the APK. It checks the tree's shape,
 # not its branding values or patches; the stages either side of it do that.
-python3 "$ROOT_DIR/scripts/verify-server-tree.py" "$DEST"
+python3 "$ROOT_DIR/scripts/verify-server-tree.py" "$DEST" --abi "$ANDROID_ABI"
 
 echo
 echo "=== Patches ==="
@@ -468,9 +486,28 @@ echo "=== ripgrep ==="
 #
 # libripgrep.so is gitignored, so this is its only source in a clean checkout:
 # without it Search returns nothing and nothing else fails.
-JNILIBS_DIR="$ROOT_DIR/android/app/src/main/jniLibs/arm64-v8a"
+JNILIBS_DIR="$ROOT_DIR/android/app/src/main/jniLibs/$ANDROID_ABI"
 mkdir -p "$JNILIBS_DIR"
-RG_SRC="$DEST/node_modules/@vscode/ripgrep-universal/bin/linux-arm64/rg"
+RG_SRC="$DEST/node_modules/@vscode/ripgrep-universal/bin/linux-$NODE_ARCH/rg"
+
+if [ "$ANDROID_ABI" = x86_64 ]; then
+    # Upstream's static Linux x64 rg has 4 KB LOAD alignment. Termux builds
+    # ripgrep for Bionic with Android's page alignment and the system linker.
+    # Replace its bytes before copying the server into the APK.
+    ASSETS_DIR="$ROOT_DIR/android/app/src/main/assets"
+    android_target_require_staging "$ASSETS_DIR"
+    WORK_DIR="$ROOT_DIR/toolchains/termux-packages/$ANDROID_ABI"
+    . "$ROOT_DIR/scripts/lib/termux-packages.sh"
+    termux_fetch_index
+    termux_resolve_packages resolved-ripgrep.tsv ripgrep
+    termux_download_packages ripgrep
+    termux_extract_packages ripgrep
+    ANDROID_RG="$WORK_DIR/extracted/ripgrep/data/data/com.termux/files/usr/bin/rg"
+    python3 "$ROOT_DIR/scripts/verify-android-elf.py" "$ANDROID_RG" --abi "$ANDROID_ABI" \
+        --lib-dir "$ASSETS_DIR/usr/lib" --lib-dir "$JNILIBS_DIR"
+    termux_copy_notices "$ASSETS_DIR/usr" ripgrep
+    cp "$ANDROID_RG" "$RG_SRC"
+fi
 
 # The same gate every other binary in jniLibs already gets, and this was the one
 # without it. verify-server-tree.py above reads rg's e_machine and stops there:
@@ -493,7 +530,8 @@ RG_SRC="$DEST/node_modules/@vscode/ripgrep-universal/bin/linux-arm64/rg"
 # ./gradlew assembleDebug directly would package the very binary this refused --
 # and no later gate would notice, because verify-server-tree.py reads e_machine
 # and that is not what is wrong with it.
-python3 "$ROOT_DIR/scripts/verify-android-elf.py" "$RG_SRC"
+python3 "$ROOT_DIR/scripts/verify-android-elf.py" "$RG_SRC" --abi "$ANDROID_ABI" \
+    --lib-dir "$ROOT_DIR/android/app/src/main/assets/usr/lib" --lib-dir "$JNILIBS_DIR"
 
 cp "$RG_SRC" "$JNILIBS_DIR/libripgrep.so"
 chmod +x "$JNILIBS_DIR/libripgrep.so"

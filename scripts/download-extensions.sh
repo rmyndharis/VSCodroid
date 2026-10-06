@@ -11,6 +11,8 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+. "$SCRIPT_DIR/lib/android-target.sh"
+android_target_require_staging "$ROOT_DIR/android/app/src/main/assets"
 ASSETS_DIR="$ROOT_DIR/android/app/src/main/assets/extensions"
 WORK_DIR="$ROOT_DIR/toolchains/extensions"
 

@@ -10,6 +10,7 @@ import com.google.android.play.core.assetpacks.AssetPackManager
 import com.google.android.play.core.assetpacks.AssetPackManagerFactory
 import com.google.android.play.core.assetpacks.AssetPackStates
 import com.google.android.play.core.assetpacks.model.AssetPackStatus
+import com.vscodroid.BuildConfig
 import com.vscodroid.util.Logger
 import io.mockk.Runs
 import io.mockk.every
@@ -363,7 +364,7 @@ class ToolchainInstallTest {
     @Test
     fun `a manifest with no name reports FAILED rather than stalling the queue`() {
         val pack = File(filesDir, "pack-nameless").apply { mkdirs() }
-        File(pack, "toolchain_java.json").writeText("""{"installRoot":"usr/opt/java"}""")
+        File(pack, "toolchain_java.json").writeText("""{"abi":"${BuildConfig.VSCODROID_ABI}","installRoot":"usr/opt/java"}""")
 
         installFromDirectory(manager(), "toolchain_java", pack)
 
@@ -375,7 +376,7 @@ class ToolchainInstallTest {
         // The positive control for the three refusals above: without it they would
         // all still pass if installFromDirectory reported FAILED unconditionally.
         val pack = File(filesDir, "pack-java").apply { mkdirs() }
-        File(pack, "toolchain_java.json").writeText("""{"name":"java","installRoot":"usr/opt/java"}""")
+        File(pack, "toolchain_java.json").writeText("""{"name":"java","abi":"${BuildConfig.VSCODROID_ABI}","installRoot":"usr/opt/java"}""")
 
         installFromDirectory(manager(), "toolchain_java", pack)
 
@@ -412,7 +413,7 @@ class ToolchainInstallTest {
         // Where a directory has to go.
         File(filesDir, "usr/opt/java/blocked").writeText("in the way")
         val pack = File(filesDir, "pack-java").apply { mkdirs() }
-        File(pack, "toolchain_java.json").writeText("""{"name":"java","installRoot":"usr/opt/java"}""")
+        File(pack, "toolchain_java.json").writeText("""{"name":"java","abi":"${BuildConfig.VSCODROID_ABI}","installRoot":"usr/opt/java"}""")
         File(pack, "usr/opt/java/blocked").mkdirs()
         File(pack, "usr/opt/java/blocked/inner").writeText("payload")
         File(pack, "usr/opt/java/ok").writeText("payload")
@@ -508,7 +509,7 @@ class ToolchainInstallTest {
     @Test
     fun `an install whose record cannot be written reports FAILED rather than COMPLETED`() {
         val pack = File(filesDir, "pack-java").apply { mkdirs() }
-        File(pack, "toolchain_java.json").writeText("""{"name":"java","installRoot":"usr/opt/java"}""")
+        File(pack, "toolchain_java.json").writeText("""{"name":"java","abi":"${BuildConfig.VSCODROID_ABI}","installRoot":"usr/opt/java"}""")
         blockTheRecordWrite()
 
         installFromDirectory(manager(), "toolchain_java", pack)
@@ -540,7 +541,7 @@ class ToolchainInstallTest {
     /** A pack whose copy runs to the end, so the record write is what fails. */
     private fun packThatCopiesCleanly(): File {
         val pack = File(filesDir, "pack-java").apply { mkdirs() }
-        File(pack, "toolchain_java.json").writeText("""{"name":"java","installRoot":"usr/opt/java"}""")
+        File(pack, "toolchain_java.json").writeText("""{"name":"java","abi":"${BuildConfig.VSCODROID_ABI}","installRoot":"usr/opt/java"}""")
         File(pack, "usr/opt/java/bin").mkdirs()
         File(pack, "usr/opt/java/bin/java").writeText("payload")
         return pack

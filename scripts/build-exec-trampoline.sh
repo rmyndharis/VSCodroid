@@ -27,10 +27,13 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
-OUT_DIR="${OUT_DIR:-$ROOT_DIR/android/app/src/main/jniLibs/arm64-v8a}"
+source "$SCRIPT_DIR/lib/android-target.sh"
+OUT_DIR="${OUT_DIR:-$ROOT_DIR/android/app/src/main/jniLibs/$ANDROID_ABI}"
+if [ "$OUT_DIR" = "$ROOT_DIR/android/app/src/main/jniLibs/$ANDROID_ABI" ]; then
+    android_target_require_staging "$ROOT_DIR/android/app/src/main/assets"
+fi
 OUT="$OUT_DIR/libexec-trampoline.so"
 
-TARGET=aarch64-linux-android
 API=33
 
 echo "=== toolchain execution trampoline ==="
@@ -47,7 +50,7 @@ if [ -z "$NDK" ] || [ ! -d "$NDK" ]; then
     exit 1
 fi
 
-CC="$NDK/toolchains/llvm/prebuilt/$HOST_TAG/bin/${TARGET}${API}-clang"
+CC="$NDK/toolchains/llvm/prebuilt/$HOST_TAG/bin/${NDK_TARGET}${API}-clang"
 if [ ! -x "$CC" ]; then
     echo "  ERROR: no compiler at $CC" >&2
     exit 1
@@ -81,4 +84,4 @@ echo "=== Verify ==="
 # wrong-architecture or 4 KB-aligned trampoline would install perfectly and make
 # every toolchain command fail on an Android 16 device, which is
 # indistinguishable from the toolchain not being installed.
-python3 "$SCRIPT_DIR/verify-android-elf.py" "$OUT" --lib-dir "$OUT_DIR"
+python3 "$SCRIPT_DIR/verify-android-elf.py" "$OUT" --abi "$ANDROID_ABI" --lib-dir "$OUT_DIR"

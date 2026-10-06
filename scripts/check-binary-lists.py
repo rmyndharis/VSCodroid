@@ -56,11 +56,15 @@ that is what this reads them for.
 """
 
 import pathlib
+import os
 import re
 import sys
 
 ROOT = pathlib.Path(__file__).resolve().parent.parent
-JNILIBS = ROOT / "android/app/src/main/jniLibs/arm64-v8a"
+ANDROID_ABI = os.environ.get("VSCODROID_ABI", "arm64-v8a")
+if ANDROID_ABI not in {"arm64-v8a", "x86_64"}:
+    raise SystemExit(f"unsupported VSCODROID_ABI: {ANDROID_ABI!r}")
+JNILIBS = ROOT / "android/app/src/main/jniLibs" / ANDROID_ABI
 
 # Both files enumerate the directory, in a mermaid node and in a tree listing.
 # Named individually rather than globbed over docs/, so a document that merely

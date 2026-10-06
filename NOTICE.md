@@ -99,6 +99,7 @@ verbatim; `docs/LEGAL_NOTICES.md` records which text covers which component.
 | bzip2 | bzip2-1.0.6 | Python |
 | c-ares | MIT | Node.js |
 | Expat | MIT | Git, Python |
+| GCC runtime | GPL-3.0 with GCC Runtime Library Exception | x86_64 musl loader rebuild |
 | gdbm | GPL-3.0 | Python, gdbm |
 | Git | GPL-2.0 | bundled tool in its own right |
 | GNU Make | GPL-3.0 | bundled tool in its own right |

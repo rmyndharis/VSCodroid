@@ -31,8 +31,11 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
-JNI_DIR="$ROOT_DIR/android/app/src/main/jniLibs/arm64-v8a"
-WORK_DIR="$ROOT_DIR/toolchains/musl"
+. "$SCRIPT_DIR/lib/android-target.sh"
+ASSETS_DIR="$ROOT_DIR/android/app/src/main/assets"
+android_target_require_staging "$ASSETS_DIR"
+JNI_DIR="$ROOT_DIR/android/app/src/main/jniLibs/$ANDROID_ABI"
+WORK_DIR="$ROOT_DIR/toolchains/musl/$ANDROID_ABI"
 
 # A branch Alpine still supports, and it has to be checked when it is changed:
 # an unsupported one keeps serving a signed index for years, so nothing here
@@ -51,7 +54,7 @@ WORK_DIR="$ROOT_DIR/toolchains/musl"
 #
 #     curl -s https://alpinelinux.org/releases.json   # branch_date, eol_date
 ALPINE_BRANCH="${ALPINE_BRANCH:-v3.23}"
-MIRROR="https://dl-cdn.alpinelinux.org/alpine/$ALPINE_BRANCH/main/aarch64"
+MIRROR="https://dl-cdn.alpinelinux.org/alpine/$ALPINE_BRANCH/main/$TERMUX_ARCH"
 
 # How stale a signed index may be, in days, matching the Termux side's default.
 #
@@ -116,8 +119,16 @@ mkdir -p "$WORK_DIR" "$JNI_DIR"
 # The tar entry name, prefix included: apk-tools names it .SIGN.<algo>.<key>,
 # and the algorithm is part of what is being pinned. A .SIGN.RSA256 entry would
 # be a different signature scheme and must not be verified as RSA-SHA1.
-ALPINE_KEY_NAME=".SIGN.RSA.alpine-devel@lists.alpinelinux.org-616ae350.rsa.pub"
-ALPINE_KEY="$SCRIPT_DIR/alpine-devel-616ae350.rsa.pub"
+case "$TERMUX_ARCH" in
+    aarch64)
+        ALPINE_KEY_NAME=".SIGN.RSA.alpine-devel@lists.alpinelinux.org-616ae350.rsa.pub"
+        ALPINE_KEY="$SCRIPT_DIR/alpine-devel-616ae350.rsa.pub"
+        ;;
+    x86_64)
+        ALPINE_KEY_NAME=".SIGN.RSA.alpine-devel@lists.alpinelinux.org-6165ee59.rsa.pub"
+        ALPINE_KEY="$SCRIPT_DIR/alpine-devel-6165ee59.rsa.pub"
+        ;;
+esac
 
 # Resolve the current musl version from the branch index rather than pinning a
 # release, the same way the Python download resolves its version from Termux's.
@@ -295,28 +306,38 @@ fi
 # LD_LIBRARY_PATH, which was verified on device.
 rm -rf "$WORK_DIR/extract"
 mkdir -p "$WORK_DIR/extract"
-tar xzf "$APK" -C "$WORK_DIR/extract" lib/ld-musl-aarch64.so.1 2>/dev/null
+MUSL_LOADER="ld-musl-$TERMUX_ARCH.so.1"
+tar xzf "$APK" -C "$WORK_DIR/extract" "lib/$MUSL_LOADER" 2>/dev/null
 
-SRC="$WORK_DIR/extract/lib/ld-musl-aarch64.so.1"
+SRC="$WORK_DIR/extract/lib/$MUSL_LOADER"
 if [ ! -f "$SRC" ]; then
-    echo "  ERROR: lib/ld-musl-aarch64.so.1 is not in musl-$MUSL_VERSION.apk." >&2
+    echo "  ERROR: lib/$MUSL_LOADER is not in musl-$MUSL_VERSION.apk." >&2
     exit 1
+fi
+
+# Alpine's x86_64 package is 4 KB aligned. Preserve the signed APK as the
+# upstream maintenance source, then rebuild the pinned musl loader for Android's
+# 16 KB page requirement before applying the same ELF gate used by ARM64.
+if [ "$ANDROID_ABI" = x86_64 ]; then
+    bash "$SCRIPT_DIR/build-musl-loader.sh" --output "$SRC" --version "$MUSL_VERSION"
 fi
 
 # Named lib*.so so the Package Manager extracts it to nativeLibraryDir with the
 # execute bit; that directory is the only one an app may execve from.
 cp "$SRC" "$JNI_DIR/libldmusl.so"
 chmod 755 "$JNI_DIR/libldmusl.so"
-echo "  installed : jniLibs/arm64-v8a/libldmusl.so ($(du -h "$JNI_DIR/libldmusl.so" | cut -f1))"
+echo "  installed : jniLibs/$ANDROID_ABI/libldmusl.so ($(du -h "$JNI_DIR/libldmusl.so" | cut -f1))"
 
 python3 "$SCRIPT_DIR/verify-android-elf.py" "$JNI_DIR/libldmusl.so"
 
 # musl is MIT, and MIT requires the copyright and permission notice to be
 # included with a binary redistribution. Alpine's musl .apk carries no notice at
-# all -- measured on musl-1.2.5-r3, whose three entries are the loader, the libc
-# symlink and the package metadata -- so the file comes from the repository
-# instead: licenses/COPYRIGHT.musl is musl 1.2.5's own COPYRIGHT, verbatim from
+# all -- measured on musl-1.2.5-r3, whose entries are the loader, libc symlink
+# and package metadata -- so the file comes from the repository instead:
+# licenses/COPYRIGHT.musl is musl 1.2.5's own COPYRIGHT, verbatim from
 # git.musl-libc.org at tag v1.2.5, which is the release ALPINE_BRANCH pins.
+# The x86_64 16 KB rebuild uses GCC and its libgcc runtime; those additional
+# notices travel beside it as well.
 #
 # It lands under assets/usr/share/doc beside the Termux notices, which
 # download-termux-tools.sh clears and fills; this script runs after it in
@@ -331,6 +352,16 @@ MUSL_DOC="$ROOT_DIR/android/app/src/main/assets/usr/share/doc/musl"
 mkdir -p "$MUSL_DOC"
 cp "$MUSL_NOTICE" "$MUSL_DOC/COPYRIGHT"
 echo "  notice    : usr/share/doc/musl/COPYRIGHT"
+if [ "$ANDROID_ABI" = x86_64 ]; then
+    for license in COPYING.GPLv3 COPYING.RUNTIME; do
+        if [ ! -f "$ROOT_DIR/licenses/$license" ]; then
+            echo "  ERROR: $ROOT_DIR/licenses/$license is required for the GCC-built x86_64 musl loader." >&2
+            exit 1
+        fi
+        cp "$ROOT_DIR/licenses/$license" "$MUSL_DOC/$license"
+        echo "  notice    : usr/share/doc/musl/$license"
+    done
+fi
 
 # What shipped, for write-build-manifest.py, the same way each Termux download
 # records itself in a resolved-*.tsv. The version is resolved from a live index

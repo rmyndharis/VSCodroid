@@ -80,16 +80,24 @@ REPO = pathlib.Path(__file__).resolve().parent.parent
 MANIFEST = REPO / "wheelhouse.json"
 VERIFY_ELF = REPO / "scripts" / "verify-android-elf.py"
 
+# Match every wheel and native library to the APK currently staged. The default
+# remains ARM for existing release commands; an x86_64 wheelhouse must be
+# explicitly populated in wheelhouse.json under targets.x86_64.
+ANDROID_ABI = os.environ.get("VSCODROID_ABI", "arm64-v8a")
+if ANDROID_ABI not in ("arm64-v8a", "x86_64"):
+    sys.exit(f"FAIL unsupported VSCODROID_ABI {ANDROID_ABI!r}; expected arm64-v8a or x86_64")
+WHEEL_ARCH = "arm64_v8a" if ANDROID_ABI == "arm64-v8a" else "x86_64"
+ANDROID_PLATFORM = f"android_24_{WHEEL_ARCH}"
+
 # What the device links against, and where those libraries live in this repo.
 DEVICE_LIB_DIRS = (
     REPO / "android/app/src/main/assets/usr/lib",
-    REPO / "android/app/src/main/jniLibs/arm64-v8a",
+    REPO / "android/app/src/main/jniLibs" / ANDROID_ABI,
 )
 
 # The platform half of the tag the shipped interpreter accepts; the Python half
 # comes from the manifest. Anything else is not for this device, and a wheel
 # whose name does not carry it would install nowhere.
-ANDROID_PLATFORM = "android_24_arm64_v8a"
 TERMUX_LIB = REPO / "scripts/lib/termux-packages.sh"
 
 # A wheel that vendors shared libraries puts them in a top-level directory and
@@ -141,7 +149,8 @@ def normalised(name):
 
 
 def page_path(python_version):
-    return REPO / "docs/site/wheels" / python_version / "wheels.html"
+    filename = "wheels.html" if ANDROID_ABI == "arm64-v8a" else "wheels-x86_64.html"
+    return REPO / "docs/site/wheels" / python_version / filename
 
 
 def bundled_python_version():
@@ -196,7 +205,7 @@ def termux_index_entry(work, deb_filename):
     digest compared against here is anchored to Termux's signature and not to
     whichever mirror served the file.
     """
-    index_dir = work / "termux-index"
+    index_dir = work / "termux-index" / ANDROID_ABI
     result = subprocess.run(
         ["bash", "-c", f'. "{TERMUX_LIB}" && termux_fetch_index'],
         env={**os.environ, "WORK_DIR": str(index_dir)},
@@ -428,13 +437,21 @@ def main():
     parser.add_argument("--out", type=pathlib.Path,
                         help="where to write the find-links page (default: docs/site/wheels/<python>/wheels.html)")
     parser.add_argument("--dist", type=pathlib.Path,
-                        default=REPO / ".build/wheelhouse",
+                        default=REPO / ".build/wheelhouse" / ANDROID_ABI,
                         help="where to leave the wheels for the release upload")
     args = parser.parse_args()
     if args.check and args.record:
         parser.error("--record writes wheelhouse.json, and --check writes nothing")
 
-    manifest = load_manifest()
+    source_manifest = load_manifest()
+    target = source_manifest.get("targets", {}).get(ANDROID_ABI)
+    if target is not None:
+        manifest = {**source_manifest, **target}
+    elif ANDROID_ABI != "arm64-v8a":
+        return fail(
+            f"wheelhouse.json has no targets.{ANDROID_ABI} entry. Refusing to emit "
+            "ARM-tagged wheels or mirror ARM native payloads into an x86_64 APK."
+        )
     declared = manifest.get("python-version")
     bundled = bundled_python_version()
     if bundled and declared != bundled:
@@ -447,10 +464,10 @@ def main():
 
     with tempfile.TemporaryDirectory(prefix="wheelhouse-") as tmp:
         work = pathlib.Path(tmp)
-        return build(args, manifest, declared, tag, out, work)
+        return build(args, manifest, declared, tag, out, work, source_manifest, target)
 
 
-def build(args, manifest, declared, tag, out, work):
+def build(args, manifest, declared, tag, out, work, source_manifest, target):
     entries = []
     # Built aside and moved into --dist only once every entry has verified, so a
     # failed run leaves the previous wheels where they were.
@@ -478,8 +495,16 @@ def build(args, manifest, declared, tag, out, work):
                 "    immutable. Do not update the digest until you know why."
             )
 
+    expected_arch_tag = f"-{ANDROID_PLATFORM}.whl"
     for package in manifest["packages"]:
         name, version, url = package["name"], package["version"], package["url"]
+        if url.endswith(".whl") and expected_arch_tag not in url:
+            sys.exit(
+                f"FAIL {name} URL does not name the selected Android wheel ABI "
+                f"({ANDROID_ABI}): {url}"
+            )
+        if ANDROID_ABI == "x86_64" and url.endswith(".deb") and "_x86_64.deb" not in url:
+            sys.exit(f"FAIL {name} Termux package URL is not x86_64: {url}")
         print(f"{name} {version}")
 
         if url.endswith(".deb"):
@@ -534,7 +559,13 @@ def build(args, manifest, declared, tag, out, work):
         return 0
 
     if dirty:
-        MANIFEST.write_text(json.dumps(manifest, indent=2) + "\n", encoding="utf-8")
+        if target is None:
+            source_manifest["packages"] = manifest["packages"]
+        else:
+            source_manifest.setdefault("targets", {})[ANDROID_ABI] = {
+                **target, "packages": manifest["packages"]
+            }
+        MANIFEST.write_text(json.dumps(source_manifest, indent=2) + "\n", encoding="utf-8")
         print(f"\nUpdated {MANIFEST.relative_to(REPO)}")
 
     args.dist.mkdir(parents=True, exist_ok=True)
@@ -546,7 +577,11 @@ def build(args, manifest, declared, tag, out, work):
 
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(page(entries, manifest["release-tag"]), encoding="utf-8")
-    print(f"\nWrote {out.relative_to(REPO)} listing {len(entries)} wheels")
+    try:
+        out_label = out.relative_to(REPO)
+    except ValueError:
+        out_label = out
+    print(f"\nWrote {out_label} listing {len(entries)} wheels")
     print(f"The wheels and notices are in {args.dist}; upload them to the {manifest['release-tag']} release.")
     print("The page must be served as text/html, which GitHub Pages does.")
     return 0

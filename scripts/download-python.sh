@@ -12,8 +12,10 @@ set -euo pipefail
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 ROOT_DIR="$(dirname "$SCRIPT_DIR")"
+. "$SCRIPT_DIR/lib/android-target.sh"
 ASSETS_DIR="$ROOT_DIR/android/app/src/main/assets"
-JNILIBS_DIR="$ROOT_DIR/android/app/src/main/jniLibs/arm64-v8a"
+android_target_require_staging "$ASSETS_DIR"
+JNILIBS_DIR="$ROOT_DIR/android/app/src/main/jniLibs/$ANDROID_ABI"
 WORK_DIR="$ROOT_DIR/toolchains/termux-packages"
 
 # The index fetch, its signature check, package resolution and the digest check
