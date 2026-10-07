@@ -661,6 +661,60 @@ class SafLiveDeviceEditTest {
     }
 
     /**
+     * The same copy lengthened while the open reads it, as a log being written is. The read
+     * stops a buffer past the length the line names, which is what the open's budget was
+     * charged for it, rather than following the file for as long as it grows.
+     */
+    @Test
+    fun `a kept copy that grows while the open reads it is read no further than its length`() {
+        deviceText = "x".repeat(20_000)
+        deviceSize = 20_000
+        open()
+        recordWithoutDigests()
+        val file = File(mirror, "notes.txt")
+        var hashed = 0L
+        duringDigests(onUpdate = { length ->
+            if (hashed == 0L) file.appendText("y".repeat(100_000))
+            hashed += length
+        })
+
+        open()
+
+        assertTrue(hashed > 0, "the open did not read the kept copy")
+        assertTrue(hashed <= 20_000, "the open hashed $hashed bytes of a copy recorded at 20000")
+        assertNull(recordedDigest(), "a digest of more than the copy was recorded as the copy's")
+    }
+
+    /**
+     * A write that lands while the open is digesting a kept copy, the closing folder's drain
+     * finishing a save: the entry that write leaves is what the next save has to compare
+     * against. Replaced by the digest of the copy the open kept, under the stamp the open
+     * listed, the next save found the stamp the write moved and kept a spare copy of it.
+     */
+    @Test
+    fun `a write landing while the open digests a kept copy keeps the entry it left`() {
+        open()
+        recordWithoutDigests()
+        var landed = false
+        duringDigests(onDigest = {
+            if (!landed) {
+                landed = true
+                save("saved as the folder opened")
+            }
+        })
+        open()
+        assertTrue(landed, "the open did not read the kept copy")
+
+        save("typed in the editor")
+
+        assertEquals(
+            emptyMap<String, String>(), deviceCopies(),
+            "the open's digest of the kept copy replaced what the write left",
+        )
+        assertEquals("typed in the editor", deviceText)
+    }
+
+    /**
      * A copy the reopen vouched for that another sync over the same mirror replaces before
      * it is digested, the two syncs an activity recreated mid-open leaves. The newer device
      * copy that sync fetched is not the kept one, and its digest taken for the kept copy's
