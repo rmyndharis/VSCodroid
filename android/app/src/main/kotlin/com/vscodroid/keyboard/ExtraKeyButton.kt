@@ -48,9 +48,15 @@ class ExtraKeyButton @JvmOverloads constructor(
     /**
      * The latch a hold on this modifier switched away from, while that touch
      * lasts; null otherwise. A touch that ends in a cancel, as one the pager
-     * takes does, puts it back.
+     * takes does, puts it back, unless [anotherFingerOnRow].
      */
     private var latchBeforeHold: Boolean? = null
+
+    /**
+     * Whether another finger is on the row, asked when a hold on this modifier
+     * ends in a cancel. [KeyPageAdapter] hands every key the row's answer.
+     */
+    var anotherFingerOnRow: () -> Boolean = { false }
 
     private val gestureDetector = GestureDetector(context,
         object : GestureDetector.SimpleOnGestureListener() {
@@ -108,9 +114,9 @@ class ExtraKeyButton @JvmOverloads constructor(
      * toggles with no alternates, so holding one a moment too long switched the
      * modifier on inside [ExtraKeyRow] while the button carried on looking off,
      * and the next tap arrived inverted. A hold on a modifier still switches it
-     * from `onLongPress`, and a cancel of that touch, as a drag the pager takes
-     * is, switches it back, both through here; a hold on any other key without
-     * alternates ends in `onSingleTapUp` like a tap.
+     * from `onLongPress`, and a cancel of that touch, as the pager taking this
+     * finger's drag is, switches it back, both through here; a hold on any other
+     * key without alternates ends in `onSingleTapUp` like a tap.
      *
      * This is a `View` callback, so nothing in the JVM unit suite can invoke
      * it. [pressedState] carries the part that can be pinned.
@@ -241,7 +247,20 @@ class ExtraKeyButton @JvmOverloads constructor(
                     // or with its window, end it the same way. A latch spent on
                     // a letter typed during the hold is back there already and
                     // is left alone.
-                    if (event.action == MotionEvent.ACTION_CANCEL && before != null && before != isToggleActive) {
+                    //
+                    // So is one while another finger is on the row. The pager
+                    // drags with the finger that went down last and cancels
+                    // every key under a finger when it takes the drag, so the
+                    // cancel can come from another finger's swipe, which must
+                    // leave this latch as the hold set it: Ctrl held with one
+                    // thumb while the other swipes to F5 runs Ctrl+F5. The
+                    // cancel cannot say whose drag it was, since what it
+                    // carries differs by release: ViewGroup hands it on
+                    // untransformed with every pointer up to API 35, and split
+                    // to this key's pointer in the 36.1 sources.
+                    if (event.action == MotionEvent.ACTION_CANCEL && before != null && before != isToggleActive &&
+                        !anotherFingerOnRow()
+                    ) {
                         emitPress()
                     }
                 }

@@ -11,7 +11,8 @@ class KeyPageAdapter(
     private val onKeyAction: (key: String, isActive: Boolean, button: ExtraKeyButton) -> Unit,
     private val onArrowKey: (direction: String) -> Unit,
     private val onDragEnd: () -> Unit,
-    private val onLongPress: (button: ExtraKeyButton, alternates: List<AlternateKey>) -> Unit
+    private val onLongPress: (button: ExtraKeyButton, alternates: List<AlternateKey>) -> Unit,
+    private val anotherFingerOnRow: () -> Boolean,
 ) : RecyclerView.Adapter<KeyPageAdapter.PageViewHolder>() {
 
     /**
@@ -76,6 +77,7 @@ class KeyPageAdapter(
                         onLongPressAction = { btn, alts ->
                             this@KeyPageAdapter.onLongPress(btn, alts)
                         }
+                        anotherFingerOnRow = this@KeyPageAdapter.anotherFingerOnRow
 
                         // Restore toggle state after recycling
                         if (item.isToggle) {

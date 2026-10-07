@@ -7,6 +7,7 @@ import android.text.TextUtils
 import android.util.AttributeSet
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -160,6 +161,13 @@ class ExtraKeyRow @JvmOverloads constructor(
 
     /** The alternates window, while one is open. See [showLongPressPopup]. */
     private var longPressPopup: LongPressPopup? = null
+
+    /**
+     * How many fingers are on the row, as of the touch event it last passed on.
+     * See [dispatchTouchEvent], and [ExtraKeyButton.anotherFingerOnRow] for the
+     * one question it answers.
+     */
+    private var fingersDown = 0
 
     /**
      * How many modifier triples have been pushed at the page.
@@ -508,8 +516,8 @@ class ExtraKeyRow @JvmOverloads constructor(
         // A replacement takes the latches before it is attached, never after.
         // Attaching it removes the pages of the adapter it replaces, which
         // cancels a touch still on one of their keys from inside the swap: a
-        // modifier its hold had switched is switched back, and a trackpad drag
-        // ends, which spends the latches. Both go through this row, which
+        // modifier its hold had switched can be switched back, and a trackpad
+        // drag ends, which spends the latches. Both go through this row, which
         // pushes what the adapter holds and starts or stops the poll from it.
         // Written back after the swap, the latches repainted the row over
         // whatever the swap had done, unpushed and unpolled: a resize while a
@@ -528,7 +536,8 @@ class ExtraKeyRow @JvmOverloads constructor(
             onDragEnd = {
                 resetModifiersIfNeeded()
             },
-            onLongPress = { button, alternates -> showLongPressPopup(button, alternates) }
+            onLongPress = { button, alternates -> showLongPressPopup(button, alternates) },
+            anotherFingerOnRow = { fingersDown > 1 },
         )
         carried?.let { (ctrl, alt, shift) ->
             ctrlActive = ctrl
@@ -721,6 +730,25 @@ class ExtraKeyRow @JvmOverloads constructor(
         setupAdapter()
         setupDots()
         Logger.d(tag, "Repacked into ${pages.size} pages for ${newConfig.smallestScreenWidthDp}dp")
+    }
+
+    /**
+     * Counts the fingers whose events reach the row, the only ones the pager
+     * can drag with, before the pager sees the event: it cancels the keys under
+     * them from inside this dispatch when it takes a drag. A finger lifting is
+     * still in its own ACTION_POINTER_UP, so that one is taken off.
+     *
+     * A cancel is not counted. Up to API 35 ViewGroup hands one on unsplit, so
+     * it can carry a finger that is on another view, and the fingers it ends
+     * were counted by the event before it.
+     */
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        when (ev.actionMasked) {
+            MotionEvent.ACTION_CANCEL -> Unit
+            MotionEvent.ACTION_POINTER_UP -> fingersDown = ev.pointerCount - 1
+            else -> fingersDown = ev.pointerCount
+        }
+        return super.dispatchTouchEvent(ev)
     }
 
     override fun onDetachedFromWindow() {

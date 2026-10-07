@@ -619,8 +619,9 @@ order, whenever a page's share would put a key under `MIN_TOUCH_TARGET_DP`: five
 does not repack, but a drop into a narrow split-screen pane does, through
 `ExtraKeyRow.onConfigurationChanged`. The latched modifiers are carried into the new pages'
 adapter before it replaces the old one (`ExtraKeyRow.setupAdapter`): replacing it cancels a
-touch still on a key or the trackpad, that cancel switches back a modifier a hold had switched
-or ends the drag, which spends the latches, and the row tells the page what it did.
+touch still on a key or the trackpad, that cancel can switch back a modifier a hold had
+switched (as below) or ends the drag, which spends the latches, and the row tells the page
+what it did.
 
 | Page | Contents at 411dp and wider |
 |------|----------|
@@ -645,10 +646,14 @@ off at each touch), and the row dismisses an open popup when the pager starts a 
 modifier's long press switches the latch while the finger is still down, so a letter
 typed on the soft keyboard during the hold is chorded, and a touch that then ends in a
 cancel switches the latch back: the pager taking the drag, the system cancelling the
-gesture, or a repack removing the key under the finger. Every other key presses on
-release, and only if the finger never left the touch slop around where it landed, so a
-swipe the pager takes presses nothing, and so does a long hold that drifted. The detector
-has no double-tap listener, so two quick taps are two presses.
+gesture, or a repack removing the key under the finger. Not while another finger is on the
+row, which `ExtraKeyRow.dispatchTouchEvent` counts: the pager drags with the finger that
+went down last and cancels every key under a finger when it takes the drag, so the cancel
+can be that finger's swipe, and Ctrl held with one thumb while the other swipes to F5 has to
+stay latched for Ctrl+F5. Every other key presses on release, and only if the finger never
+left the touch slop around where it landed, so a swipe the pager takes presses nothing, and
+so does a long hold that drifted. The detector has no double-tap listener, so two quick taps
+are two presses.
 
 There are **no discrete arrow buttons anywhere on the row.** The gesture trackpad replaced them and
 emits arrow keys as the finger moves (`TrackpadGesture.accumulate`). A drag is the only route for a

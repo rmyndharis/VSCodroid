@@ -5,6 +5,7 @@ import android.content.res.Configuration
 import android.os.Handler
 import android.os.Looper
 import android.os.SystemClock
+import android.view.InputDevice
 import android.view.MotionEvent
 import android.view.View
 import android.view.ViewConfiguration
@@ -14,9 +15,11 @@ import android.webkit.WebView
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
+import androidx.viewpager2.widget.ViewPager2
 import com.vscodroid.R
 import com.vscodroid.ToolchainActivity
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Test
@@ -38,10 +41,12 @@ import org.junit.runner.RunWith
  * it while the finger is down, and the swipe cases hold that a drag the pager
  * takes from one leaves it as it was.
  *
- * The last two put the row in a window and a finger on it, then resize it so
- * that it repacks: the swap removes the key or the trackpad under the finger,
- * whose touch is cancelled from inside it, and the row and the page it pushes
- * to have to agree afterwards.
+ * The last three put the row in a window and a finger on it. One swipes the
+ * pager with a second finger while the first holds Ctrl, which has to leave
+ * Ctrl as the hold set it. The other two resize the row so that it repacks:
+ * the swap removes the key or the trackpad under the finger, whose touch is
+ * cancelled from inside it, and the row and the page it pushes to have to
+ * agree afterwards.
  *
  * Not run by CI, which compiles the instrumented tests but has no emulator to
  * run them on.
@@ -197,6 +202,72 @@ class ExtraKeyButtonTouchInstrumentedTest {
     }
 
     /**
+     * A swipe by a second finger while the first holds Ctrl lit leaves it lit,
+     * on the row and on the page, and the same swipe by the finger on Ctrl puts
+     * it back.
+     *
+     * The pager drags with the finger that went down last, and taking the drag
+     * cancels every key under a finger, the held Ctrl among them. That cancel
+     * used to switch Ctrl back whichever finger swiped, so holding Ctrl with one
+     * thumb and swiping to F5 with the other ran F5 where it had run Ctrl+F5.
+     */
+    @Test
+    fun aSwipeByAnotherFingerLeavesAHeldModifierLatched() {
+        for (byAnotherFinger in listOf(true, false)) {
+            inRow { row, page ->
+                val ctrl = ctrlOf(row)
+                val pager = find(row, "pager") { it is ViewPager2 } as ViewPager2
+                val held = middleOf(row, ctrl)
+                val other = middleOf(row, find(row, "Tab") { it is ExtraKeyButton && it.keyValue == "Tab" })
+                // Past the pager's own slop: ViewPager2 gives its RecyclerView
+                // the paging slop, twice the touch slop.
+                val swipe = ViewConfiguration.get(row.context).scaledPagingTouchSlop * 3f
+                val down = SystemClock.uptimeMillis()
+                onMain { row.dispatchTouchEvent(fingers(down, MotionEvent.ACTION_DOWN, held)) }
+                restPastTheLongPress()
+                var lit = false
+                var pushed = false
+                onMain {
+                    lit = ctrl.isToggleActive
+                    pushed = page.ctrl
+                }
+                assertTrue("control: the hold did not latch Ctrl on the row and the page", lit && pushed)
+
+                onMain {
+                    if (byAnotherFinger) {
+                        row.dispatchTouchEvent(fingers(down, pointerDown(1), held, other))
+                        row.dispatchTouchEvent(
+                            fingers(down, MotionEvent.ACTION_MOVE, held, other.first + swipe to other.second),
+                        )
+                    } else {
+                        row.dispatchTouchEvent(fingers(down, MotionEvent.ACTION_MOVE, held.first + swipe to held.second))
+                    }
+                }
+                var dragging = false
+                onMain {
+                    dragging = pager.scrollState == ViewPager2.SCROLL_STATE_DRAGGING
+                    lit = ctrl.isToggleActive
+                    pushed = page.ctrl
+                }
+                assertTrue("control: the pager did not take the drag, so nothing cancelled the hold", dragging)
+                if (byAnotherFinger) {
+                    assertTrue(
+                        "a second finger's swipe switched off the Ctrl held under the first: " +
+                            "the row shows Ctrl=$lit and the page holds Ctrl=$pushed",
+                        lit && pushed,
+                    )
+                } else {
+                    assertFalse(
+                        "a swipe by the finger holding Ctrl left it latched: " +
+                            "the row shows Ctrl=$lit and the page holds Ctrl=$pushed",
+                        lit || pushed,
+                    )
+                }
+            }
+        }
+    }
+
+    /**
      * Holding a modifier past the long press and then having the row repacked
      * under the finger, as resizing a split-screen pane does, leaves it on both
      * sides as it was before the touch, like any other touch that ends in a
@@ -316,12 +387,8 @@ class ExtraKeyButtonTouchInstrumentedTest {
     private fun ctrlOf(row: View) =
         find(row, "Ctrl") { it is ExtraKeyButton && it.keyValue == "Ctrl" } as ExtraKeyButton
 
-    /**
-     * A finger put down on the middle of [view], dispatched through the row so
-     * every parent on the way records where it went, as for a real finger. It
-     * is never lifted: the repack cancels its touch.
-     */
-    private fun press(row: View, view: View) {
+    /** The middle of [view] in [row]'s coordinates, checked to be on the page showing. */
+    private fun middleOf(row: View, view: View): Pair<Float, Float> {
         var x = 0f
         var y = 0f
         var bounds = 0f to 0f
@@ -336,9 +403,45 @@ class ExtraKeyButtonTouchInstrumentedTest {
             "control: the ${view.javaClass.simpleName} found is not on the page showing, so no finger reaches it",
             x in 0f..bounds.first && y in 0f..bounds.second,
         )
+        return x to y
+    }
+
+    /**
+     * A finger put down on the middle of [view], dispatched through the row so
+     * every parent on the way records where it went, as for a real finger. It
+     * is never lifted: the repack cancels its touch.
+     */
+    private fun press(row: View, view: View) {
+        val (x, y) = middleOf(row, view)
         val down = SystemClock.uptimeMillis()
         onMain { row.dispatchTouchEvent(event(down, down, MotionEvent.ACTION_DOWN, x, y)) }
     }
+
+    /** One event of a gesture with a finger at each of [at], their ids counting up from 0. */
+    private fun fingers(downTime: Long, action: Int, vararg at: Pair<Float, Float>): MotionEvent {
+        val properties = Array(at.size) { i ->
+            MotionEvent.PointerProperties().apply {
+                id = i
+                toolType = MotionEvent.TOOL_TYPE_FINGER
+            }
+        }
+        val coords = Array(at.size) { i ->
+            MotionEvent.PointerCoords().apply {
+                x = at[i].first
+                y = at[i].second
+                pressure = 1f
+                size = 1f
+            }
+        }
+        return MotionEvent.obtain(
+            downTime, SystemClock.uptimeMillis(), action, at.size, properties, coords,
+            0, 0, 1f, 1f, 0, 0, InputDevice.SOURCE_TOUCHSCREEN, 0,
+        )
+    }
+
+    /** `ACTION_POINTER_DOWN` for the finger at [index], with the index packed in. */
+    private fun pointerDown(index: Int): Int =
+        MotionEvent.ACTION_POINTER_DOWN or (index shl MotionEvent.ACTION_POINTER_INDEX_SHIFT)
 
     /**
      * Time for two poll ticks and their answers, so a row the page disagrees

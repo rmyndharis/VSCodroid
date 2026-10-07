@@ -30,6 +30,13 @@ class ExtraKeyPressStateTest {
     /** The block every touch on the key goes through before and after the detector. */
     private fun touchListener(source: String): String = SourceScan.body(source, "setOnTouchListener {")
 
+    /** What a touch's end does, with each run of whitespace made one space so a condition can wrap. */
+    private fun touchEnd(): String = SourceScan.body(touchListener(button()), "MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL ->")
+        .replace(Regex("""\s+"""), " ")
+
+    /** The start of the condition under which a cancel puts a held modifier back. */
+    private val restore = "if (event.action == MotionEvent.ACTION_CANCEL && before != null && before != isToggleActive"
+
     /**
      * The defect, as arithmetic.
      *
@@ -200,12 +207,70 @@ class ExtraKeyPressStateTest {
             "a hold on a modifier does not latch it while the finger is down, or switches it before " +
                 "noting where it was. It reads:\n$modifier",
         )
-        val end = SourceScan.body(touchListener(source), "MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL ->")
+        val end = touchEnd()
         assertTrue(
-            end.contains("if (event.action == MotionEvent.ACTION_CANCEL && before != null && before != isToggleActive) {") &&
-                SourceScan.body(end, "before != isToggleActive) {").contains("emitPress()"),
+            end.contains(restore) && SourceScan.body(end.substringAfter(restore), ") {").contains("emitPress()"),
             "a drag the pager takes after a hold leaves the modifier as the hold switched it. " +
                 "It reads:\n$end",
+        )
+    }
+
+    /**
+     * A swipe by another finger leaves a modifier held under the first as the
+     * hold switched it.
+     *
+     * The pager drags with the finger that went down last and cancels every key
+     * under a finger when it takes the drag, so the cancel that reaches a held
+     * Ctrl can be another finger's swipe. Holding Ctrl with one thumb and
+     * swiping to F5 with the other is how Ctrl+F5 is reached, and the cancel
+     * switched Ctrl back there too, so that ran F5. The cancel cannot say whose
+     * drag it was, so the row counts the fingers on it before the pager sees an
+     * event, and every key asks it.
+     *
+     * NEGATIVE CONTROL, measured: the button, adapter and row at 69e3e0f2 fail
+     * the first assertion. Dropping the question from the cancel, the adapter
+     * not handing it on, the row answering one finger or more, counting after
+     * the pager has seen the event, counting a finger in its own lift, or
+     * counting the pointers of a cancel, each fails an assertion.
+     */
+    @Test
+    fun `a cancel with another finger on the row leaves a held modifier latched`() {
+        val end = touchEnd()
+        assertTrue(
+            end.contains("$restore && !anotherFingerOnRow() ) {"),
+            "a cancel puts a held modifier back whichever finger the pager took the drag from. " +
+                "It reads:\n$end",
+        )
+        val adapter = SourceScan.body(
+            SourceScan.withoutComments(SourceScan.read("src/main/kotlin/com/vscodroid/keyboard/KeyPageAdapter.kt")),
+            "override fun onBindViewHolder(",
+        )
+        assertTrue(
+            adapter.contains("anotherFingerOnRow = this@KeyPageAdapter.anotherFingerOnRow"),
+            "the adapter does not hand its keys the row's answer, so each asks a default that " +
+                "sees no other finger. It reads:\n$adapter",
+        )
+        val row = SourceScan.withoutComments(SourceScan.read("src/main/kotlin/com/vscodroid/keyboard/ExtraKeyRow.kt"))
+        val setup = SourceScan.body(row, "private fun setupAdapter(")
+        assertTrue(
+            setup.contains("anotherFingerOnRow = { fingersDown > 1 },"),
+            "the row does not answer whether another finger is on it. It reads:\n$setup",
+        )
+        val dispatch = SourceScan.body(row, "override fun dispatchTouchEvent(ev: MotionEvent): Boolean")
+        val count = SourceScan.body(dispatch, "when (ev.actionMasked) {")
+        assertTrue(
+            dispatch.indexOf("super.dispatchTouchEvent(ev)") > dispatch.indexOf(count),
+            "the row does not count its fingers before the pager sees the event, so a key the " +
+                "pager cancels from inside the dispatch reads the count of the event before. " +
+                "It reads:\n$dispatch",
+        )
+        assertTrue(
+            count.contains("MotionEvent.ACTION_CANCEL -> Unit") &&
+                count.contains("MotionEvent.ACTION_POINTER_UP -> fingersDown = ev.pointerCount - 1") &&
+                count.contains("else -> fingersDown = ev.pointerCount"),
+            "the row counts a finger in its own lift, or counts the pointers of a cancel, which " +
+                "up to API 35 arrives unsplit and can carry a finger on another view. " +
+                "It reads:\n$count",
         )
     }
 
