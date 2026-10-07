@@ -4,6 +4,8 @@ import android.annotation.SuppressLint
 import android.view.MotionEvent
 import android.webkit.WebSettings
 import android.webkit.WebView
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
 import com.vscodroid.R
 import com.vscodroid.util.Logger
 
@@ -102,7 +104,8 @@ object VSCodroidWebView {
         // here and the loading page are this colour. It is not what a light theme
         // shows between loads: the workbench page colours itself before its first
         // paint from the theme it expects to show (INITIAL_THEME_MARKER in
-        // assets/server.js).
+        // assets/server.js). Nor what a plain-text page shows: see
+        // addPlainTextPageScript.
         webView.setBackgroundColor(webView.context.getColor(R.color.colorBackground))
 
         if (Logger.debugEnabled) {
@@ -113,3 +116,44 @@ object VSCodroidWebView {
         Logger.i(TAG, "WebView configured")
     }
 }
+
+/**
+ * Gives a plain-text page the background of its own colour scheme.
+ *
+ * The server answers a request it refuses with a bare `text/plain` body, among them
+ * "Forbidden." for a missing or stale connection token, and Chromium paints such a
+ * page no background, so behind its text is the view's own, which
+ * [VSCodroidWebView.configure] makes the dark window colour. The text follows the
+ * device's mode: white in dark mode, where Chromium also paints its dark canvas
+ * under it, and black in light mode, on #1E1E1E, where it could not be read.
+ * `Canvas` is the background of the page's own scheme, white or that dark canvas,
+ * which is what such a page showed before the view had a background. Measured in
+ * Chromium 151 over the same background, not on a device.
+ *
+ * At document start and as an adopted style sheet, so the page's first paint has it
+ * and nothing waits for an element. For every origin, for the reason
+ * [com.vscodroid.addUiScaleScript] gives; the script does nothing but in a top-level
+ * plain-text document. A frame is left alone: what shows behind one is the page
+ * around it.
+ */
+internal fun addPlainTextPageScript(webView: WebView) {
+    if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+        try {
+            WebViewCompat.addDocumentStartJavaScript(webView, plainTextPageScript(), setOf("*"))
+        } catch (e: RuntimeException) {
+            // What is at stake is an error page that is hard to read, never the editor.
+            Logger.w("WebView", "Could not add the plain-text page script: ${e.message}")
+        }
+    }
+}
+
+/** The document-start script [addPlainTextPageScript] adds. */
+internal fun plainTextPageScript(): String =
+    """
+    (function() {
+        if (window.top !== window || document.contentType !== 'text/plain') return;
+        var sheet = new CSSStyleSheet();
+        sheet.replaceSync(':root { background: Canvas; }');
+        document.adoptedStyleSheets = [sheet];
+    })();
+    """.trimIndent()

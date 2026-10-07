@@ -3,6 +3,7 @@ package com.vscodroid.webview
 import android.content.Context
 import android.webkit.WebView
 import com.vscodroid.R
+import com.vscodroid.SourceScan
 import com.vscodroid.util.Logger
 import io.mockk.every
 import io.mockk.mockk
@@ -11,6 +12,7 @@ import io.mockk.mockkStatic
 import io.mockk.unmockkAll
 import io.mockk.verify
 import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 
@@ -23,8 +25,15 @@ import org.junit.jupiter.api.Test
  * WebView of the editor goes through, the one rebuilt after a renderer crash
  * included.
  *
+ * A plain-text page paints no background of its own, so the same colour sits
+ * behind its text, and [addPlainTextPageScript] gives such a page the background of
+ * its own scheme instead. `scripts/test-plain-text-page.js` runs that script; the
+ * second case here pins that every WebView is given it, which the script's own test
+ * cannot see. Source reading, as in `UiScaleScriptWiringTest` and for its reason.
+ *
  * NEGATIVE CONTROL: without the `setBackgroundColor` call in `configure` the
- * case below fails.
+ * first case fails, and without the `addPlainTextPageScript` call in
+ * `setupWebView`, or with it after the first load, the second.
  */
 class WebViewBackgroundTest {
 
@@ -53,6 +62,35 @@ class WebViewBackgroundTest {
         VSCodroidWebView.configure(webView)
 
         verify { webView.setBackgroundColor(WINDOW) }
+    }
+
+    @Test
+    fun `every WebView gets the plain-text page script before its first load`() {
+        val setup = SourceScan.withoutComments(
+            SourceScan.body(
+                SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt"),
+                "private fun setupWebView()",
+            )
+        )
+        val added = setup.indexOf("addPlainTextPageScript(wv)")
+        val loaded = setup.indexOf("wv.loadData(")
+        assertTrue(loaded >= 0) { "setupWebView no longer loads its placeholder, so this case measures nothing" }
+        assertTrue(added in 0 until loaded) {
+            "setupWebView does not add the plain-text page script before the WebView loads its " +
+                "first page, so the server's plain-text answers keep black text on the dark " +
+                "background in light mode"
+        }
+
+        // Every origin, for the reason addUiScaleScript gives: the port is not known yet.
+        val add = SourceScan.withoutComments(
+            SourceScan.body(
+                SourceScan.read("src/main/kotlin/com/vscodroid/webview/VSCodroidWebView.kt"),
+                "internal fun addPlainTextPageScript(",
+            )
+        )
+        assertTrue(
+            "WebViewCompat.addDocumentStartJavaScript(webView, plainTextPageScript(), setOf(\"*\"))" in add
+        ) { "addPlainTextPageScript no longer adds plainTextPageScript() for every origin" }
     }
 
     private companion object {

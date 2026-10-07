@@ -585,7 +585,11 @@ Outside the settings block, `configure` gives the view the window background,
 painted yet, which showed before the loading placeholder on the first launch after an update.
 The workbench page paints its own background before its first paint, from the theme it expects
 to show (§3.1), so this colour shows only where no page has painted yet and behind a page that
-paints no background of its own.
+paints no background of its own. The server's refusals are such pages, bare `text/plain` bodies
+such as "Forbidden.", and their text follows the device's mode, which left it black on this
+colour in light mode. So `addPlainTextPageScript`, a document-start script, gives a top-level
+plain-text page the `Canvas` background of its own colour scheme: white in light mode, Chromium's
+dark canvas in dark mode.
 
 ### 4.2 Crash Recovery
 

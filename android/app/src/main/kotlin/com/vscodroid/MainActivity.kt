@@ -79,6 +79,7 @@ import com.vscodroid.webview.DownloadOutcome
 import com.vscodroid.webview.VSCodroidWebChromeClient
 import com.vscodroid.webview.VSCodroidWebView
 import com.vscodroid.webview.VSCodroidWebViewClient
+import com.vscodroid.webview.addPlainTextPageScript
 import com.vscodroid.webview.urlLogLabel
 import com.vscodroid.webview.COPY_DIAGNOSTICS_URL
 import com.vscodroid.webview.RETRY_URL
@@ -2025,6 +2026,7 @@ class MainActivity : AppCompatActivity() {
             // documents that begin loading after it was added. The view
             // recreateWebView builds comes through here as well.
             addUiScaleScript(wv)
+            addPlainTextPageScript(wv)
             dropCacheLeftByEarlierBuild(wv)
             applyWindowInsetsPadding(wv)
             // Here and not in initBridge, which does its work once per WebView
