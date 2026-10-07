@@ -2889,11 +2889,11 @@ class SafSyncEngine(private val context: Context) {
      *
      * Every file-level refusal site comes through here, and the message living in one
      * place is what keeps them saying the same thing: [handleMirrorEvent] asks before it
-     * queues a job, [processWriteBack] asks again before a queued save is written, and
-     * [createOneInSaf] asks the same question while walking into a directory, which no JVM
-     * test can reach, because delivering a directory event builds a `FileObserver` and its
-     * static initializer needs native code. One helper is the only thing holding that site
-     * to the others.
+     * queues a job, [processWriteBack] asks again before it writes a save, a held-back
+     * save's try included, and [createOneInSaf] asks the same question while walking into
+     * a directory, which no JVM test can reach, because delivering a directory event builds
+     * a `FileObserver` and its static initializer needs native code. One helper is the only
+     * thing holding that site to the others.
      *
      * The notice is [onWriteBackFailed]'s and it fits: the file did not reach the device
      * folder, and the copy inside the app is the only one of it that exists. What the
@@ -3776,7 +3776,7 @@ class SafSyncEngine(private val context: Context) {
                     // document nothing had read. A [retryHeldBack] job never passes that
                     // guard at all. Asked of the document the job writes into, the one
                     // "wt" would replace. The hold ends with the refusal, or the loop would
-                    // queue it again on every idle turn.
+                    // try it again on every idle turn.
                     if (job.localPath in unfetched &&
                         writeWouldReplaceUnreadDocument(
                             job.localPath, deviceStamp(job.safDocUri) != null, unfetched,
@@ -4959,7 +4959,7 @@ class SafSyncEngine(private val context: Context) {
          *
          * Extracted because three paths ask it and one of them cannot be reached from a JVM
          * test. [handleMirrorEvent] asks before queueing a job, and [processWriteBack] again
-         * just before a queued save is written; [createOneInSaf] asks while walking into a
+         * just before it writes a save; [createOneInSaf] asks while walking into a
          * directory, which no event-driven test can drive here at all, since delivering a
          * directory event constructs a `FileObserver` and that runs a static initializer
          * reaching native code (see [SafWatchCoverageTest]). Naming the rule once is what
