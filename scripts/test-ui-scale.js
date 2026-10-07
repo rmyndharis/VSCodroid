@@ -375,10 +375,12 @@ const vscodeStub = {
             vscodeCalls.picks.push({ items, options });
             return pick(items);
         },
+        createStatusBarItem: () => ({ show() {}, hide() {}, dispose() {} }),
     },
     workspace: {
         workspaceFolders: [],
         onDidChangeWorkspaceFolders: () => ({ dispose() {} }),
+        onDidCloseTextDocument: () => ({ dispose() {} }),
     },
     env: { clipboard: { writeText: async () => {} } },
     Uri: { joinPath: (uri) => uri },

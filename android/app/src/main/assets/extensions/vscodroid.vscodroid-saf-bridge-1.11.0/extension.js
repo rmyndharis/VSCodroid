@@ -604,9 +604,38 @@ function activate(context) {
     // quotes the server's output, which can name the user's files and folders,
     // and asks to be read before it is shared. Copy then takes what the editor
     // holds, so a line the user deleted stays out of what they paste.
+    //
+    // The notice hides itself after ten seconds, long before a report of a few
+    // hundred lines has been read, so Copy also waits in the status bar for as
+    // long as the newest report is open. The item needs an id: the workbench
+    // keeps every extension host's items in one table, and an item without one
+    // is numbered per host, so it took the process monitor's slot and lost it
+    // again at that item's next update.
+    const copyReportItem = vscode.window.createStatusBarItem('copyBugReport');
+    copyReportItem.text = '$(copy) Copy Bug Report';
+    /** @type {vscode.TextDocument | undefined} */
+    let openReport;
+    /** @param {vscode.TextDocument} doc */
+    const copyReport = async (doc) => {
+        await vscode.env.clipboard.writeText(doc.getText());
+        vscode.window.showInformationMessage('Bug report copied.');
+    };
+    const reportClosedListener = vscode.workspace.onDidCloseTextDocument((closed) => {
+        // A language change is reported as a close too, of a document that
+        // stays open.
+        if (closed !== openReport || vscode.workspace.textDocuments.includes(closed)) return;
+        openReport = undefined;
+        copyReportItem.hide();
+    });
     const bugReportCmd = vscode.commands.registerCommand(
         'vscodroid.copyBugReport',
-        async () => {
+        // The status bar entry runs it with the report to copy; the palette
+        // runs it with nothing, for a new report.
+        async (/** @type {vscode.TextDocument | undefined} */ report) => {
+            if (report) {
+                await copyReport(report);
+                return;
+            }
             /** @type {vscode.TextDocument} */
             let doc;
             try {
@@ -622,14 +651,16 @@ function activate(context) {
                 vscode.window.showErrorMessage(`Could not create the bug report: ${err.message}`);
                 return;
             }
+            openReport = doc;
+            copyReportItem.command = { title: 'Copy Bug Report', command: 'vscodroid.copyBugReport', arguments: [doc] };
+            copyReportItem.show();
             const action = await vscode.window.showInformationMessage(
                 'Read the bug report before you share it: the server log can name your files ' +
-                    'and folders. Delete what you want kept private, then copy it.',
+                    'and folders. Delete what you want kept private, then tap Copy, here or in ' +
+                    'the status bar.',
                 COPY
             );
-            if (action !== COPY) return;
-            await vscode.env.clipboard.writeText(doc.getText());
-            vscode.window.showInformationMessage('Bug report copied.');
+            if (action === COPY) await copyReport(doc);
         }
     );
 
@@ -798,6 +829,8 @@ function activate(context) {
         toggleKeyRowCmd,
         uiScaleCmd,
         aboutCmd,
+        copyReportItem,
+        reportClosedListener,
         bugReportCmd
     );
 }

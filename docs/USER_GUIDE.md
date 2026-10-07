@@ -1347,7 +1347,7 @@ Recovery is bounded, because reloading a page that is itself the cause only repe
 
 If the editor freezes, reloads by itself or the app closes, run **VSCodroid: Copy Bug Report** from the Command Palette once the editor is back. The report opens in a new editor tab: the device and app version, how Android recorded the app's recent exits (one it declared not responding shows as `ANR`, one closed to free memory as `LOW_MEMORY`), each time the process that draws the editor died, the newest crash logs and the last 200 lines of the server log. Nothing is sent anywhere.
 
-Read it before you share it. The server log can name your files and folders, and you can delete any line you want kept private. Then tap **Copy** in the notification that comes with it, or select all in the editor and copy, and paste the report into an issue at [github.com/rmyndharis/VSCodroid/issues](https://github.com/rmyndharis/VSCodroid/issues).
+Read it before you share it. The server log can name your files and folders, and you can delete any line you want kept private. Then tap **Copy** in the notification that comes with it, or **Copy Bug Report** in the status bar, which stays there while the report is open, and paste the report into an issue at [github.com/rmyndharis/VSCodroid/issues](https://github.com/rmyndharis/VSCodroid/issues).
 
 ---
 

@@ -152,7 +152,7 @@ fresh.
 | ST-2 | Many terminals | Open 10 terminal tabs | Bash spawns for each, process count reported | | |
 | ST-3 | OOM recovery | Force WebView OOM (open huge file + extensions) | onRenderProcessGone fires, WebView recreated | | |
 | ST-4 | Storage nearly full | Fill device storage to under 100 MB free, as Settings reports it | Warning toast shown, app still functional | | |
-| ST-5 | Bug report after a renderer death | After ST-3, or on a debug build after crashing the renderer from DevTools (`Page.crash`), run **VSCodroid: Copy Bug Report** once the editor is back; delete one line, then tap **Copy** in the notification and paste somewhere | An untitled editor opens with the report. Renderer Deaths has a line for the death, saying crashed or killed by the system, and Recent Exits lists the app's recent process exits or says none are recorded. The paste is the editor's text without the deleted line | | |
+| ST-5 | Bug report after a renderer death | After ST-3, or on a debug build after crashing the renderer from DevTools (`Page.crash`), run **VSCodroid: Copy Bug Report** once the editor is back; delete one line, wait for the notification to go, then tap **Copy Bug Report** in the status bar and paste somewhere; close the report | An untitled editor opens with the report. Renderer Deaths has a line for the death, saying crashed or killed by the system, and Recent Exits lists the app's recent process exits or says none are recorded. The paste is the editor's text without the deleted line. The status bar entry goes with the report | | |
 
 ## 9. Performance Benchmarks
 

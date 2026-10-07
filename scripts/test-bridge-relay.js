@@ -250,6 +250,10 @@ let infoChoice = null;
 const openedDocs = [];
 const shownDocs = [];
 const clipboard = [];
+// The status bar items the extension makes, each marked while it shows, and who
+// listens for a document closing.
+const statusItems = [];
+const closeListeners = [];
 // Every command run, with its arguments, for the ones whose arguments matter.
 const ranWith = [];
 // What the editor shows besides folders: the workspace file, the documents, the
@@ -289,7 +293,11 @@ const vscodeStub = {
             return rest.includes(warningChoice) ? warningChoice : undefined;
         },
         showQuickPick: async (items) => (quickPickChoice ? quickPickChoice(items) : undefined),
-        createStatusBarItem: () => ({ show() {}, hide() {}, dispose() {} }),
+        createStatusBarItem: (...args) => {
+            const item = { args, shown: false, show() { this.shown = true; }, hide() { this.shown = false; }, dispose() {} };
+            statusItems.push(item);
+            return item;
+        },
         get tabGroups() { return tabGroups; },
         get terminals() { return terminals; },
     },
@@ -304,6 +312,7 @@ const vscodeStub = {
             return doc;
         },
         onDidChangeWorkspaceFolders: (fn) => { folderListeners.push(fn); return { dispose() {} }; },
+        onDidCloseTextDocument: (fn) => { closeListeners.push(fn); return { dispose() {} }; },
         fs: {
             readFile: async (uri) => {
                 fileReads.push(uri.path);
@@ -1187,6 +1196,43 @@ async function main() {
         [clipboard, dismissed.error], [[], []],
         'a report whose notice was dismissed still reached the clipboard: ' + JSON.stringify(clipboard),
     );
+
+    // The notice hides itself after ten seconds, long before a report of a few
+    // hundred lines has been read. Copy has to stay in the status bar while the
+    // report is open, take what the editor holds by then, and go only when that
+    // report is closed.
+    // Every page load activates the extension again; the command run above is
+    // the newest activation's, and so is its item.
+    const copyItem = statusItems.filter((item) => item.shown).pop();
+    const itemRuns = copyItem && copyItem.command;
+    assert.ok(
+        itemRuns && itemRuns.command === 'vscodroid.copyBugReport' && itemRuns.arguments[0] === openedDocs[0],
+        'Copy is not in the status bar for the open report: ' + JSON.stringify(itemRuns),
+    );
+    // The workbench keeps the items of every extension host in one table, and
+    // one made without an id is numbered per host: on a device this item took
+    // the process monitor's slot and was gone at that item's next update.
+    assert.ok(
+        typeof copyItem.args[0] === 'string' && copyItem.args[0] !== '',
+        'the status bar Copy is made without an id, so it shares a slot with another ' +
+        'extension host\'s item: ' + JSON.stringify(copyItem.args),
+    );
+    openedDocs[0].text = 'what the user kept\n';
+    closeListeners.forEach((fn) => fn({ getText: () => 'another document' }));
+    // The extension host reports a language change as a close of a document
+    // that it keeps open.
+    textDocuments = [openedDocs[0]];
+    closeListeners.forEach((fn) => fn(openedDocs[0]));
+    textDocuments = [];
+    await commands.get(itemRuns.command)(...itemRuns.arguments);
+    assert.deepStrictEqual(
+        [copyItem.shown, openedDocs.length, clipboard], [true, 1, ['what the user kept\n']],
+        'Copy in the status bar did not take what the open report holds, made another ' +
+        'report, or went when another document closed or the report changed language: ' +
+        JSON.stringify(clipboard),
+    );
+    closeListeners.forEach((fn) => fn(openedDocs[0]));
+    assert.ok(!copyItem.shown, 'Copy stayed in the status bar after its report was closed');
 
     // The bridge answers a refused session token with the empty string, which
     // is no report at all: an empty editor would read as a device with nothing
