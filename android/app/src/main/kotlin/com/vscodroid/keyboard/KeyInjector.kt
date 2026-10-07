@@ -192,6 +192,15 @@ class KeyInjector(
      * it dispatches modified KeyboardEvents so VS Code shortcuts work, then a keyup
      * for each modifier the chord carried ([modifierReleases] says why).
      *
+     * It also stops, at the window, every keyup of a modifier that had no keydown.
+     * That is what the row's releases look like, from a chord here or from a real
+     * press, and what a keyboard's never do. The workbench reads which modifiers
+     * are held from capture listeners on the window, so those still hear it. A
+     * quick pick opened with quick navigate, as Ctrl+Tab's is, does not: it
+     * accepts on a modifier's keyup in its own container, and the second Ctrl+Tab
+     * from the row, typed with focus on the picker, opened the highlighted editor
+     * on its release instead of moving down to the next one.
+     *
      * The listener resolves each character through [KeyMapping]'s table, serialized in
      * here as a lookup object, so it answers from the same definitions [injectKey] uses
      * for the key row. Deriving the fields from the character instead only works for
@@ -280,6 +289,24 @@ class KeyInjector(
                 var KEYS = $keyLookup;
 
                 $RELEASE_MODIFIERS_JS
+
+                // A modifier's keyup with no keydown of it is the row releasing
+                // a latch, from releaseModifiers or, for a real press, from
+                // Chromium at whatever has focus. It ends at this window's
+                // capture listeners, where the workbench reads what is held, so
+                // a quick pick below cannot accept on it. See the KDoc. A
+                // keyboard presses a modifier before releasing it, so its own
+                // release goes on.
+                var MODIFIERS = { Alt: 1, Control: 1, Shift: 1, Meta: 1 };
+                var pressed = {};
+                window.addEventListener('keydown', function(e) {
+                    if (MODIFIERS.hasOwnProperty(e.key)) pressed[e.key] = true;
+                }, true);
+                window.addEventListener('keyup', function(e) {
+                    if (!MODIFIERS.hasOwnProperty(e.key)) return;
+                    if (pressed[e.key]) delete pressed[e.key];
+                    else e.stopPropagation();
+                }, true);
 
                 // The edits a soft keyboard reports instead of a key, and the
                 // key each one stands for. Built once rather than per event.
@@ -616,9 +643,12 @@ class KeyInjector(
  * window hears the release exactly when it heard the chord's keyup. A chord
  * that takes its target out of the document goes unheard from there on, and a
  * release heard after an Alt chord whose keyup was not reads as an Alt pressed
- * and released alone, which focuses the menu bar. It also keeps a picker the
- * chord opens, such as Ctrl+Tab's, from taking the release as its cue to
- * accept (read from the bundle, not measured).
+ * and released alone, which focuses the menu bar.
+ *
+ * The target alone does not keep the release out of a quick pick: the second
+ * Ctrl+Tab is typed with focus on the picker the first one opened. The
+ * modifier interceptor, which every workbench page gets, stops a release at
+ * the window ([setupModifierInterceptor] says why).
  *
  * Called from the chord's script, so it reaches the page after the chord, and
  * defined in each of the two rather than shared on `window`: an announced

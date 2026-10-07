@@ -142,9 +142,11 @@ internal fun navigationKeyEvents(keyCode: Int, scanCode: Int, metaState: Int): L
 }
 
 /**
- * The modifier keys that come up after a chord held with [metaState], in the
- * order a hardware keyboard would release them: each one's left-hand key code
- * and evdev scan code, and the meta state still held once it is up.
+ * The modifier keys that come up after a chord held with [metaState]: each
+ * one's left-hand key code and evdev scan code, and the meta state still held
+ * once it is up. Alt first, then Ctrl, Shift and Meta, as the scripts'
+ * `releaseModifiers` does: a keyboard has no fixed order, and the workbench
+ * ends with nothing held from any.
  *
  * The row's modifiers are latches rather than keys, so without these the page
  * sees a modifier go down with the chord and never come up. The workbench tells
@@ -157,6 +159,10 @@ internal fun navigationKeyEvents(keyCode: Int, scanCode: Int, metaState: Int): L
  * unlatching it would then reach the page as an Alt pressed and released with
  * nothing between, which the workbench takes as a request to focus the menu
  * bar; a release after a chord has the chord between.
+ *
+ * Chromium sends the release to whatever has focus, which can be a quick pick
+ * that accepts on a modifier's keyup. The modifier interceptor stops such a
+ * keyup at the window ([KeyInjector.setupModifierInterceptor]).
  */
 internal fun modifierReleases(metaState: Int): List<Triple<Int, Int, Int>> {
     var held = metaState

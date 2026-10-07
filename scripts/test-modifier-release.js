@@ -24,12 +24,24 @@
  * concludes: that no modifier is held once a chord is over, and that nothing
  * reads as the lone Alt press and release that focuses the menu bar.
  *
+ * It also runs the recently used editors picker Ctrl+Tab opens, with the
+ * quick input's `registerQuickNavigation` transcribed from the same file,
+ * which accepts on a modifier's keyup in the picker's own container. Two row
+ * Ctrl+Tabs, and a real Ctrl+Left from the trackpad, must leave it open, and
+ * a hardware keyboard's own Ctrl release must still accept it. The real press
+ * is modelled as the events Chromium hands the page for `navigationKeyEvents`.
+ *
  * NEGATIVE CONTROL, measured: against KeyInjector.kt at 54352514, which sent
- * no release, 16 of the 26 cases fail. Each of these changes to the release
- * fails at least one case: not calling it from either script, or from either
- * of the interceptor's two chords; releasing with the flag still set; sending
- * the keyup at what has focus rather than at the chord's own target; and
- * releasing in another order.
+ * no release, 19 of the 41 cases fail, and against 602b0afe, which released
+ * at the chord's target with nothing stopping it at the window, the 3 picker
+ * cases fail: the second Ctrl+Tab accepted the editor it had just highlighted.
+ * Each of these changes fails at least one case: not calling the release from
+ * either script, or from either of the interceptor's two chords; releasing
+ * with the flag still set; sending the keyup at what has focus rather than at
+ * the chord's own target; releasing in another order; and in the interceptor,
+ * no stop at the window, a stop in the bubble phase, stopImmediatePropagation
+ * or preventDefault in its place, or a stop that ignores the keydowns a
+ * keyboard sends first.
  *
  * Extraction is strict: if a raw string moves or changes shape this fails
  * saying so, rather than quietly running an empty script.
@@ -120,10 +132,13 @@ function modifierKeyEmitter() {
     };
 }
 
-/** Anything listeners can be added to. A node that is not `connected` is out of the document. */
+/**
+ * Anything listeners can be added to, inside `parent` if it has one. A node
+ * that is not `connected` is out of the document.
+ */
 class Node {
-    constructor(name) {
-        Object.assign(this, { name, tagName: 'DIV', connected: true, listeners: [] });
+    constructor(name, parent = null) {
+        Object.assign(this, { name, parent, tagName: 'DIV', connected: true, listeners: [] });
     }
     addEventListener(type, fn, capture) {
         this.listeners.push({ type, fn, capture: capture === true || !!(capture && capture.capture) });
@@ -134,43 +149,56 @@ class Node {
 }
 
 /**
- * A page holding the workbench's emitter on its window and `focused` as the
- * active element. Every event a script dispatches is logged with the node it
- * was sent at; one sent at a node out of the document reaches that node alone.
+ * A page holding the workbench's emitter on its window, unless `emitter` is
+ * false and the case attaches it later, and `focused` as the active element.
+ * Every event dispatched is logged with the node it was sent at. It travels as
+ * a browser sends it: capture from the window down through the node's parents
+ * to the node, then back up, with `stopPropagation` ending the trip once the
+ * node it was called at is done. One sent at a node out of the document reaches
+ * that node alone. `isTrusted` is false on an event a script builds and true
+ * on one the browser sends for a real key (`real` below).
  */
-function newPage() {
+function newPage({ emitter = true } = {}) {
     const window = new Node('window');
     const document = new Node('document');
     document.body = new Node('body');
     document.body.tagName = 'BODY';
     const page = { window, document, log: [], emitter: modifierKeyEmitter() };
-    window.addEventListener('keydown', (e) => page.emitter.keydown(e), true);
-    window.addEventListener('keyup', (e) => page.emitter.keyup(e), true);
+    page.attachEmitter = () => {
+        window.addEventListener('keydown', (e) => page.emitter.keydown(e), true);
+        window.addEventListener('keyup', (e) => page.emitter.keyup(e), true);
+    };
+    if (emitter) page.attachEmitter();
     page.focused = document.activeElement = new Node('editor');
     page.window.__vscodroid = {};
     class KeyboardEvent {
         constructor(type, init) {
-            Object.assign(this, { repeat: false, defaultPrevented: false }, init, { type });
+            Object.assign(this, { repeat: false, defaultPrevented: false, isTrusted: false }, init, { type });
         }
         preventDefault() { if (this.cancelable) this.defaultPrevented = true; }
-        stopPropagation() {}
-        stopImmediatePropagation() {}
+        stopPropagation() { this.stopped = true; }
+        stopImmediatePropagation() { this.stopped = this.stoppedNow = true; }
         composedPath() { return [this.target]; }
     }
+    page.KeyboardEvent = KeyboardEvent;
     const dispatchEvent = function(event) {
         event.target = this;
         page.log.push({ at: this.name, ...event });
-        const run = (node, capture) => node.listeners
-            .filter((l) => l.type === event.type && l.capture === capture)
-            .forEach((l) => l.fn.call(node, event));
-        if (this.connected) run(window, true);
-        run(this, true);
-        run(this, false);
-        if (this.connected) run(window, false);
+        const route = [];
+        for (let n = this; n; n = n.parent) route.unshift(n);
+        if (this.connected) route.unshift(window);
+        const run = (node, capture) => {
+            for (const l of node.listeners.filter((x) => x.type === event.type && x.capture === capture)) {
+                if (event.stoppedNow) return;
+                l.fn.call(node, event);
+            }
+        };
+        for (const node of route) if (!event.stopped) run(node, true);
+        for (const node of route.reverse()) if (!event.stopped) run(node, false);
         return !event.defaultPrevented;
     };
     for (const node of [document.body, page.focused]) node.dispatchEvent = dispatchEvent;
-    page.newNode = (name) => Object.assign(new Node(name), { dispatchEvent });
+    page.newNode = (name, parent) => Object.assign(new Node(name, parent), { dispatchEvent });
     page.context = vm.createContext({
         window,
         document,
@@ -202,6 +230,88 @@ function intercept(page) {
     return (inputType, data) => listener.fn({
         inputType, data, preventDefault() {}, stopImmediatePropagation() {},
     });
+}
+
+/** The DOM keyCode of each modifier, and the workbench's own KeyCode for it. */
+const KEY_CODE = { 16: 4, 17: 5, 18: 6, 91: 57 };
+
+/**
+ * The recently used editors picker the workbench opens on Ctrl+Tab, and how it
+ * accepts, from the shipped workbench.js. The keybinding service, a bubble
+ * listener on the window, runs `quickOpenPreviousRecentlyUsedEditorInGroup`
+ * (primary 2050, Ctrl+Tab), which shows the picker with the second editor
+ * highlighted and `quickNavigateConfiguration: { keybindings }` holding
+ * Ctrl+Tab; its input is hidden, so `update` gives the list DOM focus. While it
+ * is open, Ctrl+Tab runs `quickOpenNavigateNextInEditorPicker`, which moves the
+ * highlight down and sets quick navigate again. `registerQuickNavigation` is a
+ * keyup listener on the widget's container, which accepts the highlighted
+ * editor on the keyup of a modifier a quick navigate keybinding holds; minified:
+ *
+ *   G(this.ui.container,ne.KEY_UP,e=>{if(this.canSelectMany||!this._quickNavigate)return;
+ *   let t=new Yt(e),i=t.keyCode;this._quickNavigate.keybindings.some(a=>{let c=a.getChords();
+ *   return c.length>1?!1:c[0].shiftKey&&i===4?!(t.ctrlKey||t.altKey||t.metaKey):
+ *   !!(c[0].altKey&&i===6||c[0].ctrlKey&&i===5||c[0].metaKey&&i===57)})&&(this.activeItems[0]&&
+ *   (...,this.handleAccept(!1)),this._quickNavigate=void 0)})
+ *
+ * `Yt` is StandardKeyboardEvent, whose keyCode maps the DOM's 16, 17, 18 and
+ * 91 to 4, 5, 6 and 57 and whose modifier flags are also set by the key itself.
+ */
+function recentEditorsPicker(page) {
+    const container = page.newNode('quick-input-widget', page.document.body);
+    const list = page.newNode('quick-input-list', container);
+    const picker = { open: false, active: -1, accepted: [], quickNavigate: null };
+    page.window.addEventListener('keydown', (e) => {
+        if (e.key !== 'Tab' || !e.ctrlKey || e.altKey || e.shiftKey || e.metaKey) return;
+        if (picker.open) {
+            picker.active += 1;
+        } else {
+            Object.assign(picker, { open: true, active: 1 });
+            page.document.activeElement = list;
+        }
+        picker.quickNavigate = { keybindings: [{ ctrlKey: true, shiftKey: false, altKey: false, metaKey: false }] };
+    });
+    container.addEventListener('keyup', (e) => {
+        if (!picker.quickNavigate) return;
+        const keyCode = KEY_CODE[e.keyCode] || 0;
+        const t = { ctrlKey: e.ctrlKey || keyCode === 5, altKey: e.altKey || keyCode === 6, metaKey: e.metaKey || keyCode === 57 };
+        const trigger = picker.quickNavigate.keybindings.some((c) => (c.shiftKey && keyCode === 4
+            ? !(t.ctrlKey || t.altKey || t.metaKey)
+            : !!((c.altKey && keyCode === 6) || (c.ctrlKey && keyCode === 5) || (c.metaKey && keyCode === 57))));
+        if (!trigger) return;
+        picker.accepted.push(picker.active);
+        Object.assign(picker, { open: false, quickNavigate: null });
+    });
+    return picker;
+}
+
+/**
+ * What Chromium hands the page for a real press: `key` at the focused element,
+ * down then up, with the latched modifiers, as an event the browser sent.
+ * Then, as `navigationKeyEvents` builds the press, the release of each latched
+ * modifier, Alt, Ctrl and Shift in that order, each with the rest still held.
+ * The release has no keydown before it: nothing presses a latch.
+ */
+function realPress(page, key, code, keyCode, mods = {}) {
+    const held = { ctrlKey: !!mods.ctrl, altKey: !!mods.alt, shiftKey: !!mods.shift, metaKey: false };
+    const send = (type, init) => page.document.activeElement.dispatchEvent(new page.KeyboardEvent(type, {
+        ...held, ...init, bubbles: true, cancelable: true, composed: true, isTrusted: true,
+    }));
+    send('keydown', { key, code, keyCode, which: keyCode });
+    send('keyup', { key, code, keyCode, which: keyCode });
+    for (const [flag, k, c, kc] of [['altKey', 'Alt', 'AltLeft', 18], ['ctrlKey', 'Control', 'ControlLeft', 17],
+        ['shiftKey', 'Shift', 'ShiftLeft', 16]]) {
+        if (!held[flag]) continue;
+        held[flag] = false;
+        send('keyup', { key: k, code: c, keyCode: kc, which: kc });
+    }
+}
+
+/** A hardware keyboard's key, `type` only: a modifier there goes down and comes up as a key of its own. */
+function hardwareKey(page, type, key, code, keyCode, mods = {}) {
+    page.document.activeElement.dispatchEvent(new page.KeyboardEvent(type, {
+        key, code, keyCode, which: keyCode, ctrlKey: !!mods.ctrl, altKey: false, shiftKey: false, metaKey: false,
+        bubbles: true, cancelable: true, composed: true, isTrusted: true,
+    }));
 }
 
 const MODIFIER_KEYS = ['Alt', 'Control', 'Shift', 'Meta'];
@@ -326,6 +436,63 @@ const settled = (name, page) => {
     page.window.__vscodroid.ctrl = true;
     input('insertFromPaste', 'abc');
     cases.push(['a lone Shift and a paste dispatch nothing', sequence(page).join(', '), '']);
+}
+
+// Ctrl+Tab twice from the row: the picker opens, the highlight moves down, and
+// nothing accepts until a tap or Enter. The second chord is typed with focus on
+// the picker's list, inside the container that accepts on a Ctrl keyup, so its
+// release must not reach that container.
+{
+    const page = newPage();
+    intercept(page);
+    const picker = recentEditorsPicker(page);
+    announce(page, 'Tab', 'Tab', 9, { ctrl: true });
+    announce(page, 'Tab', 'Tab', 9, { ctrl: true });
+    cases.push(['two row Ctrl+Tabs leave the recently used editors picker open',
+        JSON.stringify({ accepted: picker.accepted, open: picker.open }), JSON.stringify({ accepted: [], open: true })]);
+    cases.push(['and the second moves its highlight down one', picker.active, 2]);
+    settled('two row Ctrl+Tabs', page);
+}
+
+// A Ctrl latched for a trackpad drag inside the picker: the press is real, so
+// Chromium sends the release to the list, which is inside the container.
+{
+    const page = newPage();
+    intercept(page);
+    const picker = recentEditorsPicker(page);
+    announce(page, 'Tab', 'Tab', 9, { ctrl: true });
+    realPress(page, 'ArrowLeft', 'ArrowLeft', 37, { ctrl: true });
+    cases.push(['a real Ctrl+Left inside the picker accepts nothing', picker.accepted.length, 0]);
+    settled('a real Ctrl+Left inside the picker', page);
+}
+
+// The real release still reaches the workbench's emitter when the interceptor
+// was installed first: the page loads the interceptor at onPageFinished, and
+// the emitter is created whenever the workbench first asks for it.
+{
+    const page = newPage({ emitter: false });
+    intercept(page);
+    page.attachEmitter();
+    const picker = recentEditorsPicker(page);
+    realPress(page, 'ArrowLeft', 'ArrowLeft', 37, { alt: true });
+    announce(page, 'Tab', 'Tab', 9, { ctrl: true });
+    realPress(page, 'ArrowRight', 'ArrowRight', 39, { ctrl: true });
+    cases.push(['installed before the emitter, the real releases accept nothing', picker.accepted.length, 0]);
+    settled('installed before the emitter', page);
+}
+
+// The control: a hardware keyboard's Ctrl comes up as a key of its own, after
+// its keydown, and that release accepts the picker as on a desktop.
+{
+    const page = newPage();
+    intercept(page);
+    const picker = recentEditorsPicker(page);
+    hardwareKey(page, 'keydown', 'Control', 'ControlLeft', 17, { ctrl: true });
+    hardwareKey(page, 'keydown', 'Tab', 'Tab', 9, { ctrl: true });
+    hardwareKey(page, 'keyup', 'Tab', 'Tab', 9, { ctrl: true });
+    hardwareKey(page, 'keyup', 'Control', 'ControlLeft', 17);
+    cases.push(['a hardware keyboard releasing Ctrl still accepts the picker', JSON.stringify(picker.accepted), '[1]']);
+    cases.push(['and leaves no Ctrl held', outcome(page).held.join('+'), '']);
 }
 
 let failed = 0;

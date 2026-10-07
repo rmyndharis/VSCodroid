@@ -676,8 +676,9 @@ comes up as a real `ACTION_UP` of its left-hand key, in the same dispatch
 (`modifierReleases`): the row's modifiers are latches, so without it the page saw a
 modifier go down and never come up, and the workbench, which tells its toolbars about a
 modifier only when one goes down or comes up, left the editor's split button on Split
-Editor Down after Alt+Left. A press the WebView
-refuses falls back to the announce route. A real arrow turns WebView spatial navigation on
+Editor Down after Alt+Left. Chromium sends that release to whatever has focus, and the
+modifier interceptor stops it at the window (below). A press the WebView refuses falls
+back to the announce route. A real arrow turns WebView spatial navigation on
 until the next touch on the page, so a Left or Right that leaves a collapsed caret at the
 start or end of a text box would move focus out of it. A guard installed with the modifier
 interceptor cancels such a press when none of the box's own handlers used it. It decides
@@ -707,7 +708,14 @@ or Meta, is sent as a `keydown`/`keyup` pair built by `evaluateJavascript` at
 followed by a `keyup` for each modifier it carried, at the same element; the modifier
 interceptor's chords from the soft keyboard end the same way. No modifier `keydown` is sent,
 at the latch or later: a latch undone would then read as Alt pressed and released alone,
-which focuses the menu bar.
+which focuses the menu bar. The interceptor stops every keyup of a modifier that had no
+keydown, which is what the row's releases are by either route, at the window's capture
+phase. The workbench reads which modifiers are held from capture listeners there
+(`ModifierKeyEmitter`), so it still hears them. A quick pick opened with quick navigate, as
+Ctrl+Tab's recently used editors are, does not: it accepts on a modifier's keyup in its own
+container, so the second Ctrl+Tab from the row, typed with focus on that list, opened the
+highlighted editor instead of moving down. A keyboard's own release follows its keydown and
+goes on.
 Tab stays here because a real one moves focus, and the Explorer's rename and New File boxes
 commit the typed name when they lose it; Escape because under spatial navigation an
 unhandled real Escape blurs the focused element. Up and Down stay because they are the
