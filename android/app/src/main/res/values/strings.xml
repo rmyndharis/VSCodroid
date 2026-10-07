@@ -452,7 +452,9 @@
          It is a version number, not a quantity: nothing about the sentence
          changes when it does, and passing it as a number invites a translator to
          treat "105 and newer" as something to inflect. -->
-    <string name="webview_below_minimum">Android System WebView is version %1$s. VSCodroid is tested against %2$s and newer, so parts of the editor may not work. Update it from the Play Store.</string>
+    <string name="webview_below_minimum_title">Android System WebView is out of date</string>
+    <string name="webview_below_minimum">This device\'s Android System WebView is version %1$s. VSCodroid needs %2$s or newer: below it, Markdown previews and extension panels such as chat stay blank. Update Android System WebView from the Play Store.</string>
+    <string name="webview_update">Update</string>
 
     <!-- The extra key row, all of it spoken rather than drawn.
 

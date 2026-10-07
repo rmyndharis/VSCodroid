@@ -16,12 +16,23 @@ package com.vscodroid.util
 object WebViewVersion {
 
     /**
-     * Chrome 105, the version `minSdk` 33 ships with.
+     * Chrome 125, the first with CSS anchor positioning.
+     *
+     * The workbench places every webview, a Markdown preview, an extension's
+     * panel such as a chat view, a notebook's outputs, with
+     * `OverlayLayoutElement` (`src/vs/base/browser/overlayLayoutElement.ts`,
+     * in Code - OSS since at least 1.133.0). It puts the webview over its
+     * editor with `anchor()` and `anchor-size()` and has no other way to, so
+     * below 125 the webview keeps its default place and size, under the bottom
+     * of the page, and its tab stays blank while the rest of the editor works.
+     * Measured on an API 34 emulator image with WebView 113. This was 105, the
+     * version `minSdk` 33 shipped with, which let exactly those devices through
+     * without a word.
      *
      * Raising this means raising it in the documents too; `WebViewVersionTest`
      * reads them and fails when the three disagree.
      */
-    const val MINIMUM_CHROME_MAJOR = 105
+    const val MINIMUM_CHROME_MAJOR = 125
 
     /**
      * The Chrome major version in a WebView package's `versionName`, or null
@@ -42,4 +53,17 @@ object WebViewVersion {
         val major = majorVersionOf(versionName) ?: return false
         return major < MINIMUM_CHROME_MAJOR
     }
+
+    /**
+     * Whether to tell the user now: below the floor, and not already told about
+     * this same version.
+     *
+     * Once per installed version rather than at every launch, because the
+     * warning names a fix that is not always the user's to make (WebView updates
+     * can be blocked by the device's owner), and a dialog over every start of an
+     * editor that still works is a cost of its own. A different version, an
+     * update that is still too old or a downgrade, is told again.
+     */
+    fun shouldWarn(versionName: String?, lastWarned: String?): Boolean =
+        isBelowMinimum(versionName) && versionName != lastWarned
 }

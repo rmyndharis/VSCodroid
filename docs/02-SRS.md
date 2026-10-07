@@ -61,7 +61,7 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 
 | Assumption | Impact if Wrong |
 |-----------|----------------|
-| Android WebView (Chrome 105+) supports all VS Code UI features | May need to bundle Chromium (~100MB more) |
+| Android WebView (Chrome 125+) supports all VS Code UI features | May need to bundle Chromium (~100MB more) |
 | Termux Node.js patches apply to current LTS | May need to create patches from scratch |
 | Open VSX has sufficient extension coverage | Users may be frustrated by missing extensions |
 | The diffs in `patches/` keep applying across VS Code updates | Rebase effort increases significantly |
@@ -254,7 +254,7 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 | NFR-COMPAT-01 | Minimum Android version | 13 (API 33) | P0 |
 | NFR-COMPAT-02 | Target Android version | 16 (API 36) | P0 |
 | NFR-COMPAT-03 | Architecture | arm64-v8a only | P0 |
-| NFR-COMPAT-04 | Minimum WebView version | Chrome 105+ | P0 |
+| NFR-COMPAT-04 | Minimum WebView version | Chrome 125+ | P0 |
 | NFR-COMPAT-05 | Device compatibility | Pixel, Samsung, Xiaomi, OnePlus tested | P1 |
 | NFR-COMPAT-06 | Screen sizes | Phone (5-7"), Tablet (8-13") | P1 |
 | NFR-COMPAT-07 | Input methods | Soft keyboard, hardware keyboard, Extra Key Row | P1 |
@@ -316,7 +316,7 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 
 | Constraint | Details |
 |-----------|---------|
-| System WebView version | Depends on user's device, minimum Chrome 105 |
+| System WebView version | Depends on user's device, minimum Chrome 125 |
 | No SharedWorker support | Some VS Code features may be limited |
 | localStorage quota | ~10MB per origin, sufficient for settings |
 | WebView renderer crashes | Independent of app process, must handle recovery |

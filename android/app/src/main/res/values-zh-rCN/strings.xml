@@ -446,7 +446,9 @@
          It is a version number, not a quantity: nothing about the sentence
          changes when it does, and passing it as a number invites a translator to
          treat "105 and newer" as something to inflect. -->
-    <string name="webview_below_minimum">Android System WebView 的版本为 %1$s。VSCodroid 针对 %2$s 及更高版本进行测试，因此编辑器的部分功能可能无法正常工作。请从 Play Store 更新。</string>
+    <string name="webview_below_minimum_title">Android System WebView 版本过旧</string>
+    <string name="webview_below_minimum">此设备上的 Android System WebView 版本为 %1$s。VSCodroid 需要 %2$s 或更高版本，低于此版本时，Markdown 预览和聊天等扩展面板会保持空白。请从 Play Store 更新 Android System WebView。</string>
+    <string name="webview_update">更新</string>
 
     <!-- The extra key row, all of it spoken rather than drawn.
 

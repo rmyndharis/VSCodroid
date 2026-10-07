@@ -230,7 +230,7 @@ Manual test scenarios that verify the full user experience:
 | **RAM** | 4 GB (minimum), 8 GB (typical), 12+ GB (high-end) |
 | **Screen sizes** | Phone 6" (1080p), Phone 6.7" (1440p), Tablet 11" (2560p) |
 | **Input methods** | GBoard, Samsung Keyboard, SwiftKey, Hardware keyboard |
-| **WebView versions** | Chrome 105 (minimum), Chrome 120+, Chrome 131+ |
+| **WebView versions** | Chrome 125 (minimum), Chrome 131+ |
 
 **Run**: Before each major release, on the physical devices in § 4.3
 

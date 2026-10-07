@@ -284,9 +284,9 @@ owning extension is what frees a slot.
 - System WebView updates automatically via Play Store
 - No additional binary size (Chromium adds 100MB+)
 - WebView on Android is Chromium-based, supports all VS Code needs
-- Minimum WebView 105+ covers all required APIs on Android 13+ baseline
+- Minimum WebView 125+: the workbench positions every webview (Markdown preview, extension panels, notebook outputs) with CSS anchor positioning, which Chromium has from 125. Android 13 shipped with 105, so a WebView that never updated is below it
 
-**Trade-off**: Dependent on user's WebView version. Mitigation: runtime version check, graceful error if too old.
+**Trade-off**: Dependent on user's WebView version. Mitigation: a runtime version check (`MainActivity.checkWebViewVersion`) warns below the floor; the editor still opens, but its webviews stay blank.
 
 ---
 

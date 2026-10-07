@@ -178,7 +178,7 @@ flowchart TD
 | ------------ | ---------------------------------- |
 | Android      | 13 (API 33)                        |
 | Architecture | arm64-v8a                          |
-| WebView      | Chrome 105+                        |
+| WebView      | Chrome 125+                        |
 | RAM          | 4 GB recommended                   |
 | Storage      | ~738 MB free to install            |
 

@@ -446,7 +446,9 @@
          It is a version number, not a quantity: nothing about the sentence
          changes when it does, and passing it as a number invites a translator to
          treat "105 and newer" as something to inflect. -->
-    <string name="webview_below_minimum">Android System WebView のバージョンは %1$s です。VSCodroid は %2$s 以降でテストされているため、エディターの一部が動作しない場合があります。Play Store から更新してください。</string>
+    <string name="webview_below_minimum_title">Android System WebView が古くなっています</string>
+    <string name="webview_below_minimum">この端末の Android System WebView のバージョンは %1$s です。VSCodroid には %2$s 以降が必要です。それより古いと、Markdown のプレビューやチャットなどの拡張機能のパネルが空白のままになります。Play Store から Android System WebView を更新してください。</string>
+    <string name="webview_update">更新</string>
 
     <!-- The extra key row, all of it spoken rather than drawn.
 

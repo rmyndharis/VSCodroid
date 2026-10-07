@@ -1264,7 +1264,7 @@ Exit codes:
 | Code | Name                | Description                                |
 | ---- | ------------------- | ------------------------------------------ |
 | E101 | WEBVIEW_CRASH       | WebView renderer process crashed           |
-| E102 | WEBVIEW_TOO_OLD     | WebView version below minimum (Chrome 105) |
+| E102 | WEBVIEW_TOO_OLD     | WebView version below minimum (Chrome 125) |
 | E103 | WEBVIEW_LOAD_FAILED | Failed to load VS Code UI from localhost   |
 
 ### 7.3 Binary Errors

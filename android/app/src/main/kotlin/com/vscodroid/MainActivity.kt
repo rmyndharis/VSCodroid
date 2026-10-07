@@ -5836,15 +5836,18 @@ class MainActivity : AppCompatActivity() {
      * Warns when the installed WebView is older than the version this project
      * is tested against.
      *
-     * `minSdk` is 33, which ships Chrome 105 or newer, so a stock device passes
-     * and sees nothing. What this catches are the cases a user cannot diagnose:
-     * a System WebView disabled or downgraded by hand or by an OEM image, a
-     * device where WebView updates are blocked so the component ages while the
-     * OS does not, and emulators or custom ROMs carrying an older WebView than
-     * their API level implies. On those the workbench loads against something it
-     * was never tested on, and the failure is missing CSS or a blank editor
-     * rather than a clean refusal. `onReceivedError` announces a TLS handshake
-     * failure and otherwise only logs, so nothing else would reach the user.
+     * `minSdk` 33 shipped with Chrome 105, below the floor, so what this catches
+     * is a WebView that has not been updated since, the cases a user cannot
+     * diagnose: a System WebView disabled or downgraded by hand or by an OEM
+     * image, a device where WebView updates are blocked so the component ages
+     * while the OS does not, and emulators or custom ROMs carrying the WebView
+     * their image was built with. A device that takes WebView updates from the
+     * Play Store is far above the floor and sees nothing. Below it the
+     * workbench loads and the failure is quiet rather than a clean refusal:
+     * every webview, the Markdown preview and extension panels among them,
+     * stays blank (see [WebViewVersion.MINIMUM_CHROME_MAJOR]).
+     * `onReceivedError` announces a TLS handshake failure and otherwise only
+     * logs, so nothing else would reach the user.
      *
      * It warns and continues rather than refusing to start. The floor is a
      * tested one, not a hard incompatibility, and an editor that degrades is
@@ -5854,20 +5857,49 @@ class MainActivity : AppCompatActivity() {
     private fun checkWebViewVersion() {
         val pkg = WebView.getCurrentWebViewPackage()
         val version = pkg?.versionName
-        if (!WebViewVersion.isBelowMinimum(version)) {
+        if (pkg == null || !WebViewVersion.isBelowMinimum(version)) {
             Logger.i(tag, "WebView: ${pkg?.packageName ?: "unknown"} ${version ?: "unknown version"}")
             return
         }
-        Toast.makeText(
-            this,
-            getString(
-                R.string.webview_below_minimum,
-                version,
-                WebViewVersion.MINIMUM_CHROME_MAJOR.toString(),
-            ),
-            Toast.LENGTH_LONG
-        ).show()
         Logger.w(tag, "WebView $version is below the tested minimum ${WebViewVersion.MINIMUM_CHROME_MAJOR}")
+        // A dialog, where this was a toast: Android 12 and later cut a text toast
+        // to two lines, which showed "Android System WebView is version
+        // 113.0.5672.136. VSCodroid is tested a..." and never what to do about it
+        // (measured on an API 34 image).
+        if (!WebViewVersion.shouldWarn(version, workspacePrefs.getString(KEY_WEBVIEW_WARNED, null))) return
+        workspacePrefs.edit { putString(KEY_WEBVIEW_WARNED, version) }
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.webview_below_minimum_title))
+            .setMessage(
+                getString(
+                    R.string.webview_below_minimum,
+                    version,
+                    WebViewVersion.MINIMUM_CHROME_MAJOR.toString(),
+                )
+            )
+            .setPositiveButton(getString(R.string.webview_update)) { _, _ -> openStoreListing(pkg.packageName) }
+            .setNegativeButton(getString(R.string.crash_dismiss), null)
+            .show()
+    }
+
+    /**
+     * The store page of [packageName], the WebView provider actually in use
+     * (Android System WebView on most devices, Chrome on some): the Play Store
+     * app when there is one, its web page otherwise.
+     */
+    private fun openStoreListing(packageName: String) {
+        for (page in listOf(
+            "market://details?id=$packageName",
+            "https://play.google.com/store/apps/details?id=$packageName",
+        )) {
+            try {
+                startActivity(Intent(Intent.ACTION_VIEW, page.toUri()))
+                return
+            } catch (e: ActivityNotFoundException) {
+                // No store app to take it: the next page is the same listing on the web.
+            }
+        }
+        Logger.w(tag, "No app can show the store page of $packageName")
     }
 
 
@@ -5897,6 +5929,9 @@ class MainActivity : AppCompatActivity() {
 
         /** Whether the user has hidden the Extra Key Row. Absent means shown. */
         private const val KEY_EXTRA_KEY_ROW_HIDDEN = "extra_key_row_hidden"
+
+        /** The WebView version the user was last warned is below the floor. */
+        private const val KEY_WEBVIEW_WARNED = "webview_below_minimum_warned"
 
         /** The build that last dropped the WebView's HTTP cache, `versionName/versionCode`. */
         private const val KEY_WEBVIEW_CACHE_BUILD = "webview_cache_build"
