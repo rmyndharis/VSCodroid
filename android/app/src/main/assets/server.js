@@ -493,10 +493,11 @@ if (!fs.existsSync(rehEntryPoint)) {
     // that had the keyboard up. So the root follows the theme the workbench shows
     // rather than keeping the one the page started on. A theme change rewrites a
     // style element in the head, so each change to the head takes the editor
-    // background from the workbench again; the head is otherwise left alone after
-    // start (six changes in about five minutes of use, measured). Taking it as
-    // the page is left was tried and is too late: the keyboard starts to go down
-    // before the workbench navigates.
+    // background from the workbench again. So does every change of the window
+    // title, which the workbench makes on each editor switch and change of dirty
+    // state, at the cost of one style read each time. Taking it as the page is
+    // left was tried and is too late: the keyboard starts to go down before the
+    // workbench navigates.
     //
     // Anything that throws in here leaves the page as upstream ships it.
     try {
