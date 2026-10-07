@@ -717,9 +717,9 @@ keydown, which is what the row's releases are by either route, at the window's c
 phase. The workbench reads which modifiers are held from capture listeners there
 (`ModifierKeyEmitter`), so it still hears them. A quick pick opened with quick navigate, as
 Ctrl+Tab's recently used editors are, does not: it accepts on a modifier's keyup in its own
-container, so the second Ctrl+Tab from the row, typed with focus on that list, opened the
-highlighted editor instead of moving down. A keyboard's own release follows its keydown and
-goes on.
+container, and the second Ctrl+Tab from the row is typed with focus on that list, so its
+release would open the highlighted editor instead of moving down. A keyboard's own release
+follows its keydown and goes on.
 Tab stays here because a real one moves focus, and the Explorer's rename and New File boxes
 commit the typed name when they lose it; Escape because under spatial navigation an
 unhandled real Escape blurs the focused element. Up and Down stay because they are the

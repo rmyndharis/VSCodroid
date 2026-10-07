@@ -198,8 +198,8 @@ class KeyInjector(
      * are held from capture listeners on the window, so those still hear it. A
      * quick pick opened with quick navigate, as Ctrl+Tab's is, does not: it
      * accepts on a modifier's keyup in its own container, and the second Ctrl+Tab
-     * from the row, typed with focus on the picker, opened the highlighted editor
-     * on its release instead of moving down to the next one.
+     * from the row is typed with focus on the picker, so its release would open
+     * the highlighted editor instead of moving down to the next one.
      *
      * The listener resolves each character through [KeyMapping]'s table, serialized in
      * here as a lookup object, so it answers from the same definitions [injectKey] uses
