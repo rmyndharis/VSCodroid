@@ -1127,7 +1127,7 @@ flowchart TD
   T --> T3["ms-python.python"]
   T --> T4["dbaeumer.vscode-eslint"]
   T --> T5["bradlc.vscode-tailwindcss"]
-  O --> O1["vscodroid.vscodroid-saf-bridge (the 11 VSCodroid: commands)"]
+  O --> O1["vscodroid.vscodroid-saf-bridge (the 13 VSCodroid: commands)"]
   O --> O2["vscodroid.vscodroid-welcome (Get Started walkthrough)"]
   O --> O3["vscodroid.vscodroid-process-monitor"]
   O --> O4["vscodroid.vscodroid-serve-network (LAN address of a dev server on this device)"]
