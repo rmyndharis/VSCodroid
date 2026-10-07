@@ -4946,13 +4946,14 @@ class SafSyncEngine(private val context: Context) {
          * Whether writing [localPath] back would replace a device document this sync
          * never read.
          *
-         * Extracted because two paths ask it and only one of them can be reached from a
-         * JVM test. [handleMirrorEvent] asks before queueing a job; [createOneInSaf] asks
-         * again while walking into a directory, which no event-driven test can drive here
-         * at all, since delivering a directory event constructs a `FileObserver` and that
-         * runs a static initializer reaching native code (see [SafWatchCoverageTest]).
-         * Naming the rule once is what lets it be asserted at all, and what stops the two
-         * call sites drifting apart, which is how the second one came to be missing it.
+         * Extracted because three paths ask it and one of them cannot be reached from a JVM
+         * test. [handleMirrorEvent] asks before queueing a job, and [processWriteBack] again
+         * just before a queued save is written; [createOneInSaf] asks while walking into a
+         * directory, which no event-driven test can drive here at all, since delivering a
+         * directory event constructs a `FileObserver` and that runs a static initializer
+         * reaching native code (see [SafWatchCoverageTest]). Naming the rule once is what
+         * lets it be asserted for that path at all, and what stops the call sites drifting
+         * apart, which is how the directory walk came to be missing it.
          *
          * [deviceHoldsDocument] is the provider's answer, not a guess: the set alone is a
          * memory of what this sync could not read, and the document may have been deleted
