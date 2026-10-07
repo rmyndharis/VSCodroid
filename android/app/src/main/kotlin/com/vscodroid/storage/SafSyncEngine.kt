@@ -1058,7 +1058,9 @@ class SafSyncEngine(private val context: Context) {
             if (seen.sha256 != null || !file.isFile || file.absolutePath in unfetched) continue
             val length = file.length()
             val line = identityLine(doc.relativePath, file.lastModified(), length)
-            if (line !in vouched) continue
+            // Taken whether or not this open vouched for the copy: the record's digest is of
+            // the bytes the mirror holds under this time and length, so after a stamp moves
+            // it lets a save or a delete go ahead only over those same bytes.
             val recordedOnce = recordedDigest(line)
             val hashed = if (recordedOnce != null) {
                 recordedOnce to length
@@ -1067,12 +1069,13 @@ class SafSyncEngine(private val context: Context) {
             } else {
                 try {
                     file.inputStream().use { input ->
-                        // Vouched for, and asked again with the file already open, because the
+                        // Vouched for, and asked with the file already open, because the
                         // bytes read are the kept copy's only while the name still is: another
                         // sync over this mirror, an activity recreated mid-open, renames a newer
-                        // device copy into place, whose digest would match that device copy
-                        // and skip the set-aside meant to keep it. A rename after this leaves
-                        // the open stream on the copy that was asked about.
+                        // device copy into place, during phase 2 or after the stat above, whose
+                        // digest would match that device copy and skip the set-aside meant to
+                        // keep it. A rename after this leaves the open stream on the copy that
+                        // was asked about.
                         if (identityLine(doc.relativePath, file) !in vouched) return@use null
                         budget -= length
                         // Exactly the length the line names, or the digest is not of the copy
