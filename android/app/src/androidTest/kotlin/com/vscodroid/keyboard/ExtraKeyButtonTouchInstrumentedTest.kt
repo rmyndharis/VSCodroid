@@ -12,6 +12,8 @@ import android.view.ViewConfiguration
 import android.view.ViewGroup
 import android.webkit.ValueCallback
 import android.webkit.WebView
+import androidx.core.view.ViewCompat
+import androidx.core.view.WindowInsetsCompat
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -41,12 +43,13 @@ import org.junit.runner.RunWith
  * it while the finger is down, and the swipe cases hold that a drag the pager
  * takes from one leaves it as it was.
  *
- * The last three put the row in a window and a finger on it. One swipes the
+ * The last four put the row in a window and a finger on it. One swipes the
  * pager with a second finger while the first holds Ctrl, which has to leave
- * Ctrl as the hold set it. The other two resize the row so that it repacks:
- * the swap removes the key or the trackpad under the finger, whose touch is
- * cancelled from inside it, and the row and the page it pushes to have to
- * agree afterwards.
+ * Ctrl as the hold set it. One has the row stand down during a hold, after
+ * which a slide of that finger must not latch Ctrl again. The other two
+ * resize the row so that it repacks: the swap removes the key or the trackpad
+ * under the finger, whose touch is cancelled from inside it, and the row and
+ * the page it pushes to have to agree afterwards.
  *
  * Not run by CI, which compiles the instrumented tests but has no emulator to
  * run them on.
@@ -261,6 +264,82 @@ class ExtraKeyButtonTouchInstrumentedTest {
                         "a swipe by the finger holding Ctrl left it latched: " +
                             "the row shows Ctrl=$lit and the page holds Ctrl=$pushed",
                         lit || pushed,
+                    )
+                }
+            }
+        }
+    }
+
+    /**
+     * A row standing down during a hold that switched a lit Ctrl off leaves it
+     * off when the held finger then slides, on the row and on the page; with
+     * the row up the same slide puts it back.
+     *
+     * The keyboard going away takes the row down and clears every latch, but
+     * going GONE sends the key under the finger no cancel, and the finger still
+     * reaches it. The pager took the slide as a drag and its cancel switched
+     * Ctrl back on, with the row hidden.
+     */
+    @Test
+    fun aSlideAfterTheRowStoodDownLeavesAHeldModifierCleared() {
+        for (standDown in listOf(true, false)) {
+            inRow { row, page ->
+                val ctrl = ctrlOf(row)
+                val pager = find(row, "pager") { it is ViewPager2 } as ViewPager2
+                onMain { ctrl.performClick() }
+                var lit = false
+                var pushed = false
+                onMain { pushed = page.ctrl }
+                assertTrue("control: latching Ctrl was not pushed to the page", pushed)
+                val held = middleOf(row, ctrl)
+                val swipe = ViewConfiguration.get(row.context).scaledPagingTouchSlop * 3f
+                val down = SystemClock.uptimeMillis()
+                onMain { row.dispatchTouchEvent(fingers(down, MotionEvent.ACTION_DOWN, held)) }
+                restPastTheLongPress()
+                onMain {
+                    lit = ctrl.isToggleActive
+                    pushed = page.ctrl
+                }
+                assertFalse("control: the hold did not switch the lit Ctrl off on the row and the page", lit || pushed)
+
+                if (standDown) {
+                    // The row's own inset listener, handed insets with no
+                    // keyboard, as when something outside the row hides it.
+                    var shown = true
+                    onMain {
+                        val root = View(row.context)
+                        row.setupWithRootView(root)
+                        ViewCompat.dispatchApplyWindowInsets(
+                            root,
+                            WindowInsetsCompat.Builder().setVisible(WindowInsetsCompat.Type.ime(), false).build(),
+                        )
+                        shown = row.visibility == View.VISIBLE
+                    }
+                    assertFalse("control: insets with no keyboard did not take the row down", shown)
+                    instrumentation.waitForIdleSync()
+                }
+
+                onMain {
+                    row.dispatchTouchEvent(fingers(down, MotionEvent.ACTION_MOVE, held.first + swipe to held.second))
+                }
+                var dragging = false
+                onMain {
+                    dragging = pager.scrollState == ViewPager2.SCROLL_STATE_DRAGGING
+                    lit = ctrl.isToggleActive
+                    pushed = page.ctrl
+                }
+                assertTrue("control: the pager did not take the drag, so nothing cancelled the hold", dragging)
+                if (standDown) {
+                    assertFalse(
+                        "a slide after the row stood down latched Ctrl again: " +
+                            "the row shows Ctrl=$lit and the page holds Ctrl=$pushed",
+                        lit || pushed,
+                    )
+                } else {
+                    assertTrue(
+                        "control: with the row up the slide did not put Ctrl back: " +
+                            "the row shows Ctrl=$lit and the page holds Ctrl=$pushed",
+                        lit && pushed,
                     )
                 }
             }

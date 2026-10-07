@@ -48,7 +48,8 @@ class ExtraKeyButton @JvmOverloads constructor(
     /**
      * The latch a hold on this modifier switched away from, while that touch
      * lasts; null otherwise. A touch that ends in a cancel, as one the pager
-     * takes does, puts it back, unless [anotherFingerOnRow].
+     * takes does, puts it back, unless [anotherFingerOnRow], or unless the row
+     * stood down meanwhile and dropped it ([dropPendingRestore]).
      */
     private var latchBeforeHold: Boolean? = null
 
@@ -57,6 +58,18 @@ class ExtraKeyButton @JvmOverloads constructor(
      * ends in a cancel. [KeyPageAdapter] hands every key the row's answer.
      */
     var anotherFingerOnRow: () -> Boolean = { false }
+
+    /**
+     * Forgets the latch a hold on this modifier would put back, so a cancel
+     * that still ends the touch leaves the latch alone. For [ExtraKeyRow]
+     * standing down, which clears every latch and goes GONE, and going GONE
+     * sends the key no cancel: the finger is still on it, and a slide the
+     * pager then takes would latch the modifier again, on a row the keyboard
+     * has taken away.
+     */
+    fun dropPendingRestore() {
+        latchBeforeHold = null
+    }
 
     private val gestureDetector = GestureDetector(context,
         object : GestureDetector.SimpleOnGestureListener() {
@@ -246,7 +259,8 @@ class ExtraKeyButton @JvmOverloads constructor(
                     // under the finger, by a repack (ExtraKeyRow.setupAdapter)
                     // or with its window, end it the same way. A latch spent on
                     // a letter typed during the hold is back there already and
-                    // is left alone.
+                    // is left alone, and one the row dropped when it stood down
+                    // (dropPendingRestore) is gone.
                     //
                     // So is one while another finger is on the row. The pager
                     // drags with the finger that went down last and cancels

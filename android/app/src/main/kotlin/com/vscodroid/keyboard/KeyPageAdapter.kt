@@ -127,6 +127,15 @@ class KeyPageAdapter(
         toggleButtons[keyValue]?.isToggleActive = active
     }
 
+    /**
+     * Drops the latch a hold on any modifier would put back, for a row standing
+     * down. Only a modifier's hold notes one, so the toggles are every key that
+     * can hold one. See [ExtraKeyButton.dropPendingRestore].
+     */
+    fun dropPendingRestores() {
+        toggleButtons.values.forEach(ExtraKeyButton::dropPendingRestore)
+    }
+
 }
 
 /**

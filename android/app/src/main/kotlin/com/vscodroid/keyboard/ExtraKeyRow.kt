@@ -502,6 +502,12 @@ class ExtraKeyRow @JvmOverloads constructor(
                 longPressPopup?.dismiss()
                 longPressPopup = null
                 resetModifiersIfNeeded()
+                // A hold under way outlives the row: going GONE sends its key no
+                // cancel and the finger can still slide. The cancel the pager
+                // then sends would put back a latch the hold had switched off,
+                // latching a modifier after the reset above, on a row that is
+                // gone.
+                adapter.dropPendingRestores()
             }
             Logger.d(
                 tag,

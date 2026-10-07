@@ -650,10 +650,14 @@ gesture, or a repack removing the key under the finger. Not while another finger
 row, which `ExtraKeyRow.dispatchTouchEvent` counts: the pager drags with the finger that
 went down last and cancels every key under a finger when it takes the drag, so the cancel
 can be that finger's swipe, and Ctrl held with one thumb while the other swipes to F5 has to
-stay latched for Ctrl+F5. Every other key presses on release, and only if the finger never
-left the touch slop around where it landed, so a swipe the pager takes presses nothing, and
-so does a long hold that drifted. The detector has no double-tap listener, so two quick taps
-are two presses.
+stay latched for Ctrl+F5. Nor once the row has stood down during the touch: the keyboard
+going away hides the row and clears every latch, but going GONE sends the key no cancel, so
+the finger can still slide and the pager take the drag, and its cancel would latch a
+modifier on a row that is gone. The stand-down drops what each hold would put back
+(`KeyPageAdapter.dropPendingRestores`). Every other key presses on release, and only if the
+finger never left the touch slop around where it landed, so a swipe the pager takes presses
+nothing, and so does a long hold that drifted. The detector has no double-tap listener, so
+two quick taps are two presses.
 
 There are **no discrete arrow buttons anywhere on the row.** The gesture trackpad replaced them and
 emits arrow keys as the finger moves (`TrackpadGesture.accumulate`). A drag is the only route for a

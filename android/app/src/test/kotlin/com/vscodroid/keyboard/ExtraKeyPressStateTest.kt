@@ -275,6 +275,47 @@ class ExtraKeyPressStateTest {
     }
 
     /**
+     * A row standing down drops the latch a hold would put back.
+     *
+     * The keyboard going away takes the row down and clears every latch, but
+     * going GONE sends the key under a finger no cancel, and that finger still
+     * reaches the key. So a hold that had switched a lit Ctrl off could slide
+     * on once the keyboard was gone, the pager took the drag, and its cancel
+     * switched Ctrl back on, on the row and on the page, with the row hidden.
+     * The user guide says all three modifiers clear when the keyboard hides.
+     *
+     * NEGATIVE CONTROL, measured: the button, adapter and row at b1806fd8 fail
+     * the first assertion. Dropping the call from the stand-down, making it on
+     * every inset dispatch instead, which would also drop the latch while the
+     * row stays up, the adapter reaching no key, and the key keeping its latch
+     * each fail an assertion.
+     */
+    @Test
+    fun `a row standing down drops the latch a hold would put back`() {
+        val row = SourceScan.withoutComments(SourceScan.read("src/main/kotlin/com/vscodroid/keyboard/ExtraKeyRow.kt"))
+        val hiding = SourceScan.body(SourceScan.body(row, "fun setupWithRootView("), "if (!showRow)")
+        assertTrue(
+            hiding.contains("resetModifiersIfNeeded()") && hiding.contains("adapter.dropPendingRestores()"),
+            "the row stands down leaving a hold able to put back a latch it had switched off, " +
+                "so a slide after the keyboard went away latches the modifier again. It reads:\n$hiding",
+        )
+        val adapter = SourceScan.body(
+            SourceScan.withoutComments(SourceScan.read("src/main/kotlin/com/vscodroid/keyboard/KeyPageAdapter.kt")),
+            "fun dropPendingRestores()",
+        )
+        assertTrue(
+            adapter.contains("toggleButtons.values.forEach(ExtraKeyButton::dropPendingRestore)"),
+            "the adapter does not reach the modifiers, the only keys a hold notes a latch on. " +
+                "It reads:\n$adapter",
+        )
+        val drop = SourceScan.body(button(), "fun dropPendingRestore()")
+        assertTrue(
+            drop.contains("latchBeforeHold = null"),
+            "the key keeps the latch its hold would put back. It reads:\n$drop",
+        )
+    }
+
+    /**
      * Two quick taps on a key are two presses.
      *
      * The listener is a `SimpleOnGestureListener`, which is also an
