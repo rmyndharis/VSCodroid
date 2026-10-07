@@ -520,8 +520,10 @@ if (!fs.existsSync(rehEntryPoint)) {
     // Twenty folders are kept, the most recently shown, so the record cannot grow
     // into the storage the workbench's sealed secrets share. The record of a
     // folder that follows the user's theme is stale once that theme is changed in
-    // another one, and the next load of the folder paints its blank page in the
-    // old colour; the workbench itself starts right, its stored theme usable then.
+    // another one. The next load of the folder then paints its blank page in the
+    // old colour, and when the window before it had a theme of its own, so that
+    // the stored theme is unusable too, the workbench starts on the old theme
+    // until the extensions register.
     //
     // Anything that throws in here leaves the page as upstream ships it.
     try {
