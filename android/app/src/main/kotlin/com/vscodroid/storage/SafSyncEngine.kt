@@ -15,6 +15,7 @@ import java.io.FileOutputStream
 import java.io.InputStream
 import java.security.DigestInputStream
 import java.security.MessageDigest
+import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 import kotlin.concurrent.thread
@@ -178,13 +179,16 @@ class SafSyncEngine(private val context: Context) {
      * What the device reported for each document, as (COLUMN_LAST_MODIFIED, COLUMN_SIZE)
      * by absolute mirror path, when this engine last read it ([initialSync] phase 2) or
      * wrote it (every write-back), with the SHA-256 of what phase 2 fetched, of the mirror
-     * copy it kept within [digestKeptCopies]'s budget, or of what a landed write streamed.
-     * A save may replace exactly that and nothing newer; [keepsDeviceEdit] is what asks.
+     * copy it kept, taken from the record or read by [digestKeptCopies], or of what a landed
+     * write streamed. A save may replace exactly that and nothing newer; [keepsDeviceEdit]
+     * is what asks.
      *
      * In memory only, never in the `.synced` record, because a record line licenses a
-     * deletion (see [deviceChangedSinceRecord]). Scoped per mirror in [initialSync] like
-     * [unfetched], and for the same reason: a switch that fails partway restores the
-     * previous folder's watcher on this engine, and its entries must survive that.
+     * deletion (see [deviceChangedSinceRecord]). The digest of a copy the record vouches
+     * for goes onto that copy's line, which adds no line. Scoped per mirror in
+     * [initialSync] like [unfetched], and for the same reason: a switch that fails partway
+     * restores the previous folder's watcher on this engine, and its entries must survive
+     * that.
      */
     private val deviceSeen = ConcurrentHashMap<String, DeviceState>()
 
@@ -363,6 +367,9 @@ class SafSyncEngine(private val context: Context) {
          * out, so an unforeseen one defaults to "never a candidate".
          */
         val recorded = mutableListOf<String>()
+        // The digest of the copy each [recorded] line names, where this open took one:
+        // phase 2's fetches and [digestKeptCopies]. Written onto the line with the record.
+        val digests = HashMap<String, ByteArray>()
         var uploadsDone = 0
 
         Logger.i(tag, "Enumerated ${documents.size} items ($totalFiles files)")
@@ -374,14 +381,17 @@ class SafSyncEngine(private val context: Context) {
         val unfinishedUploads = uploadsInFlight().toMutableSet()
 
         // Loaded for the same reason and read the same way: what the last sync wrote,
-        // as (path, mtime, size) lines. Four readers, each of which needs it only in a
+        // as (path, mtime, size) lines, each with the digest of its copy where an open
+        // took one. Four readers, each of which needs it only in a
         // case it can rule out cheaply first: [shouldOverwriteMirror] for providers that
         // omit COLUMN_LAST_MODIFIED, where there is no clock to compare;
         // [setAsideDivergedMirror] when a device document is strictly newer than the
         // mirror copy it is about to replace; [deviceChangedSinceRecord] when a mirror
         // copy is strictly newer than the device document it is about to replace; and
         // [uploadMirrorOnlyDocuments] when the mirror holds a file the enumeration did
-        // not return. Read once here rather than per document; [reconcileDeletions]
+        // not return. A fifth comes after phase 2: [digestKeptCopies], which takes a kept
+        // copy's digest from its line rather than reading the copy again. Read once here
+        // rather than per document; [reconcileDeletions]
         // reads the same file again in phase 3, after phase 2 may have changed what is
         // on disk.
         //
@@ -396,8 +406,10 @@ class SafSyncEngine(private val context: Context) {
         //
         // Note the scope carefully: it is this binding that is deferred, not the file.
         // [reconcileDeletions] opens the same record again in phase 3 on every sync
-        // that enumerates anything, whatever the provider reports, so the saving is one
-        // parse and one live Set across phase 2, never "the record is not read".
+        // that enumerates anything, whatever the provider reports, so the saving is the
+        // live map across phase 2, never "the record is not read". Nor the parse, once a
+        // copy was kept: [digestKeptCopies] asks after it for every copy kept without a
+        // digest, which on a folder nothing has changed since the last sync is every file.
         //
         // Null rather than an empty set when there is no record to read, and that
         // distinction is the whole of what the readers below disagree about. A record
@@ -410,10 +422,16 @@ class SafSyncEngine(private val context: Context) {
         // onto it -- the one thing that pass documents as never allowed. The header
         // arrived after a build that wrote records without one, so a record this build
         // cannot verify is in the field and reachable on upgrade.
-        val previouslyRecorded: Set<String>? by lazy {
-            readSyncedRecord(File(mirrorDir.path + SYNCED_RECORD_SUFFIX))
-                .let { if (it.firstOrNull() == RECORD_HEADER) it.drop(1).toHashSet() else null }
+        val previousRecord: Map<String, ByteArray?>? by lazy {
+            readSyncedRecord(File(mirrorDir.path + SYNCED_RECORD_SUFFIX)).let { lines ->
+                if (lines.firstOrNull() == RECORD_HEADER) {
+                    lines.drop(1).associate { splitRecordLine(it) }
+                } else {
+                    null
+                }
+            }
         }
+        val previouslyRecorded: Set<String>? by lazy { previousRecord?.keys }
 
         // Where the mirror ends, resolved rather than compared lexically, and the one
         // thing phase 2 refuses to write outside. Every outbound path in this engine
@@ -858,10 +876,12 @@ class SafSyncEngine(private val context: Context) {
                     // of the fetched copy and keep a duplicate of it, and that identity in
                     // the record vouched for an edit the device never received, which the
                     // reclaim and phase 3 read as disposable.
-                    deviceSeen[localPath.absolutePath] = DeviceState(
-                        doc.lastModified to doc.size, fetchedDigest.digest(), copied.length,
-                    )
-                    recorded += identityLine(doc.relativePath, copied.lastModified, copied.length)
+                    val fetched = fetchedDigest.digest()
+                    deviceSeen[localPath.absolutePath] =
+                        DeviceState(doc.lastModified to doc.size, fetched, copied.length)
+                    val line = identityLine(doc.relativePath, copied.lastModified, copied.length)
+                    recorded += line
+                    digests[line] = fetched
                 } else if (localPath.isFile &&
                     usableSpaceOf(mirrorDir) < OPEN_SPACE_FLOOR_BYTES &&
                     deviceMatchesMirror(doc.uri, localPath, doc.size)
@@ -908,7 +928,7 @@ class SafSyncEngine(private val context: Context) {
             }
         }
 
-        digestKeptCopies(mirrorDir, documents, recorded)
+        digestKeptCopies(mirrorDir, documents, recorded, digests) { previousRecord?.get(it) }
 
         // Read here, where phase 2 stopped fetching, rather than beside the notice: phase
         // 2b writes into the device folder, which for internal storage is this same
@@ -938,8 +958,14 @@ class SafSyncEngine(private val context: Context) {
             0
         }
 
-        // Phase 3: drop what the device no longer has
-        val removed = reconcileDeletions(mirrorDir, documents, enumerationComplete, recorded)
+        // Phase 3: drop what the device no longer has. Each line goes out with the digest
+        // this open took of its copy, or else the one the previous record held for it:
+        // a line names the copy's time and length, so a digest taken of the copy it names
+        // still describes it, which is what carries a digest from open to open.
+        val removed = reconcileDeletions(
+            mirrorDir, documents, enumerationComplete,
+            recorded.map { recordLine(it, digests[it] ?: previousRecord?.get(it)) },
+        )
 
         val elapsed = System.currentTimeMillis() - startTime
         Logger.i(
@@ -970,7 +996,7 @@ class SafSyncEngine(private val context: Context) {
     /**
      * Gives the copies this open kept rather than fetched the digest a fetch leaves, so
      * that [keepsDeviceEdit] can tell a stamp their provider moves afterwards from another
-     * app's edit.
+     * app's edit, and puts each digest it reads into [digests] for the copy's record line.
      *
      * Kept means recorded without being fetched: the mirror copy's time equalled the one
      * the device reported, or a read found the device holding the mirror's bytes. With no
@@ -981,16 +1007,26 @@ class SafSyncEngine(private val context: Context) {
      * does not, the device's bytes miss the digest and the save goes to the set-aside
      * exactly as it did with none.
      *
-     * Newest first, because a provider moves a stamp after a write and the recent copies are
-     * the ones it moves, and at most [KEPT_COPY_DIGEST_BYTES] per open, so a folder past
-     * that is not read in full on every open; a typical source tree, which fits, is. What
-     * that leaves is a late stamp over a kept copy past the budget, which still keeps one
-     * spare copy of the unchanged document.
+     * A copy whose line in the previous record carries a digest, [recordedDigest], takes it
+     * from there unread. The line names the copy's time and length, the identity every
+     * other reader of the record acts on, so each copy is read for this at most once while
+     * its identity stands; reading every kept copy on every open read a typical source tree
+     * in full each time. The rest are read newest first, because a provider moves a stamp
+     * after a write and the recent copies are the ones it moves, and at most
+     * [KEPT_COPY_DIGEST_BYTES] of them per open. Those are the copies of a folder last opened
+     * by a build that recorded no digests, and copies recorded by a read that found the
+     * device holding them rather than by a fetch, so a folder with more of them than that is
+     * read over several opens. What that leaves is a late stamp over a kept copy no open has
+     * read yet, past this open's budget, which still keeps one spare copy of the unchanged
+     * document, and a copy read by an open whose enumeration was incomplete, which writes no
+     * record and so leaves it to be read again.
      */
     private fun digestKeptCopies(
         mirrorDir: File,
         documents: List<DocumentInfo>,
         recorded: List<String>,
+        digests: MutableMap<String, ByteArray>,
+        recordedDigest: (String) -> ByteArray?,
     ) {
         val vouched = recorded.toHashSet()
         var budget = keptCopyDigestBytes
@@ -998,28 +1034,37 @@ class SafSyncEngine(private val context: Context) {
             if (doc.isDirectory) continue
             val file = File(mirrorDir, doc.relativePath)
             val seen = deviceSeen[file.absolutePath] ?: continue
-            val length = file.length()
             // A name that is no regular file any more could be a pipe that never ends a read.
-            if (seen.sha256 != null || length > budget || !file.isFile ||
-                file.absolutePath in unfetched
-            ) {
-                continue
-            }
-            val hashed = try {
-                file.inputStream().use { input ->
-                    // Vouched for, and asked with the file already open, because the bytes
-                    // read are the kept copy's only while the name still is: another sync
-                    // over this mirror, an activity recreated mid-open, renames a newer
-                    // device copy into place, whose digest would match that device copy
-                    // and skip the set-aside meant to keep it. A rename after this leaves
-                    // the open stream on the copy that was asked about.
-                    if (identityLine(doc.relativePath, file) !in vouched) return@use null
-                    budget -= length
-                    sha256(input, length)
-                }
-            } catch (e: Exception) {
+            if (seen.sha256 != null || !file.isFile || file.absolutePath in unfetched) continue
+            val length = file.length()
+            val line = identityLine(doc.relativePath, file.lastModified(), length)
+            if (line !in vouched) continue
+            val recordedOnce = recordedDigest(line)
+            val hashed = if (recordedOnce != null) {
+                recordedOnce to length
+            } else if (length > budget) {
                 null
-            } ?: continue
+            } else {
+                try {
+                    file.inputStream().use { input ->
+                        // Vouched for, and asked again with the file already open, because the
+                        // bytes read are the kept copy's only while the name still is: another
+                        // sync over this mirror, an activity recreated mid-open, renames a newer
+                        // device copy into place, whose digest would match that device copy
+                        // and skip the set-aside meant to keep it. A rename after this leaves
+                        // the open stream on the copy that was asked about.
+                        if (identityLine(doc.relativePath, file) !in vouched) return@use null
+                        budget -= length
+                        // Exactly the length the line names, or the digest is not of the copy
+                        // it is recorded beside: an editor writing the file meanwhile
+                        // lengthens or shortens what the stream reads.
+                        sha256(input, length)?.takeIf { it.second == length }
+                    }?.also { digests[line] = it.first }
+                } catch (e: Exception) {
+                    null
+                }
+            }
+            if (hashed == null) continue
             // Only over the entry the open left, never one a write has replaced since.
             deviceSeen.replace(
                 file.absolutePath, seen, DeviceState(seen.stamp, hashed.first, hashed.second),
@@ -1301,15 +1346,15 @@ class SafSyncEngine(private val context: Context) {
      * lets the save go ahead unguarded, a held-back save's retry too, and after a write
      * drops the entry so the next save fails open; entries not following a directory
      * rename; a stamp a provider moves after the folder was opened, over a copy the open
-     * kept rather than fetched (its times agreed, or a read found the bytes equal) past
-     * the first [KEPT_COPY_DIGEST_BYTES] of such copies, newest first, and not written by
-     * this app since, which keeps one spare copy of the unchanged document; a document
-     * reported past [MAX_FILE_SIZE] at a length other than the digested one, which is held
-     * back unread, even where it holds this app's own bytes, until it is reported at that
-     * length; a held-back save whose folder is closed before a try lands, which waits for
-     * the next open, or whose directory is renamed, which waits for that or for the next
-     * save of the file; and on a provider with no clock, every copy after the first
-     * carries its counter as a time, which is cosmetic.
+     * kept rather than fetched (its times agreed, or a read found the bytes equal) that no
+     * open has digested yet and this one's [KEPT_COPY_DIGEST_BYTES] did not reach, and not
+     * written by this app since, which keeps one spare copy of the unchanged document; a
+     * document reported past [MAX_FILE_SIZE] at a length other than the digested one,
+     * which is held back unread, even where it holds this app's own bytes, until it is
+     * reported at that length; a held-back save whose folder is closed before a try lands,
+     * which waits for the next open, or whose directory is renamed, which waits for that or
+     * for the next save of the file; and on a provider with no clock, every copy after the
+     * first carries its counter as a time, which is cosmetic.
      */
     private fun keepsDeviceEdit(localFile: File, docUri: Uri): Boolean {
         // Settled again by whatever this answers: a save that goes ahead ends the hold, and
@@ -1688,7 +1733,7 @@ class SafSyncEngine(private val context: Context) {
         }
 
         for (line in entries) {
-            val parts = line.split('\t')
+            val parts = splitRecordLine(line).first.split('\t')
             if (parts.size != 3) continue  // an older build's record, or a damaged line
             val path = unescapeRecordPath(parts[0])
             val wasModified = parts[1].toLongOrNull() ?: continue
@@ -1788,7 +1833,9 @@ class SafSyncEngine(private val context: Context) {
     }
 
     /**
-     * One file's line in the synced record: relative path, mtime, size, tab separated.
+     * One file's line in the synced record: relative path, mtime, size, tab separated. That
+     * is the whole line unless [recordLine] puts the copy's digest after it, and every
+     * reader takes the digest off with [splitRecordLine] before it compares.
      *
      * Shared rather than spelled out at each site, because two of them have to agree
      * byte for byte or the disagreement shows up as behaviour: [recordIdentity] writes
@@ -1875,7 +1922,7 @@ class SafSyncEngine(private val context: Context) {
     internal fun holdsOnlyVouchedCopies(mirrorDir: File): Boolean {
         val lines = readSyncedRecord(File(mirrorDir.path + SYNCED_RECORD_SUFFIX))
         if (lines.firstOrNull() != RECORD_HEADER) return false
-        val vouched = lines.drop(1).toHashSet()
+        val vouched = lines.drop(1).mapTo(HashSet()) { splitRecordLine(it).first }
         // A directory the walk could not read leaves the mirror only partly examined,
         // which is indistinguishable from an empty one to `all`. Recorded rather than
         // returned from the handler: `onFail` is not inline, so it cannot return here.
@@ -1899,7 +1946,8 @@ class SafSyncEngine(private val context: Context) {
      *
      * The first line is [RECORD_HEADER]; every line after it is `path`, `modification
      * time` and `length` separated by tabs, the path spelled as [escapeRecordPath]
-     * spells it. The header check and the parsing are both the caller's, because a
+     * spells it, and a fourth field where an open recorded the copy's digest; see
+     * [splitRecordLine]. The header check and the parsing are both the caller's, because a
      * record in a format this build does not know has to be discarded whole and a line
      * it cannot read has to be dropped rather than repaired.
      */
@@ -4568,6 +4616,15 @@ class SafSyncEngine(private val context: Context) {
          * deleting. A record whose first line is not exactly this is ignored, which is
          * how a record from the build before headers is already treated, and in the same
          * direction: unverifiable means keep.
+         *
+         * Not bumped for the digest a line may carry as a fourth field ([recordLine]), and
+         * that is the safer choice for a build before it, which then reads such a line,
+         * wherever it needs the whole identity, as one it cannot verify, and keeps: its
+         * [reconcileDeletions] skips a line that is not three fields, and its readers that
+         * compare whole lines find no match. A bumped header would have that build discard
+         * the whole record instead, and with no record [setAsideDivergedMirror] and
+         * [deviceChangedSinceRecord] answer false, the direction that loses an edit. A record
+         * from before the digests reads here as it always did.
          */
         internal const val RECORD_HEADER = "#vscodroid-saf-sync 2"
 
@@ -4586,6 +4643,31 @@ class SafSyncEngine(private val context: Context) {
          */
         internal fun escapeRecordPath(path: String): String =
             path.replace("\\", "\\\\").replace("\t", "\\t").replace("\n", "\\n").replace("\r", "\\r")
+
+        /**
+         * A record line: [identity], as [identityLine] spells it, with the SHA-256 of the copy
+         * it names after it where [digest] is not null, in base64, whose alphabet holds no tab
+         * or line break.
+         */
+        internal fun recordLine(identity: String, digest: ByteArray?): String =
+            if (digest == null) identity
+            else identity + '\t' + Base64.getEncoder().encodeToString(digest)
+
+        /**
+         * [line] taken apart into the identity [identityLine] spells and the digest
+         * [recordLine] put after it. A line with no digest, or one this build cannot read,
+         * comes back whole and with none, so each reader keeps or drops it as it always has.
+         */
+        internal fun splitRecordLine(line: String): Pair<String, ByteArray?> {
+            val fields = line.split('\t')
+            val digest = if (fields.size != 4) null else try {
+                // Thirty-two bytes, a SHA-256; anything else is not a digest this build wrote.
+                Base64.getDecoder().decode(fields[3]).takeIf { it.size == 32 }
+            } catch (e: IllegalArgumentException) {
+                null
+            }
+            return if (digest == null) line to null else line.substringBeforeLast('\t') to digest
+        }
 
         /** The inverse of [escapeRecordPath]. A stray backslash is kept as it is. */
         internal fun unescapeRecordPath(field: String): String {
@@ -4729,9 +4811,12 @@ class SafSyncEngine(private val context: Context) {
         internal const val OPEN_SPACE_FLOOR_BYTES = StorageManager.LOW_STORAGE_BYTES + MAX_FILE_SIZE
 
         /**
-         * How many bytes of the copies an open kept rather than fetched it reads to digest
-         * them, newest first; see [digestKeptCopies]. A typical source tree fits, and a
-         * folder of photos or data does not cost a full read on every open.
+         * How many bytes of the copies an open kept rather than fetched, and that the record
+         * holds no digest for, it reads to digest them, newest first; see [digestKeptCopies].
+         * A copy read once is not read again while its identity stands, so this bounds the
+         * opens after an update from a build that recorded none: a typical source tree fits
+         * in the first, and a folder of photos or data is read over several rather than in
+         * full by one.
          */
         internal const val KEPT_COPY_DIGEST_BYTES = 64L * 1024 * 1024
 
@@ -5288,9 +5373,9 @@ internal enum class DeviceCopyOutcome {
  * What [SafSyncEngine] last knew of one device document: the (COLUMN_LAST_MODIFIED,
  * COLUMN_SIZE) its provider reported, and the SHA-256 of what the open fetched from it or
  * this app's last write streamed into it, or of the mirror copy the open kept, with the
- * length of those bytes. That digest is null for a kept copy past the open's budget,
- * [SafSyncEngine.KEPT_COPY_DIGEST_BYTES], until a write of this app lands there, and after
- * a write that does not land.
+ * length of those bytes. That digest is null for a kept copy that no open has digested yet
+ * and this open's budget, [SafSyncEngine.KEPT_COPY_DIGEST_BYTES], did not reach, until a
+ * write of this app lands there, and after a write that does not land.
  */
 private class DeviceState(
     val stamp: Pair<Long, Long>,

@@ -18,6 +18,7 @@ import io.mockk.unmockkAll
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -31,6 +32,7 @@ import java.io.File
 import java.io.FileNotFoundException
 import java.io.IOException
 import java.io.OutputStream
+import java.io.RandomAccessFile
 import java.nio.file.Files
 import java.security.MessageDigest
 import java.util.concurrent.CountDownLatch
@@ -311,6 +313,49 @@ class SafLiveDeviceEditTest {
             .filter { it.name.startsWith("notes.txt" + SafSyncEngine.DEVICE_COPY_SUFFIX) }
             .associate { it.name to it.readText() }
 
+    private val record: File get() = File(mirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX)
+
+    /**
+     * The record as a build before the digests wrote it, the one an update finds: the same
+     * lines without the digest after each, so the next open has a kept copy to read.
+     */
+    private fun recordWithoutDigests() {
+        record.writeText(record.readLines().joinToString("\n") { SafSyncEngine.splitRecordLine(it).first })
+    }
+
+    /** The digest the record's line for `notes.txt` carries, or null where it carries none. */
+    private fun recordedDigest(): ByteArray? =
+        SafSyncEngine.splitRecordLine(record.readLines().single { it.startsWith("notes.txt\t") }).second
+
+    /**
+     * Runs [onUpdate] with the length of every chunk the engine's SHA-256s are handed from
+     * now on, and [onDigest] as each of them finishes, inside the engine's own call: the one
+     * step a test can stand in, between the reads that feed a digest and what is done with it.
+     */
+    private fun duringDigests(onUpdate: (Int) -> Unit = {}, onDigest: () -> Unit = {}) {
+        mockkStatic(MessageDigest::class)
+        every { MessageDigest.getInstance("SHA-256") } answers {
+            val real = callOriginal()
+            object : MessageDigest("SHA-256") {
+                override fun engineUpdate(input: Byte) {
+                    onUpdate(1)
+                    real.update(input)
+                }
+
+                override fun engineUpdate(input: ByteArray, offset: Int, len: Int) {
+                    onUpdate(len)
+                    real.update(input, offset, len)
+                }
+
+                override fun engineReset() = real.reset()
+                override fun engineDigest(): ByteArray {
+                    onDigest()
+                    return real.digest()
+                }
+            }
+        }
+    }
+
     @Test
     fun `a device edit made while the folder is open is set aside before a save replaces it`() {
         open()
@@ -478,24 +523,12 @@ class SafLiveDeviceEditTest {
     fun `a fetched copy is recorded as it landed when an editor saves at once`() {
         val file = File(mirror, "notes.txt")
         var editorSaved = false
-        mockkStatic(MessageDigest::class)
-        every { MessageDigest.getInstance("SHA-256") } answers {
-            val real = callOriginal()
-            object : MessageDigest("SHA-256") {
-                override fun engineUpdate(input: Byte) = real.update(input)
-                override fun engineUpdate(input: ByteArray, offset: Int, len: Int) =
-                    real.update(input, offset, len)
-
-                override fun engineReset() = real.reset()
-                override fun engineDigest(): ByteArray {
-                    if (!editorSaved && file.isFile) {
-                        editorSaved = true
-                        file.writeText("x")
-                    }
-                    return real.digest()
-                }
+        duringDigests(onDigest = {
+            if (!editorSaved && file.isFile) {
+                editorSaved = true
+                file.writeText("x")
             }
-        }
+        })
         open()
         assertEquals(true, editorSaved, "the simulated save never ran")
         assertEquals(
@@ -538,13 +571,15 @@ class SafLiveDeviceEditTest {
     }
 
     /**
-     * What bounds the reads an open spends on the copies it kept: one past the budget is
-     * not read, so a stamp moved over it still keeps one spare copy of the unchanged
-     * document. Without the bound every open read the whole folder.
+     * What bounds the reads an open spends on the kept copies the record holds no digest for,
+     * as after an update from a build that recorded none: one past the budget is not read,
+     * so a stamp moved over it still keeps one spare copy of the unchanged document. Without
+     * the bound such an open read the whole folder.
      */
     @Test
-    fun `a kept copy past the open's digest budget is not read`() {
+    fun `a kept copy the record holds no digest for is not read past the open's budget`() {
         open()
+        recordWithoutDigests()
         engine.keptCopyDigestBytes = 1
         open()
         deviceModified -= 337
@@ -552,6 +587,77 @@ class SafLiveDeviceEditTest {
         save("typed in the editor")
 
         assertEquals(listOf("v1"), deviceCopies().values.toList(), "a kept copy past the budget was read")
+    }
+
+    /**
+     * The digest a fetch takes goes onto the copy's line in the record, and stays there
+     * while later opens keep the copy, so they take it rather than read the copy again. With
+     * no budget left to read anything, a stamp moved two opens later still leaves no spare
+     * copy. Every open used to read every kept copy again, which for a source tree is the
+     * whole folder.
+     */
+    @Test
+    fun `a digest the record holds serves every open that keeps its copy`() {
+        open()
+        engine.keptCopyDigestBytes = 0
+        open()
+        open()
+        deviceModified -= 337
+
+        save("typed in the editor")
+
+        assertEquals(
+            emptyMap<String, String>(), deviceCopies(),
+            "the reopen had no digest for the copy an earlier open fetched",
+        )
+        assertEquals("typed in the editor", deviceText)
+    }
+
+    /**
+     * After an update from a build that recorded no digests, the first open reads a kept copy
+     * within its budget and records what it read, so the next open does not read it again.
+     */
+    @Test
+    fun `a kept copy read by one open is not read by the next`() {
+        open()
+        recordWithoutDigests()
+        open()
+        engine.keptCopyDigestBytes = 0
+        open()
+        deviceModified -= 337
+
+        save("typed in the editor")
+
+        assertEquals(
+            emptyMap<String, String>(), deviceCopies(),
+            "the digest an open read was not there for the open after it",
+        )
+    }
+
+    /**
+     * A kept copy an editor shortens while the open reads it: what the read hashed is part of
+     * the copy the record line names, and as that copy's digest it would be wrong for as long
+     * as the line stands.
+     */
+    @Test
+    fun `a kept copy that shrinks while the open reads it leaves no digest on its line`() {
+        deviceText = "x".repeat(20_000)
+        deviceSize = 20_000
+        open()
+        recordWithoutDigests()
+        val file = File(mirror, "notes.txt")
+        var shortened = false
+        duringDigests(onUpdate = {
+            if (!shortened) {
+                shortened = true
+                RandomAccessFile(file, "rw").use { it.setLength(100) }
+            }
+        })
+
+        open()
+
+        assertTrue(shortened, "the open did not read the kept copy")
+        assertNull(recordedDigest(), "a digest of part of the copy was recorded as the copy's")
     }
 
     /**
