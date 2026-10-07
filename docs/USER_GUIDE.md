@@ -254,10 +254,12 @@ row carries `` ` `` as a key of its own, and a latched Shift over it types `~`.
 
 Every other key sends one press, the same press a tap sends, and nothing on this
 row repeats. Tab, Esc and the rest press when you lift your finger, however long you
-held it. Ctrl, Alt and Shift switch as soon as the hold is long enough for a long
-press, before you lift your finger, so a letter you type on the soft keyboard while
-still holding a lit Ctrl goes with Ctrl. A swipe that starts on a key turns the page,
-sends nothing and leaves a modifier as it was, and two quick taps send two presses.
+held it, provided the finger stayed where it landed; one that slid away at any point
+sends nothing. Ctrl, Alt and Shift switch as soon as the hold is long enough for a
+long press, before you lift your finger, so a letter you type on the soft keyboard
+while still holding a lit Ctrl goes with Ctrl. A swipe that starts on a key turns the
+page, sends nothing and leaves a modifier as it was, and two quick taps send two
+presses.
 
 #### Modifiers
 
