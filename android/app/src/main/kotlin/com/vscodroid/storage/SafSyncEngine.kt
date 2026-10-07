@@ -1075,7 +1075,11 @@ class SafSyncEngine(private val context: Context) {
             if (doc.isDirectory) continue
             val file = File(mirrorDir, doc.relativePath)
             val seen = deviceSeen[file.absolutePath] ?: continue
-            // A name that is no regular file any more could be a pipe that never ends a read.
+            // Not a name that is no regular file any more: opening a pipe waits for a writer,
+            // which held the folder's open for as long as none came. Nor a path this open could
+            // not read: the write and delete guards stop its saves and deletes before any digest
+            // is compared, unless the provider answers them inconsistently, and there a missing
+            // digest only keeps the device copy, as a set-aside or a declined delete.
             if (seen.sha256 != null || !file.isFile || file.absolutePath in unfetched) continue
             val length = file.length()
             val line = identityLine(doc.relativePath, file.lastModified(), length)
