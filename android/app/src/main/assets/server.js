@@ -462,37 +462,62 @@ if (!fs.existsSync(rehEntryPoint)) {
     // window colour: right for a dark theme, wrong for a light one. And a load that
     // cannot use the theme the workbench stored starts on the web default, the
     // light one, for the one to three seconds until the extensions register. The
-    // stored theme is one per profile, dropped whenever the configured theme is
-    // another, so that is a fresh install, which has none stored; the first load
-    // after an update that renamed the configured default, which is read from a
-    // cache holding the old name until then; and a folder whose own settings name
-    // another theme than the window before it, once those settings are in the
-    // cache the workbench reads them from at startup.
+    // stored theme is the last window's, one per profile, and is dropped whenever
+    // the theme this window is configured for is another: on a fresh install,
+    // which has none stored; on the first load after an update that renamed the
+    // configured default, which is read from a cache holding the old name until
+    // then; in a folder whose own settings name another theme than the window
+    // before it showed, once those settings are in the cache the workbench reads
+    // them from at startup; and in any folder entered from one like that.
     //
     // The workbench records what it last painted in localStorage, the base theme
-    // and the colours of each part, and nothing in the web page reads it back: that
-    // splash is drawn only by the desktop bootstrap. It is one splash for every
-    // folder, the last window's, so this keeps a record of its own in the same
-    // shape for each folder or workspace the page's address opens, of the theme
-    // that one showed last, and prefers it. Either colours the root before the
+    // and the colours of each part, and nothing in the web page reads it back:
+    // that splash is drawn only by the desktop bootstrap. It is one for the whole
+    // app, the last window's, so this keeps records of its own in the same shape,
+    // one for each folder or workspace the page's address opens: the theme that
+    // window showed last, and whether it is a theme of the folder's own. A folder
+    // with a theme of its own starts on its own record. Any other starts on the
+    // record of the folder shown most recently that follows the user's theme,
+    // which is that theme as it is now, where its own record is stale once the
+    // user picks a theme in another folder. With no such record yet, the
+    // workbench's splash is used. Whichever it is colours the root before the
     // first paint.
     //
+    // Whether a folder has a theme of its own is read from what the workbench
+    // shows, against the record of the window before. Entered from a window that
+    // follows the user's theme, the folder has one when the workbench shows
+    // another theme than that window did, read again at each theme it shows until
+    // the user does something: first the one it starts on, which is that window's
+    // stored theme only when the folder is configured for the same one, then the
+    // one it is configured for, which a folder's own settings name at startup only
+    // from its second load on, and on its first only once the extensions have
+    // registered. The first tap or key press after that ends the reading, because
+    // a theme change is then the user's pick and moves the record with it; taps
+    // while the page loads do not count. Nothing else sets or clears the mark: not
+    // a load entered from a folder with a theme of its own, whose stored theme
+    // says nothing about whether this folder follows the user's; not the first
+    // load this script runs, which has no record of a window before; not a load
+    // after the device switched between light and dark, or while it does; and the
+    // empty window, which has no folder settings, always follows.
+    //
     // The same theme is handed to the workbench as `initialColorTheme`, which it
-    // uses only when its stored theme is unusable. A folder's record is the right
-    // theme then. The shared splash is not: it shows the theme the last window
-    // stored, so whenever that is unusable because this folder is configured for
-    // another, the splash is the wrong one, and without a record the workbench
-    // starts on its own default, as upstream does. The first load this script runs
-    // is the exception. After this update the stored theme is unusable then only
-    // because the cached default still spells it the old way, so the splash is
-    // right. A load with no splash at all, which is only ever the first seconds of
-    // a fresh install, starts on the dark default this app configures, whichever
-    // load it is. Hex colours only, because the workbench parses each one with
-    // Color.fromHex, which turns anything else into red, and the splash writes a
-    // translucent colour as rgba(). Always with a colours object, an empty one
-    // included: without it the workbench colours the theme it starts on from the
-    // light map of "Light 2026", the web build's own default, which is the
-    // setting's value until the extensions register.
+    // uses only when its stored theme is unusable: to a folder with a theme of its
+    // own; to any folder entered from one, when the stored theme is that folder's
+    // and not the user's; on the first load this script runs, when after this
+    // update the stored theme is unusable only because the cached default still
+    // spells it the old way, so the splash is right; and, with no record or splash
+    // at all, which is only ever the first seconds of a fresh install, as the dark
+    // default this app configures. Any other folder entered from a window that
+    // follows the user's theme is handed nothing. That window's stored theme is
+    // right for every folder that follows the user's too; a folder it is wrong for
+    // has a theme of its own not yet marked, and the default the workbench then
+    // starts on, as upstream does, is what marks it, where a handed theme would
+    // hide it. Hex colours only, because the workbench parses each one with
+    // Color.fromHex, which turns anything else into red, and a theme can hold a
+    // translucent colour, written as rgba(). Always with a colours object, an
+    // empty one included: without it the workbench colours the theme it starts on
+    // from the light map of "Light 2026", the web build's own default, which is
+    // the setting's value until the extensions register.
     //
     // Nothing is handed over when the device has switched between light and dark
     // since the last load. With window.autoDetectColorScheme on, the stored theme
@@ -500,30 +525,35 @@ if (!fs.existsSync(rehEntryPoint)) {
     // device, and the type it picks for itself is then the right one, where the
     // record holds the other. The page cannot read that setting, so the switch is
     // what this goes by, and each load records the device's mode for the next one
-    // to compare. The root is still coloured from the record or the splash, which
-    // is right for everyone the setting does not apply to.
+    // to compare. The root is still coloured from the record, which is right for
+    // everyone the setting does not apply to. The first load this script runs has
+    // no mode to compare, so with the setting on and the device switched since the
+    // last session, it starts on the old mode's theme until the extensions
+    // register.
     //
     // The root shows again after the first paint. When the window grows, as it
     // does when the soft keyboard goes down, the space given back shows the root
     // until the workbench has laid itself out again, a tenth of a second or more
     // on an API 36 emulator: the usual case when a folder is opened from a box
     // that had the keyboard up. So the root follows the theme the workbench shows
-    // rather than keeping the one the page started on, and the folder's record is
-    // taken from the same reading. A theme change rewrites a style element in the
-    // head, so each change to the head reads the workbench's colours again. So
-    // does every change of the window title, which the workbench makes on each
-    // editor switch and change of dirty state, at the cost of that style read:
-    // storage is written on a load's first reading and then only when the theme
-    // changed. Taking the colour as the page is left was tried and is too late:
-    // the keyboard starts to go down before the workbench navigates.
+    // rather than keeping the one the page started on, and the record is taken
+    // from the same reading. A theme change rewrites a style element in the head,
+    // so each change to the head reads the workbench's colours again. So does
+    // every change of the window title, which the workbench makes on each editor
+    // switch and change of dirty state, at the cost of that style read: storage is
+    // written on a load's first reading and then only when the theme changed.
+    // Taking the colour as the page is left was tried and is too late: the
+    // keyboard starts to go down before the workbench navigates.
     //
     // Twenty folders are kept, the most recently shown, so the record cannot grow
-    // into the storage the workbench's sealed secrets share. The record of a
-    // folder that follows the user's theme is stale once that theme is changed in
-    // another one. The next load of the folder then paints its blank page in the
-    // old colour, and when the window before it had a theme of its own, so that
-    // the stored theme is unusable too, the workbench starts on the old theme
-    // until the extensions register.
+    // into the storage the workbench's sealed secrets share. Loads that still
+    // start on the wrong colour: the first load of a folder with a theme of its
+    // own, which has no record yet; a load after the device switched, as above;
+    // and those around a mark this cannot read. A folder with a theme of its own
+    // that is the first load this script runs, or whose theme arrives only after
+    // the user's first tap, is taken to follow the user's theme, and the folder
+    // opened after it to have a theme of its own. Each wrong mark is put right
+    // the next time its folder is entered from one that follows the user's theme.
     //
     // Anything that throws in here leaves the page as upstream ships it.
     try {
@@ -531,24 +561,29 @@ if (!fs.existsSync(rehEntryPoint)) {
             '\t\t\t\t\tvar query = new URLSearchParams(location.search);',
             "\t\t\t\t\tvar where = query.get('folder') || query.get('workspace') || '';",
             "\t\t\t\t\tvar seen = JSON.parse(localStorage.getItem('vscodroid-folder-themes')) || {};",
-            '\t\t\t\t\tvar mine = seen[where];',
+            '\t\t\t\t\tvar keys = Object.keys(seen), prev = seen[keys[keys.length - 1]], mine = seen[where];',
+            '\t\t\t\t\tvar user = seen[keys.filter(function (k) { return !seen[k].own; }).pop()];',
+            '\t\t\t\t\tvar own = !!(mine && mine.own);',
             "\t\t\t\t\tvar shared = JSON.parse(localStorage.getItem('monaco-parts-splash'));",
-            '\t\t\t\t\tvar splash = mine || shared || {};',
+            '\t\t\t\t\tvar splash = (own ? mine : user || shared) || {};',
             '\t\t\t\t\tvar info = splash.colorInfo || {};',
             `\t\t\t\t\tvar types = ${JSON.stringify(SPLASH_THEME_TYPES)}, type = types[splash.baseTheme] || 'dark';`,
             `\t\t\t\t\tvar ids = ${JSON.stringify(SPLASH_COLOR_IDS)};`,
             '\t\t\t\t\tvar hex = /^#[0-9a-f]{6}([0-9a-f]{2})?$/i;',
-            "\t\t\t\t\tvar scheme = matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light';",
-            "\t\t\t\t\tvar last = localStorage.getItem('vscodroid-device-scheme');",
+            "\t\t\t\t\tvar mode = function () { return matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; };",
+            "\t\t\t\t\tvar scheme = mode(), last = localStorage.getItem('vscodroid-device-scheme');",
             "\t\t\t\t\tlocalStorage.setItem('vscodroid-device-scheme', scheme);",
             "\t\t\t\t\tvar blank = type === 'light' || type === 'hcLight' ? '#ffffff' : '#1e1e1e';",
             '\t\t\t\t\tdocument.documentElement.style.backgroundColor = hex.test(info.background) ? info.background : blank;',
-            '\t\t\t\t\tif (!settings.initialColorTheme && (last === null || ((mine || !shared) && last === scheme))) {',
+            '\t\t\t\t\tif (!settings.initialColorTheme && (last === null || (last === scheme && (own || (prev && prev.own) || !(user || shared))))) {',
             '\t\t\t\t\t\tvar colors = {};',
             '\t\t\t\t\t\tfor (var key in ids) { if (hex.test(info[key])) { colors[ids[key]] = info[key]; } }',
             '\t\t\t\t\t\tsettings.initialColorTheme = { themeType: type, colors: colors };',
             '\t\t\t\t\t}',
-            '\t\t\t\t\tvar written;',
+            '\t\t\t\t\tvar acted, written;',
+            "\t\t\t\t\tvar act = function () { acted = acted || performance.getEntriesByName('code/didLoadExtensions').length > 0; };",
+            "\t\t\t\t\taddEventListener('pointerdown', act, true);",
+            "\t\t\t\t\taddEventListener('keydown', act, true);",
             '\t\t\t\t\tnew MutationObserver(function () {',
             "\t\t\t\t\t\tvar wb = document.querySelector('.monaco-workbench');",
             '\t\t\t\t\t\tvar style = wb && getComputedStyle(wb);',
@@ -560,7 +595,9 @@ if (!fs.existsSync(rehEntryPoint)) {
             "\t\t\t\t\t\tfor (var key in ids) { shown.colorInfo[key] = style.getPropertyValue('--vscode-' + ids[key].replace(/\\./g, '-')).trim(); }",
             '\t\t\t\t\t\tvar entry = JSON.stringify(shown);',
             '\t\t\t\t\t\tif (entry === written) { return; }',
+            '\t\t\t\t\t\tif (!acted && last === mode() && prev && !prev.own) { own = !!where && entry !== JSON.stringify(prev); }',
             '\t\t\t\t\t\twritten = entry;',
+            '\t\t\t\t\t\tif (own) { shown.own = true; }',
             '\t\t\t\t\t\tdelete seen[where];',
             '\t\t\t\t\t\tseen[where] = shown;',
             '\t\t\t\t\t\tvar kept = Object.keys(seen);',

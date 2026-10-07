@@ -576,23 +576,30 @@ async function stoppingTakesTheEditorServerWithIt() {
     fs.rmSync(dir, { recursive: true, force: true });
 }
 
-// Every page load starts on the theme it is about to show: the one its folder
-// showed last time, or else the one the workbench saved in its splash. Without
-// it the page shows the WebView's own background until the workbench has loaded,
-// the dark window colour whatever the theme, and a load that cannot use the
-// stored theme (the first start, the first load after an update renamed the
-// configured default, a folder whose own settings name another theme) shows the
-// light theme before a dark one, or the dark one before a light one.
+// Every page load starts on the theme it is about to show: a folder with a theme
+// of its own on the one it showed last, any other on the one the folder that most
+// recently followed the user's theme showed, or else on the splash the workbench
+// saved. Without it the page shows the WebView's own background until the
+// workbench has loaded, the dark window colour whatever the theme, and a load
+// that cannot use the stored theme (the first start, the first load after an
+// update renamed the configured default, a folder whose own settings name another
+// theme, any folder entered from one) shows the light theme before a dark one, or
+// the dark one before a light one.
 //
 // NEGATIVE CONTROL: without the script in server.js the first assertion fails;
 // with `initialColorTheme` handed over after the device switched to light mode,
 // that case fails; without the observer of the head, the case of a theme changed
-// while the page is open fails; with the shared splash read in place of a
-// folder's record, or handed over on a load after the first, the cases of a
-// folder with a theme of its own and of a folder never shown fail; handing over
-// nothing without a record fails the case of a load before any splash; without
-// the bound, or without moving a folder shown again to the end, the case of
-// twenty folders fails; writing on every change of the head fails the title case.
+// while the page is open fails; with each folder started on its own record, the
+// case of a theme picked in one folder and another opened fails; with only the
+// shared splash, or with every record moved along when a window changes theme,
+// the cases of a folder with a light theme of its own fail; marking a folder only
+// on the first theme the workbench shows fails them too, since its own settings
+// arrive later on its first load, and marking it after the user's first tap
+// fails the case of a theme picked; handing over nothing without any record or
+// splash fails the case of a load before any splash; without the bound, or
+// without moving a folder shown again to the end, the case of twenty folders
+// fails; writing on every change of the head fails the title case; and without
+// the catch around the write, the case of full storage fails.
 {
     const anchor =
         '<meta id="vscode-workbench-web-configuration" data-settings="{{WORKBENCH_WEB_CONFIGURATION}}">';
@@ -641,13 +648,17 @@ async function stoppingTakesTheEditorServerWithIt() {
      * one origin do. Answers what the workbench is then handed, what the page
      * paints before anything else, and what is left in storage for the next load.
      */
-    const load = ({ splash, last, dark, settings = {}, refuse = false, items = {}, search = '' }) => {
+    const load = ({ splash, last, dark, settings = {}, refuse = false, full = false, items = {}, search = '' }) => {
         if (splash) items['monaco-parts-splash'] = JSON.stringify(splash);
         if (last) items['vscodroid-device-scheme'] = last;
         let writes = 0;
         const localStorage = {
             getItem: (k) => { if (refuse) throw new Error('SecurityError'); return k in items ? items[k] : null; },
-            setItem: (k, v) => { writes += k === 'vscodroid-folder-themes' ? 1 : 0; items[k] = String(v); },
+            setItem: (k, v) => {
+                if (full && k === 'vscodroid-folder-themes') throw new Error('QuotaExceededError');
+                writes += k === 'vscodroid-folder-themes' ? 1 : 0;
+                items[k] = String(v);
+            },
         };
         let data = JSON.stringify(settings);
         const el = { getAttribute: () => data, setAttribute: (_name, value) => { data = value; } };
@@ -661,16 +672,23 @@ async function stoppingTakesTheEditorServerWithIt() {
             documentElement: root,
             head,
         };
-        const matchMedia = (query) => ({ matches: query === '(prefers-color-scheme: dark)' && dark });
+        const matchMedia = (query) => ({
+            matches: query === '(prefers-color-scheme: dark)' && (typeof dark === 'function' ? dark() : dark),
+        });
         const observers = [];
         class MutationObserver {
             constructor(callback) { this.callback = callback; }
             observe(target, options) { observers.push({ target, options, callback: this.callback }); }
         }
         const getComputedStyle = (node) => ({ getPropertyValue: (name) => node.vars[name] || '' });
+        const marks = [];
+        const performance = { getEntriesByName: (name) => marks.filter((m) => m === name) };
+        const listeners = [];
+        const addEventListener = (type, listener) => listeners.push({ type, listener });
         // eslint-disable-next-line no-new-func
-        new Function('document', 'localStorage', 'matchMedia', 'MutationObserver', 'getComputedStyle', 'location', body)(
-            document, localStorage, matchMedia, MutationObserver, getComputedStyle, { search });
+        new Function('document', 'localStorage', 'matchMedia', 'MutationObserver', 'getComputedStyle', 'location',
+            'performance', 'addEventListener', body)(
+            document, localStorage, matchMedia, MutationObserver, getComputedStyle, { search }, performance, addEventListener);
         return {
             settings: JSON.parse(data),
             painted: root.style.backgroundColor,
@@ -688,6 +706,12 @@ async function stoppingTakesTheEditorServerWithIt() {
                     .forEach((o) => o.callback([]));
                 return root.style.backgroundColor;
             },
+            /** The extensions have registered, which the workbench marks. */
+            registered: () => marks.push('code/didLoadExtensions'),
+            /** A tap on the page. */
+            tap: () => listeners.filter((l) => l.type === 'pointerdown').forEach((l) => l.listener({})),
+            /** A key press on the page. */
+            press: () => listeners.filter((l) => l.type === 'keydown').forEach((l) => l.listener({})),
         };
     };
 
@@ -747,21 +771,239 @@ async function stoppingTakesTheEditorServerWithIt() {
             'a load before any window saved a splash does not start on the dark default');
     }
 
-    // A folder whose own settings name Light Modern, shown before, entered after
-    // a window on the default dark theme. The stored theme is then that window's,
-    // which the folder's setting throws away, so the workbench starts on what it
-    // is handed: that has to be the folder's light theme, not the splash the dark
-    // window left. Reached first through the app's address, which encodes the
-    // path, and then through the one the workbench builds, which does not.
+    // The cases below run successive loads against a model of the workbench the
+    // page starts, built from its theme service constructor (workbench.js
+    // 1.139.1). It keeps the one theme it stored, the last window's, only when this
+    // window is configured for that same theme; else it starts on an unloaded
+    // theme of the type and colours it was handed; else of the device's type when
+    // window.autoDetectColorScheme is on, and light otherwise; with registry
+    // defaults for every colour it was not given. A folder's own settings are
+    // known then only from the copy its last load cached, so on its first load it
+    // is configured for the user's theme. Once the extensions register, which the
+    // workbench marks, the theme the window is configured for replaces the one it
+    // started on and is stored, and so is a splash of it. Each of those steps
+    // rewrites a style element in the head.
+    const base = { dark: 'vs-dark', light: 'vs' };
+    const registry = {
+        dark: {
+            foreground: '#cccccc', 'editor.background': '#1e1e1e', 'titleBar.activeBackground': '#3c3c3c',
+            'activityBar.background': '#333333', 'sideBar.background': '#252526', 'panel.background': '#1e1e1e',
+            'statusBar.background': '#007acc', 'statusBar.noFolderBackground': '#68217a',
+        },
+        light: {
+            foreground: '#616161', 'editor.background': '#ffffff', 'titleBar.activeBackground': '#dddddd',
+            'activityBar.background': '#2c2c2c', 'sideBar.background': '#f3f3f3', 'panel.background': '#ffffff',
+            'statusBar.background': '#007acc', 'statusBar.noFolderBackground': '#68217a',
+        },
+    };
+    const themes = {
+        'Dark Modern': shown('vs-dark', {
+            foreground: '#cccccc', 'editor.background': '#1f1f1f', 'titleBar.activeBackground': '#181818',
+            'activityBar.background': '#181818', 'sideBar.background': '#181818', 'panel.background': '#181818',
+            'statusBar.background': '#181818', 'statusBar.noFolderBackground': '#1f1f1f',
+        }),
+        'Light Modern': lightModern,
+    };
+    const splashOf = (name) => {
+        const color = (id) => themes[name].vars[`--vscode-${id.replace(/\./g, '-')}`];
+        return {
+            baseTheme: themes[name].base,
+            colorInfo: {
+                foreground: color('foreground'), background: color('editor.background'),
+                editorBackground: color('editor.background'), titleBarBackground: color('titleBar.activeBackground'),
+                activityBarBackground: color('activityBar.background'), sideBarBackground: color('sideBar.background'),
+                panelBackground: color('panel.background'), statusBarBackground: color('statusBar.background'),
+                statusBarNoFolderBackground: color('statusBar.noFolderBackground'),
+            },
+        };
+    };
+
+    /**
+     * A phone the app runs on, from the last window it showed before this
+     * update: `splash` is the theme that window saved and stored. `own` maps a
+     * folder or workspace to a theme its own settings name; every other window
+     * follows `user`, the user's theme. `renamed` is the first load after the
+     * update, which reads the default under its old name from a cache, so a
+     * window following it is configured for an id no theme has.
+     */
+    const phone = ({ splash, user = 'Dark Modern', own = {}, renamed = false, dark = true, autoDetect = false }) => {
+        const items = { 'monaco-parts-splash': JSON.stringify(splashOf(splash)) };
+        const state = { stored: splash, user, own, renamed, dark, autoDetect };
+        const cached = new Set();
+        let open;
+        return {
+            items,
+            state,
+            /**
+             * One page load, through to the theme the window is configured for.
+             * `early` taps the page before the extensions register. Answers how
+             * the load started.
+             */
+            visit(search, { early = false } = {}) {
+                const query = new URLSearchParams(search);
+                const where = query.get('folder') || query.get('workspace') || '';
+                const name = state.autoDetect ? (state.dark ? 'Dark Modern' : 'Light Modern') : own[where] || state.user;
+                const first = state.autoDetect ? name : (cached.has(where) && own[where]) || state.user;
+                const usable = state.stored === first && !(state.renamed && first === state.user);
+                const page = load({ items, dark: () => state.dark, search });
+                const handed = page.settings.initialColorTheme;
+                const type = handed ? handed.themeType : state.autoDetect && state.dark ? 'dark' : 'light';
+                const started = usable ? themes[first] : shown(base[type], { ...registry[type], ...(handed ? handed.colors : {}) });
+                page.changeHead(started);
+                if (early) page.tap();
+                page.registered();
+                page.changeHead(themes[name]);
+                cached.add(where);
+                Object.assign(state, { stored: name, renamed: false });
+                items['monaco-parts-splash'] = JSON.stringify(splashOf(name));
+                open = { page, where };
+                return { painted: page.painted, started, handed };
+            },
+            /**
+             * The device switches between light and dark while a window is open;
+             * with window.autoDetectColorScheme on, the workbench follows it.
+             */
+            switchDevice(dark) {
+                state.dark = dark;
+                if (!state.autoDetect) return;
+                const name = dark ? 'Dark Modern' : 'Light Modern';
+                open.page.changeHead(themes[name]);
+                state.stored = name;
+                items['monaco-parts-splash'] = JSON.stringify(splashOf(name));
+            },
+            /** The user picks a theme in the window that is open, by touch or `withKeys`. */
+            pick(name, { withKeys = false } = {}) {
+                if (withKeys) open.page.press(); else open.page.tap();
+                if (own[open.where]) own[open.where] = name; else state.user = name;
+                open.page.changeHead(themes[name]);
+                state.stored = name;
+                items['monaco-parts-splash'] = JSON.stringify(splashOf(name));
+            },
+        };
+    };
+
+    /** A load has to paint, and the workbench start on, the theme the window then shows. */
+    const startsOn = (visit, name, what) => {
+        assert.strictEqual(visit.painted, themes[name].vars['--vscode-editor-background'],
+            `${what}: the page is painted ${visit.painted} before the workbench, where ${name} is about to show`);
+        assert.strictEqual(visit.started.base, themes[name].base,
+            `${what}: the workbench starts on a ${visit.started.base} theme before ${name}`);
+    };
+
+    // The theme changed in one folder, then another opened from Open Recent, and
+    // back: the way a theme change usually ends. Every folder here follows the
+    // user's theme, so each has to start on the theme picked last, wherever it was
+    // picked, and not on the one the folder showed itself the time before.
     {
-        const items = {};
-        load({ items, dark: true, search: '?folder=%2Fprojects%2Flight' }).changeHead(lightModern);
-        load({ items, dark: true, search: '?folder=/projects/dark' }).changeHead(darkModernShown);
-        items['monaco-parts-splash'] = JSON.stringify(darkModern);
-        const page = load({ items, dark: true, search: '?folder=/projects/light' });
-        assert.deepStrictEqual(page.settings.initialColorTheme, { themeType: 'light', colors: lightModernColors },
-            'a folder whose own settings name a light theme starts on the dark theme of the window before it');
-        assert.strictEqual(page.painted, '#ffffff', 'a folder whose own settings name a light theme starts its blank page dark');
+        const device = phone({ splash: 'Dark Modern', renamed: true });
+        startsOn(device.visit('?folder=/p/npmcheck'), 'Dark Modern', 'the first load after this update');
+        device.pick('Light Modern');
+        startsOn(device.visit('?folder=/p/emptyp36'), 'Light Modern', 'a folder opened after Light Modern was picked in another');
+        device.pick('Dark Modern');
+        startsOn(device.visit('?folder=/p/npmcheck'), 'Dark Modern', 'a folder opened after Dark Modern was picked in another');
+        device.pick('Light Modern', { withKeys: true });
+        startsOn(device.visit('?folder=/p/emptyp36'), 'Light Modern', 'a folder opened after Light Modern was picked again');
+    }
+
+    // A folder whose own settings name Light Modern, entered after a window on the
+    // default dark theme, and a folder on that theme entered after it. Each throws
+    // the stored theme away, so the workbench starts on what it is handed, which
+    // has to be that folder's theme and not the one the window before left. The
+    // light folder's first load, where its settings arrive only as the extensions
+    // register, is tapped while it loads. It is reached once through the app's
+    // address, which encodes the path, and then through the one the workbench
+    // builds, which does not.
+    {
+        const device = phone({ splash: 'Dark Modern', own: { '/projects/light': 'Light Modern' } });
+        device.visit('?folder=/projects/dark');
+        device.visit('?folder=%2Fprojects%2Flight', { early: true });
+        startsOn(device.visit('?folder=/projects/dark'), 'Dark Modern',
+            'a folder on the dark user theme entered after one with a light theme of its own');
+        const light = device.visit('?folder=/projects/light');
+        startsOn(light, 'Light Modern', 'a folder with a light theme of its own entered after a dark window');
+        assert.deepStrictEqual(light.handed, { themeType: 'light', colors: lightModernColors },
+            'a folder with a light theme of its own is not handed its own colours');
+    }
+
+    // The same folder beside one that follows the user's theme while that passes
+    // through Light Modern and back. Moving every record that held a window's old
+    // theme along with it, the obvious repair for the first case, swaps the two
+    // here on every load from then on.
+    {
+        const device = phone({ splash: 'Dark Modern', own: { '/p/own-light': 'Light Modern' } });
+        device.visit('?folder=/p/own-light');
+        device.visit('?folder=/p/follow');
+        device.visit('?folder=/p/follow');
+        device.pick('Light Modern');
+        device.visit('?folder=/p/follow');
+        device.pick('Dark Modern');
+        for (let round = 0; round < 2; round++) {
+            startsOn(device.visit('?folder=/p/own-light'), 'Light Modern', 'a folder with a light theme of its own');
+            startsOn(device.visit('?folder=/p/follow'), 'Dark Modern',
+                'a folder that follows the dark user theme, after one with a light theme of its own');
+        }
+    }
+
+    // A folder with a theme of its own that is the first load this script runs has
+    // no window before it to be told apart by, so it is taken to follow the user's
+    // theme, and the folder opened after it, which then shows another theme than
+    // that one, to have a theme of its own. Neither mark outlives the next loads.
+    {
+        const device = phone({ splash: 'Light Modern', own: { '/p/light': 'Light Modern' } });
+        device.visit('?folder=/p/light');
+        device.visit('?folder=/p/a');
+        device.visit('?folder=/p/b');
+        startsOn(device.visit('?folder=/p/c'), 'Dark Modern', 'a folder opened once two others followed the dark user theme');
+        device.visit('?folder=/p/light');
+        startsOn(device.visit('?folder=/p/a'), 'Dark Modern', 'a folder first taken to have a dark theme of its own');
+        startsOn(device.visit('?folder=/p/light'), 'Light Modern', 'a folder with a light theme of its own, put right');
+    }
+
+    // The empty window has no folder settings, so whatever it starts on, it shows
+    // the user's theme. Opened after the folder that was taken to follow above,
+    // it gives the next folder the user's theme to start on at once.
+    {
+        const device = phone({ splash: 'Light Modern', own: { '/p/light': 'Light Modern' } });
+        device.visit('?folder=/p/light');
+        device.visit('?ew=true');
+        startsOn(device.visit('?folder=/p/c'), 'Dark Modern', 'a folder opened after the empty window');
+    }
+
+    // With window.autoDetectColorScheme on, the device switched to light mode
+    // while a folder was open, and the workbench followed it by itself.
+    {
+        const device = phone({ splash: 'Dark Modern', autoDetect: true });
+        device.visit('?folder=/p/a');
+        device.visit('?folder=/p/b');
+        device.switchDevice(false);
+        startsOn(device.visit('?folder=/p/c'), 'Light Modern', 'a folder opened after the device went light in another');
+    }
+
+    // With window.autoDetectColorScheme on, the device switched to light mode
+    // while the app was closed. That load follows the device by itself and is
+    // not a sign of a theme of the folder's own, so the folders after it start on
+    // the light theme it ended on.
+    {
+        const device = phone({ splash: 'Dark Modern', autoDetect: true });
+        device.visit('?folder=/p/a');
+        device.state.dark = false;
+        device.visit('?folder=/p/b');
+        startsOn(device.visit('?folder=/p/c'), 'Light Modern', 'a folder opened after a load that followed the device to light mode');
+        startsOn(device.visit('?folder=/p/a'), 'Light Modern', 'a folder last shown dark, opened after the device went light');
+    }
+
+    // A workspace is a window of its own, recorded under its own file, not under
+    // the empty window's key, where its own light theme would pass for the
+    // user's dark one.
+    {
+        const device = phone({ splash: 'Dark Modern', own: { '/p/w.code-workspace': 'Light Modern' } });
+        device.visit('?ew=true');
+        device.visit('?workspace=/p/w.code-workspace');
+        device.visit('?ew=true');
+        startsOn(device.visit('?workspace=/p/w.code-workspace'), 'Light Modern', 'a workspace with a light theme of its own');
+        startsOn(device.visit('?ew=true'), 'Dark Modern', 'the empty window after a workspace with a light theme of its own');
+        assert.ok(Object.keys(JSON.parse(device.items['vscodroid-folder-themes'])).includes('/p/w.code-workspace'),
+            'a workspace is not recorded under its own file');
     }
 
     // A folder never shown, on a load after the first. The splash then holds the
@@ -779,10 +1021,15 @@ async function stoppingTakesTheEditorServerWithIt() {
 
     // The device switched to light mode since the last load. With
     // window.autoDetectColorScheme on, the workbench is following the device and
-    // its own pick is right, so it is left to make it.
+    // its own pick is right, so it is left to make it, even in a folder with a
+    // theme of its own, whose record is handed over otherwise.
     {
-        const items = {};
-        load({ items, dark: true, search: '?folder=/projects/a' }).changeHead(darkModernShown);
+        const items = {
+            'vscodroid-folder-themes': JSON.stringify({ '/projects/a': { ...darkModern, own: true } }),
+            'vscodroid-device-scheme': 'dark',
+        };
+        assert.ok(load({ items: { ...items }, dark: true, search: '?folder=/projects/a' }).settings.initialColorTheme,
+            'a folder with a theme of its own is not handed its record');
         const page = load({ items, splash: darkModern, dark: false, search: '?folder=/projects/a' });
         assert.strictEqual(page.settings.initialColorTheme, undefined,
             'the last theme is imposed on a load after the device changed mode, which the workbench ' +
@@ -837,6 +1084,16 @@ async function stoppingTakesTheEditorServerWithIt() {
         const page = load({ splash: darkModern, last: 'dark', dark: true, refuse: true });
         assert.deepStrictEqual(page.settings, {}, 'a page whose storage refused was still changed');
         assert.strictEqual(page.painted, undefined, 'a page whose storage refused was still painted');
+    }
+
+    // Storage that is full refuses the record. The page still follows the theme,
+    // and the refusal stays in the observer rather than reaching the page as an
+    // uncaught error on every theme change.
+    {
+        const page = load({ splash: darkModern, last: 'dark', dark: true, full: true, search: '?folder=/p/full' });
+        let root;
+        assert.doesNotThrow(() => { root = page.changeHead(lightModern); }, 'a full storage throws out of the theme observer');
+        assert.strictEqual(root, '#ffffff', 'the root stops following the theme once storage is full');
     }
     fs.rmSync(dir, { recursive: true, force: true });
 }
