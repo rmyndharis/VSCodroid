@@ -22,7 +22,9 @@
  * bubble listeners back up to the window. A node's listeners are read when the
  * event reaches it, so one added to the target on the way down runs, after the
  * target's own, and a `once` listener is removed before it runs. A timer runs
- * once the dispatch is over, as a task after the key's own. Every box sits in a
+ * once the dispatch is over, as a task after the key's own, and a microtask
+ * right after the listener that queued it: the browser runs the microtask
+ * queue between the listeners of a key it dispatches itself. Every box sits in a
  * shadow root, so a listener outside it sees the host as the target, and the
  * box is reached only through `composedPath()[0]`.
  *
@@ -129,12 +131,13 @@ function newPage(userAgent = BELOW_149, { keybindings = false } = {}) {
     const window = new Node(null);
     const document = new Node(window, { activeElement: null });
     const body = new Node(document, { tagName: 'BODY' });
-    const page = { window, document, host: new Node(body, { tagName: 'DIV' }), log: [], timers: [] };
+    const page = { window, document, host: new Node(body, { tagName: 'DIV' }), log: [], timers: [], microtasks: [] };
     // The workbench's keybinding service: a bubble listener on the window,
     // registered long before the interceptor is installed.
     if (keybindings) window.addEventListener('keydown', own('keybinding', (e) => page.log.push(`keybinding ${e.key}`)));
     const setTimeout = (fn) => page.timers.push(fn);
-    vm.runInContext(INTERCEPTOR, vm.createContext({ window, document, navigator: { userAgent }, setTimeout }));
+    const queueMicrotask = (fn) => page.microtasks.push(fn);
+    vm.runInContext(INTERCEPTOR, vm.createContext({ window, document, navigator: { userAgent }, setTimeout, queueMicrotask }));
     return page;
 }
 
@@ -177,6 +180,7 @@ function dispatch(page, target, key, mods) {
             if (l.once) node.removeEventListener(l.type, l.fn, l.capture);
             running = l.fn.owner || 'guard';
             l.fn.call(node, event);
+            for (const fn of page.microtasks.splice(0)) fn();
         }
     }
     for (const node of route.slice().reverse()) {
