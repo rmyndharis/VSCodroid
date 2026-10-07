@@ -37,6 +37,9 @@ REQUIRED_PACKAGES=(
     libexpat
     tmux
     libevent
+    # tmux's Unicode width tables since Termux built it with --enable-utf8proc;
+    # without it the binary does not load (libutf8proc.so.3 in DT_NEEDED).
+    utf8proc
     libandroid-glob
     make
     openssh
@@ -88,6 +91,7 @@ get_sonames() {
         libssh2)           echo "libssh2.so" ;;
         zlib)              echo "libz.so.1" ;;
         libevent)          echo "libevent-2.1.so libevent_core-2.1.so" ;;
+        utf8proc)          echo "libutf8proc.so.3" ;;
         libandroid-glob)   echo "libandroid-glob.so" ;;
         libedit)           echo "libedit.so" ;;
         ldns)              echo "libldns.so" ;;
@@ -107,7 +111,7 @@ LIB_PACKAGES=(
     readline ncurses libiconv libandroid-support
     libcurl openssl pcre2 libexpat
     libnghttp2 libnghttp3 libngtcp2 libssh2 zlib
-    libevent libandroid-glob libedit ldns
+    libevent utf8proc libandroid-glob libedit ldns
     krb5 libresolv-wrapper
     c-ares libicu libc++ libsqlite
 )

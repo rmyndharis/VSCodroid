@@ -349,6 +349,12 @@ licence that asks for the notice to travel with the copy.
 - **License**: BSD-3-Clause License
 - **Used by**: tmux
 
+### utf8proc
+
+- **Project**: https://juliastrings.github.io/utf8proc/
+- **License**: MIT License. The Unicode data tables in it carry Unicode, Inc.'s permission notice; both texts ship in full in `usr/share/doc/utf8proc/copyright`.
+- **Used by**: tmux
+
 ### readline
 
 - **Project**: https://tiswww.case.edu/php/chet/readline/rltop.html
@@ -532,6 +538,7 @@ attribute but this project's own source.
 | [ripgrep](https://github.com/BurntSushi/ripgrep) | MIT | no | `libripgrep.so` |
 | [SQLite](https://sqlite.org) | Public Domain | no | `libsqlite3.so` |
 | [tmux](https://github.com/tmux/tmux) | ISC | no | `libtmux.so` |
+| [utf8proc](https://juliastrings.github.io/utf8proc/) | MIT | no | `libutf8proc.so.3` |
 | [xz / liblzma](https://tukaani.org/xz/) | LGPL-2.1, GPL-2.0, GPL-3.0 | **yes** | `liblzma.so.5` |
 | [zlib](https://zlib.net) | Zlib | no | `libz.so.1` |
 | [Zstandard](https://facebook.github.io/zstd/) | GPL-2.0 | **yes** | `libzstd.so.1` |
@@ -763,4 +770,4 @@ For questions about licenses, trademarks, or legal notices:
 
 ---
 
-_This document was last updated on September 28, 2026._
+_This document was last updated on October 7, 2026._

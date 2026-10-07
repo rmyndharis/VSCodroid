@@ -209,6 +209,7 @@ LIBRARIES = {
     "libssh2.so": ("libssh2", "BSD-3-Clause"),
     "libevent-2.1.so": ("libevent", "BSD-3-Clause"),
     "libevent_core-2.1.so": ("libevent", "BSD-3-Clause"),
+    "libutf8proc.so.3": ("utf8proc", "MIT"),
     "libedit.so": ("libedit", "BSD-3-Clause"),
     # Termux's `libcrypt`, a standalone crypt(3), BSD-2-Clause. Not glibc's
     # libcrypt and not libxcrypt -- the LGPL one is a different project with a
@@ -306,6 +307,7 @@ NOTICE_DIRS = {
     "ngtcp2": "usr/share/doc/libngtcp2",
     "libssh2": "usr/share/doc/libssh2",
     "libevent": "usr/share/doc/libevent",
+    "utf8proc": "usr/share/doc/utf8proc",
     "libedit": "usr/share/doc/libedit",
     "libcrypt": "usr/share/doc/libcrypt",
     "ldns": "usr/share/doc/ldns",
