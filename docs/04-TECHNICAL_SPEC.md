@@ -583,8 +583,9 @@ Read `VSCodroidWebView.configure` for the live set. Three notes on what is **not
 Outside the settings block, `configure` gives the view the window background,
 `R.color.colorBackground` (#1E1E1E). An unset WebView paints white wherever no page has
 painted yet, which showed before the loading placeholder on the first launch after an update.
-The workbench page paints its own background from the theme it last showed (§3.1), so a light
-theme still starts light.
+The workbench page paints its own background before its first paint, from the theme it expects
+to show (§3.1), so this colour shows only where no page has painted yet and behind a page that
+paints no background of its own.
 
 ### 4.2 Crash Recovery
 
