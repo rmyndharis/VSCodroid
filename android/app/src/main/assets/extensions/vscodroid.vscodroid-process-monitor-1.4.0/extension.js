@@ -50,9 +50,12 @@ function activate(context) {
     const tmpDir = process.env.TMPDIR || '/tmp';
     const snapshotPath = path.join(tmpDir, 'vscodroid-processes.json');
 
-    // Status bar item: right side, low priority (far right)
+    // Status bar item: right side, low priority (far right). With an id: the
+    // workbench keeps every extension host's items in one table, and an item
+    // without one is numbered per host, so the first such item of a web
+    // extension took this one's slot.
     statusBarItem = vscode.window.createStatusBarItem(
-        vscode.StatusBarAlignment.Right, -100
+        'processMonitor', vscode.StatusBarAlignment.Right, -100
     );
     statusBarItem.command = 'vscodroid.showProcesses';
     statusBarItem.name = 'Process Monitor';
