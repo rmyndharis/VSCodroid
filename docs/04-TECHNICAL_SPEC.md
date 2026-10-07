@@ -636,11 +636,14 @@ Ctrl, Alt and Shift latch rather than repeat. The bracket and parenthesis keys i
 opening character, because Monaco closes the pair and places the caret inside. Several keys carry
 long-press alternates, which `KeyPageConfig.kt` lists beside them; `)` is on the `()` key's
 list because no other route on the row reaches it, since `shiftedForm` leaves `(` unchanged
-and `)` sits on a digit key no page carries. Only those keys have a long press
-(`ExtraKeyButton.alternates` turns the `GestureDetector`'s on and off), and the row
-dismisses an open popup when the pager starts a drag. Every other key presses on
-release, so a swipe the pager takes presses nothing, and the detector has no double-tap
-listener, so two quick taps are two presses.
+and `)` sits on a digit key no page carries. Only those keys and the three modifiers
+have a long press (`ExtraKeyButton`'s touch listener turns the `GestureDetector`'s on or
+off at each touch), and the row dismisses an open popup when the pager starts a drag. A
+modifier's long press switches the latch while the finger is still down, so a letter
+typed on the soft keyboard during the hold is chorded, and a drag the pager takes after
+it switches the latch back. Every other key presses on release, so a swipe the pager
+takes presses nothing, and the detector has no double-tap listener, so two quick taps
+are two presses.
 
 There are **no discrete arrow buttons anywhere on the row.** The gesture trackpad replaced them and
 emits arrow keys as the finger moves (`TrackpadGesture.accumulate`). A drag is the only route for a

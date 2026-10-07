@@ -27,6 +27,9 @@ class ExtraKeyPressStateTest {
         SourceScan.read("src/main/kotlin/com/vscodroid/keyboard/ExtraKeyButton.kt"),
     )
 
+    /** The block every touch on the key goes through before and after the detector. */
+    private fun touchListener(source: String): String = SourceScan.body(source, "setOnTouchListener {")
+
     /**
      * The defect, as arithmetic.
      *
@@ -102,15 +105,15 @@ class ExtraKeyPressStateTest {
     /**
      * The coupling that decides what a hold on a modifier does.
      *
-     * A key with alternates has a long press, which opens them; a key without
-     * has none, so a hold on it presses on release, like a tap. The three
-     * modifiers have none, which is why holding Ctrl a moment too long still
-     * switches it exactly as a tap does. Give one an alternate and a hold opens
-     * a popup instead, which `emitPress` and the row's latch handling do not
-     * describe.
+     * A key with alternates has a long press, which opens them, and a modifier
+     * has one that switches it; `onLongPress` tells the two apart by whether the
+     * key has alternates. The three modifiers have none, which is why holding
+     * Ctrl past the long press latches it while the finger is still down. Give
+     * one an alternate and a hold opens a popup instead, which `emitPress` and
+     * the row's latch handling do not describe.
      */
     @Test
-    fun `the modifier toggles have no alternates so a hold switches them like a tap`() {
+    fun `the modifier toggles have no alternates so a hold switches them`() {
         val toggles = KeyPages.defaults
             .flatMap { it.items }
             .filterIsInstance<KeyItem.Button>()
@@ -121,53 +124,88 @@ class ExtraKeyPressStateTest {
             assertTrue(
                 toggle.alternates.isEmpty(),
                 "'${toggle.value}' is a toggle with alternates, so a hold on it now opens a popup " +
-                    "instead of switching the modifier on release"
+                    "instead of switching the modifier"
             )
         }
     }
 
     /**
-     * A key with nothing to open presses on release, never on a timer.
+     * Only a modifier or a key with alternates has a long press, so a swipe
+     * from any other key presses nothing.
      *
      * The detector's long press fires once a finger has stayed inside the touch
-     * slop for the long-press timeout, and a key with no alternates used to
-     * press itself there. A swipe across the row that starts slowly does exactly
-     * that, so the key went out, then the pager took the drag and turned the
-     * page, and the ACTION_CANCEL it sent could not take the key back. Measured
-     * on an API 36 emulator: F7 held 0.5 s and then swiped moved the caret and
-     * turned the page.
+     * slop for the long-press timeout, and every key used to press itself
+     * there. A swipe across the row that starts slowly does exactly that, so the
+     * key went out, then the pager took the drag and turned the page, and the
+     * ACTION_CANCEL it sent could not take the key back. Measured on an API 36
+     * emulator: F7 held 0.5 s and then swiped moved the caret and turned the
+     * page.
      *
      * NEGATIVE CONTROL, measured: the button as it was at 54352514, which kept
-     * the long press on for every key and pressed from `onLongPress`, fails the
-     * first assertion after the control. Turning the long press on in the
-     * setter, pressing from `onLongPress` again, or dropping the
-     * `setIsLongpressEnabled(false)` the detector starts with each fails its own.
+     * the long press on for every key and pressed from `onLongPress`, and at
+     * 602b0afe, which turned it on in the `alternates` setter for keys with
+     * alternates alone, both fail at the slice, deciding nothing at a touch.
+     * Turning the long press on for every key or for keys with alternates
+     * alone, or pressing from `onLongPress` for a key with alternates too, each
+     * fails an assertion.
      */
     @Test
-    fun `a key without alternates has no long press, so a swipe from it presses nothing`() {
+    fun `only a modifier or a key with alternates has a long press`() {
         val source = button()
         assertTrue(
             source.contains("private val gestureDetector = GestureDetector(context,"),
             "the button no longer builds the detector this case reads, so its verdict is worth nothing",
         )
 
-        val setter = SourceScan.body(source, "var alternates: List<AlternateKey>")
+        val down = SourceScan.body(touchListener(source), "if (event.action == MotionEvent.ACTION_DOWN) {")
         assertTrue(
-            setter.contains("gestureDetector.setIsLongpressEnabled(value.isNotEmpty())"),
-            "the long press no longer follows whether the key has alternates: either a key with " +
-                "alternates cannot open them, or a key without presses on the timer. It reads:\n$setter",
+            down.contains("gestureDetector.setIsLongpressEnabled(isToggle || alternates.isNotEmpty())"),
+            "the long press is not decided at each touch by whether the key is a modifier or has " +
+                "alternates: a modifier cannot latch while held, a key with alternates cannot open " +
+                "them, or any other key presses itself on the timer. It reads:\n$down",
         )
         val longPress = SourceScan.body(source, "override fun onLongPress(")
+        val modifier = SourceScan.body(longPress, "if (alternates.isEmpty()) {")
         assertFalse(
-            longPress.contains("emitPress()"),
-            "a long press delivers a press again, which the pager's ACTION_CANCEL cannot take " +
-                "back. It reads:\n$longPress",
+            longPress.replace(modifier, "").contains("emitPress()"),
+            "a long press on a key with alternates delivers a press as well. It reads:\n$longPress",
         )
-        val setup = SourceScan.body(source, "}).apply {")
+    }
+
+    /**
+     * Holding a modifier latches it at the long press, as before the swipe fix,
+     * and a drag the pager takes leaves it as it was before the touch.
+     *
+     * The latch has to be on while the finger is still down: a letter typed on
+     * the soft keyboard while Ctrl is held goes through the modifier interceptor,
+     * which chords it only if Ctrl is latched by then, and spends the latch. With
+     * the latch on release, as at 602b0afe, the letter went out plain and the
+     * keystroke after it was chorded instead. A slow swipe that starts on Ctrl
+     * reaches the same long press before the pager takes the drag, so the
+     * ACTION_CANCEL that follows has to switch the latch back, or the swipe
+     * would have latched Ctrl.
+     *
+     * NEGATIVE CONTROL, measured: the button at 602b0afe fails at the slice,
+     * its `onLongPress` having no branch for a modifier. Dropping the switch
+     * from that branch, noting the latch after it, or dropping the switch back
+     * on ACTION_CANCEL each fails an assertion.
+     */
+    @Test
+    fun `a modifier held past the long press latches, and a drag the pager takes puts it back`() {
+        val source = button()
+        val modifier = SourceScan.body(SourceScan.body(source, "override fun onLongPress("), "if (alternates.isEmpty()) {")
+        val recorded = modifier.indexOf("latchBeforeHold = isToggleActive")
         assertTrue(
-            setup.contains("setIsLongpressEnabled(false)"),
-            "the detector starts with its long press on, so a key that is never given alternates " +
-                "presses itself in the middle of a slow swipe. It reads:\n$setup",
+            recorded >= 0 && modifier.indexOf("emitPress()") > recorded,
+            "a hold on a modifier does not latch it while the finger is down, or switches it before " +
+                "noting where it was. It reads:\n$modifier",
+        )
+        val end = SourceScan.body(touchListener(source), "MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL ->")
+        assertTrue(
+            end.contains("if (event.action == MotionEvent.ACTION_CANCEL && before != null && before != isToggleActive) {") &&
+                SourceScan.body(end, "before != isToggleActive) {").contains("emitPress()"),
+            "a drag the pager takes after a hold leaves the modifier as the hold switched it. " +
+                "It reads:\n$end",
         )
     }
 

@@ -42,19 +42,14 @@ class ExtraKeyButton @JvmOverloads constructor(
             // false: offering an action that opens nothing is the defect this
             // pair exists to remove, not a second copy of it.
             isLongClickable = value.isNotEmpty()
-            // The touch half of the same fact. The detector's long press fires
-            // once a finger has stayed inside the touch slop for the long-press
-            // timeout, and a key with nothing to open used to press itself
-            // there. A swipe that starts slowly does exactly that, so the key
-            // went out and the pager then took the drag and turned the page;
-            // the ACTION_CANCEL it sends cannot take back a key already sent.
-            // Measured on an API 36 emulator: F7 held 0.5 s, then swiped, moved
-            // the caret and turned the page. With the long press off, a hold
-            // presses on release, through onSingleTapUp, and a drag the pager
-            // takes presses nothing.
-            gestureDetector.setIsLongpressEnabled(value.isNotEmpty())
         }
     var onLongPressAction: ((ExtraKeyButton, List<AlternateKey>) -> Unit)? = null
+
+    /**
+     * The latch a hold on this modifier switched away from, while that touch
+     * lasts; null otherwise. A drag the pager takes puts it back.
+     */
+    private var latchBeforeHold: Boolean? = null
 
     private val gestureDetector = GestureDetector(context,
         object : GestureDetector.SimpleOnGestureListener() {
@@ -71,21 +66,29 @@ class ExtraKeyButton @JvmOverloads constructor(
                 return true
             }
 
-            // Only a key with alternates gets here: [alternates] turns the long
-            // press off for every other key, so a hold on one of those presses
-            // it once, on release. Nothing repeats, on purpose. The keys that
-            // would want repeating, Backspace and the arrows, are not on the
-            // row: the soft keyboard owns Backspace and the trackpad's drag
-            // already sends arrows continuously. Repeating Tab, Esc or a `;`
-            // would only spray a source file from one hold that ran long.
+            // Only a modifier or a key with alternates gets here: the touch
+            // listener turns the long press off for every other key, so a hold
+            // on one of those presses it once, on release. Nothing repeats, on
+            // purpose. The keys that would want repeating, Backspace and the
+            // arrows, are not on the row: the soft keyboard owns Backspace and
+            // the trackpad's drag already sends arrows continuously. Repeating
+            // Tab, Esc or a `;` would only spray a source file from one hold
+            // that ran long.
             override fun onLongPress(e: MotionEvent) {
                 this@ExtraKeyButton.alpha = 1.0f
+                if (alternates.isEmpty()) {
+                    // A modifier switches while the finger is still down, so a
+                    // letter typed on the soft keyboard meanwhile is chorded and
+                    // spends the latch. Lifting the finger then does nothing
+                    // more: the detector sends no tap after a long press.
+                    latchBeforeHold = isToggleActive
+                    emitPress()
+                    return
+                }
                 performHapticFeedback(HapticFeedbackConstants.LONG_PRESS)
                 onLongPressAction?.invoke(this@ExtraKeyButton, alternates)
             }
         }).apply {
-        // Off until [alternates] gives this key something to open.
-        setIsLongpressEnabled(false)
         // No double taps. The listener above is also an OnDoubleTapListener,
         // which makes the detector look for them: a second tap within 300 ms
         // of the first went to onDoubleTap, which this listener does not
@@ -103,9 +106,10 @@ class ExtraKeyButton @JvmOverloads constructor(
      * `isToggleActive` and reported the new value. Ctrl, Alt and Shift are
      * toggles with no alternates, so holding one a moment too long switched the
      * modifier on inside [ExtraKeyRow] while the button carried on looking off,
-     * and the next tap arrived inverted. That branch is gone: a key with no
-     * alternates has no long press at all, so a hold ends in `onSingleTapUp`
-     * like a tap.
+     * and the next tap arrived inverted. A hold on a modifier still switches it
+     * from `onLongPress`, and a drag the pager takes from it switches it back,
+     * both through here; a hold on any other key without alternates ends in
+     * `onSingleTapUp` like a tap.
      *
      * This is a `View` callback, so nothing in the JVM unit suite can invoke
      * it. [pressedState] carries the part that can be pinned.
@@ -205,11 +209,35 @@ class ExtraKeyButton @JvmOverloads constructor(
         applyRoundedBackground(context.getColor(R.color.colorExtraKeyBg))
 
         setOnTouchListener { _, event ->
+            if (event.action == MotionEvent.ACTION_DOWN) {
+                // Only a key that does something while held has a long press:
+                // a modifier switches and a key with alternates opens them. The
+                // detector's long press fires once a finger has stayed inside
+                // the touch slop for the long-press timeout, and every other
+                // key used to press itself there. A swipe that starts slowly
+                // does exactly that, so the key went out and the pager then
+                // took the drag and turned the page; the ACTION_CANCEL it sends
+                // cannot take back a key already sent. Measured on an API 36
+                // emulator: F7 held 0.5 s, then swiped, moved the caret and
+                // turned the page. Read here, at each touch, because the
+                // adapter sets isToggle and alternates after building the key.
+                gestureDetector.setIsLongpressEnabled(isToggle || alternates.isNotEmpty())
+            }
             gestureDetector.onTouchEvent(event)
             when (event.action) {
                 MotionEvent.ACTION_UP, MotionEvent.ACTION_CANCEL -> {
                     if (!isToggle) {
                         alpha = 1.0f
+                    }
+                    val before = latchBeforeHold
+                    latchBeforeHold = null
+                    // The pager took the drag after a hold had switched this
+                    // modifier, so the touch was a swipe and never a press: the
+                    // latch goes back to where it was before the touch. A latch
+                    // spent on a letter typed during the hold is back there
+                    // already and is left alone.
+                    if (event.action == MotionEvent.ACTION_CANCEL && before != null && before != isToggleActive) {
+                        emitPress()
                     }
                 }
             }

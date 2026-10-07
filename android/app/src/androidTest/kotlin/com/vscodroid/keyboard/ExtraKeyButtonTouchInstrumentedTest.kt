@@ -7,6 +7,7 @@ import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import com.vscodroid.R
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertTrue
 import org.junit.Test
 import org.junit.runner.RunWith
 
@@ -22,7 +23,9 @@ import org.junit.runner.RunWith
  * finger had rested on it for the long-press timeout, so a swipe across the row
  * that started slowly sent the key it started on and then turned the page; and
  * the second of two quick taps went to the detector's double tap, which the key
- * does not handle, and was lost.
+ * does not handle, and was lost. A modifier keeps its long press, which latches
+ * it while the finger is down, and the swipe cases hold that a drag the pager
+ * takes from one leaves it as it was.
  *
  * Not run by CI, which compiles the instrumented tests but has no emulator to
  * run them on.
@@ -37,17 +40,24 @@ class ExtraKeyButtonTouchInstrumentedTest {
     /** Every press the key delivered, by key value. */
     private val pressed = mutableListOf<String>()
 
+    /** The state each press reported, which for a modifier is the latch the row is told. */
+    private val reported = mutableListOf<Boolean>()
+
     /** Every time the key opened its alternates. */
     private var opened = 0
 
     /** A key, built on the main thread: its detector needs a Looper. */
-    private fun key(alternates: List<AlternateKey> = emptyList()): ExtraKeyButton {
+    private fun key(alternates: List<AlternateKey> = emptyList(), value: String = "F7"): ExtraKeyButton {
         lateinit var button: ExtraKeyButton
         onMain {
             button = ExtraKeyButton(instrumentation.targetContext).apply {
-                keyValue = "F7"
+                keyValue = value
+                isToggle = value == "Ctrl"
                 this.alternates = alternates
-                onKeyAction = { key, _ -> pressed.add(key) }
+                onKeyAction = { key, isActive ->
+                    pressed.add(key)
+                    reported.add(isActive)
+                }
                 onLongPressAction = { _, _ -> opened++ }
             }
         }
@@ -130,5 +140,43 @@ class ExtraKeyButtonTouchInstrumentedTest {
 
         assertEquals("a hold on a key with alternates did not open them", 1, opened)
         assertEquals("a hold that opened the alternates also pressed the key", emptyList<String>(), pressed)
+    }
+
+    @Test
+    fun aModifierHeldPastTheLongPressLatchesBeforeTheFingerLifts() {
+        // So a letter typed on the soft keyboard while Ctrl is held is chorded:
+        // the interceptor chords only what arrives while the latch is on.
+        val button = key(value = "Ctrl")
+        val down = SystemClock.uptimeMillis()
+        onMain { button.dispatchTouchEvent(event(down, down, MotionEvent.ACTION_DOWN, 10f)) }
+        restPastTheLongPress()
+        assertEquals("Ctrl was not latched while the finger was still down", listOf(true), reported)
+
+        onMain { button.dispatchTouchEvent(event(down, SystemClock.uptimeMillis(), MotionEvent.ACTION_UP, 10f)) }
+        instrumentation.waitForIdleSync()
+        assertEquals("lifting the finger switched Ctrl again", listOf(true), reported)
+        assertTrue("Ctrl does not look latched", button.isToggleActive)
+    }
+
+    @Test
+    fun aSwipeThatStartsSlowlyOnAModifierLeavesItAsItWas() {
+        val slop = ViewConfiguration.get(instrumentation.targetContext).scaledTouchSlop
+        for (latched in listOf(false, true)) {
+            val button = key(value = "Ctrl")
+            onMain { button.isToggleActive = latched }
+            reported.clear()
+            val down = SystemClock.uptimeMillis()
+            onMain { button.dispatchTouchEvent(event(down, down, MotionEvent.ACTION_DOWN, 10f)) }
+            restPastTheLongPress()
+            onMain {
+                val now = SystemClock.uptimeMillis()
+                button.dispatchTouchEvent(event(down, now, MotionEvent.ACTION_MOVE, 10f + slop * 4))
+                button.dispatchTouchEvent(event(down, now, MotionEvent.ACTION_CANCEL, 10f + slop * 4))
+            }
+            instrumentation.waitForIdleSync()
+
+            assertEquals("a swipe from Ctrl latched=$latched left it switched", latched, button.isToggleActive)
+            assertEquals("the row was not told the latch went back", latched, reported.last())
+        }
     }
 }
