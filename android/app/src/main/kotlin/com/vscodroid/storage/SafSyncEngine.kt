@@ -1376,8 +1376,10 @@ class SafSyncEngine(private val context: Context) {
      * which is held back unread, even where it holds this app's own bytes, until it is
      * reported at that length; a held-back save whose folder is closed before a try lands,
      * which waits for the next open, or whose directory is renamed, which waits for that or
-     * for the next save of the file; and on a provider with no clock, every copy after the
-     * first carries its counter as a time, which is cosmetic.
+     * for the next save of the file; on a provider with no clock, a device copy an open
+     * found different from the mirror copy and left as it was, which that open takes as
+     * what it saw, so the next save of the file replaces it; and on such a provider, every
+     * copy after the first carries its counter as a time, which is cosmetic.
      */
     private fun keepsDeviceEdit(localFile: File, docUri: Uri): Boolean {
         // Settled again by whatever this answers: a save that goes ahead ends the hold, and
@@ -1453,7 +1455,8 @@ class SafSyncEngine(private val context: Context) {
      * Ceilings: [keepsDeviceEdit]'s own, each spare copy of an unchanged document there being
      * a declined delete of it here; a directory is declined for a file in it whose delete
      * was declined ([keptOnDevice]), and otherwise not asked file by file, so a file under it
-     * that raised no delete of its own, past [MAX_WATCHED_DIRECTORIES], goes with it; and a
+     * that raised no delete of its own goes with it: one past [MAX_WATCHED_DIRECTORIES], or
+     * one another app added while the folder was open, which the mirror never held; and a
      * declined delete is not tried again, so a file declined only because its read failed
      * comes back at the next open like any other.
      */

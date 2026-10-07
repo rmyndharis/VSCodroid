@@ -1030,7 +1030,9 @@ class SafLiveDeviceEditTest {
      * not deliver, and starts the folder's holds afresh. Here the device keeps no times, so
      * the reopen, finding the two copies different, leaves both as they are and takes the
      * device's size as what it last saw. A hold left over from before it was tried against
-     * that, matched it, and wrote over the device copy without keeping it.
+     * that, matched it, and wrote over the device copy without keeping it. A save made after
+     * the reopen still does, one of the guard's ceilings; what this pins is that a hold
+     * decided before that open does not do it by itself.
      */
     @Test
     fun `a held-back save from before a reopen is not tried against what that open found`() {
