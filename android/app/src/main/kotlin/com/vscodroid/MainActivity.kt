@@ -715,10 +715,17 @@ class MainActivity : AppCompatActivity() {
         // exactly backwards. Two sentences rather than one, because a directory was
         // kept for what is inside it and a document was kept for what it is, and the
         // engine has to say which: the entry is already unlinked by the time the event
-        // arrives, so nothing here can ask the disk.
-        safManager.onKeptOnDevice { kept, isDirectory ->
+        // arrives, so nothing here can ask the disk. Each comes twice, because a file the
+        // editor had and the user deleted is kept for a change on the device, which "the
+        // editor never had a copy of it" gets backwards too.
+        safManager.onKeptOnDevice { kept, isDirectory, changed ->
             val message = appContext.getString(
-                if (isDirectory) R.string.saf_directory_kept else R.string.saf_document_kept,
+                when {
+                    changed && isDirectory -> R.string.saf_directory_changed_kept
+                    changed -> R.string.saf_document_changed_kept
+                    isDirectory -> R.string.saf_directory_kept
+                    else -> R.string.saf_document_kept
+                },
                 kept.name,
             )
             toMainThread.post {

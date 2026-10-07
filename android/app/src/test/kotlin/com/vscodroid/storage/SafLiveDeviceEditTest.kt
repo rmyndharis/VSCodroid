@@ -90,6 +90,12 @@ class SafLiveDeviceEditTest {
     /** What the engine said it kept in the device folder when a delete would have taken it. */
     private val kept = mutableListOf<File>()
 
+    /**
+     * For each of [kept], whether it was said to be kept because the device's version may have
+     * changed since the editor read it, rather than because the editor never had it.
+     */
+    private val keptAsChanged = mutableListOf<Boolean>()
+
     /** Whether the device holds `notes.txt` at all; the editor can delete and make it again. */
     private var deviceHasDocument = true
 
@@ -217,7 +223,10 @@ class SafLiveDeviceEditTest {
         every { context.filesDir } returns File(root, "files").apply { mkdirs() }
         engine = SafSyncEngine(context)
         engine.onWriteBackFailed = { failed += it }
-        engine.onKeptOnDevice = { file, _ -> kept += file }
+        engine.onKeptOnDevice = { file, _, changed ->
+            kept += file
+            keptAsChanged += changed
+        }
         treeUri = mockk(relaxed = true)
         mirror = File(root, "mirror-a").apply { mkdirs() }
     }
@@ -1269,6 +1278,10 @@ class SafLiveDeviceEditTest {
         assertTrue(deviceHasDocument, "the delete took another app's edit with the file")
         assertEquals("changed by another app", deviceText)
         assertEquals(listOf(file.absolutePath), kept.map { it.absolutePath }, "nothing said it was kept")
+        assertEquals(
+            listOf(true), keptAsChanged,
+            "the notice told the user the editor never had the file they had just deleted in it",
+        )
     }
 
     /**
@@ -1312,6 +1325,10 @@ class SafLiveDeviceEditTest {
         assertTrue(deviceHasDocument, "the delete removed a device document the reopen could not read")
         assertEquals("changed by another app", deviceText)
         assertEquals(listOf(file.absolutePath), kept.map { it.absolutePath }, "nothing said it was kept")
+        assertEquals(
+            listOf(true), keptAsChanged,
+            "the notice told the user the editor never had the file they had just deleted in it",
+        )
     }
 
     /**
@@ -1437,6 +1454,7 @@ class SafLiveDeviceEditTest {
             else "the delete was declined over the copy the record vouched for",
         )
         assertEquals(if (anotherApp) listOf(file.absolutePath) else emptyList(), kept.map { it.absolutePath })
+        assertEquals(if (anotherApp) listOf(true) else emptyList(), keptAsChanged)
     }
 
     /**

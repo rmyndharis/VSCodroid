@@ -232,7 +232,7 @@ class SafUnfetchedDocumentTest {
     fun `a directory holding a document the sync never read is kept on the device`() {
         val kept = mutableListOf<String>()
         val asDirectory = mutableListOf<Boolean>()
-        engine.onKeptOnDevice = { file, isDirectory ->
+        engine.onKeptOnDevice = { file, isDirectory, _ ->
             kept.add(file.name)
             asDirectory.add(isDirectory)
         }
@@ -265,7 +265,7 @@ class SafUnfetchedDocumentTest {
     @Test
     fun `a directory the sync read whole is deleted from the device`() {
         val kept = mutableListOf<String>()
-        engine.onKeptOnDevice = { file, _ -> kept.add(file.name) }
+        engine.onKeptOnDevice = { file, _, _ -> kept.add(file.name) }
         deviceTree(
             mapOf(
                 "root" to listOf(Entry("docs", isDirectory = true)),
@@ -312,7 +312,7 @@ class SafUnfetchedDocumentTest {
     @Test
     fun `a directory whose enumeration failed is kept on the device`() {
         val kept = mutableListOf<String>()
-        engine.onKeptOnDevice = { file, _ -> kept.add(file.name) }
+        engine.onKeptOnDevice = { file, _, _ -> kept.add(file.name) }
         deviceTree(
             mapOf(
                 "root" to listOf(Entry("docs", isDirectory = true)),
@@ -337,7 +337,7 @@ class SafUnfetchedDocumentTest {
     @Test
     fun `a directory is kept for a document the sync never read at any depth`() {
         val kept = mutableListOf<String>()
-        engine.onKeptOnDevice = { file, _ -> kept.add(file.name) }
+        engine.onKeptOnDevice = { file, _, _ -> kept.add(file.name) }
         deviceTree(
             mapOf(
                 "root" to listOf(Entry("docs", isDirectory = true)),
@@ -361,7 +361,7 @@ class SafUnfetchedDocumentTest {
     @Test
     fun `a sibling whose name merely starts the same does not keep the directory`() {
         val kept = mutableListOf<String>()
-        engine.onKeptOnDevice = { file, _ -> kept.add(file.name) }
+        engine.onKeptOnDevice = { file, _, _ -> kept.add(file.name) }
         deviceTree(
             mapOf(
                 "root" to listOf(
@@ -388,7 +388,7 @@ class SafUnfetchedDocumentTest {
     @Test
     fun `a directory the device no longer holds is not kept`() {
         val kept = mutableListOf<String>()
-        engine.onKeptOnDevice = { file, _ -> kept.add(file.name) }
+        engine.onKeptOnDevice = { file, _, _ -> kept.add(file.name) }
         deviceTree(docsHoldingUnread)
         runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
 
@@ -415,7 +415,7 @@ class SafUnfetchedDocumentTest {
     @Test
     fun `renaming a directory that holds a document the sync never read still renames it`() {
         val kept = mutableListOf<String>()
-        engine.onKeptOnDevice = { file, _ -> kept.add(file.name) }
+        engine.onKeptOnDevice = { file, _, _ -> kept.add(file.name) }
         deviceTree(docsHoldingUnread)
         runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
 
@@ -440,7 +440,7 @@ class SafUnfetchedDocumentTest {
     @Test
     fun `a renamed directory still keeps the document the sync never read`() {
         val kept = mutableListOf<String>()
-        engine.onKeptOnDevice = { file, _ -> kept.add(file.name) }
+        engine.onKeptOnDevice = { file, _, _ -> kept.add(file.name) }
         deviceTree(docsHoldingUnread)
         runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
         engine.handleMirrorEvent(
@@ -496,8 +496,8 @@ class SafUnfetchedDocumentTest {
      */
     @Test
     fun `a directory delete sent after a reopen that could not read what it holds is declined`() {
-        val kept = mutableListOf<Pair<String, Boolean>>()
-        engine.onKeptOnDevice = { file, isDirectory -> kept.add(file.name to isDirectory) }
+        val kept = mutableListOf<Triple<String, Boolean, Boolean>>()
+        engine.onKeptOnDevice = { file, isDirectory, changed -> kept.add(Triple(file.name, isDirectory, changed)) }
         deviceTree(docsHoldingNotes)
         runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
         File(mirror, "docs").deleteRecursively()
@@ -508,7 +508,7 @@ class SafUnfetchedDocumentTest {
         engine.runWriteBackLoop { false }
 
         verify(exactly = 0) { DocumentsContract.deleteDocument(any(), any()) }
-        assertEquals(listOf("docs" to true), kept)
+        assertEquals(listOf(Triple("docs", true, false)), kept)
     }
 
     /**
@@ -518,8 +518,8 @@ class SafUnfetchedDocumentTest {
      */
     @Test
     fun `a directory holding a file whose delete was declined is kept on the device`() {
-        val kept = mutableListOf<Pair<String, Boolean>>()
-        engine.onKeptOnDevice = { file, isDirectory -> kept.add(file.name to isDirectory) }
+        val kept = mutableListOf<Triple<String, Boolean, Boolean>>()
+        engine.onKeptOnDevice = { file, isDirectory, changed -> kept.add(Triple(file.name, isDirectory, changed)) }
         deviceTree(docsHoldingNotes)
         runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
         changedByAnotherApp("doc:notes.md")
@@ -531,14 +531,16 @@ class SafUnfetchedDocumentTest {
         engine.runWriteBackLoop { false }
 
         verify(exactly = 0) { DocumentsContract.deleteDocument(any(), any()) }
-        assertEquals(listOf("notes.md" to false, "docs" to true), kept)
+        // Both said as a change on the device: the editor had the file, so "the editor never
+        // had a copy of it" and "files that were never copied into the editor" are false here.
+        assertEquals(listOf(Triple("notes.md", false, true), Triple("docs", true, true)), kept)
     }
 
     /** What a declined delete left follows its directory's rename, as the unread memory does. */
     @Test
     fun `a renamed directory still keeps a file whose delete was declined`() {
         val kept = mutableListOf<String>()
-        engine.onKeptOnDevice = { file, _ -> kept.add(file.name) }
+        engine.onKeptOnDevice = { file, _, _ -> kept.add(file.name) }
         deviceTree(docsHoldingNotes)
         runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
         changedByAnotherApp("doc:notes.md")
@@ -571,7 +573,7 @@ class SafUnfetchedDocumentTest {
     @Test
     fun `a reopen forgets a file whose delete was declined`() {
         val kept = mutableListOf<String>()
-        engine.onKeptOnDevice = { file, _ -> kept.add(file.name) }
+        engine.onKeptOnDevice = { file, _, _ -> kept.add(file.name) }
         deviceTree(docsHoldingNotes)
         runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
         changedByAnotherApp("doc:notes.md")
@@ -595,7 +597,7 @@ class SafUnfetchedDocumentTest {
     @Test
     fun `a directory is deleted once a file made again over a declined delete has landed`() {
         val kept = mutableListOf<String>()
-        engine.onKeptOnDevice = { file, _ -> kept.add(file.name) }
+        engine.onKeptOnDevice = { file, _, _ -> kept.add(file.name) }
         deviceTree(docsHoldingNotes)
         runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
         changedByAnotherApp("doc:notes.md")
@@ -629,7 +631,7 @@ class SafUnfetchedDocumentTest {
     @Test
     fun `a directory is kept when the provider cannot say whether it still holds it`() {
         val kept = mutableListOf<String>()
-        engine.onKeptOnDevice = { file, _ -> kept.add(file.name) }
+        engine.onKeptOnDevice = { file, _, _ -> kept.add(file.name) }
         deviceTree(docsHoldingUnread)
         runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
         every { resolver.query(any(), any(), any(), any(), any()) } throws
@@ -657,10 +659,12 @@ class SafUnfetchedDocumentTest {
     fun `a document the sync never read is kept on the device when the editor deletes it`() {
         val kept = mutableListOf<String>()
         val asDirectory = mutableListOf<Boolean>()
+        val asChanged = mutableListOf<Boolean>()
         val lost = mutableListOf<String>()
-        engine.onKeptOnDevice = { file, isDirectory ->
+        engine.onKeptOnDevice = { file, isDirectory, changed ->
             kept.add(file.name)
             asDirectory.add(isDirectory)
+            asChanged.add(changed)
         }
         engine.onWriteBackFailed = { lost.add(it.name) }
         deviceHolding("notes.md", size = 64, readable = false)
@@ -680,6 +684,10 @@ class SafUnfetchedDocumentTest {
             "a single document was announced in the wording for a directory, which tells " +
                 "the user their file holds files",
         )
+        assertEquals(
+            listOf(false), asChanged,
+            "a document the editor never had was announced as one another app changed",
+        )
         assertTrue(
             lost.isEmpty(),
             "a document that is only on the device was announced as one only the app " +
@@ -697,7 +705,7 @@ class SafUnfetchedDocumentTest {
     @Test
     fun `a document is kept when the provider cannot say whether it still holds it`() {
         val kept = mutableListOf<String>()
-        engine.onKeptOnDevice = { file, _ -> kept.add(file.name) }
+        engine.onKeptOnDevice = { file, _, _ -> kept.add(file.name) }
         deviceHolding("notes.md", size = 64, readable = false)
         runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
         every { resolver.query(any(), any(), any(), any(), any()) } throws
@@ -718,7 +726,7 @@ class SafUnfetchedDocumentTest {
     @Test
     fun `a document the sync did read is deleted from the device`() {
         val kept = mutableListOf<String>()
-        engine.onKeptOnDevice = { file, _ -> kept.add(file.name) }
+        engine.onKeptOnDevice = { file, _, _ -> kept.add(file.name) }
         deviceHolding("notes.md", size = 64)
         runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
 
@@ -741,7 +749,7 @@ class SafUnfetchedDocumentTest {
     fun `a document the sync never read is kept when it is moved away instead`() {
         val kept = mutableListOf<String>()
         val lost = mutableListOf<String>()
-        engine.onKeptOnDevice = { file, _ -> kept.add(file.name) }
+        engine.onKeptOnDevice = { file, _, _ -> kept.add(file.name) }
         engine.onWriteBackFailed = { lost.add(it.name) }
         deviceHolding("notes.md", size = 64, readable = false)
         runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
@@ -766,7 +774,7 @@ class SafUnfetchedDocumentTest {
     @Test
     fun `a neighbour whose name merely starts the same does not keep the document`() {
         val kept = mutableListOf<String>()
-        engine.onKeptOnDevice = { file, _ -> kept.add(file.name) }
+        engine.onKeptOnDevice = { file, _, _ -> kept.add(file.name) }
         deviceTree(
             mapOf(
                 "root" to listOf(

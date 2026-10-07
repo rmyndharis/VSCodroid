@@ -1489,15 +1489,24 @@ class SafSyncEngine(private val context: Context) {
      * comes back at the next open like any other.
      */
     private fun keepsDeviceDocument(job: SyncJob, docUri: Uri): Boolean {
-        val unread = holdsUnread(job.localPath, job.isDirectory) &&
+        val unread = holdsUnread(job.localPath, job.isDirectory)
+        val held = (unread || job.isDirectory && holdsKept(job.localPath)) &&
             job.safTreeUri?.let { providerHolds(it, job.relativePath) } != false
-        if (!unread) {
+        if (!held) {
             if (job.isDirectory || deviceMovedPast(File(job.localPath), docUri) == null) {
                 return false
             }
             keptOnDevice.add(job.localPath)
         }
-        keepUnread(File(job.localPath), job.relativePath, job.isDirectory)
+        // Said as a change rather than as content the editor never had, for every file this
+        // declines: the delete passed [handleMirrorEvent]'s guard, so the editor had the file,
+        // and what the device keeps is a version that moved past what this engine read, or
+        // one an open after the delete could not read. A directory is kept for what is unread
+        // under it where there is any, and otherwise for such a file.
+        keepUnread(
+            File(job.localPath), job.relativePath, job.isDirectory,
+            changed = !job.isDirectory || !unread,
+        )
         return true
     }
 
@@ -2866,19 +2875,24 @@ class SafSyncEngine(private val context: Context) {
     /**
      * Told when something deleted in the editor was left standing on the device,
      * because it holds content this sync never copied in: a directory holding such a
-     * document, or the document itself.
+     * document, or the document itself. With [changed], because what the device holds
+     * is a version of a file the editor had that this engine has not read: one that
+     * moved past what it last read or wrote, as another app's edit does, or a directory
+     * holding such a file; see [keepsDeviceDocument].
      *
      * Its own seam for the reason [onDocumentsNotCopied] has one: [onWriteBackFailed]
      * says the app holds the only copy, and here the opposite is true. The mirror copy
      * is gone, the device holds the only one, and a notice worded the other way would
      * send the user looking inside the app for files that are safe where they are.
      *
-     * The flag is what the sentence turns on and it cannot be recovered downstream:
+     * The flags are what the sentence turns on and they cannot be recovered downstream:
      * the entry is already unlinked when the event arrives, so nothing left on disk
      * can be asked whether it was a directory. "It holds files that never reached the
-     * editor" is the right sentence for one case and false for the other.
+     * editor" is the right sentence for one case and false for the other, and "the
+     * editor never had a copy of it" is false of a file the user had open and deleted.
      */
-    internal var onKeptOnDevice: (file: File, isDirectory: Boolean) -> Unit = { _, _ -> }
+    internal var onKeptOnDevice: (file: File, isDirectory: Boolean, changed: Boolean) -> Unit =
+        { _, _, _ -> }
 
     /**
      * Told when the device folder would not delete something the editor did.
@@ -2956,7 +2970,8 @@ class SafSyncEngine(private val context: Context) {
 
     /**
      * Declines to delete what the device holds at [relativePath], because it is, or it
-     * holds, a document this sync never read, and says so.
+     * holds, a document this sync never read, or with [changed] a version of a file the
+     * editor had that this engine has not read, and says so.
      *
      * Not through [refuseUnreadDocument]: that one announces on [onWriteBackFailed],
      * whose wording says the app holds the only copy, and here the app holds none.
@@ -2967,13 +2982,22 @@ class SafSyncEngine(private val context: Context) {
      * as a write and is the one occasion on which "the only copy is inside VSCodroid"
      * is both true and urgent.
      */
-    private fun keepUnread(localFile: File, relativePath: String, isDirectory: Boolean) {
+    private fun keepUnread(
+        localFile: File,
+        relativePath: String,
+        isDirectory: Boolean,
+        changed: Boolean,
+    ) {
         Logger.w(
             tag,
-            "Not deleting $relativePath from the device: it holds content this sync " +
-                "never read",
+            "Not deleting $relativePath from the device: " +
+                if (changed) {
+                    "what it holds there may have changed since this app last read or wrote it"
+                } else {
+                    "it holds content this sync never read"
+                },
         )
-        onKeptOnDevice(localFile, isDirectory)
+        onKeptOnDevice(localFile, isDirectory, changed)
     }
 
     /**
@@ -4208,12 +4232,14 @@ class SafSyncEngine(private val context: Context) {
         // cost `deleteDocument` on the one copy the set says nothing else has, so
         // a provider that cannot answer keeps. One scan of a set that is normally
         // empty, on the observer thread; the binder walk is paid only on a match.
-        if (type == SyncType.DELETE &&
-            holdsUnread(localFile.absolutePath, isDirectory) &&
-            providerHolds(safTreeUri, relativePath) != false
-        ) {
-            keepUnread(localFile, relativePath, isDirectory)
-            return
+        if (type == SyncType.DELETE) {
+            val unread = holdsUnread(localFile.absolutePath, isDirectory)
+            if ((unread || isDirectory && holdsKept(localFile.absolutePath)) &&
+                providerHolds(safTreeUri, relativePath) != false
+            ) {
+                keepUnread(localFile, relativePath, isDirectory, changed = !unread)
+                return
+            }
         }
 
         // Resolve the SAF URI for this file via its relative path, except where
@@ -4366,14 +4392,24 @@ class SafSyncEngine(private val context: Context) {
      * own mirror path when this sync did not read what is under it, either because the name
      * is skipped or because enumerating it failed, and the prefix test alone cannot match
      * that entry: `below` carries a trailing separator the entry does not have. Deleting the
-     * directory itself is exactly the case those entries exist to refuse. A file whose
-     * delete was declined counts for its directories too; see [keptOnDevice].
+     * directory itself is exactly the case those entries exist to refuse. Both guards ask
+     * [holdsKept] of a directory too.
      */
     private fun holdsUnread(path: String, isDirectory: Boolean): Boolean {
         if (path in unfetched) return true
         if (!isDirectory) return false
         val below = path + File.separator
-        return unfetched.any { it.startsWith(below) } || keptOnDevice.any { it.startsWith(below) }
+        return unfetched.any { it.startsWith(below) }
+    }
+
+    /**
+     * Whether the directory [path] holds a file whose delete [keepsDeviceDocument] declined
+     * ([keptOnDevice]), which deleting the directory would take with it. Its own question
+     * rather than part of [holdsUnread], because the notice says a different thing for it.
+     */
+    private fun holdsKept(path: String): Boolean {
+        val below = path + File.separator
+        return keptOnDevice.any { it.startsWith(below) }
     }
 
     /**

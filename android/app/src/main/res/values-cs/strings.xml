@@ -256,6 +256,15 @@
          because that one says the thing holds files, which is false of a file, and
          apart from saf_write_back_failed because the app holds nothing here at all. -->
     <string name="saf_document_kept">Soubor %1$s zůstal ve složce v zařízení: editor jeho kopii nikdy neměl. Pokud ho už nepotřebujete, odstraňte ho tam.</string>
+
+    <!-- The same refusal for a file the editor did have and the user deleted, kept
+         because the device's version may have changed since the editor last read or
+         saved it, as another app's edit does. saf_document_kept would tell that user the
+         editor never had the file they just deleted in it. -->
+    <string name="saf_document_changed_kept">Soubor %1$s zůstal ve složce v zařízení: jiná aplikace ho mohla změnit od chvíle, kdy ho editor naposledy načetl nebo uložil. Pokud ho už nepotřebujete, odstraňte ho tam.</string>
+    <!-- A directory deleted in the editor that holds such a file, and no file the editor
+         never had, which is what saf_directory_kept says. -->
+    <string name="saf_directory_changed_kept">Adresář %1$s zůstal ve složce v zařízení: jiná aplikace mohla změnit soubor v něm od chvíle, kdy ho editor naposledy načetl nebo uložil. Pokud ho už nepotřebujete, odstraňte ho tam.</string>
     <string name="saf_delete_refused">Soubor %1$s se nepodařilo smazat ze složky v zařízení, takže se při příštím otevření složky objeví znovu. Smažte jej ve správci souborů v zařízení.</string>
 
     <!-- Removing the local copy of a device folder, from the storage screen. The

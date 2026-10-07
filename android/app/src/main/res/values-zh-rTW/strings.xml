@@ -250,6 +250,15 @@
          because that one says the thing holds files, which is false of a file, and
          apart from saf_write_back_failed because the app holds nothing here at all. -->
     <string name="saf_document_kept">%1$s 已保留在裝置資料夾中：編輯器從未取得它的副本。若不再需要，請在該處刪除。</string>
+
+    <!-- The same refusal for a file the editor did have and the user deleted, kept
+         because the device's version may have changed since the editor last read or
+         saved it, as another app's edit does. saf_document_kept would tell that user the
+         editor never had the file they just deleted in it. -->
+    <string name="saf_document_changed_kept">%1$s 已保留在裝置資料夾中：自編輯器上次讀取或儲存它以來，其他應用程式可能已變更它。若不再需要，請在該處刪除。</string>
+    <!-- A directory deleted in the editor that holds such a file, and no file the editor
+         never had, which is what saf_directory_kept says. -->
+    <string name="saf_directory_changed_kept">%1$s 已保留在裝置資料夾中：自編輯器上次讀取或儲存其中的某個檔案以來，其他應用程式可能已變更該檔案。若不再需要，請在該處刪除。</string>
     <string name="saf_delete_refused">無法從裝置資料夾中刪除 %1$s，下次開啟該資料夾時它會再次出現。請在裝置的檔案管理員中刪除。</string>
 
     <!-- Removing the local copy of a device folder, from the storage screen. The
