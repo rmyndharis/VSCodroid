@@ -670,7 +670,7 @@ class SafLiveDeviceEditTest {
      * charged for it, rather than following the file for as long as it grows.
      */
     @Test
-    fun `a kept copy that grows while the open reads it is read no further than its length`() {
+    fun `a kept copy that grows while the open reads it is hashed no further than its length`() {
         deviceText = "x".repeat(20_000)
         deviceSize = 20_000
         open()
