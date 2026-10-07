@@ -80,7 +80,9 @@ VSCodroid is VS Code. If you have used VS Code on desktop, everything works the 
   keeps a file's old time when the file changes, as some USB and network folders
   do, a change that keeps the file's size goes unnoticed, and a folder over
   64 MB that changes a file's time on its own can occasionally leave such a copy
-  holding the file as you opened it. If the device folder's version cannot be
+  holding the file as you opened it, until VSCodroid has read each of its files
+  once after an update from version 1.4.0 or earlier, which it does 64 MB per
+  opening of the folder. If the device folder's version cannot be
   copied, as can happen in a network folder while it is offline even when no
   other app changed the file, or when that version is over 50 MB, your save
   stays inside VSCodroid and a notice says so. While the folder is open
