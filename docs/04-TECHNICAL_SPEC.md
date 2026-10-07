@@ -496,9 +496,10 @@ before the first paint from the theme the folder or workspace in the page's addr
 which it records itself in `localStorage` (`vscodroid-folder-themes`, the twenty most recently
 shown), or else from the splash the workbench saves there (`monaco-parts-splash`), which is one
 for every folder. It also hands that theme to the workbench as `initialColorTheme`, which the
-workbench uses only when it cannot use the theme it stored: from the folder's record, or from the
-splash on the first load the script runs, and never on a load after the device switched between
-light and dark, when `window.autoDetectColorScheme` makes the workbench's own pick the right one.
+workbench uses only when it cannot use the theme it stored: from the folder's record, from the
+splash on the first load the script runs, or the dark default while no splash exists yet, and
+never on a load after the device switched between light and dark, when
+`window.autoDetectColorScheme` makes the workbench's own pick the right one.
 After that it keeps the background on the editor colour of the theme the workbench shows, and the
 folder's record with it, because the background also fills the space the soft keyboard gives back
 until the workbench lays itself out again. The workbench keeps its stored theme, one per profile,

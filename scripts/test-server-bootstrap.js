@@ -589,9 +589,10 @@ async function stoppingTakesTheEditorServerWithIt() {
 // that case fails; without the observer of the head, the case of a theme changed
 // while the page is open fails; with the shared splash read in place of a
 // folder's record, or handed over on a load after the first, the cases of a
-// folder with a theme of its own and of a folder never shown fail; without the
-// bound, or without moving a folder shown again to the end, the case of twenty
-// folders fails; writing on every change of the head fails the title case.
+// folder with a theme of its own and of a folder never shown fail; handing over
+// nothing without a record fails the case of a load before any splash; without
+// the bound, or without moving a folder shown again to the end, the case of
+// twenty folders fails; writing on every change of the head fails the title case.
 {
     const anchor =
         '<meta id="vscode-workbench-web-configuration" data-settings="{{WORKBENCH_WEB_CONFIGURATION}}">';
@@ -735,6 +736,15 @@ async function stoppingTakesTheEditorServerWithIt() {
         assert.deepStrictEqual(page.settings.initialColorTheme, { themeType: 'dark', colors: {} },
             'a first start does not start dark, or starts without a colours object');
         assert.strictEqual(page.painted, '#1e1e1e', 'a first start is not given the dark blank page');
+    }
+
+    // A second load before any window has saved a splash, which happens only in
+    // the first seconds of a fresh install: nothing names a theme yet, so a folder
+    // without a record is still started on the dark default.
+    {
+        const page = load({ splash: undefined, last: 'dark', dark: true, search: '?folder=/projects/second' });
+        assert.deepStrictEqual(page.settings.initialColorTheme, { themeType: 'dark', colors: {} },
+            'a load before any window saved a splash does not start on the dark default');
     }
 
     // A folder whose own settings name Light Modern, shown before, entered after

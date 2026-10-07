@@ -485,8 +485,9 @@ if (!fs.existsSync(rehEntryPoint)) {
     // starts on its own default, as upstream does. The first load this script runs
     // is the exception. After this update the stored theme is unusable then only
     // because the cached default still spells it the old way, so the splash is
-    // right, and a fresh install has none and starts on the dark default this app
-    // configures. Hex colours only, because the workbench parses each one with
+    // right. A load with no splash at all, which is only ever the first seconds of
+    // a fresh install, starts on the dark default this app configures, whichever
+    // load it is. Hex colours only, because the workbench parses each one with
     // Color.fromHex, which turns anything else into red, and the splash writes a
     // translucent colour as rgba(). Always with a colours object, an empty one
     // included: without it the workbench colours the theme it starts on from the
@@ -529,7 +530,8 @@ if (!fs.existsSync(rehEntryPoint)) {
             "\t\t\t\t\tvar where = query.get('folder') || query.get('workspace') || '';",
             "\t\t\t\t\tvar seen = JSON.parse(localStorage.getItem('vscodroid-folder-themes')) || {};",
             '\t\t\t\t\tvar mine = seen[where];',
-            "\t\t\t\t\tvar splash = mine || JSON.parse(localStorage.getItem('monaco-parts-splash')) || {};",
+            "\t\t\t\t\tvar shared = JSON.parse(localStorage.getItem('monaco-parts-splash'));",
+            '\t\t\t\t\tvar splash = mine || shared || {};',
             '\t\t\t\t\tvar info = splash.colorInfo || {};',
             `\t\t\t\t\tvar types = ${JSON.stringify(SPLASH_THEME_TYPES)}, type = types[splash.baseTheme] || 'dark';`,
             `\t\t\t\t\tvar ids = ${JSON.stringify(SPLASH_COLOR_IDS)};`,
@@ -539,7 +541,7 @@ if (!fs.existsSync(rehEntryPoint)) {
             "\t\t\t\t\tlocalStorage.setItem('vscodroid-device-scheme', scheme);",
             "\t\t\t\t\tvar blank = type === 'light' || type === 'hcLight' ? '#ffffff' : '#1e1e1e';",
             '\t\t\t\t\tdocument.documentElement.style.backgroundColor = hex.test(info.background) ? info.background : blank;',
-            '\t\t\t\t\tif (!settings.initialColorTheme && (last === null || (mine && last === scheme))) {',
+            '\t\t\t\t\tif (!settings.initialColorTheme && (last === null || ((mine || !shared) && last === scheme))) {',
             '\t\t\t\t\t\tvar colors = {};',
             '\t\t\t\t\t\tfor (var key in ids) { if (hex.test(info[key])) { colors[ids[key]] = info[key]; } }',
             '\t\t\t\t\t\tsettings.initialColorTheme = { themeType: type, colors: colors };',
