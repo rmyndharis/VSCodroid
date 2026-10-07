@@ -576,17 +576,22 @@ async function stoppingTakesTheEditorServerWithIt() {
     fs.rmSync(dir, { recursive: true, force: true });
 }
 
-// Every page load starts on the theme the last one ended on, read from the splash
-// the workbench saves in localStorage. Without it the page shows the WebView's
-// own background until the workbench has loaded, the dark window colour whatever
-// the theme, and a load that cannot use the stored theme (the first start, the
-// first load after an update renamed the configured default) shows the light
-// theme before a dark one.
+// Every page load starts on the theme it is about to show: the one its folder
+// showed last time, or else the one the workbench saved in its splash. Without
+// it the page shows the WebView's own background until the workbench has loaded,
+// the dark window colour whatever the theme, and a load that cannot use the
+// stored theme (the first start, the first load after an update renamed the
+// configured default, a folder whose own settings name another theme) shows the
+// light theme before a dark one, or the dark one before a light one.
 //
 // NEGATIVE CONTROL: without the script in server.js the first assertion fails;
-// with `initialColorTheme` always taken from the splash, the case of a device that
-// switched to light mode fails; without the observer of the head, the case of a
-// theme changed while the page is open fails.
+// with `initialColorTheme` handed over after the device switched to light mode,
+// that case fails; without the observer of the head, the case of a theme changed
+// while the page is open fails; with the shared splash read in place of a
+// folder's record, or handed over on a load after the first, the cases of a
+// folder with a theme of its own and of a folder never shown fail; without the
+// bound, or without moving a folder shown again to the end, the case of twenty
+// folders fails; writing on every change of the head fails the title case.
 {
     const anchor =
         '<meta id="vscode-workbench-web-configuration" data-settings="{{WORKBENCH_WEB_CONFIGURATION}}">';
@@ -614,25 +619,40 @@ async function stoppingTakesTheEditorServerWithIt() {
         },
     };
 
+    // A theme as the workbench shows it: its base theme as a class of the
+    // workbench element, and its colours in the CSS variables of its stylesheet.
+    const shown = (base, colors) => ({
+        base,
+        vars: Object.fromEntries(Object.entries(colors).map(([id, c]) => [`--vscode-${id.replace(/\./g, '-')}`, c])),
+    });
+    const lightModernColors = {
+        foreground: '#3b3b3b', 'editor.background': '#ffffff', 'titleBar.activeBackground': '#f8f8f8',
+        'activityBar.background': '#f8f8f8', 'sideBar.background': '#f8f8f8', 'panel.background': '#f8f8f8',
+        'statusBar.background': '#f8f8f8', 'statusBar.noFolderBackground': '#f8f8f8',
+    };
+    const lightModern = shown('vs', lightModernColors);
+    const darkModernShown = shown('vs-dark', { 'editor.background': '#1f1f1f', 'statusBar.background': '#181818' });
+
     /**
      * Runs the script the way the page does, before the workbench reads its
-     * settings. Answers what the workbench is then handed, what the page paints
-     * before anything else, and what is left in storage for the next load.
+     * settings, on a page whose address carries `search`. Pass the same `items`
+     * to successive loads and they share the page's storage, the way loads of
+     * one origin do. Answers what the workbench is then handed, what the page
+     * paints before anything else, and what is left in storage for the next load.
      */
-    const load = ({ splash, last, dark, settings = {}, refuse = false }) => {
-        const items = {};
+    const load = ({ splash, last, dark, settings = {}, refuse = false, items = {}, search = '' }) => {
         if (splash) items['monaco-parts-splash'] = JSON.stringify(splash);
         if (last) items['vscodroid-device-scheme'] = last;
+        let writes = 0;
         const localStorage = {
             getItem: (k) => { if (refuse) throw new Error('SecurityError'); return k in items ? items[k] : null; },
-            setItem: (k, v) => { items[k] = String(v); },
+            setItem: (k, v) => { writes += k === 'vscodroid-folder-themes' ? 1 : 0; items[k] = String(v); },
         };
         let data = JSON.stringify(settings);
         const el = { getAttribute: () => data, setAttribute: (_name, value) => { data = value; } };
         const root = { style: {} };
-        // The workbench the page builds later, holding the theme it shows in a CSS
-        // variable the way its own stylesheet does.
-        const workbench = { vars: {} };
+        // The workbench the page builds later, showing a theme the way `shown` does.
+        const workbench = { classList: { contains: (c) => c === workbench.base }, vars: {} };
         const head = {};
         const document = {
             getElementById: (id) => (id === 'vscode-workbench-web-configuration' ? el : null),
@@ -648,19 +668,20 @@ async function stoppingTakesTheEditorServerWithIt() {
         }
         const getComputedStyle = (node) => ({ getPropertyValue: (name) => node.vars[name] || '' });
         // eslint-disable-next-line no-new-func
-        new Function('document', 'localStorage', 'matchMedia', 'MutationObserver', 'getComputedStyle', body)(
-            document, localStorage, matchMedia, MutationObserver, getComputedStyle);
+        new Function('document', 'localStorage', 'matchMedia', 'MutationObserver', 'getComputedStyle', 'location', body)(
+            document, localStorage, matchMedia, MutationObserver, getComputedStyle, { search });
         return {
             settings: JSON.parse(data),
             painted: root.style.backgroundColor,
             recorded: items['vscodroid-device-scheme'],
+            writes: () => writes,
             /**
              * The head changes the way a theme change rewrites its style element,
-             * with the workbench then showing an editor background of `editor`, or
-             * not built yet when that is undefined. Answers the root's colour after.
+             * with the workbench then showing `theme`, or not built yet when that
+             * is undefined. Answers the root's colour after.
              */
-            changeHead: (editor) => {
-                Object.assign(workbench, { built: editor !== undefined, vars: { '--vscode-editor-background': editor } });
+            changeHead: (theme) => {
+                Object.assign(workbench, theme ? { built: true, ...theme } : { built: false });
                 observers
                     .filter((o) => o.target === head && o.options.childList && o.options.subtree)
                     .forEach((o) => o.callback([]));
@@ -691,7 +712,7 @@ async function stoppingTakesTheEditorServerWithIt() {
     {
         const page = load({
             splash: { baseTheme: 'vs', colorInfo: { background: '#ffffff', statusBarBackground: '#f8f8f8' } },
-            last: 'dark', dark: true,
+            last: undefined, dark: true,
         });
         assert.deepStrictEqual(page.settings.initialColorTheme,
             { themeType: 'light', colors: { 'statusBar.background': '#f8f8f8' } },
@@ -701,7 +722,7 @@ async function stoppingTakesTheEditorServerWithIt() {
 
     // Both high-contrast types, and a splash without its background colour.
     for (const [baseTheme, themeType, painted] of [['hc-black', 'hcDark', '#1e1e1e'], ['hc-light', 'hcLight', '#ffffff']]) {
-        const page = load({ splash: { baseTheme }, last: 'light', dark: false });
+        const page = load({ splash: { baseTheme }, last: undefined, dark: false });
         assert.strictEqual(page.settings.initialColorTheme.themeType, themeType, `${baseTheme} does not start as ${themeType}`);
         assert.strictEqual(page.painted, painted, `${baseTheme} without a background colour is not given ${painted}`);
     }
@@ -716,11 +737,43 @@ async function stoppingTakesTheEditorServerWithIt() {
         assert.strictEqual(page.painted, '#1e1e1e', 'a first start is not given the dark blank page');
     }
 
+    // A folder whose own settings name Light Modern, shown before, entered after
+    // a window on the default dark theme. The stored theme is then that window's,
+    // which the folder's setting throws away, so the workbench starts on what it
+    // is handed: that has to be the folder's light theme, not the splash the dark
+    // window left. Reached first through the app's address, which encodes the
+    // path, and then through the one the workbench builds, which does not.
+    {
+        const items = {};
+        load({ items, dark: true, search: '?folder=%2Fprojects%2Flight' }).changeHead(lightModern);
+        load({ items, dark: true, search: '?folder=/projects/dark' }).changeHead(darkModernShown);
+        items['monaco-parts-splash'] = JSON.stringify(darkModern);
+        const page = load({ items, dark: true, search: '?folder=/projects/light' });
+        assert.deepStrictEqual(page.settings.initialColorTheme, { themeType: 'light', colors: lightModernColors },
+            'a folder whose own settings name a light theme starts on the dark theme of the window before it');
+        assert.strictEqual(page.painted, '#ffffff', 'a folder whose own settings name a light theme starts its blank page dark');
+    }
+
+    // A folder never shown, on a load after the first. The splash then holds the
+    // theme the workbench stored, which is unusable on that load only when the
+    // folder's settings name another, so it is not handed over and the workbench
+    // starts on its own default. The blank page still takes the splash colour,
+    // which is right for every folder that follows the user's theme.
+    {
+        const page = load({ splash: darkModern, last: 'light', dark: false, search: '?folder=/projects/new' });
+        assert.strictEqual(page.settings.initialColorTheme, undefined,
+            "the last window's theme is handed to a folder never shown, and the workbench uses it only " +
+            'when that folder is configured for another theme');
+        assert.strictEqual(page.painted, '#1f1f1f', 'a folder never shown does not start its blank page on the splash');
+    }
+
     // The device switched to light mode since the last load. With
     // window.autoDetectColorScheme on, the workbench is following the device and
     // its own pick is right, so it is left to make it.
     {
-        const page = load({ splash: darkModern, last: 'dark', dark: false });
+        const items = {};
+        load({ items, dark: true, search: '?folder=/projects/a' }).changeHead(darkModernShown);
+        const page = load({ items, splash: darkModern, dark: false, search: '?folder=/projects/a' });
         assert.strictEqual(page.settings.initialColorTheme, undefined,
             'the last theme is imposed on a load after the device changed mode, which the workbench ' +
             'follows by itself when window.autoDetectColorScheme is on');
@@ -730,25 +783,43 @@ async function stoppingTakesTheEditorServerWithIt() {
     // A starting theme the page was already given is not replaced.
     {
         const own = { themeType: 'light', colors: { 'editor.background': '#fafafa' } };
-        const page = load({ splash: darkModern, last: 'dark', dark: true, settings: { initialColorTheme: own } });
+        const page = load({ splash: darkModern, last: undefined, dark: true, settings: { initialColorTheme: own } });
         assert.deepStrictEqual(page.settings.initialColorTheme, own, 'a starting theme the page already carried was replaced');
     }
 
     // The theme changes while the page is open, here Light Modern to Dark Modern.
     // The root fills the space the soft keyboard gives back until the workbench
     // lays itself out again, so it has to follow: without the observer of the
-    // head it stays white under the dark theme.
+    // head it stays white under the dark theme. Every change of the window title
+    // changes the head too, and one that leaves the theme alone writes nothing.
     {
         const page = load({ splash: { baseTheme: 'vs', colorInfo: { background: '#ffffff' } }, last: 'light', dark: false });
         assert.strictEqual(page.painted, '#ffffff', 'a light theme does not get a light blank page');
-        assert.strictEqual(page.changeHead(' #1f1f1f'), '#1f1f1f',
+        assert.strictEqual(page.changeHead(shown('vs-dark', { 'editor.background': ' #1f1f1f' })), '#1f1f1f',
             'the root keeps the theme the page started on after the theme changed');
+        page.changeHead(shown('vs-dark', { 'editor.background': ' #1f1f1f' }));
+        assert.strictEqual(page.writes(), 1, 'a change of the head that leaves the theme alone rewrote the record');
     }
 
     // A head that changes before the workbench is built leaves the colour the page started with.
     {
         const page = load({ splash: darkModern, last: 'light', dark: false });
         assert.strictEqual(page.changeHead(undefined), '#1f1f1f', 'the root lost its colour before the workbench existed');
+    }
+
+    // Twenty folders are kept, the most recently shown, so the record cannot grow
+    // into the storage the workbench's sealed secrets share. A folder shown again
+    // counts as shown last, even with the theme it had.
+    {
+        const items = {};
+        const show = (i) => load({ items, dark: true, search: `?folder=/projects/${i}` }).changeHead(darkModernShown);
+        for (let i = 0; i < 20; i++) show(i);
+        show(0);
+        show(20);
+        const kept = Object.keys(JSON.parse(items['vscodroid-folder-themes']));
+        assert.strictEqual(kept.length, 20, `${kept.length} folders are kept rather than twenty`);
+        assert.ok(kept.includes('/projects/0') && kept.includes('/projects/20') && !kept.includes('/projects/1'),
+            `the folder dropped is not the one shown longest ago: ${kept.join(' ')}`);
     }
 
     // Storage that refuses leaves the page as upstream ships it.
@@ -868,7 +939,7 @@ preloadRidesAsOneToken()
             'ok -- product.json survives a truncated file and an unwritable directory, a missing ' +
                 'server tree is a failed start rather than a healthy one, the workbench page is ' +
                 'given the trusted-domain list once and a page without the element it extends is ' +
-                'reported rather than thrown, the page starts on the theme the last load ended on, ' +
+                'reported rather than thrown, the page starts on the theme its folder showed last, ' +
                 'the sign-in callback intent is pinned once per start, a proxy that does not parse costs only DNS, the ' +
                 'preload rides as one token, the DNS proxy outlives the bootstrap, and a stop ' +
                 'takes the editor server with it',
