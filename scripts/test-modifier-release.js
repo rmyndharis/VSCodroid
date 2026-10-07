@@ -30,11 +30,14 @@
  * Ctrl+Tabs, and a real Ctrl+Left from the trackpad, must leave it open, and
  * a hardware keyboard's own Ctrl release must still accept it. The real press
  * is modelled as the events Chromium hands the page for `navigationKeyEvents`.
+ * A keyboard holding both Shifts must have each release go on to the page.
  *
  * NEGATIVE CONTROL, measured: against KeyInjector.kt at 54352514, which sent
- * no release, 19 of the 41 cases fail, and against 602b0afe, which released
- * at the chord's target with nothing stopping it at the window, the 3 picker
- * cases fail: the second Ctrl+Tab accepted the editor it had just highlighted.
+ * no release, 19 of the 42 cases fail; against 602b0afe, which released at
+ * the chord's target with nothing stopping it at the window, the 3 picker
+ * cases fail, the second Ctrl+Tab accepting the editor it had just
+ * highlighted; and against 8539308f, which paired a release with a keydown by
+ * key rather than by code, the case of a keyboard holding both Shifts fails.
  * Each of these changes fails at least one case: not calling the release from
  * either script, or from either of the interceptor's two chords; releasing
  * with the flag still set; sending the keyup at what has focus rather than at
@@ -479,6 +482,20 @@ const settled = (name, page) => {
     realPress(page, 'ArrowRight', 'ArrowRight', 39, { ctrl: true });
     cases.push(['installed before the emitter, the real releases accept nothing', picker.accepted.length, 0]);
     settled('installed before the emitter', page);
+}
+
+// A hardware keyboard holding both Shifts: each release follows the keydown of
+// its own key, so both go on to the page.
+{
+    const page = newPage();
+    intercept(page);
+    let heard = 0;
+    page.focused.addEventListener('keyup', (e) => { if (e.key === 'Shift') heard += 1; });
+    hardwareKey(page, 'keydown', 'Shift', 'ShiftLeft', 16);
+    hardwareKey(page, 'keydown', 'Shift', 'ShiftRight', 16);
+    hardwareKey(page, 'keyup', 'Shift', 'ShiftLeft', 16);
+    hardwareKey(page, 'keyup', 'Shift', 'ShiftRight', 16);
+    cases.push(['a hardware keyboard releasing both Shifts has both releases go on', heard, 2]);
 }
 
 // The control: a hardware keyboard's Ctrl comes up as a key of its own, after

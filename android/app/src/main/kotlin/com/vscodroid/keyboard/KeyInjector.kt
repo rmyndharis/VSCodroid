@@ -192,9 +192,16 @@ class KeyInjector(
      * it dispatches modified KeyboardEvents so VS Code shortcuts work, then a keyup
      * for each modifier the chord carried ([modifierReleases] says why).
      *
-     * It also stops, at the window, every keyup of a modifier that had no keydown.
-     * That is what the row's releases look like, from a chord here or from a real
-     * press, and what a keyboard's never do. The workbench reads which modifiers
+     * It also stops, at the window, every keyup of a modifier whose key this page
+     * did not see go down, paired by `code` so that each of two Shifts held at
+     * once counts. That is what the row's releases look like, from a chord here
+     * or from a real press. A keyboard's release follows its own keydown and goes
+     * on, in an extension webview too: the webview's frame passes a modifier's
+     * keydown and keyup to the workbench, which dispatches them again on this
+     * window. A key that went down in another window, or in a frame that passes
+     * nothing on, such as the page Simple Browser nests in its webview, has its
+     * release stopped, and a key released there after going down here lets one
+     * later release from the row through. The workbench reads which modifiers
      * are held from capture listeners on the window, so those still hear it. A
      * quick pick opened with quick navigate, as Ctrl+Tab's is, does not: it
      * accepts on a modifier's keyup in its own container, and the second Ctrl+Tab
@@ -296,15 +303,16 @@ class KeyInjector(
                 // capture listeners, where the workbench reads what is held, so
                 // a quick pick below cannot accept on it. See the KDoc. A
                 // keyboard presses a modifier before releasing it, so its own
-                // release goes on.
+                // release goes on. Paired by code, the physical key: by key, a
+                // keyboard holding both Shifts had its second release stopped.
                 var MODIFIERS = { Alt: 1, Control: 1, Shift: 1, Meta: 1 };
                 var pressed = {};
                 window.addEventListener('keydown', function(e) {
-                    if (MODIFIERS.hasOwnProperty(e.key)) pressed[e.key] = true;
+                    if (MODIFIERS.hasOwnProperty(e.key)) pressed[e.code] = true;
                 }, true);
                 window.addEventListener('keyup', function(e) {
                     if (!MODIFIERS.hasOwnProperty(e.key)) return;
-                    if (pressed[e.key]) delete pressed[e.key];
+                    if (pressed[e.code]) delete pressed[e.code];
                     else e.stopPropagation();
                 }, true);
 

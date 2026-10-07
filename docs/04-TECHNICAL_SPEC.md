@@ -723,7 +723,8 @@ phase. The workbench reads which modifiers are held from capture listeners there
 Ctrl+Tab's recently used editors are, does not: it accepts on a modifier's keyup in its own
 container, and the second Ctrl+Tab from the row is typed with focus on that list, so its
 release would open the highlighted editor instead of moving down. A keyboard's own release
-follows its keydown and goes on.
+follows the keydown of the same key and goes on: the two are paired by `code`, so each of two
+Shifts held at once comes up.
 Tab stays here because a real one moves focus, and the Explorer's rename and New File boxes
 commit the typed name when they lose it; Escape because under spatial navigation an
 unhandled real Escape blurs the focused element. Up and Down stay because they are the
