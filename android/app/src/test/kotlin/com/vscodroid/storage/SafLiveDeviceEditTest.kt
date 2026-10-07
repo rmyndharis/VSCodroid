@@ -7,6 +7,7 @@ import android.net.Uri
 import android.os.FileObserver
 import android.os.SystemClock
 import android.provider.DocumentsContract
+import com.vscodroid.SourceScan
 import com.vscodroid.util.Logger
 import io.mockk.Runs
 import io.mockk.every
@@ -638,6 +639,23 @@ class SafLiveDeviceEditTest {
         open()
 
         assertEquals(1_200L, hashed, "the open did not read the newer copy alone within its budget")
+    }
+
+    /**
+     * The budget is the figure the user guide and the changelog give for it, in the decimal
+     * megabytes every size a user reads is written in (`StorageManager.formatSize`). It was
+     * 64 MiB under a "64 MB", which no reader of either could tell.
+     */
+    @Test
+    fun `the kept-copy budget is the figure the guide and the changelog give`() {
+        for (path in listOf("../../docs/USER_GUIDE.md", "../../CHANGELOG.md")) {
+            val text = SourceScan.read(path).replace(Regex("""\s+"""), " ")
+            val megabytes = Regex("""(\d+) MB per opening""").find(text)?.groupValues?.get(1)?.toLong()
+            assertEquals(
+                SafSyncEngine.KEPT_COPY_DIGEST_BYTES, megabytes?.times(1_000_000),
+                "$path gives another figure, or none, for what an open reads of the kept copies",
+            )
+        }
     }
 
     /**

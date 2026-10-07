@@ -4984,8 +4984,11 @@ class SafSyncEngine(private val context: Context) {
          * opens after an update from a build that recorded none: a typical source tree fits
          * in the first, and a folder of photos or data is read over several rather than in
          * full by one.
+         *
+         * 64 MB, decimal like every size a user reads ([StorageManager.formatSize]), because
+         * the user guide and the changelog give the figure.
          */
-        internal const val KEPT_COPY_DIGEST_BYTES = 64L * 1024 * 1024
+        internal const val KEPT_COPY_DIGEST_BYTES = 64_000_000L
 
         /**
          * How many entries one directory-create is allowed to copy to the device.
