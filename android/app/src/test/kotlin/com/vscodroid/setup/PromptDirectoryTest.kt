@@ -68,7 +68,7 @@ class PromptDirectoryTest {
         projects.mkdirs()
         copy = File(filesDir, "saf-mirrors/8e440ff38c8e").apply { File(this, "src").mkdirs() }
         // The link the app makes, so that the case follows its layout.
-        named = requireNotNull(SafStorageManager(context).namedPathFor(copy, "reviewtest2")) {
+        named = requireNotNull(SafStorageManager(context).namedPathFor(copy, "recipes")) {
             "the named path could not be made"
         }
     }

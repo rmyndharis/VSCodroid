@@ -80,20 +80,20 @@ class NamedMirrorPathTest {
         File(this, "README.md").writeText("hello")
     }
 
-    private fun folder(dir: File, displayName: String = "reviewtest2") = SafFolderInfo(
+    private fun folder(dir: File, displayName: String = "recipes") = SafFolderInfo(
         uri = mockk<Uri>(relaxed = true),
         displayName = displayName,
         lastOpened = 0L,
         mirrorPath = dir.absolutePath,
     )
 
-    private fun named(name: String = "reviewtest2", of: String = hash) = "$root/by-name/$of/$name"
+    private fun named(name: String = "recipes", of: String = hash) = "$root/by-name/$of/$name"
 
     // -- The name --
 
     @Test
     fun `a folder's name is used as it is`() {
-        assertEquals("reviewtest2", SafStorageManager.nameSegment("reviewtest2"))
+        assertEquals("recipes", SafStorageManager.nameSegment("recipes"))
         assertEquals("我的 项目", SafStorageManager.nameSegment("我的 项目"))
     }
 
@@ -185,7 +185,7 @@ class NamedMirrorPathTest {
     fun `the named path is a relative link that reads as the copy`() {
         val dir = copy()
 
-        val link = manager.namedPathFor(dir, "reviewtest2")
+        val link = manager.namedPathFor(dir, "recipes")
 
         assertEquals(File(named()), link)
         assertEquals(Paths.get("..", "..", hash), Files.readSymbolicLink(link!!.toPath()))
@@ -196,10 +196,10 @@ class NamedMirrorPathTest {
     @Test
     fun `asking again answers the same link`() {
         val dir = copy()
-        val first = manager.namedPathFor(dir, "reviewtest2")
+        val first = manager.namedPathFor(dir, "recipes")
 
-        assertEquals(first, manager.namedPathFor(dir, "reviewtest2"))
-        assertEquals(listOf("reviewtest2"), File(mirrors, "by-name/$hash").list()?.toList())
+        assertEquals(first, manager.namedPathFor(dir, "recipes"))
+        assertEquals(listOf("recipes"), File(mirrors, "by-name/$hash").list()?.toList())
     }
 
     /**
@@ -222,7 +222,7 @@ class NamedMirrorPathTest {
         val occupied = File(named()).apply { mkdirs() }
         File(occupied, "mine.txt").writeText("left here by hand")
 
-        assertNull(manager.namedPathFor(dir, "reviewtest2"))
+        assertNull(manager.namedPathFor(dir, "recipes"))
         assertEquals("left here by hand", File(occupied, "mine.txt").readText())
 
         val elsewhere = File(filesDir, "home").apply { mkdirs() }
@@ -280,7 +280,7 @@ class NamedMirrorPathTest {
     fun `the names of a copy still on disk or still granted stay`() {
         // On disk with no grant: holding a file no record vouches for, the pass keeps it.
         val kept = copy()
-        manager.namedPathFor(kept, "reviewtest2")
+        manager.namedPathFor(kept, "recipes")
         // Granted, with no copy yet: a folder picked again whose sync has not run.
         val granted = mockk<Uri>()
         every { granted.toString() } returns "content://tree/primary%3AProject"
@@ -321,7 +321,7 @@ class NamedMirrorPathTest {
     @Test
     fun `a file someone left among the names is kept`() {
         val dir = copy()
-        manager.namedPathFor(dir, "reviewtest2")
+        manager.namedPathFor(dir, "recipes")
         File(mirrors, "by-name/$hash/notes.txt").writeText("not ours")
         dir.deleteRecursively()
 

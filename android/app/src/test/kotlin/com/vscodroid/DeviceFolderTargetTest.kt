@@ -18,7 +18,7 @@ class DeviceFolderTargetTest {
     private val root = "/data/user/0/com.vscodroid/files/saf-mirrors"
     private val hash = "8e440ff38c8e"
     private val copy = "$root/$hash"
-    private val named = "$root/by-name/$hash/reviewtest2"
+    private val named = "$root/by-name/$hash/recipes"
 
     private fun target(
         target: String = copy,

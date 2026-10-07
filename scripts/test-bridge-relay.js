@@ -1221,7 +1221,7 @@ async function main() {
     const remote = (p) => uriOf('vscode-remote', '127.0.0.1:13337', p);
     const COPY = `${FILES}/saf-mirrors/8e440ff38c8e`;
     const NAMES = `${FILES}/saf-mirrors/by-name/8e440ff38c8e`;
-    const NAMED = `${NAMES}/reviewtest2`;
+    const NAMED = `${NAMES}/recipes`;
     const LINK = vscodeStub.FileType.Directory | vscodeStub.FileType.SymbolicLink;
     // The extension's storage for the folder, which names the workbench's id for it,
     // and the backups the workbench keeps under that id.
@@ -1258,7 +1258,7 @@ async function main() {
     const moved = () => ranWith.filter(([id]) => id === 'vscode.openFolder');
     const reopen = (items) => (items.includes('Reopen') ? 'Reopen' : undefined);
 
-    directories = new Map([[NAMES, [['reviewtest2', LINK]]]]);
+    directories = new Map([[NAMES, [['recipes', LINK]]]]);
     infoChoice = reopen;
     const readme = tab(`${COPY}/README.md`);
     const app = tab(`${COPY}/src/app.js`);
@@ -1269,7 +1269,7 @@ async function main() {
         docs: [{ isDirty: false }],
     });
     assert.ok(
-        shown.info.length === 1 && shown.info[0].includes('8e440ff38c8e') && shown.info[0].includes('reviewtest2'),
+        shown.info.length === 1 && shown.info[0].includes('8e440ff38c8e') && shown.info[0].includes('recipes'),
         'a page on a copy\'s hash was not offered the folder\'s name: ' + JSON.stringify(shown.info),
     );
     assert.deepStrictEqual(
@@ -1286,7 +1286,7 @@ async function main() {
 
     // The page the move lands on opens them, in that order, and forgets them.
     infoChoice = null;
-    await namedPageLoad({ folders: [{ uri: remote(NAMED), name: 'reviewtest2' }] });
+    await namedPageLoad({ folders: [{ uri: remote(NAMED), name: 'recipes' }] });
     assert.deepStrictEqual(
         shownDocs.map((u) => u.path), [`${NAMED}/README.md`, `${NAMED}/src/app.js`],
         'the editors carried across the move were not opened again under the new path: ' +
@@ -1303,7 +1303,7 @@ async function main() {
         ['to another page', { to: `${NAMES}/other`, root: `${NAMES}/other`, files: ['README.md'], at: Date.now() }],
     ]) {
         state.set(CARRIED, carried);
-        await namedPageLoad({ folders: [{ uri: remote(NAMED), name: 'reviewtest2' }] });
+        await namedPageLoad({ folders: [{ uri: remote(NAMED), name: 'recipes' }] });
         assert.ok(
             shownDocs.length === 0 && state.get(CARRIED) === undefined,
             `editors carried ${why} were opened here, or kept: ` + JSON.stringify(shownDocs),
@@ -1348,9 +1348,9 @@ async function main() {
     const noNames = await offersMove({});
     directories.set(NAMES, [['old', LINK], ['new', LINK]]);
     const twoNames = await offersMove({});
-    directories.set(NAMES, [['reviewtest2', vscodeStub.FileType.Directory]]);
+    directories.set(NAMES, [['recipes', vscodeStub.FileType.Directory]]);
     const notALink = await offersMove({});
-    directories.set(NAMES, [['reviewtest2', LINK]]);
+    directories.set(NAMES, [['recipes', LINK]]);
     const severalFolders = await offersMove({
         folders: [...onCopy, { uri: remote(`${FILES}/home/projects/site`), name: 'site' }],
     });
