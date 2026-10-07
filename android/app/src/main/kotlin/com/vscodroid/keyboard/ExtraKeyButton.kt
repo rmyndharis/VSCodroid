@@ -47,7 +47,8 @@ class ExtraKeyButton @JvmOverloads constructor(
 
     /**
      * The latch a hold on this modifier switched away from, while that touch
-     * lasts; null otherwise. A drag the pager takes puts it back.
+     * lasts; null otherwise. A touch that ends in a cancel, as one the pager
+     * takes does, puts it back.
      */
     private var latchBeforeHold: Boolean? = null
 
@@ -107,9 +108,9 @@ class ExtraKeyButton @JvmOverloads constructor(
      * toggles with no alternates, so holding one a moment too long switched the
      * modifier on inside [ExtraKeyRow] while the button carried on looking off,
      * and the next tap arrived inverted. A hold on a modifier still switches it
-     * from `onLongPress`, and a drag the pager takes from it switches it back,
-     * both through here; a hold on any other key without alternates ends in
-     * `onSingleTapUp` like a tap.
+     * from `onLongPress`, and a cancel of that touch, as a drag the pager takes
+     * is, switches it back, both through here; a hold on any other key without
+     * alternates ends in `onSingleTapUp` like a tap.
      *
      * This is a `View` callback, so nothing in the JVM unit suite can invoke
      * it. [pressedState] carries the part that can be pinned.
@@ -231,11 +232,15 @@ class ExtraKeyButton @JvmOverloads constructor(
                     }
                     val before = latchBeforeHold
                     latchBeforeHold = null
-                    // The pager took the drag after a hold had switched this
-                    // modifier, so the touch was a swipe and never a press: the
-                    // latch goes back to where it was before the touch. A latch
-                    // spent on a letter typed during the hold is back there
-                    // already and is left alone.
+                    // The touch ended without lifting after a hold had switched
+                    // this modifier, so it was never a press: the latch goes
+                    // back to where it was before the touch. Mostly that is the
+                    // pager taking a drag, which makes the touch a swipe. The
+                    // system cancelling the gesture, and the key being removed
+                    // under the finger, by a repack (ExtraKeyRow.setupAdapter)
+                    // or with its window, end it the same way. A latch spent on
+                    // a letter typed during the hold is back there already and
+                    // is left alone.
                     if (event.action == MotionEvent.ACTION_CANCEL && before != null && before != isToggleActive) {
                         emitPress()
                     }

@@ -505,6 +505,18 @@ class ExtraKeyRow @JvmOverloads constructor(
     }
 
     private fun setupAdapter() {
+        // A replacement takes the latches before it is attached, never after.
+        // Attaching it removes the pages of the adapter it replaces, which
+        // cancels a touch still on one of their keys from inside the swap: a
+        // modifier its hold had switched is switched back, and a trackpad drag
+        // ends, which spends the latches. Both go through this row, which
+        // pushes what the adapter holds and starts or stops the poll from it.
+        // Written back after the swap, the latches repainted the row over
+        // whatever the swap had done, unpushed and unpolled: a resize while a
+        // finger held a Ctrl its hold had latched left the row showing Ctrl
+        // over a page holding none, and one during a drag left its latch
+        // unspent.
+        val carried = if (::adapter.isInitialized) Triple(ctrlActive, altActive, shiftActive) else null
         adapter = KeyPageAdapter(
             pages = pages,
             onKeyAction = { key, isActive, button -> handleKeyAction(key, isActive, button) },
@@ -518,6 +530,11 @@ class ExtraKeyRow @JvmOverloads constructor(
             },
             onLongPress = { button, alternates -> showLongPressPopup(button, alternates) }
         )
+        carried?.let { (ctrl, alt, shift) ->
+            ctrlActive = ctrl
+            altActive = alt
+            shiftActive = shift
+        }
         viewPager.adapter = adapter
     }
 
@@ -673,12 +690,12 @@ class ExtraKeyRow @JvmOverloads constructor(
      *
      * When it does rebuild, the latched modifiers have to be carried across by
      * hand: the toggle map lives on [KeyPageAdapter] and the replacement starts
-     * empty, so they are read off the outgoing adapter before it is replaced and
-     * written back afterwards. Without that, a resize leaves the row painted
-     * idle while [KeyInjector] still holds the modifier that was pushed at the
-     * page, and the next key goes out as a chord nobody asked for. Written
-     * unconditionally so the badge and the band's spoken description are
-     * repainted from the new page count either way.
+     * empty, so [setupAdapter] copies them off the outgoing adapter, before the
+     * swap for the reason it gives. Without that, a resize leaves the row
+     * painted idle while [KeyInjector] still holds the modifier that was pushed
+     * at the page, and the next key goes out as a chord nobody asked for.
+     * [setupDots] then repaints the band's spoken description from the new page
+     * count; the badge names the latches alone and is the same view throughout.
      */
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
@@ -700,15 +717,9 @@ class ExtraKeyRow @JvmOverloads constructor(
         longPressPopup = null
         val repacked = KeyPages.forSmallestWidthDp(newConfig.smallestScreenWidthDp)
         if (repacked == pages) return
-        val ctrl = ctrlActive
-        val alt = altActive
-        val shift = shiftActive
         pages = repacked
         setupAdapter()
         setupDots()
-        ctrlActive = ctrl
-        altActive = alt
-        shiftActive = shift
         Logger.d(tag, "Repacked into ${pages.size} pages for ${newConfig.smallestScreenWidthDp}dp")
     }
 

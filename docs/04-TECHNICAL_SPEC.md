@@ -617,7 +617,10 @@ and a half) come to 48.4dp. `KeyPages.forSmallestWidthDp` repacks the same items
 order, whenever a page's share would put a key under `MIN_TOUCH_TARGET_DP`: five pages at
 411dp, six at 360dp, seven at 320dp. The argument is `smallestScreenWidthDp`, so rotating
 does not repack, but a drop into a narrow split-screen pane does, through
-`ExtraKeyRow.onConfigurationChanged`.
+`ExtraKeyRow.onConfigurationChanged`. The latched modifiers are carried into the new pages'
+adapter before it replaces the old one (`ExtraKeyRow.setupAdapter`): replacing it cancels a
+touch still on a key or the trackpad, that cancel switches back a modifier a hold had switched
+or ends the drag, which spends the latches, and the row tells the page what it did.
 
 | Page | Contents at 411dp and wider |
 |------|----------|
@@ -640,11 +643,12 @@ and `)` sits on a digit key no page carries. Only those keys and the three modif
 have a long press (`ExtraKeyButton`'s touch listener turns the `GestureDetector`'s on or
 off at each touch), and the row dismisses an open popup when the pager starts a drag. A
 modifier's long press switches the latch while the finger is still down, so a letter
-typed on the soft keyboard during the hold is chorded, and a drag the pager takes after
-it switches the latch back. Every other key presses on release, and only if the finger
-never left the touch slop around where it landed, so a swipe the pager takes presses
-nothing, and so does a long hold that drifted. The detector has no double-tap listener,
-so two quick taps are two presses.
+typed on the soft keyboard during the hold is chorded, and a touch that then ends in a
+cancel switches the latch back: the pager taking the drag, the system cancelling the
+gesture, or a repack removing the key under the finger. Every other key presses on
+release, and only if the finger never left the touch slop around where it landed, so a
+swipe the pager takes presses nothing, and so does a long hold that drifted. The detector
+has no double-tap listener, so two quick taps are two presses.
 
 There are **no discrete arrow buttons anywhere on the row.** The gesture trackpad replaced them and
 emits arrow keys as the finger moves (`TrackpadGesture.accumulate`). A drag is the only route for a
