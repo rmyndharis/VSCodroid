@@ -1447,11 +1447,12 @@ class SafSyncEngine(private val context: Context) {
      * back under another name. The device keeps the document, and the next open brings it
      * back into the editor.
      *
-     * Ceilings beside [keepsDeviceEdit]'s own: a directory is declined for a file in it whose
-     * delete was declined ([keptOnDevice]), and otherwise not asked file by file, so a file
-     * under it that raised no delete of its own, past [MAX_WATCHED_DIRECTORIES], goes with
-     * it; and a declined delete is not tried again, so a file declined only because its read
-     * failed comes back at the next open like any other.
+     * Ceilings: [keepsDeviceEdit]'s own, each spare copy of an unchanged document there being
+     * a declined delete of it here; a directory is declined for a file in it whose delete
+     * was declined ([keptOnDevice]), and otherwise not asked file by file, so a file under it
+     * that raised no delete of its own, past [MAX_WATCHED_DIRECTORIES], goes with it; and a
+     * declined delete is not tried again, so a file declined only because its read failed
+     * comes back at the next open like any other.
      */
     private fun keepsDeviceDocument(job: SyncJob, docUri: Uri): Boolean {
         val unread = holdsUnread(job.localPath, job.isDirectory) &&
