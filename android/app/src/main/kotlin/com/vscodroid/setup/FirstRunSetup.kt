@@ -4524,7 +4524,7 @@ private val LEGACY_STARTUP_DIR_BLOCK = """
     fi
 """.trimIndent()
 
-private const val PROMPT_VERSION = "v2"
+private const val PROMPT_VERSION = "v3"
 private const val PROMPT_BEGIN = "# >>> vscodroid prompt"
 private const val PROMPT_END = "# <<< vscodroid prompt"
 private const val PROMPT_MARKER_CURRENT = "$PROMPT_BEGIN $PROMPT_VERSION >>>"
@@ -4555,6 +4555,12 @@ private val PROMPT_BLOCK = """
         # which is the one thing this abbreviation exists to hide.
         if [[ "${'$'}dir" == *saf-mirrors/* ]]; then
             dir="${'$'}{dir#*saf-mirrors/}"
+            # A folder opened by its name is the link by-name/<hash>/<name>, and a
+            # terminal there keeps that spelling: node-pty exports PWD as the
+            # directory it starts the shell in, and bash keeps an inherited PWD that
+            # names its directory. Dropping by-name/<hash>/ leaves <name>/..., which
+            # the case below reads as it reads <hash>/..., so both paths prompt alike.
+            dir="${'$'}{dir#by-name/*/}"
             case "${'$'}dir" in
                 */*) dir="[saf]/${'$'}{dir#*/}" ;;
                 *)   dir="[saf]" ;;
