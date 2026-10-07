@@ -1028,11 +1028,11 @@ class SafLiveDeviceEditTest {
     /**
      * A reopen settles a save held back before it as it settles any save the watcher did
      * not deliver, and starts the folder's holds afresh. Here the device keeps no times, so
-     * the reopen, finding the two copies different, leaves both as they are and takes the
-     * device's size as what it last saw. A hold left over from before it was tried against
-     * that, matched it, and wrote over the device copy without keeping it. A save made after
-     * the reopen still does, one of the guard's ceilings; what this pins is that a hold
-     * decided before that open does not do it by itself.
+     * the reopen, finding the two copies different, leaves both as they are. A hold left
+     * over from before it was tried against the device's size the reopen listed, matched
+     * it, and wrote over the device copy without keeping it. What this pins is that a hold
+     * decided before that open is not tried at all; the next save of the file is what
+     * decides, and keeps the device copy (see the no-clock reopen cases below).
      */
     @Test
     fun `a held-back save from before a reopen is not tried against what that open found`() {
@@ -1377,6 +1377,89 @@ class SafLiveDeviceEditTest {
             "one device edit was lost: ${deviceCopies()}",
         )
         assertEquals("editor two", deviceText)
+    }
+
+    /**
+     * Opened again on a provider with no clock, a file whose device copy differs from the
+     * mirror's is left as it is on both sides, with no time to say which is newer. Two
+     * states look like that: another app changed a file this app saved in the session
+     * before, or a save the watcher never delivered, the app killed before its drain ran,
+     * sits over a device copy nobody touched. The open took the size it listed as what it
+     * last saw, so the next save went over another app's edit with no copy kept. The device
+     * copy is read at that save now: the copy the record vouched for, the second state, is
+     * replaced as it stands, and anything else is kept.
+     */
+    @ParameterizedTest(name = "another app changed the file: {0}")
+    @ValueSource(booleans = [true, false])
+    fun `a save after a reopen with no clock keeps another app's edit and nothing else`(anotherApp: Boolean) {
+        deviceHasClock = false
+        open()
+        if (anotherApp) {
+            save("first save")
+            editOnDevice("changed by another app")
+        } else {
+            File(mirror, "notes.txt").writeText("saved, never delivered")
+        }
+        open()
+
+        save("typed after the reopen")
+
+        assertEquals(
+            if (anotherApp) listOf("changed by another app") else emptyList(),
+            deviceCopies().values.toList(),
+            if (anotherApp) "the save replaced another app's edit with no copy of it anywhere"
+            else "the copy the record vouched for was kept as if another app had written it",
+        )
+        assertEquals("typed after the reopen", deviceText)
+    }
+
+    /** The same two states meeting a delete, which the bytes decide as they decide a save. */
+    @ParameterizedTest(name = "another app changed the file: {0}")
+    @ValueSource(booleans = [true, false])
+    fun `a delete after a reopen with no clock is declined only over another app's edit`(anotherApp: Boolean) {
+        deviceHasClock = false
+        open()
+        if (anotherApp) {
+            save("first save")
+            editOnDevice("changed by another app")
+        } else {
+            File(mirror, "notes.txt").writeText("saved, never delivered")
+        }
+        open()
+        val file = File(mirror, "notes.txt").apply { delete() }
+
+        engine.handleMirrorEvent(FileObserver.DELETE, file, mirror, treeUri)
+        engine.runWriteBackLoop { false }
+
+        assertEquals(
+            anotherApp, deviceHasDocument,
+            if (anotherApp) "the delete took another app's edit with the file"
+            else "the delete was declined over the copy the record vouched for",
+        )
+        assertEquals(if (anotherApp) listOf(file.absolutePath) else emptyList(), kept.map { it.absolutePath })
+    }
+
+    /**
+     * The reopen on a provider that reports no size either, every length 0. A save the
+     * watcher delivered leaves the device holding the mirror's bytes, and no length can say
+     * so, so the open reads them; taken as a difference, the next save kept a copy of this
+     * app's own earlier save.
+     */
+    @Test
+    fun `a save after a reopen with neither column keeps no copy of a delivered save`() {
+        deviceHasClock = false
+        deviceHasSize = false
+        open()
+        save("first save")
+        open()
+
+        save("typed after the reopen")
+
+        assertEquals(
+            emptyMap<String, String>(), deviceCopies(),
+            "this app's own delivered save was kept as if another app had written it",
+        )
+        assertEquals("typed after the reopen", deviceText)
     }
 
     /**

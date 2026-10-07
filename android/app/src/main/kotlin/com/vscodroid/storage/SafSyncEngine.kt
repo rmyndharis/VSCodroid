@@ -182,7 +182,8 @@ class SafSyncEngine(private val context: Context) {
      * wrote it (every write-back), with the SHA-256 of what phase 2 fetched, of the mirror
      * copy it kept, taken from the record or read by [digestKeptCopies], or of what a landed
      * write streamed. A save may replace exactly that and nothing newer; [keepsDeviceEdit]
-     * is what asks.
+     * is what asks. Where phase 2 could not place what the device holds there is no stamp,
+     * only the digest of the copy the previous record vouched for at that path.
      *
      * In memory only, never in the `.synced` record, because a record line licenses a
      * deletion (see [deviceChangedSinceRecord]). The digest of a copy the record vouches
@@ -410,8 +411,9 @@ class SafSyncEngine(private val context: Context) {
         // copy is strictly newer than the device document it is about to replace; and
         // [uploadMirrorOnlyDocuments] when the mirror holds a file the enumeration did
         // not return. A fifth comes after phase 2: [digestKeptCopies], which takes a kept
-        // copy's digest from its line rather than reading the copy again. Read once here
-        // rather than per document; [reconcileDeletions]
+        // copy's digest from its line rather than reading the copy again. A sixth is the
+        // no-clock arm that finds the two sides apart, through [previousLineFor]. Read once
+        // here rather than per document; [reconcileDeletions]
         // reads the same file again in phase 3, after phase 2 may have changed what is
         // on disk.
         //
@@ -452,6 +454,11 @@ class SafSyncEngine(private val context: Context) {
             }
         }
         val previouslyRecorded: Set<String>? by lazy { previousRecord?.keys }
+        // The previous record's line for a path, whatever copy it names, by the path as the
+        // record spells it. Built only once a no-clock open finds the two sides apart.
+        val previousLineFor: Map<String, String>? by lazy {
+            previousRecord?.keys?.associateBy { it.substringBefore('\t') }
+        }
 
         // Where the mirror ends, resolved rather than compared lexically, and the one
         // thing phase 2 refuses to write outside. Every outbound path in this engine
@@ -808,6 +815,20 @@ class SafSyncEngine(private val context: Context) {
                     // recorded list. Re-deriving it would also read "the two differ" out of
                     // a recordIdentity that simply declined the path.
                     if (doc.lastModified == 0L && !deviceAgrees) {
+                        // Not the listed stamp as what this engine saw, which let the next
+                        // save or delete go over the device copy unasked: it holds bytes
+                        // nothing here has read, another app's edit as readily as the copy
+                        // the record vouched for before an edit the watcher never delivered.
+                        // So no stamp, and the digest of that copy, which is the version
+                        // such an edit was made from: the next save or delete reads the
+                        // device copy, goes ahead over that version, and keeps anything
+                        // else the way [keepsDeviceEdit] keeps another app's edit.
+                        val last = previousLineFor?.get(escapeRecordPath(doc.relativePath))
+                        deviceSeen[localPath.absolutePath] = DeviceState(
+                            null,
+                            last?.let { previousRecord?.get(it) },
+                            last?.substringAfterLast('\t')?.toLongOrNull() ?: 0,
+                        )
                         // At Logger.i, not d: this file stops receiving device-side
                         // changes from here on, and a user asking why their folder does
                         // not update needs this line to exist in a bug report.
@@ -1361,6 +1382,15 @@ class SafSyncEngine(private val context: Context) {
      * back is tried again by itself while the folder is watched, so it lands once the
      * device copy can be read, decided by the bytes like any other.
      *
+     * An open that cannot place what the device holds, on a provider with no clock a device
+     * copy that differs from the mirror copy, leaves no stamp at all, so the first save reads
+     * the device copy whatever the provider reports. The digest it is read against is the
+     * previous record's for that path, the copy an edit the watcher never delivered was made
+     * from, so that edit goes out over it without a copy kept, while another app's edit made
+     * before the open is kept like one made after it. Where the record holds no digest for
+     * the path, as after an update from a build that recorded none, or after a second open
+     * with the edit still undelivered, which records nothing there, even that copy is kept.
+     *
      * Ceilings: a provider reporting neither column; a same-size edit inside one clock
      * tick, or at any time on a provider with no clock or one that keeps a document's old
      * time, as an Android phone attached over MTP does; a foreign edit in the window
@@ -1376,10 +1406,8 @@ class SafSyncEngine(private val context: Context) {
      * which is held back unread, even where it holds this app's own bytes, until it is
      * reported at that length; a held-back save whose folder is closed before a try lands,
      * which waits for the next open, or whose directory is renamed, which waits for that or
-     * for the next save of the file; on a provider with no clock, a device copy an open
-     * found different from the mirror copy and left as it was, which that open takes as
-     * what it saw, so the next save of the file replaces it; and on such a provider, every
-     * copy after the first carries its counter as a time, which is cosmetic.
+     * for the next save of the file; and on a provider with no clock, every copy after the
+     * first carries its counter as a time, which is cosmetic.
      */
     private fun keepsDeviceEdit(localFile: File, docUri: Uri): Boolean {
         // Settled again by whatever this answers: a save that goes ahead ends the hold, and
@@ -2588,14 +2616,16 @@ class SafSyncEngine(private val context: Context) {
      * path.
      *
      * ⚠️ That length is the provider's claim, not a measurement, and `COLUMN_SIZE` is
-     * optional in the same way `COLUMN_LAST_MODIFIED` is. A provider omitting both
-     * reports every length as 0, and this then answers false for every non-empty file,
-     * so the fix does not apply there. It cannot answer a wrong yes, because the bytes
-     * are compared afterwards, so the ceiling is "does not help", never a loss. The
-     * ceiling is accepted here on purpose: this runs for every file of a folder whose
-     * provider has no clock, on every open, and dropping the pre-check would read every
-     * document over binder each time. [deviceIsTruncatedMirror] takes the opposite
-     * decision, and says why.
+     * optional in the same way `COLUMN_LAST_MODIFIED` is. A provider omitting it reports
+     * every length as 0, which is why 0 rules nothing out and the bytes decide: answered
+     * false for every non-empty file, a provider omitting both never had a file tracked
+     * again, and a save delivered there would read as a device copy unlike the mirror's,
+     * of which the next save keeps a spare copy. The read stops a buffer past the mirror's
+     * length. With no clock phase 2 asks only about the files the record does not vouch
+     * for, while each file it does vouch for is fetched in full on every open, and below
+     * the free-space floor the read stands in for such a fetch. A reported length still
+     * rules the read out. [deviceIsTruncatedMirror] takes the opposite decision, and says
+     * why.
      *
      * A read that fails answers false. That is the safe direction: false leaves the
      * mirror kept and vouches for nothing new, while a true this could not justify would
@@ -2604,7 +2634,7 @@ class SafSyncEngine(private val context: Context) {
      * since, which says no more than it said before.
      */
     private fun deviceMatchesMirror(safDocUri: Uri, localFile: File, deviceSize: Long): Boolean {
-        if (deviceSize != localFile.length()) return false
+        if (deviceSize != 0L && deviceSize != localFile.length()) return false
         return try {
             context.contentResolver.openInputStream(safDocUri)?.use { device ->
                 localFile.inputStream().use { mirror ->
@@ -5482,7 +5512,12 @@ internal enum class DeviceCopyOutcome {
  * write of this app lands there, and after a write that does not land.
  */
 private class DeviceState(
-    val stamp: Pair<Long, Long>,
+    /**
+     * Null where an open found the device holding bytes it could not place, so that no stamp
+     * the provider reports lets a save or a delete through without the bytes being read; the
+     * digest is then the previous record's for the path, or null where it held none.
+     */
+    val stamp: Pair<Long, Long>?,
     val sha256: ByteArray? = null,
     val length: Long = 0,
 )
