@@ -127,7 +127,7 @@ To edit settings as JSON, use the Command Palette: `Preferences: Open User Setti
 
 ### Text Size
 
-**VSCodroid: UI Scale**, in the Command Palette, sets the size of the whole interface: the side bar, tabs, menus, status bar, panels and editor together. It offers 100%, 110%, 125% and 150%, but only the sizes that leave the screen at least 320 pixels wide, so most phones go up to 110% or 125% and tablets to 150%. The size is kept when the window reloads and when the app restarts. A size that does not take effect on your device is put back to 100%, and the command says so when you pick it.
+**VSCodroid: UI Scale**, in the Command Palette, sets the size of the whole interface: the side bar, tabs, menus, status bar, panels and editor together. It offers 100%, 110%, 125% and 150%, but only the sizes that keep the page at least 320 CSS pixels wide, so most phones go up to 110% or 125% and tablets to 150%. The size is kept when the window reloads and when the app restarts. A size that does not take effect on your device is put back to 100%, and the command says so when you pick it.
 
 To change the text in one place only, use the `editor.fontSize` and `terminal.integrated.fontSize` settings, which are remembered. **Increase Editor Font Size** in the Command Palette also works, but it is not bound to a key and it resets when the window reloads.
 
