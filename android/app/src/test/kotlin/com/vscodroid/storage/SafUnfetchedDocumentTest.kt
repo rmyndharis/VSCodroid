@@ -461,6 +461,142 @@ class SafUnfetchedDocumentTest {
         assertEquals(listOf("archive"), kept, "the rename left the unread memory at the old name")
     }
 
+    /** `docs` holding one file the sync reads whole. */
+    private val docsHoldingNotes = mapOf(
+        "root" to listOf(Entry("docs", isDirectory = true)),
+        "doc:docs" to listOf(Entry("notes.md")),
+    )
+
+    /**
+     * Another app's edit of the document [id] since the sync read it: asked about alone, it
+     * reports a later time, and a read gives other bytes than the sync fetched.
+     */
+    private fun changedByAnotherApp(id: String) {
+        val document = uris.getValue(id)
+        every { resolver.query(document, any(), any(), any(), any()) } answers {
+            mockk<Cursor>(relaxed = true) {
+                every { moveToFirst() } returns true
+                every { getColumnIndex(DocumentsContract.Document.COLUMN_LAST_MODIFIED) } returns 0
+                every { getColumnIndex(DocumentsContract.Document.COLUMN_SIZE) } returns 1
+                every { isNull(any<Int>()) } returns false
+                every { getLong(0) } returns 1_700_000_060_000
+                every { getLong(1) } returns 64
+            }
+        }
+        every { resolver.openInputStream(document) } answers {
+            ByteArrayInputStream("changed by another app".toByteArray())
+        }
+    }
+
+    /**
+     * A directory delete the closing folder's drain sends after a reopen, its queue having
+     * outlived the stop behind a slow provider. The reopen could not read what the directory
+     * holds, which the delete takes with it, and the guard was asked only when the delete
+     * was queued, before the reopen.
+     */
+    @Test
+    fun `a directory delete sent after a reopen that could not read what it holds is declined`() {
+        val kept = mutableListOf<Pair<String, Boolean>>()
+        engine.onKeptOnDevice = { file, isDirectory -> kept.add(file.name to isDirectory) }
+        deviceTree(docsHoldingNotes)
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        File(mirror, "docs").deleteRecursively()
+        engine.handleMirrorEvent(FileObserver.DELETE or isDirFlag, File(mirror, "docs"), mirror, treeUri)
+        every { resolver.openInputStream(any()) } throws IOException("the provider refused the read")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+
+        engine.runWriteBackLoop { false }
+
+        verify(exactly = 0) { DocumentsContract.deleteDocument(any(), any()) }
+        assertEquals(listOf("docs" to true), kept)
+    }
+
+    /**
+     * `rm -r docs` after another app changed `docs/notes.md` while the folder was open. The
+     * file's delete is declined, and the directory's, sent right after it, took the file
+     * anyway: `deleteDocument` on a directory takes whatever it still holds.
+     */
+    @Test
+    fun `a directory holding a file whose delete was declined is kept on the device`() {
+        val kept = mutableListOf<Pair<String, Boolean>>()
+        engine.onKeptOnDevice = { file, isDirectory -> kept.add(file.name to isDirectory) }
+        deviceTree(docsHoldingNotes)
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        changedByAnotherApp("doc:notes.md")
+        File(mirror, "docs").deleteRecursively()
+
+        // In the order `rm -r` reports them, both queued before either is sent.
+        engine.handleMirrorEvent(FileObserver.DELETE, File(mirror, "docs/notes.md"), mirror, treeUri)
+        engine.handleMirrorEvent(FileObserver.DELETE or isDirFlag, File(mirror, "docs"), mirror, treeUri)
+        engine.runWriteBackLoop { false }
+
+        verify(exactly = 0) { DocumentsContract.deleteDocument(any(), any()) }
+        assertEquals(listOf("notes.md" to false, "docs" to true), kept)
+    }
+
+    /** What a declined delete left follows its directory's rename, as the unread memory does. */
+    @Test
+    fun `a renamed directory still keeps a file whose delete was declined`() {
+        val kept = mutableListOf<String>()
+        engine.onKeptOnDevice = { file, _ -> kept.add(file.name) }
+        deviceTree(docsHoldingNotes)
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        changedByAnotherApp("doc:notes.md")
+        File(mirror, "docs/notes.md").delete()
+        deliver(FileObserver.DELETE, "docs/notes.md")
+        assertEquals(listOf("notes.md"), kept, "setup: the file's delete went through")
+        engine.handleMirrorEvent(
+            FileObserver.MOVED_FROM or isDirFlag, File(mirror, "docs"), mirror, treeUri
+        )
+        deliver(FileObserver.MOVED_TO or isDirFlag, "archive")
+        deviceTree(
+            mapOf(
+                "root" to listOf(Entry("archive", isDirectory = true)),
+                "doc:archive" to listOf(Entry("notes.md")),
+            )
+        )
+        kept.clear()
+
+        deleteDirectory("archive")
+
+        verify(exactly = 0) { DocumentsContract.deleteDocument(any(), any()) }
+        assertEquals(listOf("archive"), kept, "the rename left the declined file's memory at the old name")
+    }
+
+    /**
+     * The file made again under the name of one whose delete was declined: its save keeps the
+     * other app's version as a `.device-` copy and then lands, so nothing in the directory is
+     * left that this app has not read, and `rm -r` of it goes through.
+     */
+    @Test
+    fun `a directory is deleted once a file made again over a declined delete has landed`() {
+        val kept = mutableListOf<String>()
+        engine.onKeptOnDevice = { file, _ -> kept.add(file.name) }
+        deviceTree(docsHoldingNotes)
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        changedByAnotherApp("doc:notes.md")
+        val notes = File(mirror, "docs/notes.md").apply { delete() }
+        deliver(FileObserver.DELETE, "docs/notes.md")
+        assertEquals(listOf("notes.md"), kept, "setup: the file's delete went through")
+        notes.writeText("made again in the editor")
+        deliver(FileObserver.CREATE, "docs/notes.md")
+        val gone = File(mirror, "docs").listFiles()!!.map { it.name }
+        assertTrue(
+            gone.any { it.startsWith("notes.md" + SafSyncEngine.DEVICE_COPY_SUFFIX) },
+            "setup: the save kept no copy of the other app's version: $gone",
+        )
+        File(mirror, "docs").deleteRecursively()
+
+        for (name in gone) {
+            engine.handleMirrorEvent(FileObserver.DELETE, File(mirror, "docs/$name"), mirror, treeUri)
+        }
+        engine.handleMirrorEvent(FileObserver.DELETE or isDirFlag, File(mirror, "docs"), mirror, treeUri)
+        engine.runWriteBackLoop { false }
+
+        verify(exactly = 1) { DocumentsContract.deleteDocument(any(), uris.getValue("doc:docs")) }
+        assertEquals(listOf("notes.md"), kept, "the directory was kept after its file had landed")
+    }
+
     /**
      * A provider that cannot be asked is not a provider that said "gone". The delete is
      * `deleteDocument` on a subtree the set says holds an unread document, so an

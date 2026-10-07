@@ -86,6 +86,9 @@ class SafLiveDeviceEditTest {
     private var clock = 0L
     private val failed = mutableListOf<File>()
 
+    /** What the engine said it kept in the device folder when a delete would have taken it. */
+    private val kept = mutableListOf<File>()
+
     /** Whether the device holds `notes.txt` at all; the editor can delete and make it again. */
     private var deviceHasDocument = true
 
@@ -208,6 +211,7 @@ class SafLiveDeviceEditTest {
         every { context.filesDir } returns File(root, "files").apply { mkdirs() }
         engine = SafSyncEngine(context)
         engine.onWriteBackFailed = { failed += it }
+        engine.onKeptOnDevice = { file, _ -> kept += file }
         treeUri = mockk(relaxed = true)
         mirror = File(root, "mirror-a").apply { mkdirs() }
     }
@@ -914,12 +918,14 @@ class SafLiveDeviceEditTest {
         settle()
         deviceReadable = false
         save("second save")
+        // Readable again for the delete, which a moved stamp over bytes it cannot read holds
+        // back, so the file made again is a new document.
+        deviceReadable = true
         val file = File(mirror, "notes.txt").apply { delete() }
         engine.handleMirrorEvent(FileObserver.DELETE, file, mirror, treeUri)
         engine.runWriteBackLoop { false }
         file.writeText("brand new")
         val writesBefore = writes
-        deviceReadable = true
         clock += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
 
         retryWhileWatching()
@@ -1164,6 +1170,68 @@ class SafLiveDeviceEditTest {
             "the empty document the save itself created was kept as another app's edit",
         )
         assertEquals("brand new", deviceText)
+    }
+
+    /**
+     * A file deleted in the editor after another app changed its device document while the
+     * folder was open. A save in its place keeps that edit; the delete asked nothing, so the
+     * edit went with the file.
+     */
+    @Test
+    fun `a delete of a document another app changed since it was read is declined`() {
+        open()
+        editOnDevice("changed by another app")
+        val file = File(mirror, "notes.txt").apply { delete() }
+
+        engine.handleMirrorEvent(FileObserver.DELETE, file, mirror, treeUri)
+        engine.runWriteBackLoop { false }
+
+        assertTrue(deviceHasDocument, "the delete took another app's edit with the file")
+        assertEquals("changed by another app", deviceText)
+        assertEquals(listOf(file.absolutePath), kept.map { it.absolutePath }, "nothing said it was kept")
+    }
+
+    /**
+     * The bytes decide a delete as they decide a save, so this app's own write settling after
+     * its stream closed does not hold the delete of that file back.
+     */
+    @ParameterizedTest(name = "a delete after a settling write goes through: {0}")
+    @EnumSource(LateStamp::class)
+    fun `a delete after this app's own write settles goes through`(shape: LateStamp) {
+        lateStamp = shape
+        open()
+        save("first save")
+        settle()
+        val file = File(mirror, "notes.txt").apply { delete() }
+
+        engine.handleMirrorEvent(FileObserver.DELETE, file, mirror, treeUri)
+        engine.runWriteBackLoop { false }
+
+        assertEquals(false, deviceHasDocument, "a delete of this app's own settled write was held back")
+        assertEquals(emptyList<File>(), kept)
+    }
+
+    /**
+     * A delete the closing folder's drain sends after a reopen, its queue having outlived the
+     * stop behind a slow provider. The reopen could not read the document, which by then held
+     * another app's edit, and listed its stamp as what it saw, so only the guard for what an
+     * open could not read stands between the delete and that edit, and it was asked only when
+     * the delete was queued.
+     */
+    @Test
+    fun `a delete sent after a reopen that could not read the document is declined`() {
+        open()
+        val file = File(mirror, "notes.txt").apply { delete() }
+        engine.handleMirrorEvent(FileObserver.DELETE, file, mirror, treeUri)
+        editOnDevice("changed by another app")
+        deviceReadable = false
+        open()
+
+        engine.runWriteBackLoop { false }
+
+        assertTrue(deviceHasDocument, "the delete removed a device document the reopen could not read")
+        assertEquals("changed by another app", deviceText)
+        assertEquals(listOf(file.absolutePath), kept.map { it.absolutePath }, "nothing said it was kept")
     }
 
     /**

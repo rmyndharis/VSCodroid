@@ -46,7 +46,8 @@ import kotlin.concurrent.thread
  * under a `.device-<time>` name before a newer mirror copy is written over it;
  * [setAsideDeviceCopy] says when. While the folder is open, a save that would replace
  * a device document changed since this engine last read or wrote it keeps the device's
- * copy as `.device-<time>` first; see [keepsDeviceEdit].
+ * copy as `.device-<time>` first; see [keepsDeviceEdit]. A delete of one is declined;
+ * see [keepsDeviceDocument].
  * External changes are picked up the next time the folder is opened, which is
  * the only refresh that exists: there is no "Refresh from device" action, and the one
  * in-app action on a mirror, "VSCodroid: Manage Device Folder Storage", removes the
@@ -220,6 +221,24 @@ class SafSyncEngine(private val context: Context) {
     private val heldBack = ConcurrentHashMap<String, HeldBackSave>()
 
     /**
+     * Mirror paths of files whose delete [keepsDeviceDocument] declined because the device
+     * document had moved past what this engine last read or wrote, so the device holds there
+     * a version nothing here has read.
+     *
+     * Asked by both delete guards of a directory, beside [unfetched], because `rm -r`
+     * deletes a directory right after the files in it and `deleteDocument` on the directory
+     * takes whatever it still holds: without this, the file kept on the device went with its
+     * directory a moment later, under a notice saying it was kept. Not [unfetched] itself,
+     * which also refuses a file made again under the name until the next open, where
+     * [keepsDeviceEdit] can keep the device's version and send the new file at once.
+     *
+     * Ends at a landed write of the path, after which the device holds this app's bytes
+     * there, past whatever [keepsDeviceEdit] kept first. Follows a directory rename and is
+     * scoped per mirror in [initialSync], as [unfetched] is.
+     */
+    private val keptOnDevice = ConcurrentHashMap.newKeySet<String>()
+
+    /**
      * How many bytes [digestKeptCopies] reads per open, [KEPT_COPY_DIGEST_BYTES]. A seam
      * because no JVM test can hold that much in kept copies.
      */
@@ -309,6 +328,7 @@ class SafSyncEngine(private val context: Context) {
         refusalsAnnounced.removeAll { it.startsWith(mirrorDir.absolutePath + File.separator) }
         deviceSeen.keys.removeAll { it.startsWith(mirrorDir.absolutePath + File.separator) }
         heldBack.keys.removeAll { it.startsWith(mirrorDir.absolutePath + File.separator) }
+        keptOnDevice.removeAll { it.startsWith(mirrorDir.absolutePath + File.separator) }
 
         // Phase 1: Enumerate all documents in the tree
         val documents = mutableListOf<DocumentInfo>()
@@ -1360,22 +1380,7 @@ class SafSyncEngine(private val context: Context) {
         // Settled again by whatever this answers: a save that goes ahead ends the hold, and
         // one held back once more waits longer before it is tried again.
         val held = heldBack.remove(localFile.absolutePath)
-        val seen = deviceSeen[localFile.absolutePath] ?: return false
-        val now = deviceStamp(docUri) ?: return false
-        if (now == seen.stamp) return false
-        // Read at any length a set-aside could still keep, a missing size column's 0
-        // included: a reported length can lag the bytes, as on a provider that reports a
-        // write's new time before its new length, and skipping the read there kept a copy
-        // of the previous save. Past [MAX_FILE_SIZE] only at the digested length, because a
-        // document another app grew that far was read in full at every save and each save
-        // was held back anyway.
-        if (seen.sha256 != null &&
-            (now.second == seen.length || now.second <= MAX_FILE_SIZE) &&
-            seen.sha256.contentEquals(deviceSha256(docUri, seen.length))
-        ) {
-            deviceSeen[localFile.absolutePath] = DeviceState(now, seen.sha256, seen.length)
-            return false
-        }
+        val now = deviceMovedPast(localFile, docUri) ?: return false
         var time = now.first
         while (File(localFile.parentFile, "${localFile.name}$DEVICE_COPY_SUFFIX$time").exists()) {
             time++
@@ -1395,6 +1400,69 @@ class SafSyncEngine(private val context: Context) {
             held?.let { minOf(it.wait * 2, HELD_BACK_RETRY_MAX_MS) } ?: HELD_BACK_RETRY_FIRST_MS
         heldBack[localFile.absolutePath] =
             HeldBackSave(docUri, SystemClock.elapsedRealtime() + wait, wait)
+        return true
+    }
+
+    /**
+     * What the device reports for [docUri] now, where that has moved past what this engine
+     * last read or wrote at [localFile]'s path and the bytes do not show it to be the same
+     * version; null where it has not, and where nothing is known of the path or the
+     * provider will not say. A stamp that moved over the digested bytes becomes the one
+     * compared next. [keepsDeviceEdit] says why the bytes are asked and what that costs.
+     */
+    private fun deviceMovedPast(localFile: File, docUri: Uri): Pair<Long, Long>? {
+        val seen = deviceSeen[localFile.absolutePath] ?: return null
+        val now = deviceStamp(docUri) ?: return null
+        if (now == seen.stamp) return null
+        // Read at any length a set-aside could still keep, a missing size column's 0
+        // included: a reported length can lag the bytes, as on a provider that reports a
+        // write's new time before its new length, and skipping the read there kept a copy
+        // of the previous save. Past [MAX_FILE_SIZE] only at the digested length, because a
+        // document another app grew that far was read in full at every save and each save
+        // was held back anyway.
+        if (seen.sha256 != null &&
+            (now.second == seen.length || now.second <= MAX_FILE_SIZE) &&
+            seen.sha256.contentEquals(deviceSha256(docUri, seen.length))
+        ) {
+            deviceSeen[localFile.absolutePath] = DeviceState(now, seen.sha256, seen.length)
+            return null
+        }
+        return now
+    }
+
+    /**
+     * Declines the delete [job] would send to [docUri], and says so, where the device holds
+     * there what this engine has not read: a document, or for a directory one under it, the
+     * folder's last open could not read, or a file another app changed since this engine
+     * last read or wrote it.
+     *
+     * [handleMirrorEvent] asks the first before it queues the delete, and a job can outlive
+     * that answer: a reopen while the closing folder's drain is still inside a slow provider
+     * call can find the document unreadable, and the delete queued before it then removed a
+     * document nothing had read. The second is [keepsDeviceEdit]'s question, which no delete
+     * asked, so an edit another app made while the folder was open went with the file. The
+     * bytes decide it as they do for a save, so this app's own write settling late does not
+     * hold a delete back, and a read that fails does. Declined rather than set aside as a
+     * save's device copy is: the user deleted the file, and a copy beside it would bring it
+     * back under another name. The device keeps the document, and the next open brings it
+     * back into the editor.
+     *
+     * Ceilings beside [keepsDeviceEdit]'s own: a directory is declined for a file in it whose
+     * delete was declined ([keptOnDevice]), and otherwise not asked file by file, so a file
+     * under it that raised no delete of its own, past [MAX_WATCHED_DIRECTORIES], goes with
+     * it; and a declined delete is not tried again, so a file declined only because its read
+     * failed comes back at the next open like any other.
+     */
+    private fun keepsDeviceDocument(job: SyncJob, docUri: Uri): Boolean {
+        val unread = holdsUnread(job.localPath, job.isDirectory) &&
+            job.safTreeUri?.let { providerHolds(it, job.relativePath) } != false
+        if (!unread) {
+            if (job.isDirectory || deviceMovedPast(File(job.localPath), docUri) == null) {
+                return false
+            }
+            keptOnDevice.add(job.localPath)
+        }
+        keepUnread(File(job.localPath), job.relativePath, job.isDirectory)
         return true
     }
 
@@ -2689,6 +2757,8 @@ class SafSyncEngine(private val context: Context) {
             // directory above it moves both records while the stream runs.
             if (landed) clearUploadInFlight(claim)
             else releaseUploadClaim(claim)
+            // The version a declined delete kept there is replaced once these bytes land.
+            if (landed) keptOnDevice.remove(localFile.absolutePath)
             // Landed or not: the device now holds this app's own bytes, whole or
             // truncated, and the next save may replace them without keeping a copy. The
             // digest only where they are whole: a write cut short left an unknown prefix.
@@ -3077,7 +3147,8 @@ class SafSyncEngine(private val context: Context) {
     }
 
     /**
-     * Moves the unread-document memory under [from] to [to], for the same rename.
+     * Moves the unread-document memory under [from] to [to], for the same rename, and the
+     * files whose delete was declined ([keptOnDevice]) with it.
      *
      * The provider move that a claimed rename becomes carries the documents this sync
      * never read to the new name, and the guards that keep them safe look them up by
@@ -3094,9 +3165,11 @@ class SafSyncEngine(private val context: Context) {
     private fun renameUnfetchedUnder(from: File, to: File) {
         val old = from.absolutePath + File.separator
         val new = to.absolutePath + File.separator
-        for (path in unfetched.filter { it.startsWith(old) }) {
-            unfetched.add(new + path.removePrefix(old))
-            unfetched.remove(path)
+        for (memory in listOf(unfetched, keptOnDevice)) {
+            for (path in memory.filter { it.startsWith(old) }) {
+                memory.add(new + path.removePrefix(old))
+                memory.remove(path)
+            }
         }
     }
 
@@ -3729,11 +3802,14 @@ class SafSyncEngine(private val context: Context) {
                 // positively answers "gone": a provider that cannot answer is still
                 // treated as holding, so a transient failure keeps the warning it used
                 // to give.
-                val refused = if (job.safDocUri == null) {
-                    job.safTreeUri != null &&
-                        providerHolds(job.safTreeUri, job.relativePath) != false
-                } else {
-                    !deleteFromSaf(job.safDocUri)
+                val refused = when {
+                    job.safDocUri == null ->
+                        job.safTreeUri != null &&
+                            providerHolds(job.safTreeUri, job.relativePath) != false
+                    // Declined here rather than refused by the device, and said so in its
+                    // own words: see [keepsDeviceDocument].
+                    keepsDeviceDocument(job, job.safDocUri) -> false
+                    else -> !deleteFromSaf(job.safDocUri)
                 }
                 if (refused) {
                     announceDeleteRefused(File(job.localPath))
@@ -4090,23 +4166,12 @@ class SafSyncEngine(private val context: Context) {
         // cost `deleteDocument` on the one copy the set says nothing else has, so
         // a provider that cannot answer keeps. One scan of a set that is normally
         // empty, on the observer thread; the binder walk is paid only on a match.
-        if (type == SyncType.DELETE) {
-            val holdsUnread = if (isDirectory) {
-                val below = localFile.absolutePath + File.separator
-                // Its own path as well as the prefix. A directory is recorded by its
-                // own mirror path when this sync did not read what is under it, either
-                // because the name is skipped or because enumerating it failed, and
-                // the prefix test alone cannot match that entry: `below` carries a
-                // trailing separator the entry does not have. Deleting the directory
-                // itself is exactly the case those entries exist to refuse.
-                localFile.absolutePath in unfetched || unfetched.any { it.startsWith(below) }
-            } else {
-                localFile.absolutePath in unfetched
-            }
-            if (holdsUnread && providerHolds(safTreeUri, relativePath) != false) {
-                keepUnread(localFile, relativePath, isDirectory)
-                return
-            }
+        if (type == SyncType.DELETE &&
+            holdsUnread(localFile.absolutePath, isDirectory) &&
+            providerHolds(safTreeUri, relativePath) != false
+        ) {
+            keepUnread(localFile, relativePath, isDirectory)
+            return
         }
 
         // Resolve the SAF URI for this file via its relative path, except where
@@ -4244,9 +4309,29 @@ class SafSyncEngine(private val context: Context) {
                 timestamp = now,
                 safSourceParentUri = sourceParentUri,
                 previousName = if (pairedRename) renamedFrom?.let { File(it).name } else null,
-                relativePath = relativePath
+                relativePath = relativePath,
+                isDirectory = isDirectory,
             )
         )
+    }
+
+    /**
+     * Whether [path] is a document this sync never read or, for a directory, holds one at
+     * any depth: what [handleMirrorEvent]'s delete guard asks, and [keepsDeviceDocument]
+     * again where the delete happens.
+     *
+     * A directory is matched by its own path as well as by prefix. It is recorded by its
+     * own mirror path when this sync did not read what is under it, either because the name
+     * is skipped or because enumerating it failed, and the prefix test alone cannot match
+     * that entry: `below` carries a trailing separator the entry does not have. Deleting the
+     * directory itself is exactly the case those entries exist to refuse. A file whose
+     * delete was declined counts for its directories too; see [keptOnDevice].
+     */
+    private fun holdsUnread(path: String, isDirectory: Boolean): Boolean {
+        if (path in unfetched) return true
+        if (!isDirectory) return false
+        val below = path + File.separator
+        return unfetched.any { it.startsWith(below) } || keptOnDevice.any { it.startsWith(below) }
     }
 
     /**
@@ -5332,7 +5417,13 @@ internal data class SyncJob(
      * rename needs. Empty only where a job was built by something other than
      * [SafSyncEngine.handleMirrorEvent], which fills it.
      */
-    val relativePath: String = ""
+    val relativePath: String = "",
+    /**
+     * Whether [localPath] was a directory, as its event said, which a DELETE has no other
+     * way to know by the time it runs: the entry is already gone. Filled by
+     * [SafSyncEngine.handleMirrorEvent].
+     */
+    val isDirectory: Boolean = false,
 )
 
 internal enum class SyncType {
