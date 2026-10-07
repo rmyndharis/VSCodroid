@@ -653,6 +653,10 @@ class KeyInjector(
  * Called from the chord's script, so it reaches the page after the chord, and
  * defined in each of the two rather than shared on `window`: an announced
  * chord works without the modifier interceptor, and so should its release.
+ *
+ * Indented to the sixteen columns both scripts interpolate it at. Lines at
+ * column 0 leave `trimIndent()` no margin to take off either script, so both
+ * went out as indented as this source.
  */
 private val RELEASE_MODIFIERS_JS = """
     function releaseModifiers(target, init) {
@@ -666,4 +670,4 @@ private val RELEASE_MODIFIERS_JS = """
                 metaKey: held.metaKey, bubbles: true, cancelable: true, composed: true }));
         });
     }
-""".trimIndent()
+""".replaceIndent(" ".repeat(16)).trimStart()
