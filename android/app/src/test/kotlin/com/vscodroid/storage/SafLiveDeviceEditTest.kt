@@ -49,7 +49,8 @@ import java.util.concurrent.TimeUnit
  * moved, keeps the device copy beside the mirror file as `.device-<time>` before writing.
  *
  * The device here is one document, `notes.txt`, whose text, time and size the cases move
- * by hand. A write through `"wt"` lands like the platform provider's: it replaces the text
+ * by hand, and for a case about the open's reads a second, `other.txt`, that nothing
+ * changes. A write through `"wt"` lands like the platform provider's: it replaces the text
  * and advances the time before close() returns. [LateStamp] is the other kind of provider,
  * which reports a write's final time and size only after that.
  */
@@ -113,6 +114,10 @@ class SafLiveDeviceEditTest {
 
     /** What a [lateStamp] provider reports once it has finished the last write. */
     private var settled: Pair<Long, Long>? = null
+
+    /** A second document, `other.txt`, listed after `notes.txt` when set, at [otherModified]. */
+    private var otherText: String? = null
+    private var otherModified = OPENED_AT
 
     /**
      * Providers that finish what they report for a write after its stream has closed. Each
@@ -178,14 +183,15 @@ class SafLiveDeviceEditTest {
                 failNextQuery = false
                 throw IllegalStateException("the provider did not answer")
             }
-            deviceCursor()
+            deviceCursor(listing = firstArg<Uri>() !in uris.values)
         }
         // A real stream: a relaxed one answers 0 from `read`, and `copyTo` spins on it.
         every { resolver.openInputStream(any()) } answers {
             reads++
             if (firstArg<Uri>() in gone) throw FileNotFoundException("deleted by another app")
             if (!deviceReadable) throw IOException("offline")
-            object : ByteArrayInputStream(deviceText.toByteArray()) {
+            val text = if (firstArg<Uri>() === uris[OTHER_ID]) otherText!! else deviceText
+            object : ByteArrayInputStream(text.toByteArray()) {
                 override fun read(b: ByteArray, off: Int, len: Int) =
                     super.read(b, off, len).also { if (it > 0) bytesRead += it }
 
@@ -220,13 +226,17 @@ class SafLiveDeviceEditTest {
     fun tearDown() = unmockkAll()
 
     /**
-     * One row for `notes.txt`, answering both the enumeration and a single-document query.
-     * With no clock the time column is missing, as some providers leave it.
+     * One row for `notes.txt`, answering both the enumeration and a single-document query,
+     * and in a [listing] a second for [otherText] where it is set. With no clock the time
+     * column is missing, as some providers leave it.
      */
-    private fun deviceCursor(): Cursor {
+    private fun deviceCursor(listing: Boolean): Cursor {
         val cursor = mockk<Cursor>(relaxed = true)
         var row = -1
-        every { cursor.moveToNext() } answers { deviceHasDocument && ++row == 0 }
+        val other = listing && otherText != null
+        val rows = (if (deviceHasDocument) 1 else 0) + (if (other) 1 else 0)
+        val onOther = { other && row == rows - 1 }
+        every { cursor.moveToNext() } answers { ++row < rows }
         every { cursor.moveToFirst() } answers { deviceHasDocument }
         every { cursor.getColumnIndexOrThrow(any()) } answers {
             when (firstArg<String>()) {
@@ -244,11 +254,17 @@ class SafLiveDeviceEditTest {
             }
         }
         every { cursor.isNull(any()) } returns false
-        every { cursor.getString(0) } answers { docId }
-        every { cursor.getString(1) } returns "notes.txt"
+        every { cursor.getString(0) } answers { if (onOther()) OTHER_ID else docId }
+        every { cursor.getString(1) } answers { if (onOther()) "other.txt" else "notes.txt" }
         every { cursor.getString(2) } returns "text/plain"
-        every { cursor.getLong(3) } answers { if (deviceHasSize) deviceSize else 0L }
-        every { cursor.getLong(4) } answers { deviceModified }
+        every { cursor.getLong(3) } answers {
+            when {
+                onOther() -> otherText!!.length.toLong()
+                deviceHasSize -> deviceSize
+                else -> 0L
+            }
+        }
+        every { cursor.getLong(4) } answers { if (onOther()) otherModified else deviceModified }
         return cursor
     }
 
@@ -576,9 +592,8 @@ class SafLiveDeviceEditTest {
 
     /**
      * What bounds the reads an open spends on the kept copies the record holds no digest for,
-     * as after an update from a build that recorded none: one past the budget is not read,
-     * so a stamp moved over it still keeps one spare copy of the unchanged document. Without
-     * the bound such an open read the whole folder.
+     * as after an update from a build that recorded none: one larger than the budget is not
+     * read, so a stamp moved over it still keeps one spare copy of the unchanged document.
      */
     @Test
     fun `a kept copy the record holds no digest for is not read past the open's budget`() {
@@ -591,6 +606,29 @@ class SafLiveDeviceEditTest {
         save("typed in the editor")
 
         assertEquals(listOf("v1"), deviceCopies().values.toList(), "a kept copy past the budget was read")
+    }
+
+    /**
+     * The budget is the whole open's: a kept copy that would fit in it alone is not read once
+     * the copies read before it have spent it, or such an open read the whole folder. The
+     * newer copy goes first, because a provider moves a stamp after a write and the recent
+     * copies are the ones it moves.
+     */
+    @Test
+    fun `kept copies the record holds no digest for share one budget, newest first`() {
+        deviceText = "x".repeat(1_000)
+        deviceSize = 1_000
+        otherText = "y".repeat(1_200)
+        otherModified = OPENED_AT + 60_000
+        open()
+        recordWithoutDigests()
+        engine.keptCopyDigestBytes = 1_500
+        var hashed = 0L
+        duringDigests(onUpdate = { hashed += it })
+
+        open()
+
+        assertEquals(1_200L, hashed, "the open did not read the newer copy alone within its budget")
     }
 
     /**
@@ -1317,5 +1355,6 @@ class SafLiveDeviceEditTest {
     private companion object {
         const val OPENED_AT = 1_700_000_000_000L
         const val CREATED_AT = 1_800_000_000_000L
+        const val OTHER_ID = "doc:other.txt"
     }
 }
