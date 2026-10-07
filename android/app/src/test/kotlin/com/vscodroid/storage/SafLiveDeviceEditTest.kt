@@ -896,10 +896,10 @@ class SafLiveDeviceEditTest {
     }
 
     /**
-     * Held-back saves that are due go back on the queue one per idle turn of the loop,
-     * which polls its queue before it asks again. Queued all at once, a save made meanwhile
-     * waited behind every try that was due, each a stamp query and the reads that fail.
-     * Here a second file, made in the editor, goes to the same device document.
+     * Held-back saves that are due are tried one per idle turn of the loop, which polls its
+     * queue before it asks again. Tried all at once, a save made meanwhile waited behind
+     * every try that was due, each a stamp query and the reads that fail. Here a second
+     * file, made in the editor, goes to the same device document.
      */
     @Test
     fun `held-back saves that are due are tried one per idle turn`() {
@@ -1065,7 +1065,7 @@ class SafLiveDeviceEditTest {
         File(mirror, "notes.txt").delete()
         clock += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
 
-        assertEquals(false, engine.retryHeldBack(WatchSession(mirror)), "a save with no file was queued")
+        assertEquals(false, engine.retryHeldBack(WatchSession(mirror)), "a save with no file was tried")
         File(mirror, "notes.txt").writeText("made again")
         assertEquals(false, engine.retryHeldBack(WatchSession(mirror)), "a dropped save came back")
     }
@@ -1114,6 +1114,46 @@ class SafLiveDeviceEditTest {
             "another app's edit of the new document was replaced with no copy kept",
         )
         assertEquals("fourth", deviceText)
+    }
+
+    /**
+     * The same create, arriving between the loop finding its queue empty and its try of the
+     * hold. The try was queued behind the create with a later time, so the debounce dropped
+     * the create, and the try failed against the document another app deleted: the file
+     * reached no document, and every later save went to the deleted one.
+     */
+    @Test
+    fun `a held-back save tried as a create of its file arrives does not drop the create`() {
+        lateStamp = LateStamp.WHOLE_SECONDS
+        open()
+        save("first save")
+        settle()
+        deviceReadable = false
+        save("second save")
+        gone += uris.getValue(docId)
+        deviceHasDocument = false
+        deviceReadable = true
+        val file = File(mirror, "notes.txt")
+        File(mirror, "notes.txt.tmp").apply { writeText("third") }.renameTo(file)
+        // The create's job waits in the queue of the watcher whose loop makes the try.
+        val watching = WatchSession(mirror)
+        engine.handleMirrorEvent(FileObserver.MOVED_TO, file, mirror, treeUri)
+        watching.queue.addAll(engine.session.queue)
+        engine.session.queue.clear()
+        // The try comes a moment after the create was stamped, as it does in the loop.
+        val createdAt = System.currentTimeMillis()
+        while (System.currentTimeMillis() == createdAt) Thread.onSpinWait()
+        clock += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+        val lost = failed.size
+
+        assertTrue(engine.retryHeldBack(watching), "the held-back save was not tried")
+        engine.runWriteBackLoop(watching) { false }
+
+        assertEquals("third", deviceText, "the create of the file was dropped for the try")
+        assertEquals(lost, failed.size, "the try was sent to the deleted document")
+        editOnDevice("changed by another app")
+        save("fourth")
+        assertEquals(listOf("changed by another app"), deviceCopies().values.toList())
     }
 
     @Test

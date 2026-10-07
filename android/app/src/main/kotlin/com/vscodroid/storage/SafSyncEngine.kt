@@ -195,7 +195,7 @@ class SafSyncEngine(private val context: Context) {
 
     /**
      * Saves [keepsDeviceEdit] held back, by absolute mirror path: the document each was
-     * going to, and when [retryHeldBack] queues it again.
+     * going to, and when [retryHeldBack] tries it again.
      *
      * A held-back save used to wait for the next save of that file or the next open of the
      * folder, so on a provider that reads only while it is online, Nextcloud among them, the
@@ -1471,15 +1471,15 @@ class SafSyncEngine(private val context: Context) {
     }
 
     /**
-     * Queues again, as the save it was, one save [keepsDeviceEdit] held back under
-     * [session]'s mirror whose wait is over, and answers whether it queued one.
+     * Tries again, as the save it was, one save [keepsDeviceEdit] held back under
+     * [session]'s mirror whose wait is over, and answers whether it found one.
      *
      * The write-back loop asks whenever its queue is empty, so a held-back save lands once
      * its device copy can be read, still by [keepsDeviceEdit]'s comparison of the bytes, and
      * the waits bound what a provider that stays unreadable costs: per held-back file, a
      * stamp query and the reads that fail, after [HELD_BACK_RETRY_FIRST_MS] and then at
      * waits that double up to [HELD_BACK_RETRY_MAX_MS]. One per call, because the loop polls
-     * its queue before it asks again: queued all at once, a save made meanwhile waited
+     * its queue before it asks again: tried all at once, a save made meanwhile waited
      * behind every try that was due, which on a server that takes long to refuse a read is
      * long for a save that has nothing to do with them. A file the mirror no longer holds
      * is dropped rather than tried, which would spin the loop on a save with nothing left
@@ -1495,10 +1495,15 @@ class SafSyncEngine(private val context: Context) {
                 heldBack.remove(path, held)
                 continue
             }
-            // Stamped with the wall clock, like every job the observers queue, because the
-            // debounce compares the two.
-            val stamp = System.currentTimeMillis()
-            session.queue.offer(SyncJob(SyncType.MODIFY, path, held.docUri, null, null, stamp))
+            // Sent here rather than queued, and stamped older than any job an observer
+            // queues, so the debounce drops the try where a job of the file has arrived
+            // since the loop found its queue empty, which sends what the try would. Queued,
+            // the try went behind such a job with a later time: a create of the file was
+            // dropped for it, and where another app had deleted the document the hold
+            // names, the try failed there and the file reached no document at all.
+            processWriteBack(
+                session, SyncJob(SyncType.MODIFY, path, held.docUri, null, null, Long.MIN_VALUE),
+            )
             return true
         }
         return false
@@ -2080,7 +2085,7 @@ class SafSyncEngine(private val context: Context) {
     /**
      * Processes queued write-backs until [isRunning] goes false or the thread is
      * interrupted, then sends out whatever is still queued. Whenever the queue runs empty
-     * it queues a held-back save whose wait is over; see [retryHeldBack].
+     * it tries a held-back save whose wait is over; see [retryHeldBack].
      *
      * Drives whichever session is current, which is what a test without a live watcher
      * needs: no JVM test can call [startWatching], because registering a watch builds a
@@ -4533,7 +4538,7 @@ class SafSyncEngine(private val context: Context) {
         private const val DRAIN_GRACE_MS = 2000L
 
         /**
-         * How long a save [keepsDeviceEdit] holds back waits before [retryHeldBack] queues
+         * How long a save [keepsDeviceEdit] holds back waits before [retryHeldBack] tries
          * it again. Each hold after that doubles the wait, up to [HELD_BACK_RETRY_MAX_MS].
          */
         internal const val HELD_BACK_RETRY_FIRST_MS = 30_000L
