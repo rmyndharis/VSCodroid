@@ -555,6 +555,21 @@ if (!fs.existsSync(rehEntryPoint)) {
     // opened after it to have a theme of its own. Each wrong mark is put right
     // the next time its folder is entered from one that follows the user's theme.
     //
+    // Reading that folder's own settings would not put its first load right.
+    // This file does not serve the page: it adds this script to the template
+    // once, and the editor server fills the template on each request, so the
+    // folder is known to the page and not to this file. The page could fetch
+    // the folder's settings.json through /vscode-remote-resource and find the
+    // theme's type among the theme contributions. But the workbench decides
+    // what that load starts on. It takes a remote folder's settings at startup
+    // only from its own cached copy of them, which is empty until the folder
+    // has been opened once, so it finds the user's theme configured, keeps its
+    // stored theme whenever that is the user's, and reads initialColorTheme
+    // only when it is not; the folder's own theme follows once the extensions
+    // have registered. Colouring the root from that file would give such a load
+    // three colours where it now has two: the folder's until the workbench
+    // draws, the user's until the extensions register, and the folder's again.
+    //
     // Anything that throws in here leaves the page as upstream ships it.
     try {
         const added = extendWorkbenchPage(workbenchHtmlPath, INITIAL_THEME_MARKER, [
