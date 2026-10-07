@@ -1028,8 +1028,9 @@ What still fails is a start that names a path instead of a command:
 - `jshell` started anywhere but bash, because its default engine starts a second JVM that way; the terminal's `jshell` runs your snippets in its own JVM instead
 - a script under the app's storage run by its own path: Android refuses the script file itself, before its `#!` line is ever read. Run it as `ruby script.rb` instead
 
-`npm` and `npx` are bash functions and nothing else, so those two are still
-reachable only from bash. `sh -c 'npm -v'` fails where `bash -c 'npm -v'` works.
+`npm` and `npx` are reached the same two ways: a bash function in a shell, and a
+program on `PATH` for everything else. So `sh -c 'npm -v'`, `timeout 60 npm install`
+and a tool that runs `npm install` itself all find them, as the terminal does.
 
 ### Android Phantom Process Limit
 

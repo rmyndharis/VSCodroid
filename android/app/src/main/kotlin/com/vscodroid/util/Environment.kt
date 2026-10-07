@@ -79,14 +79,15 @@ object Environment {
             "$basePath:/system/bin"
 
         // Preload that corrects two platform checks on Android, and nothing else.
-        // process.platform reads "linux" only when the npm/npx functions opt in with
-        // VSCODROID_PLATFORM_FIX=1 or node's entry script is node-gyp, so
-        // Rollup/esbuild still see "android". os.platform() reads "linux" only inside
-        // the Jupyter extension's bundle, with no opt-in, so its pidtree can signal a
-        // kernel's children. VS Code deletes NODE_OPTIONS from the extension host's
-        // environment: server.js passes the preload in the editor server's execArgv,
-        // which the extension host and the Node children it forks inherit, and
-        // BASH_ENV puts NODE_OPTIONS back for a shell the extension host starts.
+        // process.platform reads "linux" only when the npm/npx functions or their
+        // exec-table launchers opt in with VSCODROID_PLATFORM_FIX=1 or node's entry
+        // script is node-gyp, so Rollup/esbuild still see "android". os.platform()
+        // reads "linux" only inside the Jupyter extension's bundle, with no opt-in,
+        // so its pidtree can signal a kernel's children. VS Code deletes NODE_OPTIONS
+        // from the extension host's environment: server.js passes the preload in the
+        // editor server's execArgv, which the extension host and the Node children it
+        // forks inherit, and BASH_ENV and the npm launchers put NODE_OPTIONS back for
+        // a shell or an npm the extension host starts.
         val platformFixPath = "$filesDir/server/platform-fix.js"
         val nodeOptions = "--require=$platformFixPath"
 
@@ -104,15 +105,16 @@ object Environment {
             "NODE_PATH" to "$filesDir/server/vscode-reh/node_modules",
             "NODE_OPTIONS" to nodeOptions,
             "SHELL" to shell,
-            // What a NON-interactive bash reads at startup, and the only way the
-            // bundled commands exist for one. npm, npx, claude and every
-            // toolchain binary are bash FUNCTIONS, not files: SELinux denies
-            // execve under filesDir, so there is nothing on PATH for a plain
-            // `npm` to find. Those functions were written into .bashrc alone,
-            // which bash reads only when interactive -- so a VS Code task, an
-            // npm lifecycle script, or anything an extension runs through
-            // `bash -c` got "command not found" for a command the terminal
-            // beside it runs fine.
+            // What a NON-interactive bash reads at startup, and the only way
+            // claude and pip exist for one. npm, npx, claude and every
+            // toolchain binary are bash FUNCTIONS: SELinux denies execve under
+            // filesDir, so the files themselves cannot run. npm, npx and the
+            // toolchain commands also have a trampoline link on PATH for
+            // callers that are not bash. Those functions were written into
+            // .bashrc alone, which bash reads only when interactive -- so a
+            // VS Code task, an npm lifecycle script, or anything an extension
+            // runs through `bash -c` got "command not found" for a command the
+            // terminal beside it runs fine.
             //
             // Measured against bash 3.2.57, and it is the shape of the rule
             // rather than the version that matters: `bash -c`, `bash script.sh`

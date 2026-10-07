@@ -46,6 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The soft keyboard, once put away with Back or the navigation bar's hide key, no longer comes back when the file is scrolled.
 - `npm install` installs the Android builds that Rollup, Rolldown, Lightning CSS and oxlint publish; without them Vite 8 stopped at "Cannot find native binding".
 - The warning at launch about an outdated Android System WebView now appears below version 125, where Markdown previews and extension panels stay blank, instead of only below 105.
+- `npm` and `npx` start when another program runs them, such as `timeout`, `sh -c` or a tool that runs `npm install` itself, instead of failing with `ENOENT`.
 
 ### Security
 
