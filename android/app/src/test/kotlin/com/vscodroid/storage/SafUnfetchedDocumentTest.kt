@@ -564,6 +564,30 @@ class SafUnfetchedDocumentTest {
     }
 
     /**
+     * What a declined delete left belongs to the open it was declined in, as the unread
+     * memory does: the next open reads the file again, and `rm -r` of its directory then
+     * goes through.
+     */
+    @Test
+    fun `a reopen forgets a file whose delete was declined`() {
+        val kept = mutableListOf<String>()
+        engine.onKeptOnDevice = { file, _ -> kept.add(file.name) }
+        deviceTree(docsHoldingNotes)
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        changedByAnotherApp("doc:notes.md")
+        File(mirror, "docs/notes.md").delete()
+        deliver(FileObserver.DELETE, "docs/notes.md")
+        assertEquals(listOf("notes.md"), kept, "setup: the file's delete went through")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        kept.clear()
+
+        deleteDirectory("docs")
+
+        verify(exactly = 1) { DocumentsContract.deleteDocument(any(), uris.getValue("doc:docs")) }
+        assertEquals(emptyList<String>(), kept, "a delete declined before the reopen kept the directory")
+    }
+
+    /**
      * The file made again under the name of one whose delete was declined: its save keeps the
      * other app's version as a `.device-` copy and then lands, so nothing in the directory is
      * left that this app has not read, and `rm -r` of it goes through.
