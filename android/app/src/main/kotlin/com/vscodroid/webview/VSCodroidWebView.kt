@@ -233,7 +233,10 @@ internal fun pageColorFromMessage(message: WebMessageCompat, host: String?, isMa
     return (0xFF shl 24) or data.substring(1).toInt(16)
 }
 
-/** The preferences file MainActivity, SplashActivity and PortFinder share. */
+/**
+ * The preferences file MainActivity, SplashActivity, PortFinder, NodeService and
+ * ProcessManager share.
+ */
 private const val PAGE_COLOR_PREFS = "vscodroid"
 
 private const val KEY_PAGE_COLOR = "page_color"
