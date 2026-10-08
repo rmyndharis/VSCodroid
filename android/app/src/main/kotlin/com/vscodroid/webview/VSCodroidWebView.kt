@@ -137,8 +137,9 @@ object VSCodroidWebView {
  * it stays until the server is back and MainActivity loads the editor again.
  * Chromium commits it as an HTML document at `chrome-error://chromewebdata/`, whose
  * opaque origin the "*" rule below matches, and runs document-start scripts in it as
- * in any other document: read in the sources of WebView 153 and seen in Chromium
- * 151, not on a device.
+ * in any other document: read in the sources of WebView 153, and seen on an API 36
+ * emulator with WebView 153, where the pages for a refused and for an unsafe port
+ * each had this script's style sheet and, in light mode, a white background.
  *
  * `Canvas` is the background of the page's own scheme: white or that dark canvas for
  * a plain-text page, white for the error page, which is what each showed before the
