@@ -149,12 +149,12 @@ class ExtraKeyPressStateTest {
      * page.
      *
      * NEGATIVE CONTROL, measured: the button as it was at 54352514, which kept
-     * the long press on for every key and pressed from `onLongPress`, and at
-     * 602b0afe, which turned it on in the `alternates` setter for keys with
-     * alternates alone, both fail at the slice, deciding nothing at a touch.
-     * Turning the long press on for every key or for keys with alternates
-     * alone, or pressing from `onLongPress` for a key with alternates too, each
-     * fails an assertion.
+     * the long press on for every key and pressed from `onLongPress`, and one
+     * that turned it on in the `alternates` setter for keys with alternates
+     * alone, both fail at the slice, deciding nothing at a touch. Turning the
+     * long press on for every key or for keys with alternates alone, or
+     * pressing from `onLongPress` for a key with alternates too, each fails an
+     * assertion.
      */
     @Test
     fun `only a modifier or a key with alternates has a long press`() {
@@ -186,16 +186,17 @@ class ExtraKeyPressStateTest {
      * The latch has to be on while the finger is still down: a letter typed on
      * the soft keyboard while Ctrl is held goes through the modifier interceptor,
      * which chords it only if Ctrl is latched by then, and spends the latch. With
-     * the latch on release, as at 602b0afe, the letter went out plain and the
-     * keystroke after it was chorded instead. A slow swipe that starts on Ctrl
-     * reaches the same long press before the pager takes the drag, so the
-     * ACTION_CANCEL that follows has to switch the latch back, or the swipe
-     * would have latched Ctrl.
+     * the latch on release, as when only keys with alternates had a long press,
+     * the letter went out plain and the keystroke after it was chorded instead.
+     * A slow swipe that starts on Ctrl reaches the same long press before the
+     * pager takes the drag, so the ACTION_CANCEL that follows has to switch the
+     * latch back, or the swipe would have latched Ctrl.
      *
-     * NEGATIVE CONTROL, measured: the button at 602b0afe fails at the slice,
-     * its `onLongPress` having no branch for a modifier. Dropping the switch
-     * from that branch, noting the latch after it, or dropping the switch back
-     * on ACTION_CANCEL each fails an assertion.
+     * NEGATIVE CONTROL, measured: the button with the long press on only for
+     * keys with alternates fails at the slice, its `onLongPress` having no
+     * branch for a modifier. Dropping the switch from that branch, noting the
+     * latch after it, or dropping the switch back on ACTION_CANCEL each fails
+     * an assertion.
      */
     @Test
     fun `a modifier held past the long press latches, and a drag the pager takes puts it back`() {
@@ -227,11 +228,12 @@ class ExtraKeyPressStateTest {
      * drag it was, so the row counts the fingers on it before the pager sees an
      * event, and every key asks it.
      *
-     * NEGATIVE CONTROL, measured: the button, adapter and row at 69e3e0f2 fail
-     * the first assertion. Dropping the question from the cancel, the adapter
-     * not handing it on, the row answering one finger or more, counting after
-     * the pager has seen the event, counting a finger in its own lift, or
-     * counting the pointers of a cancel, each fails an assertion.
+     * NEGATIVE CONTROL, measured: the button, adapter and row with no finger
+     * count, whose cancel put a held modifier back whichever finger swiped,
+     * fail the first assertion. Dropping the question from the cancel, the
+     * adapter not handing it on, the row answering one finger or more,
+     * counting after the pager has seen the event, counting a finger in its
+     * own lift, or counting the pointers of a cancel, each fails an assertion.
      */
     @Test
     fun `a cancel with another finger on the row leaves a held modifier latched`() {
@@ -284,11 +286,12 @@ class ExtraKeyPressStateTest {
      * switched Ctrl back on, on the row and on the page, with the row hidden.
      * The user guide says all three modifiers clear when the keyboard hides.
      *
-     * NEGATIVE CONTROL, measured: the button, adapter and row at b1806fd8 fail
-     * the first assertion. Dropping the call from the stand-down, making it on
-     * every inset dispatch instead, which would also drop the latch while the
-     * row stays up, the adapter reaching no key, and the key keeping its latch
-     * each fail an assertion.
+     * NEGATIVE CONTROL, measured: the button, adapter and row with no
+     * `dropPendingRestore`, whose stand-down cleared the latches but not the
+     * one a hold had noted, fail the first assertion. Dropping the call from
+     * the stand-down, making it on every inset dispatch instead, which would
+     * also drop the latch while the row stays up, the adapter reaching no key,
+     * and the key keeping its latch each fail an assertion.
      */
     @Test
     fun `a row standing down drops the latch a hold would put back`() {

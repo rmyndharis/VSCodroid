@@ -33,11 +33,11 @@
  * A keyboard holding both Shifts must have each release go on to the page.
  *
  * NEGATIVE CONTROL, measured: against KeyInjector.kt at 54352514, which sent
- * no release, 19 of the 42 cases fail; against 602b0afe, which released at
- * the chord's target with nothing stopping it at the window, the 3 picker
- * cases fail, the second Ctrl+Tab accepting the editor it had just
- * highlighted; and against 8539308f, which paired a release with a keydown by
- * key rather than by code, the case of a keyboard holding both Shifts fails.
+ * no release, 19 of the 42 cases fail; against one that released at the
+ * chord's target with nothing stopping it at the window, the 3 picker cases
+ * fail, the second Ctrl+Tab accepting the editor it had just highlighted; and
+ * against one that paired a release with a keydown by key rather than by
+ * code, the case of a keyboard holding both Shifts fails.
  * Each of these changes fails at least one case: not calling the release from
  * either script, or from either of the interceptor's two chords; releasing
  * with the flag still set; sending the keyup at what has focus rather than at

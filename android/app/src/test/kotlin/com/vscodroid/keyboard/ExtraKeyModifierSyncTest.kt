@@ -239,10 +239,10 @@ class ExtraKeyModifierSyncTest {
      * What the swap's cancels then do is `ExtraKeyButtonTouchInstrumentedTest`'s,
      * on a device, with a finger on Ctrl and on the trackpad.
      *
-     * NEGATIVE CONTROL, measured: the row at 8539308f, which wrote the latches
-     * back in `onConfigurationChanged` after `setupAdapter()`, fails the second
-     * assertion. Carrying them after the attach, or not at all, or writing them
-     * again after the swap, each fails an assertion.
+     * NEGATIVE CONTROL, measured: the row of main at f66e462f, which writes the
+     * latches back in `onConfigurationChanged` after `setupAdapter()`, fails
+     * the second assertion. Carrying them after the attach, or not at all, or
+     * writing them again after the swap, each fails an assertion.
      */
     @Test
     fun `a repack carries the latches into the new adapter before attaching it`() {
