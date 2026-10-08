@@ -596,10 +596,11 @@ const settled = (name, page) => {
  * TextControlElement::SetInnerEditorValue replaces the text node the
  * composition range is in, the range collapses, InputMethodController's
  * HasComposition is false from then on, and the keyboard's next update starts
- * a new composition with a compositionstart (read in Blink, not measured).
- * Chromium fires a keydown of key code 229 before each update too;
- * nothing here listens for it. `heard` is what the box's own `input`
- * listener saw, and `heardBefore` its `beforeinput` listener. With
+ * a new composition with a compositionstart (read in Blink; on an API 33
+ * emulator with Gboard 12.4 no compositionend reached the box). Chromium fires
+ * a keydown of key code 229 before each update too; nothing here listens for
+ * it. `heard` is what the box's own `input` listener saw, and `heardBefore`
+ * its `beforeinput` listener. With
  * `selection` false the box has no selection API, as an email box has none:
  * `selectionStart` is null and `setSelectionRange` throws.
  */
