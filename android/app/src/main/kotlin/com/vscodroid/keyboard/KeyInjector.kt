@@ -239,13 +239,13 @@ class KeyInjector(
      * the text and selection it had before the character, unless something
      * changed them in between. Putting the text back ends the composition with no
      * `compositionend`: Blink's composition range goes with the text it covered,
-     * and the keyboard's next edit starts a new composition (read in Blink). A
-     * task later the character comes back to this listener as the `insertText` a
-     * keyboard that commits would have sent, which makes the chord. The character
-     * still reaches the box's listeners in its `compositionupdate`, and a box
-     * that reads its text only once a composition is over, as the action list's
-     * filter and the find widget of the terminal, webviews and chat do, reads it
-     * when the keyboard's next one ends.
+     * and the keyboard's next edit starts a new composition (read in Blink, and
+     * measured below). A task later the character comes back to this listener as
+     * the `insertText` a keyboard that commits would have sent, which makes the
+     * chord. The character still reaches the box's listeners in its
+     * `compositionupdate`, and a box that reads its text only once a composition
+     * is over, as the action list's filter and the find widget of the terminal,
+     * webviews and chat do, reads it when the keyboard's next one ends.
      *
      * The terminal's textarea alone is first blurred and focused again, which is
      * Blink's own end of a composition, with the `compositionend` the terminal
@@ -258,32 +258,38 @@ class KeyInjector(
      * word reaches the shell first. Quick Open, which the terminal hands on,
      * focuses its own box before the chord's keydown is over, so a chord sent in
      * the blur's task would empty the textarea before the read. That is read from
-     * the shipped workbench; the wait was not measured. Quick Open does not stay
-     * open there: the chord's keyup goes to the textarea, as its keydown did, and
-     * the terminal lets it through, since with Quick Open showing Ctrl+P resolves
-     * to a command it does not keep from the shell, and takes the focus back, so
-     * Quick Open closes again at once, as it does for any Ctrl+P from the row in
-     * the terminal (read from the shipped xterm and workbench). The blur costs
-     * this: a terminal program that asked to hear focus changes hears focus go
-     * and come back. Anywhere else it costs more, which is why no other box gets
-     * it. The debug view's inline boxes, for a watch expression, a value, or a
-     * breakpoint's name or condition, the terminal tab rename box and the Ports
-     * view's commit what they hold when they lose the focus, the letter included,
-     * and most of them close; the quick input forgets which element to give the
-     * focus back to when it closes; and a box that reads its text on
-     * `compositionend` reads the letter.
+     * the shipped workbench, and a chord sent without the wait was not tried.
+     * Quick Open does not stay open there: the chord's keyup goes to the
+     * textarea, as its keydown did, and the terminal lets it through, since with
+     * Quick Open showing Ctrl+P resolves to a command it does not keep from the
+     * shell, and takes the focus back, so Quick Open closes again at once, as it
+     * does for any Ctrl+P from the row in the terminal (read from the shipped
+     * xterm and workbench, and measured below). The blur costs this: a terminal
+     * program that asked to hear focus changes hears focus go and come back.
+     * Anywhere else it costs more, which is why no other box gets it. The debug
+     * view's inline boxes, for a watch expression, a value, or a breakpoint's
+     * name or condition, the terminal tab rename box and the Ports view's commit
+     * what they hold when they lose the focus, the letter included, and most of
+     * them close; the quick input forgets which element to give the focus back to
+     * when it closes; and a box that reads its text on `compositionend` reads the
+     * letter.
      *
-     * Measured on an API 33 emulator with WebView 153 and Gboard 12.4, with the
-     * blur in every box and before the wait: in the Search view's box Ctrl, held
-     * past the long-press delay or tapped, then `p` opened Quick Open and left the
-     * box empty, and over an underlined `fo` left `fo`; Ctrl then `a` over `fo`
-     * selected it, and the next letter replaced it; in the terminal Ctrl then `c`
-     * gave `^C`, over an underlined `ab` gave `ab^C`, and stopped a running
-     * `cat`. Before, the letter joined the word and the latch was spent. The
-     * editor's own textarea host, which reads compositions itself, is left as it
-     * was, and so is an `input` with no selection API, such as an email box,
-     * whose selection could not be put back: each keeps the letter, and the latch
-     * is spent.
+     * Measured on an API 33 emulator with WebView 153 and Gboard 12.4: in the
+     * Search view's box Ctrl, held past the long-press delay or tapped, then `p`
+     * opened Quick Open and left the box empty, and over an underlined `fo` left
+     * `fo`, which got the focus back when Quick Open closed; Ctrl then `a` over
+     * `fo` selected it, and the next letter replaced it; and no `compositionend`
+     * reached the box. In a watch expression box Ctrl then `a` over an underlined
+     * `foo` selected it with the box still open, and Esc closed it with nothing
+     * added, where a blur and a refocus of the same box committed `foo` and
+     * closed it. In the terminal Ctrl then `c` stopped a running `cat`, over an
+     * underlined `ab` gave `ab^C`, and Ctrl then `p` over an underlined `ab` left
+     * `ab` at the prompt, Quick Open taking the focus in the chord's keydown and
+     * the terminal taking it back on its keyup. Before, the letter joined the
+     * word and the latch was spent. The editor's own textarea host, which reads
+     * compositions itself, is left as it was, and so is an `input` with no
+     * selection API, such as an email box, whose selection could not be put back:
+     * each keeps the letter, and the latch is spent.
      *
      * This is live on both edit paths, not only the legacy one, but not for
      * everything on the EditContext path. The workbench uses `NativeEditContext`
