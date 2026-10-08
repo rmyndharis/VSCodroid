@@ -2,6 +2,7 @@ package com.vscodroid
 
 import android.content.Context
 import android.content.SharedPreferences
+import com.vscodroid.util.isLightColor
 import com.vscodroid.webview.keepPageColor
 import io.mockk.every
 import io.mockk.mockk
@@ -28,8 +29,9 @@ import kotlin.math.pow
  * the other [SourceScan] cases do; the colour store and the loading page are driven.
  *
  * NEGATIVE CONTROL: writing the colour on every post fails the first case; the
- * loading page with its old literal colours, or its dark text kept on a light
- * colour, the second; the setup screen's light-ground text at #767676 the third;
+ * loading page with its old literal colours, its dark text kept on a light
+ * colour, or the #888 line it had on #1E1E1E on every dark colour, the second;
+ * the setup screen's light-ground text at #767676 the third;
  * and dropping any one of the calls the fourth names, or the starting window's
  * light theme, the fourth or the fifth.
  */
@@ -55,7 +57,7 @@ class StartColorTest {
 
     @Test
     fun `the loading page takes the kept colour, with text that reads on it`() {
-        for (background in listOf(DARK, WHITE)) {
+        for ((where, background) in EDITOR_COLORS + BOUNDS) {
             val page = loadingPageHtml(background, "Starting server...")
             val hex = "#%06x".format(background and 0xFFFFFF)
             assertTrue("<body style=\"background:$hex;" in page) { "the loading page is not painted $hex" }
@@ -64,7 +66,8 @@ class StartColorTest {
             assertTrue(colors.size == 2) { "expected the line's and the heading's colour, found $colors" }
             for (text in colors) {
                 assertTrue(contrast(parse(text), background) >= 4.5) {
-                    "$text on $hex measures %.2f:1, below 4.5:1".format(Locale.ROOT, contrast(parse(text), background))
+                    "$text on $hex ($where) measures %.2f:1, below 4.5:1"
+                        .format(Locale.ROOT, contrast(parse(text), background))
                 }
             }
         }
@@ -76,10 +79,13 @@ class StartColorTest {
         val text = Regex("""<color name="colorOnLightBackground">#([0-9A-Fa-f]{6})</color>""")
             .find(colors)?.groupValues?.get(1)?.toInt(16)
         assertTrue(text != null) { "colors.xml does not define colorOnLightBackground as #rrggbb" }
-        // The status line is the dimmer of the two, at android:alpha 0.7 in activity_splash.xml.
-        val dimmed = blend(text!!, WHITE, 0.7)
-        assertTrue(contrast(dimmed, WHITE) >= 4.5) {
-            "the status line on white measures %.2f:1, below 4.5:1".format(Locale.ROOT, contrast(dimmed, WHITE))
+        for ((where, ground) in EDITOR_COLORS.filterValues(::isLightColor)) {
+            // The status line is the dimmer of the two, at android:alpha 0.7 in activity_splash.xml.
+            val dimmed = blend(text!!, ground, 0.7)
+            assertTrue(contrast(dimmed, ground) >= 4.5) {
+                "the status line on #%06x (%s) measures %.2f:1, below 4.5:1"
+                    .format(Locale.ROOT, ground and 0xFFFFFF, where, contrast(dimmed, ground))
+            }
         }
     }
 
@@ -158,6 +164,31 @@ class StartColorTest {
 
     private companion object {
         const val WHITE = 0xFFFFFFFF.toInt()
-        const val DARK = 0xFF1E1E1E.toInt()
+
+        /**
+         * The editor colour of every theme the 1.139.1 server ships, which is the
+         * colour the page posts and the next loading page starts on.
+         */
+        val EDITOR_COLORS = mapOf(
+            "Light Modern, Light+, Light 2026, Visual Studio Light, High Contrast Light" to WHITE,
+            "Quiet Light" to 0xFFF5F5F5.toInt(),
+            "Solarized Light" to 0xFFFDF6E3.toInt(),
+            "Dark Modern" to 0xFF1F1F1F.toInt(),
+            "Dark+, Visual Studio Dark, Monokai Dimmed, the window" to 0xFF1E1E1E.toInt(),
+            "Dark 2026" to 0xFF121314.toInt(),
+            "Abyss" to 0xFF000C18.toInt(),
+            "Kimbie Dark" to 0xFF221A0F.toInt(),
+            "Monokai" to 0xFF272822.toInt(),
+            "Red" to 0xFF390000.toInt(),
+            "Solarized Dark" to 0xFF002B36.toInt(),
+            "Tomorrow Night Blue" to 0xFF002451.toInt(),
+            "High Contrast" to 0xFF000000.toInt(),
+        )
+
+        /** The greys nearest the middle that loadingPageHtml says its text still clears. */
+        val BOUNDS = mapOf(
+            "the lightest dark colour promised" to 0xFF3F3F3F.toInt(),
+            "the darkest light colour promised" to 0xFFDCDCDC.toInt(),
+        )
     }
 }

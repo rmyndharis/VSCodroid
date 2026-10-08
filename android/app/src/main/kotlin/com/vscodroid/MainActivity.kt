@@ -7184,13 +7184,18 @@ internal fun escapeHtml(s: String): String = s
 
 /**
  * The page [MainActivity] shows while the server starts, on [background], with
- * text that reads on it: grey on a dark colour as it always was, darker grey on a
- * light one, each above 4.5:1. Top-level for the reason [escapeHtml] is.
+ * text that reads on it: light grey on a dark colour, dark grey on a light one.
+ * The background is the editor colour the workbench last showed, so each text
+ * clears 4.5:1 on that of every theme the server ships, and on any colour at most
+ * as luminous as #3f3f3f or at least as luminous as #dcdcdc; a third-party
+ * theme's colour between those can measure less. The #888 the line had on
+ * #1e1e1e measures 4.19:1 on Monokai's #272822. Top-level for the reason
+ * [escapeHtml] is.
  */
 internal fun loadingPageHtml(background: Int, message: String): String {
     val light = isLightColor(background)
     return """<html><head><meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"></head>
-           <body style="background:${"#%06x".format(background and 0xFFFFFF)};color:${if (light) "#616161" else "#888"};font-family:sans-serif;
+           <body style="background:${"#%06x".format(background and 0xFFFFFF)};color:${if (light) "#616161" else "#aaa"};font-family:sans-serif;
            display:flex;align-items:center;justify-content:center;height:100vh;margin:0;">
            <div style="text-align:center"><h2 style="color:${if (light) "#333" else "#ccc"};">VSCodroid</h2>
            <p>${escapeHtml(message)}</p></div></body></html>"""
