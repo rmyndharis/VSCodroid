@@ -789,8 +789,8 @@ the chord from the character. The word composed before it stays. The terminal se
 composition only once it ends, in a zero timeout, reading it back from its textarea, which it
 empties on blur. So in the terminal alone the composition is first ended with a blur and a
 refocus, and the chord waits a task for that send: Quick Open, a chord the terminal hands to
-the workbench, takes the focus at once, and would leave the send an empty textarea. Every
-chord the interceptor makes in the terminal waits that task, a committed letter's too. A
+the workbench, takes the focus at once, and would leave the send an empty textarea. The
+chord of every letter in the terminal waits that task, a committed letter's too. A
 keyboard that commits, as Gboard 18 commits each letter, sends a keydown of key code 229
 first, on which the terminal reads its textarea back in a zero timeout and sends what
 changed; a chord that emptied the textarea before that read had it send a delete, and `ab`,

@@ -254,8 +254,8 @@ class KeyInjector(
      * before such a chord would stay unsent. It sends the word in a zero timeout,
      * reading it back from its textarea, which empties itself on blur (read from
      * the shipped xterm). So the text goes back after the blur, and only if
-     * nothing changed it in between, and the chord waits for that read, as any
-     * chord in the terminal does (below), so the word reaches the shell first.
+     * nothing changed it in between, and the chord waits for that read, as every
+     * letter's chord there does (below), so the word reaches the shell first.
      * Quick Open, which the terminal hands on, focuses its own box before the
      * chord's keydown is over, so a chord sent in the blur's task would empty the
      * textarea before the read. That is read from the shipped workbench, and a
