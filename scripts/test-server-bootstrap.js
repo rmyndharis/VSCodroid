@@ -595,7 +595,9 @@ async function stoppingTakesTheEditorServerWithIt() {
 // the cases of a folder with a light theme of its own fail; marking a folder only
 // on the first theme the workbench shows fails them too, since its own settings
 // arrive later on its first load, and marking it after the user's first tap
-// fails the case of a theme picked; handing over nothing without any record or
+// fails the case of a theme picked; telling themes apart by their colours rather
+// than their ids fails the cases of a folder that colours its bars and of a theme
+// with the user's colours; handing over nothing without any record or
 // splash fails the case of a load before any splash; without the bound, or
 // without moving a folder shown again to the end, the case of twenty folders
 // fails; writing on every change of the head fails the title case; and without
@@ -627,19 +629,21 @@ async function stoppingTakesTheEditorServerWithIt() {
         },
     };
 
-    // A theme as the workbench shows it: its base theme as a class of the
-    // workbench element, and its colours in the CSS variables of its stylesheet.
-    const shown = (base, colors) => ({
-        base,
-        vars: Object.fromEntries(Object.entries(colors).map(([id, c]) => [`--vscode-${id.replace(/\./g, '-')}`, c])),
-    });
+    // A theme as the workbench shows it: its id, which the workbench writes as
+    // classes of its element, the base theme first, and its colours in the CSS
+    // variables of its stylesheet. A theme the workbench makes up, when it cannot
+    // use the one it stored, has the base theme alone for an id.
+    const vars = (colors) =>
+        Object.fromEntries(Object.entries(colors).map(([id, c]) => [`--vscode-${id.replace(/\./g, '-')}`, c]));
+    const shown = (id, colors) => ({ id, base: id.split(' ')[0], vars: vars(colors) });
     const lightModernColors = {
         foreground: '#3b3b3b', 'editor.background': '#ffffff', 'titleBar.activeBackground': '#f8f8f8',
         'activityBar.background': '#f8f8f8', 'sideBar.background': '#f8f8f8', 'panel.background': '#f8f8f8',
         'statusBar.background': '#f8f8f8', 'statusBar.noFolderBackground': '#f8f8f8',
     };
-    const lightModern = shown('vs', lightModernColors);
-    const darkModernShown = shown('vs-dark', { 'editor.background': '#1f1f1f', 'statusBar.background': '#181818' });
+    const lightModern = shown('vs vscode-theme-defaults-themes-light_modern-json', lightModernColors);
+    const darkModernShown = shown('vs-dark vscode-theme-defaults-themes-dark_modern-json',
+        { 'editor.background': '#1f1f1f', 'statusBar.background': '#181818' });
 
     /**
      * Runs the script the way the page does, before the workbench reads its
@@ -663,8 +667,11 @@ async function stoppingTakesTheEditorServerWithIt() {
         let data = JSON.stringify(settings);
         const el = { getAttribute: () => data, setAttribute: (_name, value) => { data = value; } };
         const root = { style: {} };
-        // The workbench the page builds later, showing a theme the way `shown` does.
-        const workbench = { classList: { contains: (c) => c === workbench.base }, vars: {} };
+        // The workbench the page builds later, showing a theme the way `shown`
+        // does. Its classes come in the order workbench.js 1.139.1 writes them:
+        // the first theme's before the workbench adds its own, and each theme
+        // after that in place of the one before, at the end.
+        const workbench = { classList: Object.assign([], { contains(c) { return this.includes(c); } }), vars: {} };
         const head = {};
         const document = {
             getElementById: (id) => (id === 'vscode-workbench-web-configuration' ? el : null),
@@ -689,6 +696,12 @@ async function stoppingTakesTheEditorServerWithIt() {
         new Function('document', 'localStorage', 'matchMedia', 'MutationObserver', 'getComputedStyle', 'location',
             'performance', 'addEventListener', body)(
             document, localStorage, matchMedia, MutationObserver, getComputedStyle, { search }, performance, addEventListener);
+        const retitle = () => {
+            observers
+                .filter((o) => o.target === head && o.options.childList && o.options.subtree)
+                .forEach((o) => o.callback([]));
+            return root.style.backgroundColor;
+        };
         return {
             settings: JSON.parse(data),
             painted: root.style.backgroundColor,
@@ -700,12 +713,19 @@ async function stoppingTakesTheEditorServerWithIt() {
              * is undefined. Answers the root's colour after.
              */
             changeHead: (theme) => {
+                if (theme) {
+                    const list = workbench.classList;
+                    const before = workbench.id ? workbench.id.split(' ') : [];
+                    const others = list.filter((c) => !before.includes(c));
+                    list.length = 0;
+                    list.push(...others, ...theme.id.split(' '));
+                    if (!list.includes('monaco-workbench')) list.push('file-icons-enabled', 'monaco-workbench', 'linux', 'web');
+                }
                 Object.assign(workbench, theme ? { built: true, ...theme } : { built: false });
-                observers
-                    .filter((o) => o.target === head && o.options.childList && o.options.subtree)
-                    .forEach((o) => o.callback([]));
-                return root.style.backgroundColor;
+                return retitle();
             },
+            /** The window title changes, which changes the head and leaves the theme alone. */
+            retitle,
             /** The extensions have registered, which the workbench marks. */
             registered: () => marks.push('code/didLoadExtensions'),
             /** A tap on the page. */
@@ -785,7 +805,10 @@ async function stoppingTakesTheEditorServerWithIt() {
     // is configured for the user's theme. Once the extensions register, which the
     // workbench marks, the theme the window is configured for replaces the one it
     // started on and is stored, and so is a splash of it. Each of those steps
-    // rewrites a style element in the head.
+    // rewrites a style element in the head. The colours a folder's settings
+    // customize go over whatever theme it shows, from that cached copy at the
+    // start and from the settings once the extensions register; the theme stored
+    // is the theme alone.
     const base = { dark: 'vs-dark', light: 'vs' };
     const registry = {
         dark: {
@@ -799,18 +822,24 @@ async function stoppingTakesTheEditorServerWithIt() {
             'statusBar.background': '#007acc', 'statusBar.noFolderBackground': '#68217a',
         },
     };
+    // Dark+ and Visual Studio Dark set only the editor background, to the same
+    // colour, and take every other colour here from the registry.
     const themes = {
-        'Dark Modern': shown('vs-dark', {
+        'Dark Modern': shown('vs-dark vscode-theme-defaults-themes-dark_modern-json', {
             foreground: '#cccccc', 'editor.background': '#1f1f1f', 'titleBar.activeBackground': '#181818',
             'activityBar.background': '#181818', 'sideBar.background': '#181818', 'panel.background': '#181818',
             'statusBar.background': '#181818', 'statusBar.noFolderBackground': '#1f1f1f',
         }),
         'Light Modern': lightModern,
+        'Dark+': shown('vs-dark vscode-theme-defaults-themes-dark_plus-json', registry.dark),
+        'Visual Studio Dark': shown('vs-dark vscode-theme-defaults-themes-dark_vs-json', registry.dark),
     };
-    const splashOf = (name) => {
-        const color = (id) => themes[name].vars[`--vscode-${id.replace(/\./g, '-')}`];
+    /** A theme with the colours a folder's settings customize over it. */
+    const over = (theme, colors = {}) => ({ ...theme, vars: { ...theme.vars, ...vars(colors) } });
+    const splashOf = (theme) => {
+        const color = (id) => theme.vars[`--vscode-${id.replace(/\./g, '-')}`];
         return {
-            baseTheme: themes[name].base,
+            baseTheme: theme.base,
             colorInfo: {
                 foreground: color('foreground'), background: color('editor.background'),
                 editorBackground: color('editor.background'), titleBarBackground: color('titleBar.activeBackground'),
@@ -825,12 +854,13 @@ async function stoppingTakesTheEditorServerWithIt() {
      * A phone the app runs on, from the last window it showed before this
      * update: `splash` is the theme that window saved and stored. `own` maps a
      * folder or workspace to a theme its own settings name; every other window
-     * follows `user`, the user's theme. `renamed` is the first load after the
+     * follows `user`, the user's theme. `custom` maps a folder to the colours
+     * its own settings customize. `renamed` is the first load after the
      * update, which reads the default under its old name from a cache, so a
      * window following it is configured for an id no theme has.
      */
-    const phone = ({ splash, user = 'Dark Modern', own = {}, renamed = false, dark = true, autoDetect = false }) => {
-        const items = { 'monaco-parts-splash': JSON.stringify(splashOf(splash)) };
+    const phone = ({ splash, user = 'Dark Modern', own = {}, custom = {}, renamed = false, dark = true, autoDetect = false }) => {
+        const items = { 'monaco-parts-splash': JSON.stringify(splashOf(themes[splash])) };
         const state = { stored: splash, user, own, renamed, dark, autoDetect };
         const cached = new Set();
         let open;
@@ -839,10 +869,11 @@ async function stoppingTakesTheEditorServerWithIt() {
             state,
             /**
              * One page load, through to the theme the window is configured for.
-             * `early` taps the page before the extensions register. Answers how
-             * the load started.
+             * `early` taps the page before the extensions register, and `between`
+             * after that, before the configured theme replaces the one the
+             * workbench started on. Answers how the load started.
              */
-            visit(search, { early = false } = {}) {
+            visit(search, { early = false, between = false } = {}) {
                 const query = new URLSearchParams(search);
                 const where = query.get('folder') || query.get('workspace') || '';
                 const name = state.autoDetect ? (state.dark ? 'Dark Modern' : 'Light Modern') : own[where] || state.user;
@@ -851,14 +882,18 @@ async function stoppingTakesTheEditorServerWithIt() {
                 const page = load({ items, dark: () => state.dark, search });
                 const handed = page.settings.initialColorTheme;
                 const type = handed ? handed.themeType : state.autoDetect && state.dark ? 'dark' : 'light';
-                const started = usable ? themes[first] : shown(base[type], { ...registry[type], ...(handed ? handed.colors : {}) });
+                const started = over(
+                    usable ? themes[first] : shown(base[type], { ...registry[type], ...(handed ? handed.colors : {}) }),
+                    cached.has(where) ? custom[where] : {});
                 page.changeHead(started);
                 if (early) page.tap();
                 page.registered();
-                page.changeHead(themes[name]);
+                if (between) page.tap();
+                const configured = over(themes[name], custom[where]);
+                page.changeHead(configured);
                 cached.add(where);
                 Object.assign(state, { stored: name, renamed: false });
-                items['monaco-parts-splash'] = JSON.stringify(splashOf(name));
+                items['monaco-parts-splash'] = JSON.stringify(splashOf(configured));
                 open = { page, where };
                 return { painted: page.painted, started, handed };
             },
@@ -870,17 +905,23 @@ async function stoppingTakesTheEditorServerWithIt() {
                 state.dark = dark;
                 if (!state.autoDetect) return;
                 const name = dark ? 'Dark Modern' : 'Light Modern';
-                open.page.changeHead(themes[name]);
+                const now = over(themes[name], custom[open.where]);
+                open.page.changeHead(now);
                 state.stored = name;
-                items['monaco-parts-splash'] = JSON.stringify(splashOf(name));
+                items['monaco-parts-splash'] = JSON.stringify(splashOf(now));
             },
-            /** The user picks a theme in the window that is open, by touch or `withKeys`. */
+            /**
+             * The user picks a theme in the window that is open, by touch or
+             * `withKeys`. It goes to the folder's settings when they name one,
+             * and to the user's otherwise.
+             */
             pick(name, { withKeys = false } = {}) {
                 if (withKeys) open.page.press(); else open.page.tap();
                 if (own[open.where]) own[open.where] = name; else state.user = name;
-                open.page.changeHead(themes[name]);
+                const now = over(themes[name], custom[open.where]);
+                open.page.changeHead(now);
                 state.stored = name;
-                items['monaco-parts-splash'] = JSON.stringify(splashOf(name));
+                items['monaco-parts-splash'] = JSON.stringify(splashOf(now));
             },
         };
     };
@@ -945,6 +986,48 @@ async function stoppingTakesTheEditorServerWithIt() {
             startsOn(device.visit('?folder=/p/follow'), 'Dark Modern',
                 'a folder that follows the dark user theme, after one with a light theme of its own');
         }
+    }
+
+    // A folder whose own settings colour its title, activity and status bars, as
+    // Peacock writes them, and name no theme. It follows the user's theme, so a
+    // theme picked in it is the one the next folder starts on, and one picked in
+    // another folder is the one it starts on. Its colours differ from every other
+    // folder's, so telling themes apart by their colours, rather than by the id
+    // the workbench gives each, took it for a folder with a theme of its own, and
+    // both went wrong. Its second load is tapped once the extensions register,
+    // which leaves the theme it starts on to tell, with that theme's classes
+    // where the workbench puts them at the start.
+    {
+        const bars = '#42b883';
+        const peacock = { 'titleBar.activeBackground': bars, 'activityBar.background': bars, 'statusBar.background': bars };
+        const device = phone({ splash: 'Dark Modern', custom: { '/p/peacock': peacock } });
+        device.visit('?folder=/p/a');
+        device.visit('?folder=/p/peacock');
+        device.visit('?folder=/p/a');
+        device.visit('?folder=/p/peacock', { between: true });
+        device.pick('Light Modern');
+        startsOn(device.visit('?folder=/p/a'), 'Light Modern',
+            'a folder opened after Light Modern was picked in one whose settings colour its bars');
+        device.pick('Dark Modern');
+        startsOn(device.visit('?folder=/p/peacock'), 'Dark Modern',
+            'a folder whose settings colour its bars, opened after Dark Modern was picked in another');
+        assert.ok(!JSON.parse(device.items['vscodroid-folder-themes'])['/p/peacock'].own,
+            'a folder whose settings colour its bars is taken to have a theme of its own');
+    }
+
+    // A folder whose own settings name Visual Studio Dark while the user's theme
+    // is Dark+, two themes with the same colours in every part a record keeps.
+    // Told apart by their ids, the folder is marked, so the folder opened after
+    // it, where the theme it stored is unusable, is handed the user's theme
+    // rather than starting on the light web default.
+    {
+        const device = phone({ splash: 'Dark+', user: 'Dark+', own: { '/p/vs': 'Visual Studio Dark' } });
+        device.visit('?folder=/p/a');
+        device.visit('?folder=/p/vs');
+        startsOn(device.visit('?folder=/p/b'), 'Dark+',
+            "a folder opened after one whose own theme has the user's colours");
+        startsOn(device.visit('?folder=/p/vs'), 'Visual Studio Dark',
+            "a folder whose own theme has the user's colours, opened again");
     }
 
     // A folder with a theme of its own that is the first load this script runs has
@@ -1055,9 +1138,10 @@ async function stoppingTakesTheEditorServerWithIt() {
     {
         const page = load({ splash: { baseTheme: 'vs', colorInfo: { background: '#ffffff' } }, last: 'light', dark: false });
         assert.strictEqual(page.painted, '#ffffff', 'a light theme does not get a light blank page');
-        assert.strictEqual(page.changeHead(shown('vs-dark', { 'editor.background': ' #1f1f1f' })), '#1f1f1f',
+        const dark = shown('vs-dark vscode-theme-defaults-themes-dark_modern-json', { 'editor.background': ' #1f1f1f' });
+        assert.strictEqual(page.changeHead(dark), '#1f1f1f',
             'the root keeps the theme the page started on after the theme changed');
-        page.changeHead(shown('vs-dark', { 'editor.background': ' #1f1f1f' }));
+        page.retitle();
         assert.strictEqual(page.writes(), 1, 'a change of the head that leaves the theme alone rewrote the record');
     }
 

@@ -475,49 +475,60 @@ if (!fs.existsSync(rehEntryPoint)) {
     // that splash is drawn only by the desktop bootstrap. It is one for the whole
     // app, the last window's, so this keeps records of its own in the same shape,
     // one for each folder or workspace the page's address opens: the theme that
-    // window showed last, and whether it is a theme of the folder's own. A folder
-    // with a theme of its own starts on its own record. Any other starts on the
-    // record of the folder shown most recently that follows the user's theme,
-    // which is that theme as it is now, where its own record is stale once the
-    // user picks a theme in another folder. With no such record yet, the
-    // workbench's splash is used. Whichever it is colours the root before the
-    // first paint.
+    // window showed last, with its id, and whether it is a theme of the folder's
+    // own. A folder with a theme of its own starts on its own record. Any other
+    // starts on the record of the folder shown most recently that follows the
+    // user's theme, which is that theme as it is now, where its own record is
+    // stale once the user picks a theme in another folder. With no such record
+    // yet, the workbench's splash is used. Whichever it is colours the root
+    // before the first paint.
     //
     // Whether a folder has a theme of its own is read from what the workbench
-    // shows, against the record of the window before. Entered from a window that
-    // follows the user's theme, the folder has one when the workbench shows
-    // another theme than that window did, read again at each theme it shows until
-    // the user does something: first the one it starts on, which is that window's
-    // stored theme only when the folder is configured for the same one, then the
-    // one it is configured for, which a folder's own settings name at startup only
-    // from its second load on, and on its first only once the extensions have
-    // registered. The first tap or key press after that ends the reading, because
-    // a theme change is then the user's pick and moves the record with it; taps
-    // while the page loads do not count. Nothing else sets or clears the mark: not
-    // a load entered from a folder with a theme of its own, whose stored theme
-    // says nothing about whether this folder follows the user's; not the first
-    // load this script runs, which has no record of a window before; not a load
-    // after the device switched between light and dark, or while it does; and the
-    // empty window, which has no folder settings, always follows.
+    // shows, against the record of the window before. A theme is told by its id,
+    // which the workbench writes as two classes of its element, the base theme
+    // and the one after it, and not by its colours: a folder's own settings can
+    // customize those under the user's theme, as Peacock does with the title,
+    // activity and status bars, and two themes can share all of them, as Dark+
+    // and Visual Studio Dark do. A theme the workbench makes up, when it cannot
+    // use the one it stored, has only the base theme for an id, so the class
+    // after it is one of the workbench's own and matches no theme. Entered from a
+    // window that follows the user's theme, the folder has one of its own when
+    // the workbench shows another theme than that window did, read again at each
+    // one it shows until the user does something: first the one it starts on,
+    // which is that window's stored theme only when the folder is configured for
+    // the same one, then the one it is configured for, which a folder's own
+    // settings name at startup only from its second load on, and on its first
+    // only once the extensions have registered. The first tap or key press after
+    // that ends the reading, because a theme change is then the user's pick and
+    // moves the record with it; taps while the page loads do not count. Nothing
+    // else sets or clears the mark: not a load entered from a folder with a theme
+    // of its own, whose stored theme says nothing about whether this folder
+    // follows the user's; not the first load this script runs, which has no
+    // record of a window before; not a load after the device switched between
+    // light and dark, or while it does; and the empty window, which has no folder
+    // settings, always follows.
     //
     // The same theme is handed to the workbench as `initialColorTheme`, which it
     // uses only when its stored theme is unusable: to a folder with a theme of its
     // own; to any folder entered from one, when the stored theme is that folder's
     // and not the user's; on the first load this script runs, when after this
-    // update the stored theme is unusable only because the cached default still
-    // spells it the old way, so the splash is right; and, with no record or splash
+    // update the stored theme is usually unusable only because the cached default
+    // still spells it the old way, so the splash, the last window's theme, is
+    // right unless that window had a theme of its own and this load opens another
+    // folder, where a cold start reopens that one; and, with no record or splash
     // at all, which is only ever the first seconds of a fresh install, as the dark
     // default this app configures. Any other folder entered from a window that
     // follows the user's theme is handed nothing. That window's stored theme, once
-    // it has stored one, is right for every folder that follows the user's too; a
-    // folder it is wrong for has a theme of its own not yet marked, and the default
-    // the workbench then starts on, as upstream does, is what marks it, where a
-    // handed theme would hide it. Hex colours only, because the workbench parses
-    // each one with Color.fromHex, which turns anything else into red, and a theme
-    // can hold a translucent colour, written as rgba(). Always with a colours
-    // object, an empty one included: without it the workbench colours the theme it
-    // starts on from the light map of "Light 2026", the web build's own default,
-    // which is the setting's value until the extensions register.
+    // it has stored one, is right for every folder that follows the user's too, so
+    // the workbench would use a handed theme only in a folder with a theme of its
+    // own not yet marked, and the user's is the one theme such a folder is known
+    // not to show; it starts on its own default instead, as upstream does. Hex
+    // colours only, because the workbench parses each one with Color.fromHex,
+    // which turns anything else into red, and a theme can hold a translucent
+    // colour, written as rgba(). Always with a colours object, an empty one
+    // included: without it the workbench colours the theme it starts on from the
+    // light map of "Light 2026", the web build's own default, which is the
+    // setting's value until the extensions register.
     //
     // Nothing is handed over when the device has switched between light and dark
     // since the last load. With window.autoDetectColorScheme on, the stored theme
@@ -548,21 +559,28 @@ if (!fs.existsSync(rehEntryPoint)) {
     // Twenty folders are kept, the most recently shown, so the record cannot grow
     // into the storage the workbench's sealed secrets share. Loads that still
     // start on the wrong colour: the first load of a folder with a theme of its
-    // own, which has no record yet; a load after the device switched, as above,
-    // which is handed nothing with the setting off as well, so where the
-    // workbench cannot use its stored theme, in a folder with a theme of its own
-    // or one entered from it, it starts on the web default, the light one; on a
-    // fresh install, a load that replaces the first one before that one's
-    // extensions have registered, which finds the record of the dark default the
-    // first one started on, is handed nothing, starts on the light web default
-    // because no theme is stored yet, and is taken to have a theme of its own;
-    // and those around a mark this cannot read. A folder with a theme of its own
-    // that is the first load this script runs, that is opened for the first time
-    // right after another folder with a theme of its own, or whose theme arrives
-    // only after the user's first tap, is taken to follow the user's theme, and
-    // the folder opened after it to have a theme of its own. Each wrong mark is
-    // put right the next time its folder is entered from one that follows the
-    // user's theme.
+    // own, which has no record yet; the first load after this update, when it
+    // opens another folder than the last window and that window had a theme of
+    // its own, as above; a load after the device switched, as above, which is
+    // handed nothing with the setting off as well, so where the workbench cannot
+    // use its stored theme, in a folder with a theme of its own or one entered
+    // from it, it starts on the web default, the light one; on a fresh install, a
+    // load that replaces the first one before that one's extensions have
+    // registered, which finds the record of the dark default the first one
+    // started on, is handed nothing, starts on the light web default because no
+    // theme is stored yet, and is taken to have a theme of its own; and those
+    // around a mark this cannot read. A folder with a theme of its own that is
+    // the first load this script runs, that is opened for the first time right
+    // after another folder with a theme of its own, or whose theme arrives only
+    // after the user's first tap, is taken to follow the user's theme, and the
+    // folder opened after it to have a theme of its own. Each wrong mark is put
+    // right the next time its folder is entered from one that follows the user's
+    // theme. A record keeps the colours its folder showed, that folder's own
+    // customizations included, so a load started on another folder's record
+    // starts on those too: the blank page takes its editor colour, and a
+    // workbench that takes the record as its starting theme shows the parts that
+    // folder coloured, Peacock's bars among them, in its colours until the
+    // extensions register.
     //
     // Reading the folder's own settings would put some of those loads right, and
     // is not done. This file does not serve the page: it adds this script to the
@@ -584,18 +602,19 @@ if (!fs.existsSync(rehEntryPoint)) {
     // theme of its own, the stored theme is not the user's, so the workbench
     // takes initialColorTheme, and a type read from the file would start the
     // load on the folder's type where it now starts on the user's. Reading the
-    // file would also make the mark exact, rather than read from what the
-    // workbench shows. Neither is a small change. The start needs a request the page waits
-    // for, because the workbench reads initialColorTheme once, at startup; a
-    // reader for the comments and trailing commas settings.json allows, and for
-    // the settings of a workspace file; and a map from each installed theme's
-    // name, old names included, to its type, which a script written into the
-    // page once per update cannot keep current as themes are installed. A type
-    // alone would still start on that type's default colours rather than the
-    // folder's theme. The mark needs that request on every load, because a
-    // folder's settings can change between loads. What the two would put right
-    // is a folder with a theme of its own opened for the first time right after
-    // another, and the wrong marks above, each of which puts itself right.
+    // file would also mark a folder from its settings rather than from what the
+    // workbench shows. Neither is a small change. The start needs a request the
+    // page waits for, because the workbench reads initialColorTheme once, at
+    // startup; a reader for the comments and trailing commas settings.json
+    // allows, and for the settings of a workspace file; and a map from each
+    // installed theme's name, old names included, to its type, which a script
+    // written into the page once per update cannot keep current as themes are
+    // installed. A type alone would still start on that type's default colours
+    // rather than the folder's theme. The mark needs that request on every load,
+    // because a folder's settings can change between loads. What the two would
+    // put right is a folder with a theme of its own opened for the first time
+    // right after another, and the wrong marks above, each of which puts itself
+    // right.
     //
     // Anything that throws in here leaves the page as upstream ships it.
     try {
@@ -633,11 +652,12 @@ if (!fs.existsSync(rehEntryPoint)) {
             '\t\t\t\t\t\tif (!now) { return; }',
             '\t\t\t\t\t\tdocument.documentElement.style.backgroundColor = now;',
             '\t\t\t\t\t\tvar base = Object.keys(types).filter(function (t) { return wb.classList.contains(t); })[0];',
-            '\t\t\t\t\t\tvar shown = { baseTheme: base, colorInfo: { background: now } };',
+            '\t\t\t\t\t\tvar classes = [].slice.call(wb.classList), at = classes.indexOf(base);',
+            "\t\t\t\t\t\tvar shown = { baseTheme: base, theme: classes.slice(at, at + 2).join(' '), colorInfo: { background: now } };",
             "\t\t\t\t\t\tfor (var key in ids) { shown.colorInfo[key] = style.getPropertyValue('--vscode-' + ids[key].replace(/\\./g, '-')).trim(); }",
             '\t\t\t\t\t\tvar entry = JSON.stringify(shown);',
             '\t\t\t\t\t\tif (entry === written) { return; }',
-            '\t\t\t\t\t\tif (!acted && last === mode() && prev && !prev.own) { own = !!where && entry !== JSON.stringify(prev); }',
+            '\t\t\t\t\t\tif (!acted && last === mode() && prev && !prev.own) { own = !!where && shown.theme !== prev.theme; }',
             '\t\t\t\t\t\twritten = entry;',
             '\t\t\t\t\t\tif (own) { shown.own = true; }',
             '\t\t\t\t\t\tdelete seen[where];',
