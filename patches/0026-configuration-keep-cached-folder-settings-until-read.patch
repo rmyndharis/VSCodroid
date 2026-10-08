@@ -35,13 +35,23 @@ to the workbench page reads which theme a window shows to tell whether its
 folder has a theme of its own, and a tap in that window taught it the wrong
 answer, which started the next folder on the wrong theme.
 
+Verified in headless Chromium against the web workbench of server trees built
+with and without this patch, served on macOS with Dark Modern in the Machine
+settings, Light Modern in the folder's, and the editor server's open of the
+folder's settings.json held. Held 6 s: from the folder's second load on, the
+unpatched tree showed Dark Modern from the extensions registering, at 0.4 s,
+until 12.2 s, and on the third load still at 14 s; the patched tree showed
+Light Modern from the extensions registering on, and the same with the two
+themes swapped. A first load applied the folder's theme at 12.8 s patched and
+12.7 s unpatched, and held 0.3, 0.8 and 1.5 s at 1.4, 2.3 and 3.7 s patched.
+
 A first version of this patch swapped only once the new object had read the
 files. That moved the drop rather than removing it: the settings it had read
 then reached the configuration through a reparse, without an event, before the
-workspace service's own load compared them, so on a folder's first load the
-theme service never heard of the folder's theme. It was seen on the emulator
-and in the Chromium harness below with each open of the file held for 0.3 s or
-1.5 s.
+workspace service's own load compared them, so on a folder's first load
+nothing listening for configuration changes heard of them. A new folder naming
+Light Modern stayed on Dark Modern on the emulator, and in Chromium with the
+open held 0.3 s or 1.5 s.
 
 One note for whoever tidies this later. The reparse is written as
 `(this.loadedFolderConfiguration ?? this.folderConfiguration).reparse(` because
