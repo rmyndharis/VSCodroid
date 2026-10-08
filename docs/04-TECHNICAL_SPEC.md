@@ -790,6 +790,9 @@ timeout once it ends, reading it back from its textarea, which it empties on blu
 chord waits for that send: Quick Open, a chord the terminal hands to the workbench, takes the
 focus at once, and would leave the send an empty textarea. On the EditContext path no
 `beforeinput` reaches the element, so the editor makes no chord of a soft keyboard letter.
+The editor's own textarea, which reads compositions itself, is left alone, and so is an
+`input` with no selection API, such as an email box, whose selection could not be put back:
+each keeps a composed letter, and the latch is spent.
 
 A key or a touch that moves the editor's caret while the soft keyboard is still composing a
 word ends that composition. Chromium keeps an EditContext composition's range where it was

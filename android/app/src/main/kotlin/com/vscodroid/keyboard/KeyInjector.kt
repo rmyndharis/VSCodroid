@@ -266,7 +266,9 @@ class KeyInjector(
      * quick input forgets which element to give focus back to when it closes,
      * and gives it to the active editor instead, and a terminal program that
      * asked to hear focus changes hears focus go and come back. The editor's own
-     * textarea host, which reads compositions itself, is left as it was.
+     * textarea host, which reads compositions itself, is left as it was, and so
+     * is an `input` with no selection API, such as an email box, whose selection
+     * could not be put back: each keeps the letter, and the latch is spent.
      *
      * This is live on both edit paths, not only the legacy one, but not for
      * everything on the EditContext path. The workbench uses `NativeEditContext`
