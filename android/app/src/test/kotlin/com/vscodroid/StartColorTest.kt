@@ -34,7 +34,8 @@ import kotlin.math.pow
  * the setup screen's light-ground text at #767676 the third; dropping any one of
  * the calls the fourth names or either of the setup screen's two text colours,
  * or turning round the test that chooses them, the fourth; and dropping the
- * starting window's light theme, or swapping it with the app's own, the fifth.
+ * starting window's light theme, swapping it with the app's own, or choosing it
+ * only when the kept colour stays the same, the fifth.
  */
 class StartColorTest {
 
@@ -138,12 +139,16 @@ class StartColorTest {
 
     @Test
     fun `a light editor points the next starting window at a light theme`() {
-        // Whole lines, so the two themes swapped does not pass.
+        // Whole lines, so the two themes swapped, or the guard turned round, does not pass.
         val main = SourceScan.withoutComments(
             SourceScan.body(SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt"), "private fun showPageColor(")
         ).lines().map { it.trim() }
         assertTrue("splashScreen.setSplashScreenTheme(" in main) {
             "showPageColor no longer chooses the theme the system draws its starting window from"
+        }
+        assertTrue("if (!keepPageColor(this, color)) return" in main) {
+            "showPageColor no longer chooses the starting window only when the kept colour changes, so it " +
+                "follows a change one post late and is chosen again on every load"
         }
         assertTrue("if (isLightColor(color)) R.style.Theme_VSCodroid_LightStart else Resources.ID_NULL" in main) {
             "showPageColor no longer gives a light colour alone the white starting window, so the next start " +
