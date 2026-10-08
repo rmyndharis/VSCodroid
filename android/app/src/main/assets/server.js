@@ -502,12 +502,16 @@ if (!fs.existsSync(rehEntryPoint)) {
     // which is that window's stored theme only when the folder is configured for
     // the same one, then the one it is configured for, which a folder's own
     // settings name at startup only from its second load on, and on its first
-    // only once the extensions have registered. The first tap or key press after
-    // that ends the reading, because a theme change is then the user's pick and
-    // moves the record with it; taps while the page loads do not count. Nothing
-    // else sets or clears the mark: not a load entered from a folder with a theme
-    // of its own, whose stored theme says nothing about whether this folder
-    // follows the user's; not the first load this script runs, which has no
+    // only once its settings file has been read, which on an API 36 emulator
+    // came seconds after the extensions registered. From the second load on the
+    // workbench keeps the copy it cached until the file has been read (patch
+    // 0026); before that it showed the user's theme in that time, and a tap then
+    // left the mark wrong. The first tap or key press after the extensions
+    // register ends the reading, because a theme change is then the user's pick
+    // and moves the record with it; taps while the page loads do not count.
+    // Nothing else sets or clears the mark: not a load entered from a folder with
+    // a theme of its own, whose stored theme says nothing about whether this
+    // folder follows the user's; not the first load this script runs, which has no
     // record of a window before; not a load after the device switched between
     // light and dark, or while it does; and the empty window, which has no folder
     // settings, always follows.
@@ -580,8 +584,9 @@ if (!fs.existsSync(rehEntryPoint)) {
     // theme is stored yet, and is taken to have a theme of its own; and those
     // around a mark this cannot read. A folder with a theme of its own that is
     // the first load this script runs, that is opened for the first time right
-    // after another folder with a theme of its own, or whose theme arrives only
-    // after the user's first tap, is taken to follow the user's theme, and the
+    // after another folder with a theme of its own, or that is tapped on its
+    // first load after the extensions register and before its settings file has
+    // been read, is taken to follow the user's theme, and the
     // folder opened after it to have a theme of its own. Each wrong mark is put
     // right the next time its folder is entered from one that follows the user's
     // theme. A record keeps the colours its folder showed, that folder's own
@@ -598,7 +603,8 @@ if (!fs.existsSync(rehEntryPoint)) {
     // settings.json through /vscode-remote-resource. What the load starts on is
     // still the workbench's choice. Its configuration starts on its own cached
     // copy of a remote folder's settings, empty until the folder has been opened
-    // once, and turns to the file only when the remote file system registers.
+    // once, and turns to the file only once the remote file system has
+    // registered and the file has been read.
     // The theme service reads that configuration as the workbench starts, in the
     // task that marks code/willStartWorkbench, and in eight loads measured on an
     // API 36 emulator the file system registered 385 to 713 ms after that mark.
@@ -607,8 +613,8 @@ if (!fs.existsSync(rehEntryPoint)) {
     // that window's stored theme whatever the page hands it, and colouring the
     // root from the file would give that load three colours where it now has
     // two: the folder's until the workbench draws, the user's until the
-    // extensions register, and the folder's again. Entered from a window with a
-    // theme of its own, the stored theme is not the user's, so the workbench
+    // workbench has read the file, and the folder's again. Entered from a window
+    // with a theme of its own, the stored theme is not the user's, so the workbench
     // takes initialColorTheme, and a type read from the file would start the
     // load on the folder's type where it now starts on the user's. Reading the
     // file would also mark a folder from its settings rather than from what the
