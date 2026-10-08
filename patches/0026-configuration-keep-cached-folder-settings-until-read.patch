@@ -20,9 +20,12 @@ values instead.
 FolderConfiguration now remembers which of its two configurations the
 workspace service loaded last, and reparses that one: the cached copy until
 the file based configuration has been loaded, which is what the workspace
-service holds until then. The swap, the reads and the events are as before,
-so a folder's first load, which has no cached copy, gets its settings when it
-did and with the same change event.
+service holds until then. The swap and the reads are as before, so a folder's
+first load, which has no cached copy, gets its settings when it did and with
+the same change event. From the second load on, the event at the end of the
+read names only the settings that differ between the cached copy and the
+file; it used to name every setting of the folder's whenever the extensions
+registered during the read, since it was putting them back.
 
 On an Android emulator the read ends seconds after the extensions register. On
 API 36 a folder whose .vscode/settings.json names Light Modern, under a user
