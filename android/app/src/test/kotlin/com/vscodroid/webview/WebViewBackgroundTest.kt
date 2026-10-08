@@ -43,8 +43,9 @@ import org.junit.jupiter.api.Test
  * what shows below the last page's frame when the soft keyboard goes down while a
  * folder opens, and behind the bars. `scripts/test-server-bootstrap.js` runs the
  * page's side; the cases here pin which messages are taken, that every WebView
- * listens before its first load, that the window is given the colour of each
- * page the view shows, and what `paintWindow` does with it.
+ * listens before its first load, that the view is given the colour the page
+ * posts, that the window is given the colour of each page the view shows, and
+ * what `paintWindow` does with it.
  *
  * NEGATIVE CONTROL: without the `setBackgroundColor` call in `configure` the
  * first case fails, and with the window colour there rather than `lastPageColor`
@@ -53,11 +54,11 @@ import org.junit.jupiter.api.Test
  * call, or with it after the first load, the listener case; taking a frame's
  * message, another host's, a short or translucent colour or one in another
  * notation fails the message case, and reading an ArrayBuffer's data, which
- * throws as it would in the listener, fails it too. Without the `onColor` call in
- * the listener, or the `paintWindow` call in `showPageColor`, or with none before
- * the load in `setupWebView`, `retryServerStart` or `showErrorPage`, the window
- * case; and so does `paintWindow` without its background call or with either bar
- * appearance pinned.
+ * throws as it would in the listener, fails it too. Without the
+ * `setBackgroundColor` or `onColor` call in the listener, or the `paintWindow`
+ * call in `showPageColor`, or with none before the load in `setupWebView`,
+ * `retryServerStart` or `showErrorPage`, the window case; and so does
+ * `paintWindow` without its background call or with either bar appearance pinned.
  */
 class WebViewBackgroundTest {
 
@@ -181,15 +182,20 @@ class WebViewBackgroundTest {
 
     @Test
     fun `the window takes the colour of each page the view shows`() {
-        // The workbench page's, as it posts it. Read rather than driven: the
-        // listener cannot be captured on the JVM, where WebViewCompat's static
-        // initialiser calls the android.jar stub of Uri.parse.
+        // The workbench page's, as it posts it, which the view is given as well.
+        // Read rather than driven: the listener cannot be captured on the JVM,
+        // where WebViewCompat's static initialiser calls the android.jar stub of
+        // Uri.parse.
         val listener = SourceScan.withoutComments(
             SourceScan.body(
                 SourceScan.read("src/main/kotlin/com/vscodroid/webview/VSCodroidWebView.kt"),
                 "internal fun addPageColorListener(",
             )
         )
+        assertTrue("view.setBackgroundColor(color)" in listener) {
+            "addPageColorListener no longer gives the view the colour the page posted, so after a theme " +
+                "change the view keeps the one it started on, which shows wherever no page has painted yet"
+        }
         assertTrue("onColor(color)" in listener) {
             "addPageColorListener no longer hands the colour the page posted on, so the window behind the " +
                 "view keeps the one it had: #1E1E1E under a light theme, where the keyboard was and behind the bars"
