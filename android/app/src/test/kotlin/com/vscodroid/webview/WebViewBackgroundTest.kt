@@ -57,8 +57,9 @@ import org.junit.jupiter.api.Test
  * throws as it would in the listener, fails it too. Without the
  * `setBackgroundColor` or `onColor` call in the listener, or the `paintWindow`
  * call in `showPageColor`, or with none before the load in `setupWebView`,
- * `retryServerStart` or `showErrorPage`, the window case; and so does
- * `paintWindow` without its background call or with either bar appearance pinned.
+ * `retryServerStart` or `showErrorPage`, or one there with the other page's
+ * colour, the window case; and so does `paintWindow` without its background call
+ * or with either bar appearance pinned.
  */
 class WebViewBackgroundTest {
 
@@ -225,18 +226,20 @@ class WebViewBackgroundTest {
                     "light theme's bars, or dark ones on a dark theme's"
             }
         }
-        // The app's own pages, which post nothing: each paints the window before it loads.
+        // The app's own pages, which post nothing: each paints the window its colour
+        // before it loads, the kept one for the loading page and the theme's window
+        // colour, #1E1E1E, for the error page drawn on it.
         listOf(
-            "private fun setupWebView()" to "wv.loadData(",
-            "private fun retryServerStart()" to "webView?.loadData(",
-            "private fun showErrorPage(" to "webView?.loadDataWithBaseURL(",
-        ).forEach { (declaration, load) ->
+            Triple("private fun setupWebView()", "paintWindow(lastPageColor(this))", "wv.loadData("),
+            Triple("private fun retryServerStart()", "paintWindow(lastPageColor(this))", "webView?.loadData("),
+            Triple("private fun showErrorPage(", "paintWindow(getColor(R.color.colorBackground))", "webView?.loadDataWithBaseURL("),
+        ).forEach { (declaration, paint, load) ->
             val code = body(declaration)
             val loaded = code.indexOf(load)
             assertTrue(loaded >= 0) { "$declaration no longer loads its page with $load, so this case measures nothing" }
-            assertTrue(code.indexOf("paintWindow(") in 0 until loaded) {
-                "$declaration loads its page without first giving the window that page's colour, so a " +
-                    "window a light workbench painted stays light around it"
+            assertTrue(code.indexOf(paint) in 0 until loaded) {
+                "$declaration does not call `$paint` before it loads its page, so the window around that page " +
+                    "keeps the colour it had, which under a light theme is not the page's"
             }
         }
     }
