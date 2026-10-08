@@ -835,10 +835,12 @@ async function stoppingTakesTheEditorServerWithIt() {
     // is configured for the user's theme. Once the extensions register, which the
     // workbench marks, the theme the window is configured for replaces the one it
     // started on and is stored, and so is a splash of it. Each of those steps
-    // rewrites a style element in the head. The colours a folder's settings
-    // customize go over whatever theme it shows, from that cached copy at the
-    // start and from the settings once the extensions register; the theme stored
-    // is the theme alone.
+    // rewrites a style element in the head. On a folder's first load its own
+    // settings arrive later than that, once its settings file has been read,
+    // which the model takes as the same step; a tap `between` the two stands for
+    // one in that time. The colours a folder's settings customize go over
+    // whatever theme it shows, from that cached copy at the start and from the
+    // settings once the extensions register; the theme stored is the theme alone.
     const base = { dark: 'vs-dark', light: 'vs' };
     const registry = {
         dark: {
@@ -983,10 +985,11 @@ async function stoppingTakesTheEditorServerWithIt() {
     // default dark theme, and a folder on that theme entered after it. Each throws
     // the stored theme away, so the workbench starts on what it is handed, which
     // has to be that folder's theme and not the one the window before left. The
-    // light folder's first load, where its settings arrive only as the extensions
-    // register, is tapped while it loads. It is reached once through the app's
-    // address, which encodes the path, and then through the one the workbench
-    // builds, which does not.
+    // light folder's first load, whose own settings arrive only once its settings
+    // file has been read, after the extensions register, is tapped while it loads,
+    // before they register, which does not count. It is reached once through the
+    // app's address, which encodes the path, and then through the one the
+    // workbench builds, which does not.
     {
         const device = phone({ splash: 'Dark Modern', own: { '/projects/light': 'Light Modern' } });
         device.visit('?folder=/projects/dark');
