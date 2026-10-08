@@ -627,16 +627,22 @@ colour, and to the view. Only an opaque `#rrggbb` from the top frame on the loop
 taken. The loading page and the error pages are this app's own and post nothing, so each gives
 the window its own colour before it loads.
 
-`MainActivity` also keeps the colour (`keepPageColor`), and every screen of the next start begins
-on it (`lastPageColor`): the windows of `SplashActivity` and `MainActivity` with their bars, the
-setup screen's text, the view and the "Starting server..." page. Under a light theme a cold start
-had been dark until the workbench painted, 2.3 s on the emulator, and the first launch after an
-update for the whole of setup. The system draws its starting window from a theme before any of
-the app runs, so while the colour is light it is pointed at `Theme.VSCodroid.LightStart` through
+`MainActivity` also keeps the colour (`keepPageColor`), and every screen of the next start begins on
+it (`lastPageColor`): the windows of `SplashActivity` and `MainActivity` with their bars, the setup
+screen's text, the view and the "Starting server..." page. Under a light theme a cold start had been
+dark until the workbench painted, 2.3 s on the emulator, and the first launch after an update for
+the whole of setup. The system draws its starting window from a theme before any of the app runs, so
+while the colour is light it is pointed at `Theme.VSCodroid.LightStart` through
 `SplashScreen.setSplashScreenTheme`, which the system keeps for later launches, and back at the
-manifest's theme when it is dark. The toolchain picker and the error pages stay on the theme's
-dark window, which their layouts are drawn for. The first start after updating from a release
-without this has no colour kept yet and stays dark until the workbench paints.
+manifest's theme when it is dark. The system keeps that theme by its name and looks it up on each
+launch, falling back to the manifest's without an error when the name no longer resolves, and the
+app names it again only when the colour changes, so the style must keep its name. A light theme's
+starting window is white whatever that theme's own background is. The toolchain picker, the
+Toolchains screen, the extra key row and the error pages stay on the theme's dark colours, which
+their layouts are drawn for. The first start after updating from a release without this has no
+colour kept yet and stays dark until the workbench paints, and with `window.autoDetectColorScheme`
+on, a start after the device switched between light and dark while the app was closed begins on the
+colour from before.
 
 ### 4.2 Crash Recovery
 

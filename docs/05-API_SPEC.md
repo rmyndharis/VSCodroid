@@ -579,11 +579,12 @@ One more object reaches the page outside `AndroidBridge`: `vscodroidPageColor`, 
 script `server.js` adds to the workbench page (`INITIAL_THEME_MARKER`) posts it the colour
 it paints the page with, and the app gives that colour to the window behind the WebView,
 which shows below the page's last frame while the soft keyboard goes down and behind the
-system bars, and to the WebView's own background. It takes no token and returns nothing. A message is acted on only when it comes from
-the top frame on the loopback address and is a string holding an opaque `#rrggbb`, so the
-most a caller can do with it is set that colour. The type is tested before the data is
-read: a page can post an `ArrayBuffer` too, and reading one's data as a string throws in
-the callback the WebView runs on the UI thread.
+system bars, and to the WebView's own background. It takes no token and returns nothing. A
+message is acted on only when it comes from the top frame on the loopback address and is a
+string holding an opaque `#rrggbb`, so the most a caller can do with it is set that colour,
+which the app also keeps for the screens of its next start. The type is tested before the
+data is read: a page can post an `ArrayBuffer` too, and reading one's data as a string
+throws in the callback the WebView runs on the UI thread.
 
 ### 2.5 Extension Auth Callback Relay (Chrome Custom Tabs)
 
