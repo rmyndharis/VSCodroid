@@ -25,6 +25,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.CsvSource
 import org.junit.jupiter.params.provider.EnumSource
 import org.junit.jupiter.params.provider.ValueSource
 import java.io.ByteArrayInputStream
@@ -113,6 +114,9 @@ class SafLiveDeviceEditTest {
     private var failStampAfterNextWrite = false
     private var failNextQuery = false
 
+    /** Set to make the provider fail the next query for one document, the stamp query. */
+    private var failStampQuery = false
+
     /** How many of the next `"wt"` streams fail at their first byte, before anything lands. */
     private var failWriteStreams = 0
 
@@ -190,7 +194,12 @@ class SafLiveDeviceEditTest {
                 failNextQuery = false
                 throw IllegalStateException("the provider did not answer")
             }
-            deviceCursor(listing = firstArg<Uri>() !in uris.values)
+            val document = firstArg<Uri>() in uris.values
+            if (document && failStampQuery) {
+                failStampQuery = false
+                throw IllegalStateException("the provider did not answer for the document")
+            }
+            deviceCursor(listing = !document)
         }
         // A real stream: a relaxed one answers 0 from `read`, and `copyTo` spins on it.
         every { resolver.openInputStream(any()) } answers {
@@ -896,6 +905,77 @@ class SafLiveDeviceEditTest {
     }
 
     /**
+     * A held-back save meeting a stamp query the provider does not answer, at a try or at the
+     * next save of the file. The guard had seen the device move past what it read, and the
+     * unanswered query let the save go over that version unread, another app's edit with no
+     * copy of it anywhere, for a try with nobody saving too. The bytes decide it as they
+     * decide any held-back save, so it waits on and lands once they can be read.
+     */
+    @ParameterizedTest(name = "clock: {0}, the next save rather than a try: {1}")
+    @CsvSource("true, false", "true, true", "false, false", "false, true")
+    fun `a held-back save goes over no unread device copy when its stamp goes unanswered`(
+        hasClock: Boolean,
+        bySave: Boolean,
+    ) {
+        deviceHasClock = hasClock
+        open()
+        save("first save")
+        editOnDevice("changed by another app")
+        deviceReadable = false
+        save("second save")
+        assertEquals(1, writes, "precondition: the second save was held back")
+        failStampQuery = true
+
+        if (bySave) {
+            save("third save")
+        } else {
+            clock += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+            retryWhileWatching()
+        }
+
+        assertEquals(false, failStampQuery, "precondition: the provider was asked for the stamp")
+        assertEquals(
+            "changed by another app", deviceText,
+            "a held-back save went over a device copy nothing had read",
+        )
+        assertEquals(1, writes)
+        deviceReadable = true
+        clock += SafSyncEngine.HELD_BACK_RETRY_MAX_MS
+        retryWhileWatching()
+        assertEquals(if (bySave) "third save" else "second save", deviceText)
+        assertEquals(listOf("changed by another app"), deviceCopies().values.toList())
+    }
+
+    /**
+     * The same hold, and the device reporting again the stamp this engine last read, over
+     * other bytes of the same length: a provider that keeps a document's old time, as MTP to
+     * an Android phone does. The guard had seen the stamp move, and its coming back let the
+     * try replace that edit unread.
+     */
+    @Test
+    fun `a held-back save is not sent over another app's edit when the old stamp comes back`() {
+        open()
+        save("first save")
+        val written = deviceModified to deviceSize
+        editOnDevice("changed by another app")
+        deviceReadable = false
+        save("second save")
+        deviceText = "first EDIT"
+        deviceModified = written.first
+        deviceSize = written.second
+        deviceReadable = true
+        clock += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+
+        retryWhileWatching()
+
+        assertEquals(
+            listOf("first EDIT"), deviceCopies().values.toList(),
+            "another app's edit was replaced with no copy of it anywhere",
+        )
+        assertEquals("second save", deviceText)
+    }
+
+    /**
      * What a provider that stays unreadable costs: one try per held-back save per wait, the
      * wait doubling from the first to the longest and staying there.
      */
@@ -1351,6 +1431,73 @@ class SafLiveDeviceEditTest {
             listOf(true), keptAsChanged,
             "the notice told the user the editor never had the file they had just deleted in it",
         )
+    }
+
+    /**
+     * A delete of a file whose save is held back, meeting a stamp query the provider does not
+     * answer. The guard had seen the device move past what it read, and the unanswered query
+     * let the delete take that version unread. Where the loop's idle turn found the file gone
+     * before the delete's event arrived, it dropped the hold first, so the hold could not say
+     * so either.
+     */
+    @ParameterizedTest(name = "the idle turn dropped the hold first: {0}")
+    @ValueSource(booleans = [false, true])
+    fun `a delete of a file whose save is held back is declined when its stamp goes unanswered`(
+        holdDropped: Boolean,
+    ) {
+        open()
+        save("first save")
+        editOnDevice("changed by another app")
+        deviceReadable = false
+        save("second save")
+        val file = File(mirror, "notes.txt").apply { delete() }
+        if (holdDropped) {
+            clock += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+            retryWhileWatching()
+        }
+        engine.handleMirrorEvent(FileObserver.DELETE, file, mirror, treeUri)
+        failStampQuery = true
+
+        engine.runWriteBackLoop { false }
+
+        assertEquals(false, failStampQuery, "precondition: the delete asked the provider for the stamp")
+        assertTrue(deviceHasDocument, "the delete took another app's edit with the file")
+        assertEquals(listOf(file.absolutePath), kept.map { it.absolutePath }, "nothing said it was kept")
+        assertEquals(listOf(true), keptAsChanged)
+    }
+
+    /**
+     * A file made again in the editor after its delete was declined over another app's edit.
+     * Its save writes into the document the device kept, whose stamp the guard had seen move
+     * past what it read, and a stamp query the provider did not answer let the save replace
+     * the version the delete had kept, with no copy of it anywhere.
+     */
+    @ParameterizedTest(name = "arrives as a create: {0}")
+    @ValueSource(booleans = [true, false])
+    fun `a file made again after a declined delete keeps the device's version when its stamp goes unanswered`(
+        asCreate: Boolean,
+    ) {
+        open()
+        save("first save")
+        editOnDevice("changed by another app")
+        val file = File(mirror, "notes.txt").apply { delete() }
+        engine.handleMirrorEvent(FileObserver.DELETE, file, mirror, treeUri)
+        engine.runWriteBackLoop { false }
+        assertTrue(deviceHasDocument, "precondition: the delete was declined")
+        file.writeText("made again")
+        failStampQuery = true
+
+        engine.handleMirrorEvent(
+            if (asCreate) FileObserver.CREATE else FileObserver.MODIFY, file, mirror, treeUri,
+        )
+        engine.runWriteBackLoop { false }
+
+        assertEquals(false, failStampQuery, "precondition: the save asked the provider for the stamp")
+        assertEquals(
+            listOf("changed by another app"), deviceCopies().values.toList(),
+            "the version the delete kept was replaced with no copy of it anywhere",
+        )
+        assertEquals("made again", deviceText)
     }
 
     /**

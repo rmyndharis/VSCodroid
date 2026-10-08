@@ -183,7 +183,9 @@ class SafSyncEngine(private val context: Context) {
      * copy it kept, taken from the record or read by [digestKeptCopies], or of what a landed
      * write streamed. A save may replace exactly that and nothing newer; [keepsDeviceEdit]
      * is what asks. Where phase 2 could not place what the device holds there is no stamp,
-     * only the digest of the copy the previous record vouched for at that path.
+     * only the digest of the copy the previous record vouched for at that path, and none
+     * either once a stamp has moved past what this engine read and the bytes did not show
+     * the same version, until a read does or a write lands ([deviceMovedPast]).
      *
      * In memory only, never in the `.synced` record, because a record line licenses a
      * deletion (see [deviceChangedSinceRecord]). The digest of a copy the record vouches
@@ -1434,8 +1436,9 @@ class SafSyncEngine(private val context: Context) {
      * an Android phone attached over MTP does; a foreign edit in the window between a landed
      * write and its refresh, or between this check and the write, which SAF has no
      * conditional write to close; a stamp the provider will not report, which lets the save
-     * go ahead unguarded, a held-back save's retry too, except over a device copy an open
-     * could not place, and after a write drops the entry so the next save fails open;
+     * go ahead unguarded, except over a device copy this engine knows it has not read, one an
+     * open could not place or one whose stamp it has seen move past what it read, and after
+     * a write drops the entry so the next save fails open;
      * entries not following a directory rename; a stamp a provider moves after the folder
      * was opened, over a copy the open kept rather than fetched (its times agreed, or a read
      * found the bytes equal) that no open has digested yet and this one's
@@ -1484,9 +1487,11 @@ class SafSyncEngine(private val context: Context) {
      * What the device reports for [docUri] now, where that has moved past what this engine
      * last read or wrote at [localFile]'s path and the bytes do not show it to be the same
      * version; null where it has not, and where nothing is known of the path or the
-     * provider will not say, unless an open could not place the device copy, where only
-     * the bytes answer. A stamp that moved over the digested bytes becomes the one compared
-     * next. [keepsDeviceEdit] says why the bytes are asked and what that costs.
+     * provider will not say, unless the device copy is one this engine could not place,
+     * where only the bytes answer. A stamp that moved over the digested bytes becomes the
+     * one compared next, and one that moved past them leaves the path unplaced, as an open
+     * that cannot place the copy leaves it, until a read finds those bytes again or a write
+     * lands. [keepsDeviceEdit] says why the bytes are asked and what that costs.
      */
     private fun deviceMovedPast(localFile: File, docUri: Uri): Pair<Long, Long>? {
         val seen = deviceSeen[localFile.absolutePath] ?: return null
@@ -1508,6 +1513,17 @@ class SafSyncEngine(private val context: Context) {
         ) {
             deviceSeen[localFile.absolutePath] = DeviceState(now, seen.sha256, seen.length)
             return null
+        }
+        // The device now holds what this engine has not read, and the stamp it compared
+        // against no longer says anything: kept, it let a held-back save's try, the next
+        // save, a delete, or a file made again after a declined delete go over that version
+        // unread once a stamp query went unanswered, or once the provider reported the old
+        // stamp again. So no stamp, as for a copy an open could not place, and only the
+        // bytes answer from here. Whatever entry stands now is the one marked, keeping its
+        // digest: an open or a write may have replaced the one read above, and its bytes are
+        // the ones a later read can match.
+        deviceSeen.computeIfPresent(localFile.absolutePath) { _, current ->
+            DeviceState(null, current.sha256, current.length)
         }
         return now
     }
@@ -5609,10 +5625,11 @@ internal enum class DeviceCopyOutcome {
  */
 private class DeviceState(
     /**
-     * Null where an open found the device holding bytes it could not place, so that no stamp
-     * the provider reports, or fails to report, lets a save or a delete through without the
-     * bytes being read; the digest is then the previous record's for the path, or null where
-     * it held none.
+     * Null where an open found the device holding bytes it could not place, or where a stamp
+     * moved past the bytes this engine read and a read could not show them unchanged, so
+     * that no stamp the provider reports, or fails to report, lets a save or a delete through
+     * without the bytes being read. The digest is then the previous record's for the path,
+     * or the one the entry carried when the stamp moved, or null where there is none.
      */
     val stamp: Pair<Long, Long>?,
     val sha256: ByteArray? = null,
