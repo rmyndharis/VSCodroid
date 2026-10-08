@@ -491,43 +491,43 @@ costing the app its editor server, and it is passed as one token, because
 The bootstrap also adds three scripts to the workbench page template,
 `vscode-reh/out/vs/code/browser/workbench/workbench.html`, through `extendWorkbenchPage`, because
 the page cannot take them from `product.json`: the trusted link domains, the extension
-recommendations, and the theme a page load starts on. The last records in `localStorage`
-(`vscodroid-folder-themes`, the twenty folders or workspaces most recently shown) the theme each
-one showed last and whether that theme is the folder's own, which it reads from the themes the
-workbench shows until the user acts, against the record of the folder shown before it when that one
-follows the user's theme. A theme is told by its id, which the workbench writes as classes of its
-element, and not by its colours, which a folder's own `workbench.colorCustomizations` change under
-the user's theme (Peacock's bar colours, for one). Before the first paint it colours the page
-background from the folder's own record when the folder has a theme of its own, and otherwise from
-the record of the folder that most recently showed the user's theme, or, with no record yet, from
-the splash the workbench saves there (`monaco-parts-splash`). It hands the same theme to the
-workbench as `initialColorTheme`, which the workbench uses only when it cannot use the theme it
-stored: to a folder with a theme of its own, to any folder entered from one, on the first load the
-script runs, and as the dark default while nothing is recorded yet; never on a load after the device
-switched between light and dark, when `window.autoDetectColorScheme` makes the workbench's own pick
-the right one. After that it keeps the background on the editor colour of the theme the workbench
-shows, and the record with it, because the background also fills the space the soft keyboard gives
-back until the workbench lays itself out again, and it posts each colour it paints to the app, which
-gives it to the window behind the view as well (§4.1). The workbench keeps its stored theme, one per
-profile, only while the configured `workbench.colorTheme` equals the theme's id, so it drops that
-theme in a folder whose own settings name another and in any folder entered from one, and the
-default the welcome extension sets must be an id the server tree contributes, not an older name
-upstream migrates; `verify-server-tree.py` checks it.
+recommendations, and the theme a page load starts on. The last one first reads the settings file of
+the window it opens, the folder's `.vscode/settings.json` or the workspace file, with a synchronous
+GET of `/vscode-remote-resource`, because the page has to be coloured before its first paint and the
+workbench reads its configuration element once. The text goes to the workbench as
+`initialWorkspaceSettings`, which patch 0027 adds: a remote folder's configuration used to hold the
+folder's own settings only as the copy its last load cached, so a folder opened for the first time
+ran on the user's settings, the theme among them, until its file had been read through the remote
+file system, 8.5 to 20.6 s into the load on an API 36 emulator. The theme the file names decides the
+start. A folder that names one starts on its own record in `localStorage`
+(`vscodroid-folder-themes`, the twenty folders or workspaces most recently shown, each with the theme
+it showed by id, its colours and, for a theme of the folder's own, the name its settings gave it)
+when that record was taken under the same name, and otherwise on that theme's look among the server
+tree's own themes, which the bootstrap reads from the tree's theme files when it writes the script.
+Any other window starts on the record of the window that most recently followed the user's theme,
+or, before the script has recorded any, on the splash the workbench saves (`monaco-parts-splash`).
+Before the first paint the script colours the page background from that look, and it hands the same
+look to the workbench as `initialColorTheme`, which the workbench uses only when it cannot use the
+theme it stored; never on a load after the device switched between light and dark, when
+`window.autoDetectColorScheme` makes the workbench's own pick the right one, and not for a theme of
+the folder's own it has no look for. After that it keeps the background on the editor colour of the
+theme the workbench shows, and the record with it, because the background also fills the space the
+soft keyboard gives back until the workbench lays itself out again, and it posts each colour it paints
+to the app, which gives it to the window behind the view as well (§4.1). The workbench keeps its
+stored theme, one per profile, only while the configured `workbench.colorTheme` equals the theme's
+id, so it drops that theme in a folder whose own settings name another and in any folder entered from
+one, and the default the welcome extension sets must be an id the server tree contributes, not an
+older name upstream migrates; `verify-server-tree.py` checks it.
 
-Two loads of a folder whose own settings name a theme still start on a theme other than the
-folder's, because the script cannot read those settings (the `server.js` comment says why) and the
-workbench takes them from its own copy. On the folder's first load ever there is no copy: the
-workbench finds the user's theme configured and shows it until the folder's settings file has been
-read, 8.5 s into the load and 3.8 s after the extensions registered on an API 36 emulator. The
-published server tree waits for the file the same way (measured in Chromium), so this is upstream's
-order, not this script's. From the second load on patch 0026 keeps the copy in force, so the
-folder's theme shows from the extensions registering. On a load that finds a copy but no record,
-which is the folder's first load after the update that brought this script and any load after twenty
-other folders were shown since its last, the page takes the user's colour and, entered from a folder
-that follows the user's theme, the workbench drops its stored theme for the one the copy names and
-starts on the web default, the light one with the registry's default colours, until the extensions
-register. A Light Modern folder under Dark Modern showed 0.9 s of Dark Modern's colour, then 4.6 s
-of that default, on the emulator.
+What still starts on another theme: a folder naming a theme an installed extension contributes, on
+its first load and its first after twenty other folders were shown, which the script has no look for,
+so it takes the user's colour and, where the workbench cannot use its stored theme, the web default,
+the light one with the registry's default colours, until the extensions register; a window whose
+settings file cannot be read, which starts as one following the user's theme would and is not
+recorded; and a window after the user's theme was changed by an edit of the user's settings while a
+folder with a theme of its own was open, whose record of the user's theme is then older than the
+theme. Patch 0026 keeps the folder's settings in force between the extensions registering and the
+file being read, which a folder's settings given by the page or by its cached copy both need.
 
 Readiness is `GET /version`, and only a `200` counts. There is no `/healthz`:
 what used to serve one was a fallback server in `assets/server.js` that bound the
@@ -976,6 +976,7 @@ flowchart TD
   P --> P22["0022 EditContext: keep the IME buffer and caret in step"]
   P --> P23["0023 suggest: drop a pending quick suggest on a caret key"]
   P --> P26["0026 configuration: keep a folder's cached settings until its file is read"]
+  P --> P27["0027 configuration: start a remote workspace from the settings the page read"]
 ```
 
 Five of these are load-bearing in ways their titles understate:
