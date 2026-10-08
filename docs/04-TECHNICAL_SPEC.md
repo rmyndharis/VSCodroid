@@ -514,6 +514,21 @@ theme in a folder whose own settings name another and in any folder entered from
 default the welcome extension sets must be an id the server tree contributes, not an older name
 upstream migrates; `verify-server-tree.py` checks it.
 
+Two loads of a folder whose own settings name a theme still start on a theme other than the
+folder's, because the script cannot read those settings (the `server.js` comment says why) and the
+workbench takes them from its own copy. On the folder's first load ever there is no copy: the
+workbench finds the user's theme configured and shows it until the folder's settings file has been
+read, 7.5 s into the load and 3.8 s after the extensions registered on an API 36 emulator. The
+published server tree waits for the file the same way (measured in Chromium), so this is upstream's
+order, not this script's. From the second load on patch 0026 keeps the copy in force, so the
+folder's theme shows from the extensions registering. On a load that finds a copy but no record,
+which is the folder's first load after the update that brought this script and any load after twenty
+other folders were shown since its last, the page takes the user's colour and, entered from a folder
+that follows the user's theme, the workbench drops its stored theme for the one the copy names and
+starts on the web default, the light one with the registry's default colours, until the extensions
+register. A Light Modern folder under Dark Modern showed 0.9 s of Dark Modern's colour, then 4.6 s
+of that default, on the emulator.
+
 Readiness is `GET /version`, and only a `200` counts. There is no `/healthz`:
 what used to serve one was a fallback server in `assets/server.js` that bound the
 port when `vscode-reh/out/server-main.js` was missing and answered 200 to every

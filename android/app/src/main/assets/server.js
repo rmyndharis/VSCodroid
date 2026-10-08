@@ -575,7 +575,8 @@ if (!fs.existsSync(rehEntryPoint)) {
     // Twenty folders are kept, the most recently shown, so the record cannot grow
     // into the storage the workbench's sealed secrets share. Loads that still
     // start on the wrong colour: the first load of a folder with a theme of its
-    // own, which has no record yet; the first load after this update, when it
+    // own, which has no record yet, and its first after twenty other folders
+    // were shown, which has none left; the first load after this update, when it
     // opens another folder than the last window and that window had a theme of
     // its own, as above; a load after the device switched, as above, which is
     // handed nothing with the setting off as well, so where the workbench cannot
