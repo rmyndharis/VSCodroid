@@ -615,8 +615,9 @@ async function stoppingTakesTheEditorServerWithIt() {
 // user's colours; handing over nothing without any record or splash fails the
 // case of a load before any splash; without the bound, or without moving a
 // folder shown again to the end, the case of twenty folders fails; writing on
-// every change of the head fails the title case; and without the catch around
-// the write, the case of full storage fails.
+// every change of the head fails the title case; without the catch around the
+// write, the case of full storage fails; and reading the theme files on every
+// start, the case of a second start fails.
 {
     const anchor =
         '<meta id="vscode-workbench-web-configuration" data-settings="{{WORKBENCH_WEB_CONFIGURATION}}">';
@@ -1381,6 +1382,29 @@ async function stoppingTakesTheEditorServerWithIt() {
             'a theme is not given the colours of the file it includes');
         assert.strictEqual(known['Dark Modern'].colorInfo.titleBarBackground, '#181818',
             'a theme\'s own colours are not kept over those of the file it includes, or not in lower case');
+    }
+
+    // A start whose page already carries the script reads none of the theme files:
+    // they change only with the tree, which every update extracts afresh, and the
+    // reads are a hundred or so on the way to every server start.
+    {
+        const reads = path.join(dir, 'reads.js');
+        fs.writeFileSync(reads, [
+            "const fs = require('fs');",
+            'const readFileSync = fs.readFileSync;',
+            'fs.readFileSync = function (file, ...rest) {',
+            "    if (/[\\\\/]extensions[\\\\/]/.test(String(file))) process.stderr.write(`read ${file}\\n`);",
+            '    return readFileSync.call(this, file, ...rest);',
+            '};',
+            '',
+        ].join('\n'));
+        const again = spawnSync(process.execPath, ['--require', reads, path.join(dir, 'server.js'), '--host=127.0.0.1'], {
+            encoding: 'utf8',
+            timeout: 20_000,
+        });
+        assert.strictEqual(again.status, 0, `a second start should boot cleanly:\n${again.stdout}${again.stderr}`);
+        assert.deepStrictEqual((again.stderr || '').match(/^read .*$/gm), null,
+            'a start whose page already carries the script read the theme files again, on the way to the server');
     }
     fs.rmSync(dir, { recursive: true, force: true });
 }
