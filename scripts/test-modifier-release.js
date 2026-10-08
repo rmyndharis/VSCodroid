@@ -40,14 +40,15 @@
  * into a text box, with the composition events in Blink's order: a letter it
  * adds while Ctrl is latched must come out as the chord only once the
  * composition is over, with the box as it was before the letter and the box's
- * own `input` listener never hearing it, over a word still composing too; and
- * in the terminal, with xterm's composition handling copied from the shipped
- * @xterm/xterm, the word composed before the chord must reach the shell
- * first, also when the workbench takes the chord.
+ * own `beforeinput` and `input` listeners never hearing it, over a word still
+ * composing too, and so must the next latched letter; a box with no selection
+ * API keeps the letter; and in the terminal, with xterm's composition handling
+ * copied from the shipped @xterm/xterm, the word composed before the chord
+ * must reach the shell first, also when the workbench takes the chord.
  *
  * NEGATIVE CONTROL, measured: against KeyInjector.kt at f66e462f, which sent
- * no release, 32 of the 69 cases fail; against the interceptor before it made
- * a chord of a composed letter, 12 of the 22 composing cases; against one
+ * no release, 33 of the 72 cases fail; against the interceptor before it made
+ * a chord of a composed letter, 13 of the 24 composing cases; against one
  * that released at the chord's target with nothing stopping it at the window,
  * 5 picker cases fail, the first Ctrl+Tab in the Command Palette opening the
  * editor it had just highlighted; and against one that paired a release with
@@ -61,9 +62,10 @@
  * or preventDefault in its place, or a stop that ignores the keydowns a
  * keyboard sends first. For a composed letter: the chord sent in the same
  * task, no blur, the text put back before the blur or whatever changed it,
- * the box's `input` listener hearing the letter, no guard while a chord is
- * pending, and the editor's own textarea, a rewritten word or a character
- * with no key taken for a letter.
+ * the box's `beforeinput` or `input` listener hearing the letter, no guard
+ * while a chord is pending, the guard never dropped, a box with no selection
+ * API taken for one with it, and the editor's own textarea, a rewritten word
+ * or a character with no key taken for a letter.
  *
  * Extraction is strict: if a raw string moves or changes shape this fails
  * saying so, rather than quietly running an empty script.
@@ -222,9 +224,14 @@ function newPage({ emitter = true } = {}) {
     for (const node of [document.body, page.focused]) node.dispatchEvent = dispatchEvent;
     page.newNode = (name, parent) => Object.assign(new Node(name, parent), { dispatchEvent });
     // Timers wait until a case runs them, in the order they were set, as the
-    // browser runs zero timeouts once the task that set them is over.
+    // browser runs zero timeouts once the task that set them is over. One that
+    // throws is reported, as the browser reports it, and the rest still run.
     page.timers = [];
-    page.runTimers = () => { while (page.timers.length) page.timers.shift()(); };
+    page.runTimers = () => {
+        while (page.timers.length) {
+            try { page.timers.shift()(); } catch (e) { timerErrors.push(e.message); }
+        }
+    };
     page.context = vm.createContext({
         window,
         document,
@@ -373,6 +380,7 @@ function outcome(page) {
 }
 
 const cases = [];
+const timerErrors = [];
 const settled = (name, page) => {
     const o = outcome(page);
     cases.push([`${name}: no toolbar is left on its Alt action`, o.toolbarAlt, false]);
@@ -575,25 +583,30 @@ const settled = (name, page) => {
  * composition first, keeping its text, with a compositionend, and then fires
  * blur. Chromium fires a keydown of key code 229 before each update too;
  * nothing here listens for it. `heard` is what the box's own `input`
- * listener saw.
+ * listener saw, and `heardBefore` its `beforeinput` listener. With
+ * `selection` false the box has no selection API, as an email box has none:
+ * `selectionStart` is null and `setSelectionRange` throws.
  */
-function textBox(page, { value = '', className = 'input', tagName = 'TEXTAREA' } = {}) {
+function textBox(page, { value = '', className = 'input', tagName = 'TEXTAREA', selection = true } = {}) {
     page.document.body.parent = page.document;
     const box = page.newNode('text-box', page.document.body);
     const classes = className.split(' ');
+    const caret = selection ? value.length : null;
     Object.assign(box, {
-        tagName, value, selectionStart: value.length, selectionEnd: value.length, selectionDirection: 'none',
-        classList: { contains: (c) => classes.includes(c) }, heard: [],
+        tagName, value, selectionStart: caret, selectionEnd: caret, selectionDirection: 'none',
+        classList: { contains: (c) => classes.includes(c) }, heard: [], heardBefore: [],
     });
-    box.setSelectionRange = (start, end, direction) => Object.assign(box,
-        { selectionStart: start, selectionEnd: end, selectionDirection: direction || 'none' });
+    box.setSelectionRange = (start, end, direction) => {
+        if (!selection) throw new Error(`the ${tagName} box does not support selection`);
+        Object.assign(box, { selectionStart: start, selectionEnd: end, selectionDirection: direction || 'none' });
+    };
     let composition = null;
     const fire = (type, init = {}) => box.dispatchEvent(new page.KeyboardEvent(type,
         { bubbles: true, cancelable: false, composed: true, ...init }));
     box.compose = (text) => {
         if (!composition) {
             fire('compositionstart', { data: '' });
-            composition = [box.selectionStart, box.selectionEnd];
+            composition = selection ? [box.selectionStart, box.selectionEnd] : [box.value.length, box.value.length];
         }
         fire('compositionupdate', { data: text });
         fire('beforeinput', { inputType: 'insertCompositionText', data: text, isComposing: true });
@@ -602,7 +615,7 @@ function textBox(page, { value = '', className = 'input', tagName = 'TEXTAREA' }
         if (!composition || page.document.activeElement !== box) return;
         box.value = box.value.slice(0, composition[0]) + text + box.value.slice(composition[1]);
         composition = [composition[0], composition[0] + text.length];
-        box.selectionStart = box.selectionEnd = composition[1];
+        if (selection) box.selectionStart = box.selectionEnd = composition[1];
         fire('input', { inputType: 'insertCompositionText', data: text, isComposing: true });
     };
     box.blur = () => {
@@ -620,6 +633,7 @@ function textBox(page, { value = '', className = 'input', tagName = 'TEXTAREA' }
         fire('focus', { bubbles: false });
     };
     box.addEventListener('input', () => box.heard.push(box.value));
+    box.addEventListener('beforeinput', (e) => box.heardBefore.push(e.data));
     page.document.activeElement = box;
     return box;
 }
@@ -707,7 +721,7 @@ const keys = (page, at = 'text-box') => sequence(page).filter((line, i) => page.
         end !== -1 && end < page.log.findIndex((e) => e.type === 'keydown' && e.key === 'p'), true]);
     cases.push(['and the box is as it was before the letter',
         JSON.stringify([box.value, box.selectionStart, box.selectionEnd]), JSON.stringify(['', 0, 0])]);
-    cases.push(['and the box never heard the letter', JSON.stringify(box.heard), '[]']);
+    cases.push(['and the box never heard the letter', JSON.stringify([box.heardBefore, box.heard]), '[[],[]]']);
     cases.push(['and Ctrl is spent', page.window.__vscodroid.ctrl, false]);
     cases.push(['and the box still has focus', page.document.activeElement === box, true]);
     settled('a composed Ctrl+P', page);
@@ -728,7 +742,23 @@ const keys = (page, at = 'text-box') => sequence(page).filter((line, i) => page.
         'keydown p ctrl, keyup p ctrl, keyup Control']);
     cases.push(['and leaves the word as typed, the caret after it',
         JSON.stringify([box.value, box.selectionStart, box.selectionEnd]), JSON.stringify(['fo', 2, 2])]);
-    cases.push(['and the box heard the word and not the letter', JSON.stringify(box.heard), JSON.stringify(['f', 'fo'])]);
+    cases.push(['and the box heard the word and not the letter', JSON.stringify([box.heardBefore, box.heard]),
+        JSON.stringify([['f', 'fo'], ['f', 'fo']])]);
+}
+
+// The next letter with Ctrl latched again is a chord of its own, as Ctrl+A
+// and then Ctrl+C select the box's text and copy it.
+{
+    const page = newPage();
+    intercept(page);
+    const box = textBox(page);
+    for (const letter of ['a', 'c']) {
+        page.window.__vscodroid.ctrl = true;
+        box.compose(letter);
+        page.runTimers();
+    }
+    cases.push(['two composed letters, each with Ctrl latched, are two chords',
+        keys(page).filter((k) => k.startsWith('keydown')).join(', '), 'keydown a ctrl, keydown c ctrl']);
 }
 
 // A capital is a shifted key, as on the insertText route: Ctrl+Shift+P.
@@ -758,6 +788,20 @@ const keys = (page, at = 'text-box') => sequence(page).filter((line, i) => page.
         JSON.stringify([box.value, keys(page)]), JSON.stringify(['them\u00e9', []])]);
     cases.push(['and spend the latch', JSON.stringify([page.window.__vscodroid.ctrl, page.window.__vscodroid.alt]),
         JSON.stringify([false, false])]);
+}
+
+// A box with no selection API, as an email box: its selection cannot be put
+// back, so the letter is typed, with no chord, and spends the latch, as on
+// the insertText route a character with no chord does.
+{
+    const page = newPage();
+    intercept(page);
+    const box = textBox(page, { tagName: 'INPUT', selection: false });
+    page.window.__vscodroid.ctrl = true;
+    box.compose('p');
+    page.runTimers();
+    cases.push(['a box with no selection API keeps a composed letter, with no chord, and spends the latch',
+        JSON.stringify([box.value, keys(page), page.window.__vscodroid.ctrl]), JSON.stringify(['p', [], false])]);
 }
 
 // The editor's own textarea host reads compositions itself and is left alone.
@@ -837,6 +881,8 @@ const keys = (page, at = 'text-box') => sequence(page).filter((line, i) => page.
     cases.push(['a chord the workbench takes from the terminal still lets ab reach the shell',
         JSON.stringify(term.sent()), JSON.stringify(['ab'])]);
 }
+
+cases.push(['no timer threw', timerErrors.join('; '), '']);
 
 let failed = 0;
 for (const [name, got, want] of cases) {
