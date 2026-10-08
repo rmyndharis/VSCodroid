@@ -115,8 +115,8 @@ class WebViewBackgroundTest {
         assertTrue(loaded >= 0) { "setupWebView no longer loads its placeholder, so this case measures nothing" }
         assertTrue(added in 0 until loaded) {
             "setupWebView does not add the plain-text page script before the WebView loads its " +
-                "first page, so the server's plain-text answers keep black text on the dark " +
-                "background in light mode, and the WebView's error page in both modes"
+                "first page, so under a dark theme the server's plain-text answers keep black text " +
+                "on the WebView's dark background in light mode, and the WebView's error page in both modes"
         }
 
         // Every origin, for the reason addUiScaleScript gives: the port is not known yet.
