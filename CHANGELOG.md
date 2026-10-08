@@ -49,6 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A save or a delete still being sent when its device folder is opened again no longer replaces or removes the device's version of the file if that open could not read it.
 - Deleting a file in a device folder no longer removes changes another app made to it while the folder was open; the file stays in the device folder and a notice says so.
 - In a device folder that reports no file times, a change another app made to a file before the folder was opened, which the editor did not show, is no longer overwritten by the next save of that file or removed by deleting it.
+- In a device folder that reports neither file times nor sizes, a file you edited starts receiving device changes again once both sides hold the same content, as it already did where sizes are reported.
 - Opening a large device folder no longer fills the phone's storage: copying stops while about 150 MB is still free, and the files left out stay unchanged in the device folder.
 - A device folder shows its own name in the Explorer and the title bar instead of a code such as `8e440ff38c8e`. One opened in an earlier version offers to reopen under its name, with its open files.
 - The soft keyboard, once put away with Back or the navigation bar's hide key, no longer comes back when the file is scrolled.
