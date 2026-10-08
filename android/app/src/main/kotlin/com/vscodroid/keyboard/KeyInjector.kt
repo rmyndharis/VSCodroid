@@ -254,8 +254,8 @@ class KeyInjector(
      * the blur, and only if nothing changed it in between, and the chord waits
      * for that read, so the word reaches the shell first. Quick Open, which the
      * terminal hands on, focuses its own box before the chord's keydown is over,
-     * so a chord sent in the blur's task emptied the textarea before the read;
-     * that is read from the shipped workbench, and the wait was not measured.
+     * so a chord sent in the blur's task would empty the textarea before the
+     * read. That is read from the shipped workbench; the wait was not measured.
      * Measured on an API 33 emulator with WebView 153 and Gboard 12.4, before
      * the wait: in the Search view's box Ctrl, held past the long-press delay or
      * tapped, then `p` opened Quick Open and left the box empty, and over an
