@@ -204,15 +204,20 @@ class SafSyncEngine(private val context: Context) {
      * came back. Tried again as the save it was, through every guard a save goes through, so
      * what decides is what is known of the device's bytes, never the time that has passed.
      *
-     * Scoped per mirror in [initialSync] like [deviceSeen], because the next open settles the
-     * mirror's newer copy as it settles any save the watcher did not deliver. A hold the
-     * closing folder's drain records after that, its read having outlasted the stop, is
-     * refused like a save of the file where the open could not read the device copy; see
-     * [processWriteBack]. Tried only by the loop watching that mirror, so nothing is written
-     * into a folder that is closed. A hold ends at [keepsDeviceEdit]'s next answer for its
-     * file, at any write of the file, which sends what the hold was waiting to send (a create
-     * writes a document it has just made without asking [keepsDeviceEdit]), at a refusal of
-     * it, or once the file is deleted or gone from the mirror.
+     * Scoped per mirror in [initialSync] like [deviceSeen], because an open that reads file
+     * times settles the mirror's newer copy as it settles any save the watcher did not
+     * deliver. One with no time to compare leaves a file whose two copies differ as they
+     * are, so it keeps that file's hold, the one thing saying the mirror's copy was never
+     * sent. A hold the closing folder's drain records after the open has cleared the
+     * folder's holds, its read having outlasted the stop, is refused like a save of the file
+     * where the open could not read the device copy; see [processWriteBack]. In memory only:
+     * once the process has died, an open of a folder with no clock sends nothing, and the
+     * next save of the file is what goes out. Tried only by the loop watching that mirror, so
+     * nothing is written into a folder that is closed. A hold ends at [keepsDeviceEdit]'s
+     * next answer for its file, at any write of the file, which sends what the hold was
+     * waiting to send (a create writes a document it has just made without asking
+     * [keepsDeviceEdit]), at a refusal of it, or once the file is deleted or gone from the
+     * mirror.
      *
      * The waits are read off the monotonic clock, never wall time, for the reason
      * `SafStorageManager.onWriteBackFailed` gives about its throttle: a wall clock corrected
@@ -328,6 +333,10 @@ class SafSyncEngine(private val context: Context) {
         unfetched.removeAll { it.startsWith(mirrorDir.absolutePath + File.separator) }
         refusalsAnnounced.removeAll { it.startsWith(mirrorDir.absolutePath + File.separator) }
         deviceSeen.keys.removeAll { it.startsWith(mirrorDir.absolutePath + File.separator) }
+        // Taken aside rather than dropped: phase 2's no-clock arm puts back the hold of a
+        // file it leaves as it is, the one save this open does not settle.
+        val heldBefore =
+            heldBack.filterKeys { it.startsWith(mirrorDir.absolutePath + File.separator) }
         heldBack.keys.removeAll { it.startsWith(mirrorDir.absolutePath + File.separator) }
         keptOnDevice.removeAll { it.startsWith(mirrorDir.absolutePath + File.separator) }
 
@@ -829,6 +838,17 @@ class SafSyncEngine(private val context: Context) {
                             last?.let { previousRecord?.get(it) },
                             last?.substringAfterLast('\t')?.toLongOrNull() ?: 0,
                         )
+                        // A save held back before this open is in the mirror and not on the
+                        // device, and nothing here sent it: dropped with the other holds, it
+                        // waited for the next save of the file, with no notice after the
+                        // open. Tried again as before, and the entry above makes the try
+                        // read the device copy, so another app's edit is kept beside it.
+                        // Through the document listed here rather than the one it was held
+                        // for, which another app may have replaced since.
+                        heldBefore[localPath.absolutePath]?.let {
+                            heldBack[localPath.absolutePath] =
+                                HeldBackSave(doc.uri, it.dueAt, it.wait)
+                        }
                         // At Logger.i, not d: this file stops receiving device-side
                         // changes from here on, and a user asking why their folder does
                         // not update needs this line to exist in a bug report.
@@ -1409,9 +1429,10 @@ class SafSyncEngine(private val context: Context) {
      * document reported past [MAX_FILE_SIZE] at a length other than the digested one,
      * which is held back unread, even where it holds this app's own bytes, until it is
      * reported at that length; a held-back save whose folder is closed before a try lands,
-     * which waits for the next open, or whose directory is renamed, which waits for that or
-     * for the next save of the file; and on a provider with no clock, every copy after the
-     * first carries its counter as a time, which is cosmetic.
+     * which waits for the next open (with no clock, for the tries that follow it, and once
+     * the process has died, for the next save of the file), or whose directory is renamed,
+     * which waits for that or for the next save of the file; and on a provider with no
+     * clock, every copy after the first carries its counter as a time, which is cosmetic.
      */
     private fun keepsDeviceEdit(localFile: File, docUri: Uri): Boolean {
         // Settled again by whatever this answers: a save that goes ahead ends the hold, and

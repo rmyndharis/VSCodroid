@@ -1053,16 +1053,16 @@ class SafLiveDeviceEditTest {
     }
 
     /**
-     * A reopen settles a save held back before it as it settles any save the watcher did
-     * not deliver, and starts the folder's holds afresh. Here the device keeps no times, so
-     * the reopen, finding the two copies different, leaves both as they are. A hold left
-     * over from before it was tried against the device's size the reopen listed, matched
-     * it, and wrote over the device copy without keeping it. What this pins is that a hold
-     * decided before that open is not tried at all; the next save of the file is what
-     * decides, and keeps the device copy (see the no-clock reopen cases below).
+     * A reopen of a folder that keeps no times, finding the two copies of a file different,
+     * leaves both as they are, so it settles nothing for a save held back before it. The
+     * reopen dropped that hold with the others, and the save waited, with no notice after
+     * the reopen, for the next save of the file. The hold now stands, and the open leaves
+     * no stamp for what it could not place, so the try reads the device copy and keeps
+     * another app's edit beside the save, where a try against the size the reopen listed
+     * matched it and wrote over that edit.
      */
     @Test
-    fun `a held-back save from before a reopen is not tried against what that open found`() {
+    fun `a held-back save outlives a reopen that leaves both copies with no clock`() {
         deviceHasClock = false
         open()
         save("first save")
@@ -1076,10 +1076,61 @@ class SafLiveDeviceEditTest {
 
         retryWhileWatching()
 
-        assertEquals(
-            "changed by another app", deviceText,
-            "a save held back before the reopen was tried against what the reopen found",
-        )
+        assertEquals("second save", deviceText, "the save held back before the reopen was not sent")
+        assertEquals(listOf("changed by another app"), deviceCopies().values.toList())
+    }
+
+    /**
+     * The hold that outlives such a reopen goes to the document that open listed. Another
+     * app that replaced the document while the folder was closed, as a sync client writing
+     * a new file over the old one does, left the id it was held for pointing at nothing,
+     * and a try sent there failed and reported the save as lost.
+     */
+    @Test
+    fun `a held-back save kept across a reopen goes to the document that open listed`() {
+        deviceHasClock = false
+        open()
+        save("first save")
+        editOnDevice("changed by another app")
+        deviceReadable = false
+        save("second save")
+        deviceReadable = true
+        gone += uris.getValue(docId)
+        docId += "+"
+        open()
+        val lost = failed.size
+        clock += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+
+        retryWhileWatching()
+
+        assertEquals(lost, failed.size, "the try was sent to the document another app replaced")
+        assertEquals("second save", deviceText)
+        assertEquals(listOf("changed by another app"), deviceCopies().values.toList())
+    }
+
+    /**
+     * A reopen that reads times settles a save held back before it, and one that no longer
+     * finds the document has nothing to settle it against: another app deleted it while the
+     * folder was closed, and what becomes of the file is for phase 2b of a later open to
+     * decide. A hold kept there was tried at the deleted document, which failed and reported
+     * the save as lost.
+     */
+    @Test
+    fun `a reopen that no longer finds a held-back save's document does not try it`() {
+        lateStamp = LateStamp.WHOLE_SECONDS
+        open()
+        save("first save")
+        settle()
+        deviceReadable = false
+        save("second save")
+        gone += uris.getValue(docId)
+        deviceHasDocument = false
+        open()
+        val lost = failed.size
+        clock += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+
+        assertEquals(false, engine.retryHeldBack(WatchSession(mirror)), "a hold the reopen did not keep was tried")
+        assertEquals(lost, failed.size)
     }
 
     /** A save whose file has left the mirror has nothing to send, and queuing it spun the loop. */

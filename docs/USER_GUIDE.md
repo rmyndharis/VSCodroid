@@ -86,15 +86,17 @@ VSCodroid is VS Code. If you have used VS Code on desktop, everything works the 
   newer when yours and the device folder's differ as you open it, as when
   another app changed a file you saved there in an earlier session: the editor
   keeps showing your version, and your next save of the file keeps the other
-  app's beside it. If the device folder's version cannot be
-  copied, as can happen in a network folder while it is offline even when no
-  other app changed the file, or when that version is over 50 MB, your save
-  stays inside VSCodroid and a notice says so. While the folder is open
-  VSCodroid tries the save again by itself, at least every five minutes, and it
-  goes through, without a second notice, once that version can be read or
-  copied. Opening the folder again tries it too; if that version cannot be read
-  or copied then either, saves of the file wait inside VSCodroid until an open
-  can.
+  app's beside it. If the device folder's version cannot be copied, as can
+  happen in a network folder while it is offline even when no other app changed
+  the file, or when that version is over 50 MB, your save stays inside VSCodroid
+  and a notice says so. While the folder is open VSCodroid tries the save again
+  by itself, at least every five minutes, and it goes through, without a second
+  notice, once that version can be read or copied. If the folder reports file
+  times, opening it again tries the save too; if that version cannot be read or
+  copied then either, saves of the file wait inside VSCodroid until an open can.
+  If it reports none, opening it again leaves both versions as they are, as
+  above: VSCodroid goes on trying the save, and after VSCodroid restarts, your
+  next save of the file sends it.
 - A file of a device folder that you delete in the editor is deleted in the
   device folder too, unless the device folder's version is one VSCodroid has not
   read: another app may have changed it since you opened the folder or last
