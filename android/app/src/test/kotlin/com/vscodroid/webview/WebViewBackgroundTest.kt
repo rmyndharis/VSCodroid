@@ -12,6 +12,8 @@ import io.mockk.mockkStatic
 import io.mockk.unmockkAll
 import io.mockk.verify
 import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -32,9 +34,19 @@ import org.junit.jupiter.api.Test
  * pins that every WebView is given it, which the script's own test cannot see.
  * Source reading, as in `UiScaleScriptWiringTest` and for its reason.
  *
+ * The view's background also shows where the workbench page has not painted at a
+ * new size, as below the last page's frame when the soft keyboard goes down while
+ * a folder opens, so the page posts the colour it paints itself with and
+ * [addPageColorListener] makes it the view's. `scripts/test-server-bootstrap.js`
+ * runs the page's side; the cases here pin which messages are taken and that every
+ * WebView listens before its first load.
+ *
  * NEGATIVE CONTROL: without the `setBackgroundColor` call in `configure` the
  * first case fails, and without the `addPlainTextPageScript` call in
- * `setupWebView`, or with it after the first load, the second.
+ * `setupWebView`, or with it after the first load, the second. Without the
+ * `addPageColorListener` call, or with it after the first load, the fourth; taking
+ * a frame's message, another host's, a short or translucent colour or one in
+ * another notation fails the third.
  */
 class WebViewBackgroundTest {
 
@@ -92,6 +104,48 @@ class WebViewBackgroundTest {
         assertTrue(
             "WebViewCompat.addDocumentStartJavaScript(webView, plainTextPageScript(), setOf(\"*\"))" in add
         ) { "addPlainTextPageScript no longer adds plainTextPageScript() for every origin" }
+    }
+
+    @Test
+    fun `only the workbench page's opaque colour becomes the view's background`() {
+        assertEquals(0xFFFFFFFF.toInt(), pageColorFromMessage("#ffffff", "127.0.0.1", true))
+        assertEquals(0xFF1F1F1F.toInt(), pageColorFromMessage("#1F1F1F", "localhost", true))
+        // Any frame can post, webviews of extensions included, and only the
+        // workbench page, the top frame on the loopback address, says what it paints.
+        assertNull(pageColorFromMessage("#ffffff", "127.0.0.1", false)) { "a frame's colour was taken" }
+        assertNull(pageColorFromMessage("#ffffff", "abc.vscode-cdn.net", true)) { "another host's colour was taken" }
+        assertNull(pageColorFromMessage("#ffffff", null, true)) { "a page with no host had its colour taken" }
+        // Only what the workbench writes for an opaque colour.
+        for (data in listOf("#fff", "#ffffff80", "rgb(255, 255, 255)", " #ffffff", "#ffffff ", "#gggggg", "", null)) {
+            assertNull(pageColorFromMessage(data, "127.0.0.1", true)) { "'$data' was taken as a background colour" }
+        }
+    }
+
+    @Test
+    fun `every WebView listens for the page's colour before its first load`() {
+        val setup = SourceScan.withoutComments(
+            SourceScan.body(
+                SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt"),
+                "private fun setupWebView()",
+            )
+        )
+        val added = setup.indexOf("addPageColorListener(wv)")
+        val loaded = setup.indexOf("wv.loadData(")
+        assertTrue(loaded >= 0) { "setupWebView no longer loads its placeholder, so this case measures nothing" }
+        assertTrue(added in 0 until loaded) {
+            "setupWebView does not add the page colour listener before the WebView loads its first page, " +
+                "so the workbench page has nothing to post its colour to and the space the soft keyboard " +
+                "gives back stays the window colour under a light theme"
+        }
+        val add = SourceScan.withoutComments(
+            SourceScan.body(
+                SourceScan.read("src/main/kotlin/com/vscodroid/webview/VSCodroidWebView.kt"),
+                "internal fun addPageColorListener(",
+            )
+        )
+        assertTrue("WebViewCompat.addWebMessageListener(webView, PAGE_COLOR_OBJECT, setOf(\"*\"))" in add) {
+            "addPageColorListener no longer listens under PAGE_COLOR_OBJECT for every origin"
+        }
     }
 
     private companion object {

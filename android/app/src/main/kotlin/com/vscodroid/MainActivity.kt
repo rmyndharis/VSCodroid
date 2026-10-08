@@ -79,6 +79,7 @@ import com.vscodroid.webview.DownloadOutcome
 import com.vscodroid.webview.VSCodroidWebChromeClient
 import com.vscodroid.webview.VSCodroidWebView
 import com.vscodroid.webview.VSCodroidWebViewClient
+import com.vscodroid.webview.addPageColorListener
 import com.vscodroid.webview.addPlainTextPageScript
 import com.vscodroid.webview.urlLogLabel
 import com.vscodroid.webview.COPY_DIAGNOSTICS_URL
@@ -2023,10 +2024,12 @@ class MainActivity : AppCompatActivity() {
         webView?.let { wv ->
             VSCodroidWebView.configure(wv)
             // Before the first load below: a document-start script runs only in
-            // documents that begin loading after it was added. The view
-            // recreateWebView builds comes through here as well.
+            // documents that begin loading after it was added, and the object a
+            // page posts to is there only in those. The view recreateWebView
+            // builds comes through here as well.
             addUiScaleScript(wv)
             addPlainTextPageScript(wv)
+            addPageColorListener(wv)
             dropCacheLeftByEarlierBuild(wv)
             applyWindowInsetsPadding(wv)
             // Here and not in initBridge, which does its work once per WebView

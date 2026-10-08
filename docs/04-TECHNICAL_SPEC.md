@@ -507,7 +507,8 @@ script runs, and as the dark default while nothing is recorded yet; never on a l
 switched between light and dark, when `window.autoDetectColorScheme` makes the workbench's own pick
 the right one. After that it keeps the background on the editor colour of the theme the workbench
 shows, and the record with it, because the background also fills the space the soft keyboard gives
-back until the workbench lays itself out again. The workbench keeps its stored theme, one per
+back until the workbench lays itself out again, and it posts each colour it paints to the app, which
+makes it the view's background as well (§4.1). The workbench keeps its stored theme, one per
 profile, only while the configured `workbench.colorTheme` equals the theme's id, so it drops that
 theme in a folder whose own settings name another and in any folder entered from one, and the
 default the welcome extension sets must be an id the server tree contributes, not an older name
@@ -596,6 +597,16 @@ script, gives a top-level document of either kind the `Canvas` background of its
 scheme: white in light mode and Chromium's dark canvas in dark mode for a plain-text page, white
 in both for the error page, which Chromium commits as an HTML document at
 `chrome-error://chromewebdata/`.
+
+The view's background also shows where the workbench page has not painted at a new size. When the
+soft keyboard goes down the view grows, and a folder opened from a box that had the keyboard up
+holds the last page's frame until the next page paints, so the space below that frame took the
+window colour, a dark band under a light theme. So the page script posts the colour it paints the
+page with, at the start of each load and on each theme change, to the object
+`addPageColorListener` adds (`vscodroidPageColor`), and the view takes it as its background. Only
+an opaque `#rrggbb` from the top frame on the loopback address is taken. The window behind the
+view, which shows where the keyboard was until the activity lays itself out again, stays
+#1E1E1E.
 
 ### 4.2 Crash Recovery
 

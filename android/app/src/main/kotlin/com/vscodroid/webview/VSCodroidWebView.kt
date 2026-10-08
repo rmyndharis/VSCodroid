@@ -104,8 +104,9 @@ object VSCodroidWebView {
         // here and the loading page are this colour. It is not what a light theme
         // shows between loads: the workbench page colours itself before its first
         // paint from the theme it expects to show (INITIAL_THEME_MARKER in
-        // assets/server.js). Nor what a plain-text page or the WebView's own error
-        // page shows: see addPlainTextPageScript.
+        // assets/server.js), and from its first load the view takes that colour
+        // too, see addPageColorListener. Nor what a plain-text page or the
+        // WebView's own error page shows: see addPlainTextPageScript.
         webView.setBackgroundColor(webView.context.getColor(R.color.colorBackground))
 
         if (Logger.debugEnabled) {
@@ -170,3 +171,49 @@ internal fun plainTextPageScript(): String =
         document.adoptedStyleSheets = [sheet];
     })();
     """.trimIndent()
+
+/** The object the workbench page posts its background colour to; see [addPageColorListener]. */
+internal const val PAGE_COLOR_OBJECT = "vscodroidPageColor"
+
+/**
+ * Keeps the view's background on the colour the workbench page paints its own.
+ *
+ * The view's background shows wherever the page has not painted, and that is not
+ * only before a first page. When the soft keyboard goes down the view grows, and
+ * until the page paints at the new size the space below its last frame is the
+ * view's background. Opening a folder from a box that had the keyboard up holds
+ * that frame until the next page paints: 1.6 s on an API 36 emulator. With the
+ * dark window colour [VSCodroidWebView.configure] gives the view, that space was
+ * a dark band under a light theme, as it was white under a dark one before.
+ *
+ * The page script in assets/server.js (INITIAL_THEME_MARKER) posts the colour it
+ * paints the page with at the start of each load and again whenever the theme
+ * changes, and this makes it the view's. For every origin, for the reason
+ * [com.vscodroid.addUiScaleScript] gives; [pageColorFromMessage] says which
+ * messages are taken.
+ */
+internal fun addPageColorListener(webView: WebView) {
+    if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
+        try {
+            WebViewCompat.addWebMessageListener(webView, PAGE_COLOR_OBJECT, setOf("*")) { view, message, origin, isMainFrame, _ ->
+                pageColorFromMessage(message.data, origin.host, isMainFrame)?.let(view::setBackgroundColor)
+            }
+        } catch (e: RuntimeException) {
+            // What is at stake is the colour of a band for a moment, never the editor.
+            Logger.w("WebView", "Could not add the page colour listener: ${e.message}")
+        }
+    }
+}
+
+/**
+ * The colour a message to [PAGE_COLOR_OBJECT] asks for, or null to leave the view
+ * as it is. Only the workbench page sets it: the top frame on the loopback address,
+ * which is where the page script runs, since any frame can post. Only an opaque
+ * `#rrggbb`, which is how the workbench writes an opaque theme colour; a
+ * translucent one would let the window behind show through.
+ */
+internal fun pageColorFromMessage(data: String?, host: String?, isMainFrame: Boolean): Int? {
+    if (!isMainFrame || (host != "127.0.0.1" && host != "localhost")) return null
+    if (data == null || !Regex("#[0-9a-fA-F]{6}").matches(data)) return null
+    return (0xFF shl 24) or data.substring(1).toInt(16)
+}

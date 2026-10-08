@@ -115,6 +115,15 @@ const BLACK_FORMATTER = 'ms-python.black-formatter';
 // The script that starts the page on the last theme; see INITIAL_THEME_MARKER.
 const INITIAL_THEME_MARKER = 'vscodroid-initial-theme';
 
+// The object the app gives the page to post its colour to, read from the Kotlin
+// side, so that a page script posting under another name fails here.
+const PAGE_COLOR_OBJECT = (() => {
+    const kotlin = path.resolve(__dirname, '../android/app/src/main/kotlin/com/vscodroid/webview/VSCodroidWebView.kt');
+    const found = /internal const val PAGE_COLOR_OBJECT = "([^"]+)"/.exec(fs.readFileSync(kotlin, 'utf8'));
+    assert.ok(found, 'PAGE_COLOR_OBJECT is gone from VSCodroidWebView.kt, so nothing says what the page posts to');
+    return found[1];
+})();
+
 const UPSTREAM = JSON.stringify({ nameShort: 'Code - OSS', version: '1.133.0', quality: 'oss' }, null, 2);
 
 // 1. A valid file is rewritten with the overrides, and nothing is left beside it.
@@ -652,7 +661,7 @@ async function stoppingTakesTheEditorServerWithIt() {
      * one origin do. Answers what the workbench is then handed, what the page
      * paints before anything else, and what is left in storage for the next load.
      */
-    const load = ({ splash, last, dark, settings = {}, refuse = false, full = false, items = {}, search = '' }) => {
+    const load = ({ splash, last, dark, settings = {}, refuse = false, full = false, items = {}, search = '', sink = true }) => {
         if (splash) items['monaco-parts-splash'] = JSON.stringify(splash);
         if (last) items['vscodroid-device-scheme'] = last;
         let writes = 0;
@@ -692,10 +701,15 @@ async function stoppingTakesTheEditorServerWithIt() {
         const performance = { getEntriesByName: (name) => marks.filter((m) => m === name) };
         const listeners = [];
         const addEventListener = (type, listener) => listeners.push({ type, listener });
+        // The object the app adds for the page's colour, which a WebView without
+        // message listeners does not have.
+        const posted = [];
+        const window = sink ? { [PAGE_COLOR_OBJECT]: { postMessage: (color) => posted.push(color) } } : {};
         // eslint-disable-next-line no-new-func
         new Function('document', 'localStorage', 'matchMedia', 'MutationObserver', 'getComputedStyle', 'location',
-            'performance', 'addEventListener', body)(
-            document, localStorage, matchMedia, MutationObserver, getComputedStyle, { search }, performance, addEventListener);
+            'performance', 'addEventListener', 'window', body)(
+            document, localStorage, matchMedia, MutationObserver, getComputedStyle, { search }, performance, addEventListener,
+            window);
         const retitle = () => {
             observers
                 .filter((o) => o.target === head && o.options.childList && o.options.subtree)
@@ -705,6 +719,8 @@ async function stoppingTakesTheEditorServerWithIt() {
         return {
             settings: JSON.parse(data),
             painted: root.style.backgroundColor,
+            /** Every colour posted to the app, which makes it the view's background. */
+            posted,
             recorded: items['vscodroid-device-scheme'],
             writes: () => writes,
             /**
@@ -750,7 +766,21 @@ async function stoppingTakesTheEditorServerWithIt() {
         }, 'a load that cannot use the stored theme does not start on the dark one the splash recorded, ' +
             'or it was handed a colour that is not hex');
         assert.strictEqual(page.painted, '#1f1f1f', 'the page is not coloured before the workbench paints');
+        assert.deepStrictEqual(page.posted, ['#1f1f1f'],
+            'the colour the page starts on is not posted to the app, so the view behind it keeps the colour ' +
+            'of the page before');
         assert.strictEqual(page.recorded, 'light', "the device's mode is not recorded for the next load");
+    }
+
+    // A WebView without message listeners gives the page no object to post to,
+    // and the page starts the same.
+    {
+        const page = load({ splash: darkModern, last: undefined, dark: false, sink: false });
+        assert.strictEqual(page.settings.initialColorTheme.themeType, 'dark',
+            'a page with nothing to post its colour to is not given its starting theme');
+        assert.strictEqual(page.painted, '#1f1f1f', 'a page with nothing to post its colour to is not coloured');
+        assert.strictEqual(page.changeHead(lightModern), '#ffffff',
+            'a page with nothing to post its colour to stops following the theme');
     }
 
     // A light theme starts light, and the blank page is the light background.
@@ -1143,6 +1173,11 @@ async function stoppingTakesTheEditorServerWithIt() {
             'the root keeps the theme the page started on after the theme changed');
         page.retitle();
         assert.strictEqual(page.writes(), 1, 'a change of the head that leaves the theme alone rewrote the record');
+        // The view behind the page shows where the page has not painted at a new
+        // size, so it takes each colour the root does, and once per change.
+        assert.deepStrictEqual(page.posted, ['#ffffff', '#1f1f1f'],
+            'the app is not told the colour of each theme the page shows, or is told it again on a title change, ' +
+            'so the space the keyboard gives back can show the colour of a theme no longer shown');
     }
 
     // A head that changes before the workbench is built leaves the colour the page started with.

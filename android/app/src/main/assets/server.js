@@ -83,6 +83,10 @@ const RECOMMENDATIONS_MARKER = 'vscodroid-extension-recommendations';
 // What says the page already starts on the last theme; see the block that adds it.
 const INITIAL_THEME_MARKER = 'vscodroid-initial-theme';
 
+// The object the app gives the page to post the colour it paints itself with,
+// PAGE_COLOR_OBJECT in VSCodroidWebView.kt; see the block that adds the script.
+const PAGE_COLOR_OBJECT = 'vscodroidPageColor';
+
 // The theme type for each base theme, as the workbench names it in its splash
 // and in a class of its own element.
 const SPLASH_THEME_TYPES = { 'vs': 'light', 'vs-dark': 'dark', 'hc-black': 'hcDark', 'hc-light': 'hcLight' };
@@ -548,13 +552,18 @@ if (!fs.existsSync(rehEntryPoint)) {
     // on an API 36 emulator: the usual case when a folder is opened from a box
     // that had the keyboard up. So the root follows the theme the workbench shows
     // rather than keeping the one the page started on, and the record is taken
-    // from the same reading. A theme change rewrites a style element in the head,
-    // so each change to the head reads the workbench's colours again. So does
-    // every change of the window title, which the workbench makes on each editor
-    // switch and change of dirty state, at the cost of that style read: storage is
-    // written on a load's first reading and then only when the theme changed.
-    // Taking the colour as the page is left was tried and is too late: the
-    // keyboard starts to go down before the workbench navigates.
+    // from the same reading. Where the page has not painted at the new size at
+    // all, the view's own background shows instead, which for a folder opened
+    // that way lasts until the next page paints, so each colour the root is
+    // given is also posted to the app, which makes it the view's background
+    // (addPageColorListener in VSCodroidWebView.kt). A theme change rewrites a
+    // style element in the head, so each change to the head reads the
+    // workbench's colours again. So does every change of the window title,
+    // which the workbench makes on each editor switch and change of dirty state,
+    // at the cost of that style read: storage is written on a load's first
+    // reading and then only when the theme changed, and a colour is posted only
+    // when it changed. Taking the colour as the page is left was tried and is
+    // too late: the keyboard starts to go down before the workbench navigates.
     //
     // Twenty folders are kept, the most recently shown, so the record cannot grow
     // into the storage the workbench's sealed secrets share. Loads that still
@@ -635,7 +644,12 @@ if (!fs.existsSync(rehEntryPoint)) {
             "\t\t\t\t\tvar scheme = mode(), last = localStorage.getItem('vscodroid-device-scheme');",
             "\t\t\t\t\tlocalStorage.setItem('vscodroid-device-scheme', scheme);",
             "\t\t\t\t\tvar blank = type === 'light' || type === 'hcLight' ? '#ffffff' : '#1e1e1e';",
-            '\t\t\t\t\tdocument.documentElement.style.backgroundColor = hex.test(info.background) ? info.background : blank;',
+            `\t\t\t\t\tvar sink = window.${PAGE_COLOR_OBJECT}, told;`,
+            '\t\t\t\t\tvar paint = function (color) {',
+            '\t\t\t\t\t\tdocument.documentElement.style.backgroundColor = color;',
+            '\t\t\t\t\t\tif (sink && color !== told) { told = color; sink.postMessage(color); }',
+            '\t\t\t\t\t};',
+            '\t\t\t\t\tpaint(hex.test(info.background) ? info.background : blank);',
             '\t\t\t\t\tif (!settings.initialColorTheme && (last === null || (last === scheme && (own || (prev && prev.own) || !(user || shared))))) {',
             '\t\t\t\t\t\tvar colors = {};',
             '\t\t\t\t\t\tfor (var key in ids) { if (hex.test(info[key])) { colors[ids[key]] = info[key]; } }',
@@ -650,7 +664,7 @@ if (!fs.existsSync(rehEntryPoint)) {
             '\t\t\t\t\t\tvar style = wb && getComputedStyle(wb);',
             "\t\t\t\t\t\tvar now = style ? style.getPropertyValue('--vscode-editor-background').trim() : '';",
             '\t\t\t\t\t\tif (!now) { return; }',
-            '\t\t\t\t\t\tdocument.documentElement.style.backgroundColor = now;',
+            '\t\t\t\t\t\tpaint(now);',
             '\t\t\t\t\t\tvar base = Object.keys(types).filter(function (t) { return wb.classList.contains(t); })[0];',
             '\t\t\t\t\t\tvar classes = [].slice.call(wb.classList), at = classes.indexOf(base);',
             "\t\t\t\t\t\tvar shown = { baseTheme: base, theme: classes.slice(at, at + 2).join(' '), colorInfo: { background: now } };",

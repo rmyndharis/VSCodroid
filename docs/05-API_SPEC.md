@@ -571,6 +571,18 @@ fun getThemeMode(authToken: String): String
 // Returns: "light" or "dark" (follows Android system theme)
 ```
 
+#### Page Colour
+
+One more object reaches the page outside `AndroidBridge`: `vscodroidPageColor`, which
+`addPageColorListener` in `VSCodroidWebView.kt` adds with
+`WebViewCompat.addWebMessageListener` before the first load, for every origin. The page
+script `server.js` adds to the workbench page (`INITIAL_THEME_MARKER`) posts it the colour
+it paints the page with, and the WebView takes that colour as its own background, which
+shows where the page has not painted, as below its last frame while the soft keyboard goes
+down. It takes no token and returns nothing. A message is acted on only when it comes from
+the top frame on the loopback address and is an opaque `#rrggbb`, so the most a caller can
+do with it is set that colour.
+
 ### 2.5 Extension Auth Callback Relay (Chrome Custom Tabs)
 
 Kotlin knows nothing about OAuth here. It relays one opaque blob between two
