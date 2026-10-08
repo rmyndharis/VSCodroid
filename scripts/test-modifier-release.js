@@ -47,11 +47,12 @@
  * selection API keeps the letter. In the terminal, with xterm's composition
  * handling copied from the shipped @xterm/xterm, the word composed before the
  * chord must reach the shell first, also when the workbench takes the chord
- * and the Quick Open it runs takes the focus at once.
+ * and the Quick Open it runs takes the focus at once, which the terminal then
+ * takes back on the chord's keyup.
  *
  * NEGATIVE CONTROL, measured: against KeyInjector.kt at f66e462f, which sent
- * no release, 36 of the 76 cases fail; against the interceptor before it made
- * a chord of a composed letter, 16 of the 28 composing cases; against one
+ * no release, 36 of the 77 cases fail; against the interceptor before it made
+ * a chord of a composed letter, 16 of the 29 composing cases; against one
  * that blurred every box, 3 cases, the box that commits on blur committing
  * `fooa`, sending no chord and leaving Ctrl latched; against one that sent
  * the chord in the task that ended the composition, the case where Quick Open
@@ -663,9 +664,11 @@ function textBox(page, { value = '', className = 'input', tagName = 'TEXTAREA', 
  * composition on any key but 229 and the modifiers, and _finalizeComposition,
  * which sends what was composed, from where the composition started, in a
  * zero timeout after a compositionend; and the terminal's own blur handler,
- * which empties the textarea. A keydown the workbench takes (`workbench`,
- * as VS Code's custom key handler does for a command it keeps from the shell)
- * goes no further. Ctrl+C is sent as ^C. `sent` is what reaches the shell.
+ * which empties the textarea, and its keyup handler, which gives the textarea
+ * the focus for any key but a modifier. A key the workbench takes
+ * (`workbench`, as VS Code's custom key handler does for a command it keeps
+ * from the shell, which it is asked again for the keyup) goes no further.
+ * Ctrl+C is sent as ^C. `sent` is what reaches the shell.
  */
 function terminal(page, workbench = () => false) {
     const box = textBox(page, { className: 'xterm-helper-textarea' });
@@ -712,6 +715,10 @@ function terminal(page, workbench = () => false) {
             finalize(false);
         }
         if (e.ctrlKey && e.key === 'c') sent.push('\x03');
+    }, true);
+    box.addEventListener('keyup', (e) => {
+        if (workbench(e) || [16, 17, 18, 91, 92, 93, 224].includes(e.keyCode) || e.key === 'Meta') return;
+        box.focus();
     }, true);
     box.addEventListener('blur', () => { box.value = ''; });
     box.sent = () => sent.filter((d) => d !== '');
@@ -936,16 +943,25 @@ const keys = (page, at = 'text-box') => sequence(page).filter((line, i) => page.
 // at once: the keybinding service, a bubble listener on the window, runs
 // Quick Open, whose show focuses its input box before the keydown is over,
 // and the textarea empties itself as it loses the focus.
+//
+// The chord's keyup still goes to the textarea, where its keydown went, and
+// there the workbench lets it through: with Quick Open showing, Ctrl+P
+// resolves to quickOpenNavigateNextInFilePicker, which is not one it keeps
+// from the shell. So xterm gives the textarea the focus back, and Quick Open,
+// which closes when it loses the focus, closes again at once, as it does on
+// main for a Ctrl+P from the row in the terminal.
 {
     const page = newPage();
     intercept(page);
-    const term = terminal(page, (e) => e.ctrlKey && e.key === 'p');
+    const term = terminal(page, (e) => e.ctrlKey && e.key === 'p' && page.document.activeElement !== quickOpen);
     const quickOpen = page.newNode('quick-input-box', page.document.body);
     page.window.addEventListener('keydown', (e) => {
         if (!e.ctrlKey || e.key !== 'p') return;
         term.blur();
         page.document.activeElement = quickOpen;
     });
+    let atKeyup = null;
+    page.window.addEventListener('keyup', (e) => { if (e.key === 'p') atKeyup = page.document.activeElement; }, true);
     term.compose('a');
     term.compose('ab');
     page.window.__vscodroid.ctrl = true;
@@ -953,7 +969,8 @@ const keys = (page, at = 'text-box') => sequence(page).filter((line, i) => page.
     page.runTimers();
     cases.push(['a chord the workbench takes from the terminal, focusing Quick Open, still lets ab reach the shell',
         JSON.stringify(term.sent()), JSON.stringify(['ab'])]);
-    cases.push(['and Quick Open has the focus', page.document.activeElement === quickOpen, true]);
+    cases.push(['and Quick Open has the focus when the chord comes up', atKeyup === quickOpen, true]);
+    cases.push(["and the terminal takes it back on the chord's keyup", page.document.activeElement === term, true]);
 }
 
 cases.push(['no timer threw', timerErrors.join('; '), '']);

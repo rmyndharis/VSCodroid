@@ -258,10 +258,15 @@ class KeyInjector(
      * word reaches the shell first. Quick Open, which the terminal hands on,
      * focuses its own box before the chord's keydown is over, so a chord sent in
      * the blur's task would empty the textarea before the read. That is read from
-     * the shipped workbench; the wait was not measured. The blur costs this: a
-     * terminal program that asked to hear focus changes hears focus go and come
-     * back. Anywhere else it costs more, which is why no other box gets it. The
-     * debug view's inline boxes, for a watch expression, a value, or a
+     * the shipped workbench; the wait was not measured. Quick Open does not stay
+     * open there: the chord's keyup goes to the textarea, as its keydown did, and
+     * the terminal lets it through, since with Quick Open showing Ctrl+P resolves
+     * to a command it does not keep from the shell, and takes the focus back, so
+     * Quick Open closes again at once, as it does for any Ctrl+P from the row in
+     * the terminal (read from the shipped xterm and workbench). The blur costs
+     * this: a terminal program that asked to hear focus changes hears focus go
+     * and come back. Anywhere else it costs more, which is why no other box gets
+     * it. The debug view's inline boxes, for a watch expression, a value, or a
      * breakpoint's name or condition, the terminal tab rename box and the Ports
      * view's commit what they hold when they lose the focus, the letter included,
      * and most of them close; the quick input forgets which element to give the
