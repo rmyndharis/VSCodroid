@@ -624,8 +624,12 @@ one), so under a light theme it was a dark band of the theme's window colour, #1
 on each theme change, to the object `addPageColorListener` adds (`vscodroidPageColor`), which
 gives it to the view, and `MainActivity` gives it to the window through `paintWindow`, with dark
 bar icons on a light colour. Only an opaque `#rrggbb` from the top frame on the loopback address is
-taken. The loading page and the error pages are this app's own and post nothing, so each gives
-the window its own colour before it loads.
+taken. The window takes it once the view draws the page that posted it, through a visual state
+callback, and not as the page posts: a page posts as its load starts, while the view goes on
+drawing the last page's frame, and painted at once the bars around that frame showed the new colour
+for 0.55 to 1.7 s at every change between a dark and a light theme. The loading page and the error
+pages are this app's own and post nothing, so each gives the window its own colour before it loads
+and drops a page's colour still waiting for its frame.
 
 `MainActivity` also keeps the colour (`keepStartColor`), and every screen of the next start begins on
 it (`lastPageColor`): the windows of `SplashActivity` and `MainActivity` with their bars, the setup

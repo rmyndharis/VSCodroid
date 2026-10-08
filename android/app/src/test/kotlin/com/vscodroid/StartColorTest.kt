@@ -109,8 +109,8 @@ class StartColorTest {
 
         mapOf(
             "MainActivity.showPageColor" to (body(main, "private fun showPageColor(") to "keepStartColor(color)"),
-            "MainActivity.setupWebView" to (body(main, "private fun setupWebView()") to "paintWindow(lastPageColor(this))"),
-            "MainActivity.retryServerStart" to (body(main, "private fun retryServerStart()") to "paintWindow(lastPageColor(this))"),
+            "MainActivity.setupWebView" to (body(main, "private fun setupWebView()") to "paintWindowNow(lastPageColor(this))"),
+            "MainActivity.retryServerStart" to (body(main, "private fun retryServerStart()") to "paintWindowNow(lastPageColor(this))"),
             // An expression body, which SourceScan.body cannot bound: the line after it.
             "MainActivity.loadingPage" to (
                 SourceScan.withoutComments(main).substringAfter("private fun loadingPage(): String =").lines()[1]

@@ -2029,7 +2029,7 @@ class MainActivity : AppCompatActivity() {
             VSCodroidWebView.configure(wv)
             // The loading page's colour, before the first frame: the one the
             // workbench last painted, so a light theme starts light.
-            paintWindow(lastPageColor(this))
+            paintWindowNow(lastPageColor(this))
             // Before the first load below: a document-start script runs only in
             // documents that begin loading after it was added, and the object a
             // page posts to is there only in those. The view recreateWebView
@@ -2074,8 +2074,47 @@ class MainActivity : AppCompatActivity() {
      * shows before the workbench, see [lastPageColor].
      */
     private fun showPageColor(color: Int) {
-        paintWindow(color)
+        paintWindowWhenDrawn(color)
         keepStartColor(color)
+    }
+
+    /**
+     * The last window colour asked for, so that a page's colour still waiting for
+     * the frame that draws it does not land over a later one.
+     */
+    private var windowColorRequest = 0L
+
+    /**
+     * Gives the window [color] once the view draws the page that posted it, not
+     * before.
+     *
+     * A page posts its colour as its load starts, and the view goes on drawing the
+     * last page's frame until the new page paints, a second or more for the
+     * workbench. Painted at once, the bars around that frame took the new colour
+     * while it still showed the old: for 0.55 to 1.7 s at every change between a
+     * dark and a light theme on an API 36 emulator, and white around the dark
+     * loading page on the first launch after an update. A visual state callback
+     * runs once a frame holding the page as it is when the callback is posted is
+     * ready to draw, which for a page that has just started is its first.
+     */
+    private fun paintWindowWhenDrawn(color: Int) {
+        val request = ++windowColorRequest
+        val wv = webView
+        if (wv != null && WebViewFeature.isFeatureSupported(WebViewFeature.VISUAL_STATE_CALLBACK)) {
+            WebViewCompat.postVisualStateCallback(wv, request) { if (it == windowColorRequest) paintWindow(color) }
+        } else {
+            paintWindow(color)
+        }
+    }
+
+    /**
+     * Gives the window [color] now, for a page of this app's own, which posts
+     * nothing, and drops a page's colour still waiting for its frame, which would
+     * otherwise land over it.
+     */
+    private fun paintWindowNow(color: Int) {
+        windowColorRequest++
+        paintWindow(color)
     }
 
     /**
@@ -2724,7 +2763,7 @@ class MainActivity : AppCompatActivity() {
         markAppNavigation()
         // The page below is dark whatever the editor's theme, and the window
         // around it, which a light one had made light, goes with it.
-        paintWindow(getColor(R.color.colorBackground))
+        paintWindowNow(getColor(R.color.colorBackground))
         webView?.loadDataWithBaseURL(
             null,
             """<html><head><meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"></head>
@@ -2786,7 +2825,7 @@ class MainActivity : AppCompatActivity() {
         markAppNavigation()
         // The loading page's colour, as setupWebView gives it: this can replace an
         // error page, which painted the window its own.
-        paintWindow(lastPageColor(this))
+        paintWindowNow(lastPageColor(this))
         webView?.loadData(dataUrlSafe(loadingPage()), "text/html", "utf-8")
         // Guarded for the reason [startAndBindService] is, and put back rather
         // than only logged. The loading page is already on screen by the time this

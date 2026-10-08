@@ -55,11 +55,14 @@ import org.junit.jupiter.api.Test
  * message, another host's, a short or translucent colour or one in another
  * notation fails the message case, and reading an ArrayBuffer's data, which
  * throws as it would in the listener, fails it too. Without the
- * `setBackgroundColor` or `onColor` call in the listener, or the `paintWindow`
- * call in `showPageColor`, or with none before the load in `setupWebView`,
- * `retryServerStart` or `showErrorPage`, or one there with the other page's
- * colour, the window case; and so does `paintWindow` without its background call
- * or with either bar appearance pinned.
+ * `setBackgroundColor` or `onColor` call in the listener, or the
+ * `paintWindowWhenDrawn` call in `showPageColor`, or with `paintWindow` there in
+ * its place, or with the visual state callback gone from `paintWindowWhenDrawn`
+ * or its test of the request, or with no `paintWindowNow` before the load in
+ * `setupWebView`, `retryServerStart` or `showErrorPage`, or one there with the
+ * other page's colour, or one that leaves a waiting colour, the window case; and
+ * so does `paintWindow` without its background call or with either bar
+ * appearance pinned.
  */
 class WebViewBackgroundTest {
 
@@ -203,8 +206,33 @@ class WebViewBackgroundTest {
         }
         val main = SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt")
         fun body(declaration: String) = SourceScan.withoutComments(SourceScan.body(main, declaration))
-        assertTrue("paintWindow(color)" in body("private fun showPageColor(")) {
+        fun lines(declaration: String) = body(declaration).lines().map { it.trim() }
+        val shown = body("private fun showPageColor(")
+        assertTrue("paintWindowWhenDrawn(color)" in shown) {
             "showPageColor no longer gives the window the colour the workbench page posts"
+        }
+        // Once the view draws the page that posted it: a page posts as its load
+        // starts, while the view still draws the last page's frame.
+        assertTrue("paintWindow(color)" !in shown) {
+            "showPageColor paints the window as the page posts, so the bars take the new page's colour " +
+                "around the last page's frame, for up to 1.7 s at a change between a dark and a light theme"
+        }
+        val drawn = lines("private fun paintWindowWhenDrawn(")
+        for (line in listOf(
+            "val request = ++windowColorRequest",
+            "WebViewCompat.postVisualStateCallback(wv, request) { if (it == windowColorRequest) paintWindow(color) }",
+        )) {
+            assertTrue(line in drawn) {
+                "paintWindowWhenDrawn no longer has `$line`, so the window takes a page's colour before the view " +
+                    "draws that page, or an older colour lands over a later one"
+            }
+        }
+        // The app's own pages paint at once, and drop a colour still waiting, which
+        // would otherwise land over theirs.
+        val now = lines("private fun paintWindowNow(")
+        assertTrue("windowColorRequest++" in now && "paintWindow(color)" in now) {
+            "paintWindowNow no longer drops a page's colour still waiting for its frame before it paints, so a " +
+                "workbench colour can land over the error page's window"
         }
         // What paintWindow does with it, read as well: a Window and its drawable are
         // android.jar stubs here. Whole lines, so a call left with another argument,
@@ -230,9 +258,9 @@ class WebViewBackgroundTest {
         // before it loads, the kept one for the loading page and the theme's window
         // colour, #1E1E1E, for the error page drawn on it.
         listOf(
-            Triple("private fun setupWebView()", "paintWindow(lastPageColor(this))", "wv.loadData("),
-            Triple("private fun retryServerStart()", "paintWindow(lastPageColor(this))", "webView?.loadData("),
-            Triple("private fun showErrorPage(", "paintWindow(getColor(R.color.colorBackground))", "webView?.loadDataWithBaseURL("),
+            Triple("private fun setupWebView()", "paintWindowNow(lastPageColor(this))", "wv.loadData("),
+            Triple("private fun retryServerStart()", "paintWindowNow(lastPageColor(this))", "webView?.loadData("),
+            Triple("private fun showErrorPage(", "paintWindowNow(getColor(R.color.colorBackground))", "webView?.loadDataWithBaseURL("),
         ).forEach { (declaration, paint, load) ->
             val code = body(declaration)
             val loaded = code.indexOf(load)
