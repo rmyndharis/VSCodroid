@@ -38,22 +38,26 @@
  *
  * Last, a keyboard that composes, as Gboard 12.4 composes every letter, types
  * into a text box, with the composition events in Blink's order: a letter it
- * adds while Ctrl is latched must come out as the chord only once the
- * composition is over, with the box as it was before the letter and the box's
- * own `beforeinput` and `input` listeners never hearing it, over a word still
- * composing too, and so must the next latched letter; a box with no selection
- * API keeps the letter; and in the terminal, with xterm's composition handling
- * copied from the shipped @xterm/xterm, the word composed before the chord
- * must reach the shell first, also when the workbench takes the chord and the
- * Quick Open it runs takes the focus at once.
+ * adds while Ctrl is latched must come out as the chord only once the box has
+ * the text it had before the letter and no composition, with the box's own
+ * `beforeinput` and `input` listeners never hearing the letter, over a word
+ * still composing too, and so must the next latched letter. The box keeps the
+ * focus throughout, so one that commits what it holds on blur, as the debug
+ * view's inline boxes do, commits nothing and stays open. A box with no
+ * selection API keeps the letter. In the terminal, with xterm's composition
+ * handling copied from the shipped @xterm/xterm, the word composed before the
+ * chord must reach the shell first, also when the workbench takes the chord
+ * and the Quick Open it runs takes the focus at once.
  *
  * NEGATIVE CONTROL, measured: against KeyInjector.kt at f66e462f, which sent
- * no release, 35 of the 74 cases fail; against the interceptor before it made
- * a chord of a composed letter, 15 of the 26 composing cases; against one
- * that sent the chord in the task that ended the composition, the case where
- * Quick Open takes the focus, the word lost; against one that released at the
- * chord's target with nothing stopping it at the window, 5 picker cases fail,
- * the first Ctrl+Tab in the Command Palette opening the editor it had just
+ * no release, 36 of the 76 cases fail; against the interceptor before it made
+ * a chord of a composed letter, 16 of the 28 composing cases; against one
+ * that blurred every box, 3 cases, the box that commits on blur committing
+ * `fooa`, sending no chord and leaving Ctrl latched; against one that sent
+ * the chord in the task that ended the composition, the case where Quick Open
+ * takes the focus, the word lost; against one that released at the chord's
+ * target with nothing stopping it at the window, 5 picker cases fail, the
+ * first Ctrl+Tab in the Command Palette opening the editor it had just
  * highlighted; and against one that paired a release with a keydown by key
  * rather than by code, the case of a keyboard holding both Shifts fails.
  * Each of these changes fails at least one case: not calling the release from
@@ -63,11 +67,12 @@
  * no stop at the window, a stop in the bubble phase, stopImmediatePropagation
  * or preventDefault in its place, or a stop that ignores the keydowns a
  * keyboard sends first. For a composed letter: the chord sent in the same
- * task, no blur, the text put back before the blur or whatever changed it,
- * the box's `beforeinput` or `input` listener hearing the letter, no guard
- * while a chord is pending, the guard dropped before the chord or never, a
- * box with no selection API taken for one with it, and the editor's own
- * textarea, a rewritten word or a character with no key taken for a letter.
+ * task, no blur of the terminal's textarea or a blur of any other box, the
+ * text put back before the blur or whatever changed it, the box's
+ * `beforeinput` or `input` listener hearing the letter, no guard while a
+ * chord is pending, the guard dropped before the chord or never, a box with
+ * no selection API taken for one with it, and the editor's own textarea, a
+ * rewritten word or a character with no key taken for a letter.
  *
  * Extraction is strict: if a raw string moves or changes shape this fails
  * saying so, rather than quietly running an empty script.
@@ -586,7 +591,12 @@ const settled = (name, page) => {
  * of the composition (of the selection, for a new one) and an `input`.
  * `blur()` is FocusController::SetFocusedElement, which finishes the
  * composition first, keeping its text, with a compositionend, and then fires
- * blur. Chromium fires a keydown of key code 229 before each update too;
+ * blur. A script that sets `value` ends the composition with no event at all:
+ * TextControlElement::SetInnerEditorValue replaces the text node the
+ * composition range is in, the range collapses, InputMethodController's
+ * HasComposition is false from then on, and the keyboard's next update starts
+ * a new composition with a compositionstart (read in Blink, not measured).
+ * Chromium fires a keydown of key code 229 before each update too;
  * nothing here listens for it. `heard` is what the box's own `input`
  * listener saw, and `heardBefore` its `beforeinput` listener. With
  * `selection` false the box has no selection API, as an email box has none:
@@ -598,14 +608,17 @@ function textBox(page, { value = '', className = 'input', tagName = 'TEXTAREA', 
     const classes = className.split(' ');
     const caret = selection ? value.length : null;
     Object.assign(box, {
-        tagName, value, selectionStart: caret, selectionEnd: caret, selectionDirection: 'none',
+        tagName, selectionStart: caret, selectionEnd: caret, selectionDirection: 'none',
         classList: { contains: (c) => classes.includes(c) }, heard: [], heardBefore: [],
     });
     box.setSelectionRange = (start, end, direction) => {
         if (!selection) throw new Error(`the ${tagName} box does not support selection`);
         Object.assign(box, { selectionStart: start, selectionEnd: end, selectionDirection: direction || 'none' });
     };
+    let content = value;
     let composition = null;
+    Object.defineProperty(box, 'value', { get: () => content, set: (v) => { content = v; composition = null; } });
+    box.composing = () => composition !== null;
     const fire = (type, init = {}) => box.dispatchEvent(new page.KeyboardEvent(type,
         { bubbles: true, cancelable: false, composed: true, ...init }));
     box.compose = (text) => {
@@ -618,7 +631,7 @@ function textBox(page, { value = '', className = 'input', tagName = 'TEXTAREA', 
         // A listener that took the focus away meanwhile has the text land in
         // whatever took it, which is not modelled; this box gets none of it.
         if (!composition || page.document.activeElement !== box) return;
-        box.value = box.value.slice(0, composition[0]) + text + box.value.slice(composition[1]);
+        content = content.slice(0, composition[0]) + text + content.slice(composition[1]);
         composition = [composition[0], composition[0] + text.length];
         if (selection) box.selectionStart = box.selectionEnd = composition[1];
         fire('input', { inputType: 'insertCompositionText', data: text, isComposing: true });
@@ -716,20 +729,48 @@ const keys = (page, at = 'text-box') => sequence(page).filter((line, i) => page.
     const page = newPage();
     intercept(page);
     const box = textBox(page);
+    let atChord = null;
+    box.addEventListener('keydown', (e) => { if (e.key === 'p') atChord = [box.value, box.composing()]; });
     page.window.__vscodroid.ctrl = true;
     box.compose('p');
     cases.push(['a composed letter with Ctrl latched sends nothing while the letter goes in', keys(page).join(', '), '']);
     page.runTimers();
     cases.push(['then Ctrl+P, and Ctrl comes up', keys(page).join(', '), 'keydown p ctrl, keyup p ctrl, keyup Control']);
-    const end = page.log.findIndex((e) => e.type === 'compositionend');
-    cases.push(['and the composition is over before the chord',
-        end !== -1 && end < page.log.findIndex((e) => e.type === 'keydown' && e.key === 'p'), true]);
+    cases.push(['and the box has its text back, with no composition, before the chord',
+        JSON.stringify(atChord), JSON.stringify(['', false])]);
     cases.push(['and the box is as it was before the letter',
         JSON.stringify([box.value, box.selectionStart, box.selectionEnd]), JSON.stringify(['', 0, 0])]);
     cases.push(['and the box never heard the letter', JSON.stringify([box.heardBefore, box.heard]), '[[],[]]']);
     cases.push(['and Ctrl is spent', page.window.__vscodroid.ctrl, false]);
-    cases.push(['and the box still has focus', page.document.activeElement === box, true]);
+    cases.push(['and the box keeps the focus throughout',
+        page.document.activeElement === box && !page.log.some((e) => e.at === 'text-box' && e.type === 'blur'), true]);
     settled('a composed Ctrl+P', page);
+}
+
+// A box that commits what it holds when it loses the focus, and closes, as
+// the debug view's Watch and Set Value boxes, the breakpoint boxes, the
+// terminal tab rename box and the Ports view's do in the shipped workbench.
+// Ctrl then `a` over a composing `foo` leaves it open with `foo`, sends it
+// Ctrl+A and spends the latch. A blur there committed `fooa` and closed the
+// box, and the chord, sent at a box no longer in the document, never came.
+{
+    const page = newPage();
+    intercept(page);
+    const box = textBox(page, { tagName: 'INPUT' });
+    const committed = [];
+    box.addEventListener('blur', () => {
+        committed.push(box.value);
+        box.parent = null;
+        box.connected = false;
+    });
+    for (const text of ['f', 'fo', 'foo']) box.compose(text);
+    page.window.__vscodroid.ctrl = true;
+    box.compose('fooa');
+    page.runTimers();
+    cases.push(['Ctrl then a over a word in a box that commits on blur is Ctrl+A, and commits nothing',
+        JSON.stringify([keys(page).filter((k) => k.startsWith('keydown')), committed, box.value]),
+        JSON.stringify([['keydown a ctrl'], [], 'foo'])]);
+    cases.push(['and spends the latch', page.window.__vscodroid.ctrl, false]);
 }
 
 // Over a word the keyboard is still composing, as when the latch comes in the

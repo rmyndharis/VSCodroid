@@ -235,40 +235,50 @@ class KeyInjector(
      * the letter is the box's before anything here can refuse it. So when such an
      * edit adds one character with a key to the composition, in a focused `input`
      * or `textarea`, the terminal's included, its `beforeinput` and `input` are
-     * kept from the box's own listeners, and in the next task the composition is
-     * ended by taking the focus away and giving it back, and the box gets back
-     * the text and selection it had before the character. A task later the
-     * character comes back to this listener as the `insertText` a keyboard that
-     * commits would have sent, which makes the chord. The character still
-     * reaches the box's listeners in its `compositionupdate` and in the blur's
-     * `compositionend`, which comes before the text goes back, so a box that
-     * reads its text on that `compositionend`, as the action list's filter and
-     * the find widget of the terminal, webviews and chat do, goes on from the
-     * character until its next input. The blur is Blink's own end of a
-     * composition, with the `compositionend` the box's listeners expect: the
-     * terminal sends what it composed on that event, and a chord the terminal
-     * hands to the workbench never reaches its composition handling, so without
-     * the blur the word typed before such a chord would stay unsent. It sends the
-     * word in a zero timeout, reading it back from its textarea, which empties
-     * itself on blur (read from the shipped xterm). So the text goes back after
-     * the blur, and only if nothing changed it in between, and the chord waits
-     * for that read, so the word reaches the shell first. Quick Open, which the
-     * terminal hands on, focuses its own box before the chord's keydown is over,
-     * so a chord sent in the blur's task would empty the textarea before the
-     * read. That is read from the shipped workbench; the wait was not measured.
-     * Measured on an API 33 emulator with WebView 153 and Gboard 12.4, before
-     * the wait: in the Search view's box Ctrl, held past the long-press delay or
-     * tapped, then `p` opened Quick Open and left the box empty, and over an
-     * underlined `fo` left `fo`; Ctrl then `a` over `fo` selected it, and the
-     * next letter replaced it; in the terminal Ctrl then `c` gave `^C`, over an
-     * underlined `ab` gave `ab^C`, and stopped a running `cat`. Before, the
-     * letter joined the word and the latch was spent. What the blur costs: the
-     * quick input forgets which element to give focus back to when it closes,
-     * and gives it to the active editor instead, and a terminal program that
-     * asked to hear focus changes hears focus go and come back. The editor's own
-     * textarea host, which reads compositions itself, is left as it was, and so
-     * is an `input` with no selection API, such as an email box, whose selection
-     * could not be put back: each keeps the letter, and the latch is spent.
+     * kept from the box's own listeners, and in the next task the box gets back
+     * the text and selection it had before the character, unless something
+     * changed them in between. Putting the text back ends the composition with no
+     * `compositionend`: Blink's composition range goes with the text it covered,
+     * and the keyboard's next edit starts a new composition (read in Blink). A
+     * task later the character comes back to this listener as the `insertText` a
+     * keyboard that commits would have sent, which makes the chord. The character
+     * still reaches the box's listeners in its `compositionupdate`, and a box
+     * that reads its text only once a composition is over, as the action list's
+     * filter and the find widget of the terminal, webviews and chat do, reads it
+     * when the keyboard's next one ends.
+     *
+     * The terminal's textarea alone is first blurred and focused again, which is
+     * Blink's own end of a composition, with the `compositionend` the terminal
+     * sends what it composed on. A chord the terminal hands to the workbench
+     * never reaches its composition handling, so without the blur the word typed
+     * before such a chord would stay unsent. It sends the word in a zero timeout,
+     * reading it back from its textarea, which empties itself on blur (read from
+     * the shipped xterm). So the text goes back after the blur, and only if
+     * nothing changed it in between, and the chord waits for that read, so the
+     * word reaches the shell first. Quick Open, which the terminal hands on,
+     * focuses its own box before the chord's keydown is over, so a chord sent in
+     * the blur's task would empty the textarea before the read. That is read from
+     * the shipped workbench; the wait was not measured. The blur costs this: a
+     * terminal program that asked to hear focus changes hears focus go and come
+     * back. Anywhere else it costs more, which is why no other box gets it. The
+     * debug view's inline boxes, for a watch expression, a value, or a
+     * breakpoint's name or condition, the terminal tab rename box and the Ports
+     * view's commit what they hold when they lose the focus, the letter included,
+     * and most of them close; the quick input forgets which element to give the
+     * focus back to when it closes; and a box that reads its text on
+     * `compositionend` reads the letter.
+     *
+     * Measured on an API 33 emulator with WebView 153 and Gboard 12.4, with the
+     * blur in every box and before the wait: in the Search view's box Ctrl, held
+     * past the long-press delay or tapped, then `p` opened Quick Open and left the
+     * box empty, and over an underlined `fo` left `fo`; Ctrl then `a` over `fo`
+     * selected it, and the next letter replaced it; in the terminal Ctrl then `c`
+     * gave `^C`, over an underlined `ab` gave `ab^C`, and stopped a running
+     * `cat`. Before, the letter joined the word and the latch was spent. The
+     * editor's own textarea host, which reads compositions itself, is left as it
+     * was, and so is an `input` with no selection API, such as an email box,
+     * whose selection could not be put back: each keeps the letter, and the latch
+     * is spent.
      *
      * This is live on both edit paths, not only the legacy one, but not for
      * everything on the EditContext path. The workbench uses `NativeEditContext`
@@ -446,7 +456,12 @@ class KeyInjector(
                     setTimeout(function() {
                         document.removeEventListener('input', hide, true);
                         var untouched = after !== null && box.value === after;
-                        if (document.activeElement === box) {
+                        // Only the terminal's textarea is blurred, since the
+                        // terminal sends a composition only once it ends. A box
+                        // that commits on blur, as the debug view's inline
+                        // editors and the terminal tab rename box do, would
+                        // commit the letter and close. See the KDoc.
+                        if (document.activeElement === box && box.classList.contains('xterm-helper-textarea')) {
                             box.blur();
                             box.focus();
                         }

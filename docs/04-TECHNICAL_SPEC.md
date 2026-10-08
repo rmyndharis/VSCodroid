@@ -783,16 +783,19 @@ which it cancels. A keyboard that composes, as Gboard 12.4 composes every word, 
 letter in a text box as `insertCompositionText`, which cannot be cancelled. So when such an
 update adds one character with a key to the composition in an `input` or `textarea`, the
 terminal's included, the interceptor keeps its `beforeinput` and `input` from the box's own
-listeners and, in the next task, ends the composition with a blur and a refocus and puts back
-the box's text and selection as they were before the character; a task later it makes the
-chord from it. The word composed before it stays. The terminal sends a composition in a zero
-timeout once it ends, reading it back from its textarea, which it empties on blur, so the
-chord waits for that send: Quick Open, a chord the terminal hands to the workbench, takes the
-focus at once, and would leave the send an empty textarea. On the EditContext path no
-`beforeinput` reaches the element, so the editor makes no chord of a soft keyboard letter.
-The editor's own textarea, which reads compositions itself, is left alone, and so is an
-`input` with no selection API, such as an email box, whose selection could not be put back:
-each keeps a composed letter, and the latch is spent.
+listeners and, in the next task, puts back the box's text and selection as they were before
+the character, if nothing changed them in between, which also ends the composition. A task
+later it makes the chord from the character. The word composed before it stays. The terminal
+sends a composition only once it ends, in a zero timeout, reading it back from its textarea,
+which it empties on blur. So in the terminal alone the composition is first ended with a blur
+and a refocus, and the chord waits for that send: Quick Open, a chord the terminal hands to
+the workbench, takes the focus at once, and would leave the send an empty textarea. No other
+box is blurred: the debug view's inline boxes, the terminal tab rename box and the Ports
+view's commit what they hold when they lose the focus, the letter included, and close. On the
+EditContext path no `beforeinput` reaches the element, so the editor makes no chord of a soft
+keyboard letter. The editor's own textarea, which reads compositions itself, is left alone,
+and so is an `input` with no selection API, such as an email box, whose selection could not
+be put back: each keeps a composed letter, and the latch is spent.
 
 A key or a touch that moves the editor's caret while the soft keyboard is still composing a
 word ends that composition. Chromium keeps an EditContext composition's range where it was
