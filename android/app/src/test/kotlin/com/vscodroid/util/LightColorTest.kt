@@ -16,8 +16,8 @@ class LightColorTest {
 
     @Test
     fun `editor backgrounds of light themes are light, of dark themes are not`() {
-        // Light Modern, Light+, Solarized Light, Quiet Light, High Contrast Light.
-        for (color in listOf(0xFFFFFFFF, 0xFFFFFFFE, 0xFFFDF6E3, 0xFFF5F5F5, 0xFFFFFFFF)) {
+        // Light Modern, Light+ and High Contrast Light share white; Solarized Light, Quiet Light.
+        for (color in listOf(0xFFFFFFFF, 0xFFFDF6E3, 0xFFF5F5F5)) {
             assertTrue(isLightColor(color.toInt())) { "#%06x is not taken as light".format(color and 0xFFFFFF) }
         }
         // Dark Modern, Dark+ and the window, Monokai, Solarized Dark, High Contrast.
