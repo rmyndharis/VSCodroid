@@ -236,19 +236,23 @@ class KeyInjector(
      * edit adds one character with a key to the composition, in a focused `input`
      * or `textarea`, the terminal's included, the box's own listeners are kept
      * from hearing it, and in the next task the composition is ended by taking
-     * the focus away and giving it back, the box gets back the text and selection
-     * it had before the character, and the character comes back to this listener
-     * as the `insertText` a keyboard that commits would have sent, which makes the
-     * chord. The blur is Blink's own end of a composition, with the
-     * `compositionend` the box's listeners expect: the terminal sends what it
-     * composed on that event, and a chord the terminal hands to the workbench
-     * never reaches its composition handling, so without the blur the word typed
-     * before such a chord would stay unsent (read from the shipped xterm). The
-     * text goes back after the blur, and only if nothing changed it in between:
-     * the terminal's textarea empties itself on blur and reads a finished
-     * composition back from it, so the word typed before the chord reaches the
-     * shell first. Measured on an API 33 emulator with WebView 153 and Gboard
-     * 12.4: in the Search view's box Ctrl, held past the long-press delay or
+     * the focus away and giving it back, and the box gets back the text and
+     * selection it had before the character. A task later the character comes
+     * back to this listener as the `insertText` a keyboard that commits would
+     * have sent, which makes the chord. The blur is Blink's own end of a
+     * composition, with the `compositionend` the box's listeners expect: the
+     * terminal sends what it composed on that event, and a chord the terminal
+     * hands to the workbench never reaches its composition handling, so without
+     * the blur the word typed before such a chord would stay unsent. It sends the
+     * word in a zero timeout, reading it back from its textarea, which empties
+     * itself on blur (read from the shipped xterm). So the text goes back after
+     * the blur, and only if nothing changed it in between, and the chord waits
+     * for that read, so the word reaches the shell first. Quick Open, which the
+     * terminal hands on, focuses its own box before the chord's keydown is over,
+     * so a chord sent in the blur's task emptied the textarea before the read;
+     * that is read from the shipped workbench, and the wait was not measured.
+     * Measured on an API 33 emulator with WebView 153 and Gboard 12.4, before
+     * the wait: in the Search view's box Ctrl, held past the long-press delay or
      * tapped, then `p` opened Quick Open and left the box empty, and over an
      * underlined `fo` left `fo`; Ctrl then `a` over `fo` selected it, and the
      * next letter replaced it; in the terminal Ctrl then `c` gave `^C`, over an
@@ -434,7 +438,6 @@ class KeyInjector(
                     // letter would land in whatever took it.
                     setTimeout(function() {
                         document.removeEventListener('input', hide, true);
-                        chordPending = false;
                         var untouched = after !== null && box.value === after;
                         if (document.activeElement === box) {
                             box.blur();
@@ -444,9 +447,18 @@ class KeyInjector(
                             box.value = before.value;
                             box.setSelectionRange(before.start, before.end, before.direction);
                         }
-                        box.dispatchEvent(new InputEvent('beforeinput', {
-                            inputType: 'insertText', data: ch, bubbles: true, cancelable: true, composed: true
-                        }));
+                        // And one task more, after the terminal's own zero
+                        // timeout, which the blur's compositionend queued and
+                        // which sends the word from the text just put back. A
+                        // chord that takes the focus, as Quick Open does at
+                        // once, would empty the textarea before that read. The
+                        // chord is pending until it is sent.
+                        setTimeout(function() {
+                            chordPending = false;
+                            box.dispatchEvent(new InputEvent('beforeinput', {
+                                inputType: 'insertText', data: ch, bubbles: true, cancelable: true, composed: true
+                            }));
+                        }, 0);
                     }, 0);
                     return true;
                 }

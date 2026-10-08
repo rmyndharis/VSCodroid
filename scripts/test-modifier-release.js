@@ -44,16 +44,18 @@
  * composing too, and so must the next latched letter; a box with no selection
  * API keeps the letter; and in the terminal, with xterm's composition handling
  * copied from the shipped @xterm/xterm, the word composed before the chord
- * must reach the shell first, also when the workbench takes the chord.
+ * must reach the shell first, also when the workbench takes the chord and the
+ * Quick Open it runs takes the focus at once.
  *
  * NEGATIVE CONTROL, measured: against KeyInjector.kt at f66e462f, which sent
- * no release, 33 of the 72 cases fail; against the interceptor before it made
- * a chord of a composed letter, 13 of the 24 composing cases; against one
- * that released at the chord's target with nothing stopping it at the window,
- * 5 picker cases fail, the first Ctrl+Tab in the Command Palette opening the
- * editor it had just highlighted; and against one that paired a release with
- * a keydown by key rather than by code, the case of a keyboard holding both
- * Shifts fails.
+ * no release, 36 of the 74 cases fail; against the interceptor before it made
+ * a chord of a composed letter, 16 of the 26 composing cases; against one
+ * that sent the chord in the task that ended the composition, the case where
+ * Quick Open takes the focus, the word lost; against one that released at the
+ * chord's target with nothing stopping it at the window, 5 picker cases fail,
+ * the first Ctrl+Tab in the Command Palette opening the editor it had just
+ * highlighted; and against one that paired a release with a keydown by key
+ * rather than by code, the case of a keyboard holding both Shifts fails.
  * Each of these changes fails at least one case: not calling the release from
  * either script, or from either of the interceptor's two chords; releasing
  * with the flag still set; sending the keyup at what has focus rather than at
@@ -63,9 +65,9 @@
  * keyboard sends first. For a composed letter: the chord sent in the same
  * task, no blur, the text put back before the blur or whatever changed it,
  * the box's `beforeinput` or `input` listener hearing the letter, no guard
- * while a chord is pending, the guard never dropped, a box with no selection
- * API taken for one with it, and the editor's own textarea, a rewritten word
- * or a character with no key taken for a letter.
+ * while a chord is pending, the guard dropped before the chord or never, a
+ * box with no selection API taken for one with it, and the editor's own
+ * textarea, a rewritten word or a character with no key taken for a letter.
  *
  * Extraction is strict: if a raw string moves or changes shape this fails
  * saying so, rather than quietly running an empty script.
@@ -227,11 +229,10 @@ function newPage({ emitter = true } = {}) {
     // browser runs zero timeouts once the task that set them is over. One that
     // throws is reported, as the browser reports it, and the rest still run.
     page.timers = [];
-    page.runTimers = () => {
-        while (page.timers.length) {
-            try { page.timers.shift()(); } catch (e) { timerErrors.push(e.message); }
-        }
+    page.runTimer = () => {
+        try { page.timers.shift()(); } catch (e) { timerErrors.push(e.message); }
     };
+    page.runTimers = () => { while (page.timers.length) page.runTimer(); };
     page.context = vm.createContext({
         window,
         document,
@@ -841,6 +842,23 @@ const keys = (page, at = 'text-box') => sequence(page).filter((line, i) => page.
         JSON.stringify([box.value, keys(page)[0]]), JSON.stringify(['pk', 'keydown p ctrl'])]);
 }
 
+// The same between the task that ends the composition and the chord's: a
+// word the keyboard starts then is the page's too, with Ctrl still latched,
+// and the chord is still the only one.
+{
+    const page = newPage();
+    intercept(page);
+    const box = textBox(page);
+    page.window.__vscodroid.ctrl = true;
+    box.compose('p');
+    page.runTimer();
+    box.compose('k');
+    page.runTimers();
+    cases.push(['a word started before the chord is typed, and the chord follows alone',
+        JSON.stringify([box.value, keys(page).filter((k) => k.startsWith('keydown'))]),
+        JSON.stringify(['k', ['keydown p ctrl']])]);
+}
+
 // The terminal: Ctrl then `c` at an empty prompt is ^C and nothing else.
 {
     const page = newPage();
@@ -868,18 +886,29 @@ const keys = (page, at = 'text-box') => sequence(page).filter((line, i) => page.
 }
 
 // A chord the workbench takes from the terminal never reaches xterm's
-// composition handling, so only the compositionend sends the word.
+// composition handling, so only the compositionend sends the word, read back
+// from the textarea in a zero timeout. Ctrl+P is one, and it takes the focus
+// at once: the keybinding service, a bubble listener on the window, runs
+// Quick Open, whose show focuses its input box before the keydown is over,
+// and the textarea empties itself as it loses the focus.
 {
     const page = newPage();
     intercept(page);
     const term = terminal(page, (e) => e.ctrlKey && e.key === 'p');
+    const quickOpen = page.newNode('quick-input-box', page.document.body);
+    page.window.addEventListener('keydown', (e) => {
+        if (!e.ctrlKey || e.key !== 'p') return;
+        term.blur();
+        page.document.activeElement = quickOpen;
+    });
     term.compose('a');
     term.compose('ab');
     page.window.__vscodroid.ctrl = true;
     term.compose('abp');
     page.runTimers();
-    cases.push(['a chord the workbench takes from the terminal still lets ab reach the shell',
+    cases.push(['a chord the workbench takes from the terminal, focusing Quick Open, still lets ab reach the shell',
         JSON.stringify(term.sent()), JSON.stringify(['ab'])]);
+    cases.push(['and Quick Open has the focus', page.document.activeElement === quickOpen, true]);
 }
 
 cases.push(['no timer threw', timerErrors.join('; '), '']);
