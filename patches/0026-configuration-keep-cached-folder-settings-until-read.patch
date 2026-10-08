@@ -2,20 +2,27 @@ Keep a folder's cached settings until its settings file has been read.
 
 For a remote folder, FolderConfiguration starts on the copy of the folder's
 settings that its last load cached, and swaps in a FileServiceBasedConfiguration
-once the vscode-remote file system provider registers. It swapped first and let
-the new object read the folder's files afterwards, and until that read ends the
-new object holds no settings at all: its reparse() answers an empty model.
+once the vscode-remote file system provider registers. The new object reads the
+folder's files only when the workspace service next loads it, and until then
+it holds no settings: its reparse() answers an empty model.
 
 WorkspaceService.onDefaultConfigurationChanged reparses the folder
 configuration and puts the result in place of the folder's and the workspace's
-settings. The default configuration changes as the extensions register, since
-every extension that contributes settings or configurationDefaults changes it.
-So whenever the read was still running when the extensions registered, every
-setting of the folder's own was gone from the configuration until the read
-ended, and the first reads of whatever started in between, the theme service
-and the extensions activating, got the user's values instead.
-WorkspaceConfiguration, which does the same for a .code-workspace file, already
-loads the new object before swapping it in; this does the same for a folder.
+settings, without an event, since a reparse is meant to change how settings
+are read rather than which ones there are. The default configuration changes
+as the extensions register, since every extension that contributes settings or
+configurationDefaults changes it. So whenever the read was still running when
+the extensions registered, every setting of the folder's own was gone from the
+configuration until the read ended, and whatever read the configuration in
+between, the theme service and the extensions activating, got the user's
+values instead.
+
+FolderConfiguration now remembers which of its two configurations the
+workspace service loaded last, and reparses that one: the cached copy until
+the file based configuration has been loaded, which is what the workspace
+service holds until then. The swap, the reads and the events are as before,
+so a folder's first load, which has no cached copy, gets its settings when it
+did and with the same change event.
 
 On an Android emulator the read ends seconds after the extensions register. On
 API 36 a folder whose .vscode/settings.json names Light Modern, under a user
@@ -28,60 +35,57 @@ to the workbench page reads which theme a window shows to tell whether its
 folder has a theme of its own, and a tap in that window taught it the wrong
 answer, which started the next folder on the wrong theme.
 
-The new object is still created, and starts watching the folder's files, as
-soon as the provider registers, and a change it reports before the swap is
-passed on as before: the workspace service then reloads the cached copy, and
-the change that the swap itself reports reloads the files. A folder's first
-load, which has no cached copy, shows the user's settings until the read ends,
-as before, and its settings now apply one read of the file later: the workspace
-service reads the file again once the swap reports it, and the editor server
-answers atomic reads of one file one at a time.
+A first version of this patch swapped only once the new object had read the
+files. That moved the drop rather than removing it: the settings it had read
+then reached the configuration through a reparse, without an event, before the
+workspace service's own load compared them, so on a folder's first load the
+theme service never heard of the folder's theme. It was seen on the emulator
+and in the Chromium harness below with each open of the file held for 0.3 s or
+1.5 s.
 
-Verified in headless Chromium against the web workbench of a server tree built
-with and without this patch, served on macOS with the editor server's open of
-the folder's settings.json held for 6 s, Dark Modern in the Machine settings
-and Light Modern in the folder's. From the folder's second load on, the
-unpatched tree showed Dark Modern from the extensions registering, at 0.3 s,
-until 12.2 s, and on the third load still at 14 s; the patched tree showed
-Light Modern from the extensions registering on, with no Dark Modern frame.
-The folder's first load applied its theme at 18.7 s instead of 12.7 s, the
-one extra read. With the scripts VSCodroid adds to the workbench page, the
-open held for 4 s and a tap 0.3 s after the extensions registered, the
-unpatched tree left the folder recorded as following the user's theme, and
-the next folder opened painted white and started on the light web default;
-with the patched tree the next folder started dark.
-
-One note for whoever tidies this later. The swap is written as
-`loadConfiguration().then(() => { this.folderConfiguration = ... })` rather
-than with await because `.loadConfiguration().then(()=>{this.folderConfiguration=`
-is the token patches/fingerprints.txt matches to prove this patch reached the
-packaged bundle: esbuild joins the statements after an await with commas, which
-the source does not have, so an awaited form leaves no text that is in both the
-patch and the bundle. If you rewrite it, move that row to something the new
-shape introduces and check the replacement occurs zero times in an unpatched
-bundle first.
+One note for whoever tidies this later. The reparse is written as
+`(this.loadedFolderConfiguration ?? this.folderConfiguration).reparse(` because
+that text, with the spaces gone, is the token patches/fingerprints.txt matches
+to prove this patch reached the packaged bundle; property names survive the
+bundler and locals do not. If you hoist it into a local, move that row to
+something the new shape introduces and check the replacement occurs zero times
+in an unpatched bundle first.
 
 diff --git a/src/vs/workbench/services/configuration/browser/configuration.ts b/src/vs/workbench/services/configuration/browser/configuration.ts
-index a83c04f..0db2cd1 100644
+index a83c04f..aeb45e3 100644
 --- a/src/vs/workbench/services/configuration/browser/configuration.ts
 +++ b/src/vs/workbench/services/configuration/browser/configuration.ts
-@@ -1042,9 +1042,16 @@ export class FolderConfiguration extends Disposable {
- 			this.folderConfiguration = this.cachedFolderConfiguration;
- 			whenProviderRegistered(workspaceFolder.uri, fileService)
- 				.then(() => {
--					this.folderConfiguration = this._register(this.createFileServiceBasedConfiguration(fileService, uriIdentityService, logService));
--					this._register(this.folderConfiguration.onDidChange(e => this.onDidFolderConfigurationChange()));
--					this.onDidFolderConfigurationChange();
-+					const folderConfiguration = this._register(this.createFileServiceBasedConfiguration(fileService, uriIdentityService, logService));
-+					this._register(folderConfiguration.onDidChange(e => this.onDidFolderConfigurationChange()));
-+					// Swap only once the files are read, as WorkspaceConfiguration does. Until
-+					// then it holds no settings, and a change to the default configuration,
-+					// which registering extensions makes, reparses this and would put no
-+					// folder settings in place of the cached ones until the read ends.
-+					folderConfiguration.loadConfiguration().then(() => {
-+						this.folderConfiguration = folderConfiguration;
-+						this.onDidFolderConfigurationChange();
-+					});
- 				});
- 		} else {
- 			this.folderConfiguration = this._register(this.createFileServiceBasedConfiguration(fileService, uriIdentityService, logService));
+@@ -1018,6 +1018,7 @@ export class FolderConfiguration extends Disposable {
+ 	readonly onDidChange: Event<void> = this._onDidChange.event;
+ 
+ 	private folderConfiguration: CachedFolderConfiguration | FileServiceBasedConfiguration;
++	private loadedFolderConfiguration: CachedFolderConfiguration | FileServiceBasedConfiguration | undefined;
+ 	private readonly scopes: ConfigurationScope[];
+ 	private readonly configurationFolder: URI;
+ 	private cachedFolderConfiguration: CachedFolderConfiguration;
+@@ -1053,7 +1054,11 @@ export class FolderConfiguration extends Disposable {
+ 	}
+ 
+ 	loadConfiguration(): Promise<ConfigurationModel> {
+-		return this.folderConfiguration.loadConfiguration();
++		const folderConfiguration = this.folderConfiguration;
++		return folderConfiguration.loadConfiguration().then(configurationModel => {
++			this.loadedFolderConfiguration = folderConfiguration;
++			return configurationModel;
++		});
+ 	}
+ 
+ 	updateWorkspaceTrust(trusted: boolean): ConfigurationModel {
+@@ -1062,7 +1067,11 @@ export class FolderConfiguration extends Disposable {
+ 	}
+ 
+ 	reparse(): ConfigurationModel {
+-		const configurationModel = this.folderConfiguration.reparse({ scopes: this.scopes, skipRestricted: this.isUntrusted() });
++		// Reparse the configuration whose settings were last loaded, which are the ones in use.
++		// The file based configuration is swapped in before it has read the folder's files and
++		// holds no settings until then, so reparsing it, as every change to the default
++		// configuration does, would drop the folder's settings until the read ends.
++		const configurationModel = (this.loadedFolderConfiguration ?? this.folderConfiguration).reparse({ scopes: this.scopes, skipRestricted: this.isUntrusted() });
+ 		this.updateCache();
+ 		return configurationModel;
+ 	}
