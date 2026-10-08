@@ -1527,6 +1527,68 @@ class SafLiveDeviceEditTest {
     }
 
     /**
+     * The same reopen, and a save whose stamp query the provider does not answer. The open
+     * left no stamp so that only the device's bytes could let a save through, and a stamp
+     * that never came let it through unread, a held-back save's try too, with nobody saving.
+     */
+    @ParameterizedTest(name = "another app changed the file: {0}")
+    @ValueSource(booleans = [true, false])
+    fun `a save after a reopen with no clock reads the device copy when its stamp goes unanswered`(
+        anotherApp: Boolean,
+    ) {
+        deviceHasClock = false
+        open()
+        if (anotherApp) {
+            save("first save")
+            editOnDevice("changed by another app")
+        } else {
+            File(mirror, "notes.txt").writeText("saved, never delivered")
+        }
+        open()
+        failNextQuery = true
+
+        save("typed after the reopen")
+
+        assertEquals(false, failNextQuery, "precondition: the save asked the provider for the stamp")
+        assertEquals(
+            if (anotherApp) listOf("changed by another app") else emptyList(),
+            deviceCopies().values.toList(),
+            if (anotherApp) "the save replaced another app's edit with no copy of it anywhere"
+            else "the copy the record vouched for was kept as if another app had written it",
+        )
+        assertEquals("typed after the reopen", deviceText)
+    }
+
+    /** A delete meeting the unanswered stamp, which the bytes decide as they decide a save. */
+    @ParameterizedTest(name = "another app changed the file: {0}")
+    @ValueSource(booleans = [true, false])
+    fun `a delete after a reopen with no clock reads the device copy when its stamp goes unanswered`(
+        anotherApp: Boolean,
+    ) {
+        deviceHasClock = false
+        open()
+        if (anotherApp) {
+            save("first save")
+            editOnDevice("changed by another app")
+        } else {
+            File(mirror, "notes.txt").writeText("saved, never delivered")
+        }
+        open()
+        val file = File(mirror, "notes.txt").apply { delete() }
+        failNextQuery = true
+
+        engine.handleMirrorEvent(FileObserver.DELETE, file, mirror, treeUri)
+        engine.runWriteBackLoop { false }
+
+        assertEquals(
+            anotherApp, deviceHasDocument,
+            if (anotherApp) "the delete took another app's edit with the file"
+            else "the delete was declined over the copy the record vouched for",
+        )
+        assertEquals(false, failNextQuery, "precondition: the delete asked the provider for the stamp")
+    }
+
+    /**
      * The reopen on a provider that reports no size either, every length 0. A save the
      * watcher delivered leaves the device holding the mirror's bytes, and no length can say
      * so, so the open reads them; taken as a difference, the next save kept a copy of this

@@ -1424,24 +1424,25 @@ class SafSyncEngine(private val context: Context) {
      * digest for the path, as after an update from a build that recorded none, or after a
      * second open with the edit still undelivered, which records nothing there.
      *
-     * Ceilings: a provider reporting neither column; a same-size edit inside one clock
-     * tick, or at any time on a provider with no clock or one that keeps a document's old
-     * time, as an Android phone attached over MTP does; a foreign edit in the window
-     * between a landed write and its refresh, or between this check and the write, which
-     * SAF has no conditional write to close; a stamp the provider will not report, which
-     * lets the save go ahead unguarded, a held-back save's retry too, and after a write
-     * drops the entry so the next save fails open; entries not following a directory
-     * rename; a stamp a provider moves after the folder was opened, over a copy the open
-     * kept rather than fetched (its times agreed, or a read found the bytes equal) that no
-     * open has digested yet and this one's [KEPT_COPY_DIGEST_BYTES] did not reach, and not
-     * written by this app since, which keeps one spare copy of the unchanged document; a
-     * document reported past [MAX_FILE_SIZE] at a length other than the digested one,
-     * which is held back unread, even where it holds this app's own bytes, until it is
-     * reported at that length; a held-back save whose folder is closed before a try lands,
-     * which waits for the next open (with no clock, for the tries that follow it, and once
-     * the process has died, for the next save of the file), or whose directory is renamed,
-     * which waits for that or for the next save of the file; and on a provider with no
-     * clock, every copy after the first carries its counter as a time, which is cosmetic.
+     * Ceilings: a provider reporting neither column; a same-size edit inside one clock tick,
+     * or at any time on a provider with no clock or one that keeps a document's old time, as
+     * an Android phone attached over MTP does; a foreign edit in the window between a landed
+     * write and its refresh, or between this check and the write, which SAF has no
+     * conditional write to close; a stamp the provider will not report, which lets the save
+     * go ahead unguarded, a held-back save's retry too, except over a device copy an open
+     * could not place, and after a write drops the entry so the next save fails open;
+     * entries not following a directory rename; a stamp a provider moves after the folder
+     * was opened, over a copy the open kept rather than fetched (its times agreed, or a read
+     * found the bytes equal) that no open has digested yet and this one's
+     * [KEPT_COPY_DIGEST_BYTES] did not reach, and not written by this app since, which keeps
+     * one spare copy of the unchanged document; a document reported past [MAX_FILE_SIZE] at
+     * a length other than the digested one, which is held back unread, even where it holds
+     * this app's own bytes, until it is reported at that length; a held-back save whose
+     * folder is closed before a try lands, which waits for the next open (with no clock, for
+     * the tries that follow it, and once the process has died, for the next save of the
+     * file), or whose directory is renamed, which waits for that or for the next save of the
+     * file; and on a provider with no clock, every copy after the first carries its counter
+     * as a time, which is cosmetic.
      */
     private fun keepsDeviceEdit(localFile: File, docUri: Uri): Boolean {
         // Settled again by whatever this answers: a save that goes ahead ends the hold, and
@@ -1474,12 +1475,17 @@ class SafSyncEngine(private val context: Context) {
      * What the device reports for [docUri] now, where that has moved past what this engine
      * last read or wrote at [localFile]'s path and the bytes do not show it to be the same
      * version; null where it has not, and where nothing is known of the path or the
-     * provider will not say. A stamp that moved over the digested bytes becomes the one
-     * compared next. [keepsDeviceEdit] says why the bytes are asked and what that costs.
+     * provider will not say, unless an open could not place the device copy, where only
+     * the bytes answer. A stamp that moved over the digested bytes becomes the one compared
+     * next. [keepsDeviceEdit] says why the bytes are asked and what that costs.
      */
     private fun deviceMovedPast(localFile: File, docUri: Uri): Pair<Long, Long>? {
         val seen = deviceSeen[localFile.absolutePath] ?: return null
-        val now = deviceStamp(docUri) ?: return null
+        // An unplaced copy has no stamp so that its bytes decide, and an unanswered query let
+        // a save, or a held-back save's try with nobody saving, go over it unread. Taken as a
+        // moved stamp instead, with the time and the length unknown: the 0s a provider that
+        // reports neither gives, which is also what a matching read re-baselines to.
+        val now = deviceStamp(docUri) ?: if (seen.stamp == null) 0L to 0L else return null
         if (now == seen.stamp) return null
         // Read at any length a set-aside could still keep, a missing size column's 0
         // included: a reported length can lag the bytes, as on a provider that reports a
@@ -5593,8 +5599,9 @@ internal enum class DeviceCopyOutcome {
 private class DeviceState(
     /**
      * Null where an open found the device holding bytes it could not place, so that no stamp
-     * the provider reports lets a save or a delete through without the bytes being read; the
-     * digest is then the previous record's for the path, or null where it held none.
+     * the provider reports, or fails to report, lets a save or a delete through without the
+     * bytes being read; the digest is then the previous record's for the path, or null where
+     * it held none.
      */
     val stamp: Pair<Long, Long>?,
     val sha256: ByteArray? = null,
