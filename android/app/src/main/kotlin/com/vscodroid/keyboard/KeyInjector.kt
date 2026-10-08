@@ -222,12 +222,42 @@ class KeyInjector(
      * A Shift held on its own is not intercepted but is spent: the page keeps the
      * character it was about to insert, and the flag is cleared, so a latch cannot
      * carry over into a key the user taps minutes later. A Ctrl or Alt that meets
-     * input this listener has no chord for, a paste or an IME composition, is spent
-     * the same way and for the same reason.
+     * input this listener has no chord for, a paste or a composition update that
+     * adds more or other than one character, is spent the same way and for the
+     * same reason.
      *
      * Backspace, Delete and Enter reach the page from here rather than from the key
      * row, because a soft keyboard reports all three as an edit and not as a key,
      * and no page of the row carries one. They are listed in `COMMANDS` below.
+     *
+     * A keyboard that composes, as Gboard 12.4 composes every word, reports each
+     * letter in a text box as `insertCompositionText`, which cannot be cancelled:
+     * the letter is the box's before anything here can refuse it. So when such an
+     * edit adds one character with a key to the composition, in a focused `input`
+     * or `textarea`, the terminal's included, the box's own listeners are kept
+     * from hearing it, and in the next task the composition is ended by taking
+     * the focus away and giving it back, the box gets back the text and selection
+     * it had before the character, and the character comes back to this listener
+     * as the `insertText` a keyboard that commits would have sent, which makes the
+     * chord. The blur is Blink's own end of a composition, with the
+     * `compositionend` the box's listeners expect: the terminal sends what it
+     * composed on that event, and a chord the terminal hands to the workbench
+     * never reaches its composition handling, so without the blur the word typed
+     * before such a chord would stay unsent (read from the shipped xterm). The
+     * text goes back after the blur, and only if nothing changed it in between:
+     * the terminal's textarea empties itself on blur and reads a finished
+     * composition back from it, so the word typed before the chord reaches the
+     * shell first. Measured on an API 33 emulator with WebView 153 and Gboard
+     * 12.4: in the Search view's box Ctrl, held past the long-press delay or
+     * tapped, then `p` opened Quick Open and left the box empty, and over an
+     * underlined `fo` left `fo`; Ctrl then `a` over `fo` selected it, and the
+     * next letter replaced it; in the terminal Ctrl then `c` gave `^C`, over an
+     * underlined `ab` gave `ab^C`, and stopped a running `cat`. Before, the
+     * letter joined the word and the latch was spent. What the blur costs: the
+     * quick input forgets which element to give focus back to when it closes,
+     * and gives it to the active editor instead, and a terminal program that
+     * asked to hear focus changes hears focus go and come back. The editor's own
+     * textarea host, which reads compositions itself, is left as it was.
      *
      * This is live on both edit paths, not only the legacy one, but not for
      * everything on the EditContext path. The workbench uses `NativeEditContext`
@@ -352,6 +382,75 @@ class KeyInjector(
                     insertLineBreak: ['Enter', 13]
                 };
 
+                // What a keyboard is composing in a text box, and what it was
+                // before its latest update. Blink fires compositionupdate with
+                // the whole composition just before the beforeinput that puts
+                // it in. A composition on the EditContext path fires at the
+                // EditContext, not here.
+                var composition = { text: '', previous: '' };
+                function compositionOver() {
+                    composition.text = '';
+                    composition.previous = '';
+                }
+                document.addEventListener('compositionstart', compositionOver, true);
+                document.addEventListener('compositionend', compositionOver, true);
+                document.addEventListener('compositionupdate', function(e) {
+                    composition.previous = composition.text;
+                    composition.text = e.data || '';
+                }, true);
+
+                // A character a composing keyboard adds in a text box, as Gboard
+                // 12.4 adds every letter, made the chord it would have been from
+                // a keyboard that commits. See the KDoc. True when this takes the
+                // event, or leaves it to the page because a chord is pending.
+                var chordPending = false;
+                function chordComposed(e) {
+                    if (chordPending) return true;
+                    var box = e.target;
+                    var data = e.data || '';
+                    var previous = composition.previous;
+                    var ch = data.charAt(previous.length);
+                    if (box !== document.activeElement ||
+                        !(box.tagName === 'TEXTAREA' || (box.tagName === 'INPUT' && box.selectionStart !== null)) ||
+                        box.classList.contains('inputarea') ||
+                        data.length !== previous.length + 1 || data.slice(0, previous.length) !== previous ||
+                        !(KEYS[ch] || /[a-zA-Z0-9]/.test(ch))) return false;
+                    e.stopImmediatePropagation();
+                    chordPending = true;
+                    var before = { value: box.value, start: box.selectionStart, end: box.selectionEnd,
+                        direction: box.selectionDirection };
+                    var after = null;
+                    // The input event the letter's insertion fires, kept from
+                    // the box as the beforeinput was.
+                    function hide(ev) {
+                        if (ev.target !== box) return;
+                        document.removeEventListener('input', hide, true);
+                        after = box.value;
+                        ev.stopImmediatePropagation();
+                    }
+                    document.addEventListener('input', hide, true);
+                    // A later task, once the insertion is over: a chord sent now
+                    // would move focus before the letter is put in, and the
+                    // letter would land in whatever took it.
+                    setTimeout(function() {
+                        document.removeEventListener('input', hide, true);
+                        chordPending = false;
+                        var untouched = after !== null && box.value === after;
+                        if (document.activeElement === box) {
+                            box.blur();
+                            box.focus();
+                        }
+                        if (untouched) {
+                            box.value = before.value;
+                            box.setSelectionRange(before.start, before.end, before.direction);
+                        }
+                        box.dispatchEvent(new InputEvent('beforeinput', {
+                            inputType: 'insertText', data: ch, bubbles: true, cancelable: true, composed: true
+                        }));
+                    }, 0);
+                    return true;
+                }
+
                 document.addEventListener('beforeinput', function(e) {
                     var mod = window.__vscodroid;
                     // Shift alone is not intercepted: the soft keyboard's own
@@ -419,7 +518,11 @@ class KeyInjector(
                         return;
                     }
 
-                    // Everything else the page can insert: a paste, an IME
+                    // A character a composing keyboard adds in a text box. Its
+                    // chord comes from chordComposed, in a later task.
+                    if (e.inputType === 'insertCompositionText' && chordComposed(e)) return;
+
+                    // Everything else the page can insert: a paste, any other
                     // composition update, an autocorrect replacement, a word
                     // delete. There is no chord to send for one, and cancelling
                     // it would leave the tap producing nothing, so it is left to
@@ -514,12 +617,12 @@ class KeyInjector(
                 // A composing IME on the EditContext edit path. Chromium reports
                 // a composition to the EditContext object alone: compositionstart,
                 // then a textupdate per keystroke, and the element receives no
-                // beforeinput for any of it, where the textarea path reports the
-                // same keystrokes as insertCompositionText, which the branch
-                // above spends. A latch that survives the first composed
-                // character attaches to the first one the IME commits outright,
-                // which is the space that ends the word: the space was cancelled
-                // and Ctrl+Space opened suggestions in its place.
+                // beforeinput for any of it, where the editor's textarea path
+                // reports the same keystrokes as insertCompositionText, which the
+                // branch above spends there. A latch that survives the first
+                // composed character attaches to the first one the IME commits
+                // outright, which is the space that ends the word: the space was
+                // cancelled and Ctrl+Space opened suggestions in its place.
                 //
                 // compositionstart rather than compositionend, because it is the
                 // earliest signal and the one the textarea path already spends

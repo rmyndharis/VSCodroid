@@ -36,19 +36,34 @@
  * `navigationKeyEvents`. A keyboard holding both Shifts must have each release
  * go on to the page.
  *
+ * Last, a keyboard that composes, as Gboard 12.4 composes every letter, types
+ * into a text box, with the composition events in Blink's order: a letter it
+ * adds while Ctrl is latched must come out as the chord only once the
+ * composition is over, with the box as it was before the letter and the box's
+ * own `input` listener never hearing it, over a word still composing too; and
+ * in the terminal, with xterm's composition handling copied from the shipped
+ * @xterm/xterm, the word composed before the chord must reach the shell
+ * first, also when the workbench takes the chord.
+ *
  * NEGATIVE CONTROL, measured: against KeyInjector.kt at f66e462f, which sent
- * no release, 20 of the 47 cases fail; against one that released at the
- * chord's target with nothing stopping it at the window, 5 picker cases fail,
- * the first Ctrl+Tab in the Command Palette opening the editor it had just
- * highlighted; and against one that paired a release with a keydown by key
- * rather than by code, the case of a keyboard holding both Shifts fails.
+ * no release, 32 of the 69 cases fail; against the interceptor before it made
+ * a chord of a composed letter, 12 of the 22 composing cases; against one
+ * that released at the chord's target with nothing stopping it at the window,
+ * 5 picker cases fail, the first Ctrl+Tab in the Command Palette opening the
+ * editor it had just highlighted; and against one that paired a release with
+ * a keydown by key rather than by code, the case of a keyboard holding both
+ * Shifts fails.
  * Each of these changes fails at least one case: not calling the release from
  * either script, or from either of the interceptor's two chords; releasing
  * with the flag still set; sending the keyup at what has focus rather than at
  * the chord's own target; releasing in another order; and in the interceptor,
  * no stop at the window, a stop in the bubble phase, stopImmediatePropagation
  * or preventDefault in its place, or a stop that ignores the keydowns a
- * keyboard sends first.
+ * keyboard sends first. For a composed letter: the chord sent in the same
+ * task, no blur, the text put back before the blur or whatever changed it,
+ * the box's `input` listener hearing the letter, no guard while a chord is
+ * pending, and the editor's own textarea, a rewritten word or a character
+ * with no key taken for a letter.
  *
  * Extraction is strict: if a raw string moves or changes shape this fails
  * saying so, rather than quietly running an empty script.
@@ -206,12 +221,17 @@ function newPage({ emitter = true } = {}) {
     };
     for (const node of [document.body, page.focused]) node.dispatchEvent = dispatchEvent;
     page.newNode = (name, parent) => Object.assign(new Node(name, parent), { dispatchEvent });
+    // Timers wait until a case runs them, in the order they were set, as the
+    // browser runs zero timeouts once the task that set them is over.
+    page.timers = [];
+    page.runTimers = () => { while (page.timers.length) page.timers.shift()(); };
     page.context = vm.createContext({
         window,
         document,
         KeyboardEvent,
+        InputEvent: KeyboardEvent,
         navigator: { userAgent: 'Chrome/153.0.0.0' },
-        setTimeout: () => {},
+        setTimeout: (fn) => { page.timers.push(fn); },
     });
     return page;
 }
@@ -541,6 +561,281 @@ const settled = (name, page) => {
     hardwareKey(page, 'keyup', 'Control', 'ControlLeft', 17);
     cases.push(['a hardware keyboard releasing Ctrl still accepts the picker', JSON.stringify(picker.accepted), '[1]']);
     cases.push(['and leaves no Ctrl held', outcome(page).held.join('+'), '']);
+}
+
+/**
+ * A focused text box on `page`, inside its document, fed the way Chromium
+ * hands a composing keyboard's edits to one. `compose(text)` is the keyboard
+ * setting its composition to `text`, which Blink's
+ * InputMethodController::SetComposition turns into a compositionstart for a
+ * new composition, a compositionupdate with the whole text, a `beforeinput`
+ * of `insertCompositionText` that cannot be cancelled, the text put in place
+ * of the composition (of the selection, for a new one) and an `input`.
+ * `blur()` is FocusController::SetFocusedElement, which finishes the
+ * composition first, keeping its text, with a compositionend, and then fires
+ * blur. Chromium fires a keydown of key code 229 before each update too;
+ * nothing here listens for it. `heard` is what the box's own `input`
+ * listener saw.
+ */
+function textBox(page, { value = '', className = 'input', tagName = 'TEXTAREA' } = {}) {
+    page.document.body.parent = page.document;
+    const box = page.newNode('text-box', page.document.body);
+    const classes = className.split(' ');
+    Object.assign(box, {
+        tagName, value, selectionStart: value.length, selectionEnd: value.length, selectionDirection: 'none',
+        classList: { contains: (c) => classes.includes(c) }, heard: [],
+    });
+    box.setSelectionRange = (start, end, direction) => Object.assign(box,
+        { selectionStart: start, selectionEnd: end, selectionDirection: direction || 'none' });
+    let composition = null;
+    const fire = (type, init = {}) => box.dispatchEvent(new page.KeyboardEvent(type,
+        { bubbles: true, cancelable: false, composed: true, ...init }));
+    box.compose = (text) => {
+        if (!composition) {
+            fire('compositionstart', { data: '' });
+            composition = [box.selectionStart, box.selectionEnd];
+        }
+        fire('compositionupdate', { data: text });
+        fire('beforeinput', { inputType: 'insertCompositionText', data: text, isComposing: true });
+        // A listener that took the focus away meanwhile has the text land in
+        // whatever took it, which is not modelled; this box gets none of it.
+        if (!composition || page.document.activeElement !== box) return;
+        box.value = box.value.slice(0, composition[0]) + text + box.value.slice(composition[1]);
+        composition = [composition[0], composition[0] + text.length];
+        box.selectionStart = box.selectionEnd = composition[1];
+        fire('input', { inputType: 'insertCompositionText', data: text, isComposing: true });
+    };
+    box.blur = () => {
+        if (page.document.activeElement !== box) return;
+        if (composition) {
+            const text = box.value.slice(composition[0], composition[1]);
+            composition = null;
+            fire('compositionend', { data: text });
+        }
+        page.document.activeElement = page.document.body;
+        fire('blur', { bubbles: false });
+    };
+    box.focus = () => {
+        page.document.activeElement = box;
+        fire('focus', { bubbles: false });
+    };
+    box.addEventListener('input', () => box.heard.push(box.value));
+    page.document.activeElement = box;
+    return box;
+}
+
+/**
+ * The terminal's helper textarea with xterm's handling of it, copied from the
+ * shipped @xterm/xterm (lib/xterm.mjs): CompositionHelper's compositionstart,
+ * compositionupdate and compositionend, its keydown, which finishes a
+ * composition on any key but 229 and the modifiers, and _finalizeComposition,
+ * which sends what was composed, from where the composition started, in a
+ * zero timeout after a compositionend; and the terminal's own blur handler,
+ * which empties the textarea. A keydown the workbench takes (`workbench`,
+ * as VS Code's custom key handler does for a command it keeps from the shell)
+ * goes no further. Ctrl+C is sent as ^C. `sent` is what reaches the shell.
+ */
+function terminal(page, workbench = () => false) {
+    const box = textBox(page, { className: 'xterm-helper-textarea' });
+    const sent = [];
+    const h = { composing: false, sending: false, start: 0, end: 0, suffix: '' };
+    const finalize = (wait) => {
+        h.composing = false;
+        if (!wait) {
+            h.sending = false;
+            sent.push(box.value.substring(h.start, h.end));
+            return;
+        }
+        const at = { start: h.start, end: h.end };
+        const suffix = h.suffix;
+        h.sending = true;
+        page.context.setTimeout(() => {
+            if (!h.sending) return;
+            h.sending = false;
+            let r;
+            if (h.composing) {
+                r = box.value.substring(at.start, h.start);
+            } else {
+                const v = box.value;
+                const o = suffix.length > 0 && v.endsWith(suffix) ? v.length - suffix.length : v.length;
+                r = v.substring(at.start, Math.max(at.start, o));
+            }
+            if (r.length > 0) sent.push(r);
+        });
+    };
+    box.addEventListener('compositionstart', () => {
+        h.composing = true;
+        h.start = Math.min(box.selectionStart, box.selectionEnd);
+        h.end = Math.max(box.selectionStart, box.selectionEnd);
+        h.suffix = box.value.substring(h.end);
+    });
+    box.addEventListener('compositionupdate', () => {
+        page.context.setTimeout(() => { h.end = Math.max(h.start, box.selectionEnd); });
+    });
+    box.addEventListener('compositionend', () => finalize(true));
+    box.addEventListener('keydown', (e) => {
+        if (workbench(e)) return;
+        if (h.composing || h.sending) {
+            if ([20, 229, 16, 17, 18].includes(e.keyCode)) return;
+            finalize(false);
+        }
+        if (e.ctrlKey && e.key === 'c') sent.push('\x03');
+    }, true);
+    box.addEventListener('blur', () => { box.value = ''; });
+    box.sent = () => sent.filter((d) => d !== '');
+    return box;
+}
+
+/** The keydowns and keyups a case's page saw at `at`, as `sequence` writes them. */
+const keys = (page, at = 'text-box') => sequence(page).filter((line, i) => page.log[i].at === at && /^key/.test(line));
+
+// A composing keyboard in a text box, Gboard 12.4's way with every letter:
+// Ctrl latched, then `p`. The letter is the box's before anything can refuse
+// it, so the chord comes once the composition is over, and the box gets its
+// text back.
+{
+    const page = newPage();
+    intercept(page);
+    const box = textBox(page);
+    page.window.__vscodroid.ctrl = true;
+    box.compose('p');
+    cases.push(['a composed letter with Ctrl latched sends nothing while the letter goes in', keys(page).join(', '), '']);
+    page.runTimers();
+    cases.push(['then Ctrl+P, and Ctrl comes up', keys(page).join(', '), 'keydown p ctrl, keyup p ctrl, keyup Control']);
+    const end = page.log.findIndex((e) => e.type === 'compositionend');
+    cases.push(['and the composition is over before the chord',
+        end !== -1 && end < page.log.findIndex((e) => e.type === 'keydown' && e.key === 'p'), true]);
+    cases.push(['and the box is as it was before the letter',
+        JSON.stringify([box.value, box.selectionStart, box.selectionEnd]), JSON.stringify(['', 0, 0])]);
+    cases.push(['and the box never heard the letter', JSON.stringify(box.heard), '[]']);
+    cases.push(['and Ctrl is spent', page.window.__vscodroid.ctrl, false]);
+    cases.push(['and the box still has focus', page.document.activeElement === box, true]);
+    settled('a composed Ctrl+P', page);
+}
+
+// Over a word the keyboard is still composing, as when the latch comes in the
+// middle of typing: the word stays as typed and only the letter is the chord.
+{
+    const page = newPage();
+    intercept(page);
+    const box = textBox(page);
+    box.compose('f');
+    box.compose('fo');
+    page.window.__vscodroid.ctrl = true;
+    box.compose('fop');
+    page.runTimers();
+    cases.push(['a letter added to a composing word with Ctrl latched is Ctrl+P', keys(page).join(', '),
+        'keydown p ctrl, keyup p ctrl, keyup Control']);
+    cases.push(['and leaves the word as typed, the caret after it',
+        JSON.stringify([box.value, box.selectionStart, box.selectionEnd]), JSON.stringify(['fo', 2, 2])]);
+    cases.push(['and the box heard the word and not the letter', JSON.stringify(box.heard), JSON.stringify(['f', 'fo'])]);
+}
+
+// A capital is a shifted key, as on the insertText route: Ctrl+Shift+P.
+{
+    const page = newPage();
+    intercept(page);
+    const box = textBox(page);
+    page.window.__vscodroid.ctrl = true;
+    box.compose('P');
+    page.runTimers();
+    cases.push(['a composed capital with Ctrl latched is Ctrl+Shift+P', keys(page)[0], 'keydown P ctrl shift']);
+}
+
+// What is not one character more is left to the page and spends the latch:
+// a word the keyboard rewrote, and a character with no key on a US layout.
+{
+    const page = newPage();
+    intercept(page);
+    const box = textBox(page);
+    box.compose('teh');
+    page.window.__vscodroid.alt = true;
+    box.compose('them');
+    page.window.__vscodroid.ctrl = true;
+    box.compose('them\u00e9');
+    page.runTimers();
+    cases.push(['a rewritten word and a letter with no key are typed, with no chord',
+        JSON.stringify([box.value, keys(page)]), JSON.stringify(['them\u00e9', []])]);
+    cases.push(['and spend the latch', JSON.stringify([page.window.__vscodroid.ctrl, page.window.__vscodroid.alt]),
+        JSON.stringify([false, false])]);
+}
+
+// The editor's own textarea host reads compositions itself and is left alone.
+{
+    const page = newPage();
+    intercept(page);
+    const box = textBox(page, { className: 'inputarea monaco-mouse-cursor-text' });
+    page.window.__vscodroid.ctrl = true;
+    box.compose('p');
+    page.runTimers();
+    cases.push(["the editor's textarea keeps the letter, with no chord",
+        JSON.stringify([box.value, keys(page)]), JSON.stringify(['p', []])]);
+}
+
+// Nothing latched: the composition is the page's, untouched.
+{
+    const page = newPage();
+    intercept(page);
+    const box = textBox(page);
+    box.compose('p');
+    page.runTimers();
+    cases.push(['with nothing latched a composed letter is just typed',
+        JSON.stringify([box.value, box.heard, keys(page)]), JSON.stringify(['p', ['p'], []])]);
+}
+
+// A second update before the chord's task, the keyboard faster than the
+// page: it is left to the page, and nothing is taken out of the box.
+{
+    const page = newPage();
+    intercept(page);
+    const box = textBox(page);
+    page.window.__vscodroid.ctrl = true;
+    box.compose('p');
+    box.compose('pk');
+    page.runTimers();
+    cases.push(['an update before the chord is typed, and the chord still follows',
+        JSON.stringify([box.value, keys(page)[0]]), JSON.stringify(['pk', 'keydown p ctrl'])]);
+}
+
+// The terminal: Ctrl then `c` at an empty prompt is ^C and nothing else.
+{
+    const page = newPage();
+    intercept(page);
+    const term = terminal(page);
+    page.window.__vscodroid.ctrl = true;
+    term.compose('c');
+    page.runTimers();
+    cases.push(['a composed Ctrl+C in the terminal sends ^C alone', JSON.stringify(term.sent()), JSON.stringify(['\x03'])]);
+}
+
+// Over a word the terminal is still composing: the word reaches the shell,
+// then ^C, as `ab` then Ctrl+C would from a keyboard that commits.
+{
+    const page = newPage();
+    intercept(page);
+    const term = terminal(page);
+    term.compose('a');
+    term.compose('ab');
+    page.window.__vscodroid.ctrl = true;
+    term.compose('abc');
+    page.runTimers();
+    cases.push(['a composed Ctrl+C over `ab` in the terminal sends ab, then ^C',
+        JSON.stringify(term.sent()), JSON.stringify(['ab', '\x03'])]);
+}
+
+// A chord the workbench takes from the terminal never reaches xterm's
+// composition handling, so only the compositionend sends the word.
+{
+    const page = newPage();
+    intercept(page);
+    const term = terminal(page, (e) => e.ctrlKey && e.key === 'p');
+    term.compose('a');
+    term.compose('ab');
+    page.window.__vscodroid.ctrl = true;
+    term.compose('abp');
+    page.runTimers();
+    cases.push(['a chord the workbench takes from the terminal still lets ab reach the shell',
+        JSON.stringify(term.sent()), JSON.stringify(['ab'])]);
 }
 
 let failed = 0;

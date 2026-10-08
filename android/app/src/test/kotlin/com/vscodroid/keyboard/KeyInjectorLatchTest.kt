@@ -17,12 +17,15 @@ import org.junit.jupiter.api.Test
  * The interceptor acts on two kinds of `beforeinput`: a single-character
  * `insertText`, which it turns into a chord, and the edits that stand for a key,
  * which become Ctrl+Backspace, Ctrl+Delete and Ctrl+Enter. Both spend the latch
- * on the way out. Everything else a soft keyboard produces, a paste, an IME
- * composition update, an autocorrect replacement, a word delete, used to leave it
- * standing, and a modifier left standing is not a modifier that did nothing: the
- * next ordinary character is cancelled and dispatched as a chord in its place, so
- * typing `a` after a paste selects the document instead of inserting a letter and
- * the keystroke after that replaces the selection.
+ * on the way out. A composition update that adds one character in a text box
+ * comes back to the first as an `insertText`, which
+ * `scripts/test-modifier-release.js` runs. Everything else a soft keyboard
+ * produces, a paste, any other composition update, an autocorrect replacement, a
+ * word delete, used to leave it standing, and a modifier left standing is not a
+ * modifier that did nothing: the next ordinary character is cancelled and
+ * dispatched as a chord in its place, so typing `a` after a paste selects the
+ * document instead of inserting a letter and the keystroke after that replaces
+ * the selection.
  *
  * [KeyInjectorShiftTest] holds the same rule for a lone Shift, which was already
  * spent on every event. These hold the branch the other two modifiers reach.
@@ -232,14 +235,16 @@ class KeyInjectorLatchTest {
      * The listener the script attaches to an `EditContext`, from its registration
      * to the close of its body.
      *
-     * Sliced at the event name because the body is one flag-clearing block among
-     * several: the three `beforeinput` branches above clear the same flags, so a
-     * whole-script search cannot tell a hook that spends the latch from one that
-     * only registers.
+     * Sliced at the registration on the EditContext because the body is one
+     * flag-clearing block among several: the three `beforeinput` branches above
+     * clear the same flags, so a whole-script search cannot tell a hook that
+     * spends the latch from one that only registers. The document has a
+     * `compositionstart` listener too, which follows a text box's composition
+     * and spends nothing.
      */
     private fun compositionHook(): String {
         val installed = installedListener()
-        val guard = "addEventListener('compositionstart'"
+        val guard = "ec.addEventListener('compositionstart'"
         val start = installed.indexOf(guard)
         assertTrue(
             start >= 0,

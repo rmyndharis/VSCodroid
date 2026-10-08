@@ -777,6 +777,18 @@ without closing it. Every other target keeps `isComposing`, because there the ke
 does the work. An editor inside the quick input, such as Quick Chat's, keeps it too, like
 any other editor.
 
+A letter typed on the soft keyboard with Ctrl or Alt latched is made a chord by the modifier
+interceptor (`KeyInjector.setupModifierInterceptor`) from the `beforeinput` the letter fires,
+which it cancels. A keyboard that composes, as Gboard 12.4 composes every word, reports a
+letter in a text box as `insertCompositionText`, which cannot be cancelled. So when such an
+update adds one character with a key to the composition in an `input` or `textarea`, the
+terminal's included, the interceptor keeps it from the box's own listeners and, in the next
+task, ends the composition with a blur and a refocus, puts back the box's text and selection
+as they were before the character, and makes the chord from it. The word composed before it
+stays, and the terminal, which sends a composition when it ends, sends that word before the
+chord. On the EditContext path no `beforeinput` reaches the element, so the editor makes no
+chord of a soft keyboard letter.
+
 A key or a touch that moves the editor's caret while the soft keyboard is still composing a
 word ends that composition. Chromium keeps an EditContext composition's range where it was
 when the page moves the selection (crbug 379170477), so a keyboard that recomposes the word
