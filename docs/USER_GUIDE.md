@@ -96,7 +96,9 @@ VSCodroid is VS Code. If you have used VS Code on desktop, everything works the 
   copied then either, saves of the file wait inside VSCodroid until an open can.
   If it reports none, opening it again leaves both versions as they are, as
   above: VSCodroid goes on trying the save, and after VSCodroid restarts, your
-  next save of the file sends it.
+  next save of the file sends it. In either kind of folder, an open that finds
+  that version over 50 MB keeps saves of the file inside VSCodroid until an open
+  finds it smaller.
 - A file of a device folder that you delete in the editor is deleted in the
   device folder too, unless the device folder's version is one VSCodroid has not
   read: another app may have changed it since you opened the folder or last
@@ -104,6 +106,10 @@ VSCodroid is VS Code. If you have used VS Code on desktop, everything works the 
   read it. Such a file is kept in the device folder, and so is a folder holding
   it that you delete from the terminal; a notice says so, and the file comes
   back into the editor the next time you open the folder.
+- An open that cannot list the folder holding a file leaves VSCodroid nothing
+  to check that file against until an open can: a save held back before that
+  open is no longer tried, and your next save or delete of the file replaces or
+  removes the device folder's version without keeping a copy.
 - The Explorer and the title bar show a device folder under its own name. A
   folder opened in an earlier version is shown under a twelve-character code
   such as `8e440ff38c8e`, the name of its copy, and offers to reopen under its

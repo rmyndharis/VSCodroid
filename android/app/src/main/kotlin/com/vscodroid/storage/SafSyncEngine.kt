@@ -1529,9 +1529,11 @@ class SafSyncEngine(private val context: Context) {
      * back under another name. The device keeps the document, and the next open brings it
      * back into the editor.
      *
-     * Ceilings: [keepsDeviceEdit]'s own, each spare copy of an unchanged document there being
-     * a declined delete of it here; a directory is declined for a file in it whose delete
-     * was declined ([keptOnDevice]), and otherwise not asked file by file, so a file under it
+     * Ceilings: [keepsDeviceEdit]'s own, each spare copy of an unchanged document there
+     * being a declined delete of it here, and an open that cannot list the folder or the
+     * directory holding the file, which leaves it no stamp and arms nothing, so its delete
+     * goes ahead as its save does; a directory is declined for a file in it whose delete was
+     * declined ([keptOnDevice]), and otherwise not asked file by file, so a file under it
      * that raised no delete of its own goes with it: one past [MAX_WATCHED_DIRECTORIES], or
      * one another app added while the folder was open, which the mirror never held; and a
      * declined delete is not tried again, so a file declined only because its read failed
