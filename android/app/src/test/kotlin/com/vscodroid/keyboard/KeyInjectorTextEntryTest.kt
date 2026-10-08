@@ -189,8 +189,7 @@ class KeyInjectorTextEntryTest {
      *
      * NEGATIVE CONTROL, measured: with `RELEASE_MODIFIERS_JS` built by
      * `trimIndent()` alone, which puts its later lines at column 0, both
-     * scripts fail, Alt+Esc's announce script 212 bytes longer than it is and
-     * the interceptor 3572.
+     * scripts fail.
      */
     @Test
     fun `the scripts that send a chord go out dedented`() {
