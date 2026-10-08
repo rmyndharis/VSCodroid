@@ -124,6 +124,10 @@ class ExtraKeyButtonTouchInstrumentedTest {
         val down = SystemClock.uptimeMillis()
         onMain { button.dispatchTouchEvent(event(down, down, MotionEvent.ACTION_DOWN, 10f)) }
         restPastTheLongPress()
+        // Before the lift too: a key that pressed itself at the timeout also
+        // ends this hold with one press.
+        assertEquals("the key pressed before the finger lifted", emptyList<String>(), pressed)
+
         onMain { button.dispatchTouchEvent(event(down, SystemClock.uptimeMillis(), MotionEvent.ACTION_UP, 10f)) }
         instrumentation.waitForIdleSync()
 
