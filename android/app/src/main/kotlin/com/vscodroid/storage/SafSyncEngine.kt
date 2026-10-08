@@ -3897,16 +3897,22 @@ class SafSyncEngine(private val context: Context) {
                     // what [keepsDeviceEdit] compares against, so a save queued before
                     // the reopen, or the hold that read leaves once it fails, went over a
                     // document nothing had read. A [retryHeldBack] job never passes that
-                    // guard at all. Asked of the document the job writes into, the one
-                    // "wt" would replace. The hold ends with the refusal, or the loop would
-                    // try it again on every idle turn. This and the delete's recheck in
-                    // [keepsDeviceDocument] ask this engine's own [unfetched], so they cover
-                    // a reopen by this engine only: the drain of an engine whose activity
-                    // was recreated never learns what the new engine's open could not read,
-                    // the two-engine case [refusalsAnnounced] describes.
+                    // guard at all. Asked as the delete's recheck asks it, through
+                    // [providerHolds], so only a device that answers "gone" lets the save
+                    // through: a stamp query asked instead read an unanswered query as no
+                    // document, and the save went over the one the reopen could not read. A
+                    // try carries no tree to walk, so one of such a file is refused. The
+                    // hold ends with the refusal, or the loop would try it again on every
+                    // idle turn. This and the delete's recheck in [keepsDeviceDocument] ask
+                    // this engine's own [unfetched], so they cover a reopen by this engine
+                    // only: the drain of an engine whose activity was recreated never learns
+                    // what the new engine's open could not read, the two-engine case
+                    // [refusalsAnnounced] describes.
                     if (job.localPath in unfetched &&
                         writeWouldReplaceUnreadDocument(
-                            job.localPath, deviceStamp(job.safDocUri) != null, unfetched,
+                            job.localPath,
+                            job.safTreeUri?.let { providerHolds(it, job.relativePath) } != false,
+                            unfetched,
                         )
                     ) {
                         heldBack.remove(job.localPath)
@@ -4506,7 +4512,8 @@ class SafSyncEngine(private val context: Context) {
      * answer, because for it "not held" means the delete goes through, and the delete
      * is `deleteDocument` on content the sync knows it never read. So this walk
      * reports the three cases apart, and the guard treats only a positive "gone" as
-     * permission.
+     * permission. [processWriteBack] asks it for the same reason before a save that would
+     * open such content with "wt".
      */
     private fun providerHolds(treeUri: Uri, relativePath: String): Boolean? {
         var currentDocId = DocumentsContract.getTreeDocumentId(treeUri)

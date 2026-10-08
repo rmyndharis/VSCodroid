@@ -1088,11 +1088,16 @@ class SafLiveDeviceEditTest {
      * until an open can, and it takes the device's listed stamp as what it last saw. The
      * drain went on from there: the hold it recorded after the reopen had cleared the holds
      * was tried, and a save queued behind the read ran, each finding that stamp unchanged
-     * and writing over a device copy nothing had read.
+     * and writing over a device copy nothing had read. The check before the write asked the
+     * provider for the document's stamp, and a query it did not answer read as no document,
+     * so either one still went over that copy.
      */
-    @ParameterizedTest(name = "another save queued behind the read: {0}")
-    @ValueSource(booleans = [false, true])
-    fun `a reopen during a slow failing read leaves no save to go over what it could not read`(queuedBehind: Boolean) {
+    @ParameterizedTest(name = "another save queued behind the read: {0}, the check unanswered: {1}")
+    @CsvSource("false, false", "true, false", "false, true", "true, true")
+    fun `a reopen during a slow failing read leaves no save to go over what it could not read`(
+        queuedBehind: Boolean,
+        checkUnanswered: Boolean,
+    ) {
         open()
         save("first save")
         editOnDevice("changed by another app")
@@ -1117,10 +1122,13 @@ class SafLiveDeviceEditTest {
             engine.handleMirrorEvent(FileObserver.MODIFY, file, mirror, treeUri)
         }
         open { _, _ ->
+            // The query the drain makes next, its read failed: the check of the queued save.
+            if (checkUnanswered && queuedBehind) failNextQuery = true
             release.countDown()
             drain.join(5_000)
         }
         clock += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+        if (checkUnanswered && !queuedBehind) failNextQuery = true
 
         retryWhileWatching()
 
@@ -1545,6 +1553,33 @@ class SafLiveDeviceEditTest {
             listOf(true), keptAsChanged,
             "the notice told the user the editor never had the file they had just deleted in it",
         )
+    }
+
+    /**
+     * A save the drain sends after the same reopen. The check before the write asked the
+     * provider for the document's stamp, and a query it did not answer read as no document,
+     * so the save went over the copy the reopen could not read, another app's edit with it.
+     */
+    @ParameterizedTest(name = "the check unanswered: {0}")
+    @ValueSource(booleans = [false, true])
+    fun `a save sent after a reopen that could not read the document is refused`(checkUnanswered: Boolean) {
+        open()
+        save("first save")
+        val file = File(mirror, "notes.txt").apply { writeText("second save") }
+        engine.handleMirrorEvent(FileObserver.MODIFY, file, mirror, treeUri)
+        editOnDevice("changed by another app")
+        deviceReadable = false
+        open()
+        failNextQuery = checkUnanswered
+
+        engine.runWriteBackLoop { false }
+
+        assertEquals(false, failNextQuery, "precondition: the check asked the provider")
+        assertEquals(
+            "changed by another app", deviceText,
+            "the save went over a device copy the reopen could not read",
+        )
+        assertEquals(1, writes)
     }
 
     /**
