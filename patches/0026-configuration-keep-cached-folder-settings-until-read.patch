@@ -32,8 +32,24 @@ The new object is still created, and starts watching the folder's files, as
 soon as the provider registers, and a change it reports before the swap is
 passed on as before: the workspace service then reloads the cached copy, and
 the change that the swap itself reports reloads the files. A folder's first
-load, which has no cached copy, is unchanged: it shows the user's settings
-until the read ends, as it did.
+load, which has no cached copy, shows the user's settings until the read ends,
+as before, and its settings now apply one read of the file later: the workspace
+service reads the file again once the swap reports it, and the editor server
+answers atomic reads of one file one at a time.
+
+Verified in headless Chromium against the web workbench of a server tree built
+with and without this patch, served on macOS with the editor server's open of
+the folder's settings.json held for 6 s, Dark Modern in the Machine settings
+and Light Modern in the folder's. From the folder's second load on, the
+unpatched tree showed Dark Modern from the extensions registering, at 0.3 s,
+until 12.2 s, and on the third load still at 14 s; the patched tree showed
+Light Modern from the extensions registering on, with no Dark Modern frame.
+The folder's first load applied its theme at 18.7 s instead of 12.7 s, the
+one extra read. With the scripts VSCodroid adds to the workbench page, the
+open held for 4 s and a tap 0.3 s after the extensions registered, the
+unpatched tree left the folder recorded as following the user's theme, and
+the next folder opened painted white and started on the light web default;
+with the patched tree the next folder started dark.
 
 One note for whoever tidies this later. The swap is written as
 `loadConfiguration().then(() => { this.folderConfiguration = ... })` rather
