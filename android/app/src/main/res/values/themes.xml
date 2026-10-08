@@ -61,13 +61,13 @@
     </style>
 
     <!-- The starting window the system draws on a launch while the editor's theme
-         is light, before any of this app runs. MainActivity names it through
-         SplashScreen.setSplashScreenTheme, which the system keeps for later
-         launches; nothing else applies it. The bar icons on it follow its colour by
-         themselves.
+         is light, before any of this app runs. keepStartColor (VSCodroidWebView.kt)
+         names it through SplashScreen.setSplashScreenTheme, which the system keeps
+         for later launches; nothing else applies it. The bar icons on it follow its
+         colour by themselves.
          ⚠️ Keep the name. The system stores it as a name and looks it up on every
          launch, and one that no longer resolves falls back to the manifest's dark
-         theme without an error. MainActivity names the theme again only when the
+         theme without an error. keepStartColor names the theme again only when the
          editor's colour changes, so after a rename an install stays dark until it
          does. -->
     <style name="Theme.VSCodroid.LightStart">

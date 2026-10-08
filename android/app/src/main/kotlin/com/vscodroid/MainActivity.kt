@@ -12,7 +12,6 @@ import android.content.ComponentCallbacks2.TRIM_MEMORY_MODERATE
 import android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL
 import android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW
 import android.content.pm.PackageManager
-import android.content.res.Resources
 import android.graphics.Typeface
 import android.os.Bundle
 import android.net.Uri
@@ -84,7 +83,7 @@ import com.vscodroid.webview.VSCodroidWebView
 import com.vscodroid.webview.VSCodroidWebViewClient
 import com.vscodroid.webview.addPageColorListener
 import com.vscodroid.webview.addPlainTextPageScript
-import com.vscodroid.webview.keepPageColor
+import com.vscodroid.webview.keepStartColor
 import com.vscodroid.webview.lastPageColor
 import com.vscodroid.webview.urlLogLabel
 import com.vscodroid.webview.COPY_DIAGNOSTICS_URL
@@ -2076,14 +2075,7 @@ class MainActivity : AppCompatActivity() {
      */
     private fun showPageColor(color: Int) {
         paintWindow(color)
-        if (!keepPageColor(this, color)) return
-        // The starting window the system draws on a launch, before this app runs:
-        // only the theme it is drawn from can be chosen, and the system keeps the
-        // choice for every launch after. White for a light editor, the theme's own
-        // #1E1E1E otherwise.
-        splashScreen.setSplashScreenTheme(
-            if (isLightColor(color)) R.style.Theme_VSCodroid_LightStart else Resources.ID_NULL
-        )
+        keepStartColor(color)
     }
 
     /**

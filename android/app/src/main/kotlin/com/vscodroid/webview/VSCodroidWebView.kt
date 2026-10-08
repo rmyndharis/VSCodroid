@@ -1,16 +1,21 @@
 package com.vscodroid.webview
 
 import android.annotation.SuppressLint
+import android.app.Activity
 import android.content.Context
+import android.content.res.Resources
 import android.view.MotionEvent
+import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebSettings
 import android.webkit.WebView
+import android.webkit.WebViewClient
 import androidx.core.content.edit
 import androidx.webkit.WebMessageCompat
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import com.vscodroid.R
 import com.vscodroid.util.Logger
+import com.vscodroid.util.isLightColor
 
 object VSCodroidWebView {
     private const val TAG = "WebView"
@@ -262,4 +267,97 @@ internal fun keepPageColor(context: Context, color: Int): Boolean {
     if (prefs.getInt(KEY_PAGE_COLOR, 0) == color) return false
     prefs.edit { putInt(KEY_PAGE_COLOR, color) }
     return true
+}
+
+/** Whether a colour has been kept for [lastPageColor] at all. */
+internal fun hasKeptPageColor(context: Context): Boolean =
+    context.getSharedPreferences(PAGE_COLOR_PREFS, Context.MODE_PRIVATE).contains(KEY_PAGE_COLOR)
+
+/**
+ * Keeps [color] for the next start, see [lastPageColor], and points the system's
+ * starting window at the theme for it.
+ */
+internal fun Activity.keepStartColor(color: Int) {
+    if (!keepPageColor(this, color)) return
+    // The starting window the system draws on a launch, before this app runs:
+    // only the theme it is drawn from can be chosen, and the system keeps the
+    // choice for every launch after. White for a light editor, the theme's own
+    // #1E1E1E otherwise.
+    splashScreen.setSplashScreenTheme(
+        if (isLightColor(color)) R.style.Theme_VSCodroid_LightStart else Resources.ID_NULL
+    )
+}
+
+/**
+ * Answers the editor colour of the splash the workbench saves in its page's
+ * localStorage, `monaco-parts-splash`, or '' where there is none.
+ */
+internal const val SAVED_SPLASH_COLOR_SCRIPT =
+    "(function () { try { var s = JSON.parse(localStorage.getItem('monaco-parts-splash')); " +
+        "return (s && s.colorInfo && s.colorInfo.background) || ''; } catch (e) { return ''; } })()"
+
+/**
+ * Reads the editor colour the workbench's splash saved, for a start that has no
+ * colour kept, and hands it to [onColor] on the UI thread, once: null where there
+ * is no splash or no colour in it.
+ *
+ * That start is the first after an update from a build that kept none, and the
+ * editor's theme is then known only to the storage of the workbench page's own
+ * origin, which no Android API reads: WebStorage names origins and their usage,
+ * never a value. So a page loaded on that origin reads it, in a view of its own
+ * that loads nothing over the network. The colour arrives within a second, before
+ * most of a setup that takes a minute on that start; the system's starting window,
+ * drawn before any of the app runs, comes from the manifest's theme whatever this
+ * finds.
+ *
+ * Answers the view, which the caller destroys once [onColor] has run, or when it
+ * goes first; or null, and [onColor] never runs, where no view can be made: a
+ * WebView provider missing or being replaced throws from the constructor, as
+ * [com.vscodroid.preWarmWebView] says, and the setup this runs beside needs none.
+ */
+// MissingOnRenderProcessGone: the client below does override it. The check does
+// not see the override on an anonymous Kotlin subclass, as bootstrapClient in
+// MainActivity says too.
+@SuppressLint("SetJavaScriptEnabled", "MissingOnRenderProcessGone")
+internal fun readSavedPageColor(context: Context, port: Int, onColor: (Int?) -> Unit): WebView? {
+    val probe = try {
+        WebView(context)
+    } catch (t: Throwable) {
+        Logger.w("WebView", "Could not read the editor's colour: ${t.message}")
+        return null
+    }
+    probe.settings.javaScriptEnabled = true
+    probe.settings.domStorageEnabled = true
+    probe.webViewClient = object : WebViewClient() {
+        private var answered = false
+
+        private fun answer(color: Int?) {
+            if (answered) return
+            answered = true
+            onColor(color)
+        }
+
+        override fun onPageFinished(view: WebView, url: String?) {
+            if (!answered) view.evaluateJavascript(SAVED_SPLASH_COLOR_SCRIPT) { answer(savedPageColor(it)) }
+        }
+
+        // Every view of this app shares one renderer, the editor's included, and a
+        // client that does not take its loss takes the app down with it.
+        override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
+            answer(null)
+            return true
+        }
+    }
+    probe.loadDataWithBaseURL("http://127.0.0.1:$port/", "<!DOCTYPE html><title></title>", "text/html", "utf-8", null)
+    return probe
+}
+
+/**
+ * The colour [SAVED_SPLASH_COLOR_SCRIPT] answered, from the JSON string
+ * `evaluateJavascript` hands back, or null for anything but an opaque `#rrggbb`.
+ */
+internal fun savedPageColor(result: String?): Int? {
+    val color = result?.removeSurrounding("\"") ?: return null
+    if (!Regex("#[0-9a-fA-F]{6}").matches(color)) return null
+    return (0xFF shl 24) or color.substring(1).toInt(16)
 }

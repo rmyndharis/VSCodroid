@@ -627,7 +627,7 @@ bar icons on a light colour. Only an opaque `#rrggbb` from the top frame on the 
 taken. The loading page and the error pages are this app's own and post nothing, so each gives
 the window its own colour before it loads.
 
-`MainActivity` also keeps the colour (`keepPageColor`), and every screen of the next start begins on
+`MainActivity` also keeps the colour (`keepStartColor`), and every screen of the next start begins on
 it (`lastPageColor`): the windows of `SplashActivity` and `MainActivity` with their bars, the setup
 screen's text, the view and the "Starting server..." page. Under a light theme a cold start had been
 dark until the workbench painted, 2.3 s on the emulator, and the first launch after an update for
@@ -643,9 +643,13 @@ and "Clear storage" keeps the choice but drops the colour, so the next start is 
 dark setup until the workbench's first dark colour resets it (read in the platform sources, not
 measured). The toolchain picker, the Toolchains screen, the extra key row and the error pages stay
 on the theme's dark colours, which their layouts are drawn for. The first start after updating from
-a release without this has no colour kept yet and stays dark until the workbench paints, and with
-`window.autoDetectColorScheme` on, a start after the device switched between light and dark while
-the app was closed begins on the colour from before.
+a release without this has no colour kept yet, and the editor's theme is then known only to the
+storage of the workbench page's origin, which no Android API reads. So `SplashActivity`, before
+setup runs, loads a page on that origin in a view of its own (`readSavedPageColor`), reads the
+colour of the splash the workbench saved there, and keeps it, and the setup screen and every screen
+after it take it. That start's own starting window is drawn before any of the app runs, from the
+manifest's theme, so it is dark. With `window.autoDetectColorScheme` on, a start after the device
+switched between light and dark while the app was closed begins on the colour from before.
 
 ### 4.2 Crash Recovery
 
