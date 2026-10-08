@@ -208,16 +208,21 @@ class SafSyncEngine(private val context: Context) {
      * times settles the mirror's newer copy as it settles any save the watcher did not
      * deliver. One with no time to compare leaves a file whose two copies differ as they
      * are, so it keeps that file's hold, the one thing saying the mirror's copy was never
-     * sent. A hold the closing folder's drain records after the open has cleared the
-     * folder's holds, its read having outlasted the stop, is refused like a save of the file
-     * where the open could not read the device copy; see [processWriteBack]. In memory only:
-     * once the process has died, an open of a folder with no clock sends nothing, and the
-     * next save of the file is what goes out. Tried only by the loop watching that mirror, so
-     * nothing is written into a folder that is closed. A hold ends at [keepsDeviceEdit]'s
-     * next answer for its file, at any write of the file, which sends what the hold was
-     * waiting to send (a create writes a document it has just made without asking
-     * [keepsDeviceEdit]), at a refusal of it, or once the file is deleted or gone from the
-     * mirror.
+     * sent. One that skips the file for its size puts back no hold, since it refuses the
+     * file's saves until an open finds the document smaller, and nor does one that cannot
+     * list the folder, or the directory holding the file, which leaves the file no stamp
+     * either, so its next save goes ahead unguarded. A hold the closing folder's drain
+     * records after the open has cleared the folder's holds, its read having outlasted the
+     * stop, is refused like a save of the file where the open could not read the device
+     * copy; see [processWriteBack]. In memory only, on an engine that lives as long as the
+     * activity whose [SafStorageManager] built it (see [shutdown]): once that activity is
+     * destroyed, as swiping the app from Recents does while the process goes on serving, the
+     * next activity's open of a folder with no clock sends nothing, and the next save of the
+     * file is what goes out. Tried only by the loop watching that mirror, so nothing is
+     * written into a folder that is closed. A hold ends at [keepsDeviceEdit]'s next answer
+     * for its file, at any write of the file, which sends what the hold was waiting to send
+     * (a create writes a document it has just made without asking [keepsDeviceEdit]), at a
+     * refusal of it, or once the file is deleted or gone from the mirror.
      *
      * The waits are read off the monotonic clock, never wall time, for the reason
      * `SafStorageManager.onWriteBackFailed` gives about its throttle: a wall clock corrected
@@ -825,8 +830,8 @@ class SafSyncEngine(private val context: Context) {
                     // a recordIdentity that simply declined the path.
                     if (doc.lastModified == 0L && !deviceAgrees) {
                         // Not the listed stamp as what this engine saw, which let the next
-                        // save or delete go over the device copy unasked: it holds bytes
-                        // nothing here has read, another app's edit as readily as the copy
+                        // save or delete go over the device copy unasked: it holds bytes the
+                        // open could not place, another app's edit as readily as the copy
                         // the record vouched for before an edit the watcher never delivered,
                         // or a save the session delivered before it lost a later one. So no
                         // stamp, and the digest of the copy the record vouched for: the next
@@ -1439,9 +1444,13 @@ class SafSyncEngine(private val context: Context) {
      * a length other than the digested one, which is held back unread, even where it holds
      * this app's own bytes, until it is reported at that length; a held-back save whose
      * folder is closed before a try lands, which waits for the next open (with no clock, for
-     * the tries that follow it, and once the process has died, for the next save of the
-     * file), or whose directory is renamed, which waits for that or for the next save of the
-     * file; and on a provider with no clock, every copy after the first carries its counter
+     * the tries after it where this engine makes that open, and for the next save of the
+     * file where the next activity's engine does), unless that open skips the document for
+     * its size, which refuses the file's saves until an open finds it smaller, or cannot
+     * list the folder or the directory holding the file, which ends the hold and the stamp,
+     * so the next save goes ahead unguarded; a held-back save whose directory is renamed,
+     * which is dropped and waits for the next save of the file or, with a clock, the next
+     * open; and on a provider with no clock, every copy after the first carries its counter
      * as a time, which is cosmetic.
      */
     private fun keepsDeviceEdit(localFile: File, docUri: Uri): Boolean {
