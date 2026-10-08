@@ -1099,14 +1099,17 @@ class SafLiveDeviceEditTest {
 
     /**
      * A reopen of the folder while its closing drain is inside a read the provider takes
-     * longer than the stop waits to refuse, as a server slow to fail does offline. The
-     * reopen can neither read nor keep the device copy either, so it refuses the file's saves
-     * until an open can, and it takes the device's listed stamp as what it last saw. The
-     * drain went on from there: the hold it recorded after the reopen had cleared the holds
-     * was tried, and a save queued behind the read ran, each finding that stamp unchanged
-     * and writing over a device copy nothing had read. The check before the write asked the
-     * provider for the document's stamp, and a query it did not answer read as no document,
-     * so either one still went over that copy.
+     * longer than the stop waits to refuse, as a server slow to fail does offline: the fetch
+     * that would set the device copy aside, the read of its bytes before it having failed at
+     * once. The reopen can neither read nor keep the device copy either, so it refuses the
+     * file's saves until an open can, and it places the copy at the device's listed stamp,
+     * over the entry the drain had found moved. The drain went on from there: the hold it
+     * recorded after the reopen had cleared the holds was tried, and a save queued behind the
+     * read ran, each finding that stamp unchanged and writing over a device copy nothing had
+     * read. The check before the write asked the provider for the document's stamp, and a
+     * query it did not answer read as no document, so either one still went over that copy.
+     * It walks the provider now, as a delete's check does, and a try, which carries no tree
+     * to walk, is refused.
      */
     @ParameterizedTest(name = "another save queued behind the read: {0}, the check unanswered: {1}")
     @CsvSource("false, false", "true, false", "false, true", "true, true")
@@ -1120,25 +1123,27 @@ class SafLiveDeviceEditTest {
         val file = File(mirror, "notes.txt").apply { writeText("second save") }
         engine.handleMirrorEvent(FileObserver.MODIFY, file, mirror, treeUri)
         val closing = engine.session
-        val inRead = CountDownLatch(1)
+        val inFetch = CountDownLatch(1)
         val release = CountDownLatch(1)
         val drain = Thread { engine.runWriteBackLoop(closing) { false } }
+        var drainReads = 0
         every { resolver.openInputStream(any()) } answers {
             reads++
-            if (Thread.currentThread() === drain && inRead.count > 0) {
-                inRead.countDown()
+            // The drain's second read, the set-aside's fetch, is the one that outlasts the stop.
+            if (Thread.currentThread() === drain && ++drainReads == 2 && inFetch.count > 0) {
+                inFetch.countDown()
                 release.await(5, TimeUnit.SECONDS)
             }
             throw IOException("offline")
         }
         drain.start()
-        assertTrue(inRead.await(5, TimeUnit.SECONDS), "the drain never reached the device copy")
+        assertTrue(inFetch.await(5, TimeUnit.SECONDS), "the drain never reached the set-aside's fetch")
         if (queuedBehind) {
             file.writeText("third save")
             engine.handleMirrorEvent(FileObserver.MODIFY, file, mirror, treeUri)
         }
         open { _, _ ->
-            // The query the drain makes next, its read failed: the check of the queued save.
+            // The query the drain makes next, once its fetch fails: the check of the queued save.
             if (checkUnanswered && queuedBehind) failNextQuery = true
             release.countDown()
             drain.join(5_000)
