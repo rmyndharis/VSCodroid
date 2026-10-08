@@ -8,8 +8,9 @@
  * among them, and the WebView answers a load that failed, such as a folder switch
  * while the editor server restarts, with "Webpage not available", an HTML page at
  * chrome-error://chromewebdata/. Neither paints a background, so behind its text is
- * the WebView's own, the dark window colour. The script is JavaScript inside the
- * Kotlin raw string of `plainTextPageScript()` in `VSCodroidWebView.kt`, which
+ * the WebView's own, the colour the workbench page last painted, which is dark under
+ * a dark theme. The script is JavaScript inside the Kotlin raw string of
+ * `plainTextPageScript()` in `VSCodroidWebView.kt`, which
  * `addPlainTextPageScript` registers to run at the start of every document of every
  * origin, so nothing compiles it and the Kotlin suite can only see that it is
  * registered. This runs the real script under `vm` against fake documents: a
@@ -87,13 +88,13 @@ const ERROR_PAGE = { type: 'text/html', protocol: 'chrome-error:' };
 const forbidden = run({ type: 'text/plain' });
 assert.deepStrictEqual(forbidden.sheets, CANVAS,
     'a top-level plain-text page, such as the server\'s "Forbidden.", is not given the ' +
-    'background of its own scheme, so its black text sits on the dark WebView background ' +
-    'in light mode');
+    'background of its own scheme, so under a dark theme its black text sits on the ' +
+    'WebView\'s dark background in light mode');
 
 assert.deepStrictEqual(run(ERROR_PAGE).sheets, CANVAS,
     'the WebView\'s own error page, "Webpage not available" for a load that failed, is not ' +
-    'given the background of its own scheme, so its black text sits on the dark WebView ' +
-    'background in both modes');
+    'given the background of its own scheme, so under a dark theme its black text sits on ' +
+    'the WebView\'s dark background in both modes');
 
 for (const [label, doc] of [
     ['an HTML page, such as the workbench, which colours itself,', { type: 'text/html' }],

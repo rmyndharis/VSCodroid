@@ -589,8 +589,9 @@ async function stoppingTakesTheEditorServerWithIt() {
 // of its own on the one it showed last, any other on the one the folder that most
 // recently followed the user's theme showed, or else on the splash the workbench
 // saved. Without it the page shows the WebView's own background until the
-// workbench has loaded, the dark window colour whatever the theme, and a load
-// that cannot use the stored theme (the first start, the first load after an
+// workbench has loaded, the colour the page before it painted, which is wrong
+// for a page that is to show another theme, and a load that cannot use the
+// stored theme (the first start, the first load after an
 // update renamed the configured default, a folder whose own settings name another
 // theme, any folder entered from one) shows the light theme before a dark one, or
 // the dark one before a light one.

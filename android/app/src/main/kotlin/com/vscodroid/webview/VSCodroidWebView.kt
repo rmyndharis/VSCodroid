@@ -127,16 +127,19 @@ object VSCodroidWebView {
  *
  * The server answers a request it refuses with a bare `text/plain` body, among them
  * "Forbidden." for a missing or stale connection token, and Chromium paints such a
- * page no background, so behind its text is the view's own, which
- * [VSCodroidWebView.configure] makes the dark window colour. The text follows the
+ * page no background, so behind its text is the view's own: the colour the
+ * workbench page last painted ([VSCodroidWebView.configure],
+ * [addPageColorListener]), which is dark under a dark theme. The text follows the
  * device's mode: white in dark mode, where Chromium also paints its dark canvas
- * under it, and black in light mode, on #1E1E1E, where it could not be read.
+ * under it, and black in light mode, which on a dark theme's colour could not be
+ * read.
  *
  * The page the WebView shows for a load that failed, "Webpage not available" with
  * net::ERR_CONNECTION_REFUSED, paints no background and names no colour scheme, so
- * its text is black on #1E1E1E in both modes. It is what the workbench gets when it
- * navigates while the editor server restarts, for a folder switch or a reload, and
- * it stays until the server is back and MainActivity loads the editor again.
+ * its text is black on that colour in both modes. It is what the workbench gets
+ * when it navigates while the editor server restarts, for a folder switch or a
+ * reload, and it stays until the server is back and MainActivity loads the editor
+ * again.
  * Chromium commits it as an HTML document at `chrome-error://chromewebdata/`, whose
  * opaque origin the "*" rule below matches, and runs document-start scripts in it as
  * in any other document: read in the sources of WebView 153, and seen on an API 36
@@ -145,7 +148,7 @@ object VSCodroidWebView {
  *
  * `Canvas` is the background of the page's own scheme: white or that dark canvas for
  * a plain-text page, white for the error page, which is what each showed before the
- * view had a background. Measured in Chromium 151 over the same background.
+ * view had a background. Measured in Chromium 151 over a #1E1E1E background.
  *
  * At document start and as an adopted style sheet, so the page's first paint has it
  * and nothing waits for an element. For every origin, for the reason
