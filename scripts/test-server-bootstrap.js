@@ -762,9 +762,12 @@ async function stoppingTakesTheEditorServerWithIt() {
         assert.strictEqual(page.painted, '#1e1e1e', 'a first start is not given the dark blank page');
     }
 
-    // A second load before any window has saved a splash, which happens only in
-    // the first seconds of a fresh install: nothing names a theme yet, so a folder
-    // without a record is still started on the dark default.
+    // A second load before any window has saved a splash or shown a theme, which
+    // happens only in the first second or so of a fresh install: nothing names a
+    // theme yet, so a folder without a record is still started on the dark
+    // default. Once the first load has shown a theme it has a record, and a load
+    // that replaces it before its extensions register is handed nothing, one of
+    // the loads server.js lists as starting on the wrong colour.
     {
         const page = load({ splash: undefined, last: 'dark', dark: true, search: '?folder=/projects/second' });
         assert.deepStrictEqual(page.settings.initialColorTheme, { themeType: 'dark', colors: {} },
