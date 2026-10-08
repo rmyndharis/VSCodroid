@@ -421,10 +421,10 @@ class SafSyncEngine(private val context: Context) {
         // [uploadMirrorOnlyDocuments] when the mirror holds a file the enumeration did
         // not return. A fifth comes after phase 2: [digestKeptCopies], which takes a kept
         // copy's digest from its line rather than reading the copy again. A sixth is the
-        // no-clock arm that finds the two sides apart, through [previousLineFor]. Read once
-        // here rather than per document; [reconcileDeletions]
-        // reads the same file again in phase 3, after phase 2 may have changed what is
-        // on disk.
+        // no-clock arm that finds the two sides apart, through [previousLineFor]. A seventh
+        // is phase 3, which carries a line's digest from it wherever this open took none.
+        // Read once here rather than per document; [reconcileDeletions] reads the same file
+        // again in phase 3, after phase 2 may have changed what is on disk.
         //
         // `by lazy`, and it takes both halves to make that true. This was passed to
         // [shouldOverwriteMirror] by value, and Kotlin evaluates arguments before the
@@ -2606,7 +2606,9 @@ class SafSyncEngine(private val context: Context) {
      * paid a second time by [setAsideDeviceCopy] wherever this answers false.
      * Affordable only because a journal line gates the branch, so it never runs
      * on a healthy folder. [deviceMatchesMirror] decides the other way and says
-     * why: it runs for every file of a no-clock folder on every open.
+     * why: on a folder with no clock it runs at every open for each file the
+     * record does not vouch for, and wherever the free-space floor holds a fetch
+     * back.
      *
      * A read that fails answers false, the safe direction: the caller then
      * preserves the document before replacing it.
@@ -3864,7 +3866,11 @@ class SafSyncEngine(private val context: Context) {
                     // document nothing had read. A [retryHeldBack] job never passes that
                     // guard at all. Asked of the document the job writes into, the one
                     // "wt" would replace. The hold ends with the refusal, or the loop would
-                    // try it again on every idle turn.
+                    // try it again on every idle turn. This and the delete's recheck in
+                    // [keepsDeviceDocument] ask this engine's own [unfetched], so they cover
+                    // a reopen by this engine only: the drain of an engine whose activity
+                    // was recreated never learns what the new engine's open could not read,
+                    // the two-engine case [refusalsAnnounced] describes.
                     if (job.localPath in unfetched &&
                         writeWouldReplaceUnreadDocument(
                             job.localPath, deviceStamp(job.safDocUri) != null, unfetched,
