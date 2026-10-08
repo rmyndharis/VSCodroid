@@ -313,9 +313,10 @@ if (!fs.existsSync(rehEntryPoint)) {
             log('info', 'Product configuration updated');
         } catch (e) {
             // Carrying on beats exiting. The watchdog restarts this process, so
-            // an uncaught throw here is a crash loop that reaches the user as a
-            // white screen with no explanation; the server below will report the
-            // same file in its own terms, after this line has already named it.
+            // an uncaught throw here is a crash loop that ends on the page saying
+            // the server could not be restarted, with no editor at all; the
+            // server below will report the same file in its own terms, after this
+            // line has already named it.
             log('error', `Could not apply the product configuration to ${productJsonPath}: ${e.message}`);
             log('error', 'A truncated product.json is repaired by the asset extraction that ' +
                 'runs on the next app update, or by clearing app data.');
