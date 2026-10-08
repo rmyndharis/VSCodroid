@@ -240,8 +240,8 @@ class KeyInjector(
      * changed them in between. Putting the text back ends the composition with no
      * `compositionend`: Blink's composition range goes with the text it covered,
      * and the keyboard's next edit starts a new composition (read in Blink, and
-     * measured below). A task later the character comes back to this listener as
-     * the `insertText` a keyboard that commits would have sent, which makes the
+     * measured below). Then the character comes back to this listener as the
+     * `insertText` a keyboard that commits would have sent, which makes the
      * chord. The character still reaches the box's listeners in its
      * `compositionupdate`, and a box that reads its text only once a composition
      * is over, as the action list's filter and the find widget of the terminal,
@@ -254,11 +254,12 @@ class KeyInjector(
      * before such a chord would stay unsent. It sends the word in a zero timeout,
      * reading it back from its textarea, which empties itself on blur (read from
      * the shipped xterm). So the text goes back after the blur, and only if
-     * nothing changed it in between, and the chord waits for that read, so the
-     * word reaches the shell first. Quick Open, which the terminal hands on,
-     * focuses its own box before the chord's keydown is over, so a chord sent in
-     * the blur's task would empty the textarea before the read. That is read from
-     * the shipped workbench, and a chord sent without the wait was not tried.
+     * nothing changed it in between, and the chord waits for that read, as any
+     * chord in the terminal does (below), so the word reaches the shell first.
+     * Quick Open, which the terminal hands on, focuses its own box before the
+     * chord's keydown is over, so a chord sent in the blur's task would empty the
+     * textarea before the read. That is read from the shipped workbench, and a
+     * composed chord sent without the wait was not tried.
      * Quick Open does not stay open there: the chord's keyup goes to the
      * textarea, as its keydown did, and the terminal lets it through, since with
      * Quick Open showing Ctrl+P resolves to a command it does not keep from the
@@ -290,6 +291,22 @@ class KeyInjector(
      * compositions itself, is left as it was, and so is an `input` with no
      * selection API, such as an email box, whose selection could not be put back:
      * each keeps the letter, and the latch is spent.
+     *
+     * A keyboard that commits, as Gboard 18 commits every letter, meets a read of
+     * the terminal's textarea too. Its keydown of key code 229 comes before the
+     * letter, and on it the terminal keeps the textarea's text and, in a zero
+     * timeout, reads it back and sends what changed, a delete if the text got
+     * shorter (read from the shipped xterm). A chord sent from the letter's
+     * `beforeinput` that takes the focus, as Quick Open's does, emptied the
+     * textarea before that read, and the shell lost the last letter typed:
+     * measured on an API 36 emulator with WebView 153 and Gboard 18.4.1, `ab` at
+     * the prompt, then Ctrl and `p`, left `a`, where Ctrl and `c`, which leave the
+     * focus there, gave `ab^C`. So in the terminal the chord of an `insertText` is
+     * sent a task later, after that read, which finds the text as it was, the
+     * letter being cancelled. The same task is the wait a composed letter's chord
+     * needs there, after the read its blur started. For a letter a keyboard
+     * commits the wait is read from the shipped xterm and was not measured on a
+     * device.
      *
      * This is live on both edit paths, not only the legacy one, but not for
      * everything on the EditContext path. The workbench uses `NativeEditContext`
@@ -480,18 +497,12 @@ class KeyInjector(
                             box.value = before.value;
                             box.setSelectionRange(before.start, before.end, before.direction);
                         }
-                        // And one task more, after the terminal's own zero
-                        // timeout, which the blur's compositionend queued and
-                        // which sends the word from the text just put back. A
-                        // chord that takes the focus, as Quick Open does at
-                        // once, would empty the textarea before that read. The
-                        // chord is pending until it is sent.
-                        setTimeout(function() {
-                            chordPending = false;
-                            box.dispatchEvent(new InputEvent('beforeinput', {
-                                inputType: 'insertText', data: ch, bubbles: true, cancelable: true, composed: true
-                            }));
-                        }, 0);
+                        // The chord, which in the terminal waits a task more,
+                        // for the read the blur's compositionend queued there.
+                        chordPending = false;
+                        box.dispatchEvent(new InputEvent('beforeinput', {
+                            inputType: 'insertText', data: ch, bubbles: true, cancelable: true, composed: true
+                        }));
                     }, 0);
                     return true;
                 }
@@ -650,9 +661,19 @@ class KeyInjector(
                         cancelable: true,
                         composed: true
                     };
-                    target.dispatchEvent(new KeyboardEvent('keydown', init));
-                    target.dispatchEvent(new KeyboardEvent('keyup', init));
-                    releaseModifiers(target, init);
+                    function chord() {
+                        target.dispatchEvent(new KeyboardEvent('keydown', init));
+                        target.dispatchEvent(new KeyboardEvent('keyup', init));
+                        releaseModifiers(target, init);
+                    }
+                    // In the terminal the chord waits a task, for xterm's read
+                    // of its textarea: the one the keyboard's keydown of 229
+                    // started, or the one chordComposed's blur did. A chord
+                    // that takes the focus empties the textarea before it,
+                    // and xterm sends a delete, or loses the composed word.
+                    // See the KDoc.
+                    if (target.classList.contains('xterm-helper-textarea')) setTimeout(chord, 0);
+                    else chord();
 
                     mod.ctrl = false;
                     mod.alt = false;

@@ -48,15 +48,21 @@
  * handling copied from the shipped @xterm/xterm, the word composed before the
  * chord must reach the shell first, also when the workbench takes the chord
  * and the Quick Open it runs takes the focus at once, which the terminal then
- * takes back on the chord's keyup.
+ * takes back on the chord's keyup. And a keyboard that commits, as Gboard
+ * 18.4.1 commits every letter, types `ab` in the terminal, with xterm's read
+ * of its textarea on the keyboard's keydown of 229 copied too: a letter
+ * typed then with Ctrl latched must leave `ab` at the prompt when its chord
+ * takes the focus, and must follow `ab` as ^C when it is Ctrl+C.
  *
  * NEGATIVE CONTROL, measured: against KeyInjector.kt at f66e462f, which sent
- * no release, 36 of the 77 cases fail; against the interceptor before it made
+ * no release, 38 of the 83 cases fail; against the interceptor before it made
  * a chord of a composed letter, 16 of the 29 composing cases; against one
  * that blurred every box, 3 cases, the box that commits on blur committing
  * `fooa`, sending no chord and leaving Ctrl latched; against one that sent
- * the chord in the task that ended the composition, the case where Quick Open
- * takes the focus, the word lost; against one that released at the chord's
+ * the terminal's chord at once, 3 cases, the Ctrl+P that takes the focus
+ * losing a composed `ab` and having the shell sent a delete after a committed
+ * one, and against one that waited for a composed letter alone, the 2 cases
+ * of a committed `ab`; against one that released at the chord's
  * target with nothing stopping it at the window, 5 picker cases fail, the
  * first Ctrl+Tab in the Command Palette opening the editor it had just
  * highlighted; and against one that paired a release with a keydown by key
@@ -71,9 +77,10 @@
  * task, no blur of the terminal's textarea or a blur of any other box, the
  * text put back before the blur or whatever changed it, the box's
  * `beforeinput` or `input` listener hearing the letter, no guard while a
- * chord is pending, the guard dropped before the chord or never, a box with
- * no selection API taken for one with it, and the editor's own textarea, a
- * rewritten word or a character with no key taken for a letter.
+ * chord is pending or one never dropped, a box with no selection API taken
+ * for one with it, and the editor's own textarea, a rewritten word or a
+ * character with no key taken for a letter. And every box's chord sent a
+ * task later.
  *
  * Extraction is strict: if a raw string moves or changes shape this fails
  * saying so, rather than quietly running an empty script.
@@ -170,7 +177,9 @@ function modifierKeyEmitter() {
  */
 class Node {
     constructor(name, parent = null) {
-        Object.assign(this, { name, parent, tagName: 'DIV', connected: true, listeners: [] });
+        Object.assign(this, {
+            name, parent, tagName: 'DIV', connected: true, listeners: [], classList: { contains: () => false },
+        });
     }
     addEventListener(type, fn, capture) {
         this.listeners.push({ type, fn, capture: capture === true || !!(capture && capture.capture) });
@@ -598,9 +607,14 @@ const settled = (name, page) => {
  * HasComposition is false from then on, and the keyboard's next update starts
  * a new composition with a compositionstart (read in Blink; on an API 33
  * emulator with Gboard 12.4 no compositionend reached the box). Chromium fires
- * a keydown of key code 229 before each update too; nothing here listens for
- * it. `heard` is what the box's own `input` listener saw, and `heardBefore`
- * its `beforeinput` listener. With
+ * a keydown of key code 229 before each update too, which `compose` leaves
+ * out: the terminal's read on it finds a composition on and sends nothing.
+ * `commit(text)` is a keyboard that commits, as Gboard 18.4.1 commits every
+ * letter: that keydown of 229, a `beforeinput` of `insertText` that can be
+ * cancelled, the text put in at the caret unless it was, an `input`, and a
+ * keyup of 229, the keys at whatever has the focus when each is sent, as
+ * Chromium sends them. `heard` is what the box's own `input` listener saw, and
+ * `heardBefore` its `beforeinput` listener. With
  * `selection` false the box has no selection API, as an email box has none:
  * `selectionStart` is null and `setSelectionRange` throws.
  */
@@ -638,6 +652,20 @@ function textBox(page, { value = '', className = 'input', tagName = 'TEXTAREA', 
         if (selection) box.selectionStart = box.selectionEnd = composition[1];
         fire('input', { inputType: 'insertCompositionText', data: text, isComposing: true });
     };
+    box.commit = (text) => {
+        const press = (type) => page.document.activeElement.dispatchEvent(new page.KeyboardEvent(type, {
+            key: 'Unidentified', keyCode: 229, which: 229, bubbles: true, cancelable: true, composed: true, isTrusted: true,
+        }));
+        press('keydown');
+        if (fire('beforeinput', { inputType: 'insertText', data: text, cancelable: true }) &&
+            page.document.activeElement === box) {
+            const [start, end] = selection ? [box.selectionStart, box.selectionEnd] : [content.length, content.length];
+            content = content.slice(0, start) + text + content.slice(end);
+            if (selection) box.selectionStart = box.selectionEnd = start + text.length;
+            fire('input', { inputType: 'insertText', data: text });
+        }
+        press('keyup');
+    };
     box.blur = () => {
         if (page.document.activeElement !== box) return;
         if (composition) {
@@ -664,12 +692,15 @@ function textBox(page, { value = '', className = 'input', tagName = 'TEXTAREA', 
  * compositionupdate and compositionend, its keydown, which finishes a
  * composition on any key but 229 and the modifiers, and _finalizeComposition,
  * which sends what was composed, from where the composition started, in a
- * zero timeout after a compositionend; and the terminal's own blur handler,
- * which empties the textarea, and its keyup handler, which gives the textarea
- * the focus for any key but a modifier. A key the workbench takes
- * (`workbench`, as VS Code's custom key handler does for a command it keeps
- * from the shell, which it is asked again for the keyup) goes no further.
- * Ctrl+C is sent as ^C. `sent` is what reaches the shell.
+ * zero timeout after a compositionend; _handleAnyTextareaChanges, which a
+ * keydown of 229 outside a composition runs, keeping the textarea's text and
+ * sending, in a zero timeout, what was added to it, a delete if it got
+ * shorter, or the whole text if it changed in place; and the terminal's own
+ * blur handler, which empties the textarea, and its keyup handler, which
+ * gives the textarea the focus for any key but a modifier. A key the
+ * workbench takes (`workbench`, as VS Code's custom key handler does for a
+ * command it keeps from the shell, which it is asked again for the keyup)
+ * goes no further. Ctrl+C is sent as ^C. `sent` is what reaches the shell.
  */
 function terminal(page, workbench = () => false) {
     const box = textBox(page, { className: 'xterm-helper-textarea' });
@@ -709,12 +740,27 @@ function terminal(page, workbench = () => false) {
         page.context.setTimeout(() => { h.end = Math.max(h.start, box.selectionEnd); });
     });
     box.addEventListener('compositionend', () => finalize(true));
+    let reading = false;
+    const readChanges = () => {
+        if (reading) return;
+        reading = true;
+        const before = box.value;
+        page.context.setTimeout(() => {
+            reading = false;
+            if (h.composing) return;
+            const now = box.value;
+            if (now.length > before.length) sent.push(now.replace(before, ''));
+            else if (now.length < before.length) sent.push('\x7F');
+            else if (now !== before) sent.push(now);
+        });
+    };
     box.addEventListener('keydown', (e) => {
         if (workbench(e)) return;
         if (h.composing || h.sending) {
             if ([20, 229, 16, 17, 18].includes(e.keyCode)) return;
             finalize(false);
         }
+        if (e.keyCode === 229) return readChanges();
         if (e.ctrlKey && e.key === 'c') sent.push('\x03');
     }, true);
     box.addEventListener('keyup', (e) => {
@@ -972,6 +1018,61 @@ const keys = (page, at = 'text-box') => sequence(page).filter((line, i) => page.
         JSON.stringify(term.sent()), JSON.stringify(['ab'])]);
     cases.push(['and Quick Open has the focus when the chord comes up', atKeyup === quickOpen, true]);
     cases.push(["and the terminal takes it back on the chord's keyup", page.document.activeElement === term, true]);
+}
+
+// A keyboard that commits, Gboard 18.4.1's way with every letter, in the
+// terminal: `ab`, then Ctrl latched and `p`. The keydown of 229 before the
+// `p` has xterm read its textarea back in a zero timeout, and the chord that
+// replaces the `p` takes the focus, which empties the textarea. Sent in the
+// edit's own task, the chord emptied it before that read, which then found the
+// text shorter and sent a delete: on an API 36 emulator with Gboard 18.4.1 the
+// prompt read `a`, on main too. `keeps` is a view that keeps the focus, where
+// Quick Open gives it back to the terminal on the chord's keyup.
+function committedChordInTerminal(keeps) {
+    const page = newPage();
+    intercept(page);
+    const view = page.newNode('quick-input-box', page.document.body);
+    const term = terminal(page, (e) => e.ctrlKey && e.key === 'p' && (keeps || page.document.activeElement !== view));
+    page.window.addEventListener('keydown', (e) => {
+        if (!e.ctrlKey || e.key !== 'p') return;
+        term.blur();
+        page.document.activeElement = view;
+    });
+    let atKeyup = null;
+    page.window.addEventListener('keyup', (e) => { if (e.key === 'p') atKeyup = page.document.activeElement; }, true);
+    for (const letter of ['a', 'b']) {
+        term.commit(letter);
+        page.runTimers();
+    }
+    page.window.__vscodroid.ctrl = true;
+    term.commit('p');
+    page.runTimers();
+    return [term.sent(), atKeyup === view, page.document.activeElement === term];
+}
+for (const [view, keeps] of [['Quick Open', false], ['a view that keeps the focus', true]]) {
+    const [sent, chorded, back] = committedChordInTerminal(keeps);
+    cases.push([`a committed Ctrl+P after ab in the terminal, opening ${view}, leaves ab at the prompt`,
+        JSON.stringify(sent), JSON.stringify(['a', 'b'])]);
+    cases.push([`and the chord opened ${view}, the terminal ${keeps ? 'not ' : ''}taking the focus back`,
+        JSON.stringify([chorded, back]), JSON.stringify([true, !keeps])]);
+}
+
+// The control: a chord the terminal keeps is sent to the shell after the
+// word, as the same emulator gave `ab^C`.
+{
+    const page = newPage();
+    intercept(page);
+    const term = terminal(page);
+    for (const letter of ['a', 'b']) {
+        term.commit(letter);
+        page.runTimers();
+    }
+    page.window.__vscodroid.ctrl = true;
+    term.commit('c');
+    page.runTimers();
+    cases.push(['a committed Ctrl+C after ab in the terminal sends a, b, then ^C',
+        JSON.stringify(term.sent()), JSON.stringify(['a', 'b', '\x03'])]);
+    cases.push(['and spends the latch', page.window.__vscodroid.ctrl, false]);
 }
 
 cases.push(['no timer threw', timerErrors.join('; '), '']);

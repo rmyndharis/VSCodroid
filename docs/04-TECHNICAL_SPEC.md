@@ -784,18 +784,23 @@ letter in a text box as `insertCompositionText`, which cannot be cancelled. So w
 update adds one character with a key to the composition in an `input` or `textarea`, the
 terminal's included, the interceptor keeps its `beforeinput` and `input` from the box's own
 listeners and, in the next task, puts back the box's text and selection as they were before
-the character, if nothing changed them in between, which also ends the composition. A task
-later it makes the chord from the character. The word composed before it stays. The terminal
-sends a composition only once it ends, in a zero timeout, reading it back from its textarea,
-which it empties on blur. So in the terminal alone the composition is first ended with a blur
-and a refocus, and the chord waits for that send: Quick Open, a chord the terminal hands to
-the workbench, takes the focus at once, and would leave the send an empty textarea. No other
-box is blurred: the debug view's inline boxes, the terminal tab rename box and the Ports
-view's commit what they hold when they lose the focus, the letter included, and close. On the
-EditContext path no `beforeinput` reaches the element, so the editor makes no chord of a soft
-keyboard letter. The editor's own textarea, which reads compositions itself, is left alone,
-and so is an `input` with no selection API, such as an email box, whose selection could not
-be put back: each keeps a composed letter, and the latch is spent.
+the character, if nothing changed them in between, which also ends the composition, and makes
+the chord from the character. The word composed before it stays. The terminal sends a
+composition only once it ends, in a zero timeout, reading it back from its textarea, which it
+empties on blur. So in the terminal alone the composition is first ended with a blur and a
+refocus, and the chord waits a task for that send: Quick Open, a chord the terminal hands to
+the workbench, takes the focus at once, and would leave the send an empty textarea. Every
+chord the interceptor makes in the terminal waits that task, a committed letter's too. A
+keyboard that commits, as Gboard 18 commits each letter, sends a keydown of key code 229
+first, on which the terminal reads its textarea back in a zero timeout and sends what
+changed; a chord that emptied the textarea before that read had it send a delete, and `ab`,
+Ctrl and `p` left `a` at the prompt. No other box is blurred: the debug view's inline boxes,
+the terminal tab rename box and the Ports view's commit what they hold when they lose the
+focus, the letter included, and close. On the EditContext path no `beforeinput` reaches the
+element, so the editor makes no chord of a soft keyboard letter. The editor's own textarea,
+which reads compositions itself, is left alone, and so is an `input` with no selection API,
+such as an email box, whose selection could not be put back: each keeps a composed letter,
+and the latch is spent.
 
 A key or a touch that moves the editor's caret while the soft keyboard is still composing a
 word ends that composition. Chromium keeps an EditContext composition's range where it was
