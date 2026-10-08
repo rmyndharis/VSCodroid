@@ -25,11 +25,12 @@ import org.junit.jupiter.api.Test
  * WebView of the editor goes through, the one rebuilt after a renderer crash
  * included.
  *
- * A plain-text page paints no background of its own, so the same colour sits
- * behind its text, and [addPlainTextPageScript] gives such a page the background of
- * its own scheme instead. `scripts/test-plain-text-page.js` runs that script; the
- * second case here pins that every WebView is given it, which the script's own test
- * cannot see. Source reading, as in `UiScaleScriptWiringTest` and for its reason.
+ * A plain-text page, and the WebView's own error page for a load that failed, paint
+ * no background of their own, so the same colour sits behind their text, and
+ * [addPlainTextPageScript] gives such a page the background of its own scheme
+ * instead. `scripts/test-plain-text-page.js` runs that script; the second case here
+ * pins that every WebView is given it, which the script's own test cannot see.
+ * Source reading, as in `UiScaleScriptWiringTest` and for its reason.
  *
  * NEGATIVE CONTROL: without the `setBackgroundColor` call in `configure` the
  * first case fails, and without the `addPlainTextPageScript` call in
@@ -78,7 +79,7 @@ class WebViewBackgroundTest {
         assertTrue(added in 0 until loaded) {
             "setupWebView does not add the plain-text page script before the WebView loads its " +
                 "first page, so the server's plain-text answers keep black text on the dark " +
-                "background in light mode"
+                "background in light mode, and the WebView's error page in both modes"
         }
 
         // Every origin, for the reason addUiScaleScript gives: the port is not known yet.

@@ -585,11 +585,15 @@ Outside the settings block, `configure` gives the view the window background,
 painted yet, which showed before the loading placeholder on the first launch after an update.
 The workbench page paints its own background before its first paint, from the theme it expects
 to show (§3.1), so this colour shows only where no page has painted yet and behind a page that
-paints no background of its own. The server's refusals are such pages, bare `text/plain` bodies
-such as "Forbidden.", and their text follows the device's mode, which left it black on this
-colour in light mode. So `addPlainTextPageScript`, a document-start script, gives a top-level
-plain-text page the `Canvas` background of its own colour scheme: white in light mode, Chromium's
-dark canvas in dark mode.
+paints no background of its own. Two kinds of page paint none. The server's refusals, bare
+`text/plain` bodies such as "Forbidden.", set their text in the device's mode, which left it black
+on this colour in light mode. The WebView's own page for a load that failed, "Webpage not
+available", which the workbench gets when it navigates while the editor server restarts, names no
+colour scheme and sets black text in both modes. So `addPlainTextPageScript`, a document-start
+script, gives a top-level document of either kind the `Canvas` background of its own colour
+scheme: white in light mode and Chromium's dark canvas in dark mode for a plain-text page, white
+in both for the error page, which Chromium commits as an HTML document at
+`chrome-error://chromewebdata/`.
 
 ### 4.2 Crash Recovery
 

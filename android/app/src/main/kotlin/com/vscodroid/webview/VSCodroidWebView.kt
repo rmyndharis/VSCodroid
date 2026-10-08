@@ -104,8 +104,8 @@ object VSCodroidWebView {
         // here and the loading page are this colour. It is not what a light theme
         // shows between loads: the workbench page colours itself before its first
         // paint from the theme it expects to show (INITIAL_THEME_MARKER in
-        // assets/server.js). Nor what a plain-text page shows: see
-        // addPlainTextPageScript.
+        // assets/server.js). Nor what a plain-text page or the WebView's own error
+        // page shows: see addPlainTextPageScript.
         webView.setBackgroundColor(webView.context.getColor(R.color.colorBackground))
 
         if (Logger.debugEnabled) {
@@ -118,7 +118,8 @@ object VSCodroidWebView {
 }
 
 /**
- * Gives a plain-text page the background of its own colour scheme.
+ * Gives a plain-text page, and the WebView's own error page, the background of its
+ * own colour scheme.
  *
  * The server answers a request it refuses with a bare `text/plain` body, among them
  * "Forbidden." for a missing or stale connection token, and Chromium paints such a
@@ -126,15 +127,26 @@ object VSCodroidWebView {
  * [VSCodroidWebView.configure] makes the dark window colour. The text follows the
  * device's mode: white in dark mode, where Chromium also paints its dark canvas
  * under it, and black in light mode, on #1E1E1E, where it could not be read.
- * `Canvas` is the background of the page's own scheme, white or that dark canvas,
- * which is what such a page showed before the view had a background. Measured in
- * Chromium 151 over the same background, not on a device.
+ *
+ * The page the WebView shows for a load that failed, "Webpage not available" with
+ * net::ERR_CONNECTION_REFUSED, paints no background and names no colour scheme, so
+ * its text is black on #1E1E1E in both modes. It is what the workbench gets when it
+ * navigates while the editor server restarts, for a folder switch or a reload, and
+ * it stays until the server is back and MainActivity loads the editor again.
+ * Chromium commits it as an HTML document at `chrome-error://chromewebdata/`, whose
+ * opaque origin the "*" rule below matches, and runs document-start scripts in it as
+ * in any other document: read in the sources of WebView 153 and seen in Chromium
+ * 151, not on a device.
+ *
+ * `Canvas` is the background of the page's own scheme: white or that dark canvas for
+ * a plain-text page, white for the error page, which is what each showed before the
+ * view had a background. Measured in Chromium 151 over the same background.
  *
  * At document start and as an adopted style sheet, so the page's first paint has it
  * and nothing waits for an element. For every origin, for the reason
- * [com.vscodroid.addUiScaleScript] gives; the script does nothing but in a top-level
- * plain-text document. A frame is left alone: what shows behind one is the page
- * around it.
+ * [com.vscodroid.addUiScaleScript] gives; the script does nothing but in those two
+ * kinds of top-level document. A frame is left alone: what shows behind one is the
+ * page around it.
  */
 internal fun addPlainTextPageScript(webView: WebView) {
     if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
@@ -151,7 +163,8 @@ internal fun addPlainTextPageScript(webView: WebView) {
 internal fun plainTextPageScript(): String =
     """
     (function() {
-        if (window.top !== window || document.contentType !== 'text/plain') return;
+        if (window.top !== window) return;
+        if (document.contentType !== 'text/plain' && location.protocol !== 'chrome-error:') return;
         var sheet = new CSSStyleSheet();
         sheet.replaceSync(':root { background: Canvas; }');
         document.adoptedStyleSheets = [sheet];
