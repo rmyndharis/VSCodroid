@@ -518,7 +518,7 @@ Two loads of a folder whose own settings name a theme still start on a theme oth
 folder's, because the script cannot read those settings (the `server.js` comment says why) and the
 workbench takes them from its own copy. On the folder's first load ever there is no copy: the
 workbench finds the user's theme configured and shows it until the folder's settings file has been
-read, 7.5 s into the load and 3.8 s after the extensions registered on an API 36 emulator. The
+read, 8.5 s into the load and 3.8 s after the extensions registered on an API 36 emulator. The
 published server tree waits for the file the same way (measured in Chromium), so this is upstream's
 order, not this script's. From the second load on patch 0026 keeps the copy in force, so the
 folder's theme shows from the extensions registering. On a load that finds a copy but no record,
@@ -621,9 +621,9 @@ last page's frame, which the view holds at its old height until the next page pa
 own background never shows in that last space (measured on an API 36 emulator with a magenta
 one), so under a light theme it was a dark band of the theme's window colour, #1E1E1E, for up to
 2.1 s. So the page script posts the colour it paints the page with, at the start of each load and
-on each theme change, to the object `addPageColorListener` adds (`vscodroidPageColor`), and
-`MainActivity` gives it to the window through `paintWindow`, with dark bar icons on a light
-colour, and to the view. Only an opaque `#rrggbb` from the top frame on the loopback address is
+on each theme change, to the object `addPageColorListener` adds (`vscodroidPageColor`), which
+gives it to the view, and `MainActivity` gives it to the window through `paintWindow`, with dark
+bar icons on a light colour. Only an opaque `#rrggbb` from the top frame on the loopback address is
 taken. The loading page and the error pages are this app's own and post nothing, so each gives
 the window its own colour before it loads.
 
@@ -637,12 +637,15 @@ while the colour is light it is pointed at `Theme.VSCodroid.LightStart` through
 manifest's theme when it is dark. The system keeps that theme by its name and looks it up on each
 launch, falling back to the manifest's without an error when the name no longer resolves, and the
 app names it again only when the colour changes, so the style must keep its name. A light theme's
-starting window is white whatever that theme's own background is. The toolchain picker, the
-Toolchains screen, the extra key row and the error pages stay on the theme's dark colours, which
-their layouts are drawn for. The first start after updating from a release without this has no
-colour kept yet and stays dark until the workbench paints, and with `window.autoDetectColorScheme`
-on, a start after the device switched between light and dark while the app was closed begins on the
-colour from before.
+starting window is white whatever that theme's own background is. The choice is the package's, so
+under a light colour a launch into a dark screen, as from the Toolchains shortcut, starts white too,
+and "Clear storage" keeps the choice but drops the colour, so the next start is white before the
+dark setup until the workbench's first dark colour resets it (read in the platform sources, not
+measured). The toolchain picker, the Toolchains screen, the extra key row and the error pages stay
+on the theme's dark colours, which their layouts are drawn for. The first start after updating from
+a release without this has no colour kept yet and stays dark until the workbench paints, and with
+`window.autoDetectColorScheme` on, a start after the device switched between light and dark while
+the app was closed begins on the colour from before.
 
 ### 4.2 Crash Recovery
 
