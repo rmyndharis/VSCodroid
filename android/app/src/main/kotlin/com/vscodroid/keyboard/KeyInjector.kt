@@ -224,21 +224,30 @@ class KeyInjector(
      * row, because a soft keyboard reports all three as an edit and not as a key,
      * and no page of the row carries one. They are listed in `COMMANDS` below.
      *
-     * This is live on both edit paths, not only the legacy one. The workbench uses
-     * `NativeEditContext` wherever `globalThis.EditContext` exists, and an element
-     * with an `EditContext` attached still receives every `beforeinput` except
-     * `insertCompositionText`; only the `input` event is withheld. The workbench's
-     * own `NativeEditContext` reads `beforeinput` for `insertParagraph` for exactly
-     * that reason.
+     * This is live on both edit paths, not only the legacy one, but not for
+     * everything on the EditContext path. The workbench uses `NativeEditContext`
+     * wherever `globalThis.EditContext` exists, and an element with an
+     * `EditContext` attached still receives the `beforeinput` of an edit a key
+     * press makes, such as Enter's `insertParagraph`, which the workbench's own
+     * `NativeEditContext` reads to type the newline. Text a keyboard composes or
+     * commits does not reach the element as a `beforeinput`: Chromium reports it
+     * to the `EditContext` object, as `textupdate` beside the composition and
+     * format events, and the element gets only the keydown and keyup of key code
+     * 229. So on that path a letter the soft keyboard types is never made a chord
+     * here.
      *
-     * Two inputs reach the page with no `beforeinput` at all, and each gets a hook
-     * of its own below so the latch is still spent: a composition on the
-     * EditContext path, which Chromium reports to the `EditContext` object and
-     * never to the element, and typing inside a frame, which no event in this
-     * document can see. A third is the soft keyboard's Enter when a keybinding
-     * accepts it. `MainActivity.injectComposingEnter` spends a lone Shift on
-     * the Enter whose empty `code` it fills, without applying it, as here; an
-     * Enter that arrives with a `code` is not covered.
+     * Three inputs reach the page with no `beforeinput` at all. Two get a hook of
+     * their own below so the latch is still spent: a composition on the
+     * EditContext path, and typing inside a frame, which no event in this
+     * document can see. The third, a letter committed outright on the EditContext
+     * path, as Gboard 18 commits one, is not covered: it is typed and the latch
+     * stays on for the next key. Measured on an API 36 emulator with WebView 153
+     * and Gboard 18.4.1: Ctrl latched, then `p` gave a keydown 229, a
+     * `textupdate` and a keyup, and no `beforeinput`, and `p` was typed with Ctrl
+     * still lit. A fourth is the soft keyboard's Enter when a keybinding accepts
+     * it. `MainActivity.injectComposingEnter` spends a lone Shift on the Enter
+     * whose empty `code` it fills, without applying it, as here; an Enter that
+     * arrives with a `code` is not covered.
      *
      * The same script guards Left and Right, the only arrows pressed for real,
      * at the edge of a text box. A real arrow turns WebView spatial navigation

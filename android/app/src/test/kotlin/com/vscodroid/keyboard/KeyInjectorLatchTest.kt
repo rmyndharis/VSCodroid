@@ -43,11 +43,13 @@ import org.junit.jupiter.api.Test
  * `e.preventDefault();` to the branch turns `the page keeps the input this
  * listener has no chord for` red.
  *
- * Two inputs never produce a `beforeinput` for any branch to spend on, and the
- * last cases hold the hooks that spend the latch for them: a composition on the
- * EditContext edit path, which Chromium reports to the `EditContext` object and
- * not to the element, and typing inside a frame, which no listener in this
- * document can see. Dropping either hook turns its case red at the slice.
+ * Three inputs never produce a `beforeinput` for any branch to spend on, and the
+ * last cases hold the hooks that spend the latch for two of them: a composition
+ * on the EditContext edit path, which Chromium reports to the `EditContext`
+ * object and not to the element, and typing inside a frame, which no listener in
+ * this document can see. Dropping either hook turns its case red at the slice.
+ * The third, a letter committed outright on the EditContext path, has no hook
+ * and no case: `setupModifierInterceptor` says what was measured there.
  */
 class KeyInjectorLatchTest {
 
