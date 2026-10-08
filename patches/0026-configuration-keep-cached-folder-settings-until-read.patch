@@ -1,0 +1,71 @@
+Keep a folder's cached settings until its settings file has been read.
+
+For a remote folder, FolderConfiguration starts on the copy of the folder's
+settings that its last load cached, and swaps in a FileServiceBasedConfiguration
+once the vscode-remote file system provider registers. It swapped first and let
+the new object read the folder's files afterwards, and until that read ends the
+new object holds no settings at all: its reparse() answers an empty model.
+
+WorkspaceService.onDefaultConfigurationChanged reparses the folder
+configuration and puts the result in place of the folder's and the workspace's
+settings. The default configuration changes as the extensions register, since
+every extension that contributes settings or configurationDefaults changes it.
+So whenever the read was still running when the extensions registered, every
+setting of the folder's own was gone from the configuration until the read
+ended, and the first reads of whatever started in between, the theme service
+and the extensions activating, got the user's values instead.
+WorkspaceConfiguration, which does the same for a .code-workspace file, already
+loads the new object before swapping it in; this does the same for a folder.
+
+On an Android emulator the read ends seconds after the extensions register. On
+API 36 a folder whose .vscode/settings.json names Light Modern, under a user
+theme of Dark Modern, showed Dark Modern for 6 to 7.5 s on every load from its
+second on: from the extensions registering (code/didLoadExtensions at 12.3 s
+in one load) until the read ended (Light Modern back at 20.7 s, at the moment
+the explorer filled). The mirror case, a folder naming Dark Modern under Light
+Modern, showed Light Modern in the same window. The page script VSCodroid adds
+to the workbench page reads which theme a window shows to tell whether its
+folder has a theme of its own, and a tap in that window taught it the wrong
+answer, which started the next folder on the wrong theme.
+
+The new object is still created, and starts watching the folder's files, as
+soon as the provider registers, and a change it reports before the swap is
+passed on as before: the workspace service then reloads the cached copy, and
+the change that the swap itself reports reloads the files. A folder's first
+load, which has no cached copy, is unchanged: it shows the user's settings
+until the read ends, as it did.
+
+One note for whoever tidies this later. The swap is written as
+`loadConfiguration().then(() => { this.folderConfiguration = ... })` rather
+than with await because `.loadConfiguration().then(()=>{this.folderConfiguration=`
+is the token patches/fingerprints.txt matches to prove this patch reached the
+packaged bundle: esbuild joins the statements after an await with commas, which
+the source does not have, so an awaited form leaves no text that is in both the
+patch and the bundle. If you rewrite it, move that row to something the new
+shape introduces and check the replacement occurs zero times in an unpatched
+bundle first.
+
+diff --git a/src/vs/workbench/services/configuration/browser/configuration.ts b/src/vs/workbench/services/configuration/browser/configuration.ts
+index a83c04f..0db2cd1 100644
+--- a/src/vs/workbench/services/configuration/browser/configuration.ts
++++ b/src/vs/workbench/services/configuration/browser/configuration.ts
+@@ -1042,9 +1042,16 @@ export class FolderConfiguration extends Disposable {
+ 			this.folderConfiguration = this.cachedFolderConfiguration;
+ 			whenProviderRegistered(workspaceFolder.uri, fileService)
+ 				.then(() => {
+-					this.folderConfiguration = this._register(this.createFileServiceBasedConfiguration(fileService, uriIdentityService, logService));
+-					this._register(this.folderConfiguration.onDidChange(e => this.onDidFolderConfigurationChange()));
+-					this.onDidFolderConfigurationChange();
++					const folderConfiguration = this._register(this.createFileServiceBasedConfiguration(fileService, uriIdentityService, logService));
++					this._register(folderConfiguration.onDidChange(e => this.onDidFolderConfigurationChange()));
++					// Swap only once the files are read, as WorkspaceConfiguration does. Until
++					// then it holds no settings, and a change to the default configuration,
++					// which registering extensions makes, reparses this and would put no
++					// folder settings in place of the cached ones until the read ends.
++					folderConfiguration.loadConfiguration().then(() => {
++						this.folderConfiguration = folderConfiguration;
++						this.onDidFolderConfigurationChange();
++					});
+ 				});
+ 		} else {
+ 			this.folderConfiguration = this._register(this.createFileServiceBasedConfiguration(fileService, uriIdentityService, logService));

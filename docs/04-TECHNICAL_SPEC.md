@@ -925,6 +925,7 @@ flowchart TD
   P --> P21["0021 terminal hint: no Copilot CLI line on Android"]
   P --> P22["0022 EditContext: keep the IME buffer and caret in step"]
   P --> P23["0023 suggest: drop a pending quick suggest on a caret key"]
+  P --> P26["0026 configuration: keep a folder's cached settings until its file is read"]
 ```
 
 Five of these are load-bearing in ways their titles understate:

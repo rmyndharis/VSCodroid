@@ -181,3 +181,10 @@
 # patch. Folding the block into the else-if chain below it deletes the token;
 # the patch header says so at the call site too.
 0023 suggest caret move|out/vs/code/browser/workbench/workbench.js|this._triggerQuickSuggest.cancel();return
+# 0026 gates on the swap it moves behind the read. The statements after an
+# await are joined with commas in this bundle and with semicolons in the
+# source, so the row needs the promise form the patch is written in; its header
+# says so at the call site too. Against the shipped 1.139.1 workbench.js the
+# pattern occurs 0 times, while the positive control `.loadConfiguration()`
+# occurs 9 times.
+0026 folder settings kept until read|out/vs/code/browser/workbench/workbench.js|.loadConfiguration().then(()=>{this.folderConfiguration=
