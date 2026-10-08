@@ -62,6 +62,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Two quick taps on a key row key press it twice instead of once.
 - An Alt chord from the key row no longer leaves toolbar buttons on their Alt action, such as Split Editor Down in place of Split Editor Right, where a tap ran it.
 - In text boxes and the terminal, Ctrl or Alt latched on the key row combines with the next letter on a keyboard that underlines words, as some Gboard versions do: Ctrl then C stops a running command instead of typing c.
+- A key row modifier no longer stays lit after a split-screen resize that interrupts a hold on it or a trackpad drag.
 
 ### Security
 
