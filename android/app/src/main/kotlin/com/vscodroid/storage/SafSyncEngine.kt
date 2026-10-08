@@ -186,7 +186,10 @@ class SafSyncEngine(private val context: Context) {
      * is what asks. Where phase 2 could not place what the device holds there is no stamp,
      * only the digest of the copy the previous record vouched for at that path, and none
      * either once a stamp has moved past what this engine read and the bytes did not show
-     * the same version, until a read does or a write lands ([deviceMovedPast]).
+     * the same version, until a read does or a write lands ([deviceMovedPast]). A read that
+     * finds the digested bytes at a moved stamp makes that stamp the one compared next, and
+     * where the provider did not answer the stamp query, a placeholder no answer equals,
+     * (0, [UNANSWERED_SIZE]), so the next answer is read against the bytes again.
      *
      * In memory only, never in the `.synced` record, because a record line licenses a
      * deletion (see [deviceChangedSinceRecord]). The digest of a copy the record vouches
@@ -1602,7 +1605,9 @@ class SafSyncEngine(private val context: Context) {
      * The write-back loop asks whenever its queue is empty, so a held-back save lands once
      * its device copy can be read, still by [keepsDeviceEdit]'s comparison of the bytes, and
      * the waits bound what a provider that stays unreadable costs: per held-back file, a
-     * stamp query and the reads that fail, or, while the provider does not answer that query
+     * stamp query and the reads that fail, each as far as it gets, so a set-aside's fetch
+     * that breaks off partway streams that far again at every try, even past [MAX_FILE_SIZE]
+     * where the provider reports no size; or, while the provider does not answer that query
      * over a device copy past [MAX_FILE_SIZE], a read of the digested length and a buffer and
      * one of that limit, after [HELD_BACK_RETRY_FIRST_MS] and then at waits that double up to
      * [HELD_BACK_RETRY_MAX_MS]. One per call, because the loop polls its queue before it asks
@@ -5684,11 +5689,12 @@ internal enum class DeviceCopyOutcome {
 
 /**
  * What [SafSyncEngine] last knew of one device document: the (COLUMN_LAST_MODIFIED,
- * COLUMN_SIZE) its provider reported, and the SHA-256 of what the open fetched from it or
- * this app's last write streamed into it, or of the mirror copy the open kept, with the
- * length of those bytes. That digest is null for a kept copy that no open has digested yet
- * and this open's budget, [SafSyncEngine.KEPT_COPY_DIGEST_BYTES], did not reach, until a
- * write of this app lands there, and after a write that does not land.
+ * COLUMN_SIZE) its provider reported, or a placeholder no report equals where a read matched
+ * the bytes at a stamp query the provider did not answer, and the SHA-256 of what the open
+ * fetched from it or this app's last write streamed into it, or of the mirror copy the open
+ * kept, with the length of those bytes. That digest is null for a kept copy that no open has
+ * digested yet and this open's budget, [SafSyncEngine.KEPT_COPY_DIGEST_BYTES], did not
+ * reach, until a write of this app lands there, and after a write that does not land.
  */
 private class DeviceState(
     /**
