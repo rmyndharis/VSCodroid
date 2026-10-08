@@ -183,10 +183,10 @@ class ExtraKeyPressStateTest {
      * Holding a modifier latches it at the long press, and a drag the pager
      * takes leaves it as it was before the touch.
      *
-     * The latch has to be on while the finger is still down: a letter typed on
-     * the soft keyboard while Ctrl is held goes through the modifier interceptor,
-     * which chords it only if Ctrl is latched by then, and spends the latch. A
-     * latch that came on release would let the letter go out plain and chord
+     * The latch has to be on while the finger is still down, so that what is
+     * typed during the hold meets it as it would after a tap: the modifier
+     * interceptor acts on a letter only while Ctrl is latched. A latch that came
+     * on release would let a letter typed during the hold go out plain and meet
      * the keystroke after it instead. A slow swipe that starts on Ctrl reaches
      * the same long press before the pager takes the drag, so the ACTION_CANCEL
      * that follows has to switch the latch back, or the swipe latches Ctrl.

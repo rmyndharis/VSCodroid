@@ -643,8 +643,8 @@ list because no other route on the row reaches it, since `shiftedForm` leaves `(
 and `)` sits on a digit key no page carries. Only those keys and the three modifiers
 have a long press (`ExtraKeyButton`'s touch listener turns the `GestureDetector`'s on or
 off at each touch), and the row dismisses an open popup when the pager starts a drag. A
-modifier's long press switches the latch while the finger is still down, so a letter
-typed on the soft keyboard during the hold is chorded, and a touch that then ends in a
+modifier's long press switches the latch while the finger is still down, so what is
+typed during the hold meets it as it would after a tap, and a touch that then ends in a
 cancel switches the latch back: the pager taking the drag, the system cancelling the
 gesture, or a repack removing the key under the finger. Not while another finger is on the
 row, which `ExtraKeyRow.dispatchTouchEvent` counts: the pager drags with the finger that

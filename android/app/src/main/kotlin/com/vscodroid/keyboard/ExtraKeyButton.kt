@@ -97,10 +97,10 @@ class ExtraKeyButton @JvmOverloads constructor(
             override fun onLongPress(e: MotionEvent) {
                 this@ExtraKeyButton.alpha = 1.0f
                 if (alternates.isEmpty()) {
-                    // A modifier switches while the finger is still down, so a
-                    // letter typed on the soft keyboard meanwhile is chorded and
-                    // spends the latch. Lifting the finger then does nothing
-                    // more: the detector sends no tap after a long press.
+                    // A modifier switches while the finger is still down, so
+                    // whatever is typed meanwhile meets the latch as it would
+                    // after a tap. Lifting the finger then does nothing more:
+                    // the detector sends no tap after a long press.
                     latchBeforeHold = isToggleActive
                     emitPress()
                     return

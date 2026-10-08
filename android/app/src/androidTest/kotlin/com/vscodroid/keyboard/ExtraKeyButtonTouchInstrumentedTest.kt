@@ -168,8 +168,8 @@ class ExtraKeyButtonTouchInstrumentedTest {
 
     @Test
     fun aModifierHeldPastTheLongPressLatchesBeforeTheFingerLifts() {
-        // So a letter typed on the soft keyboard while Ctrl is held is chorded:
-        // the interceptor chords only what arrives while the latch is on.
+        // So what is typed while Ctrl is held meets the latch as it would after
+        // a tap: the interceptor acts only on what arrives while it is on.
         val button = key(value = "Ctrl")
         val down = SystemClock.uptimeMillis()
         onMain { button.dispatchTouchEvent(event(down, down, MotionEvent.ACTION_DOWN, 10f)) }
