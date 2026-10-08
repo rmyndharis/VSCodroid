@@ -2,6 +2,7 @@ package com.vscodroid.webview
 
 import android.content.Context
 import android.webkit.WebView
+import androidx.webkit.WebMessageCompat
 import com.vscodroid.R
 import com.vscodroid.SourceScan
 import com.vscodroid.util.Logger
@@ -46,7 +47,8 @@ import org.junit.jupiter.api.Test
  * `setupWebView`, or with it after the first load, the second. Without the
  * `addPageColorListener` call, or with it after the first load, the fourth; taking
  * a frame's message, another host's, a short or translucent colour or one in
- * another notation fails the third.
+ * another notation fails the third, and reading an ArrayBuffer's data, which
+ * throws as it would in the listener, fails it too.
  */
 class WebViewBackgroundTest {
 
@@ -108,16 +110,23 @@ class WebViewBackgroundTest {
 
     @Test
     fun `only the workbench page's opaque colour becomes the view's background`() {
-        assertEquals(0xFFFFFFFF.toInt(), pageColorFromMessage("#ffffff", "127.0.0.1", true))
-        assertEquals(0xFF1F1F1F.toInt(), pageColorFromMessage("#1F1F1F", "localhost", true))
+        fun color(data: String?, host: String? = "127.0.0.1", isMainFrame: Boolean = true) =
+            pageColorFromMessage(WebMessageCompat(data), host, isMainFrame)
+
+        assertEquals(0xFFFFFFFF.toInt(), color("#ffffff"))
+        assertEquals(0xFF1F1F1F.toInt(), color("#1F1F1F", "localhost"))
         // Any frame can post, webviews of extensions included, and only the
         // workbench page, the top frame on the loopback address, says what it paints.
-        assertNull(pageColorFromMessage("#ffffff", "127.0.0.1", false)) { "a frame's colour was taken" }
-        assertNull(pageColorFromMessage("#ffffff", "abc.vscode-cdn.net", true)) { "another host's colour was taken" }
-        assertNull(pageColorFromMessage("#ffffff", null, true)) { "a page with no host had its colour taken" }
+        assertNull(color("#ffffff", isMainFrame = false)) { "a frame's colour was taken" }
+        assertNull(color("#ffffff", "abc.vscode-cdn.net")) { "another host's colour was taken" }
+        assertNull(color("#ffffff", null)) { "a page with no host had its colour taken" }
         // Only what the workbench writes for an opaque colour.
         for (data in listOf("#fff", "#ffffff80", "rgb(255, 255, 255)", " #ffffff", "#ffffff ", "#gggggg", "", null)) {
-            assertNull(pageColorFromMessage(data, "127.0.0.1", true)) { "'$data' was taken as a background colour" }
+            assertNull(color(data)) { "'$data' was taken as a background colour" }
+        }
+        // An ArrayBuffer, which any page can post too and whose data throws when read.
+        assertNull(pageColorFromMessage(WebMessageCompat(byteArrayOf(0)), "127.0.0.1", true)) {
+            "an ArrayBuffer was taken as a background colour"
         }
     }
 

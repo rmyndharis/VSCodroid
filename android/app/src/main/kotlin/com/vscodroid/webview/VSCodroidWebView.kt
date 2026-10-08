@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.view.MotionEvent
 import android.webkit.WebSettings
 import android.webkit.WebView
+import androidx.webkit.WebMessageCompat
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import com.vscodroid.R
@@ -196,7 +197,7 @@ internal fun addPageColorListener(webView: WebView) {
     if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
         try {
             WebViewCompat.addWebMessageListener(webView, PAGE_COLOR_OBJECT, setOf("*")) { view, message, origin, isMainFrame, _ ->
-                pageColorFromMessage(message.data, origin.host, isMainFrame)?.let(view::setBackgroundColor)
+                pageColorFromMessage(message, origin.host, isMainFrame)?.let(view::setBackgroundColor)
             }
         } catch (e: RuntimeException) {
             // What is at stake is the colour of a band for a moment, never the editor.
@@ -211,9 +212,16 @@ internal fun addPageColorListener(webView: WebView) {
  * which is where the page script runs, since any frame can post. Only an opaque
  * `#rrggbb`, which is how the workbench writes an opaque theme colour; a
  * translucent one would let the window behind show through.
+ *
+ * Only a string, tested before `data` is read. A page can post an ArrayBuffer as
+ * well, which androidx.webkit hands over as one wherever the WebView supports
+ * WEB_MESSAGE_ARRAY_BUFFER, and `data` throws IllegalStateException for that, in
+ * the callback the WebView runs on the UI thread.
  */
-internal fun pageColorFromMessage(data: String?, host: String?, isMainFrame: Boolean): Int? {
+internal fun pageColorFromMessage(message: WebMessageCompat, host: String?, isMainFrame: Boolean): Int? {
     if (!isMainFrame || (host != "127.0.0.1" && host != "localhost")) return null
+    if (message.type != WebMessageCompat.TYPE_STRING) return null
+    val data = message.data
     if (data == null || !Regex("#[0-9a-fA-F]{6}").matches(data)) return null
     return (0xFF shl 24) or data.substring(1).toInt(16)
 }

@@ -580,8 +580,10 @@ script `server.js` adds to the workbench page (`INITIAL_THEME_MARKER`) posts it 
 it paints the page with, and the WebView takes that colour as its own background, which
 shows where the page has not painted, as below its last frame while the soft keyboard goes
 down. It takes no token and returns nothing. A message is acted on only when it comes from
-the top frame on the loopback address and is an opaque `#rrggbb`, so the most a caller can
-do with it is set that colour.
+the top frame on the loopback address and is a string holding an opaque `#rrggbb`, so the
+most a caller can do with it is set that colour. The type is tested before the data is
+read: a page can post an `ArrayBuffer` too, and reading one's data as a string throws in
+the callback the WebView runs on the UI thread.
 
 ### 2.5 Extension Auth Callback Relay (Chrome Custom Tabs)
 
