@@ -232,9 +232,10 @@ class ExtraKeyModifierSyncTest {
      * ends there, which spends the latches; both go through the row, which
      * pushes what the adapter holds and starts or stops this poll from it. The
      * latches used to be written back after the swap, which repainted the row
-     * over whatever the swap had done, unpushed and unpolled: a resize while a
-     * finger held a Ctrl its hold had latched left the row showing Ctrl over a
-     * page holding none, and nothing polled to notice.
+     * over whatever the swap had done, unpushed and unpolled: a resize during a
+     * trackpad drag left Ctrl lit on the row and held on the page, with the poll
+     * stopped. A hold's cancel would fare no better: it switches the modifier
+     * back on both sides, and the write-back would undo that on the row alone.
      *
      * What the swap's cancels then do is `ExtraKeyButtonTouchInstrumentedTest`'s,
      * on a device, with a finger on Ctrl and on the trackpad.

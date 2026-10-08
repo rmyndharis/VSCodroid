@@ -525,11 +525,12 @@ class ExtraKeyRow @JvmOverloads constructor(
         // modifier its hold had switched can be switched back, and a trackpad
         // drag ends, which spends the latches. Both go through this row, which
         // pushes what the adapter holds and starts or stops the poll from it.
-        // Written back after the swap, the latches repainted the row over
-        // whatever the swap had done, unpushed and unpolled: a resize while a
-        // finger held a Ctrl its hold had latched left the row showing Ctrl
-        // over a page holding none, and one during a drag left its latch
-        // unspent.
+        // Written back after the swap, the latches would repaint the row over
+        // whatever the swap had done, unpushed and unpolled: a hold's cancel
+        // switches a modifier back on both sides, and the write-back would
+        // undo that on the row alone. While they were written back there, a
+        // resize during a trackpad drag left its latch unspent, lit on the row
+        // and held on the page, with the poll stopped.
         val carried = if (::adapter.isInitialized) Triple(ctrlActive, altActive, shiftActive) else null
         adapter = KeyPageAdapter(
             pages = pages,

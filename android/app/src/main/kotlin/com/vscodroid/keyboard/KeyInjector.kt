@@ -303,8 +303,9 @@ class KeyInjector(
                 // capture listeners, where the workbench reads what is held, so
                 // a quick pick below cannot accept on it. See the KDoc. A
                 // keyboard presses a modifier before releasing it, so its own
-                // release goes on. Paired by code, the physical key: by key, a
-                // keyboard holding both Shifts had its second release stopped.
+                // release goes on. Paired by code, the physical key: paired by
+                // key, a keyboard holding both Shifts would have its second
+                // release stopped.
                 var MODIFIERS = { Alt: 1, Control: 1, Shift: 1, Meta: 1 };
                 var pressed = {};
                 window.addEventListener('keydown', function(e) {
@@ -663,8 +664,8 @@ class KeyInjector(
  * chord works without the modifier interceptor, and so should its release.
  *
  * Indented to the sixteen columns both scripts interpolate it at. Lines at
- * column 0 leave `trimIndent()` no margin to take off either script, so both
- * went out as indented as this source.
+ * column 0 would leave `trimIndent()` no margin to take off either script, and
+ * both would go out as indented as this source.
  */
 private val RELEASE_MODIFIERS_JS = """
     function releaseModifiers(target, init) {

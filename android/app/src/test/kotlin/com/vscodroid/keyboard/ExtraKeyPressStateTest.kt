@@ -180,17 +180,16 @@ class ExtraKeyPressStateTest {
     }
 
     /**
-     * Holding a modifier latches it at the long press, as before the swipe fix,
-     * and a drag the pager takes leaves it as it was before the touch.
+     * Holding a modifier latches it at the long press, and a drag the pager
+     * takes leaves it as it was before the touch.
      *
      * The latch has to be on while the finger is still down: a letter typed on
      * the soft keyboard while Ctrl is held goes through the modifier interceptor,
-     * which chords it only if Ctrl is latched by then, and spends the latch. With
-     * the latch on release, as when only keys with alternates had a long press,
-     * the letter went out plain and the keystroke after it was chorded instead.
-     * A slow swipe that starts on Ctrl reaches the same long press before the
-     * pager takes the drag, so the ACTION_CANCEL that follows has to switch the
-     * latch back, or the swipe would have latched Ctrl.
+     * which chords it only if Ctrl is latched by then, and spends the latch. A
+     * latch that came on release would let the letter go out plain and chord
+     * the keystroke after it instead. A slow swipe that starts on Ctrl reaches
+     * the same long press before the pager takes the drag, so the ACTION_CANCEL
+     * that follows has to switch the latch back, or the swipe latches Ctrl.
      *
      * NEGATIVE CONTROL, measured: the button with the long press on only for
      * keys with alternates fails at the slice, its `onLongPress` having no
@@ -223,10 +222,10 @@ class ExtraKeyPressStateTest {
      * The pager drags with the finger that went down last and cancels every key
      * under a finger when it takes the drag, so the cancel that reaches a held
      * Ctrl can be another finger's swipe. Holding Ctrl with one thumb and
-     * swiping to F5 with the other is how Ctrl+F5 is reached, and the cancel
-     * switched Ctrl back there too, so that ran F5. The cancel cannot say whose
-     * drag it was, so the row counts the fingers on it before the pager sees an
-     * event, and every key asks it.
+     * swiping to F5 with the other is how Ctrl+F5 is reached, and a cancel that
+     * switched Ctrl back there too would make that run F5. The cancel cannot say
+     * whose drag it was, so the row counts the fingers on it before the pager
+     * sees an event, and every key asks it.
      *
      * NEGATIVE CONTROL, measured: the button, adapter and row with no finger
      * count, whose cancel put a held modifier back whichever finger swiped,
@@ -281,10 +280,11 @@ class ExtraKeyPressStateTest {
      *
      * The keyboard going away takes the row down and clears every latch, but
      * going GONE sends the key under a finger no cancel, and that finger still
-     * reaches the key. So a hold that had switched a lit Ctrl off could slide
-     * on once the keyboard was gone, the pager took the drag, and its cancel
-     * switched Ctrl back on, on the row and on the page, with the row hidden.
-     * The user guide says all three modifiers clear when the keyboard hides.
+     * reaches the key. So a hold that has switched a lit Ctrl off can slide on
+     * once the keyboard is gone, the pager takes the drag, and without the drop
+     * its cancel would switch Ctrl back on, on the row and on the page, with the
+     * row hidden. The user guide says all three modifiers clear when the
+     * keyboard hides.
      *
      * NEGATIVE CONTROL, measured: the button, adapter and row with no
      * `dropPendingRestore`, whose stand-down cleared the latches but not the

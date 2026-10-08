@@ -210,9 +210,9 @@ class ExtraKeyButtonTouchInstrumentedTest {
      * it back.
      *
      * The pager drags with the finger that went down last, and taking the drag
-     * cancels every key under a finger, the held Ctrl among them. That cancel
-     * used to switch Ctrl back whichever finger swiped, so holding Ctrl with one
-     * thumb and swiping to F5 with the other ran F5 where it had run Ctrl+F5.
+     * cancels every key under a finger, the held Ctrl among them. Were that
+     * cancel to switch Ctrl back whichever finger swiped, holding Ctrl with one
+     * thumb and swiping to F5 with the other would run F5, not Ctrl+F5.
      */
     @Test
     fun aSwipeByAnotherFingerLeavesAHeldModifierLatched() {
@@ -277,8 +277,9 @@ class ExtraKeyButtonTouchInstrumentedTest {
      *
      * The keyboard going away takes the row down and clears every latch, but
      * going GONE sends the key under the finger no cancel, and the finger still
-     * reaches it. The pager took the slide as a drag and its cancel switched
-     * Ctrl back on, with the row hidden.
+     * reaches it. The pager takes the slide as a drag, and unless the stand-down
+     * drops what the hold would put back, its cancel switches Ctrl back on, with
+     * the row hidden.
      */
     @Test
     fun aSlideAfterTheRowStoodDownLeavesAHeldModifierCleared() {
@@ -354,9 +355,11 @@ class ExtraKeyButtonTouchInstrumentedTest {
      *
      * The repack swaps the pager's adapter, the swap removes the page under the
      * finger and cancels the hold from inside it, and the key switches the latch
-     * back through the row, which pushes it. The row used to write the latches
-     * back after the swap, unpushed: from off, it showed Ctrl lit over a page
-     * holding none, with nothing polling to notice, and from on the reverse.
+     * back through the row, which pushes it. Latches written back after the
+     * swap, unpushed, would undo that on the row alone: from off it would show
+     * Ctrl lit over a page holding none, with nothing polling to notice, and
+     * from on the reverse. Before a cancel put a hold's latch back, the latch
+     * the hold set outlived the repack, on the row and on the page alike.
      */
     @Test
     fun aRepackUnderAHeldModifierLeavesTheRowAndThePageAgreeing() {
