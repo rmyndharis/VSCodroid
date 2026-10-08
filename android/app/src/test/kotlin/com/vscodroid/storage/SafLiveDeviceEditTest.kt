@@ -33,6 +33,7 @@ import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.FileNotFoundException
 import java.io.IOException
+import java.io.InputStream
 import java.io.OutputStream
 import java.io.RandomAccessFile
 import java.nio.file.Files
@@ -351,6 +352,21 @@ class SafLiveDeviceEditTest {
         mirrorDir.listFiles()!!
             .filter { it.name.startsWith("notes.txt" + SafSyncEngine.DEVICE_COPY_SUFFIX) }
             .associate { it.name to it.readText() }
+
+    /** A device document of [length] zero bytes, streamed without holding them. */
+    private fun zeros(length: Long) = object : InputStream() {
+        private var left = length
+
+        override fun read() = if (left > 0) 0.also { left-- } else -1
+
+        override fun read(b: ByteArray, off: Int, len: Int): Int {
+            if (left <= 0) return -1
+            val n = minOf(len.toLong(), left).toInt()
+            b.fill(0, off, off + n)
+            left -= n
+            return n
+        }
+    }
 
     private val record: File get() = File(mirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX)
 
@@ -1357,6 +1373,43 @@ class SafLiveDeviceEditTest {
 
         assertEquals(readsBefore, reads, "a device copy of another length was read to hash it")
         assertEquals(0, writes, "the save overwrote a device edit it could not keep")
+        assertEquals(listOf(File(mirror, "notes.txt").absolutePath), failed.map { it.absolutePath })
+    }
+
+    /**
+     * A set-aside keeps the device copy in this app's own storage, so it is refused for a
+     * document reported past the copy limit, and a size the provider does not report reads
+     * as 0 and passed that refusal whatever the document held: on a provider with no size
+     * column, or at a stamp query unanswered over a copy whose stamp had moved, another app's
+     * edit grown past the limit was fetched in full, the free-space floor asked only before
+     * the copy began.
+     */
+    @ParameterizedTest(name = "the provider has no size column: {0}")
+    @ValueSource(booleans = [true, false])
+    fun `a device copy past the copy limit is not fetched where no size says so`(noSizeColumn: Boolean) {
+        deviceHasSize = !noSizeColumn
+        open()
+        save("first save")
+        editOnDevice("changed by another app")
+        if (!noSizeColumn) {
+            deviceReadable = false
+            save("second save")
+            deviceReadable = true
+            failStampQuery = true
+        }
+        every { resolver.openInputStream(any()) } answers {
+            reads++
+            zeros(SafSyncEngine.MAX_FILE_SIZE + 1)
+        }
+
+        save("typed in the editor")
+
+        assertEquals(false, failStampQuery, "precondition: the save asked the provider for the stamp")
+        assertEquals(
+            listOf("notes.txt"), mirror.list()!!.sorted(),
+            "the document grown past the copy limit was fetched into the mirror",
+        )
+        assertEquals(1, writes, "the save went ahead with nothing of the device's version kept")
         assertEquals(listOf(File(mirror, "notes.txt").absolutePath), failed.map { it.absolutePath })
     }
 

@@ -13,6 +13,7 @@ import kotlinx.coroutines.withContext
 import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStream
+import java.io.OutputStream
 import java.security.DigestInputStream
 import java.security.MessageDigest
 import java.util.Base64
@@ -1344,8 +1345,13 @@ class SafSyncEngine(private val context: Context) {
         if (!mirrorCopiesInFlight.add(preserved.absolutePath)) {
             return DeviceCopyOutcome.UNAVAILABLE
         }
+        // Bounded by the same ceiling as it streams, because the size above is what the
+        // provider reported, and 0 where it reports none or [keepsDeviceEdit] could not get
+        // an answer: such a document passed the check whatever it held, and one another app
+        // had grown far past the ceiling was fetched in full, the free-space floor asked
+        // only before the copy began.
         val fetched = try {
-            copyDocumentToLocal(doc.uri, preserved, doc.lastModified)
+            copyDocumentToLocal(doc.uri, preserved, doc.lastModified, limit = MAX_FILE_SIZE)
         } finally {
             mirrorCopiesInFlight.remove(preserved.absolutePath)
         }
@@ -2524,12 +2530,15 @@ class SafSyncEngine(private val context: Context) {
      *   not from [dest] afterwards, which an editor can have written by then.
      * @param digest updated with every byte fetched, so a caller learns what the copy
      *   holds without reading it again. Meaningful only after an answer that is not null.
+     * @param limit the most bytes the copy may hold. A document holding more is not
+     *   copied, after no more than that has been written beside [dest], and answers null.
      */
     private fun copyDocumentToLocal(
         docUri: Uri,
         dest: File,
         sourceModified: Long,
         digest: MessageDigest? = null,
+        limit: Long = Long.MAX_VALUE,
         onReplacing: (fetched: File) -> Unit = {},
     ): LandedCopy? {
         // The only floor, and here because both fetches into filesDir pass through this
@@ -2561,10 +2570,17 @@ class SafSyncEngine(private val context: Context) {
             }
             val copied = (if (digest != null) DigestInputStream(source, digest) else source)
                 .use { input ->
-                    FileOutputStream(partial).use { output ->
-                        input.copyTo(output, COPY_BUFFER_SIZE)
-                    }
+                    FileOutputStream(partial).use { output -> copyAtMost(input, output, limit) }
                 }
+            if (copied == null) {
+                partial.delete()
+                Logger.i(
+                    tag,
+                    "Not copying ${dest.name}: the document holds more than this app's own " +
+                        "storage will hold a copy of",
+                )
+                return null
+            }
             // Stamp with the source's own time so later syncs compare two timestamps
             // from the same clock rather than a provider's against the filesystem's.
             if (sourceModified > 0) partial.setLastModified(sourceModified)
@@ -5441,6 +5457,23 @@ class SafSyncEngine(private val context: Context) {
                 read = input.read(buffer)
             }
             return digest.digest() to total
+        }
+
+        /**
+         * Copies [input] into [output] and answers how many bytes that was, or null as soon as
+         * it holds more than [limit], having written no more than [limit] of them.
+         */
+        private fun copyAtMost(input: InputStream, output: OutputStream, limit: Long): Long? {
+            val buffer = ByteArray(COPY_BUFFER_SIZE)
+            var total = 0L
+            var read = input.read(buffer)
+            while (read >= 0) {
+                total += read
+                if (total > limit) return null
+                output.write(buffer, 0, read)
+                read = input.read(buffer)
+            }
+            return total
         }
 
         /**
