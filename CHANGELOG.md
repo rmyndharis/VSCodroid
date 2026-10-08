@@ -65,7 +65,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A key row chord typed in the terminal that opens a view, such as Ctrl then P, no longer deletes the last letter at the prompt on a keyboard that does not underline words, such as Gboard 18.
 - A key row modifier no longer stays lit after a split-screen resize that interrupts a hold on it or a trackpad drag.
 - Opening a folder, reloading the window and starting the app no longer show a white screen and then the light theme for a few seconds before the dark theme.
-- A folder's own settings, such as a color theme in its `.vscode/settings.json`, no longer give way to your settings for several seconds while the editor finishes loading.
+- A folder's own settings, such as a colour theme in its `.vscode/settings.json`, no longer give way to your settings for several seconds while the editor finishes loading.
 
 ### Security
 
