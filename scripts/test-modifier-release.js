@@ -26,18 +26,22 @@
  *
  * It also runs the recently used editors picker Ctrl+Tab opens, with the
  * quick input's `registerQuickNavigation` transcribed from the same file,
- * which accepts on a modifier's keyup in the picker's own container. Two row
- * Ctrl+Tabs, and a real Ctrl+Left from the trackpad, must leave it open, and
- * a hardware keyboard's own Ctrl release must still accept it. The real press
- * is modelled as the events Chromium hands the page for `navigationKeyEvents`.
- * A keyboard holding both Shifts must have each release go on to the page.
+ * which accepts on a modifier's keyup in the picker's own container. Opened
+ * from a file it takes the focus to its list, and the keyboard and the row go
+ * down. Opened in the Command Palette it keeps the palette's input box, so the
+ * row's chords and their releases land inside the container: one or two row
+ * Ctrl+Tabs there, and a real Ctrl+Left from the trackpad, must leave it open,
+ * and a hardware keyboard's own Ctrl release must still accept it. The real
+ * press is modelled as the events Chromium hands the page for
+ * `navigationKeyEvents`. A keyboard holding both Shifts must have each release
+ * go on to the page.
  *
- * NEGATIVE CONTROL, measured: against KeyInjector.kt at 54352514, which sent
- * no release, 19 of the 42 cases fail; against one that released at the
- * chord's target with nothing stopping it at the window, the 3 picker cases
- * fail, the second Ctrl+Tab accepting the editor it had just highlighted; and
- * against one that paired a release with a keydown by key rather than by
- * code, the case of a keyboard holding both Shifts fails.
+ * NEGATIVE CONTROL, measured: against KeyInjector.kt at f66e462f, which sent
+ * no release, 20 of the 47 cases fail; against one that released at the
+ * chord's target with nothing stopping it at the window, 5 picker cases fail,
+ * the first Ctrl+Tab in the Command Palette opening the editor it had just
+ * highlighted; and against one that paired a release with a keydown by key
+ * rather than by code, the case of a keyboard holding both Shifts fails.
  * Each of these changes fails at least one case: not calling the release from
  * either script, or from either of the interceptor's two chords; releasing
  * with the flag still set; sending the keyup at what has focus rather than at
@@ -244,11 +248,19 @@ const KEY_CODE = { 16: 4, 17: 5, 18: 6, 91: 57 };
  * listener on the window, runs `quickOpenPreviousRecentlyUsedEditorInGroup`
  * (primary 2050, Ctrl+Tab), which shows the picker with the second editor
  * highlighted and `quickNavigateConfiguration: { keybindings }` holding
- * Ctrl+Tab; its input is hidden, so `update` gives the list DOM focus. While it
- * is open, Ctrl+Tab runs `quickOpenNavigateNextInEditorPicker`, which moves the
- * highlight down and sets quick navigate again. `registerQuickNavigation` is a
- * keyup listener on the widget's container, which accepts the highlighted
- * editor on the keyup of a modifier a quick navigate keybinding holds; minified:
+ * Ctrl+Tab. Where the focus then is decides whether the row can reach it.
+ * Opened from the editor, the picker hides its input, so `update` gives the
+ * list DOM focus, and Chromium hides the soft keyboard whenever focus leaves
+ * an editable element, which takes the key row with it. Opened over a quick
+ * pick that is showing, as Ctrl+Tab from the row in the Command Palette opens
+ * it, it keeps that pick's input box, `hideInput=!!h.quickNavigate&&!a` with
+ * `a` the visible quick access, and the box keeps the focus, so the keyboard
+ * and the row stay up and every chord from the row is typed inside the
+ * container, its release with it (`overPalette`). While it is open, Ctrl+Tab
+ * runs `quickOpenNavigateNextInEditorPicker`, which moves the highlight down
+ * and sets quick navigate again. `registerQuickNavigation` is a keyup listener
+ * on the widget's container, which accepts the highlighted editor on the keyup
+ * of a modifier a quick navigate keybinding holds; minified:
  *
  *   G(this.ui.container,ne.KEY_UP,e=>{if(this.canSelectMany||!this._quickNavigate)return;
  *   let t=new Yt(e),i=t.keyCode;this._quickNavigate.keybindings.some(a=>{let c=a.getChords();
@@ -259,17 +271,19 @@ const KEY_CODE = { 16: 4, 17: 5, 18: 6, 91: 57 };
  * `Yt` is StandardKeyboardEvent, whose keyCode maps the DOM's 16, 17, 18 and
  * 91 to 4, 5, 6 and 57 and whose modifier flags are also set by the key itself.
  */
-function recentEditorsPicker(page) {
+function recentEditorsPicker(page, { overPalette = false } = {}) {
     const container = page.newNode('quick-input-widget', page.document.body);
+    const input = page.newNode('quick-input-box', container);
     const list = page.newNode('quick-input-list', container);
-    const picker = { open: false, active: -1, accepted: [], quickNavigate: null };
+    if (overPalette) page.document.activeElement = input;
+    const picker = { open: false, active: -1, accepted: [], quickNavigate: null, list };
     page.window.addEventListener('keydown', (e) => {
         if (e.key !== 'Tab' || !e.ctrlKey || e.altKey || e.shiftKey || e.metaKey) return;
         if (picker.open) {
             picker.active += 1;
         } else {
             Object.assign(picker, { open: true, active: 1 });
-            page.document.activeElement = list;
+            if (!overPalette) page.document.activeElement = list;
         }
         picker.quickNavigate = { keybindings: [{ ctrlKey: true, shiftKey: false, altKey: false, metaKey: false }] };
     });
@@ -441,28 +455,45 @@ const settled = (name, page) => {
     cases.push(['a lone Shift and a paste dispatch nothing', sequence(page).join(', '), '']);
 }
 
-// Ctrl+Tab twice from the row: the picker opens, the highlight moves down, and
-// nothing accepts until a tap or Enter. The second chord is typed with focus on
-// the picker's list, inside the container that accepts on a Ctrl keyup, so its
-// release must not reach that container.
+// Ctrl+Tab from the row in a file: the picker opens and takes the focus to its
+// list. The chord's release goes to the editor it was typed in, outside the
+// picker, and the keyboard goes down with the row, which can send the picker
+// nothing more.
 {
     const page = newPage();
     intercept(page);
     const picker = recentEditorsPicker(page);
     announce(page, 'Tab', 'Tab', 9, { ctrl: true });
-    announce(page, 'Tab', 'Tab', 9, { ctrl: true });
-    cases.push(['two row Ctrl+Tabs leave the recently used editors picker open',
-        JSON.stringify({ accepted: picker.accepted, open: picker.open }), JSON.stringify({ accepted: [], open: true })]);
-    cases.push(['and the second moves its highlight down one', picker.active, 2]);
-    settled('two row Ctrl+Tabs', page);
+    cases.push(['a row Ctrl+Tab in a file leaves the picker open, its list focused',
+        JSON.stringify({ accepted: picker.accepted, open: picker.open, list: page.document.activeElement === picker.list }),
+        JSON.stringify({ accepted: [], open: true, list: true })]);
+    settled('a row Ctrl+Tab in a file', page);
 }
 
-// A Ctrl latched for a trackpad drag inside the picker: the press is real, so
-// Chromium sends the release to the list, which is inside the container.
+// Ctrl+Tab from the row in the Command Palette: the picker keeps the palette's
+// input box, so the chord is typed inside the container that accepts on a Ctrl
+// keyup, and so is its release, which must not reach that container. Nothing
+// accepts until a tap or Enter, and a second Ctrl+Tab moves the highlight down.
 {
     const page = newPage();
     intercept(page);
-    const picker = recentEditorsPicker(page);
+    const picker = recentEditorsPicker(page, { overPalette: true });
+    announce(page, 'Tab', 'Tab', 9, { ctrl: true });
+    cases.push(['a row Ctrl+Tab in the Command Palette leaves the picker open',
+        JSON.stringify({ accepted: picker.accepted, open: picker.open }), JSON.stringify({ accepted: [], open: true })]);
+    announce(page, 'Tab', 'Tab', 9, { ctrl: true });
+    cases.push(['and so does a second one',
+        JSON.stringify({ accepted: picker.accepted, open: picker.open }), JSON.stringify({ accepted: [], open: true })]);
+    cases.push(['which moves its highlight down one', picker.active, 2]);
+    settled('two row Ctrl+Tabs in the Command Palette', page);
+}
+
+// A Ctrl latched for a trackpad drag inside that picker: the press is real, so
+// Chromium sends the release to the focused input, which is inside the container.
+{
+    const page = newPage();
+    intercept(page);
+    const picker = recentEditorsPicker(page, { overPalette: true });
     announce(page, 'Tab', 'Tab', 9, { ctrl: true });
     realPress(page, 'ArrowLeft', 'ArrowLeft', 37, { ctrl: true });
     cases.push(['a real Ctrl+Left inside the picker accepts nothing', picker.accepted.length, 0]);
@@ -476,7 +507,7 @@ const settled = (name, page) => {
     const page = newPage({ emitter: false });
     intercept(page);
     page.attachEmitter();
-    const picker = recentEditorsPicker(page);
+    const picker = recentEditorsPicker(page, { overPalette: true });
     realPress(page, 'ArrowLeft', 'ArrowLeft', 37, { alt: true });
     announce(page, 'Tab', 'Tab', 9, { ctrl: true });
     realPress(page, 'ArrowRight', 'ArrowRight', 39, { ctrl: true });
