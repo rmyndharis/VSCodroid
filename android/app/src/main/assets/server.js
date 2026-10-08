@@ -463,8 +463,9 @@ if (!fs.existsSync(rehEntryPoint)) {
     // Two gaps. On every reload, folder switch and cold start the page paints
     // nothing of its own until the 18 MB workbench.js has loaded and applied a
     // theme, about a second on an API 36 emulator, and the WebView's own
-    // background shows through, which VSCodroidWebView.configure makes the dark
-    // window colour: right for a dark theme, wrong for a light one. And a load that
+    // background shows through, which is the colour the page before it painted
+    // (lastPageColor in VSCodroidWebView.kt): wrong whenever this page is to
+    // show another theme, as a folder with a theme of its own does. And a load that
     // cannot use the theme the workbench stored starts on the web default, the
     // light one, for the one to three seconds until the extensions register. The
     // stored theme is the last window's, one per profile, and is dropped whenever
