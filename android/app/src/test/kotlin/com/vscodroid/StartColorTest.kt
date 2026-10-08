@@ -31,10 +31,10 @@ import kotlin.math.pow
  * NEGATIVE CONTROL: writing the colour on every post fails the first case; the
  * loading page with its old literal colours, its dark text kept on a light
  * colour, or the #888 line it had on #1E1E1E on every dark colour, the second;
- * the setup screen's light-ground text at #767676 the third;
- * and dropping any one of the calls the fourth names, either of the setup
- * screen's two text colours, or the starting window's light theme, the fourth or
- * the fifth.
+ * the setup screen's light-ground text at #767676 the third; dropping any one of
+ * the calls the fourth names or either of the setup screen's two text colours,
+ * or turning round the test that chooses them, the fourth; and dropping the
+ * starting window's light theme, or swapping it with the app's own, the fifth.
  */
 class StartColorTest {
 
@@ -107,7 +107,6 @@ class StartColorTest {
                     to "loadingPageHtml(lastPageColor(this)"
                 ),
             "SplashActivity.onCreate" to (body(splash, "override fun onCreate(") to "paintWindow(lastPageColor(this))"),
-            "SplashActivity.showSplashLayout" to (body(splash, "private fun showSplashLayout()") to "isLightColor(lastPageColor(this))"),
         ).forEach { (where, pair) ->
             val (code, call) = pair
             assertTrue(call in code) {
@@ -115,15 +114,18 @@ class StartColorTest {
             }
         }
         // The setup screen's two texts, light for the theme's dark window, made dark on
-        // a light colour. Whole lines, so one left with another colour does not pass.
+        // a light colour. Whole lines, so the test turned round, or a text left with
+        // another colour, does not pass.
         val layout = body(splash, "private fun showSplashLayout()").lines().map { it.trim() }
         for (line in listOf(
+            "if (isLightColor(lastPageColor(this))) {",
             "val text = getColor(R.color.colorOnLightBackground)",
             "findViewById<TextView>(R.id.appName).setTextColor(text)",
             "findViewById<TextView>(R.id.statusText).setTextColor(text)",
         )) {
             assertTrue(line in layout) {
-                "showSplashLayout no longer has `$line`, so the setup screen's light text sits on a light editor colour"
+                "showSplashLayout no longer has `$line`, so the setup screen's text does not follow the editor " +
+                    "colour: light text on a light one, or dark text on a dark one"
             }
         }
         // Drawn for the theme's dark window, whatever colour onCreate gave it.
@@ -136,11 +138,16 @@ class StartColorTest {
 
     @Test
     fun `a light editor points the next starting window at a light theme`() {
+        // Whole lines, so the two themes swapped does not pass.
         val main = SourceScan.withoutComments(
             SourceScan.body(SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt"), "private fun showPageColor(")
-        )
-        assertTrue("splashScreen.setSplashScreenTheme(" in main && "R.style.Theme_VSCodroid_LightStart" in main) {
+        ).lines().map { it.trim() }
+        assertTrue("splashScreen.setSplashScreenTheme(" in main) {
             "showPageColor no longer chooses the theme the system draws its starting window from"
+        }
+        assertTrue("if (isLightColor(color)) R.style.Theme_VSCodroid_LightStart else Resources.ID_NULL" in main) {
+            "showPageColor no longer gives a light colour alone the white starting window, so the next start " +
+                "under a light theme begins dark, or under a dark one white"
         }
         val style = Regex("""<style\s+name="Theme\.VSCodroid\.LightStart".*?</style>""", RegexOption.DOT_MATCHES_ALL)
             .find(File("src/main/res/values/themes.xml").readText())?.value
