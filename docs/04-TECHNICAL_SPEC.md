@@ -782,14 +782,14 @@ interceptor (`KeyInjector.setupModifierInterceptor`) from the `beforeinput` the 
 which it cancels. A keyboard that composes, as Gboard 12.4 composes every word, reports a
 letter in a text box as `insertCompositionText`, which cannot be cancelled. So when such an
 update adds one character with a key to the composition in an `input` or `textarea`, the
-terminal's included, the interceptor keeps it from the box's own listeners and, in the next
-task, ends the composition with a blur and a refocus and puts back the box's text and
-selection as they were before the character; a task later it makes the chord from it. The
-word composed before it stays. The terminal sends a composition in a zero timeout once it
-ends, reading it back from its textarea, which it empties on blur, so the chord waits for
-that send: Quick Open, a chord the terminal hands to the workbench, takes the focus at once,
-and would leave the send an empty textarea. On the EditContext path no `beforeinput` reaches
-the element, so the editor makes no chord of a soft keyboard letter.
+terminal's included, the interceptor keeps its `beforeinput` and `input` from the box's own
+listeners and, in the next task, ends the composition with a blur and a refocus and puts back
+the box's text and selection as they were before the character; a task later it makes the
+chord from it. The word composed before it stays. The terminal sends a composition in a zero
+timeout once it ends, reading it back from its textarea, which it empties on blur, so the
+chord waits for that send: Quick Open, a chord the terminal hands to the workbench, takes the
+focus at once, and would leave the send an empty textarea. On the EditContext path no
+`beforeinput` reaches the element, so the editor makes no chord of a soft keyboard letter.
 
 A key or a touch that moves the editor's caret while the soft keyboard is still composing a
 word ends that composition. Chromium keeps an EditContext composition's range where it was

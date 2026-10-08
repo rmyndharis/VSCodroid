@@ -234,12 +234,17 @@ class KeyInjector(
      * letter in a text box as `insertCompositionText`, which cannot be cancelled:
      * the letter is the box's before anything here can refuse it. So when such an
      * edit adds one character with a key to the composition, in a focused `input`
-     * or `textarea`, the terminal's included, the box's own listeners are kept
-     * from hearing it, and in the next task the composition is ended by taking
-     * the focus away and giving it back, and the box gets back the text and
-     * selection it had before the character. A task later the character comes
-     * back to this listener as the `insertText` a keyboard that commits would
-     * have sent, which makes the chord. The blur is Blink's own end of a
+     * or `textarea`, the terminal's included, its `beforeinput` and `input` are
+     * kept from the box's own listeners, and in the next task the composition is
+     * ended by taking the focus away and giving it back, and the box gets back
+     * the text and selection it had before the character. A task later the
+     * character comes back to this listener as the `insertText` a keyboard that
+     * commits would have sent, which makes the chord. The character still
+     * reaches the box's listeners in its `compositionupdate` and in the blur's
+     * `compositionend`, which comes before the text goes back, so a box that
+     * reads its text on that `compositionend`, as the action list's filter and
+     * the find widget of the terminal, webviews and chat do, goes on from the
+     * character until its next input. The blur is Blink's own end of a
      * composition, with the `compositionend` the box's listeners expect: the
      * terminal sends what it composed on that event, and a chord the terminal
      * hands to the workbench never reaches its composition handling, so without
