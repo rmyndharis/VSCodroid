@@ -73,8 +73,12 @@ class SafLiveDeviceEditTest {
     private var deviceSize = 2L
     private var deviceHasClock = true
 
-    /** False for a provider whose size column is null, which reads back as 0. */
+    /**
+     * False for a provider that reports no size: its column reads back as [unknownSize], 0
+     * where it is null, or the -1 some providers give for a size they do not know.
+     */
     private var deviceHasSize = true
+    private var unknownSize = 0L
     private var writes = 0
 
     /** How many times the device document was opened for reading. */
@@ -281,7 +285,7 @@ class SafLiveDeviceEditTest {
             when {
                 onOther() -> otherText!!.length.toLong()
                 deviceHasSize -> deviceSize
-                else -> 0L
+                else -> unknownSize
             }
         }
         every { cursor.getLong(4) } answers { if (onOther()) otherModified else deviceModified }
@@ -1438,11 +1442,15 @@ class SafLiveDeviceEditTest {
      * and another app's edit grown past the copy limit while the folder is open. A set-aside
      * that stopped at the limit there refused the copy of a file the open itself copies in, so
      * the save was held back for as long as the folder stayed open, each try streaming the
-     * limit's worth of the document again. It is kept whole, as the open keeps it.
+     * limit's worth of the document again. It is kept whole, as the open keeps it, also where
+     * the provider gives -1 for the size it does not know, which was taken for a stamp query
+     * that went unanswered.
      */
-    @Test
-    fun `a set-aside on a provider with no size column keeps a copy past the copy limit`() {
+    @ParameterizedTest(name = "an unknown size reads {0}")
+    @ValueSource(longs = [0, -1])
+    fun `a set-aside on a provider with no size column keeps a copy past the copy limit`(unknown: Long) {
         deviceHasSize = false
+        unknownSize = unknown
         open()
         save("first save")
         editOnDevice("changed by another app")
@@ -1467,11 +1475,14 @@ class SafLiveDeviceEditTest {
      * time the device put before the mirror's, as a coarse clock does. The open finds the mirror
      * newer and the device moved since the record, and sets the device copy aside to tell the
      * two apart: stopped at the limit there, the copy was refused, and the open said the file
-     * was not reaching the device and refused every save of it until the next open.
+     * was not reaching the device and refused every save of it until the next open. A listing
+     * that gives -1 for the size it does not know is the same folder.
      */
-    @Test
-    fun `a reopen of a folder with no size column refuses no save of a file past the copy limit`() {
+    @ParameterizedTest(name = "an unknown size reads {0}")
+    @ValueSource(longs = [0, -1])
+    fun `a reopen of a folder with no size column refuses no save of a file past the copy limit`(unknown: Long) {
         deviceHasSize = false
+        unknownSize = unknown
         every { resolver.openInputStream(any()) } answers {
             reads++
             zeros(SafSyncEngine.MAX_FILE_SIZE + 2)

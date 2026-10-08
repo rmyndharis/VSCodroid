@@ -1349,7 +1349,7 @@ class SafSyncEngine(private val context: Context) {
         // query [keepsDeviceEdit] got no answer to ([UNANSWERED_SIZE]): such a document passed
         // the check above whatever it held, and one another app had grown far past the ceiling
         // was fetched in full, the free-space floor asked only before the copy began. Not on a
-        // provider with no size column, whose documents phase 2 fetches whole: stopped at the
+        // provider that reports no size, whose documents phase 2 fetches whole: stopped at the
         // ceiling there, every set-aside of a file past it that phase 2 had copied in was
         // refused, and the saves of the file with it.
         val limit = if (doc.size == UNANSWERED_SIZE) MAX_FILE_SIZE else Long.MAX_VALUE
@@ -1512,7 +1512,7 @@ class SafSyncEngine(private val context: Context) {
         val seen = deviceSeen[localFile.absolutePath] ?: return null
         // An unplaced copy has no stamp so that its bytes decide, and an unanswered query let
         // a save, or a held-back save's try with nobody saving, go over it unread. Taken as a
-        // moved stamp instead, with no time and a length no provider reports,
+        // moved stamp instead, with no time and a length no answer carries,
         // [UNANSWERED_SIZE]: a matching read re-baselines to it, so the next answer is checked
         // against the bytes again, and a set-aside it leads to knows that nothing said how much
         // the device holds; see [setAsideDeviceCopy].
@@ -2449,7 +2449,12 @@ class SafSyncEngine(private val context: Context) {
                     val docId = cursor.getString(idIndex)
                     val name = cursor.getString(nameIndex)
                     val mimeType = cursor.getString(mimeIndex)
-                    val size = cursor.getLong(sizeIndex)
+                    // A null reads back as 0, and a negative size, the -1 some providers give
+                    // for one they do not know, is read as 0 as well. Taken as a length, it had
+                    // [deviceMatchesMirror] answer every file unlike the mirror unread, and had a
+                    // set-aside take it for [UNANSWERED_SIZE] and stop at [MAX_FILE_SIZE] where
+                    // phase 2 fetches the document whole. [deviceStamp] reads the column alike.
+                    val size = cursor.getLong(sizeIndex).coerceAtLeast(0)
                     val lastModified =
                         if (modifiedIndex >= 0 && !cursor.isNull(modifiedIndex)) cursor.getLong(modifiedIndex) else 0L
                     val isDir = mimeType == DocumentsContract.Document.MIME_TYPE_DIR
@@ -3710,8 +3715,9 @@ class SafSyncEngine(private val context: Context) {
 
     /**
      * What the device reports for [docUri] now, as (COLUMN_LAST_MODIFIED, COLUMN_SIZE), or
-     * null when the provider does not answer. A missing column reads as 0, the rule
-     * [walkTree] applies, so both sides of a [deviceSeen] comparison are read alike.
+     * null when the provider does not answer. A missing column, and a negative size, read as
+     * 0, the rules [walkTree] applies, so both sides of a [deviceSeen] comparison are read
+     * alike and no answer carries [UNANSWERED_SIZE].
      */
     private fun deviceStamp(docUri: Uri): Pair<Long, Long>? = try {
         context.contentResolver.query(
@@ -3731,7 +3737,7 @@ class SafSyncEngine(private val context: Context) {
             } else {
                 0L
             }
-            val size = if (sizeIndex >= 0) cursor.getLong(sizeIndex) else 0L
+            val size = if (sizeIndex >= 0) cursor.getLong(sizeIndex).coerceAtLeast(0) else 0L
             modified to size
         }
     } catch (e: Exception) {
@@ -5072,8 +5078,8 @@ class SafSyncEngine(private val context: Context) {
 
         /**
          * The length [deviceMovedPast] gives a stamp the provider did not answer, which no
-         * provider reports: a missing size column reads as 0. [setAsideDeviceCopy] stops its
-         * fetch at [MAX_FILE_SIZE] for it.
+         * answer carries: [walkTree] and [deviceStamp] read a missing size column, and a
+         * negative size, as 0. [setAsideDeviceCopy] stops its fetch at [MAX_FILE_SIZE] for it.
          */
         private const val UNANSWERED_SIZE = -1L
 
