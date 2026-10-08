@@ -178,6 +178,35 @@ class KeyInjectorTextEntryTest {
         verify(exactly = 5) { webView.dispatchKeyEvent(any()) }
     }
 
+    /**
+     * The two scripts that define `releaseModifiers` go out without the Kotlin
+     * source's indentation.
+     *
+     * `trimIndent()` takes off only the margin every line shares, so one line
+     * of the interpolated function at column 0 leaves it none: every line then
+     * keeps the indentation of the source around it, which costs nothing in
+     * behaviour and is sent with every announced key and every page load.
+     *
+     * NEGATIVE CONTROL, measured: with `RELEASE_MODIFIERS_JS` built by
+     * `trimIndent()` alone, which puts its later lines at column 0, both
+     * scripts fail, Alt+Esc's announce script 212 bytes longer than it is and
+     * the interceptor 3572.
+     */
+    @Test
+    fun `the scripts that send a chord go out dedented`() {
+        val scripts = mutableListOf<String>()
+        every { webView.evaluateJavascript(capture(scripts), any()) } returns Unit
+
+        KeyInjector(webView).injectKey("Escape", altKey = true)
+        KeyInjector(webView).setupModifierInterceptor()
+
+        assertEquals(2, scripts.size, "control: the announce script and the interceptor were not both sent")
+        val indented = listOf("the announce script", "the modifier interceptor").zip(scripts)
+            .filterNot { (_, script) -> script.startsWith("(function() {") }
+            .map { (name, script) -> "$name, starting '${script.lineSequence().first()}'" }
+        assertEquals(emptyList<String>(), indented, "these go out as indented as the Kotlin source")
+    }
+
     @Test
     fun `navigation keys carry the scan code Chromium turns into KeyboardEvent code`() {
         // Linux evdev codes, which is the column Chromium's Android key code
