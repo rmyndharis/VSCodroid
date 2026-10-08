@@ -730,10 +730,13 @@ keydown, which is what the row's releases are by either route, at the window's c
 phase. The workbench reads which modifiers are held from capture listeners there
 (`ModifierKeyEmitter`), so it still hears them. A quick pick opened with quick navigate, as
 Ctrl+Tab's recently used editors are, does not: it accepts on a modifier's keyup in its own
-container, and the second Ctrl+Tab from the row is typed with focus on that list, so its
-release would open the highlighted editor instead of moving down. A keyboard's own release
-follows the keydown of the same key and goes on: the two are paired by `code`, so each of two
-Shifts held at once comes up.
+container. Opened in the Command Palette it keeps the palette's input box, and with it the
+focus, the keyboard and the row, so a Ctrl+Tab from the row is typed inside that container
+and its release would open the highlighted editor at once instead of leaving the list for
+the next Ctrl+Tab. Opened from a file it focuses its list, and the keyboard goes down with
+the row, since Chromium hides the keyboard whenever focus leaves an editable element. A
+keyboard's own release follows the keydown of the same key and goes on: the two are paired
+by `code`, so each of two Shifts held at once comes up.
 Tab stays here because a real one moves focus, and the Explorer's rename and New File boxes
 commit the typed name when they lose it; Escape because under spatial navigation an
 unhandled real Escape blurs the focused element. Up and Down stay because they are the

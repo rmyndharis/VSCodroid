@@ -204,9 +204,14 @@ class KeyInjector(
      * later release from the row through. The workbench reads which modifiers
      * are held from capture listeners on the window, so those still hear it. A
      * quick pick opened with quick navigate, as Ctrl+Tab's is, does not: it
-     * accepts on a modifier's keyup in its own container, and the second Ctrl+Tab
-     * from the row is typed with focus on the picker, so its release would open
-     * the highlighted editor instead of moving down to the next one.
+     * accepts on a modifier's keyup in its own container. Opened in the Command
+     * Palette it keeps the palette's input box, and with it the focus, the
+     * keyboard and the key row, so a Ctrl+Tab from the row is typed inside that
+     * container and its release would open the highlighted editor at once
+     * instead of leaving the list for the next Ctrl+Tab to move down. Opened
+     * from a file it focuses its list instead, and the keyboard goes down and
+     * takes the row with it: Chromium hides the keyboard whenever focus leaves
+     * an editable element.
      *
      * The listener resolves each character through [KeyMapping]'s table, serialized in
      * here as a lookup object, so it answers from the same definitions [injectKey] uses
@@ -663,8 +668,8 @@ class KeyInjector(
  * release heard after an Alt chord whose keyup was not reads as an Alt pressed
  * and released alone, which focuses the menu bar.
  *
- * The target alone does not keep the release out of a quick pick: the second
- * Ctrl+Tab is typed with focus on the picker the first one opened. The
+ * The target alone does not keep the release out of a quick pick: a Ctrl+Tab
+ * typed in the Command Palette has its target inside the picker it opens. The
  * modifier interceptor, which every workbench page gets, stops a release at
  * the window ([setupModifierInterceptor] says why).
  *
