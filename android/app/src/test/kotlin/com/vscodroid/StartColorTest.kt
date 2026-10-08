@@ -32,8 +32,9 @@ import kotlin.math.pow
  * loading page with its old literal colours, its dark text kept on a light
  * colour, or the #888 line it had on #1E1E1E on every dark colour, the second;
  * the setup screen's light-ground text at #767676 the third;
- * and dropping any one of the calls the fourth names, or the starting window's
- * light theme, the fourth or the fifth.
+ * and dropping any one of the calls the fourth names, either of the setup
+ * screen's two text colours, or the starting window's light theme, the fourth or
+ * the fifth.
  */
 class StartColorTest {
 
@@ -111,6 +112,18 @@ class StartColorTest {
             val (code, call) = pair
             assertTrue(call in code) {
                 "$where no longer has $call, so under a light theme that screen starts dark again"
+            }
+        }
+        // The setup screen's two texts, light for the theme's dark window, made dark on
+        // a light colour. Whole lines, so one left with another colour does not pass.
+        val layout = body(splash, "private fun showSplashLayout()").lines().map { it.trim() }
+        for (line in listOf(
+            "val text = getColor(R.color.colorOnLightBackground)",
+            "findViewById<TextView>(R.id.appName).setTextColor(text)",
+            "findViewById<TextView>(R.id.statusText).setTextColor(text)",
+        )) {
+            assertTrue(line in layout) {
+                "showSplashLayout no longer has `$line`, so the setup screen's light text sits on a light editor colour"
             }
         }
         // Drawn for the theme's dark window, whatever colour onCreate gave it.

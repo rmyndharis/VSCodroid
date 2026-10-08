@@ -43,8 +43,8 @@ import org.junit.jupiter.api.Test
  * what shows below the last page's frame when the soft keyboard goes down while a
  * folder opens, and behind the bars. `scripts/test-server-bootstrap.js` runs the
  * page's side; the cases here pin which messages are taken, that every WebView
- * listens before its first load, and that the window takes the colour of each
- * page the view shows.
+ * listens before its first load, that the window is given the colour of each
+ * page the view shows, and what `paintWindow` does with it.
  *
  * NEGATIVE CONTROL: without the `setBackgroundColor` call in `configure` the
  * first case fails, and with the window colour there rather than `lastPageColor`
@@ -56,7 +56,8 @@ import org.junit.jupiter.api.Test
  * throws as it would in the listener, fails it too. Without the `onColor` call in
  * the listener, or the `paintWindow` call in `showPageColor`, or with none before
  * the load in `setupWebView`, `retryServerStart` or `showErrorPage`, the window
- * case.
+ * case; and so does `paintWindow` without its background call or with either bar
+ * appearance pinned.
  */
 class WebViewBackgroundTest {
 
@@ -197,6 +198,26 @@ class WebViewBackgroundTest {
         fun body(declaration: String) = SourceScan.withoutComments(SourceScan.body(main, declaration))
         assertTrue("paintWindow(color)" in body("private fun showPageColor(")) {
             "showPageColor no longer gives the window the colour the workbench page posts"
+        }
+        // What paintWindow does with it, read as well: a Window and its drawable are
+        // android.jar stubs here. Whole lines, so a call left with another argument,
+        // or an appearance pinned to one value, does not pass.
+        val paint = SourceScan.withoutComments(
+            SourceScan.body(SourceScan.read("src/main/kotlin/com/vscodroid/util/ViewInsets.kt"), "fun Activity.paintWindow(")
+        ).lines().map { it.trim() }
+        assertTrue("window.setBackgroundDrawable(color.toDrawable())" in paint) {
+            "paintWindow no longer gives the window the colour, so it keeps the one it had: #1E1E1E under a " +
+                "light theme, where the keyboard was and behind the bars"
+        }
+        for (line in listOf(
+            "val light = isLightColor(color)",
+            "isAppearanceLightStatusBars = light",
+            "isAppearanceLightNavigationBars = light",
+        )) {
+            assertTrue(line in paint) {
+                "paintWindow no longer has `$line`, so the bar icons do not follow the colour: light icons on a " +
+                    "light theme's bars, or dark ones on a dark theme's"
+            }
         }
         // The app's own pages, which post nothing: each paints the window before it loads.
         listOf(
