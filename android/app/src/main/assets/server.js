@@ -558,9 +558,10 @@ if (!fs.existsSync(rehEntryPoint)) {
     // that had the keyboard up. So the root follows the theme the workbench shows
     // rather than keeping the one the page started on, and the record is taken
     // from the same reading. Where the page has not painted at the new size at
-    // all, the view's own background shows instead, which for a folder opened
-    // that way lasts until the next page paints, so each colour the root is
-    // given is also posted to the app, which makes it the view's background
+    // all, as below the last frame that a reload or a folder opened that way
+    // holds until the next page paints, what shows is the window behind the
+    // view, so each colour the root is given is also posted to the app, which
+    // gives that window the colour and the bars on it icons that read on it
     // (addPageColorListener in VSCodroidWebView.kt). A theme change rewrites a
     // style element in the head, so each change to the head reads the
     // workbench's colours again. So does every change of the window title,

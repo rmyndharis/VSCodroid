@@ -41,6 +41,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import androidx.activity.OnBackPressedCallback
 import com.vscodroid.util.drawBehindSystemBars
+import com.vscodroid.util.paintWindow
 import com.vscodroid.util.CrashReporter
 import com.vscodroid.util.StorageManager
 import com.vscodroid.util.WebViewVersion
@@ -2023,13 +2024,16 @@ class MainActivity : AppCompatActivity() {
         webView = findViewById(R.id.webView)
         webView?.let { wv ->
             VSCodroidWebView.configure(wv)
+            // The loading page's colour, which a page that had painted the window
+            // its own leaves behind it when recreateWebView builds the view again.
+            paintWindow(getColor(R.color.colorBackground))
             // Before the first load below: a document-start script runs only in
             // documents that begin loading after it was added, and the object a
             // page posts to is there only in those. The view recreateWebView
             // builds comes through here as well.
             addUiScaleScript(wv)
             addPlainTextPageScript(wv)
-            addPageColorListener(wv)
+            addPageColorListener(wv, ::showPageColor)
             dropCacheLeftByEarlierBuild(wv)
             applyWindowInsetsPadding(wv)
             // Here and not in initBridge, which does its work once per WebView
@@ -2054,6 +2058,18 @@ class MainActivity : AppCompatActivity() {
             rendererCrashLoopShown = false
             wv.loadData(dataUrlSafe(loadingPage()), "text/html", "utf-8")
         }
+    }
+
+    /**
+     * Gives the window the colour the workbench page paints itself with.
+     *
+     * Where the window shows, see [paintWindow]: under a light theme the space the
+     * keyboard gave back stayed #1E1E1E for up to 2.1 s while a reload or a folder
+     * opened from the path box held the last frame, on an API 36 emulator, and the
+     * status and navigation bars were that colour throughout.
+     */
+    private fun showPageColor(color: Int) {
+        paintWindow(color)
     }
 
     /**
@@ -2704,6 +2720,9 @@ class MainActivity : AppCompatActivity() {
         // written here and needs no server at all. The veto the dead server does
         // cause is the other one, a save still in flight.
         markAppNavigation()
+        // The page below is dark whatever the editor's theme, and the window
+        // around it, which a light one had made light, goes with it.
+        paintWindow(getColor(R.color.colorBackground))
         webView?.loadDataWithBaseURL(
             null,
             """<html><head><meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"></head>
@@ -2763,6 +2782,9 @@ class MainActivity : AppCompatActivity() {
         // refusing costs is the page carrying the folder and the only control that
         // can start the server again.
         markAppNavigation()
+        // The loading page's colour, as setupWebView gives it: this can replace the
+        // workbench, which painted the window its own.
+        paintWindow(getColor(R.color.colorBackground))
         webView?.loadData(dataUrlSafe(loadingPage()), "text/html", "utf-8")
         // Guarded for the reason [startAndBindService] is, and put back rather
         // than only logged. The loading page is already on screen by the time this

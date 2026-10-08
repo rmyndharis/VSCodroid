@@ -508,7 +508,7 @@ switched between light and dark, when `window.autoDetectColorScheme` makes the w
 the right one. After that it keeps the background on the editor colour of the theme the workbench
 shows, and the record with it, because the background also fills the space the soft keyboard gives
 back until the workbench lays itself out again, and it posts each colour it paints to the app, which
-makes it the view's background as well (§4.1). The workbench keeps its stored theme, one per
+gives it to the window behind the view as well (§4.1). The workbench keeps its stored theme, one per
 profile, only while the configured `workbench.colorTheme` equals the theme's id, so it drops that
 theme in a folder whose own settings name another and in any folder entered from one, and the
 default the welcome extension sets must be an id the server tree contributes, not an older name
@@ -598,15 +598,18 @@ scheme: white in light mode and Chromium's dark canvas in dark mode for a plain-
 in both for the error page, which Chromium commits as an HTML document at
 `chrome-error://chromewebdata/`.
 
-The view's background also shows where the workbench page has not painted at a new size. When the
-soft keyboard goes down the view grows, and a folder opened from a box that had the keyboard up
-holds the last page's frame until the next page paints, so the space below that frame took the
-window colour, a dark band under a light theme. So the page script posts the colour it paints the
-page with, at the start of each load and on each theme change, to the object
-`addPageColorListener` adds (`vscodroidPageColor`), and the view takes it as its background. Only
-an opaque `#rrggbb` from the top frame on the loopback address is taken. The window behind the
-view, which shows where the keyboard was until the activity lays itself out again, stays
-#1E1E1E.
+The window behind the view shows wherever no view draws: behind the transparent status and
+navigation bars, below the extra key row while the soft keyboard slides away, and, when the
+keyboard goes down as a reload or a folder opened from a box that had it up begins, below the
+last page's frame, which the view holds at its old height until the next page paints. The view's
+own background never shows in that last space (measured on an API 36 emulator with a magenta
+one), so under a light theme it was a dark band of the theme's window colour, #1E1E1E, for up to
+2.1 s. So the page script posts the colour it paints the page with, at the start of each load and
+on each theme change, to the object `addPageColorListener` adds (`vscodroidPageColor`), and
+`MainActivity` gives it to the window through `paintWindow`, with dark bar icons on a light
+colour, and to the view. Only an opaque `#rrggbb` from the top frame on the loopback address is
+taken. The loading page and the error pages are this app's own and post nothing, so each gives
+the window its own colour before it loads.
 
 ### 4.2 Crash Recovery
 

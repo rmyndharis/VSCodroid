@@ -719,7 +719,7 @@ async function stoppingTakesTheEditorServerWithIt() {
         return {
             settings: JSON.parse(data),
             painted: root.style.backgroundColor,
-            /** Every colour posted to the app, which makes it the view's background. */
+            /** Every colour posted to the app, which gives it to the window behind the view. */
             posted,
             recorded: items['vscodroid-device-scheme'],
             writes: () => writes,
@@ -767,7 +767,7 @@ async function stoppingTakesTheEditorServerWithIt() {
             'or it was handed a colour that is not hex');
         assert.strictEqual(page.painted, '#1f1f1f', 'the page is not coloured before the workbench paints');
         assert.deepStrictEqual(page.posted, ['#1f1f1f'],
-            'the colour the page starts on is not posted to the app, so the view behind it keeps the colour ' +
+            'the colour the page starts on is not posted to the app, so the window behind it keeps the colour ' +
             'of the page before');
         assert.strictEqual(page.recorded, 'light', "the device's mode is not recorded for the next load");
     }
@@ -1176,7 +1176,7 @@ async function stoppingTakesTheEditorServerWithIt() {
             'the root keeps the theme the page started on after the theme changed');
         page.retitle();
         assert.strictEqual(page.writes(), 1, 'a change of the head that leaves the theme alone rewrote the record');
-        // The view behind the page shows where the page has not painted at a new
+        // The window behind the page shows where the page has not painted at a new
         // size, so it takes each colour the root does, and once per change.
         assert.deepStrictEqual(page.posted, ['#ffffff', '#1f1f1f'],
             'the app is not told the colour of each theme the page shows, or is told it again on a title change, ' +

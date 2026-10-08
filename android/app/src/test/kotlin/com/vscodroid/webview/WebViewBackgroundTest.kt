@@ -35,12 +35,14 @@ import org.junit.jupiter.api.Test
  * pins that every WebView is given it, which the script's own test cannot see.
  * Source reading, as in `UiScaleScriptWiringTest` and for its reason.
  *
- * The view's background also shows where the workbench page has not painted at a
- * new size, as below the last page's frame when the soft keyboard goes down while
- * a folder opens, so the page posts the colour it paints itself with and
- * [addPageColorListener] makes it the view's. `scripts/test-server-bootstrap.js`
- * runs the page's side; the cases here pin which messages are taken and that every
- * WebView listens before its first load.
+ * The workbench page posts the colour it paints itself with, and
+ * [addPageColorListener] makes it the view's and hands it to MainActivity, which
+ * gives it to the window behind the view: that, not the view's background, is
+ * what shows below the last page's frame when the soft keyboard goes down while a
+ * folder opens, and behind the bars. `scripts/test-server-bootstrap.js` runs the
+ * page's side; the cases here pin which messages are taken, that every WebView
+ * listens before its first load, and that the window takes the colour of each
+ * page the view shows.
  *
  * NEGATIVE CONTROL: without the `setBackgroundColor` call in `configure` the
  * first case fails, and without the `addPlainTextPageScript` call in
@@ -48,7 +50,9 @@ import org.junit.jupiter.api.Test
  * `addPageColorListener` call, or with it after the first load, the fourth; taking
  * a frame's message, another host's, a short or translucent colour or one in
  * another notation fails the third, and reading an ArrayBuffer's data, which
- * throws as it would in the listener, fails it too.
+ * throws as it would in the listener, fails it too. Without the `onColor` call in
+ * the listener, or the `paintWindow` call in `showPageColor`, or with none before
+ * the load in `setupWebView`, `retryServerStart` or `showErrorPage`, the fifth.
  */
 class WebViewBackgroundTest {
 
@@ -138,7 +142,7 @@ class WebViewBackgroundTest {
                 "private fun setupWebView()",
             )
         )
-        val added = setup.indexOf("addPageColorListener(wv)")
+        val added = setup.indexOf("addPageColorListener(wv, ::showPageColor)")
         val loaded = setup.indexOf("wv.loadData(")
         assertTrue(loaded >= 0) { "setupWebView no longer loads its placeholder, so this case measures nothing" }
         assertTrue(added in 0 until loaded) {
@@ -154,6 +158,42 @@ class WebViewBackgroundTest {
         )
         assertTrue("WebViewCompat.addWebMessageListener(webView, PAGE_COLOR_OBJECT, setOf(\"*\"))" in add) {
             "addPageColorListener no longer listens under PAGE_COLOR_OBJECT for every origin"
+        }
+    }
+
+    @Test
+    fun `the window takes the colour of each page the view shows`() {
+        // The workbench page's, as it posts it. Read rather than driven: the
+        // listener cannot be captured on the JVM, where WebViewCompat's static
+        // initialiser calls the android.jar stub of Uri.parse.
+        val listener = SourceScan.withoutComments(
+            SourceScan.body(
+                SourceScan.read("src/main/kotlin/com/vscodroid/webview/VSCodroidWebView.kt"),
+                "internal fun addPageColorListener(",
+            )
+        )
+        assertTrue("onColor(color)" in listener) {
+            "addPageColorListener no longer hands the colour the page posted on, so the window behind the " +
+                "view keeps the one it had: #1E1E1E under a light theme, where the keyboard was and behind the bars"
+        }
+        val main = SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt")
+        fun body(declaration: String) = SourceScan.withoutComments(SourceScan.body(main, declaration))
+        assertTrue("paintWindow(color)" in body("private fun showPageColor(")) {
+            "showPageColor no longer gives the window the colour the workbench page posts"
+        }
+        // The app's own pages, which post nothing: each paints the window before it loads.
+        listOf(
+            "private fun setupWebView()" to "wv.loadData(",
+            "private fun retryServerStart()" to "webView?.loadData(",
+            "private fun showErrorPage(" to "webView?.loadDataWithBaseURL(",
+        ).forEach { (declaration, load) ->
+            val code = body(declaration)
+            val loaded = code.indexOf(load)
+            assertTrue(loaded >= 0) { "$declaration no longer loads its page with $load, so this case measures nothing" }
+            assertTrue(code.indexOf("paintWindow(") in 0 until loaded) {
+                "$declaration loads its page without first giving the window that page's colour, so a " +
+                    "window a light workbench painted stays light around it"
+            }
         }
     }
 

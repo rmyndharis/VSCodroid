@@ -178,27 +178,28 @@ internal fun plainTextPageScript(): String =
 internal const val PAGE_COLOR_OBJECT = "vscodroidPageColor"
 
 /**
- * Keeps the view's background on the colour the workbench page paints its own.
- *
- * The view's background shows wherever the page has not painted, and that is not
- * only before a first page. When the soft keyboard goes down the view grows, and
- * until the page paints at the new size the space below its last frame is the
- * view's background. Opening a folder from a box that had the keyboard up holds
- * that frame until the next page paints: 1.6 s on an API 36 emulator. With the
- * dark window colour [VSCodroidWebView.configure] gives the view, that space was
- * a dark band under a light theme, as it was white under a dark one before.
+ * Hands each colour the workbench page paints itself with to [onColor], after
+ * giving it to the view as its background.
  *
  * The page script in assets/server.js (INITIAL_THEME_MARKER) posts the colour it
  * paints the page with at the start of each load and again whenever the theme
- * changes, and this makes it the view's. For every origin, for the reason
+ * changes. What it is for is the window behind the view, which
+ * [com.vscodroid.util.paintWindow] says where it shows: as the space the soft
+ * keyboard gives back while a navigation holds the last page's frame, and behind
+ * the status and navigation bars. The view's own background shows only where a
+ * page paints nothing at all, and is kept on the same colour for that. For every
+ * origin, for the reason
  * [com.vscodroid.addUiScaleScript] gives; [pageColorFromMessage] says which
  * messages are taken.
  */
-internal fun addPageColorListener(webView: WebView) {
+internal fun addPageColorListener(webView: WebView, onColor: (Int) -> Unit) {
     if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
         try {
             WebViewCompat.addWebMessageListener(webView, PAGE_COLOR_OBJECT, setOf("*")) { view, message, origin, isMainFrame, _ ->
-                pageColorFromMessage(message, origin.host, isMainFrame)?.let(view::setBackgroundColor)
+                pageColorFromMessage(message, origin.host, isMainFrame)?.let { color ->
+                    view.setBackgroundColor(color)
+                    onColor(color)
+                }
             }
         } catch (e: RuntimeException) {
             // What is at stake is the colour of a band for a moment, never the editor.
