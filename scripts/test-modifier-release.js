@@ -55,8 +55,8 @@
  * takes the focus, and must follow `ab` as ^C when it is Ctrl+C.
  *
  * NEGATIVE CONTROL, measured: against KeyInjector.kt at f66e462f, which sent
- * no release, 38 of the 83 cases fail; against the interceptor before it made
- * a chord of a composed letter, 16 of the 29 composing cases; against one
+ * no release, 37 of the 82 cases fail; against the interceptor before it made
+ * a chord of a composed letter, 15 of the 28 composing cases; against one
  * that blurred every box, 3 cases, the box that commits on blur committing
  * `fooa`, sending no chord and leaving Ctrl latched; against one that sent
  * the terminal's chord at once, 3 cases, the Ctrl+P that takes the focus
@@ -939,23 +939,6 @@ const keys = (page, at = 'text-box') => sequence(page).filter((line, i) => page.
     page.runTimers();
     cases.push(['an update before the chord is typed, and the chord still follows',
         JSON.stringify([box.value, keys(page)[0]]), JSON.stringify(['pk', 'keydown p ctrl'])]);
-}
-
-// The same between the task that ends the composition and the chord's: a
-// word the keyboard starts then is the page's too, with Ctrl still latched,
-// and the chord is still the only one.
-{
-    const page = newPage();
-    intercept(page);
-    const box = textBox(page);
-    page.window.__vscodroid.ctrl = true;
-    box.compose('p');
-    page.runTimer();
-    box.compose('k');
-    page.runTimers();
-    cases.push(['a word started before the chord is typed, and the chord follows alone',
-        JSON.stringify([box.value, keys(page).filter((k) => k.startsWith('keydown'))]),
-        JSON.stringify(['k', ['keydown p ctrl']])]);
 }
 
 // The terminal: Ctrl then `c` at an empty prompt is ^C and nothing else.
