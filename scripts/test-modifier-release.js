@@ -48,8 +48,8 @@
  * Quick Open it runs takes the focus at once.
  *
  * NEGATIVE CONTROL, measured: against KeyInjector.kt at f66e462f, which sent
- * no release, 36 of the 74 cases fail; against the interceptor before it made
- * a chord of a composed letter, 16 of the 26 composing cases; against one
+ * no release, 35 of the 74 cases fail; against the interceptor before it made
+ * a chord of a composed letter, 15 of the 26 composing cases; against one
  * that sent the chord in the task that ended the composition, the case where
  * Quick Open takes the focus, the word lost; against one that released at the
  * chord's target with nothing stopping it at the window, 5 picker cases fail,
@@ -228,9 +228,13 @@ function newPage({ emitter = true } = {}) {
     // Timers wait until a case runs them, in the order they were set, as the
     // browser runs zero timeouts once the task that set them is over. One that
     // throws is reported, as the browser reports it, and the rest still run.
+    // Running one when none is set does nothing, so a script that set none
+    // fails the case's own checks and is not reported as a timer that threw.
     page.timers = [];
     page.runTimer = () => {
-        try { page.timers.shift()(); } catch (e) { timerErrors.push(e.message); }
+        const timer = page.timers.shift();
+        if (!timer) return;
+        try { timer(); } catch (e) { timerErrors.push(e.message); }
     };
     page.runTimers = () => { while (page.timers.length) page.runTimer(); };
     page.context = vm.createContext({
