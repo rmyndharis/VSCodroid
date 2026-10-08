@@ -827,11 +827,13 @@ class SafSyncEngine(private val context: Context) {
                         // Not the listed stamp as what this engine saw, which let the next
                         // save or delete go over the device copy unasked: it holds bytes
                         // nothing here has read, another app's edit as readily as the copy
-                        // the record vouched for before an edit the watcher never delivered.
-                        // So no stamp, and the digest of that copy, which is the version
-                        // such an edit was made from: the next save or delete reads the
-                        // device copy, goes ahead over that version, and keeps anything
-                        // else the way [keepsDeviceEdit] keeps another app's edit.
+                        // the record vouched for before an edit the watcher never delivered,
+                        // or a save the session delivered before it lost a later one. So no
+                        // stamp, and the digest of the copy the record vouched for: the next
+                        // save or delete reads the device copy, goes ahead over that
+                        // version, and keeps anything else the way [keepsDeviceEdit] keeps
+                        // another app's edit, this app's own delivered save included; see
+                        // there for why the record cannot tell that one apart.
                         val last = previousLineFor?.get(escapeRecordPath(doc.relativePath))
                         deviceSeen[localPath.absolutePath] = DeviceState(
                             null,
@@ -1408,12 +1410,19 @@ class SafSyncEngine(private val context: Context) {
      *
      * An open that cannot place what the device holds, on a provider with no clock a device
      * copy that differs from the mirror copy, leaves no stamp at all, so the first save reads
-     * the device copy whatever the provider reports. The digest it is read against is the
-     * previous record's for that path, the copy an edit the watcher never delivered was made
-     * from, so that edit goes out over it without a copy kept, while another app's edit made
-     * before the open is kept like one made after it. Where the record holds no digest for
-     * the path, as after an update from a build that recorded none, or after a second open
-     * with the edit still undelivered, which records nothing there, even that copy is kept.
+     * the device copy whatever stamp the provider reports. The digest it is read against is
+     * the previous record's for that path, the copy the open before fetched or kept. An edit
+     * the watcher never delivered goes out over that copy without a copy kept, and another
+     * app's edit made before the open is kept like one made after it. That needs the edit to
+     * have been made from that copy, which is so only where its session delivered no save of
+     * the file first, since the record learns nothing of a landed write: after a delivered
+     * save the device holds that save, which matches no recorded digest, so the first save
+     * keeps it beside the file as another app's edit would be kept, and a delete is declined
+     * with the notice that another app may have changed the file. That is a spare copy of
+     * this app's own bytes, the false positive the strictly newer arm of [initialSync] names
+     * where there is a clock, and nothing is lost. The same holds where the record has no
+     * digest for the path, as after an update from a build that recorded none, or after a
+     * second open with the edit still undelivered, which records nothing there.
      *
      * Ceilings: a provider reporting neither column; a same-size edit inside one clock
      * tick, or at any time on a provider with no clock or one that keeps a document's old
