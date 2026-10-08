@@ -1383,25 +1383,69 @@ class SafLiveDeviceEditTest {
 
     /**
      * A set-aside keeps the device copy in this app's own storage, so it is refused for a
-     * document reported past the copy limit, and a size the provider does not report reads
-     * as 0 and passed that refusal whatever the document held: on a provider with no size
-     * column, or at a stamp query unanswered over a copy whose stamp had moved, another app's
-     * edit grown past the limit was fetched in full, the free-space floor asked only before
-     * the copy began.
+     * document reported past the copy limit, and at a stamp query unanswered over a copy whose
+     * stamp had moved, nothing reports a size at all: the refusal let such a document through
+     * whatever it held, and another app's edit grown far past the limit was fetched in full, the
+     * free-space floor asked only before the copy began. The fetch stops once it passes the
+     * limit, and the save is held back as for a document reported that large; one of exactly
+     * the limit is kept, as one reported at it is.
      */
-    @ParameterizedTest(name = "the provider has no size column: {0}")
-    @ValueSource(booleans = [true, false])
-    fun `a device copy past the copy limit is not fetched where no size says so`(noSizeColumn: Boolean) {
-        deviceHasSize = !noSizeColumn
+    @ParameterizedTest(name = "the device copy holds {0} bytes")
+    @ValueSource(longs = [SafSyncEngine.MAX_FILE_SIZE, 3 * SafSyncEngine.MAX_FILE_SIZE])
+    fun `a set-aside after an unanswered stamp query stops at the copy limit`(length: Long) {
         open()
         save("first save")
         editOnDevice("changed by another app")
-        if (!noSizeColumn) {
-            deviceReadable = false
-            save("second save")
-            deviceReadable = true
-            failStampQuery = true
+        deviceReadable = false
+        save("second save")
+        deviceReadable = true
+        failStampQuery = true
+        var streamed = 0L
+        every { resolver.openInputStream(any()) } answers {
+            reads++
+            val device = zeros(length)
+            object : InputStream() {
+                override fun read() = device.read().also { if (it >= 0) streamed++ }
+
+                override fun read(b: ByteArray, off: Int, len: Int) =
+                    device.read(b, off, len).also { if (it > 0) streamed += it }
+            }
         }
+
+        save("typed in the editor")
+
+        assertEquals(false, failStampQuery, "precondition: the save asked the provider for the stamp")
+        val keepable = length <= SafSyncEngine.MAX_FILE_SIZE
+        assertTrue(
+            streamed < 2 * SafSyncEngine.MAX_FILE_SIZE,
+            "a device copy of $length bytes was streamed $streamed bytes into this app's storage",
+        )
+        assertEquals(
+            if (keepable) listOf(length) else emptyList(),
+            mirror.listFiles()!!.filter { it.name != "notes.txt" }.map { it.length() },
+            "the device copy was not kept as far as the copy limit allows",
+        )
+        assertEquals(
+            if (keepable) 2 else 1, writes,
+            if (keepable) "the save was held back over a device copy it could keep"
+            else "the save went ahead with nothing of the device's version kept",
+        )
+        assertEquals(listOf(File(mirror, "notes.txt").absolutePath), failed.map { it.absolutePath })
+    }
+
+    /**
+     * A provider with no size column, whose documents an open fetches whole whatever they hold,
+     * and another app's edit grown past the copy limit while the folder is open. A set-aside
+     * that stopped at the limit there refused the copy of a file the open itself copies in, so
+     * the save was held back for as long as the folder stayed open, each try streaming the
+     * limit's worth of the document again. It is kept whole, as the open keeps it.
+     */
+    @Test
+    fun `a set-aside on a provider with no size column keeps a copy past the copy limit`() {
+        deviceHasSize = false
+        open()
+        save("first save")
+        editOnDevice("changed by another app")
         every { resolver.openInputStream(any()) } answers {
             reads++
             zeros(SafSyncEngine.MAX_FILE_SIZE + 1)
@@ -1409,13 +1453,53 @@ class SafLiveDeviceEditTest {
 
         save("typed in the editor")
 
-        assertEquals(false, failStampQuery, "precondition: the save asked the provider for the stamp")
+        assertEquals(2, writes, "the save was held back over a device copy the open itself would fetch")
         assertEquals(
-            listOf("notes.txt"), mirror.list()!!.sorted(),
-            "the document grown past the copy limit was fetched into the mirror",
+            listOf(SafSyncEngine.MAX_FILE_SIZE + 1),
+            mirror.listFiles()!!.filter { it.name != "notes.txt" }.map { it.length() },
         )
-        assertEquals(1, writes, "the save went ahead with nothing of the device's version kept")
-        assertEquals(listOf(File(mirror, "notes.txt").absolutePath), failed.map { it.absolutePath })
+        assertEquals(emptyList<File>(), failed)
+    }
+
+    /**
+     * The reopen of a folder that reports times and no sizes, holding a file past the copy
+     * limit that the open fetched whole, after a save the watcher delivered whose write-back
+     * time the device put before the mirror's, as a coarse clock does. The open finds the mirror
+     * newer and the device moved since the record, and sets the device copy aside to tell the
+     * two apart: stopped at the limit there, the copy was refused, and the open said the file
+     * was not reaching the device and refused every save of it until the next open.
+     */
+    @Test
+    fun `a reopen of a folder with no size column refuses no save of a file past the copy limit`() {
+        deviceHasSize = false
+        every { resolver.openInputStream(any()) } answers {
+            reads++
+            zeros(SafSyncEngine.MAX_FILE_SIZE + 2)
+        }
+        // Counted rather than kept, so the device goes on holding the mirror's bytes.
+        every { resolver.openOutputStream(any(), "wt") } answers {
+            object : OutputStream() {
+                override fun write(b: Int) = Unit
+
+                override fun write(b: ByteArray, off: Int, len: Int) = Unit
+
+                override fun close() {
+                    writes++
+                    deviceModified += 1_000
+                }
+            }
+        }
+        open()
+        File(mirror, "notes.txt").setLastModified(deviceModified + 3_000)
+        deviceModified += 2_000
+
+        open()
+
+        assertEquals(emptyList<File>(), failed, "the reopen said a file both sides hold alike was not sent")
+        assertEquals(listOf("notes.txt"), mirror.list()!!.sorted())
+        save("typed after the reopen")
+        assertEquals(emptyList<File>(), failed, "the save of a file both sides held alike was refused")
+        assertEquals(2, writes)
     }
 
     /**

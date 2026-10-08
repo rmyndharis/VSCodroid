@@ -1345,13 +1345,16 @@ class SafSyncEngine(private val context: Context) {
         if (!mirrorCopiesInFlight.add(preserved.absolutePath)) {
             return DeviceCopyOutcome.UNAVAILABLE
         }
-        // Bounded by the same ceiling as it streams, because the size above is what the
-        // provider reported, and 0 where it reports none or [keepsDeviceEdit] could not get
-        // an answer: such a document passed the check whatever it held, and one another app
-        // had grown far past the ceiling was fetched in full, the free-space floor asked
-        // only before the copy began.
+        // Bounded by the same ceiling as it streams where nothing reported a size, at a stamp
+        // query [keepsDeviceEdit] got no answer to ([UNANSWERED_SIZE]): such a document passed
+        // the check above whatever it held, and one another app had grown far past the ceiling
+        // was fetched in full, the free-space floor asked only before the copy began. Not on a
+        // provider with no size column, whose documents phase 2 fetches whole: stopped at the
+        // ceiling there, every set-aside of a file past it that phase 2 had copied in was
+        // refused, and the saves of the file with it.
+        val limit = if (doc.size == UNANSWERED_SIZE) MAX_FILE_SIZE else Long.MAX_VALUE
         val fetched = try {
-            copyDocumentToLocal(doc.uri, preserved, doc.lastModified, limit = MAX_FILE_SIZE)
+            copyDocumentToLocal(doc.uri, preserved, doc.lastModified, limit = limit)
         } finally {
             mirrorCopiesInFlight.remove(preserved.absolutePath)
         }
@@ -1419,7 +1422,10 @@ class SafSyncEngine(private val context: Context) {
      * does offline, nothing tells that version from another app's edit, and the save goes
      * on to the set-aside, which holds it back while its own fetch fails too. A save held
      * back is tried again by itself while the folder is watched, so it lands once the
-     * device copy can be read, decided by the bytes like any other.
+     * device copy can be read and, where it is another version, kept, decided by the bytes
+     * like any other. A device copy is kept as phase 2 fetches one: not where the provider
+     * reports it past [MAX_FILE_SIZE], whole where it reports no size, and no further than
+     * that limit where the stamp query went unanswered.
      *
      * An open that cannot place what the device holds, on a provider with no clock a device
      * copy that differs from the mirror copy, leaves no stamp at all, so the first save reads
@@ -1451,7 +1457,9 @@ class SafSyncEngine(private val context: Context) {
      * [KEPT_COPY_DIGEST_BYTES] did not reach, and not written by this app since, which keeps
      * one spare copy of the unchanged document; a document reported past [MAX_FILE_SIZE] at
      * a length other than the digested one, which is held back unread, even where it holds
-     * this app's own bytes, until it is reported at that length; a held-back save whose
+     * this app's own bytes, until it is reported at that length, and one past it whose stamp
+     * query goes unanswered, which each try reads that far before holding the save back
+     * again, until the provider answers; a held-back save whose
      * folder is closed before a try lands, which waits for the next open (with no clock, for
      * the tries after it where this engine makes that open, and for the next save of the
      * file where the next activity's engine does), unless that open skips the document for
@@ -1459,8 +1467,9 @@ class SafSyncEngine(private val context: Context) {
      * list the folder or the directory holding the file, which ends the hold and the stamp,
      * so the next save goes ahead unguarded; a held-back save whose directory is renamed,
      * which is dropped and waits for the next save of the file or, with a clock, the next
-     * open; and on a provider with no clock, every copy after the first carries its counter
-     * as a time, which is cosmetic.
+     * open; and on a provider with no clock, or where the stamp query went unanswered, a copy
+     * is named for the time 0, and every copy after the first carries its counter as a time,
+     * which is cosmetic.
      */
     private fun keepsDeviceEdit(localFile: File, docUri: Uri): Boolean {
         // Settled again by whatever this answers: a save that goes ahead ends the hold, and
@@ -1503,16 +1512,19 @@ class SafSyncEngine(private val context: Context) {
         val seen = deviceSeen[localFile.absolutePath] ?: return null
         // An unplaced copy has no stamp so that its bytes decide, and an unanswered query let
         // a save, or a held-back save's try with nobody saving, go over it unread. Taken as a
-        // moved stamp instead, with the time and the length unknown: the 0s a provider that
-        // reports neither gives, which is also what a matching read re-baselines to.
-        val now = deviceStamp(docUri) ?: if (seen.stamp == null) 0L to 0L else return null
+        // moved stamp instead, with no time and a length no provider reports,
+        // [UNANSWERED_SIZE]: a matching read re-baselines to it, so the next answer is checked
+        // against the bytes again, and a set-aside it leads to knows that nothing said how much
+        // the device holds; see [setAsideDeviceCopy].
+        val now = deviceStamp(docUri)
+            ?: if (seen.stamp == null) 0L to UNANSWERED_SIZE else return null
         if (now == seen.stamp) return null
-        // Read at any length a set-aside could still keep, a missing size column's 0
-        // included: a reported length can lag the bytes, as on a provider that reports a
-        // write's new time before its new length, and skipping the read there kept a copy
-        // of the previous save. Past [MAX_FILE_SIZE] only at the digested length, because a
-        // document another app grew that far was read in full at every save and each save
-        // was held back anyway.
+        // Read at any length a set-aside could still keep, a missing size column's 0 and an
+        // unanswered query's length included: a reported length can lag the bytes, as on a
+        // provider that reports a write's new time before its new length, and skipping the
+        // read there kept a copy of the previous save. Past [MAX_FILE_SIZE] only at the
+        // digested length, because a document another app grew that far was read in full at
+        // every save and each save was held back anyway.
         if (seen.sha256 != null &&
             (now.second == seen.length || now.second <= MAX_FILE_SIZE) &&
             seen.sha256.contentEquals(deviceSha256(docUri, seen.length))
@@ -1590,14 +1602,15 @@ class SafSyncEngine(private val context: Context) {
      * The write-back loop asks whenever its queue is empty, so a held-back save lands once
      * its device copy can be read, still by [keepsDeviceEdit]'s comparison of the bytes, and
      * the waits bound what a provider that stays unreadable costs: per held-back file, a
-     * stamp query and the reads that fail, after [HELD_BACK_RETRY_FIRST_MS] and then at
-     * waits that double up to [HELD_BACK_RETRY_MAX_MS]. One per call, because the loop polls
-     * its queue before it asks again: tried all at once, a save made meanwhile waited
-     * behind every try that was due, which on a server that takes long to refuse a read is
-     * long for a save that has nothing to do with them. A file the mirror no longer holds
-     * is dropped rather than tried, which would spin the loop on a save with nothing left
-     * to send. A try runs as a save does, so one of a file the folder's last open could not
-     * read is refused like a save of it.
+     * stamp query and the reads that fail, or, while the provider does not answer that query
+     * over a device copy past [MAX_FILE_SIZE], a read of the digested length and a buffer and
+     * one of that limit, after [HELD_BACK_RETRY_FIRST_MS] and then at waits that double up to
+     * [HELD_BACK_RETRY_MAX_MS]. One per call, because the loop polls its queue before it asks
+     * again: tried all at once, a save made meanwhile waited behind every try that was due,
+     * which on a server that takes long to refuse a read is long for a save that has nothing
+     * to do with them. A file the mirror no longer holds is dropped rather than tried, which
+     * would spin the loop on a save with nothing left to send. A try runs as a save does, so
+     * one of a file the folder's last open could not read is refused like a save of it.
      */
     internal fun retryHeldBack(session: WatchSession): Boolean {
         val prefix = (session.root ?: return false).absolutePath + File.separator
@@ -5058,6 +5071,13 @@ class SafSyncEngine(private val context: Context) {
         internal const val MAX_FILE_SIZE = 50L * 1024 * 1024
 
         /**
+         * The length [deviceMovedPast] gives a stamp the provider did not answer, which no
+         * provider reports: a missing size column reads as 0. [setAsideDeviceCopy] stops its
+         * fetch at [MAX_FILE_SIZE] for it.
+         */
+        private const val UNANSWERED_SIZE = -1L
+
+        /**
          * Free space below which a fetch into the mirror is not attempted: the app's own
          * critically-low line plus one [MAX_FILE_SIZE] fetch, because the check runs
          * before a fetch and one fetch can spend that much. Read live from the disk, so
@@ -5650,7 +5670,8 @@ internal enum class DeviceCopyOutcome {
     /**
      * The device copy could not be brought over, so writing over it would lose it: the
      * document would not open, the copy failed, another sync is already fetching it, or
-     * it is larger than [SafSyncEngine.MAX_FILE_SIZE].
+     * it is reported larger than [SafSyncEngine.MAX_FILE_SIZE], or holds more than that
+     * where the provider did not answer for its size.
      */
     UNAVAILABLE,
 }
