@@ -583,9 +583,10 @@ Read `VSCodroidWebView.configure` for the live set. Three notes on what is **not
 - **`textZoom = 100` is a pin, not a default.** It is why changing the system font size has no
   effect on editor text, which is a live accessibility gap rather than a setting anyone tuned.
 
-Outside the settings block, `configure` gives the view the window background,
-`R.color.colorBackground` (#1E1E1E). An unset WebView paints white wherever no page has
-painted yet, which showed before the loading placeholder on the first launch after an update.
+Outside the settings block, `configure` gives the view the colour the workbench page last
+painted (`lastPageColor`, below), or the window background, `R.color.colorBackground` (#1E1E1E),
+before it ever has. An unset WebView paints white wherever no page has painted yet, which showed
+before the loading placeholder on the first launch after an update.
 The workbench page paints its own background before its first paint, from the theme it expects
 to show (§3.1), so this colour shows only where no page has painted yet and behind a page that
 paints no background of its own. Two kinds of page paint none. The server's refusals, bare
@@ -610,6 +611,17 @@ on each theme change, to the object `addPageColorListener` adds (`vscodroidPageC
 colour, and to the view. Only an opaque `#rrggbb` from the top frame on the loopback address is
 taken. The loading page and the error pages are this app's own and post nothing, so each gives
 the window its own colour before it loads.
+
+`MainActivity` also keeps the colour (`keepPageColor`), and every screen of the next start begins
+on it (`lastPageColor`): the windows of `SplashActivity` and `MainActivity` with their bars, the
+setup screen's text, the view and the "Starting server..." page. Under a light theme a cold start
+had been dark until the workbench painted, 2.3 s on the emulator, and the first launch after an
+update for the whole of setup. The system draws its starting window from a theme before any of
+the app runs, so while the colour is light it is pointed at `Theme.VSCodroid.LightStart` through
+`SplashScreen.setSplashScreenTheme`, which the system keeps for later launches, and back at the
+manifest's theme when it is dark. The toolchain picker and the error pages stay on the theme's
+dark window, which their layouts are drawn for. The first start after updating from a release
+without this has no colour kept yet and stays dark until the workbench paints.
 
 ### 4.2 Crash Recovery
 

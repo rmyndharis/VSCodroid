@@ -25,8 +25,11 @@ import com.vscodroid.setup.ToolchainPickerAdapter
 import com.vscodroid.setup.ToolchainRegistry
 import com.vscodroid.storage.SafStorageManager
 import com.vscodroid.util.drawBehindSystemBars
+import com.vscodroid.util.isLightColor
 import com.vscodroid.util.Logger
 import com.vscodroid.util.padForSystemBars
+import com.vscodroid.util.paintWindow
+import com.vscodroid.webview.lastPageColor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -77,6 +80,9 @@ class SplashActivity : AppCompatActivity() {
         // Before super.onCreate(), as the call it replaces required.
         drawBehindSystemBars()
         super.onCreate(savedInstanceState)
+        // The colour the editor last showed, for the window this screen and the
+        // setup it hosts are drawn on; see lastPageColor.
+        paintWindow(lastPageColor(this))
 
         val setup = FirstRunSetup(this)
 
@@ -259,6 +265,13 @@ class SplashActivity : AppCompatActivity() {
     private fun showSplashLayout() {
         setContentView(R.layout.activity_splash)
         findViewById<View>(R.id.splashRoot).padForSystemBars()
+        // The layout's text is light, for the theme's dark window, and the window is
+        // the editor's colour now. Dimmed as the status line is, 6.2:1 on white.
+        if (isLightColor(lastPageColor(this))) {
+            val text = getColor(R.color.colorOnLightBackground)
+            findViewById<TextView>(R.id.appName).setTextColor(text)
+            findViewById<TextView>(R.id.statusText).setTextColor(text)
+        }
     }
 
     /**
@@ -571,6 +584,9 @@ class SplashActivity : AppCompatActivity() {
     }
 
     private fun showToolchainPicker() {
+        // Its cards and text are drawn for the theme's dark window, whatever the
+        // editor's colour onCreate gave this one.
+        paintWindow(getColor(R.color.colorBackground))
         setContentView(R.layout.layout_toolchain_picker)
         findViewById<View>(R.id.pickerRoot)
             .padForSystemBars(basePx = (24 * resources.displayMetrics.density).toInt())

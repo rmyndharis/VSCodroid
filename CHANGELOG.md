@@ -67,6 +67,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Opening a folder, reloading the window and starting the app no longer show a white screen and then the light theme for a few seconds before the dark theme.
 - A folder's own settings, such as a colour theme in its `.vscode/settings.json`, no longer give way to your settings for several seconds while the editor finishes loading.
 - Under a light theme, the status and navigation bars and the space the keyboard leaves while a folder opens or the window reloads take the theme's background instead of staying dark.
+- Under a light theme the app also starts light: the launch screen, the setup screen and the "Starting server..." page take the background the editor last showed.
 
 ### Security
 

@@ -1,6 +1,7 @@
 package com.vscodroid.webview
 
 import android.content.Context
+import android.content.SharedPreferences
 import android.webkit.WebView
 import androidx.webkit.WebMessageCompat
 import com.vscodroid.R
@@ -24,15 +25,16 @@ import org.junit.jupiter.api.Test
  *
  * Unset, that is white, and on the first launch after an update it showed as two
  * white frames fading in over the dark splash before the loading page painted
- * (measured on an API 36 emulator). Asserted through `configure`, which every
- * WebView of the editor goes through, the one rebuilt after a renderer crash
- * included.
+ * (measured on an API 36 emulator). It is the colour the workbench page last
+ * painted, kept for the next start (`lastPageColor`), and the window colour before
+ * it ever has. Asserted through `configure`, which every WebView of the editor goes
+ * through, the one rebuilt after a renderer crash included.
  *
  * A plain-text page, and the WebView's own error page for a load that failed, paint
  * no background of their own, so the same colour sits behind their text, and
  * [addPlainTextPageScript] gives such a page the background of its own scheme
- * instead. `scripts/test-plain-text-page.js` runs that script; the second case here
- * pins that every WebView is given it, which the script's own test cannot see.
+ * instead. `scripts/test-plain-text-page.js` runs that script; the plain-text case
+ * here pins that every WebView is given it, which the script's own test cannot see.
  * Source reading, as in `UiScaleScriptWiringTest` and for its reason.
  *
  * The workbench page posts the colour it paints itself with, and
@@ -45,19 +47,22 @@ import org.junit.jupiter.api.Test
  * page the view shows.
  *
  * NEGATIVE CONTROL: without the `setBackgroundColor` call in `configure` the
- * first case fails, and without the `addPlainTextPageScript` call in
- * `setupWebView`, or with it after the first load, the second. Without the
- * `addPageColorListener` call, or with it after the first load, the fourth; taking
- * a frame's message, another host's, a short or translucent colour or one in
- * another notation fails the third, and reading an ArrayBuffer's data, which
+ * first case fails, and with the window colour there rather than `lastPageColor`
+ * the second. Without the `addPlainTextPageScript` call in `setupWebView`, or with
+ * it after the first load, the plain-text case. Without the `addPageColorListener`
+ * call, or with it after the first load, the listener case; taking a frame's
+ * message, another host's, a short or translucent colour or one in another
+ * notation fails the message case, and reading an ArrayBuffer's data, which
  * throws as it would in the listener, fails it too. Without the `onColor` call in
  * the listener, or the `paintWindow` call in `showPageColor`, or with none before
- * the load in `setupWebView`, `retryServerStart` or `showErrorPage`, the fifth.
+ * the load in `setupWebView`, `retryServerStart` or `showErrorPage`, the window
+ * case.
  */
 class WebViewBackgroundTest {
 
     private val webView = mockk<WebView>(relaxed = true)
     private val context = mockk<Context>()
+    private val prefs = mockk<SharedPreferences>()
 
     @BeforeEach
     fun setUp() {
@@ -71,6 +76,9 @@ class WebViewBackgroundTest {
         every { Logger.debugEnabled } returns false
         every { webView.context } returns context
         every { context.getColor(R.color.colorBackground) } returns WINDOW
+        every { context.getSharedPreferences("vscodroid", Context.MODE_PRIVATE) } returns prefs
+        // Nothing kept: the default asked for is the answer.
+        every { prefs.getInt("page_color", any()) } answers { secondArg() }
     }
 
     @AfterEach
@@ -81,6 +89,15 @@ class WebViewBackgroundTest {
         VSCodroidWebView.configure(webView)
 
         verify { webView.setBackgroundColor(WINDOW) }
+    }
+
+    @Test
+    fun `a new view starts on the colour the workbench last painted`() {
+        every { prefs.getInt("page_color", any()) } returns 0xFFFFFFFF.toInt()
+
+        VSCodroidWebView.configure(webView)
+
+        verify { webView.setBackgroundColor(0xFFFFFFFF.toInt()) }
     }
 
     @Test

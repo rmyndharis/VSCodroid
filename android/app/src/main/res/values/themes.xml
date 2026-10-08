@@ -60,4 +60,13 @@
         <item name="android:enforceNavigationBarContrast">false</item>
     </style>
 
+    <!-- The starting window the system draws on a launch while the editor's theme
+         is light, before any of this app runs. MainActivity names it through
+         SplashScreen.setSplashScreenTheme, which the system keeps for later
+         launches; nothing else applies it. The bar icons on it follow its colour by
+         themselves. -->
+    <style name="Theme.VSCodroid.LightStart">
+        <item name="android:windowSplashScreenBackground">@android:color/white</item>
+    </style>
+
 </resources>

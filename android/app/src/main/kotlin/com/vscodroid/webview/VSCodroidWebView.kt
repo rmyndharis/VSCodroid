@@ -1,9 +1,11 @@
 package com.vscodroid.webview
 
 import android.annotation.SuppressLint
+import android.content.Context
 import android.view.MotionEvent
 import android.webkit.WebSettings
 import android.webkit.WebView
+import androidx.core.content.edit
 import androidx.webkit.WebMessageCompat
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
@@ -101,14 +103,14 @@ object VSCodroidWebView {
         // the first frames of a new view, before the loading page, and longest on
         // the first launch after an update, when dropCacheLeftByEarlierBuild in
         // MainActivity runs first. Measured on an API 36 emulator as two white
-        // frames fading in over the dark splash. The window behind every screen
-        // here and the loading page are this colour. It is not what a light theme
-        // shows between loads: the workbench page colours itself before its first
-        // paint from the theme it expects to show (INITIAL_THEME_MARKER in
-        // assets/server.js), and from its first load the view takes that colour
-        // too, see addPageColorListener. Nor what a plain-text page or the
-        // WebView's own error page shows: see addPlainTextPageScript.
-        webView.setBackgroundColor(webView.context.getColor(R.color.colorBackground))
+        // frames fading in over the dark splash. The colour the workbench page last
+        // painted, as the window behind the view and the loading page are, so a
+        // light theme does not start dark; see lastPageColor. Between loads the
+        // workbench page colours itself before its first paint from the theme it
+        // expects to show (INITIAL_THEME_MARKER in assets/server.js), and a
+        // plain-text page or the WebView's own error page takes the background of
+        // its own colour scheme: see addPlainTextPageScript.
+        webView.setBackgroundColor(lastPageColor(webView.context))
 
         if (Logger.debugEnabled) {
             WebView.setWebContentsDebuggingEnabled(true)
@@ -226,4 +228,32 @@ internal fun pageColorFromMessage(message: WebMessageCompat, host: String?, isMa
     val data = message.data
     if (data == null || !Regex("#[0-9a-fA-F]{6}").matches(data)) return null
     return (0xFF shl 24) or data.substring(1).toInt(16)
+}
+
+/** The preferences file MainActivity, SplashActivity and PortFinder share. */
+private const val PAGE_COLOR_PREFS = "vscodroid"
+
+private const val KEY_PAGE_COLOR = "page_color"
+
+/**
+ * The colour the workbench page last posted, or the theme's window colour before
+ * it ever has.
+ *
+ * What the screens before the workbench start on: the windows of SplashActivity
+ * and MainActivity with their bars, the setup screen's text, this view and the
+ * loading page. Each was the dark window colour whatever the editor's theme, so
+ * under a light one every cold start and every first launch after an update was
+ * dark until the workbench painted: 2.3 s and 40 s on an API 36 emulator.
+ */
+internal fun lastPageColor(context: Context): Int =
+    context.getSharedPreferences(PAGE_COLOR_PREFS, Context.MODE_PRIVATE)
+        .getInt(KEY_PAGE_COLOR, context.getColor(R.color.colorBackground))
+
+/** Keeps [color] for [lastPageColor]; false when it is the colour kept already. */
+internal fun keepPageColor(context: Context, color: Int): Boolean {
+    val prefs = context.getSharedPreferences(PAGE_COLOR_PREFS, Context.MODE_PRIVATE)
+    // 0 for none: an opaque colour, the only kind taken, is never 0.
+    if (prefs.getInt(KEY_PAGE_COLOR, 0) == color) return false
+    prefs.edit { putInt(KEY_PAGE_COLOR, color) }
+    return true
 }
