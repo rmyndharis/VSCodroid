@@ -859,7 +859,6 @@ def self_test() -> int:
                 {"contributes": {"configurationDefaults": {"workbench.colorTheme": name}}}))
             want = f"{verdict}{welcome.name} makes the default theme"
             out = io.StringIO()
-            failed = False
             with contextlib.redirect_stdout(out):
                 check_default_theme(tree, bundled)
             if want not in out.getvalue():
