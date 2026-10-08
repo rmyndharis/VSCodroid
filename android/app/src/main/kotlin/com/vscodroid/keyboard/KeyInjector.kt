@@ -275,22 +275,23 @@ class KeyInjector(
      * when it closes; and a box that reads its text on `compositionend` reads the
      * letter.
      *
-     * Measured on an API 33 emulator with WebView 153 and Gboard 12.4: in the
-     * Search view's box Ctrl, held past the long-press delay or tapped, then `p`
-     * opened Quick Open and left the box empty, and over an underlined `fo` left
-     * `fo`, which got the focus back when Quick Open closed; Ctrl then `a` over
-     * `fo` selected it, and the next letter replaced it; and no `compositionend`
-     * reached the box. In a watch expression box Ctrl then `a` over an underlined
-     * `foo` selected it with the box still open, and Esc closed it with nothing
-     * added, where a blur and a refocus of the same box committed `foo` and
-     * closed it. In the terminal Ctrl then `c` stopped a running `cat`, over an
-     * underlined `ab` gave `ab^C`, and Ctrl then `p` over an underlined `ab` left
-     * `ab` at the prompt, Quick Open taking the focus in the chord's keydown and
-     * the terminal taking it back on its keyup. Before, the letter joined the
-     * word and the latch was spent. The editor's own textarea host, which reads
-     * compositions itself, is left as it was, and so is an `input` with no
-     * selection API, such as an email box, whose selection could not be put back:
-     * each keeps the letter, and the latch is spent.
+     * Measured on an API 33 emulator with WebView 153 and Gboard 12.4, while every
+     * box's chord still waited a task after its text was put back, as only the
+     * terminal's does now: in the Search view's box Ctrl, held past the long-press
+     * delay or tapped, then `p` opened Quick Open and left the box empty, and over
+     * an underlined `fo` left `fo`, which got the focus back when Quick Open
+     * closed; Ctrl then `a` over `fo` selected it, and the next letter replaced it;
+     * and no `compositionend` reached the box. In a watch expression box Ctrl then
+     * `a` over an underlined `foo` selected it with the box still open, and Esc
+     * closed it with nothing added, where a blur and a refocus of the same box
+     * committed `foo` and closed it. In the terminal Ctrl then `c` stopped a
+     * running `cat`, over an underlined `ab` gave `ab^C`, and Ctrl then `p` over an
+     * underlined `ab` left `ab` at the prompt, Quick Open taking the focus in the
+     * chord's keydown and the terminal taking it back on its keyup. Before, the
+     * letter joined the word and the latch was spent. The editor's own textarea
+     * host, which reads compositions itself, is left as it was, and so is an
+     * `input` with no selection API, such as an email box, whose selection could
+     * not be put back: each keeps the letter, and the latch is spent.
      *
      * A keyboard that commits, as Gboard 18 commits every letter, meets a read of
      * the terminal's textarea too. Its keydown of key code 229 comes before the
