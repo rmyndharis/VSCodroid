@@ -33,10 +33,7 @@ theme of Dark Modern, showed Dark Modern for 6 to 7.5 s on every load from its
 second on: from the extensions registering (code/didLoadExtensions at 12.3 s
 in one load) until the read ended (Light Modern back at 20.7 s, at the moment
 the explorer filled). The mirror case, a folder naming Dark Modern under Light
-Modern, showed Light Modern in the same window. The page script VSCodroid adds
-to the workbench page reads which theme a window shows to tell whether its
-folder has a theme of its own, and a tap in that window taught it the wrong
-answer, which started the next folder on the wrong theme.
+Modern, showed Light Modern in the same window.
 
 Verified in headless Chromium against the web workbench of server trees built
 with and without this patch, served on macOS with Dark Modern in the Machine
