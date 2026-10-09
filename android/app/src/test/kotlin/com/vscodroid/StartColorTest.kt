@@ -43,8 +43,8 @@ import kotlin.math.pow
  * only when the kept colour stays the same, the fifth; and reading the saved
  * colour where one is kept, without a port, after setup has started, from another
  * key or without storage, taking a short colour, painting it over the picker or not
- * keeping it, leaving the view that reads it alive, or letting a view that cannot be
- * made end the launch, the sixth.
+ * keeping it, leaving the view that reads it alive once it has answered or once the
+ * screen goes, or letting a view that cannot be made end the launch, the sixth.
  */
 class StartColorTest {
 
@@ -231,6 +231,14 @@ class StartColorTest {
         }
         assertTrue("colorProbe?.destroy()" in lines(splash, "override fun onDestroy()")) {
             "SplashActivity no longer lets the view that reads the colour go with it"
+        }
+        // Once it has answered too: the callback drops the only reference to it,
+        // so onDestroy would find nothing to destroy.
+        val reading = create.indexOf("colorProbe = readSavedPageColor(this, port) { color ->")
+        val answered = create.indexOf("if (color != null) showSavedPageColor(color)")
+        assertTrue(create.indexOf("colorProbe?.destroy()") in reading until answered) {
+            "SplashActivity no longer destroys the view that read the colour once it has answered, and the callback " +
+                "drops the only reference to it, so nothing destroys it"
         }
         // On the workbench page's own origin, as MainActivity loads it, with storage.
         // Without the comment strip, which takes the `//` of the address for one.
