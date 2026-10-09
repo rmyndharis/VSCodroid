@@ -188,9 +188,13 @@ class StartColorTest {
         }
         // The splash the workbench saves in its page's storage, and the part of it
         // that is the editor's colour.
-        assertTrue(
-            "localStorage.getItem('monaco-parts-splash')" in SAVED_SPLASH_COLOR_SCRIPT &&
-                "s.colorInfo.background" in SAVED_SPLASH_COLOR_SCRIPT
+        // Whole, as evaluateJavascript runs it: the JavaScript is compiled by nothing,
+        // and a script that no longer parses the splash, answers nothing or is never
+        // called reads no colour while every other case passes.
+        assertEquals(
+            "(function () { try { var s = JSON.parse(localStorage.getItem('monaco-parts-splash')); " +
+                "return (s && s.colorInfo && s.colorInfo.background) || ''; } catch (e) { return ''; } })()",
+            SAVED_SPLASH_COLOR_SCRIPT,
         ) { "the script no longer reads the editor colour of the splash the workbench saves" }
 
         val prefs = mockk<SharedPreferences>()
