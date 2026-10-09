@@ -551,7 +551,10 @@ if (!fs.existsSync(rehEntryPoint)) {
     // the answer have to be done before the page goes on: the root has to be
     // coloured before the first paint, and the workbench reads its configuration
     // element once, when workbench.js runs. The request is one more round trip
-    // to the server on this device per load, ahead of the stylesheet.
+    // to the server on this device per load, ahead of the stylesheet, and for a
+    // folder without a settings file one more line in server.log, "File not
+    // found:" and the file's path, which the server prints for every file it
+    // cannot find.
     // The text goes to the workbench as initialWorkspaceSettings (patch 0027),
     // which its configuration starts from. Without it a remote folder's
     // configuration held the folder's own settings only as the copy its last
