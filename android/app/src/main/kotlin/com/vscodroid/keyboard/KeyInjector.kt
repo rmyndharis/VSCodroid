@@ -222,9 +222,10 @@ class KeyInjector(
      * A Shift held on its own is not intercepted but is spent: the page keeps the
      * character it was about to insert, and the flag is cleared, so a latch cannot
      * carry over into a key the user taps minutes later. A Ctrl or Alt that meets
-     * input this listener has no chord for, a paste or a composition update that
-     * adds more or other than one character, is spent the same way and for the
-     * same reason.
+     * input this listener has no chord for, a paste, a composition update in a
+     * text box that adds more or other than one character, or a composition on
+     * the EditContext path that the swap below does not catch, is spent the same
+     * way and for the same reason.
      *
      * Backspace, Delete and Enter reach the page from here rather than from the key
      * row, because a soft keyboard reports all three as an edit and not as a key,
@@ -318,21 +319,53 @@ class KeyInjector(
      * commits does not reach the element as a `beforeinput`: Chromium reports it
      * to the `EditContext` object, as `textupdate` beside the composition and
      * format events, and the element gets only the keydown and keyup of key code
-     * 229. So on that path a letter the soft keyboard types is never made a chord
-     * here.
+     * 229. So on that path a letter the soft keyboard types becomes a chord only
+     * through the swap described below.
      *
      * Three inputs reach the page with no `beforeinput` at all. Two get a hook of
      * their own below so the latch is still spent: a composition on the
      * EditContext path, and typing inside a frame, which no event in this
      * document can see. The third, a letter committed outright on the EditContext
-     * path, as Gboard 18 commits one, is not covered: it is typed and the latch
-     * stays on for the next key. Measured on an API 36 emulator with WebView 153
-     * and Gboard 18.4.1: Ctrl latched, then `p` gave a keydown 229, a
-     * `textupdate` and a keyup, and no `beforeinput`, and `p` was typed with Ctrl
-     * still lit. A fourth is the soft keyboard's Enter when a keybinding accepts
-     * it. `MainActivity.injectComposingEnter` spends a lone Shift on the Enter
-     * whose empty `code` it fills, without applying it, as here; an Enter that
-     * arrives with a `code` is not covered.
+     * path, as Gboard 18 commits one, is taken by the same swap; without it the
+     * letter is typed and the latch stays on for the next key. Measured on an API
+     * 36 emulator with WebView 153 and Gboard 18.4.1, before the swap: Ctrl
+     * latched, then `p` gave a keydown 229, a `textupdate` and a keyup, and no
+     * `beforeinput`, and `p` was typed with Ctrl still lit. A fourth is the soft
+     * keyboard's Enter when a keybinding accepts it.
+     * `MainActivity.injectComposingEnter` spends a lone Shift on the Enter whose
+     * empty `code` it fills, without applying it, as here; an Enter that arrives
+     * with a `code` is not covered.
+     *
+     * Spending is all the composition hook can do, and a keyboard that composes
+     * every word made the latch useless: Gboard 12.4 types each letter on the
+     * EditContext path as a composition, which the editor types before this
+     * script hears of it, so Ctrl then `p` typed `p` and opened nothing, and over
+     * an underlined word the letter joined the word and Ctrl stayed latched for
+     * the next key. So while Ctrl or Alt is latched, the focused EditContext host
+     * is lent an empty EditContext of this script's own, which takes the next
+     * character; the editor's is given back, and the character goes to the
+     * `beforeinput` listener as the event it never got, which sends its chord
+     * through the same table and spends the latch. A word still composing is
+     * ended first and stays as typed. Measured on an API 33 emulator with Gboard
+     * 12.4, with the swap installed over DevTools: Ctrl then `p` opened Quick
+     * Open with no `p` in the file, from an empty line and over an underlined
+     * word. A letter a keyboard commits outright reaches the EditContext as a
+     * `textupdate` too, so the empty one takes it the same way, and built in,
+     * Gboard 12.4 on the same emulator committed the letter over the empty
+     * EditContext rather than composing it.
+     * A Backspace finds nothing to delete in it, so Gboard sends that as a key
+     * press, which the editor bound to a plain Backspace with the latch still
+     * on; measured on the same emulator, Ctrl then Backspace deleted one
+     * character and left Ctrl lit. The press is turned into the delete edit
+     * the listener makes Ctrl+Backspace of. Once the chord has run and the
+     * editor's EditContext is back, the host is blurred and focused again if
+     * it still has focus, which restarts input: the keyboard keeps its own copy
+     * of the text, the chord's letter stayed in it, and Gboard 12.4 on the same
+     * emulator built its next word from that copy, so `ab`, Ctrl, `s` and `c`
+     * left `ababsc`.
+     * What it costs: text committed in one piece while Ctrl or Alt is latched, a
+     * suggestion chip say, has no chord, spends the latch and is lost with the
+     * empty EditContext, where the `beforeinput` path leaves it to the page.
      *
      * The same script guards Left and Right, the only arrows pressed for real,
      * at the edge of a text box. A real arrow turns WebView spatial navigation
@@ -702,22 +735,153 @@ class KeyInjector(
                 // workbench attaches it, and hooked once per object. The element
                 // focused when this installs is hooked as well: the editor is
                 // usually focused before this runs and would otherwise wait for
-                // the next focus change.
+                // the next focus change. It also records which EditContexts hold
+                // a composition, for the swap below.
+                var composingContexts = new WeakSet();
                 function hookComposition(el) {
                     var ec = el && el.editContext;
                     if (!ec || ec.__vscodroid_hooked) return;
                     ec.__vscodroid_hooked = true;
                     ec.addEventListener('compositionstart', function() {
+                        composingContexts.add(ec);
                         var mod = window.__vscodroid;
                         mod.ctrl = false;
                         mod.alt = false;
                         mod.shift = false;
+                    });
+                    ec.addEventListener('compositionend', function() {
+                        composingContexts.delete(ec);
                     });
                 }
                 document.addEventListener('focusin', function(e) {
                     hookComposition(e.target);
                 }, true);
                 hookComposition(document.activeElement);
+
+                // A latch over a keyboard that composes. Gboard 12.4 types every
+                // letter on the EditContext path as a composition, and the
+                // editor's own textupdate listener, added before this script
+                // ran, types it before anything here could cancel it, with no
+                // beforeinput for the listener above to make a chord of. So
+                // while Ctrl or Alt is latched, the focused host is given an
+                // empty EditContext of this script's own: the next character
+                // lands there, the editor's EditContext is put back, and the
+                // character goes to the listener above as the beforeinput it
+                // never got, which sends the chord and spends the latch. A
+                // letter a keyboard commits outright reaches the EditContext as
+                // a textupdate as well, and the empty one takes it the same
+                // way. Spending or clearing the latch
+                // puts the editor's EditContext back, and so does focus leaving
+                // the host.
+                //
+                // Putting it back is not enough on its own. The keyboard keeps
+                // its own copy of the text: it saw the empty EditContext, and
+                // the chord's letter went into that copy. Given the editor's
+                // back it is told at most that the caret moved, and nothing at
+                // all where both carets have the same offset, so it went on
+                // from a copy holding the letter. On an API 33 emulator with
+                // Gboard 12.4, `ab`, Ctrl, `s` (the file saved) and `c` left
+                // `ababsc`; on an API 37 emulator with Gboard 17.7.4, Ctrl then
+                // `s` at the start of `ell` left `s` in the suggestion strip,
+                // and tapping `so` there wrote `o ell`. So while the host keeps
+                // focus it is blurred and focused again once the EditContext is
+                // back, which restarts input, and the keyboard reads the
+                // editor's text, as it does when a composing word is ended
+                // below. A chord that takes focus elsewhere, such as Quick
+                // Open, leaves that to the focus change.
+                var held = { ctrl: !!window.__vscodroid.ctrl, alt: !!window.__vscodroid.alt };
+                var lent = null;
+                function giveBack() {
+                    if (!lent) return;
+                    var l = lent;
+                    lent = null;
+                    if (l.host.editContext !== l.empty) return;
+                    l.host.editContext = l.own;
+                    if (document.activeElement === l.host) {
+                        l.host.blur();
+                        l.host.focus();
+                    }
+                }
+                function takeNextCharacter() {
+                    // A host that has gone from the page, or lost focus without
+                    // telling, still has the empty one.
+                    giveBack();
+                    var host = document.activeElement;
+                    if (!(held.ctrl || held.alt) || !host || !host.editContext ||
+                        typeof EditContext !== 'function') return;
+                    // A word still composing goes into the editor as typed, and
+                    // only then is the EditContext lent out.
+                    if (composingContexts.has(host.editContext)) {
+                        host.blur();
+                        host.focus();
+                    }
+                    var empty = new EditContext();
+                    // Kept from the composition hook above, which a blur and
+                    // focus while it is lent would otherwise attach: the hook
+                    // spends the latch at compositionstart, so a keyboard that
+                    // composes over this EditContext would lose its letter to
+                    // the give-back, with no chord.
+                    empty.__vscodroid_hooked = true;
+                    empty.addEventListener('textupdate', function(e) {
+                        // A selection-only update is not the character, and an
+                        // EditContext already given back takes nothing.
+                        if (!e.text || !lent || lent.empty !== empty) return;
+                        // The chord first, so that the keyboard reads the text
+                        // again after the chord has changed it.
+                        host.dispatchEvent(new InputEvent('beforeinput', {
+                            inputType: 'insertText', data: e.text,
+                            bubbles: true, cancelable: true, composed: true
+                        }));
+                        giveBack();
+                    });
+                    lent = { host: host, own: host.editContext, empty: empty };
+                    host.editContext = empty;
+                }
+                ['ctrl', 'alt'].forEach(function(name) {
+                    Object.defineProperty(window.__vscodroid, name, {
+                        configurable: true,
+                        enumerable: true,
+                        get: function() { return held[name]; },
+                        set: function(value) {
+                            var was = held.ctrl || held.alt;
+                            held[name] = !!value;
+                            if (!(held.ctrl || held.alt)) giveBack();
+                            else if (!was) setTimeout(takeNextCharacter, 0);
+                        }
+                    });
+                });
+                // Not while focus is still on its way out. Blink deactivates the
+                // EditContext the element has once the focus change is done, so
+                // swapped in here the editor's own was deactivated instead, the
+                // empty one stayed active, and it took everything typed in the
+                // element focus went to: on an API 33 emulator with Gboard 12.4,
+                // `sugg` typed in Quick Open after Ctrl then `p` left the box
+                // empty. A blur and focus in one task, as the keyboard guard
+                // makes, and the window losing focus and getting it back leave
+                // focus where it was and the EditContext lent.
+                document.addEventListener('focusout', function(e) {
+                    if (!lent || e.target !== lent.host) return;
+                    setTimeout(function() {
+                        if (lent && document.activeElement !== lent.host) giveBack();
+                    }, 0);
+                }, true);
+                // A keyboard's Backspace over the empty EditContext. With
+                // nothing before the caret there to delete, Gboard sends it as
+                // a key press rather than the edit it sends over text, and the
+                // editor's own binding deleted one character with the latch
+                // still on. It goes to the listener above as that edit, which
+                // makes it Ctrl+Backspace.
+                document.addEventListener('keydown', function(e) {
+                    if (!lent || e.target !== lent.host || e.key !== 'Backspace' ||
+                        e.ctrlKey || e.altKey || e.metaKey) return;
+                    e.preventDefault();
+                    e.stopImmediatePropagation();
+                    lent.host.dispatchEvent(new InputEvent('beforeinput', {
+                        inputType: 'deleteContentBackward',
+                        bubbles: true, cancelable: true, composed: true
+                    }));
+                    giveBack();
+                }, true);
 
                 // Focus moving into a frame. An event never leaves the document
                 // it fires in, so what is typed in a frame is out of the

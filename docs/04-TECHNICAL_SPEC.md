@@ -865,6 +865,30 @@ cannot produce a press on the layout in force it returns false and the announce 
 runs instead; that preserves the keystroke but still inserts nothing, and it logs a
 warning rather than a debug line so the case is visible in a release build.
 
+A latched Ctrl or Alt reaches what the soft keyboard types through the modifier
+interceptor (`KeyInjector.setupModifierInterceptor`), which cancels a `beforeinput` of one
+character and sends the chord in its place. On the EditContext path the soft keyboard sends
+no such event: Chromium reports what it composes or commits to the EditContext object, and
+the editor's own `textupdate` listener types it first, as Gboard 18.4.1 showed on an API 36
+emulator for a committed letter and Gboard 12.4, which composes every word, on an API 33
+emulator. So while Ctrl or Alt is latched the focused EditContext host is lent an empty
+EditContext of the interceptor's own, after any word still composing is ended. A character
+composed or committed into it reaches the `beforeinput` listener as the event it never got;
+Gboard 12.4 committed rather than composed over the empty EditContext on that emulator.
+Either way the chord is sent first and the editor's EditContext is then given back, and while
+the host keeps focus it is blurred and focused again, which restarts input. Without that the
+keyboard went on from its own copy of the text, which held the chord's letter: on that
+emulator `ab`, Ctrl, `s` (the file saved) and `c` left `ababsc`, and with Gboard 17.7.4 on
+an API 37 emulator the suggestion strip went on offering `s` after Ctrl then `s` at the start
+of a line. Clearing the latch, spending it and focus leaving the host give the EditContext
+back too, focus leaving only once it has left: Blink deactivates the EditContext an element
+has when the focus change is done, so one given back during `focusout` left the empty one
+active, and after Ctrl then `p` what was typed in Quick Open went into it, leaving the box
+empty. A Backspace finds nothing to delete in the empty EditContext, so the keyboard
+sends it as a key press, which is turned into the delete edit the listener makes
+Ctrl+Backspace of. Text committed in one piece while the latch is on, a suggestion chip
+say, has no chord and is lost with the empty EditContext.
+
 The soft keyboard's own Enter is handled in the page by `MainActivity.injectComposingEnter`.
 A composing Enter is replaced with one the workbench recognises, and a non-composing Enter
 that arrives with an empty `code`, as Gboard's action key does in a one-line box, is given
@@ -920,27 +944,164 @@ refocuses the composing host in the same task as the caret move, from a window c
 `keydown` listener for the arrows, Home, End, PageUp, PageDown, Tab, Backspace and Delete,
 and from the editor's own `-monaco-gesturetap` and `-monaco-gesturecontextmenu`. It does so
 before the editor handles the key or the tap, except where an open suggestion list takes a
-key without modifiers, or a tap: ending a composition makes the editor refilter the list and
-highlight its first row again, so Up, Down, PageUp and PageDown that move the highlight end
-nothing, and Tab accepting the highlighted suggestion or a tap on a row end the composition
-after the list has acted. With no list open, ending a composition also makes the editor
-schedule a quick suggestion, which 10 ms later opens the list wherever the caret then ends a
-word. Patch 0023 cancels it when a cursor key moves the caret; without it, End on a line
-ending in an identifier, or a trackpad drag down onto one, opened the list there, and Enter
-then accepted a suggestion instead of starting a new line. The word is committed as typed,
-so on a Japanese keyboard the kana are committed unconverted. A caret moved by a command,
-such as Undo, Find or Go to Line, is not covered.
+key without modifiers, or a tap. Up, Down, PageUp and PageDown that move the list's highlight
+end nothing, and Tab accepting the highlighted suggestion or a tap on a row end the
+composition after the list has acted, because ending a composition makes the editor
+refilter the list and highlight its first row again. With no list open, a quick suggestion
+can still be pending when a cursor key moves the caret, scheduled 10 ms after the last letter
+typed or the end of a composition that typed, patch 0025 scheduling none for one that typed
+nothing, and it opens the list wherever the caret then ends a word. Patch 0023 cancels it when
+a cursor key moves the caret; without it, End on a line ending in an identifier, or a trackpad
+drag down onto one, opened the list there, and Enter then accepted a suggestion instead of
+starting a new line. The word is committed as typed, so on a Japanese keyboard the kana are
+committed unconverted. A caret moved by a command, such as Undo, Find or Go to Line, is not
+covered.
+
+Gboard 12.4 also sends Enter as a key press when the caret is inside an underlined word or at
+its start, as after a tap on the word or Home, and at once recomposes the word after the
+caret at the offsets of its own copy of the text: the old line with a line break at the
+caret. The editor's EditContext buffer used to restart at the new line, so that range fell on
+other characters, and a tap inside `alpha1` in `const alpha1 = 1, alpha2 = 2` followed by
+Enter left `ha1 = 1, aha1a2 = 2` on the new line. At column 1 the buffer did not change at
+all, so the keyboard was never told, and its next Backspace deleted nothing. Patch 0024, on
+Android, keeps the buffer's start after an edit the keyboard made, so the line break it typed
+stays in the buffer and a Backspace it sends for that line break joins the lines. Where text
+follows the caret it starts the buffer instead where the caret sits at the offset the
+keyboard expects, so the recomposition lands on the text after the caret whatever
+indentation the editor added. It does that only there, because the keyboard's copy of the
+text before the caret then lacks the indentation and nothing tells the keyboard: moving the
+start at the end of a line as well, measured, let Gboard recompose a word over other
+characters after Enter at the end of an indented line, and three Backspaces turned `alpha1;`
+into `alphalpha`. With the start kept, the indentation moves the caret off the offset the
+keyboard expects, and it reads the text again. A selection the keyboard sets without changing
+any text, as Gboard does for a space bar swipe and before it commits a suggestion, goes where
+the keyboard asked, on whichever line of the buffer that is, as a cursor key moves the caret,
+and the buffer keeps its start and its end. The keyboard goes on from its own copy of the
+text as if its selection had landed: with the caret moved only along its line, a swipe past
+the start of a line typed after Enter left Gboard 12.4's own caret at the end of the line
+above, and on an API 33 emulator it wrote the word there, `one`, over `alph`. So the caret
+follows the swipe into the line above, as in a text box, and the buffer keeps the lines after
+the caret's, which the keyboard's copy holds, until the next tap, cursor key or command. What
+the keyboard replaces reaches across the line breaks the buffer holds, after the caret as well
+as before it. A Backspace the keyboard sends as a key press, as Gboard 17.7 and 18.4 do, keeps
+the buffer as it is too, from the press to its release, because the keyboard counts the
+character in its own copy: reset as after a command, the buffer dropped the lines a swipe into
+the line above had kept while the caret moved where the keyboard expected, and on an API 37
+emulator the next suggestion Gboard 17.7.4 committed for the line below was written over the
+line above, `gama` becoming `gabra `; with the buffer kept, the same steps replaced only the word
+on the line below.
+Several cursors become one, as they do on the textarea input. Moved as a cursor key moves it,
+the caret also takes an open suggestion list along: the list is refiltered at the new caret
+and closes once the caret leaves the word, where a move made as typing would leave it open for
+Enter to accept a suggestion at the new caret. Every other cursor change, and every edit and
+selection on other platforms, starts the buffer at the caret's line, as upstream does.
+
+A keyboard hears of a selection that moved and of nothing else, because Android passes a
+selection on only when it changed. So a buffer rewritten with the caret at the offset it had
+left the keyboard on the text it had: on an API 36 emulator with Gboard 18.4, after Tab
+accepted `delta` over a `d` typed on a new line, the strip went on offering `do`, which made
+the line `deltao `, and after a tap from the end of `delta` to the end of `alpha` on another
+line its `Delta` replaced `alpha`. The tap route comes from upstream's per-line buffer and the
+Tab route from the start kept after Enter. On Android patch 0024 therefore keeps what the
+keyboard knew before the first rewrite of a task that is not an edit or a selection of the
+keyboard's, and once the code that rewrote the buffer has returned, still in the same task,
+restarts input if the text then differs from it and the selection does not: the editing host
+is blurred and focused again with the editor's focus tracking paused, and the keyboard reads
+the text again. Decided at the end of the task, an accepted suggestion or a paste, which
+rewrites the buffer before the caret moves, restarts nothing. It costs a restart at each tap,
+cursor key or command that leaves the caret at the same offset of another line, column 1
+included, at each command that rewrites the caret's line without moving the caret, such as a
+forward Delete and its undo, and at each edit made after the caret on its line in a later
+task, as linked editing makes while a tag is typed, or a replacement before the caret by text
+as long; an edit before the caret that changes its length moves the caret's offset, which the
+keyboard is told of, and restarts nothing. The keyboard guard keeps a
+keyboard that is up across that blur and focus (below). Text the editor adds inside an edit
+of the keyboard's, such as an auto-closed bracket or quote, restarts nothing, because that
+rewrite counts as the keyboard's own, so the keyboard's copy goes on without it, as before
+(read from the code).
+
+Patch 0025 changes how the editor's suggestions meet a composition. A composition counts as
+typed only when its last caret move was typing, so the word Gboard underlines under a tap,
+by rewriting it with itself, opens no suggestion list when the keyboard is put away, and the
+end of such a composition checks no trigger character either.
+
+A touch on another part of the workbench, an activity bar icon or a status bar item, leaves
+focus in the editor on Android, because the workbench's touch gestures cancel the events that
+would move it, so the blur that ends a suggestion session on a desktop never comes. A list
+stayed open over the view the touch opened, and the next tap there accepted a suggestion into
+the file: with Gboard 12.4 on an API 33 emulator, `hello world` became `hello
+WebTransportDatagramDuplexStream` from a tap meant for a file in the Explorer. The keyboard
+guard puts the keyboard away at such a touch (below), which ends a word still underlined, and
+the end of that composition would arm a quick suggestion (read from the code). On Android patch
+0025 ends the session on a `pointerdown` outside the editor and its overflow widgets, a request
+still out or a quick suggestion still pending included, and the composition the keyboard then
+ends counts as one that typed nothing, so its end arms nothing either. A list left open when
+the keyboard is put away with Back, which no touch precedes, stays until a tap, as before.
 
 The same script decides when the soft keyboard comes up for the editor. It holds it down
 with `inputmode="none"` on the editor's editing host and lets it up only for a tap on text,
-anywhere inside an editor or in a text box, decided at `pointerup` so that a drag to scroll
-never raises it; text boxes themselves are not held. A tap anywhere inside an editor
-counts, the margin and the space under the last line included, because the editor moves the
-caret there. When the keyboard goes away, by Back, the navigation bar's hide key or
-anything else, `ExtraKeyRow`'s inset listener reports it and
-`window.__vscodroidKeyboardDismissed` puts the hold back, so the next scroll of the file
+anywhere inside an editor or a terminal or in a text box, decided at `pointerup` so that a
+drag to scroll never raises it; text boxes themselves are not held. The terminal's helper
+textarea is held like the editor's host, so a terminal focused from a tap outside text, its
+tab in the panel say, opens with the keyboard down until it is tapped; left out, as it was,
+the terminal kept the keyboard up over the view an activity bar icon opened, with typing
+going to the shell, and after Back the same icon raised it again. Typing with the keyboard up
+counts as a tap on text, in a text box as in an editor, so a terminal that Enter opens from the
+Command Palette, or a file from Quick Open, keeps the keyboard up when the palette was opened
+from a menu: held there, as after the tap on the menu, the keyboard went down under a terminal
+opened to be typed into. A file not open yet goes through a gap first: Quick Open's Enter takes
+the old editor's host away while the file loads, and Enter in the Explorer's New File box
+leaves focus on the Explorer's list, and Chromium takes the keyboard down there. A keyboard
+reported down while nothing that takes text has focus clears nothing a tap or typing counted,
+so the new editor's focus raises it again, as it did on API 33 and 37 emulators; read as put
+away, it left the file held with the keyboard down on API 33, 36 and 37 emulators. The test is
+what has focus, so Back while an extension's webview, an iframe, has focus is read the same
+way, as is the keyboard Chromium takes down when a terminal that was typed into goes away, and
+an editor focused next without a touch can raise it (read from the code). A host blurred and
+focused again in one task, as patch 0024 and the key row restart input, keeps a keyboard that
+is up: that focus holds nothing, though the touch before it was outside text and left the
+keyboard up, a drag on the activity bar, a long press or a button that opens a menu, because a
+hold written at that focus would take the keyboard down on a phone (below). It takes off a hold
+already on the host, which a turn of the phone that reports the keyboard down and up again
+leaves, and the composition finish takes such a hold off too; that hold reached Chromium when
+it was written, so a restart that meets it changes no input mode. A hold the focus handler put
+on with the keyboard up, to take it down, stays until the keyboard is reported down or a tap on
+text lets it up. A tap anywhere inside an editor counts, the margin and the space under the
+last line included, because the editor moves the caret there. When the keyboard goes away, by
+Back, the navigation bar's hide key or anything else, `ExtraKeyRow`'s inset listener reports
+it and `window.__vscodroidKeyboardDismissed` puts the hold back, so the next scroll of the file
 leaves it down; without that the host kept no `inputmode` and Chromium raised the keyboard
-again for any touch on it. A read-only editor never lets it up: its EditContext host
+again for any touch on it. A keyboard reported down while nothing
+that takes text has focus is taken as one Chromium took down as focus left text, and the hook
+keeps what a tap or typing counted (above).
+
+With the keyboard up, `inputmode="none"` on the focused host takes it down only where no
+hardware keyboard is attached: Chromium's `ImeAdapterImpl.updateState` hides the keyboard when
+the focused element's input mode turns to none unless the configuration reports a keyboard,
+and every emulator these flows were measured on does (`hw.keyboard=yes`, `qwerty` in its
+configuration). There a tap on an activity bar icon, which leaves focus on the editor's host,
+left the keyboard over the Explorer, and over the Search view with typing still going to the
+file. On a phone the hold took it down instead, over anything but a word still composing, and
+for every touch outside text: a drag, a long press and a button that opens a menu as well
+(read from Chromium's source, not measured on a phone). So while the keyboard is up a touch
+outside text leaves the focused host without the hold, and after a tap outside text that
+leaves an editing host focused the script asks for the keyboard down with
+`navigator.virtualKeyboard.hide()` under a manual `virtualKeyboardPolicy`, which goes back
+to auto when the keyboard is reported down, on the next tap on text, after a second, or when
+another host is asked; the dismissal hook then holds the host. The hold that hook writes when
+a turn of the phone reports the keyboard down and up again, as an API 36 emulator does, would
+take a phone's keyboard down at the turn and leave it down until a tap on text (read from the
+same source, not measured). A tap is the script's own test,
+12 CSS px and 500 ms, or a tap by the workbench's touch gesture, which the activity bar, the
+status bar and the tabs act on and which is looser, under 700 ms within 30 px on each axis:
+with only the script's test, a touch on the Search icon that slid 20 px, or a press of 620 ms
+on the Explorer icon, opened the view with the keyboard left up and typing going to the file,
+on an API 33 emulator, and with the gesture's tap counted the same touches took it down there
+and on an API 37 emulator. A button that opens a menu, marked `aria-haspopup="true"` as the
+views' and the editor's More Actions, Accounts, Manage and the Application Menu are, is left
+alone, because the keyboard going down resizes the window and the menu closed with it; so is
+a touch whose target has left the page, the block of a menu that a tap outside it has just
+closed. A read-only editor never lets it up: its EditContext host
 carries `aria-autocomplete="none"`, which the editor writes while it is read-only, so with
 File: Toggle Active Editor Read-only in Session a tap only moves the caret;
 `files.readonlyInclude` reaches the same editor option (read from the bundle, not
@@ -994,6 +1155,8 @@ flowchart TD
   P --> P21["0021 terminal hint: no Copilot CLI line on Android"]
   P --> P22["0022 EditContext: keep the IME buffer and caret in step"]
   P --> P23["0023 suggest: drop a pending quick suggest on a caret key"]
+  P --> P24["0024 EditContext: keep the buffer where the keyboard expects it"]
+  P --> P25["0025 suggest: only from compositions that typed; a touch elsewhere ends it"]
   P --> P26["0026 configuration: keep a folder's cached settings until its file is read"]
   P --> P27["0027 configuration: start a remote workspace from the settings the page read"]
 ```

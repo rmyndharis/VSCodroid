@@ -181,6 +181,117 @@
 # patch. Folding the block into the else-if chain below it deletes the token;
 # the patch header says so at the call site too.
 0023 suggest caret move|out/vs/code/browser/workbench/workbench.js|this._triggerQuickSuggest.cancel();return
+# 0024's rows name what it adds. Property names survive this bundle, as 0016
+# and 0022 rely on, so each row is a name the patch introduces. Against the
+# shipped 1.139.1 workbench.js (the 0023 build) every pattern occurs 0 times
+# but restart by focus, which upstream's one pause matches there.
+#
+#  - window start: the buffer's start is re-decided on every cursor change.
+#  - start kept at a line end: an edit of the keyboard's that leaves the caret
+#    at the end of its line keeps the start, which only the 20 line limit
+#    moves. Moved there too, the start left the keyboard's copy of the text
+#    before the caret without the indentation the editor had added.
+#  - keyboard caret, x6: the caret offset the keyboard expects is set before
+#    and cleared after each of its two edits, its textupdate and its Enter, and
+#    read where the start is decided and where the lines after the selection
+#    are dropped, each in a `===void 0` the pattern matches as well. Dropping
+#    any one of the six, the clear after the textupdate's edit among them,
+#    fails the row.
+#  - composition across lines, x2: CompositionOperation's walk back over line
+#    breaks, called from the window and from the replace. With the replace
+#    back at its column-1 clamp only the window's call is left.
+#  - composition forward across lines: the walk forward over line breaks,
+#    called from the replace alone. The bundle's other positionAfter names
+#    are properties, never called. Clamped at the end of the caret's line
+#    again, a range the keyboard replaced past it was inserted in front of
+#    the lines it covered.
+#  - offsets as positions, x5: the selection the keyboard sets, at both of its
+#    ends, the composition underline and the character bounds all map a buffer
+#    offset through the window's own start. Without the selection's two, a
+#    selection on an earlier line of the window was refused at column 1.
+#  - selection without an edit: the test that sends a textupdate changing no
+#    text, a selection the keyboard set, to a caret move of its own instead of
+#    typing the text before the caret again.
+#  - selection as a cursor key: that move is made from source 'keyboard' with
+#    reason Explicit, as a cursor key makes one, so an open suggest list is
+#    refiltered at the new caret. Made as compositionType makes it, with the
+#    reason typing has, it left the list open for Enter to accept at the new
+#    caret. No other call in this bundle reaches setCursorStates through a
+#    `viewModel.` property.
+#  - selection keeps the start, x6: the flag that keeps the window as it is
+#    while that caret move is applied, initialised, set and cleared around the
+#    move, and read where the start is decided, where the lines after the
+#    selection are dropped and where a rewrite of the window decides whether to
+#    restart input. Without the first read, the window moves to the caret's
+#    line under the keyboard's selection.
+#  - lines after the selection, x7: how many lines the window holds after the
+#    selection's, which a selection the keyboard sets on an earlier line makes
+#    more than none, so the window keeps its end too. Initialised, read where a
+#    change decides whether to rewrite the window, dropped on any cursor change
+#    that is not the keyboard's and when the start is reset, set by the
+#    selection (two in one statement) and read where the window is built.
+#    Without it a swipe back to the right stops at the end of the earlier line.
+#  - selection start read first: that read is the first thing the start
+#    decision does, ahead of the reason test, which the Explicit move fails.
+#    The test compiles into one conditional expression with the rest, so a
+#    read placed after it no longer opens a block. It reads the Backspace key's
+#    flag beside it.
+#  - input restarted: the call that asks for an input restart after a rewrite
+#    of the window, which restarts input at the end of the task if the text
+#    then differs from what the keyboard knew and the selection does not, as
+#    Android passes the keyboard a selection that changed and nothing else.
+#    Without it Gboard went on offering the words of the text it had, and a
+#    pick wrote over the new text.
+#  - what the keyboard knew, x4: the text and selection kept from the first
+#    rewrite of a task, read and set there, and read and cleared at its end,
+#    so that the rewrites of one task restart input once.
+#  - restart only for an unmoved selection, x2: the selection compared with the
+#    one before, where a rewrite is noted and at the end of the task. Without
+#    the second, accepting a suggestion, which rewrites the window before it
+#    moves the caret, restarted input with the keyboard told of the move.
+#  - restart by focus, x2: the blur and focus that restart input run with the
+#    editor's focus tracker paused, beside upstream's one pause, where the IME
+#    textarea takes focus. The shipped bundle has 1.
+#  - own edits restart nothing, x3: the flag set and cleared around the
+#    keyboard's own edit, and initialised. The keyboard's copy holds that edit
+#    already, and a restart in the middle of its typing ends the word it is
+#    composing.
+#  - Backspace key keeps the window, x5: the flag set at a Backspace key press
+#    and cleared at its release, initialised, and read where the start is
+#    decided and where the lines after the selection are dropped. Gboard 17.7
+#    and 18.4 send their Backspace as a key press and count the character in
+#    their own copy; without the second read the window dropped the lines a
+#    swipe into the line above had kept, and the word the keyboard picked for
+#    the next line was written over the line above.
+0024 editcontext window start|out/vs/code/browser/workbench/workbench.js|_editContextStart=this._editContextStartAfter(
+0024 editcontext start kept at line end|out/vs/code/browser/workbench/workbench.js|startLineNumber - this._editContextStart.lineNumber >
+0024 editcontext keyboard caret|out/vs/code/browser/workbench/workbench.js x6|_expectedCaretOffset=
+0024 composition across lines|out/vs/code/browser/workbench/workbench.js x2|.positionBefore(
+0024 composition forward across lines|out/vs/code/browser/workbench/workbench.js|.positionAfter(
+0024 editcontext offsets as positions|out/vs/code/browser/workbench/workbench.js x5|this._modelPositionAt(
+0024 editcontext selection without an edit|out/vs/code/browser/workbench/workbench.js|.updateRangeStart===
+0024 editcontext selection as a cursor key|out/vs/code/browser/workbench/workbench.js|viewModel.setCursorStates("keyboard",
+0024 editcontext selection keeps the start|out/vs/code/browser/workbench/workbench.js x6|this._keepEditContextStart
+0024 editcontext lines after the selection|out/vs/code/browser/workbench/workbench.js x7|this._editContextLinesAfter
+0024 editcontext selection start read first|out/vs/code/browser/workbench/workbench.js|{if(this._keepEditContextStart||this._deletingByKey)
+0024 editcontext input restarted|out/vs/code/browser/workbench/workbench.js|this._restartInputIfUnheard(
+0024 editcontext what the keyboard knew|out/vs/code/browser/workbench/workbench.js x4|this._beforeRewrite
+0024 editcontext restart only for an unmoved selection|out/vs/code/browser/workbench/workbench.js x2|this._previousEditContextSelection.equals(
+0024 editcontext restart by focus|out/vs/code/browser/workbench/workbench.js x2|this._focusTracker.pause()
+0024 editcontext own edits restart nothing|out/vs/code/browser/workbench/workbench.js x3|_applyingInputMethodEdit=
+0024 editcontext Backspace key keeps the window|out/vs/code/browser/workbench/workbench.js x5|this._deletingByKey
+# 0025's rows: a composition that typed nothing arms no quick suggestion and
+# checks no trigger character, and on Android a touch outside the editor ends
+# the session. Property names, as for 0024, each 0 times in the shipped
+# bundle. The trigger character gate compiles to `&&` inside an arrow body
+# with braces, so the row is the braced listener the patch writes; upstream's
+# was `()=>e()`.
+#
+#  - touch elsewhere: the overflow widgets test in the pointerdown listener
+#    that ends the session on a touch outside the editor, emitted as written.
+0025 suggest composition typed|out/vs/code/browser/workbench/workbench.js|_onCompositionEnd(this._typedWhileComposing)
+0025 suggest trigger characters|out/vs/code/browser/workbench/workbench.js|_triggerCharacterListener.add(this._editor.onDidCompositionEnd(() => {
+0025 suggest touch elsewhere|out/vs/code/browser/workbench/workbench.js|this._editor.getOverflowWidgetsDomNode() ?? null
 # 0026 gates on the reparse it redirects. Property names survive this bundle
 # (folderConfiguration and cachedFolderConfiguration are emitted readable), so
 # the new field and the `??` beside the old one make a token only this patch

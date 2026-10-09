@@ -1,0 +1,166 @@
+Suggest from a composition only when it typed, and end the session at a touch
+elsewhere on Android.
+
+SuggestModel ignores the caret and the text while the editor composes, and
+when a composition ends it arms a quick suggestion, or refilters an open
+list, as if the word had just been typed. A keyboard can compose a word it
+did not type. Gboard 12.4 underlines the word under a tap, or under the
+caret after Home or an accepted suggestion, by rewriting it with itself,
+which moves no caret. When that composition ended, because the keyboard was
+put away with Back or the hide key, the list opened over the tapped word
+(`b|ee` gave `bean`, `beat`; `d|og` gave `door`, `dot`), and after a Tab
+accept it could open again with the accepted word as its only row. A
+composition now counts as typed when the last caret move during it was
+typing (an empty selection, reason NotSet, source 'keyboard' or
+'deleteLeft'), and one that typed nothing ends without arming anything. The
+end of a composition also checks the character before the caret against the
+language's trigger characters, and a composition that typed nothing typed
+none, so that check is skipped too. That half follows from the code rather
+than from a failure seen: in the published bundle a tap at the start of
+`alpha2`, after a space, recomposed the word and Back then opened no list,
+the JavaScript provider offering nothing for a space there, and Gboard did
+not recompose the word after a period at all. A composition that typed
+nothing still refilters an open list when it ends, as before. A desktop
+input method moves the caret with every key of a composition, so it is
+unaffected.
+
+A touch on another part of the workbench, an activity bar icon or a status
+bar item, leaves focus in the editor on Android, because the workbench's
+touch gestures cancel the events that would move it, so the blur that ends
+a session on a desktop never comes. A list stayed open over the view the
+touch had opened, and the next tap there accepted a suggestion into the
+file: on an API 33 emulator with Gboard 12.4, `hello world` became `hello
+WebTransportDatagramDuplexStream` and `ki` became `kite` from taps meant for
+files in the Explorer, which did not open. The page's keyboard guard
+(MainActivity.injectKeyboardGuard) puts the keyboard away at such a touch,
+which ends a word still underlined, and the end of that composition arms a
+quick suggestion, which needs only the editor to keep focus (read from the
+code), so the list would open over the new view. On Android a
+pointerdown outside the editor and its overflow widgets now ends the session
+as that blur does, a request still out or a quick suggestion still pending
+included, and the composition the keyboard then ends counts as one that
+typed nothing, so its end arms nothing either. What that costs: a touch
+outside the editor closes the list wherever it lands, a scroll of another
+view included, as a click there does on a desktop.
+
+Verified with the tree built from these patches, on an API 33 emulator with
+Gboard 12.4 and an API 37 emulator with Gboard 17.7.4. On API 33 a tap in
+`b|ee` followed by Back opened no list. With `alp` underlined on an empty
+line of a JavaScript file, a tap on the Explorer icon put the keyboard away,
+ended the word and opened no list, and a tap on a file in the Explorer
+opened that file; after a typed `alp` and Back the list opened with the
+keyboard down, as before, and the tap on the Explorer icon closed it at the
+pointerdown. On API 37, with the list open over a typed `alp`, the same tap
+closed it, and a tap on a file in the tree opened the file. Each time the
+file held what was typed.
+
+diff --git a/src/vs/editor/contrib/suggest/browser/suggestModel.ts b/src/vs/editor/contrib/suggest/browser/suggestModel.ts
+index 69dc36a..22d9ec5 100644
+--- a/src/vs/editor/contrib/suggest/browser/suggestModel.ts
++++ b/src/vs/editor/contrib/suggest/browser/suggestModel.ts
+@@ -3,6 +3,7 @@
+  *  Licensed under the MIT License. See License.txt in the project root for license information.
+  *--------------------------------------------------------------------------------------------*/
+ 
++import { addDisposableListener, EventType, getWindow, isAncestor } from '../../../../base/browser/dom.js';
+ import { disposableTimeout, TimeoutTimer } from '../../../../base/common/async.js';
+ import { CancellationTokenSource } from '../../../../base/common/cancellation.js';
+ import { onUnexpectedError } from '../../../../base/common/errors.js';
+@@ -10,6 +11,7 @@ import { Emitter, Event } from '../../../../base/common/event.js';
+ import { FuzzyScoreOptions } from '../../../../base/common/filters.js';
+ import { DisposableStore, dispose, IDisposable } from '../../../../base/common/lifecycle.js';
+ import { registerAutorunSelfDisposable } from '../../../../base/common/observable.js';
++import { isAndroid } from '../../../../base/common/platform.js';
+ import { getLeadingWhitespace, isHighSurrogate, isLowSurrogate } from '../../../../base/common/strings.js';
+ import { assertType } from '../../../../base/common/types.js';
+ import { IClipboardService } from '../../../../platform/clipboard/common/clipboardService.js';
+@@ -145,6 +147,11 @@ export class SuggestModel implements IDisposable {
+ 
+ 	private _completionModel: CompletionModel | undefined;
+ 	private readonly _completionDisposables = new DisposableStore();
++
++	// Whether the last caret move of the current or last composition was typing. A keyboard that
++	// composes a word it did not type, as Gboard does with the word under a tap, moves no caret,
++	// and when that composition ends there is nothing new to suggest for.
++	private _typedWhileComposing = false;
+ 	private readonly _onDidCancel = new Emitter<ICancelEvent>();
+ 	private readonly _onDidTrigger = new Emitter<ITriggerEvent>();
+ 	private readonly _onDidSuggest = new Emitter<ISuggestEvent>();
+@@ -186,16 +193,20 @@ export class SuggestModel implements IDisposable {
+ 		let editorIsComposing = false;
+ 		this._toDispose.add(this._editor.onDidCompositionStart(() => {
+ 			editorIsComposing = true;
++			this._typedWhileComposing = false;
+ 		}));
+ 		this._toDispose.add(this._editor.onDidCompositionEnd(() => {
+ 			editorIsComposing = false;
+-			this._onCompositionEnd();
++			this._onCompositionEnd(this._typedWhileComposing);
+ 		}));
+ 		this._toDispose.add(this._editor.onDidChangeCursorSelection(e => {
+ 			// only trigger suggest when the editor isn't composing a character
+ 			if (!editorIsComposing) {
+ 				this._onCursorChange(e);
++				return;
+ 			}
++			this._typedWhileComposing = e.selection.isEmpty() && e.reason === CursorChangeReason.NotSet
++				&& (e.source === 'keyboard' || e.source === 'deleteLeft');
+ 		}));
+ 		this._toDispose.add(this._editor.onDidChangeModelContent(() => {
+ 			// only filter completions when the editor isn't composing a character
+@@ -206,6 +217,26 @@ export class SuggestModel implements IDisposable {
+ 			}
+ 		}));
+ 
++		// On Android a touch on another part of the workbench, such as an activity bar icon or a
++		// status bar item, leaves focus in the editor, because the workbench's touch gestures cancel
++		// the events that would move it, so the blur that ends a session on a desktop never comes.
++		// The list stayed open over whatever the touch opened, and a touch meant for a file in the
++		// Explorer accepted a suggestion into the editor instead. A touch outside the editor and its
++		// widgets ends the session as that blur does, and a composition the keyboard ends as it goes
++		// down counts as one that typed nothing, so its end arms nothing either.
++		if (isAndroid) {
++			const container = this._editor.getContainerDomNode();
++			this._toDispose.add(addDisposableListener(getWindow(container), EventType.POINTER_DOWN, e => {
++				const target = e.target as Node | null;
++				if (isAncestor(target, container) || isAncestor(target, this._editor.getOverflowWidgetsDomNode() ?? null)) {
++					return;
++				}
++				this._typedWhileComposing = false;
++				this.cancel();
++				this.clear();
++			}, true));
++		}
++
+ 		this._updateTriggerCharacters();
+ 	}
+ 
+@@ -298,7 +329,12 @@ export class SuggestModel implements IDisposable {
+ 		};
+ 
+ 		this._triggerCharacterListener.add(this._editor.onDidType(checkTriggerCharacter));
+-		this._triggerCharacterListener.add(this._editor.onDidCompositionEnd(() => checkTriggerCharacter()));
++		this._triggerCharacterListener.add(this._editor.onDidCompositionEnd(() => {
++			// a composition that typed nothing typed no trigger character either
++			if (this._typedWhileComposing) {
++				checkTriggerCharacter();
++			}
++		}));
+ 	}
+ 
+ 	// --- trigger/retrigger/cancel suggest
+@@ -382,10 +418,12 @@ export class SuggestModel implements IDisposable {
+ 		}
+ 	}
+ 
+-	private _onCompositionEnd(): void {
++	private _onCompositionEnd(typed: boolean): void {
+ 		// trigger or refilter when composition ends
+ 		if (this._triggerState === undefined) {
+-			this._doTriggerQuickSuggest();
++			if (typed) {
++				this._doTriggerQuickSuggest();
++			}
+ 		} else {
+ 			this._refilterCompletionItems();
+ 		}
