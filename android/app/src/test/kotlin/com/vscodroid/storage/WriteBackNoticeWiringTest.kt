@@ -136,11 +136,11 @@ class WriteBackNoticeWiringTest {
     }
 
     /**
-     * One seam, two sentences. A directory is kept for what is inside it and a
-     * document is kept for what it is, so the second wording is named here as
-     * separately as the capped upload is above: the directory sentence says the thing
-     * holds files that never reached the editor, which of a single document is simply
-     * false, and a user told that goes looking inside a file.
+     * One seam, two sentences, each in two versions. A directory is kept for what is
+     * inside it and a document is kept for what it is, so the second wording is named
+     * here as separately as the capped upload is above: the directory sentence says the
+     * thing holds files that never reached the editor, which of a single document is
+     * simply false, and a user told that goes looking inside a file.
      */
     @Test
     fun `MainActivity asks to be told when a delete was declined to save the device copy`() {
@@ -161,6 +161,18 @@ class WriteBackNoticeWiringTest {
             Regex("""(?m)^\s*[^/\n]*saf_document_kept\b""").containsMatchIn(source),
             "a single kept document is announced in the wording for a directory, which " +
                 "tells the user their file holds files",
+        )
+        // And each of the two again for a file the editor had and the user deleted, kept
+        // for a change on the device: "the editor never had a copy of it" is false there.
+        assertTrue(
+            Regex("""(?m)^\s*[^/\n]*saf_document_changed_kept\b""").containsMatchIn(source),
+            "a file kept because another app may have changed it is announced as one the " +
+                "editor never had, which the user had open a moment ago",
+        )
+        assertTrue(
+            Regex("""(?m)^\s*[^/\n]*saf_directory_changed_kept\b""").containsMatchIn(source),
+            "a directory kept for such a file is announced as holding files the editor " +
+                "never had",
         )
     }
 

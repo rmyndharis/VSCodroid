@@ -254,6 +254,15 @@
          because that one says the thing holds files, which is false of a file, and
          apart from saf_write_back_failed because the app holds nothing here at all. -->
     <string name="saf_document_kept">%1$s se conservó en la carpeta del dispositivo: el editor nunca tuvo una copia. Elimínalo ahí si ya no lo necesitas.</string>
+
+    <!-- The same refusal for a file the editor did have and the user deleted, kept
+         because the device's version may have changed since the editor last read or
+         saved it, as another app's edit does. saf_document_kept would tell that user the
+         editor never had the file they just deleted in it. -->
+    <string name="saf_document_changed_kept">%1$s se conservó en la carpeta del dispositivo: es posible que otra aplicación lo haya cambiado desde la última vez que el editor lo leyó o guardó. Elimínalo ahí si ya no lo necesitas.</string>
+    <!-- A directory deleted in the editor that holds such a file, and no file the editor
+         never had, which is what saf_directory_kept says. -->
+    <string name="saf_directory_changed_kept">%1$s se conservó en la carpeta del dispositivo: es posible que otra aplicación haya cambiado un archivo que contiene desde la última vez que el editor lo leyó o guardó. Elimínala ahí si ya no la necesitas.</string>
     <string name="saf_delete_refused">No se pudo eliminar %1$s de la carpeta del dispositivo, así que volverá a aparecer la próxima vez que se abra la carpeta. Elimínalo en el gestor de archivos del dispositivo.</string>
 
     <!-- Removing the local copy of a device folder, from the storage screen. The

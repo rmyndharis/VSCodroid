@@ -252,6 +252,15 @@
          because that one says the thing holds files, which is false of a file, and
          apart from saf_write_back_failed because the app holds nothing here at all. -->
     <string name="saf_document_kept">%1$s cihaz klasöründe tutuldu: düzenleyicide bunun kopyası hiç olmadı. Buna artık ihtiyacınız yoksa orada silin.</string>
+
+    <!-- The same refusal for a file the editor did have and the user deleted, kept
+         because the device's version may have changed since the editor last read or
+         saved it, as another app's edit does. saf_document_kept would tell that user the
+         editor never had the file they just deleted in it. -->
+    <string name="saf_document_changed_kept">%1$s cihaz klasöründe tutuldu: düzenleyici onu en son okuduğundan veya kaydettiğinden beri başka bir uygulama onu değiştirmiş olabilir. Buna artık ihtiyacınız yoksa orada silin.</string>
+    <!-- A directory deleted in the editor that holds such a file, and no file the editor
+         never had, which is what saf_directory_kept says. -->
+    <string name="saf_directory_changed_kept">%1$s cihaz klasöründe tutuldu: düzenleyici içindeki bir dosyayı en son okuduğundan veya kaydettiğinden beri başka bir uygulama o dosyayı değiştirmiş olabilir. Buna artık ihtiyacınız yoksa orada silin.</string>
     <string name="saf_delete_refused">%1$s cihaz klasöründen silinemedi, bu yüzden klasör bir dahaki açılışta yeniden görünecek. Cihazınızdaki dosya yöneticisinden silin.</string>
 
     <!-- Removing the local copy of a device folder, from the storage screen. The

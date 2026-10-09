@@ -68,21 +68,49 @@ VSCodroid is VS Code. If you have used VS Code on desktop, everything works the 
   add another.
 - A device folder is edited as a copy inside the app. The copy is read from the
   device when you open the folder, and each save is written back to the device
-  as you make it. It leaves out files over 50 MB, and the directories `.git`,
-  `node_modules`, `.gradle`, `.idea`, `venv`, `.env` and `__pycache__` are
-  neither read in nor written back, so a git repository opened this way has no
-  history here. Changes another app makes while the folder is open do not
-  reach the editor until you open the folder again. If you save a file that
-  another app changed since you opened the folder or last saved that file, the
-  other app's version is normally kept beside yours as `<name>.device-<time>`,
-  in the editor and in the device folder. The check goes by the time and size
-  the device folder reports for the file: in a folder that reports no times, or
-  keeps a file's old time when the file changes, as some USB and network folders
-  do, a change that keeps the file's size goes unnoticed, and a folder that
-  changes a file's time on its own can occasionally leave such a copy holding
-  the file as you opened it. If the device folder's version cannot be copied, as
-  can happen in a network folder while it is offline even when no other app
-  changed the file, your save stays inside VSCodroid and a notice says so.
+  as you make it. It leaves out files the device folder reports as over 50 MB,
+  and the directories `.git`, `node_modules`, `.gradle`, `.idea`, `venv`, `.env`
+  and `__pycache__` are neither read in nor written back, so a git repository
+  opened this way has no history here. Changes another app makes while the
+  folder is open do not reach the editor until you open the folder again. If you
+  save a file that another app changed since you opened the folder or last saved
+  that file, the other app's version is normally kept beside yours as
+  `<name>.device-<time>`, in the editor and in the device folder. The check goes
+  by the time and size the device folder reports for the file: in a folder that
+  reports no times, or keeps a file's old time when the file changes, as some
+  USB and network folders do, a change that keeps the file's size goes
+  unnoticed, and a folder over 64 MB that changes a file's time on its own can
+  occasionally leave such a copy holding the file as you opened it, until
+  VSCodroid has read each of its files once after an update from version 1.4.0
+  or earlier, which it does 64 MB per opening of the folder. A folder that
+  reports no times cannot say which copy is newer when yours and the device
+  folder's differ as you open it, as when another app changed a file you saved
+  there in an earlier session: the editor keeps showing your version, and your
+  next save of the file keeps the other app's beside it. If the device folder's
+  version cannot be copied, as can happen in a network folder while it is
+  offline even when no other app changed the file, or when the device folder
+  reports that version as over 50 MB, your save stays inside VSCodroid and a
+  notice says so. While the folder is open VSCodroid tries the save again by
+  itself, at least every five minutes, and it goes through, without a second
+  notice, once that version can be read or copied. If the folder reports file
+  times, opening it again tries the save too; if that version cannot be read or
+  copied then either, saves of the file wait inside VSCodroid until an open can.
+  If it reports none, opening it again leaves both versions as they are, as
+  above: VSCodroid goes on trying the save, and after VSCodroid restarts, your
+  next save of the file sends it. In either kind of folder, an open that finds
+  that version reported as over 50 MB keeps saves of the file inside VSCodroid
+  until an open finds it smaller.
+- A file of a device folder that you delete in the editor is deleted in the
+  device folder too, unless the device folder's version is one VSCodroid has not
+  read: another app may have changed it since you opened the folder or last
+  saved the file, by the same check as a save, or opening the folder could not
+  read it. Such a file is kept in the device folder, and so is a folder holding
+  it that you delete from the terminal; a notice says so, and the file comes
+  back into the editor the next time you open the folder.
+- An open that cannot list the folder holding a file leaves VSCodroid nothing
+  to check that file against until an open can: a save held back before that
+  open is no longer tried, and your next save or delete of the file replaces or
+  removes the device folder's version without keeping a copy.
 - The Explorer and the title bar show a device folder under its own name. A
   folder opened in an earlier version is shown under a twelve-character code
   such as `8e440ff38c8e`, the name of its copy, and offers to reopen under its

@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The editor no longer carries Windows, macOS, x86 and desktop Linux helper programs that cannot run on Android, which saves about 30 MB of storage on new installs and updates alike.
 - With a hardware keyboard, Left and Right no longer move the caret in a number box such as a number setting, which keeps them from moving focus out of the box at either end; Home, End and a tap still move it.
 - A tap on a read-only file, such as one set with File: Toggle Active Editor Read-only in Session or `files.readonlyInclude`, moves the cursor without raising the soft keyboard.
+- A save to a network device folder while it is offline can now wait inside VSCodroid, with a notice, until the folder's version of the file can be read, and is then sent while the folder is open, or, if the folder reports file times, when it is next opened.
 
 ### Removed
 
@@ -44,7 +45,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Enter on Gboard accepts in the Command Palette, Quick Open and input boxes such as Open in Browser, where it often did nothing.
 - Typing in the editor with a soft keyboard no longer adds reversed or repeated letters, or deletes the wrong ones, after the cursor moves, the editor regains focus or a keyboard suggestion is tapped; text such as `upgradessedargpu` could be saved.
 - Moving the cursor with a key or a tap, or accepting one of the editor's suggestions with Tab or a tap, while the soft keyboard still underlines a word no longer makes the keyboard's next edit land where that word was; text such as `alpha delta charlie charlie` could be saved.
-- Saving a file in a device folder no longer overwrites changes another app made to it while the folder was open; the other app's version is normally kept beside yours as `<name>.device-<time>`.
+- Saving a file in a device folder no longer overwrites changes another app made to it while the folder was open; the other app's version is normally kept beside yours as `<name>.device-<time>`. A folder over 64 MB that changes file times on its own, as some SD cards do, can also get such a copy of an unchanged file until each of its files has been read once after the update, 64 MB per opening.
+- A save or a delete still being sent when its device folder is opened again no longer replaces or removes the device's version of the file if that open could not read it.
+- Deleting a file in a device folder no longer removes changes another app made to it while the folder was open; the file stays in the device folder and a notice says so.
+- In a device folder that reports no file times, a change another app made to a file before the folder was opened, which the editor did not show, is no longer overwritten by the next save of that file or removed by deleting it.
+- In a device folder that reports neither file times nor sizes, a file you edited starts receiving device changes again once both sides hold the same content, as it already did where sizes are reported.
 - Opening a large device folder no longer fills the phone's storage: copying stops while about 150 MB is still free, and the files left out stay unchanged in the device folder.
 - A device folder shows its own name in the Explorer and the title bar instead of a code such as `8e440ff38c8e`. One opened in an earlier version offers to reopen under its name, with its open files.
 - The soft keyboard, once put away with Back or the navigation bar's hide key, no longer comes back when the file is scrolled.

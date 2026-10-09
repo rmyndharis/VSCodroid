@@ -455,6 +455,32 @@ class InitialSyncWiringTest {
     }
 
     /**
+     * The same on a provider that reports no size either, every length 0. No length can say
+     * the two sides agree there, so the bytes are read; ruled out by a length of 0, a file
+     * once edited stayed frozen on such a provider for good.
+     */
+    @Test
+    fun `a file the watcher delivered is tracked again with no size reported either`() {
+        deviceFolderHolding("notes.txt", "from the device", modified = 0, reportedSize = 0)
+        sync()
+        val local = File(mirror, "notes.txt")
+        local.writeText("a much longer edit made in the editor")
+        local.setLastModified(1_700_000_060_000)
+        deviceFolderHolding(
+            "notes.txt", "a much longer edit made in the editor", modified = 0, reportedSize = 0,
+        )
+        sync()
+
+        deviceFolderHolding("notes.txt", "changed on the device", modified = 0, reportedSize = 0)
+        sync()
+
+        assertEquals(
+            "changed on the device", local.readText(),
+            "still frozen: a reported length of 0 was taken to rule out the agreement",
+        )
+    }
+
+    /**
      * And a file the two sides genuinely disagree about is still left alone, on both
      * sides. That is what keeps the fix from being a licence to overwrite.
      */
