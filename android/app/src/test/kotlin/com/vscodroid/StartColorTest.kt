@@ -263,6 +263,8 @@ class StartColorTest {
         // the object still compiles, overrides and all, and the view keeps the
         // default client, which does neither.
         val unhooked = "it reads no colour, and $lost"
+        // The caller can destroy only the view it is handed.
+        val alive = "the caller has no view to destroy, and the one that reads stays alive"
         for ((line, why) in listOf(
             "probe.settings.javaScriptEnabled = true" to noColor,
             "probe.settings.domStorageEnabled = true" to noColor,
@@ -275,6 +277,7 @@ class StartColorTest {
             "override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {" to lost,
             "answer(null)" to lost,
             "return true" to lost,
+            "return probe" to alive,
         )) {
             assertTrue(line in read) { "readSavedPageColor no longer has `$line`, so $why" }
         }
