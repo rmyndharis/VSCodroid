@@ -632,19 +632,24 @@ if (!fs.existsSync(rehEntryPoint)) {
     // a path, or whose request failed, starts as one following the user's theme
     // would and is not recorded, since whether it follows the user's theme is not
     // known. Loads that still start on the wrong colour: a folder naming a theme
-    // of an installed extension, on its first load or its first after twenty
-    // other folders were shown, which takes the user's colour and, where the
-    // workbench cannot use its stored theme, its light default until the
-    // extensions register; a load after the device switched, as above, which is
-    // handed nothing with the setting off as well; and the first window after the
-    // user's theme changed in a folder with a theme of its own, by an edit of the
-    // user's settings rather than the theme picker, which writes the folder's,
-    // since the record of the user's theme is then older than the theme. A record
-    // keeps the colours its folder showed, that folder's own customizations
-    // included, so a load started on another folder's record starts on those too:
-    // the blank page takes its editor colour, and a workbench that takes the
-    // record as its starting theme shows the parts that folder coloured in its
-    // colours until the extensions register.
+    // of an installed extension, on its first load or its first after twenty other
+    // folders were shown, which takes the user's colour and, where the workbench
+    // cannot use its stored theme, its light default until the extensions
+    // register; a window following the user's theme while every window recorded
+    // has a theme of its own, which happens once after the update when the first
+    // window it opens has one and after twenty such windows in a row, and which
+    // starts on the dark default whatever the user's theme, so under a light one
+    // it is dark until the workbench paints and, where the workbench cannot use
+    // its stored theme, until the extensions register; a load after the device
+    // switched, as above, which is handed nothing with the setting off as well;
+    // and the first window after the user's theme changed in a folder with a theme
+    // of its own, by an edit of the user's settings rather than the theme picker,
+    // which writes the folder's, since the record of the user's theme is then
+    // older than the theme. A record keeps the colours its folder showed, that
+    // folder's own customizations included, so a load started on another folder's
+    // record starts on those too: the blank page takes its editor colour, and a
+    // workbench that takes the record as its starting theme shows the parts that
+    // folder coloured in its colours until the extensions register.
     //
     // Anything that throws in here leaves the page as upstream ships it.
     try {

@@ -588,7 +588,9 @@ async function stoppingTakesTheEditorServerWithIt() {
 // Every page load starts on the theme it is about to show: a folder whose own
 // settings name a theme on that theme, as its own record or the server's own
 // themes have it, any other window on the one the window that most recently
-// followed the user's theme showed, or else on the splash the workbench saved.
+// followed the user's theme showed, or else on the splash the workbench saved,
+// or, where only windows with a theme of their own are recorded, on the dark
+// default.
 // The page reads the folder's settings file, or the workspace file, for that,
 // and hands the text to the workbench, whose configuration starts from it
 // (patch 0027). Without it the page shows the WebView's own background until
@@ -1171,6 +1173,8 @@ async function stoppingTakesTheEditorServerWithIt() {
     // folder's, so the first window after it that follows the user's theme has
     // nothing to start on but the dark default this app configures, as a fresh
     // install has, and the next starts on the user's theme as that one showed it.
+    // Under a light user theme that first start is dark: nothing the page can
+    // read before it paints names the user's theme then.
     {
         const device = phone({ splash: 'Light Modern', own: { '/p/light': 'Light Modern' }, opened: ['/p/light'] });
         startsOn(device.visit('?folder=/p/light'), 'Light Modern', 'a folder with a light theme of its own, the first load');

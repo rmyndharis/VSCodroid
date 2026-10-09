@@ -504,8 +504,10 @@ start. A folder that names one starts on its own record in `localStorage`
 theme and colours it showed and, for a theme of the folder's own, the name its settings gave it)
 when that record was taken under the same name, and otherwise on that theme's look among the server
 tree's own themes, which the bootstrap reads from the tree's theme files when it writes the script.
-Any other window starts on the record of the window that most recently followed the user's theme,
-or, before the script has recorded any, on the splash the workbench saves (`monaco-parts-splash`).
+Any other window starts on the record of the window that most recently followed the user's theme;
+before the script has recorded any window, on the splash the workbench saves (`monaco-parts-splash`);
+and once it has recorded only windows with a theme of their own, on the dark default this app
+configures.
 Before the first paint the script colours the page background from that look, and it hands the same
 look to the workbench as `initialColorTheme`, which the workbench uses only when it cannot use the
 theme it stored; never on a load after the device switched between light and dark, when
@@ -522,7 +524,11 @@ older name upstream migrates; `verify-server-tree.py` checks it.
 What still starts on another theme: a folder naming a theme an installed extension contributes, on
 its first load and its first after twenty other folders were shown, which the script has no look for,
 so it takes the user's colour and, where the workbench cannot use its stored theme, the web default,
-the light one with the registry's default colours, until the extensions register; a window whose
+the light one with the registry's default colours, until the extensions register; a window following
+the user's theme while every window recorded has a theme of its own, once after the update when the
+first window it opens has one and after twenty such windows in a row, which starts on the dark
+default whatever the user's theme, so under a light one it is dark until the workbench paints and,
+where the workbench cannot use its stored theme, until the extensions register; a window whose
 settings file cannot be read, which starts as one following the user's theme would and is not
 recorded; and a window after the user's theme was changed by an edit of the user's settings while a
 folder with a theme of its own was open, whose record of the user's theme is then older than the
