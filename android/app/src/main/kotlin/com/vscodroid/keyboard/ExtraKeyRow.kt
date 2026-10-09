@@ -7,6 +7,7 @@ import android.text.TextUtils
 import android.util.AttributeSet
 import android.util.TypedValue
 import android.view.Gravity
+import android.view.MotionEvent
 import android.view.View
 import android.widget.ImageView
 import android.widget.LinearLayout
@@ -160,6 +161,13 @@ class ExtraKeyRow @JvmOverloads constructor(
 
     /** The alternates window, while one is open. See [showLongPressPopup]. */
     private var longPressPopup: LongPressPopup? = null
+
+    /**
+     * How many fingers are on the row, as of the touch event it last passed on.
+     * See [dispatchTouchEvent], and [ExtraKeyButton.anotherFingerOnRow] for the
+     * one question it answers.
+     */
+    private var fingersDown = 0
 
     /**
      * How many modifier triples have been pushed at the page.
@@ -494,6 +502,12 @@ class ExtraKeyRow @JvmOverloads constructor(
                 longPressPopup?.dismiss()
                 longPressPopup = null
                 resetModifiersIfNeeded()
+                // A hold under way outlives the row: going GONE sends its key no
+                // cancel and the finger can still slide. The cancel the pager
+                // then sends would put back a latch the hold had switched off,
+                // latching a modifier after the reset above, on a row that is
+                // gone.
+                adapter.dropPendingRestores()
             }
             Logger.d(
                 tag,
@@ -505,6 +519,19 @@ class ExtraKeyRow @JvmOverloads constructor(
     }
 
     private fun setupAdapter() {
+        // A replacement takes the latches before it is attached, never after.
+        // Attaching it removes the pages of the adapter it replaces, which
+        // cancels a touch still on one of their keys from inside the swap: a
+        // modifier its hold had switched can be switched back, and a trackpad
+        // drag ends, which spends the latches. Both go through this row, which
+        // pushes what the adapter holds and starts or stops the poll from it.
+        // Written back after the swap, the latches would repaint the row over
+        // whatever the swap had done, unpushed and unpolled: a hold's cancel
+        // switches a modifier back on both sides, and the write-back would
+        // undo that on the row alone. While they were written back there, a
+        // resize during a trackpad drag left its latch unspent, lit on the row
+        // and held on the page, with the poll stopped.
+        val carried = if (::adapter.isInitialized) Triple(ctrlActive, altActive, shiftActive) else null
         adapter = KeyPageAdapter(
             pages = pages,
             onKeyAction = { key, isActive, button -> handleKeyAction(key, isActive, button) },
@@ -516,8 +543,14 @@ class ExtraKeyRow @JvmOverloads constructor(
             onDragEnd = {
                 resetModifiersIfNeeded()
             },
-            onLongPress = { button, alternates -> showLongPressPopup(button, alternates) }
+            onLongPress = { button, alternates -> showLongPressPopup(button, alternates) },
+            anotherFingerOnRow = { fingersDown > 1 },
         )
+        carried?.let { (ctrl, alt, shift) ->
+            ctrlActive = ctrl
+            altActive = alt
+            shiftActive = shift
+        }
         viewPager.adapter = adapter
     }
 
@@ -596,6 +629,20 @@ class ExtraKeyRow @JvmOverloads constructor(
                 // The call is inert when no service is listening.
                 dotContainer.announceForAccessibility(pageIndicatorText(position))
             }
+
+            override fun onPageScrollStateChanged(state: Int) {
+                if (state != ViewPager2.SCROLL_STATE_DRAGGING) return
+                // A swipe that starts slowly on a key with alternates opens them
+                // before the pager takes the drag, and the page then slides away
+                // from under a popup that is a window of its own. Measured on an
+                // API 36 emulator: `{}` held 0.6 s, then swiped, left `[` and `<`
+                // over the editor on the next page until a tap outside them.
+                // No later drag can meet an open popup: it is focusable and
+                // touch modal, so the next touch anywhere goes to it and closes
+                // it. Only the gesture that opened it is still the row's.
+                longPressPopup?.dismiss()
+                longPressPopup = null
+            }
         })
     }
 
@@ -659,12 +706,12 @@ class ExtraKeyRow @JvmOverloads constructor(
      *
      * When it does rebuild, the latched modifiers have to be carried across by
      * hand: the toggle map lives on [KeyPageAdapter] and the replacement starts
-     * empty, so they are read off the outgoing adapter before it is replaced and
-     * written back afterwards. Without that, a resize leaves the row painted
-     * idle while [KeyInjector] still holds the modifier that was pushed at the
-     * page, and the next key goes out as a chord nobody asked for. Written
-     * unconditionally so the badge and the band's spoken description are
-     * repainted from the new page count either way.
+     * empty, so [setupAdapter] copies them off the outgoing adapter, before the
+     * swap for the reason it gives. Without that, a resize leaves the row
+     * painted idle while [KeyInjector] still holds the modifier that was pushed
+     * at the page, and the next key goes out as a chord nobody asked for.
+     * [setupDots] then repaints the band's spoken description from the new page
+     * count; the badge names the latches alone and is the same view throughout.
      */
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
@@ -686,16 +733,29 @@ class ExtraKeyRow @JvmOverloads constructor(
         longPressPopup = null
         val repacked = KeyPages.forSmallestWidthDp(newConfig.smallestScreenWidthDp)
         if (repacked == pages) return
-        val ctrl = ctrlActive
-        val alt = altActive
-        val shift = shiftActive
         pages = repacked
         setupAdapter()
         setupDots()
-        ctrlActive = ctrl
-        altActive = alt
-        shiftActive = shift
         Logger.d(tag, "Repacked into ${pages.size} pages for ${newConfig.smallestScreenWidthDp}dp")
+    }
+
+    /**
+     * Counts the fingers whose events reach the row, the only ones the pager
+     * can drag with, before the pager sees the event: it cancels the keys under
+     * them from inside this dispatch when it takes a drag. A finger lifting is
+     * still in its own ACTION_POINTER_UP, so that one is taken off.
+     *
+     * A cancel is not counted. Up to API 35 ViewGroup hands one on unsplit, so
+     * it can carry a finger that is on another view, and the fingers it ends
+     * were counted by the event before it.
+     */
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        when (ev.actionMasked) {
+            MotionEvent.ACTION_CANCEL -> Unit
+            MotionEvent.ACTION_POINTER_UP -> fingersDown = ev.pointerCount - 1
+            else -> fingersDown = ev.pointerCount
+        }
+        return super.dispatchTouchEvent(ev)
     }
 
     override fun onDetachedFromWindow() {

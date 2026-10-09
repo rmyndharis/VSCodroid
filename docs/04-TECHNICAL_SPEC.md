@@ -617,7 +617,11 @@ and a half) come to 48.4dp. `KeyPages.forSmallestWidthDp` repacks the same items
 order, whenever a page's share would put a key under `MIN_TOUCH_TARGET_DP`: five pages at
 411dp, six at 360dp, seven at 320dp. The argument is `smallestScreenWidthDp`, so rotating
 does not repack, but a drop into a narrow split-screen pane does, through
-`ExtraKeyRow.onConfigurationChanged`.
+`ExtraKeyRow.onConfigurationChanged`. The latched modifiers are carried into the new pages'
+adapter before it replaces the old one (`ExtraKeyRow.setupAdapter`): replacing it cancels a
+touch still on a key or the trackpad, that cancel can switch back a modifier a hold had
+switched (as below) or ends the drag, which spends the latches, and the row tells the page
+what it did.
 
 | Page | Contents at 411dp and wider |
 |------|----------|
@@ -636,7 +640,24 @@ Ctrl, Alt and Shift latch rather than repeat. The bracket and parenthesis keys i
 opening character, because Monaco closes the pair and places the caret inside. Several keys carry
 long-press alternates, which `KeyPageConfig.kt` lists beside them; `)` is on the `()` key's
 list because no other route on the row reaches it, since `shiftedForm` leaves `(` unchanged
-and `)` sits on a digit key no page carries.
+and `)` sits on a digit key no page carries. Only those keys and the three modifiers
+have a long press (`ExtraKeyButton`'s touch listener turns the `GestureDetector`'s on or
+off at each touch), and the row dismisses an open popup when the pager starts a drag. A
+modifier's long press switches the latch while the finger is still down, so what is
+typed during the hold meets it as it would after a tap, and a touch that then ends in a
+cancel switches the latch back: the pager taking the drag, the system cancelling the
+gesture, or a repack removing the key under the finger. Not while another finger is on the
+row, which `ExtraKeyRow.dispatchTouchEvent` counts: the pager drags with the finger that
+went down last and cancels every key under a finger when it takes the drag, so the cancel
+can be that finger's swipe, and Ctrl held with one thumb while the other swipes to F5 has to
+stay latched for Ctrl+F5. Nor once the row has stood down during the touch: the keyboard
+going away hides the row and clears every latch, but going GONE sends the key no cancel, so
+the finger can still slide and the pager take the drag, and its cancel would latch a
+modifier on a row that is gone. The stand-down drops what each hold would put back
+(`KeyPageAdapter.dropPendingRestores`). Every other key presses on release, and only if the
+finger never left the touch slop around where it landed, so a swipe the pager takes presses
+nothing, and so does a long hold that drifted. The detector has no double-tap listener, so
+two quick taps are two presses.
 
 There are **no discrete arrow buttons anywhere on the row.** The gesture trackpad replaced them and
 emits arrow keys as the finger moves (`TrackpadGesture.accumulate`). A drag is the only route for a
@@ -667,18 +688,26 @@ dispatch as real `KeyEvent` pairs, with any latched Ctrl, Alt or Shift as meta s
 they move the caret and select in text boxes and reach extension webviews, where an
 announced key did nothing. Each carries the evdev scan code a hardware keyboard sends,
 because Chromium derives `KeyboardEvent.code` from it, and Home and End use
-`KEYCODE_MOVE_HOME`/`KEYCODE_MOVE_END`, not the system Home key. A press the WebView
-refuses falls back to the announce route. A real arrow turns WebView spatial navigation on
+`KEYCODE_MOVE_HOME`/`KEYCODE_MOVE_END`, not the system Home key. Each latched modifier then
+comes up as a real `ACTION_UP` of its left-hand key, in the same dispatch
+(`modifierReleases`): the row's modifiers are latches, so without it the page saw a
+modifier go down and never come up, and the workbench, which tells its toolbars about a
+modifier only when one goes down or comes up, left the editor's split button on Split
+Editor Down after Alt+Left. Chromium sends that release to whatever has focus, and the
+modifier interceptor stops it at the window (below). A press the WebView refuses falls
+back to the announce route. A real arrow turns WebView spatial navigation on
 until the next touch on the page, so a Left or Right that leaves a collapsed caret at the
 start or end of a text box would move focus out of it. A guard installed with the modifier
 interceptor cancels such a press when none of the box's own handlers used it. It decides
-on the box itself: a capture `keydown` listener on the window adds a one-shot listener to
-the event's innermost target, which runs after the box's own listeners and before the key
+on the box itself: a capture `keydown` listener on the window adds a listener for that key
+to the event's innermost target, which runs after the box's own listeners and before the key
 bubbles to any container, so a box or container that calls `stopPropagation` on the key in
 the bubble phase, as the Problems, Output, Debug Console and Comments filters and the chat
-model picker's filter do, cannot hide it. A number or email box has no selection API, so
-its caret cannot be read and every unmodified Left and Right there is cancelled. Before
-Chromium 149, Blink on Android has no command for Alt+Left or Alt+Right, so the press
+model picker's filter do, cannot hide it. A zero timeout removes that listener once the key
+is over, because a box that stops the key before it, as the terminal's textarea does with
+every arrow in its capture listener, never runs it. A number or email box has no selection
+API, so its caret cannot be read and every unmodified Left and Right there is cancelled.
+Before Chromium 149, Blink on Android has no command for Alt+Left or Alt+Right, so the press
 reaches spatial navigation wherever the caret is; below 149, read from the user agent, the
 guard cancels it in any text box and on the editor's EditContext host. From 149 they move
 to the start and end of the line, which Blink counts as handled even where the caret
@@ -692,7 +721,22 @@ ViewPager2's RecyclerView is one.
 **Everything else is announced.** A key that names a command rather than a character
 (`Tab`, `Escape`, `F7`), the trackpad's Up and Down, and any character held with Ctrl, Alt
 or Meta, is sent as a `keydown`/`keyup` pair built by `evaluateJavascript` at
-`document.activeElement`, since that is what the workbench resolves its key bindings from.
+`document.activeElement`, since that is what the workbench resolves its key bindings from,
+followed by a `keyup` for each modifier it carried, at the same element; the modifier
+interceptor's chords from the soft keyboard end the same way. No modifier `keydown` is sent,
+at the latch or later: a latch undone would then read as Alt pressed and released alone,
+which focuses the menu bar. The interceptor stops every keyup of a modifier that had no
+keydown, which is what the row's releases are by either route, at the window's capture
+phase. The workbench reads which modifiers are held from capture listeners there
+(`ModifierKeyEmitter`), so it still hears them. A quick pick opened with quick navigate, as
+Ctrl+Tab's recently used editors are, does not: it accepts on a modifier's keyup in its own
+container. Opened in the Command Palette it keeps the palette's input box, and with it the
+focus, the keyboard and the row, so a Ctrl+Tab from the row is typed inside that container
+and its release would open the highlighted editor at once instead of leaving the list for
+the next Ctrl+Tab. Opened from a file it focuses its list, and the keyboard goes down with
+the row, since Chromium hides the keyboard whenever focus leaves an editable element. A
+keyboard's own release follows the keydown of the same key and goes on: the two are paired
+by `code`, so each of two Shifts held at once comes up.
 Tab stays here because a real one moves focus, and the Explorer's rename and New File boxes
 commit the typed name when they lose it; Escape because under spatial navigation an
 unhandled real Escape blurs the focused element. Up and Down stay because they are the
@@ -732,6 +776,31 @@ they page the list, go to its first and last item, and open Quick Open's highlig
 without closing it. Every other target keeps `isComposing`, because there the key's default
 does the work. An editor inside the quick input, such as Quick Chat's, keeps it too, like
 any other editor.
+
+A letter typed on the soft keyboard with Ctrl or Alt latched is made a chord by the modifier
+interceptor (`KeyInjector.setupModifierInterceptor`) from the `beforeinput` the letter fires,
+which it cancels. A keyboard that composes, as Gboard 12.4 composes every word, reports a
+letter in a text box as `insertCompositionText`, which cannot be cancelled. So when such an
+update adds one character with a key to the composition in an `input` or `textarea`, the
+terminal's included, the interceptor keeps its `beforeinput` and `input` from the box's own
+listeners and, in the next task, puts back the box's text and selection as they were before
+the character, if nothing changed them in between, which also ends the composition, and makes
+the chord from the character. The word composed before it stays. The terminal sends a
+composition only once it ends, in a zero timeout, reading it back from its textarea, which it
+empties on blur. So in the terminal alone the composition is first ended with a blur and a
+refocus, and the chord waits a task for that send: Quick Open, a chord the terminal hands to
+the workbench, takes the focus at once, and would leave the send an empty textarea. The
+chord of every letter in the terminal waits that task, a committed letter's too. A
+keyboard that commits, as Gboard 18 commits each letter, sends a keydown of key code 229
+first, on which the terminal reads its textarea back in a zero timeout and sends what
+changed; a chord that emptied the textarea before that read had it send a delete, and `ab`,
+Ctrl and `p` left `a` at the prompt. No other box is blurred: the debug view's inline boxes,
+the terminal tab rename box and the Ports view's commit what they hold when they lose the
+focus, the letter included, and close. On the EditContext path no `beforeinput` reaches the
+element, so the editor makes no chord of a soft keyboard letter. The editor's own textarea,
+which reads compositions itself, is left alone, and so is an `input` with no selection API,
+such as an email box, whose selection could not be put back: each keeps a composed letter,
+and the latch is spent.
 
 A key or a touch that moves the editor's caret while the soft keyboard is still composing a
 word ends that composition. Chromium keeps an EditContext composition's range where it was

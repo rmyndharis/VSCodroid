@@ -31,6 +31,7 @@ class ExtraKeyToggleStateTest {
         onArrowKey = { },
         onDragEnd = { },
         onLongPress = { _, _ -> },
+        anotherFingerOnRow = { false },
     )
 
     /**

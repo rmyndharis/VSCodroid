@@ -30,7 +30,8 @@ class KeyInjector(
      * character held with Ctrl, Alt or Meta, is announced as a DOM event,
      * because that is what the workbench resolves its bindings from;
      * [NAVIGATION_KEYS] says why the trackpad's Up and Down, Tab and Escape
-     * stay there.
+     * stay there. Either way the modifiers a press carried come up after it,
+     * on the same route ([modifierReleases] says why).
      */
     fun injectKey(
         key: String,
@@ -128,6 +129,7 @@ class KeyInjector(
 
         val js = """
             (function() {
+                $RELEASE_MODIFIERS_JS
                 var target = document.activeElement || document.body;
                 var eventInit = {
                     key: ${jsKey},
@@ -144,6 +146,7 @@ class KeyInjector(
                 };
                 target.dispatchEvent(new KeyboardEvent('keydown', eventInit));
                 target.dispatchEvent(new KeyboardEvent('keyup', eventInit));
+                releaseModifiers(target, eventInit);
                 return target === document.body ? 'body' : (target.tagName || 'unknown');
             })();
         """.trimIndent()
@@ -186,7 +189,29 @@ class KeyInjector(
     /**
      * Installs a JS `beforeinput` listener that intercepts soft keyboard text input
      * when ExtraKeyRow modifiers (Ctrl/Alt) are active. Instead of inserting text,
-     * it dispatches modified KeyboardEvents so VS Code shortcuts work.
+     * it dispatches modified KeyboardEvents so VS Code shortcuts work, then a keyup
+     * for each modifier the chord carried ([modifierReleases] says why).
+     *
+     * It also stops, at the window, every keyup of a modifier whose key this page
+     * did not see go down, paired by `code` so that each of two Shifts held at
+     * once counts. That is what the row's releases look like, from a chord here
+     * or from a real press. A keyboard's release follows its own keydown and goes
+     * on, in an extension webview too: the webview's frame passes a modifier's
+     * keydown and keyup to the workbench, which dispatches them again on this
+     * window. A key that went down in another window, or in a frame that passes
+     * nothing on, such as the page Simple Browser nests in its webview, has its
+     * release stopped, and a key released there after going down here lets one
+     * later release from the row through. The workbench reads which modifiers
+     * are held from capture listeners on the window, so those still hear it. A
+     * quick pick opened with quick navigate, as Ctrl+Tab's is, does not: it
+     * accepts on a modifier's keyup in its own container. Opened in the Command
+     * Palette it keeps the palette's input box, and with it the focus, the
+     * keyboard and the key row, so a Ctrl+Tab from the row is typed inside that
+     * container and its release would open the highlighted editor at once
+     * instead of leaving the list for the next Ctrl+Tab to move down. Opened
+     * from a file it focuses its list instead, and the keyboard goes down and
+     * takes the row with it: Chromium hides the keyboard whenever focus leaves
+     * an editable element.
      *
      * The listener resolves each character through [KeyMapping]'s table, serialized in
      * here as a lookup object, so it answers from the same definitions [injectKey] uses
@@ -197,28 +222,117 @@ class KeyInjector(
      * A Shift held on its own is not intercepted but is spent: the page keeps the
      * character it was about to insert, and the flag is cleared, so a latch cannot
      * carry over into a key the user taps minutes later. A Ctrl or Alt that meets
-     * input this listener has no chord for, a paste or an IME composition, is spent
-     * the same way and for the same reason.
+     * input this listener has no chord for, a paste or a composition update that
+     * adds more or other than one character, is spent the same way and for the
+     * same reason.
      *
      * Backspace, Delete and Enter reach the page from here rather than from the key
      * row, because a soft keyboard reports all three as an edit and not as a key,
      * and no page of the row carries one. They are listed in `COMMANDS` below.
      *
-     * This is live on both edit paths, not only the legacy one. The workbench uses
-     * `NativeEditContext` wherever `globalThis.EditContext` exists, and an element
-     * with an `EditContext` attached still receives every `beforeinput` except
-     * `insertCompositionText`; only the `input` event is withheld. The workbench's
-     * own `NativeEditContext` reads `beforeinput` for `insertParagraph` for exactly
-     * that reason.
+     * A keyboard that composes, as Gboard 12.4 composes every word, reports each
+     * letter in a text box as `insertCompositionText`, which cannot be cancelled:
+     * the letter is the box's before anything here can refuse it. So when such an
+     * edit adds one character with a key to the composition, in a focused `input`
+     * or `textarea`, the terminal's included, its `beforeinput` and `input` are
+     * kept from the box's own listeners, and in the next task the box gets back
+     * the text and selection it had before the character, unless something
+     * changed them in between. Putting the text back ends the composition with no
+     * `compositionend`: Blink's composition range goes with the text it covered,
+     * and the keyboard's next edit starts a new composition (read in Blink, and
+     * measured below). Then the character comes back to this listener as the
+     * `insertText` a keyboard that commits would have sent, which makes the
+     * chord. The character still reaches the box's listeners in its
+     * `compositionupdate`, and a box that reads its text only once a composition
+     * is over, as the action list's filter and the find widget of the terminal,
+     * webviews and chat do, reads it when the keyboard's next one ends.
      *
-     * Two inputs reach the page with no `beforeinput` at all, and each gets a hook
-     * of its own below so the latch is still spent: a composition on the
-     * EditContext path, which Chromium reports to the `EditContext` object and
-     * never to the element, and typing inside a frame, which no event in this
-     * document can see. A third is the soft keyboard's Enter when a keybinding
-     * accepts it. `MainActivity.injectComposingEnter` spends a lone Shift on
-     * the Enter whose empty `code` it fills, without applying it, as here; an
-     * Enter that arrives with a `code` is not covered.
+     * The terminal's textarea alone is first blurred and focused again, which is
+     * Blink's own end of a composition, with the `compositionend` the terminal
+     * sends what it composed on. A chord the terminal hands to the workbench
+     * never reaches its composition handling, so without the blur the word typed
+     * before such a chord would stay unsent. It sends the word in a zero timeout,
+     * reading it back from its textarea, which empties itself on blur (read from
+     * the shipped xterm). So the text goes back after the blur, and only if
+     * nothing changed it in between, and the chord waits for that read, as every
+     * letter's chord there does (below), so the word reaches the shell first.
+     * Quick Open, which the terminal hands on, focuses its own box before the
+     * chord's keydown is over, so a chord sent in the blur's task would empty the
+     * textarea before the read. That is read from the shipped workbench, and a
+     * composed chord sent without the wait was not tried.
+     * Quick Open does not stay open there: the chord's keyup goes to the
+     * textarea, as its keydown did, and the terminal lets it through, since with
+     * Quick Open showing Ctrl+P resolves to a command it does not keep from the
+     * shell, and takes the focus back, so Quick Open closes again at once, as it
+     * does for any Ctrl+P from the row in the terminal (read from the shipped
+     * xterm and workbench, and measured below). The blur costs this: a terminal
+     * program that asked to hear focus changes hears focus go and come back.
+     * Anywhere else it costs more, which is why no other box gets it. The debug
+     * view's inline boxes, for a watch expression, a value, or a breakpoint's
+     * name or condition, the terminal tab rename box and the Ports view's commit
+     * what they hold when they lose the focus, the letter included, and most of
+     * them close; the quick input forgets which element to give the focus back to
+     * when it closes; and a box that reads its text on `compositionend` reads the
+     * letter.
+     *
+     * Measured on an API 33 emulator with WebView 153 and Gboard 12.4, while every
+     * box's chord still waited a task after its text was put back, as only the
+     * terminal's does now: in the Search view's box Ctrl, held past the long-press
+     * delay or tapped, then `p` opened Quick Open and left the box empty, and over
+     * an underlined `fo` left `fo`, which got the focus back when Quick Open
+     * closed; Ctrl then `a` over `fo` selected it, and the next letter replaced it;
+     * and no `compositionend` reached the box. In a watch expression box Ctrl then
+     * `a` over an underlined `foo` selected it with the box still open, and Esc
+     * closed it with nothing added, where a blur and a refocus of the same box
+     * committed `foo` and closed it. In the terminal Ctrl then `c` stopped a
+     * running `cat`, over an underlined `ab` gave `ab^C`, and Ctrl then `p` over an
+     * underlined `ab` left `ab` at the prompt, Quick Open taking the focus in the
+     * chord's keydown and the terminal taking it back on its keyup. Before, the
+     * letter joined the word and the latch was spent. The editor's own textarea
+     * host, which reads compositions itself, is left as it was, and so is an
+     * `input` with no selection API, such as an email box, whose selection could
+     * not be put back: each keeps the letter, and the latch is spent.
+     *
+     * A keyboard that commits, as Gboard 18 commits every letter, meets a read of
+     * the terminal's textarea too. Its keydown of key code 229 comes before the
+     * letter, and on it the terminal keeps the textarea's text and, in a zero
+     * timeout, reads it back and sends what changed, a delete if the text got
+     * shorter (read from the shipped xterm). A chord sent from the letter's
+     * `beforeinput` that takes the focus, as Quick Open's does, emptied the
+     * textarea before that read, and the shell lost the last letter typed:
+     * measured on an API 36 emulator with WebView 153 and Gboard 18.4.1, `ab` at
+     * the prompt, then Ctrl and `p`, left `a`, where Ctrl and `c`, which leave the
+     * focus there, gave `ab^C`. So in the terminal the chord of an `insertText` is
+     * sent a task later, after that read, which finds the text as it was, the
+     * letter being cancelled. The same task is the wait a composed letter's chord
+     * needs there, after the read its blur started. For a letter a keyboard
+     * commits the wait is read from the shipped xterm and was not measured on a
+     * device.
+     *
+     * This is live on both edit paths, not only the legacy one, but not for
+     * everything on the EditContext path. The workbench uses `NativeEditContext`
+     * wherever `globalThis.EditContext` exists, and an element with an
+     * `EditContext` attached still receives the `beforeinput` of an edit a key
+     * press makes, such as Enter's `insertParagraph`, which the workbench's own
+     * `NativeEditContext` reads to type the newline. Text a keyboard composes or
+     * commits does not reach the element as a `beforeinput`: Chromium reports it
+     * to the `EditContext` object, as `textupdate` beside the composition and
+     * format events, and the element gets only the keydown and keyup of key code
+     * 229. So on that path a letter the soft keyboard types is never made a chord
+     * here.
+     *
+     * Three inputs reach the page with no `beforeinput` at all. Two get a hook of
+     * their own below so the latch is still spent: a composition on the
+     * EditContext path, and typing inside a frame, which no event in this
+     * document can see. The third, a letter committed outright on the EditContext
+     * path, as Gboard 18 commits one, is not covered: it is typed and the latch
+     * stays on for the next key. Measured on an API 36 emulator with WebView 153
+     * and Gboard 18.4.1: Ctrl latched, then `p` gave a keydown 229, a
+     * `textupdate` and a keyup, and no `beforeinput`, and `p` was typed with Ctrl
+     * still lit. A fourth is the soft keyboard's Enter when a keybinding accepts
+     * it. `MainActivity.injectComposingEnter` spends a lone Shift on the Enter
+     * whose empty `code` it fills, without applying it, as here; an Enter that
+     * arrives with a `code` is not covered.
      *
      * The same script guards Left and Right, the only arrows pressed for real,
      * at the edge of a text box. A real arrow turns WebView spatial navigation
@@ -249,7 +363,10 @@ class KeyInjector(
      * handler or container stops the key's propagation, as the Problems,
      * Output, Debug Console and Comments filters and the chat model picker's
      * filter do, hides it from a listener on the window, and its default action
-     * and spatial navigation run all the same. Cancelling stops no binding: the
+     * and spatial navigation run all the same. The listener that decides is
+     * added to the box for that one key and removed by a timer once the key is
+     * over, so a box that stops the key before it, as the terminal's textarea
+     * does with every arrow, keeps none. Cancelling stops no binding: the
      * workbench's keybinding service listens on the window, after the box, and
      * does not read `defaultPrevented`. It covers this document only, so a text
      * box inside an extension webview, a frame of another origin, is not
@@ -272,6 +389,28 @@ class KeyInjector(
 
                 var KEYS = $keyLookup;
 
+                $RELEASE_MODIFIERS_JS
+
+                // A modifier's keyup with no keydown of it is the row releasing
+                // a latch, from releaseModifiers or, for a real press, from
+                // Chromium at whatever has focus. It ends at this window's
+                // capture listeners, where the workbench reads what is held, so
+                // a quick pick below cannot accept on it. See the KDoc. A
+                // keyboard presses a modifier before releasing it, so its own
+                // release goes on. Paired by code, the physical key: paired by
+                // key, a keyboard holding both Shifts would have its second
+                // release stopped.
+                var MODIFIERS = { Alt: 1, Control: 1, Shift: 1, Meta: 1 };
+                var pressed = {};
+                window.addEventListener('keydown', function(e) {
+                    if (MODIFIERS.hasOwnProperty(e.key)) pressed[e.code] = true;
+                }, true);
+                window.addEventListener('keyup', function(e) {
+                    if (!MODIFIERS.hasOwnProperty(e.key)) return;
+                    if (pressed[e.code]) delete pressed[e.code];
+                    else e.stopPropagation();
+                }, true);
+
                 // The edits a soft keyboard reports instead of a key, and the
                 // key each one stands for. Built once rather than per event.
                 //
@@ -292,6 +431,82 @@ class KeyInjector(
                     insertParagraph: ['Enter', 13],
                     insertLineBreak: ['Enter', 13]
                 };
+
+                // What a keyboard is composing in a text box, and what it was
+                // before its latest update. Blink fires compositionupdate with
+                // the whole composition just before the beforeinput that puts
+                // it in. A composition on the EditContext path fires at the
+                // EditContext, not here.
+                var composition = { text: '', previous: '' };
+                function compositionOver() {
+                    composition.text = '';
+                    composition.previous = '';
+                }
+                document.addEventListener('compositionstart', compositionOver, true);
+                document.addEventListener('compositionend', compositionOver, true);
+                document.addEventListener('compositionupdate', function(e) {
+                    composition.previous = composition.text;
+                    composition.text = e.data || '';
+                }, true);
+
+                // A character a composing keyboard adds in a text box, as Gboard
+                // 12.4 adds every letter, made the chord it would have been from
+                // a keyboard that commits. See the KDoc. True when this takes the
+                // event, or leaves it to the page because a chord is pending.
+                var chordPending = false;
+                function chordComposed(e) {
+                    if (chordPending) return true;
+                    var box = e.target;
+                    var data = e.data || '';
+                    var previous = composition.previous;
+                    var ch = data.charAt(previous.length);
+                    if (box !== document.activeElement ||
+                        !(box.tagName === 'TEXTAREA' || (box.tagName === 'INPUT' && box.selectionStart !== null)) ||
+                        box.classList.contains('inputarea') ||
+                        data.length !== previous.length + 1 || data.slice(0, previous.length) !== previous ||
+                        !(KEYS[ch] || /[a-zA-Z0-9]/.test(ch))) return false;
+                    e.stopImmediatePropagation();
+                    chordPending = true;
+                    var before = { value: box.value, start: box.selectionStart, end: box.selectionEnd,
+                        direction: box.selectionDirection };
+                    var after = null;
+                    // The input event the letter's insertion fires, kept from
+                    // the box as the beforeinput was.
+                    function hide(ev) {
+                        if (ev.target !== box) return;
+                        document.removeEventListener('input', hide, true);
+                        after = box.value;
+                        ev.stopImmediatePropagation();
+                    }
+                    document.addEventListener('input', hide, true);
+                    // A later task, once the insertion is over: a chord sent now
+                    // would move focus before the letter is put in, and the
+                    // letter would land in whatever took it.
+                    setTimeout(function() {
+                        document.removeEventListener('input', hide, true);
+                        var untouched = after !== null && box.value === after;
+                        // Only the terminal's textarea is blurred, since the
+                        // terminal sends a composition only once it ends. A box
+                        // that commits on blur, as the debug view's inline
+                        // editors and the terminal tab rename box do, would
+                        // commit the letter and close. See the KDoc.
+                        if (document.activeElement === box && box.classList.contains('xterm-helper-textarea')) {
+                            box.blur();
+                            box.focus();
+                        }
+                        if (untouched) {
+                            box.value = before.value;
+                            box.setSelectionRange(before.start, before.end, before.direction);
+                        }
+                        // The chord, which in the terminal waits a task more,
+                        // for the read the blur's compositionend queued there.
+                        chordPending = false;
+                        box.dispatchEvent(new InputEvent('beforeinput', {
+                            inputType: 'insertText', data: ch, bubbles: true, cancelable: true, composed: true
+                        }));
+                    }, 0);
+                    return true;
+                }
 
                 document.addEventListener('beforeinput', function(e) {
                     var mod = window.__vscodroid;
@@ -353,13 +568,18 @@ class KeyInjector(
                         };
                         target.dispatchEvent(new KeyboardEvent('keydown', init));
                         target.dispatchEvent(new KeyboardEvent('keyup', init));
+                        releaseModifiers(target, init);
                         mod.ctrl = false;
                         mod.alt = false;
                         mod.shift = false;
                         return;
                     }
 
-                    // Everything else the page can insert: a paste, an IME
+                    // A character a composing keyboard adds in a text box. Its
+                    // chord comes from chordComposed, in a later task.
+                    if (e.inputType === 'insertCompositionText' && chordComposed(e)) return;
+
+                    // Everything else the page can insert: a paste, any other
                     // composition update, an autocorrect replacement, a word
                     // delete. There is no chord to send for one, and cancelling
                     // it would leave the tap producing nothing, so it is left to
@@ -442,8 +662,19 @@ class KeyInjector(
                         cancelable: true,
                         composed: true
                     };
-                    target.dispatchEvent(new KeyboardEvent('keydown', init));
-                    target.dispatchEvent(new KeyboardEvent('keyup', init));
+                    function chord() {
+                        target.dispatchEvent(new KeyboardEvent('keydown', init));
+                        target.dispatchEvent(new KeyboardEvent('keyup', init));
+                        releaseModifiers(target, init);
+                    }
+                    // In the terminal the chord waits a task, for xterm's read
+                    // of its textarea: the one the keyboard's keydown of 229
+                    // started, or the one chordComposed's blur did. A chord
+                    // that takes the focus empties the textarea before it,
+                    // and xterm sends a delete, or loses the composed word.
+                    // See the KDoc.
+                    if (target.classList.contains('xterm-helper-textarea')) setTimeout(chord, 0);
+                    else chord();
 
                     mod.ctrl = false;
                     mod.alt = false;
@@ -453,12 +684,12 @@ class KeyInjector(
                 // A composing IME on the EditContext edit path. Chromium reports
                 // a composition to the EditContext object alone: compositionstart,
                 // then a textupdate per keystroke, and the element receives no
-                // beforeinput for any of it, where the textarea path reports the
-                // same keystrokes as insertCompositionText, which the branch
-                // above spends. A latch that survives the first composed
-                // character attaches to the first one the IME commits outright,
-                // which is the space that ends the word: the space was cancelled
-                // and Ctrl+Space opened suggestions in its place.
+                // beforeinput for any of it, where the editor's textarea path
+                // reports the same keystrokes as insertCompositionText, which the
+                // branch above spends there. A latch that survives the first
+                // composed character attaches to the first one the IME commits
+                // outright, which is the space that ends the word: the space was
+                // cancelled and Ctrl+Space opened suggestions in its place.
                 //
                 // compositionstart rather than compositionend, because it is the
                 // earliest signal and the one the textarea path already spends
@@ -533,15 +764,25 @@ class KeyInjector(
                 // own listeners and before the key bubbles to any container,
                 // so neither can hide the key with stopPropagation in the
                 // bubble phase.
-                // Once, and only for its own event: a key stopped before it
-                // reaches the target leaves nothing that acts on the next one.
+                // Only for its own event, and removed by a timer once that
+                // event is over, whether or not it ran. A key stopped before
+                // the listener's turn never runs it, so removing it from
+                // inside, as `once` did, left it there: the terminal's textarea
+                // stops every arrow in its own capture listener, and each
+                // trackpad step in a terminal left one more behind. The timer
+                // runs in a later task, after the whole dispatch. A microtask
+                // would not: the browser runs microtasks between the listeners
+                // of a key it dispatches itself, so one queued here would
+                // remove the listener before the key reached the box.
                 window.addEventListener('keydown', function(e) {
                     if (!EDGE.hasOwnProperty(e.key) || e.ctrlKey || e.shiftKey || e.metaKey) return;
                     var t = e.composedPath()[0];
                     if (!t) return;
-                    t.addEventListener('keydown', function(ev) {
+                    function decide(ev) {
                         if (ev === e && !e.defaultPrevented && leaves(e, t)) e.preventDefault();
-                    }, { once: true });
+                    }
+                    t.addEventListener('keydown', decide);
+                    setTimeout(function() { t.removeEventListener('keydown', decide); }, 0);
                 }, true);
             })();
         """.trimIndent()
@@ -582,3 +823,44 @@ class KeyInjector(
         }
     }
 }
+
+/**
+ * `releaseModifiers(target, init)`, defined in each script that sends a chord
+ * and called right after the chord's own keyup: a keyup at `target` for each
+ * modifier `init` holds, as a hardware keyboard sends one when the key comes
+ * up. Alt, Ctrl, Shift and Meta, in that order and each with the flags still
+ * held, which is what [modifierReleases] gives a real press; it says why a
+ * chord needs them.
+ *
+ * At the chord's own target, not at whatever has focus by then, so that the
+ * window hears the release exactly when it heard the chord's keyup. A chord
+ * that takes its target out of the document goes unheard from there on, and a
+ * release heard after an Alt chord whose keyup was not reads as an Alt pressed
+ * and released alone, which focuses the menu bar.
+ *
+ * The target alone does not keep the release out of a quick pick: a Ctrl+Tab
+ * typed in the Command Palette has its target inside the picker it opens. The
+ * modifier interceptor, which every workbench page gets, stops a release at
+ * the window ([setupModifierInterceptor] says why).
+ *
+ * Called from the chord's script, so it reaches the page after the chord, and
+ * defined in each of the two rather than shared on `window`: an announced
+ * chord works without the modifier interceptor, and so should its release.
+ *
+ * Indented to the sixteen columns both scripts interpolate it at. Lines at
+ * column 0 would leave `trimIndent()` no margin to take off either script, and
+ * both would go out as indented as this source.
+ */
+private val RELEASE_MODIFIERS_JS = """
+    function releaseModifiers(target, init) {
+        var held = { altKey: init.altKey, ctrlKey: init.ctrlKey, shiftKey: init.shiftKey, metaKey: init.metaKey };
+        [['altKey', 'Alt', 'AltLeft', 18], ['ctrlKey', 'Control', 'ControlLeft', 17],
+            ['shiftKey', 'Shift', 'ShiftLeft', 16], ['metaKey', 'Meta', 'MetaLeft', 91]].forEach(function(m) {
+            if (!held[m[0]]) return;
+            held[m[0]] = false;
+            target.dispatchEvent(new KeyboardEvent('keyup', { key: m[1], code: m[2], keyCode: m[3], which: m[3],
+                location: 1, altKey: held.altKey, ctrlKey: held.ctrlKey, shiftKey: held.shiftKey,
+                metaKey: held.metaKey, bubbles: true, cancelable: true, composed: true }));
+        });
+    }
+""".replaceIndent(" ".repeat(16)).trimStart()

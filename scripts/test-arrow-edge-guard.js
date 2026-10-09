@@ -21,20 +21,25 @@
  * target, at the target its capture listeners and then the rest, then the
  * bubble listeners back up to the window. A node's listeners are read when the
  * event reaches it, so one added to the target on the way down runs, after the
- * target's own, and a `once` listener is removed before it runs. Every box sits
- * in a shadow root, so a listener outside it sees the host as the target, and
- * the box is reached only through `composedPath()[0]`.
+ * target's own, and a `once` listener is removed before it runs. A timer runs
+ * once the dispatch is over, as a task after the key's own, and a microtask
+ * right after the listener that queued it: the browser runs the microtask
+ * queue between the listeners of a key it dispatches itself. Every box sits in a
+ * shadow root, so a listener outside it sees the host as the target, and the
+ * box is reached only through `composedPath()[0]`.
  *
  * NEGATIVE CONTROL, measured: against the guard as it was before it decided at
- * the target (main at 42ab78ed) 12 of the 45 cases fail. Each of these changes
- * to the guard fails at least one case: deciding in the window's capture or
- * bubble phase, or in the target's capture phase; `e.target` for the innermost
- * target; no `once`; deciding the event the listener receives rather than its
- * own; stopping the key's propagation; no version gate, a gate at 150, Alt
- * never cancelled, or an unreadable user agent taken as 149; Alt only on a
- * collapsed caret, or on any target; no EditContext host, no number box or no
- * email box; the edges swapped; and ignoring `defaultPrevented`, the
- * selection's end or Shift.
+ * the target (main at 42ab78ed) 12 of the 47 cases fail, and against the guard
+ * as it was before a timer removed its listener (main at 54352514) the two
+ * cases about a listener left on a box fail. Each of these changes to the
+ * guard fails at least one case: deciding in the window's capture or bubble
+ * phase, or in the target's capture phase; `e.target` for the innermost
+ * target; no timer, or a microtask or an immediate removal in its place;
+ * stopping the key's propagation; no version gate, a gate at 150, Alt never
+ * cancelled, or an unreadable user agent taken as 149; Alt only on a collapsed
+ * caret, or on any target; no EditContext host, no number box or no email box;
+ * the edges swapped; and ignoring `defaultPrevented`, the selection's end or
+ * Shift.
  *
  * Extraction is deliberately strict. If the raw string moves or changes shape
  * this fails saying so, rather than quietly checking an empty string.
@@ -52,8 +57,10 @@ const KEY_INJECTOR = path.join(
 
 /**
  * The body of the raw string in `setupModifierInterceptor()`, with the
- * indentation `trimIndent()` removes taken off. `$keyLookup` is the one
- * interpolation, and the guard does not read it, so an empty table stands in.
+ * indentation `trimIndent()` removes taken off. `$keyLookup` and
+ * `$RELEASE_MODIFIERS_JS` are its interpolations, and the guard reads neither,
+ * so an empty table and an empty function stand in;
+ * `scripts/test-modifier-release.js` runs the real function.
  */
 function extractInterceptor() {
     const lines = fs.readFileSync(KEY_INJECTOR, 'utf8').split('\n');
@@ -75,7 +82,8 @@ function extractInterceptor() {
     );
     const js = body.map((l) => (l.trim() ? l.slice(indent) : '')).join('\n');
 
-    const substituted = js.split('$keyLookup').join('{}');
+    const substituted = js.split('$keyLookup').join('{}')
+        .split('$RELEASE_MODIFIERS_JS').join('function releaseModifiers() {}');
     assert.ok(!substituted.includes('$'),
         'the interceptor gained a Kotlin interpolation this check does not know how to fill');
     assert.ok(substituted.includes('var EDGE'),
@@ -123,16 +131,27 @@ function newPage(userAgent = BELOW_149, { keybindings = false } = {}) {
     const window = new Node(null);
     const document = new Node(window, { activeElement: null });
     const body = new Node(document, { tagName: 'BODY' });
-    const page = { window, document, host: new Node(body, { tagName: 'DIV' }), log: [] };
+    const page = { window, document, host: new Node(body, { tagName: 'DIV' }), log: [], timers: [], microtasks: [] };
     // The workbench's keybinding service: a bubble listener on the window,
     // registered long before the interceptor is installed.
     if (keybindings) window.addEventListener('keydown', own('keybinding', (e) => page.log.push(`keybinding ${e.key}`)));
-    vm.runInContext(INTERCEPTOR, vm.createContext({ window, document, navigator: { userAgent } }));
+    const setTimeout = (fn) => page.timers.push(fn);
+    const queueMicrotask = (fn) => page.microtasks.push(fn);
+    vm.runInContext(INTERCEPTOR, vm.createContext({ window, document, navigator: { userAgent }, setTimeout, queueMicrotask }));
     return page;
 }
 
-/** A keydown at `target`, dispatched through every phase. Returns who cancelled it, in order. */
+/**
+ * A keydown at `target`, dispatched through every phase, then the timers it set,
+ * which a browser runs in a later task. Returns who cancelled it, in order.
+ */
 function press(page, target, key, mods = {}) {
+    const cancelledBy = dispatch(page, target, key, mods);
+    for (const fn of page.timers.splice(0)) fn();
+    return cancelledBy;
+}
+
+function dispatch(page, target, key, mods) {
     const route = [];
     for (let n = target; n; n = n.parent) route.push(n);
     const cancelledBy = [];
@@ -161,6 +180,7 @@ function press(page, target, key, mods = {}) {
             if (l.once) node.removeEventListener(l.type, l.fn, l.capture);
             running = l.fn.owner || 'guard';
             l.fn.call(node, event);
+            for (const fn of page.microtasks.splice(0)) fn();
         }
     }
     for (const node of route.slice().reverse()) {
@@ -282,7 +302,7 @@ const cases = [
         cancelledBy.includes('guard') && page.log.includes('keybinding ArrowRight'), true]);
 }
 
-// One listener per press, gone once the press has been decided.
+// One listener per press, gone once the press is over.
 {
     const page = newPage();
     const field = new Node(page.host, box('abc', 1));
@@ -291,8 +311,25 @@ const cases = [
     cases.push(['the box keeps no listener after its presses', field.listeners.length === 0, true]);
 }
 
+// The terminal's textarea takes every arrow in its own capture listener, which
+// cancels it and stops its propagation, so the guard's listener there never
+// runs. It has to go when the key is over all the same, or each trackpad step
+// in a terminal leaves one more on the textarea.
+{
+    const page = newPage();
+    const textarea = new Node(page.host, box('', 0, 0, 'TEXTAREA'));
+    textarea.addEventListener('keydown', own('terminal', (e) => {
+        e.preventDefault();
+        e.stopPropagation();
+    }), true);
+    for (const key of ['ArrowRight', 'ArrowRight', 'ArrowLeft', 'ArrowRight', 'ArrowLeft']) press(page, textarea, key);
+    cases.push(['a box that stops every arrow in its capture listener, as the terminal does, keeps only its own',
+        textarea.listeners.length, 1]);
+}
+
 // A press stopped on its way down never reaches the box, so its listener does
-// not run then. It must not act on a later key at the box either.
+// not run then. It is gone once the key is over, and must not act on a later
+// key at the box either.
 {
     const page = newPage();
     const container = new Node(page.host, { tagName: 'DIV' });
@@ -301,6 +338,7 @@ const cases = [
     container.addEventListener('keydown', stopOnTheWayDown, true);
     press(page, field, 'ArrowRight');
     container.removeEventListener('keydown', stopOnTheWayDown, true);
+    cases.push(['a press stopped on its way down leaves no listener on the box', field.listeners.length, 0]);
     cases.push(['a key typed after a press stopped on its way down is not cancelled',
         press(page, field, 'a').includes('guard'), false]);
     cases.push(['and the next Right at the end is cancelled once',

@@ -154,11 +154,13 @@ nothing ever calls.
 var target = document.activeElement || document.body;
 target.dispatchEvent(new KeyboardEvent('keydown', eventInit));
 target.dispatchEvent(new KeyboardEvent('keyup', eventInit));
+releaseModifiers(target, eventInit);  // a keyup for each modifier it carried
 ```
 
 `eventInit` carries the fields a `KeyboardEvent` takes: `key`, `code`,
 `keyCode`, and the `ctrlKey`/`altKey`/`shiftKey`/`metaKey` modifiers. They are
-the DOM's own names, not an interface this project defines.
+the DOM's own names, not an interface this project defines. `releaseModifiers`
+is defined inside the same script, not on the page.
 
 #### Memory Pressure Notification
 

@@ -20,9 +20,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The editor is now Code - OSS 1.139.1, up from 1.133.0.
 - The editor no longer carries Windows, macOS, x86 and desktop Linux helper programs that cannot run on Android, which saves about 30 MB of storage on new installs and updates alike.
-- With a hardware keyboard, Left and Right no longer move the caret in a number box such as a number setting, which keeps them from moving focus out of the box at either end; Home, End and a tap still move it.
+- Left and Right from the trackpad or a keyboard with arrow keys do not move the caret in a number box such as a number setting, which keeps them from moving focus out of the box at either end; Home, End and a tap still move it.
 - A tap on a read-only file, such as one set with File: Toggle Active Editor Read-only in Session or `files.readonlyInclude`, moves the cursor without raising the soft keyboard.
 - A save to a network device folder while it is offline can now wait inside VSCodroid, with a notice, until the folder's version of the file can be read, and is then sent while the folder is open, or, if the folder reports file times, when it is next opened.
+- Holding a key row key that has no alternates, such as Tab or Esc, presses it when you lift your finger rather than after the long-press delay; Ctrl, Alt and Shift still switch at the delay.
 
 ### Removed
 
@@ -57,6 +58,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The warning at launch about an outdated Android System WebView now appears below version 125, where Markdown previews and extension panels stay blank, instead of only below 105.
 - `npm` and `npx` start when another program runs them, such as `timeout`, `sh -c` or a tool that runs `npm install` itself, instead of failing with `ENOENT`.
 - The process monitor's status bar item stays in place when an extension that runs in the page adds an unnamed status bar item of its own; the two used to share one slot.
+- A swipe across the key row that starts slowly turns the page without pressing the key it started on, switching a modifier or leaving that key's alternates open.
+- Two quick taps on a key row key press it twice instead of once.
+- An Alt chord from the key row no longer leaves toolbar buttons on their Alt action, such as Split Editor Down in place of Split Editor Right, where a tap ran it.
+- In text boxes and the terminal, Ctrl or Alt latched on the key row combines with the next letter on a keyboard that underlines words, as some Gboard versions do: Ctrl then C stops a running command instead of typing c.
+- A key row chord typed in the terminal that opens a view, such as Ctrl then P, no longer deletes the last letter at the prompt on a keyboard that does not underline words, such as Gboard 18.
+- A key row modifier no longer stays lit after a split-screen resize that interrupts a hold on it or a trackpad drag.
 
 ### Security
 
