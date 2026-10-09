@@ -1,0 +1,679 @@
+Keep the EditContext buffer where the keyboard expects it after its own edit.
+
+NativeEditContext gives the browser's EditContext the text of the lines the
+selection is on, with offsets counted from column 1 of the first of them, and
+moves that window to the caret's line whenever the caret changes lines. An
+input method keeps its own copy of the text and acts on it before it hears
+what an edit did, so a move it did not ask for leaves it working on offsets
+that now point somewhere else.
+
+Gboard 12.4 does exactly that with Enter. With a word underlined and the caret
+inside it or at its start, as after a tap on the word or Home, it sends Enter
+as a key press and at once recomposes the word after the caret at the offsets
+of its copy: the old line with a line break at the caret. By then the window
+had moved to the new line, so the range landed on other characters and the
+keyboard wrote the word over them. On an API 33 emulator, in
+`const alpha1 = 1, alpha2 = 2, alpha3 = 3;`, a tap inside alpha1 then Enter
+left `ha1 = 1, aha1a2 = 2, alpha3 = 3;` on the new line, a tap before it left
+`alpha1 alpha1lpha2 = 2`, and Home then Enter left `cconstalpha1 = 1`. The
+same Enter at column 1 left the window's text and caret exactly as they were,
+so the keyboard was told nothing, kept the line break it believed it had
+typed, and spent the next Backspace deleting it: one Backspace did nothing
+for every such Enter.
+
+After an edit the keyboard made, a textupdate or its Enter, the window now
+keeps its start, so the line break the keyboard typed is in it and the
+Backspace it sends for that line break has something to delete. Where text
+follows the caret, the window starts instead where the caret sits at the
+offset the keyboard expects, the event's own selection for a textupdate and
+one past the old caret for the Enter, so that the recomposed range covers the
+text after the caret the keyboard believes in. Keeping the start there is not
+enough, measured: in indented code the editor puts the indentation after the
+line break, the recomposed range then covered three of its four spaces, and
+`    const alp|ha1 = 1;` became `ha1 ha1 = 1;`, where the per-line window had
+only been saved by its range falling past the end of the line.
+
+The start moves to that offset only where text follows the caret, because
+the keyboard's copy of the text before the caret then lacks the indentation
+the editor added, and nothing tells the keyboard so. Moved after every edit
+of the keyboard's, measured, it broke Enter at the end of an indented line:
+told the caret it expected, Gboard kept its copy, took the second Backspace
+for the `;`, recomposed what it took for `alpha1` over `a1;`, the line break
+and two spaces, and the third Backspace after Enter at the end of
+`    let beta2 = alpha1;` left `    let beta2 = alphalpha`, which the per-line
+window never did. With the start kept, the indentation puts the caret off
+the offset the keyboard expects, and it reads the text again. With text
+after the caret, its copy stays short of the indentation until the caret
+moves for another reason, so a Backspace right after Enter inside a word on
+an indented line deletes one space of the indentation, as the per-line window
+did; the Backspaces after it go on taking out the indentation and then the
+line break.
+
+Anything else that moves the caret, a tap, a cursor key, a command other
+than a Backspace sent as a key press (see below), a paste or an undo, still
+moves the window to the caret's line, and the keyboard, told of a caret it
+did not expect, reads the text again. Only what the
+keyboard does itself keeps an earlier start: a window that kept it across
+every edit reached back over lines nothing had typed, and opening a file at
+its saved caret on line 3 gave the keyboard lines 1 to 3 as one buffer.
+
+A keyboard is told of a selection that moved and of nothing else: Android's
+InputMethodManager passes a selection on only when it differs from the last
+one it passed (its updateSelection in the API 33, 36 and 37 sources; the path
+through Chromium was not traced), and what was measured matches that. Where
+the caret's offset in the new window is the one it had in the old, the
+keyboard never hears that the text changed and goes on from the text it had.
+On an API 36 emulator with Gboard 18.4,
+Enter at the end of `ell`, Ctrl and the space bar, and `d` left the window at
+`ell\nd` with the caret at 5; Tab accepted `delta`, the window moved to the
+caret's line, `delta` with the caret at 5, and the suggestion strip went on
+offering `d`, `do` and `did`, where `do` made the line `deltao `. A tap from
+the end of a line holding `delta` to the end of `alpha` in
+`alpha beta Charlie delta`, offset 5 in both, left the strip on `delta`, and
+its `Delta` replaced `alpha`. That route needs no kept start: the published
+bundle also starts the window at the caret's line after a tap, and replayed
+in a browser it rewrote the window with no selection update for that tap, for
+taps at column 1 of two lines and for Down along a column, where it did
+update the selection after the Tab. So on Android, after a rewrite that is
+not an edit or a selection of the keyboard's, which its own copy holds
+already, what the keyboard knew before the first rewrite of the task is kept,
+and once the code that rewrote the window has returned, still in the same
+task, input is restarted if the text then differs from it and the selection
+does not. The editing host is blurred and focused again with the editor's
+focus tracker paused, so that the editor is not told it lost focus, as the
+keyboard guard and the key row's latched chord restart input from the page,
+and the keyboard reads the text again. Deciding at the end of the task is
+what keeps the restart to those cases: accepting a suggestion or a paste
+rewrites the window before the caret moves, and decided at that rewrite,
+replayed in a browser, a suggestion accepted with the caret moving on
+restarted input as well. Waiting also keeps the end of a composition the
+blur brings out of the edit, and makes the two rewrites the Tab made restart
+input once. It costs a restart at every tap, cursor key or command that
+leaves the caret at the same offset of another line, column 1 included, at
+every command that rewrites the caret's line without moving the caret, such
+as a forward Delete and its undo, and at every edit made after the caret on
+its line in a later task, as linked editing makes while a tag is typed, or a
+replacement before the caret by text as long; an edit before the caret that
+changes its length moves the caret's offset, which the keyboard is told of,
+and restarts nothing. On a phone the refocus would put a keyboard that was
+up away if the page's keyboard guard wrote `inputmode="none"` on the host at
+that focus, as its focus handler did after a drag, a long press or a menu
+button outside text: Chromium hides the keyboard when the focused element's
+input mode turns to none, unless a hardware keyboard is attached, and the
+emulators measured all report one. The guard keeps the
+keyboard up across a host blurred and focused again in one task
+(MainActivity.injectKeyboardGuard). Text the editor adds inside
+an edit of the keyboard's, such as an auto-closed bracket or quote, is not in
+the keyboard's copy, and since that rewrite counts as the keyboard's own it
+restarts nothing, as nothing told the keyboard of it before (read from the
+code, not measured).
+
+A textupdate that changes no text, which is how a selection the keyboard sets
+arrives, as Gboard's do for a space bar swipe and before it commits a
+suggestion, puts the selection where the keyboard asked, on whichever line of
+the window that is, and leaves the window as it is, its end included. A
+keyboard goes on from its own copy of the text as if its selection had landed.
+Applied like an edit, the update typed the text before the caret again, over
+every line the window holds, and moved the caret along its line only, stopping
+at column 1. Moving the caret alone, along its line, with the window kept, was
+not enough either. On the API 33 emulator with Gboard 12.4, after `one`, Enter
+and `alph`, a swipe left on the space bar moved the caret to the start of
+`alph`, the step across the line break moved nothing, and Gboard, its own
+caret at the end of `one`, wrote `one` over `alph` with no further input,
+twice out of twice. Told of a caret it did not ask for, that keyboard did not
+read the text again. With the selection where it asked, the caret goes on to
+the end of `one`, as in a text box. The window then keeps the lines after the
+caret's, which the keyboard's copy holds: ended at the caret's line, it would
+refuse a swipe back to the right at that line's end in the same way. Those
+lines stay across what the keyboard does next, and go, with the window's
+earlier start, at the next tap, cursor key or command.
+
+The selection is set as the textarea input sets one the keyboard asks for
+(ViewController.setSelection): one selection, from source 'keyboard' with
+reason Explicit, as a cursor key moves the caret, so several cursors become
+one, as they do there. Moved as compositionType moves it, with the reason
+typing has, the move was taken for typing that changed nothing: the suggest
+model refilters an open list only for an edit or an Explicit move, and opens
+one when typing moves the caret to the end of a word. Replayed the same way,
+with a keyboard that commits, `x alp` under a list open on `alpha1` and the
+caret moved back after `x` kept the list, and Enter or Tab then made the line
+`xalpha1`, where the published bundle, which typed the text again, closed the
+list at the move, split the line on Enter and inserted a tab at the caret on
+Tab. A move onto the end of a word, after Escape had closed the list, opened
+it again, in the published bundle too. With reason Explicit the list is
+refiltered at the new caret, closing once the caret leaves the word, and a
+quick suggestion still pending is dropped, as patch 0023 drops it for a cursor
+key.
+
+A Backspace sent as a key press keeps the window as it is too, from the
+press to its release. Gboard 17.7.4 and 18.4.1 send their Backspace that way,
+which the editor runs as its deleteLeft command, and count the character in
+their own copy of the text, as they count an edit they sent. Reset as after
+any other command, the window dropped the lines after the caret's that a
+swipe into the line above had kept, while the caret moved to the offset the
+keyboard expected, so the keyboard was told nothing and went on from its
+copy. On an API 37 emulator with Gboard 17.7.4, after `gamma`, Enter and
+`zeta`, a space bar swipe back into `gamma` and a Backspace left the window
+at `gama`; the swipe back to the right was refused past its end, the strip
+offered words for `zeta`, and the pick of `zebra` deleted the two characters
+before the editor's caret and wrote `bra `, which made the first line
+`gabra ` and left `zeta` as it was, in three attempts out of four. A
+Backspace that deletes more than the one character the keyboard counts, back
+to a tab stop of indentation, leaves the caret off the offset the keyboard
+expects, which it is told of. With a modifier the key is left to its command
+as before. Gboard 12.4 deletes through textupdates, which keep the window
+already, and sends a key press only where its copy holds nothing before the
+caret; the line join that makes takes the caret before the window's start,
+and the window then starts at the caret's line, as before.
+
+All of this is done on Android only, the one platform it was measured on:
+elsewhere every edit starts the window at the caret's line, and a selection
+is typed as an edit, as before.
+
+The window is built with \n line breaks whatever the model uses, since the
+keyboard counts a line break as one character. Typing line after line keeps
+its start, so the window grows with each line, until an edit leaves the
+caret at the end of its line with more than 20 lines before the caret's: the
+window then moves to the caret's line, where nothing follows the caret for
+the keyboard to recompose. While text follows the caret, an earlier start is
+kept however far back it is.
+
+A Backspace the keyboard sends for a line break before the caret now joins the
+lines. CompositionOperation replaced characters before the caret on its own
+line only, clamped at column 1, which made that Backspace nothing; it now
+reaches back across line breaks, each counting as one character as in the
+window. It reaches forward across them in the same way, because the lines the
+window keeps after the caret's line are text the keyboard can replace: clamped
+at the end of the caret's line, a recomposition of `alph` on the line after
+`one`, replayed with the caret at the end of `one`, put a second `alph` in
+front of the first. With several cursors the counts apply at each of them, as
+they always did, and the walks with them: a recomposition of `bean` around the
+primary cursor, two characters on each side, replaced the `yz` before a
+secondary cursor at the end of `xyz` and the line break and `p` after it,
+leaving `xbeanqrstu` where `xyz` stood over `pqrstu`; the published bundle,
+clamped to the secondary cursor's line, left `xbean` and `pqrstu`. The
+composition underline and the character bounds map offsets through the
+window's own start rather than the selection's line.
+
+Verified on the API 33 emulator with Gboard 12.4 with the built tree
+installed. All three of the flows above left the text intact and a Backspace
+after each joined the lines back. The indented one kept `    const alp` over
+`    ha1 = 1;`, and five Backspaces after it took out the four spaces of
+indentation and then the line break, one each, before an `x` landed at the
+caret. Three Enters on an empty last line were undone by three Backspaces.
+Enter at the end of `    let beta2 = alpha1;`, six Backspaces and an `x` left
+`    let beta2 = alpha1x`, as the published bundle does, and a `}` typed on
+the new line, which the editor outdented, then three Backspaces and an `x`
+left the same. Typing a word, Enter and four more words left the buffer at
+`kiwi \nalpha beta charlie delta`, and a tap and a suggestion from the strip
+left it on the caret's line alone. Then the built bundle, driven in headless
+Chromium with an Android user agent and CDP IME calls replaying Gboard's
+sequence (finish, Enter key, recomposition at the stale offsets), beside the
+published 1.139.1 bundle: the old one wrote `aha1a2`, `cconstalpha1` and
+`    ha1 = 1;ha1` and its Backspaces after three Enters deleted nothing; this
+one kept each line, and its Backspaces joined the lines back. Enter at the end
+of the indented line reported the caret at 28 in a buffer from the line's
+start, where the keyboard expected 24, and Ctrl+Enter, a command, left the
+buffer on the caret's line. With a desktop user agent the window stayed on the
+caret's line throughout. Selections replayed the same way, as Blink sends one
+the keyboard sets. After `one`, Enter and `alph` composed as Gboard 12.4
+composes them, a swipe back five characters put the caret at the end of `one`,
+the keyboard's recomposition of `one` there left both lines intact and its `x`
+gave `onex`; the bundle that moved the caret along its line only wrote
+`oonealph` for the same keyboard, and the sequence Gboard sent on the emulator
+after its refused step wrote `one` over `alph`, as it had there. That sequence
+recomposes `alph` with the caret at the end of `one`, twice, and then writes
+`one` into the composition: this bundle replaced `alph` with itself each time
+and then with `one`, which is what that keyboard asked for, where the replace
+clamped at the end of the caret's line put each `alph` in front of the first
+and left the lines `one`, `one`, `alph`, `alph`, `alph`. Gboard 12.4 sent it
+after a refused move; with the move landing, it recomposed `one` on the
+emulator. A swipe back to the right went into `alph` again, and an `x` gave
+`alxph`; a tap after the swipe left the window on the tapped line alone. A
+keyboard that moved back one character at a time over `kiwi `, `one`, `two`
+and `alph` took the caret into `two`, both in step at every step. Moves along
+a line changed neither the window nor the model, where every one of them had
+rewritten the lines before the caret; Gboard's suggestion pick after an Enter,
+its selection, a delete before the caret and the commit, still left
+`kiwi \nalpha `; and with two cursors the selection left one. With the list
+open on `x alp`, a move back after `x` closed it, and Enter split the line and
+Tab inserted a tab, as in the published bundle; a move onto the end of `alp`
+after Escape opened no list. Every other flow replayed here printed byte for
+byte what it printed before the selection crossed lines, apart from the
+selections across a line break, which now land. With the kept start read after
+the reason test instead, the window went back to the caret's line at each
+move, and the correction after a selection left `alpha alphas`. On the
+emulator with the tree built just before the replace reached forward, the
+swipe after `one`, Enter and `alph` took the caret on into `one`, where Gboard
+recomposed `one` with both lines intact, a swipe back to the right took it to
+the end of `alph`, and an `x` after a shorter swipe gave `alxph`; by the event
+log, no edit the keyboard made there replaced anything past the caret's line.
+With a desktop user agent the selections were typed as before, line by line.
+
+The restart was replayed the same way, with a keyboard that commits, in a file
+holding `alpha beta Charlie delta`, `ell` and `delta`. In the published bundle
+and in this one before the restart, a tap from the end of `delta` to the end
+of `alpha`, a tap from column 1 of one line to column 1 of the other, and Down
+twice along column 3 each rewrote the buffer with no selection update; Enter
+at the end of `ell`, Ctrl and the space bar, `d` and Tab did so here only,
+where the published bundle, its buffer `d`, moved the selection. With the
+restart each was followed by one blur and focus of the host, after the
+rewrite, with the editor's focus state unchanged throughout, while a tap to
+another offset, typing with Enter and a commit over a composition, and Tab
+accepting `alpha` over `al` restarted nothing; decided at each rewrite instead
+of at the end of the task, that last one restarted input as well. With `d`
+still composed when Tab accepted `delta`, in a harness with no keyboard guard
+to end the composition, a letter composed next landed at the caret, `deltax`,
+where without the restart it took the place of the `a` under the composition
+range Chromium had kept, `deltx`. Every other flow replayed here printed what
+it printed before, apart from a status bar position read at once after typing,
+which differed between runs of either bundle. Not measured on a device.
+
+The Backspace key was replayed the same way, from the event log of the API 37
+emulator, with a keyboard that commits and sends its Backspace as a key
+press: `zeta` typed after Enter at the end of `gamma`, selections 9, 8, 7, 6
+and 4, the Backspace, selections 4 and 7, and the pick of `zebra` as a
+selection at 9, the two characters before the caret deleted and `bra `
+committed. The bundle before this kept the window at `gama` after the
+Backspace and wrote `gabra ` over the first line, as on the emulator; this
+one kept `gama\nzeta` with the caret at 3, followed the selection into `zeta`
+and made the second line `zebra `. A Backspace at the end of the second line
+kept the window from the first line, one at the start of the window's only
+line joined it to the line above as before, and with a desktop user agent
+the window stayed on the caret's line. Every other flow replayed here printed
+byte for byte what it printed before. On the API 37 emulator with the built
+tree, `gamma`, Enter, `zeta`, a swipe into `gamma`, the Backspace and a swipe
+back left the window holding both lines and the caret at the end of `zeta`,
+and `zebra` from the strip replaced `zeta` with the first line as the
+Backspace had left it.
+
+diff --git a/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts b/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
+index c654033..7f8af73 100644
+--- a/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
++++ b/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
+@@ -9,6 +9,7 @@ import { addDisposableListener, getActiveElement, getWindow, getWindowId } from
+ import { FastDomNode } from '../../../../../base/browser/fastDomNode.js';
+ import { StandardKeyboardEvent } from '../../../../../base/browser/keyboardEvent.js';
+ import { KeyCode } from '../../../../../base/common/keyCodes.js';
++import { isAndroid } from '../../../../../base/common/platform.js';
+ import { IInstantiationService } from '../../../../../platform/instantiation/common/instantiation.js';
+ import { EditorOption } from '../../../../common/config/editorOptions.js';
+ import { EndOfLinePreference, IModelDeltaDecoration } from '../../../../common/model.js';
+@@ -34,6 +35,9 @@ import { OffsetRange } from '../../../../common/core/ranges/offsetRange.js';
+ import { ILogService } from '../../../../../platform/log/common/log.js';
+ import { inputLatency } from '../../../../../base/browser/performance.js';
+ import { ViewportData } from '../../../../common/viewLayout/viewLinesViewportData.js';
++import { CursorChangeReason } from '../../../../common/cursorEvents.js';
++import { CursorState } from '../../../../common/cursorCommon.js';
++import { CompositionOperation } from '../../../../common/cursor/cursorTypeEditOperations.js';
+ 
+ // Corresponds to classes in nativeEditContext.css
+ enum CompositionClassName {
+@@ -42,6 +46,10 @@ enum CompositionClassName {
+ 	PRIMARY = 'edit-context-composition-primary',
+ }
+ 
++// Past this many lines before the caret's, an edit at the end of a line moves the buffer to the
++// caret's line: see _editContextStartAfter.
++const MAX_LINES_BEFORE_CARET = 20;
++
+ interface ITextUpdateEvent {
+ 	text: string;
+ 	selectionStart: number;
+@@ -60,6 +68,23 @@ export class NativeEditContext extends AbstractEditContext {
+ 	private _previousEditContextSelection: OffsetRange = new OffsetRange(0, 0);
+ 	private _previousEditContextText: string = '';
+ 	private _editContextPrimarySelection: Selection = new Selection(1, 1, 1, 1);
++	// Where the buffer starts in the model, which after an edit or a selection the input method made
++	// can be before the selection's line: see _editContextStartAfter.
++	private _editContextStart: Position = new Position(1, 1);
++	// How many lines the buffer holds after the selection's last line, which only a selection the
++	// input method set on an earlier line of the buffer makes more than none: see _emitTypeEvent.
++	private _editContextLinesAfter = 0;
++	// While an edit the input method sent is applied, the buffer offset at which it expects the caret.
++	private _expectedCaretOffset: number | undefined;
++	// While a selection the input method set is applied, which keeps the buffer as it is.
++	private _keepEditContextStart = false;
++	// While an edit the input method sent is applied, which its own copy of the text holds already.
++	private _applyingInputMethodEdit = false;
++	// From a Backspace key press to its release, which keeps the buffer as it is: see _onKeyDown.
++	private _deletingByKey = false;
++	// The buffer and selection the input method knew before the first rewrite of the current task,
++	// kept until the task's rewrites are done: see _restartInputIfUnheard.
++	private _beforeRewrite: { text: string; selection: OffsetRange } | undefined;
+ 
+ 	// Overflow guard container
+ 	private readonly _parent: HTMLElement;
+@@ -157,7 +182,11 @@ export class NativeEditContext extends AbstractEditContext {
+ 		this._register(addDisposableListener(this.domNode.domNode, 'beforeinput', async (e) => {
+ 			inputLatency.onBeforeInput();
+ 			if (e.inputType === 'insertParagraph' || e.inputType === 'insertLineBreak') {
++				// The input method counts the line break it asked for as one character at the caret.
++				const selection = this._previousEditContextSelection;
++				this._expectedCaretOffset = selection.isEmpty ? selection.start + 1 : undefined;
+ 				this._onType(this._viewController, { text: '\n', replacePrevCharCnt: 0, replaceNextCharCnt: 0, positionDelta: 0 });
++				this._expectedCaretOffset = undefined;
+ 			}
+ 		}));
+ 		this._register(addDisposableListener(this.domNode.domNode, 'paste', (e) => {
+@@ -251,8 +280,8 @@ export class NativeEditContext extends AbstractEditContext {
+ 		this._register(context.viewModel.model.onDidChangeContent((e) => {
+ 			let doChange = false;
+ 			for (const change of e.changes) {
+-				if (change.range.startLineNumber <= this._editContextPrimarySelection.endLineNumber
+-					&& change.range.endLineNumber >= this._editContextPrimarySelection.startLineNumber) {
++				if (change.range.startLineNumber <= this._editContextPrimarySelection.endLineNumber + this._editContextLinesAfter
++					&& change.range.endLineNumber >= this._editContextStart.lineNumber) {
+ 					doChange = true;
+ 					break;
+ 				}
+@@ -303,6 +332,12 @@ export class NativeEditContext extends AbstractEditContext {
+ 
+ 	public override onCursorStateChanged(e: ViewCursorStateChangedEvent): boolean {
+ 		this._primarySelection = e.modelSelections[0] ?? new Selection(1, 1, 1, 1);
++		// The lines after the selection's stay in the buffer only across what the input method does
++		// itself, as its earlier start does.
++		if (!this._keepEditContextStart && !this._deletingByKey && this._expectedCaretOffset === undefined) {
++			this._editContextLinesAfter = 0;
++		}
++		this._editContextStart = this._editContextStartAfter(e.reason);
+ 		this._screenReaderSupport.onCursorStateChanged(e);
+ 		this._updateEditContext();
+ 		return true;
+@@ -393,6 +428,7 @@ export class NativeEditContext extends AbstractEditContext {
+ 
+ 	private _onKeyUp(e: KeyboardEvent) {
+ 		inputLatency.onKeyUp();
++		this._deletingByKey = false;
+ 		this._viewController.emitKeyUp(new StandardKeyboardEvent(e));
+ 	}
+ 
+@@ -403,6 +439,16 @@ export class NativeEditContext extends AbstractEditContext {
+ 		if (standardKeyboardEvent.keyCode === KeyCode.KEY_IN_COMPOSITION) {
+ 			standardKeyboardEvent.stopPropagation();
+ 		}
++		// Gboard 17.7 and 18.4 send their Backspace as a key press, which the editor runs as a
++		// command, and count the character it deletes in their own copy of the text as they count
++		// an edit they sent. So until the key is released the buffer keeps its start and its end,
++		// as across a selection the input method set. Reset as after any other command, it dropped
++		// the lines a space bar swipe back into the line above had left after the caret's, while
++		// the caret moved where the keyboard expected, so the keyboard was told nothing: its copy
++		// kept those lines, its selection on them was refused, and the word it then picked for the
++		// line below was written over the line above.
++		this._deletingByKey = isAndroid && standardKeyboardEvent.keyCode === KeyCode.Backspace &&
++			!standardKeyboardEvent.ctrlKey && !standardKeyboardEvent.altKey && !standardKeyboardEvent.metaKey;
+ 		this._viewController.emitKeyDown(standardKeyboardEvent);
+ 	}
+ 
+@@ -417,6 +463,8 @@ export class NativeEditContext extends AbstractEditContext {
+ 			return;
+ 		}
+ 		const newText = editContextState.text ?? ' ';
++		const oldText = this._editContext.text;
++		const oldSelection = this._previousEditContextSelection;
+ 		// The buffer can hold IME edits this class did not write, so compare with and replace all
+ 		// of it: a range sized from the previous write leaves the IME's text after the new line.
+ 		if (newText !== this._editContext.text) {
+@@ -429,6 +477,42 @@ export class NativeEditContext extends AbstractEditContext {
+ 		}
+ 		this._editContextPrimarySelection = editContextState.editContextPrimarySelection;
+ 		this._previousEditContextSelection = new OffsetRange(editContextState.selectionStartOffset, editContextState.selectionEndOffset);
++		// An edit or a selection of the input method's own is in its copy of the text already.
++		if (isAndroid && !this._applyingInputMethodEdit && !this._keepEditContextStart &&
++			(newText !== oldText || !this._previousEditContextSelection.equals(oldSelection))) {
++			this._restartInputIfUnheard(oldText, oldSelection);
++		}
++	}
++
++	// Makes the input method read the buffer again where nothing else tells it to. Android tells
++	// an input method that the selection moved and nothing else, so a rewrite of the buffer that
++	// leaves the selection at the offsets it had leaves the input method working on the text it
++	// had: when a tap or a command put the buffer on another line with the caret at the same
++	// offset in it, Gboard 18.4 went on offering the words of the old text, and a pick wrote over
++	// the new one. So what the input method knew before the first rewrite of a task is kept, and
++	// once the code that rewrote the buffer has returned, still in the same task, input restarts
++	// if the text differs and the selection does not. It waits so that an edit whose selection
++	// moves afterwards, as when a suggestion is accepted or text pasted, restarts nothing, two
++	// rewrites restart input once, and the end of a composition the blur brings does not run
++	// inside an edit. Taking focus away and giving it back restarts input, with the focus tracker
++	// paused so that the editor is not told it lost focus.
++	private _restartInputIfUnheard(text: string, selection: OffsetRange): void {
++		if (this._beforeRewrite) {
++			return;
++		}
++		this._beforeRewrite = { text, selection };
++		queueMicrotask(() => {
++			const before = this._beforeRewrite;
++			this._beforeRewrite = undefined;
++			const domNode = this.domNode.domNode;
++			if (!before || this._editContext.text === before.text || !this._previousEditContextSelection.equals(before.selection) || getActiveElement() !== domNode) {
++				return;
++			}
++			this._focusTracker.pause();
++			domNode.blur();
++			domNode.focus();
++			this._focusTracker.resume();
++		});
+ 	}
+ 
+ 	private _emitTypeEvent(viewController: ViewController, e: ITextUpdateEvent): void {
+@@ -439,6 +523,31 @@ export class NativeEditContext extends AbstractEditContext {
+ 		const selectionStartOffset = this._previousEditContextSelection.start;
+ 		this._previousEditContextSelection = new OffsetRange(e.selectionStart, e.selectionEnd);
+ 
++		if (isAndroid && e.text === '' && e.updateRangeStart === e.updateRangeEnd) {
++			// No text changed: the input method set its selection, as Gboard does for a space bar swipe
++			// and before it commits a suggestion, or sent nothing at all. The selection goes where it
++			// asked, an earlier line the buffer holds included, and the buffer keeps its start and its
++			// end, because the input method goes on from its own copy of the text as if the selection
++			// had landed: refused at the start of a line, a swipe left Gboard 12.4's caret at the end
++			// of the line above, and it wrote the word it found there over the word after the editor's
++			// caret. Typing the text before the caret again, as an edit does, would rewrite every line
++			// the buffer holds. The selection is set as the textarea input sets one the input method
++			// asks for (ViewController.setSelection), from source 'keyboard' with reason Explicit, so an
++			// open suggest list is refiltered at the new caret: moved as typing moves it, the caret left
++			// the list in place for Enter or Tab to accept there, and opened one at the end of a word.
++			if (e.selectionStart !== selectionStartOffset || e.selectionEnd !== selectionEndOffset) {
++				const transformer = new PositionOffsetTransformer(this._editContext.text);
++				const selection = Selection.fromPositions(this._modelPositionAt(transformer, e.selectionStart), this._modelPositionAt(transformer, e.selectionEnd));
++				this._editContextLinesAfter = Math.max(0, this._editContextLinesAfter + this._editContextPrimarySelection.endLineNumber - selection.endLineNumber);
++				this._keepEditContextStart = true;
++				this._context.viewModel.setCursorStates('keyboard', CursorChangeReason.Explicit, [CursorState.fromModelSelection(selection)]);
++				this._keepEditContextStart = false;
++			}
++			// A selection that leaves the editor's where it was fires no cursor event to write it back.
++			this._updateEditContext();
++			return;
++		}
++
+ 		let replaceNextCharCnt = 0;
+ 		let replacePrevCharCnt = 0;
+ 		if (e.updateRangeEnd > selectionEndOffset) {
+@@ -469,15 +578,19 @@ export class NativeEditContext extends AbstractEditContext {
+ 			replaceNextCharCnt,
+ 			positionDelta
+ 		};
++		this._expectedCaretOffset = e.selectionStart === e.selectionEnd ? e.selectionStart : undefined;
+ 		this._onType(viewController, typeInput);
++		this._expectedCaretOffset = undefined;
+ 	}
+ 
+ 	private _onType(viewController: ViewController, typeInput: ITypeData): void {
++		this._applyingInputMethodEdit = true;
+ 		if (typeInput.replacePrevCharCnt || typeInput.replaceNextCharCnt || typeInput.positionDelta) {
+ 			viewController.compositionType(typeInput.text, typeInput.replacePrevCharCnt, typeInput.replaceNextCharCnt, typeInput.positionDelta);
+ 		} else {
+ 			viewController.type(typeInput.text);
+ 		}
++		this._applyingInputMethodEdit = false;
+ 	}
+ 
+ 	private _getNewEditContextState(): { text: string; selectionStartOffset: number; selectionEndOffset: number; editContextPrimarySelection: Selection } | undefined {
+@@ -486,13 +599,17 @@ export class NativeEditContext extends AbstractEditContext {
+ 		if (!model.isValidRange(editContextPrimarySelection)) {
+ 			return;
+ 		}
+-		const primarySelectionStartLine = editContextPrimarySelection.startLineNumber;
+-		const primarySelectionEndLine = editContextPrimarySelection.endLineNumber;
+-		const endColumnOfEndLineNumber = model.getLineMaxColumn(primarySelectionEndLine);
+-		const rangeOfText = new Range(primarySelectionStartLine, 1, primarySelectionEndLine, endColumnOfEndLineNumber);
+-		const text = model.getValueInRange(rangeOfText, EndOfLinePreference.TextDefined);
+-		const selectionStartOffset = editContextPrimarySelection.startColumn - 1;
+-		const selectionEndOffset = text.length + editContextPrimarySelection.endColumn - endColumnOfEndLineNumber;
++		if (!this._editContextStart.equals(model.validatePosition(this._editContextStart)) || editContextPrimarySelection.getStartPosition().isBefore(this._editContextStart)) {
++			this._editContextStart = new Position(editContextPrimarySelection.startLineNumber, 1);
++			this._editContextLinesAfter = 0;
++		}
++		const start = this._editContextStart;
++		const endLine = Math.min(model.getLineCount(), editContextPrimarySelection.endLineNumber + this._editContextLinesAfter);
++		const rangeOfText = new Range(start.lineNumber, start.column, endLine, model.getLineMaxColumn(endLine));
++		// \n whatever the model uses: an input method counts a line break as one character.
++		const text = model.getValueInRange(rangeOfText, EndOfLinePreference.LF);
++		const selectionStartOffset = model.getValueLengthInRange(Range.fromPositions(start, editContextPrimarySelection.getStartPosition()), EndOfLinePreference.LF);
++		const selectionEndOffset = selectionStartOffset + model.getValueLengthInRange(editContextPrimarySelection, EndOfLinePreference.LF);
+ 		return {
+ 			text,
+ 			selectionStartOffset,
+@@ -501,8 +618,60 @@ export class NativeEditContext extends AbstractEditContext {
+ 		};
+ 	}
+ 
+-	private _editContextStartPosition(): Position {
+-		return new Position(this._editContextPrimarySelection.startLineNumber, 1);
++	// An input method keeps its own copy of the text and can act on it before it hears what an
++	// edit did. Gboard sends Enter as a key press and at once recomposes the word after the caret at
++	// the offsets of its copy, which is the old buffer with a line break at the caret. The buffer
++	// used to restart at the caret's line after every line change, so with the caret inside a word
++	// those offsets landed on other characters and the input method wrote the word over them; the
++	// same edit at column 1 left the buffer as it was, and the input method spent the next Backspace
++	// on a line break that was not there.
++	//
++	// So after an edit the input method made, the buffer keeps its start, and a line break the input
++	// method deletes is one. Where text follows the caret, the start moves instead to where the caret
++	// lands at the offset the input method expects, so that its offsets point at the text after the
++	// caret it believes in, whatever indentation the editor added. Only there, because the input
++	// method's copy of the text before the caret then lacks that indentation and nothing tells it so:
++	// moved at the end of a line too, after Enter at the end of an indented line Gboard recomposed
++	// what it took for the word before the caret at the offsets of that copy, and three Backspaces
++	// turned `alpha1;` into `alphalpha`. With the start kept, the indentation moves the caret off the
++	// offset the input method expects, and it reads the text again.
++	//
++	// A selection the input method set keeps the start, and the lines after the selection's, though
++	// it moves the caret as a cursor key does: see _emitTypeEvent. After anything else, a tap, a
++	// cursor key, a command that moves the caret, a paste or an undo, the buffer starts at the
++	// caret's line as before. It starts there after every edit on every platform but Android, the
++	// only one this was measured on.
++	private _editContextStartAfter(reason: CursorChangeReason): Position {
++		if (this._keepEditContextStart || this._deletingByKey) {
++			return this._editContextStart;
++		}
++		const selection = this._primarySelection;
++		const model = this._context.viewModel.model;
++		const lineStart = new Position(selection.startLineNumber, 1);
++		if (!isAndroid || reason !== CursorChangeReason.NotSet || !selection.isEmpty()) {
++			return lineStart;
++		}
++		if (this._expectedCaretOffset === undefined) {
++			return lineStart;
++		}
++		if (selection.startColumn < model.getLineMaxColumn(selection.startLineNumber)) {
++			return CompositionOperation.positionBefore(model, selection.getPosition(), this._expectedCaretOffset);
++		}
++		// Typing line after line would grow the buffer without end. Moving it changes the offsets
++		// the input method holds, which is safe here, where nothing follows the caret to recompose.
++		if (selection.startLineNumber - this._editContextStart.lineNumber > MAX_LINES_BEFORE_CARET) {
++			return lineStart;
++		}
++		return this._editContextStart;
++	}
++
++	// A buffer offset as a model position. The buffer is the model's text from _editContextStart.
++	private _modelPositionAt(transformer: PositionOffsetTransformer, offset: number): Position {
++		const position = transformer.getPosition(offset);
++		const start = this._editContextStart;
++		return position.lineNumber === 1
++			? new Position(start.lineNumber, start.column + position.column - 1)
++			: new Position(start.lineNumber + position.lineNumber - 1, position.column);
+ 	}
+ 
+ 	private _handleTextFormatUpdate(e: TextFormatUpdateEvent): void {
+@@ -510,13 +679,11 @@ export class NativeEditContext extends AbstractEditContext {
+ 			return;
+ 		}
+ 		const formats = e.getTextFormats();
+-		const editContextStartPosition = this._editContextStartPosition();
++		const transformer = new PositionOffsetTransformer(this._editContext.text);
+ 		const decorations: IModelDeltaDecoration[] = [];
+ 		formats.forEach(f => {
+-			const textModel = this._context.viewModel.model;
+-			const offsetOfEditContextText = textModel.getOffsetAt(editContextStartPosition);
+-			const startPositionOfDecoration = textModel.getPositionAt(offsetOfEditContextText + f.rangeStart);
+-			const endPositionOfDecoration = textModel.getPositionAt(offsetOfEditContextText + f.rangeEnd);
++			const startPositionOfDecoration = this._modelPositionAt(transformer, f.rangeStart);
++			const endPositionOfDecoration = this._modelPositionAt(transformer, f.rangeEnd);
+ 			const decorationRange = Range.fromPositions(startPositionOfDecoration, endPositionOfDecoration);
+ 			const thickness = f.underlineThickness.toLowerCase();
+ 			let decorationClassName: string = CompositionClassName.NONE;
+@@ -589,9 +756,7 @@ export class NativeEditContext extends AbstractEditContext {
+ 		const characterBounds: DOMRect[] = [];
+ 		const offsetTransformer = new PositionOffsetTransformer(this._editContext.text);
+ 		for (let offset = e.rangeStart; offset < e.rangeEnd; offset++) {
+-			const editContextStartPosition = offsetTransformer.getPosition(offset);
+-			const textStartLineOffsetWithinEditor = this._editContextPrimarySelection.startLineNumber - 1;
+-			const characterStartPosition = new Position(textStartLineOffsetWithinEditor + editContextStartPosition.lineNumber, editContextStartPosition.column);
++			const characterStartPosition = this._modelPositionAt(offsetTransformer, offset);
+ 			const characterEndPosition = characterStartPosition.delta(0, 1);
+ 			const characterModelRange = Range.fromPositions(characterStartPosition, characterEndPosition);
+ 			const characterViewRange = this._context.viewModel.coordinatesConverter.convertModelRangeToViewRange(characterModelRange);
+diff --git a/src/vs/editor/common/cursor/cursorTypeEditOperations.ts b/src/vs/editor/common/cursor/cursorTypeEditOperations.ts
+index 45284b3..78bdb3e 100644
+--- a/src/vs/editor/common/cursor/cursorTypeEditOperations.ts
++++ b/src/vs/editor/common/cursor/cursorTypeEditOperations.ts
+@@ -762,11 +762,44 @@ export class CompositionOperation {
+ 			return null;
+ 		}
+ 		const pos = selection.getPosition();
+-		const startColumn = Math.max(1, pos.column - replacePrevCharCnt);
+-		const endColumn = Math.min(model.getLineMaxColumn(pos.lineNumber), pos.column + replaceNextCharCnt);
+-		const range = new Range(pos.lineNumber, startColumn, pos.lineNumber, endColumn);
++		// The EditContext buffer can hold lines before the caret's, and lines after it once the input
++		// method has set its selection on an earlier line, so what an input method replaces can reach
++		// across line breaks on either side of the caret: a Backspace at the start of a line joins it
++		// to the line above instead of deleting nothing, and a range that runs on past the end of the
++		// caret's line is replaced instead of being inserted again in front of the text it covers.
++		const start = CompositionOperation.positionBefore(model, pos, replacePrevCharCnt);
++		const end = CompositionOperation.positionAfter(model, pos, replaceNextCharCnt);
++		const range = Range.fromPositions(start, end);
+ 		return new ReplaceCommandWithOffsetCursorState(range, text, 0, positionDelta);
+ 	}
++
++	/**
++	 * The position `count` characters before `position`, a line break counting as one character as
++	 * it does in an EditContext buffer, and never before the start of the model.
++	 */
++	public static positionBefore(model: ICursorSimpleModel, position: Position, count: number): Position {
++		let lineNumber = position.lineNumber;
++		let column = position.column - count;
++		while (column < 1 && lineNumber > 1) {
++			lineNumber--;
++			column += model.getLineMaxColumn(lineNumber);
++		}
++		return new Position(lineNumber, Math.max(1, column));
++	}
++
++	/**
++	 * The position `count` characters after `position`, a line break counting as one character as
++	 * it does in an EditContext buffer, and never past the end of the model.
++	 */
++	public static positionAfter(model: ICursorSimpleModel, position: Position, count: number): Position {
++		let lineNumber = position.lineNumber;
++		let column = position.column + count;
++		while (column > model.getLineMaxColumn(lineNumber) && lineNumber < model.getLineCount()) {
++			column -= model.getLineMaxColumn(lineNumber);
++			lineNumber++;
++		}
++		return new Position(lineNumber, Math.min(model.getLineMaxColumn(lineNumber), column));
++	}
+ }
+ 
+ export class TypeWithoutInterceptorsOperation {

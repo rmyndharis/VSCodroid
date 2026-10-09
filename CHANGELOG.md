@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A tap on a read-only file, such as one set with File: Toggle Active Editor Read-only in Session or `files.readonlyInclude`, moves the cursor without raising the soft keyboard.
 - A save to a network device folder while it is offline can now wait inside VSCodroid, with a notice, until the folder's version of the file can be read, and is then sent while the folder is open, or, if the folder reports file times, when it is next opened.
 - Holding a key row key that has no alternates, such as Tab or Esc, presses it when you lift your finger rather than after the long-press delay; Ctrl, Alt and Shift still switch at the delay.
+- A terminal focused from a tap outside it, such as its tab in the panel, opens with the soft keyboard down until it is tapped, as a file opened from the Explorer does; one opened with Enter after typing in the Command Palette keeps it up, and the keyboard is up once a file opened that way from Quick Open, or created with Enter in the Explorer's New File box, has loaded.
 
 ### Removed
 
@@ -68,6 +69,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A folder's own settings, such as a colour theme in its `.vscode/settings.json`, apply from the start of a load, the first time the folder opens included, instead of giving way to your settings for several seconds.
 - Under a light theme, the status and navigation bars and the space the keyboard leaves while a folder opens or the window reloads take the theme's background instead of staying dark.
 - Under a light theme the app also starts light: the setup screen and the "Starting server..." page take the background the editor last showed, and the launch screen is white from the second start after updating.
+- Pressing Enter on Gboard with the cursor inside or at the start of a word no longer writes that word over the next line; text such as `ha1 = 1, aha1a2 = 2` could be saved.
+- Backspace on Gboard right after Enter at the start of a line deletes the line break instead of doing nothing.
+- Putting the soft keyboard away after tapping a word no longer opens the suggestion list over it.
+- In the editor, Ctrl or Alt latched on the key row combines with the next letter, Backspace or space from the soft keyboard: Ctrl then P opens Quick Open instead of typing p.
+- A tap outside the text that leaves the editor or the terminal focused, such as on the Explorer or Search icon, puts the soft keyboard away, a slow or slightly sliding tap included; it could stay up, with typing going to the file or the shell behind the view.
+- On a phone, a drag outside the text, a long press or a button that opens a menu no longer puts a soft keyboard away, so the menu stays open.
+- With the terminal focused, a tap outside it no longer brings back a soft keyboard put away with Back.
+- A suggestion list closes when a tap lands outside the editor; it stayed open over the view the tap opened, and a tap meant for a file in the Explorer could accept a suggestion into the editor.
+- Gboard's suggestion strip follows the text when a tap or a cursor key lands at the same column of another line; it went on offering the old words, and picking one wrote over the text at the cursor.
 
 ### Security
 

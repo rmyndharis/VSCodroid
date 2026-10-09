@@ -3660,10 +3660,59 @@ class MainActivity : AppCompatActivity() {
      * finished when it loses focus.
      *
      * Measured on an API 37 emulator at 411dp, `dumpsys input_method` beside a
-     * screenshot each time. Tapping the Explorer icon: was `mInputShown=true`,
-     * now false. Opening a file from the tree: was true, now false. Dragging to
-     * scroll a file: was true, now false. Tapping a word: true, with the caret
-     * on it and the keyboard up.
+     * screenshot each time, each starting with the keyboard down. Tapping the
+     * Explorer icon: was `mInputShown=true`, now false. Opening a file from the
+     * tree: was true, now false. Dragging to scroll a file: was true, now false.
+     * Tapping a word: true, with the caret on it and the keyboard up.
+     *
+     * With the keyboard already up, `inputmode` on the focused host takes it
+     * down only where no hardware keyboard is attached. Chromium's
+     * `ImeAdapterImpl.updateState` hides the keyboard when the focused
+     * element's input mode turns to none, unless the configuration reports a
+     * keyboard, and every emulator measured here does (`hw.keyboard=yes`, so
+     * `qwerty` in its configuration): there a tap on an activity bar icon,
+     * which leaves focus on the editor's host, left the keyboard over the
+     * Explorer, and over the Search view with typing still going to the file.
+     * On a phone the hold did take it down, except over a word still composing,
+     * which apply() leaves alone, and it did so for every touch outside text,
+     * a drag, a long press or a button that opens a menu as well (read from
+     * Chromium's source, not measured on a phone). So the hold is no longer
+     * written on the focused host while the keyboard is up, and the keyboard
+     * is asked down only for a tap. On API 33 and 37 emulators a More Actions
+     * menu and a drag along the activity bar then left that host without the
+     * attribute, with the keyboard up.
+     * A tap outside text (the same travel and duration test as a tap on text,
+     * or a tap by the workbench's own touch gesture, which is looser and which
+     * the activity bar, the status bar and the tabs act on: a touch on the
+     * Search icon that slid 20 CSS px, or a press of 620 ms on the Explorer
+     * icon, opened the view with the keyboard left up and typing still going to
+     * the file, measured on an API 33 emulator with Gboard 12.4; with the
+     * gesture's tap counted, a press of 620 ms and a slide of 20 px took it down
+     * on API 33 and 37 emulators) therefore asks
+     * for the keyboard down with `navigator.virtualKeyboard.hide()`
+     * once the tap's own handlers have run, only if an editing host still has
+     * focus and the keyboard is reported up, under `virtualKeyboardPolicy`
+     * `manual`, which the dismissal hook, a tap on text or a one second timeout
+     * puts back to `auto`, and the dismissal hook then holds that host. A tab,
+     * which takes focus, needs none of it. Nor is
+     * it done for a button that opens a menu, marked `aria-haspopup="true"` as
+     * the views' and the editor's More Actions, Accounts, Manage and the
+     * Application Menu are: the keyboard going down resizes the window, and
+     * the menu the tap had just opened closed with it. Measured on an API 33
+     * emulator with Gboard 12.4: with the keyboard up, the Explorer's Views and
+     * More Actions and the editor's More Actions opened no lasting menu, and
+     * with `navigator.virtualKeyboard.hide` stubbed out over DevTools the first
+     * stayed open. Hiding
+     * the keyboard ends a word it was composing, as Back does, which is why
+     * this waits for patch 0025: before it, that end opened the suggestion
+     * list, and a list already open stayed open, since nothing took focus from
+     * the editor, floating over the view the tap had opened, where the next tap
+     * accepted a suggestion into the file. Patch 0025 ends the editor's
+     * suggestion session on any touch outside it and leaves that end nothing to
+     * arm. Measured on an API 33 emulator with Gboard 12.4, as a DevTools
+     * candidate: the Explorer icon put the keyboard down 43 ms after the tap,
+     * also over an underlined word, which stayed as it was; the Search icon put
+     * it down, and a tap in the search box raised it with focus in the box.
      *
      * A tap anywhere inside the editor counts as one on text, the margin and the
      * empty space under the last line included, because Monaco moves the caret
@@ -3686,7 +3735,23 @@ class MainActivity : AppCompatActivity() {
      * because a touch outside text took focus away, finds nothing to change,
      * except a host that was still composing at that touch: apply() skipped it
      * then, and it gets the hold now, which the focus returning would give it
-     * anyway.
+     * anyway. A keyboard reported down while nothing that takes text has focus
+     * is not taken as put away: Chromium takes it down as focus leaves text,
+     * and Enter does that on its way into an editor when Quick Open opens a
+     * file not open yet, which leaves focus on the page while the file loads,
+     * or when New File leaves it on the Explorer's list. Read as put away, it
+     * cleared what the typing in the box had counted, and the file opened
+     * held, with the keyboard down: measured on API 33, 36 and 37 emulators.
+     * So that report clears nothing a tap or typing counted, and the new
+     * editor's focus raises the keyboard again, measured on the API 33
+     * emulator with Gboard 12.4 with the hook skipped in that gap over
+     * DevTools, and with this rule built in on API 33 and 37 emulators, with
+     * Gboard 12.4 and 17.7.4, for files opened from Quick Open and created in
+     * New File. The test is what has focus, so Back while an extension's
+     * webview has focus, an iframe, is read the same way, as is the keyboard
+     * Chromium takes down when a terminal that was typed into goes away: what a
+     * tap or typing counted stays, and an editor focused next without a touch
+     * can take the keyboard up again (read from the code, not measured).
      * Measured on the same emulator with the guard built in: a tap on a word,
      * then Back or the hide key, then a drag and a fling left the keyboard
      * down and a tap on a word raised it; the same scroll with the hook
@@ -3697,10 +3762,15 @@ class MainActivity : AppCompatActivity() {
      * it does: each turn reports the keyboard down and, about 350 ms later, up
      * again, so the hook puts the hold back on the focused host in between.
      * Measured there, the keyboard was up again after turning to landscape and
-     * back, and the next letter landed at the caret. Not measured: switching
-     * keyboards with the globe key and leaving the app with the keyboard up,
-     * either of which may report the same down and up; a hardware keyboard; a
-     * floating or split keyboard; and keyboards other than Gboard.
+     * back, and the next letter landed at the caret. That emulator reports a
+     * hardware keyboard, where the hold never takes a keyboard down; on a phone
+     * the hold written at that report would itself be the change of input mode
+     * that takes the keyboard down, at the turn, and it would stay down until a
+     * tap on text (read from Chromium's source, not measured on a phone). Not
+     * measured: switching keyboards with the globe key and leaving the app with
+     * the keyboard up, either of which may report the same down and up; a
+     * hardware keyboard; a floating or split keyboard; and keyboards other than
+     * Gboard.
      *
      * A read-only editor never lets the keyboard up, so a file made read-only
      * with File: Toggle Active Editor Read-only in Session or matched by
@@ -3726,8 +3796,53 @@ class MainActivity : AppCompatActivity() {
      * checks the marker against the packaged bundle wherever the tree is
      * present, the release build's unit run included.
      *
-     * The terminal is left alone. It has an editing host of its own, and
-     * opening a terminal is asking to type.
+     * The terminal's helper textarea is held and let up like the editor's host,
+     * and a tap on the terminal counts as one on text. Left alone, as it was,
+     * the terminal kept the keyboard up after a tap outside text, with typing
+     * going to the shell behind the Source Control view, and after Back the
+     * same tap raised the keyboard again: measured on an API 36 emulator with
+     * Gboard 18.4. The cost is that a terminal focused from a tap outside text,
+     * its tab in the panel say, opens with the keyboard down until it is
+     * tapped, as a file opened from the Explorer does.
+     *
+     * Typing with the keyboard up counts as aiming at text, in a text box as in
+     * an editor. A box can take focus without a tap on text: the Command
+     * Palette opened from the Application Menu is typed into with the last
+     * touch on that menu, and Enter on Terminal: Create New Terminal moved focus
+     * into the new terminal, which was held, so the keyboard went down under a
+     * terminal opened to be typed into: measured on an API 33 emulator with
+     * Gboard 12.4. With this rule the terminal opened with the keyboard up on
+     * API 33, 36 and 37 emulators. A file Enter opens from Quick Open is the
+     * same case, as is one Enter creates in the Explorer's New File box: a file
+     * open already kept the keyboard up on those three emulators, and one not
+     * open yet needs the dismissal hook's rule above as well. A tap on the
+     * palette's row is a tap outside text, and what it opens starts with the
+     * keyboard down.
+     *
+     * A host blurred and focused again in one task, with the keyboard up, keeps
+     * it. Patch 0024 restarts input that way when the editor has rewritten the
+     * keyboard's text under a caret left at the same offset, and the key row
+     * does after a latched chord. The focus handler took that focus for a new
+     * one and held the host whenever the last touch had been outside text and
+     * left the keyboard up, a drag, a long press or a button that opens a menu.
+     * Written at that focus, `inputmode="none"` turns the focused element's
+     * input mode to none, which on a phone takes the keyboard down (read from
+     * Chromium's source, as above), so after a drag on the activity bar a
+     * trackpad Down along a column would put it away there. The emulators
+     * measured report a hardware keyboard and never show it. Such a focus now
+     * holds nothing. A hold already on the host, which a turn of the phone
+     * leaves on the API 36 emulator (above), comes off with a refocus of its
+     * own, and the composition finish below takes one off between its blur
+     * and its focus. That hold reached Chromium when it was written, so a
+     * restart that meets it changes no input mode and takes nothing down.
+     * A hold the focus handler put on with the keyboard up, to take it down,
+     * is left until the keyboard is reported down or a tap on text lets it up.
+     * Replayed in headless Chromium with the 1.139.1 bundle: after a drag
+     * outside text, a cursor key along a column left the host focused without
+     * the attribute, also with a word composed before or after the drag, where
+     * the script before this left it held. A touch on the Explorer's tree is no
+     * such touch: the list takes focus at the touch and the keyboard goes down
+     * with it.
      *
      * The same script ends a word the keyboard is still composing when a key or
      * a tap moves the editor's caret. Chromium keeps an EditContext
@@ -3761,10 +3876,11 @@ class MainActivity : AppCompatActivity() {
      * bubble phase, and the target for a gesture, which does not bubble. When
      * the event is stopped before that listener, a zero timeout ends it
      * instead, in a later task. A long press on the list ends nothing. With no
-     * list open, ending a composition makes the editor schedule a quick
-     * suggestion 10 ms later, and patch 0023 cancels it when a cursor key then
-     * moves the caret: otherwise the list opened at the key's destination, such
-     * as after End on a line ending in an identifier.
+     * list open, ending a composition that typed makes the editor schedule a
+     * quick suggestion 10 ms later, patch 0025 scheduling none for one that
+     * typed nothing, and patch 0023 cancels it when a cursor key then moves
+     * the caret: otherwise the list opened at the key's destination, such as
+     * after End on a line ending in an identifier.
      *
      * Measured on an API 33 emulator with Gboard 12.4, with this code installed
      * over DevTools rather than built in: End, Home, PageUp, the trackpad in
@@ -3782,11 +3898,9 @@ class MainActivity : AppCompatActivity() {
      * measured: keyboards other than Gboard, Korean and Chinese input, and the
      * other Monaco editors, such as the Source Control message box and the chat
      * input. What it costs: the word is committed as typed, so on a Japanese
-     * keyboard a guarded key or tap commits the kana unconverted; a word ended
-     * after an accept can make the editor offer the accepted word again as a
-     * one-row list; and a chord the suggestion list also binds, such as
-     * Shift+Tab or Ctrl+Down, ends the word first, so the list acts from its
-     * first row.
+     * keyboard a guarded key or tap commits the kana unconverted; and a chord
+     * the suggestion list also binds, such as Shift+Tab or Ctrl+Down, ends the
+     * word first, so the list acts from its first row.
      */
     private fun injectKeyboardGuard() {
         webView?.evaluateJavascript(
@@ -3820,8 +3934,21 @@ class MainActivity : AppCompatActivity() {
                 // introduces; the alternative is a selector that has to name
                 // each of them and be corrected on every VS Code bump that
                 // renames one.
-                var TEXT = '.monaco-editor, textarea, input, [contenteditable="true"], .native-edit-context';
-                var EDITING_HOST = '.native-edit-context, .monaco-editor textarea.inputarea';
+                //
+                // The terminal is text in the same way: a tap on it is how the
+                // shell is typed into, and its helper textarea is an editing host
+                // like the editor's. Left out, a tap outside text with the
+                // terminal focused left the keyboard up over the view it opened,
+                // with what was typed going to the shell behind it, and once the
+                // keyboard had been put away the same tap raised it again, as
+                // Chromium raises it for a tap anywhere while an editable element
+                // without inputmode="none" has focus: measured on an API 36
+                // emulator with Gboard 18.4, the Source Control and Explorer icons
+                // did both. The cost is that a terminal focused from a tap outside
+                // text, its tab in the panel say, opens with the keyboard down
+                // until it is tapped, as a file opened from the Explorer does.
+                var TEXT = '.monaco-editor, textarea, input, [contenteditable="true"], .native-edit-context, .xterm';
+                var EDITING_HOST = '.native-edit-context, .monaco-editor textarea.inputarea, .xterm-helper-textarea';
                 var aimedAtText = false;
                 // Set while this code is taking focus away and giving it back,
                 // so the focus it causes is not treated as one to answer.
@@ -3850,8 +3977,19 @@ class MainActivity : AppCompatActivity() {
                 // 700, so any press it turns into a menu is already past 500 here.
                 // The margin costs only that a deliberately slow tap between 500
                 // and 700ms leaves the keyboard down. That is a second tap, against
-                // a menu that could not be opened at all.
+                // a menu that could not be opened at all. It holds while the page
+                // keeps up: the gesture times the press with Date.now() as its
+                // touchstart and touchend handlers run, this with the events' own
+                // timestamps, so on an API 37 emulator under heavy host load, with
+                // the handlers about 700 ms late, the gesture opened the editor's
+                // menu for a press this read as a tap, and the keyboard it let up
+                // rose once the menu was closed.
                 var LONG_PRESS_MS = 500;
+                // Where a touch outside text went down, until it is lifted, and
+                // the host the keyboard was last asked down for, until it is
+                // down. See hideTheKeyboard().
+                var outsideTap = null;
+                var manualHost = null;
                 // Editing hosts holding a word the on-screen keyboard is still
                 // composing. Chromium answers a changed `inputmode` on the
                 // focused element by restarting input, which writes the composed
@@ -3890,13 +4028,34 @@ class MainActivity : AppCompatActivity() {
                 document.addEventListener('compositionend', function(e) {
                     if (e.target) composing.delete(e.target);
                 }, true);
+                // Typing in any box with the keyboard up is aiming at text too.
+                // The Command Palette opened from a menu is typed into with the
+                // last touch outside text, and Enter there can move focus into
+                // an editing host, a new terminal or a file from Quick Open,
+                // which the focus handler then held: the keyboard went down
+                // under a terminal opened to be typed into. Only real typing
+                // counts, not the untrusted events the key row's chords
+                // dispatch, and only with the keyboard up: typing on a hardware
+                // keyboard is no reason to bring the soft keyboard up.
+                document.addEventListener('beforeinput', function(e) {
+                    if (e.isTrusted && window.__vscodroidImeVisible && e.target && e.target.closest && e.target.closest(TEXT)) aimedAtText = true;
+                }, true);
                 // An empty commit ends an EditContext composition without a
                 // compositionend, and a host left in the set is one apply()
                 // never lets the keyboard up for again. Losing focus is the
                 // reliable end: Blink finishes the composition of the element
                 // it takes focus from, and of the page when the page loses it.
+                //
+                // The element that lost focus is kept until the script that
+                // blurred it has returned, the next microtask checkpoint, so
+                // the focus handler can tell a host blurred and focused again
+                // in one run of script, which never really lost focus, from
+                // one that takes focus later.
+                var blurred = null;
                 document.addEventListener('focusout', function(e) {
                     composing.delete(e.target);
+                    blurred = e.target;
+                    queueMicrotask(function() { blurred = null; });
                 }, true);
                 // A read-only editor takes no typing, so touching one is reading
                 // it, and its host never loses the hold. Monaco writes
@@ -3909,6 +4068,21 @@ class MainActivity : AppCompatActivity() {
                 // before.
                 function writable(element) {
                     return !element.editContext || element.getAttribute('aria-autocomplete') !== 'none';
+                }
+                // A host the focus handler held while the keyboard was up, to
+                // take it down: a file switched to with a chord from the key
+                // row after a drag outside text, say. Until the keyboard is
+                // reported down or a tap on text lets it up, a refocus of it
+                // keeps the hold, so that an input restart in the meantime does
+                // not undo it: the editor restarts input when it first writes a
+                // new host's buffer with the caret at offset 0, such as at Down
+                // from the first line's start.
+                var heldAtFocus = null;
+                // Whether a refocus of this host leaves the keyboard where it
+                // is: up, over an editor that takes typing, and not being taken
+                // down by this script.
+                function keepsTheKeyboard(element) {
+                    return window.__vscodroidImeVisible && element !== heldAtFocus && writable(element);
                 }
                 function apply(element) {
                     watch(element);
@@ -3934,6 +4108,8 @@ class MainActivity : AppCompatActivity() {
                 // a key or a tap moves the caret.
                 function letTheKeyboardUp() {
                     aimedAtText = true;
+                    heldAtFocus = null;
+                    restorePolicy();
                     var focused = document.activeElement;
                     var wasHeldDown = !!(focused && focused.getAttribute &&
                         focused.getAttribute('inputmode') === 'none');
@@ -3945,8 +4121,51 @@ class MainActivity : AppCompatActivity() {
                         reapplying = false;
                     }
                 }
+                // A tap outside text that leaves the editing host focused, as the
+                // activity bar's icons do, left a keyboard that was up where it
+                // was: inputmode on a host that already has focus takes a visible
+                // keyboard down only where no hardware keyboard is attached, the
+                // touch writes none on the focused host while the keyboard is up,
+                // and apply() leaves a composing host alone besides. So the
+                // keyboard is asked down directly, once the
+                // tap's own handlers have run and only if a host still has focus,
+                // under a manual policy, which makes Chromium hide it on request.
+                // The policy goes back to auto when the keyboard is reported
+                // down, or after a second if that report never comes, so the
+                // next tap on text raises it as before. A second request first
+                // puts back the host of the one before: only the last host is
+                // remembered, and one left on manual would never raise the
+                // keyboard for a tap again until the page reloads.
+                function hideTheKeyboard() {
+                    restorePolicy();
+                    var host = document.activeElement;
+                    if (!window.__vscodroidImeVisible || !navigator.virtualKeyboard ||
+                        !host || !host.matches || !host.matches(EDITING_HOST)) return;
+                    host.virtualKeyboardPolicy = 'manual';
+                    manualHost = host;
+                    navigator.virtualKeyboard.hide();
+                    setTimeout(restorePolicy, 1000);
+                }
+                function restorePolicy() {
+                    if (!manualHost) return;
+                    manualHost.virtualKeyboardPolicy = 'auto';
+                    manualHost = null;
+                }
+                // Whether the workbench's own touch gesture took the touch as a
+                // tap. The activity bar, the status bar and the tabs act on that
+                // tap, which it grants for a press under 700 ms that stays within
+                // 30 px on each axis, looser than the test here: a touch on the
+                // Search icon that slid 20 px, or a press of 620 ms on the
+                // Explorer icon, opened the view and left the keyboard up, with
+                // typing still going to the file, measured on an API 33 emulator.
+                // Its event is dispatched from touchend, after pointerup and
+                // before the zero timeout that pointerup schedules.
+                var gestureTapped = false;
+                window.addEventListener('-monaco-gesturetap', function() { gestureTapped = true; }, true);
                 document.addEventListener('pointerdown', function(e) {
                     var target = e.target;
+                    outsideTap = null;
+                    gestureTapped = false;
                     // A touch inside an open context menu decides nothing about the
                     // keyboard, and letting it decide destroys the menu.
                     //
@@ -3970,16 +4189,23 @@ class MainActivity : AppCompatActivity() {
                     //
                     // An early return rather than falling through to the branch under
                     // it: that branch clears `aimedAtText` and puts `inputmode="none"`
-                    // back on every editing host, which would take the keyboard away
-                    // from a menu opened while the user was typing. Nothing about the
-                    // keyboard should change because a menu was touched.
+                    // back on the editing hosts, which would hold whatever a menu
+                    // opened while the user was typing goes on to focus. Nothing
+                    // about the keyboard should change because a menu was touched.
                     //
                     // Both shapes are covered. A shadow-DOM menu retargets to the host
                     // itself, which carries the class; a light-DOM one (the explorer,
                     // the terminal, the menubar) leaves the target inside
                     // `.context-view`, and `closest` reaches it there.
+                    //
+                    // So does a target already gone from the page. A touch outside
+                    // an open menu closes it from a window listener that runs before
+                    // this one, which removes the menu's block, the touch's target,
+                    // so `closest` finds no menu above it. Read as a tap outside
+                    // text, closing a menu with the keyboard up asked the keyboard
+                    // down, measured on an API 33 emulator.
                     if (target && ((target.classList && target.classList.contains('shadow-root-host')) ||
-                        (target.closest && target.closest('.context-view')))) {
+                        (target.closest && target.closest('.context-view')) || target.isConnected === false)) {
                         pendingTap = null;
                         return;
                     }
@@ -3995,10 +4221,37 @@ class MainActivity : AppCompatActivity() {
                         return;
                     }
                     pendingTap = null;
+                    outsideTap = { id: e.pointerId, x: e.clientX, y: e.clientY, at: e.timeStamp,
+                        opensMenu: !!(target && target.closest && target.closest('[aria-haspopup="true"]')) };
                     aimedAtText = false;
-                    applyAll();
+                    // Every host but the focused one while the keyboard is up. On
+                    // a phone Chromium takes the keyboard down as soon as the
+                    // focused element's inputmode turns to none, at the next frame,
+                    // unless a hardware keyboard is attached (ImeAdapterImpl's
+                    // updateState), so the hold alone would put it away for a drag,
+                    // a long press or a button that opens a menu, where it stays
+                    // up. Every emulator here reports a hardware keyboard, so none
+                    // of them shows the difference. A tap asks for the keyboard
+                    // down below, and the dismissal hook then holds that host.
+                    var focused = document.activeElement;
+                    document.querySelectorAll(EDITING_HOST).forEach(function(element) {
+                        if (element !== focused || !window.__vscodroidImeVisible) apply(element);
+                    });
                 }, true);
                 document.addEventListener('pointerup', function(e) {
+                    // The same tap test as for text below, or the workbench's own,
+                    // which decides for the targets that act on it. A button that
+                    // opens a menu, such as a view's More Actions, keeps the
+                    // keyboard: putting it away resizes the window, and the menu the
+                    // tap had just opened closed with the resize.
+                    if (outsideTap && outsideTap.id === e.pointerId) {
+                        var tap = outsideTap;
+                        var moved = Math.abs(e.clientX - tap.x) + Math.abs(e.clientY - tap.y);
+                        var tapped = moved <= TAP_SLOP && e.timeStamp - tap.at < LONG_PRESS_MS;
+                        outsideTap = null;
+                        if (!tap.opensMenu) setTimeout(function() { if (tapped || gestureTapped) hideTheKeyboard(); }, 0);
+                        return;
+                    }
                     // Keyed by pointer, because a second finger anywhere on the
                     // page would otherwise answer for the first: the last touch
                     // down wins the single slot, and lifting either one is read
@@ -4017,6 +4270,7 @@ class MainActivity : AppCompatActivity() {
                     letTheKeyboardUp();
                 }, true);
                 document.addEventListener('pointercancel', function(e) {
+                    if (outsideTap && outsideTap.id === e.pointerId) outsideTap = null;
                     if (pendingTap && pendingTap.id !== e.pointerId) return;
                     // The gesture became the system's: a swipe from an edge, a
                     // pull down, a second finger. Nothing was decided, so
@@ -4041,7 +4295,30 @@ class MainActivity : AppCompatActivity() {
                     // answering it here would raise it for a scroll.
                     if (pendingTap) return;
                     if (!target || !target.matches || !target.matches(EDITING_HOST)) return;
+                    // A host blurred and focused again in one task never lost
+                    // focus: patch 0024 restarts input that way after the
+                    // editor rewrites the keyboard's text under a caret left at
+                    // the same offset, and the key row does after a latched
+                    // chord. Holding it below after a touch outside text that
+                    // left the keyboard up (a drag, a long press, a button that
+                    // opens a menu) would put that keyboard away on a phone at
+                    // a trackpad Down along a column. So with the keyboard up
+                    // such a host is not held, and a hold already on it, which a
+                    // turn of the phone leaves, comes off with a refocus of its
+                    // own, because the focus it got was granted with the
+                    // attribute in place.
+                    if (target === blurred && keepsTheKeyboard(target)) {
+                        if (target.getAttribute('inputmode') === 'none') {
+                            target.removeAttribute('inputmode');
+                            reapplying = true;
+                            target.blur();
+                            target.focus();
+                            reapplying = false;
+                        }
+                        return;
+                    }
                     if (aimedAtText && writable(target)) { target.removeAttribute('inputmode'); return; }
+                    if (window.__vscodroidImeVisible) heldAtFocus = target;
                     if (target.getAttribute('inputmode') === 'none') return;
                     target.setAttribute('inputmode', 'none');
                     reapplying = true;
@@ -4066,10 +4343,18 @@ class MainActivity : AppCompatActivity() {
                     if (!element) return;
                     reapplying = true;
                     element.blur();
+                    // A word typed into a host held under a keyboard that is up,
+                    // after a drag outside text say, is ended by now, so the
+                    // hold comes off without writing it in again; left on, it
+                    // would put the keyboard away at this focus, as at the
+                    // refocus the focus handler answers.
+                    if (keepsTheKeyboard(element) && element.getAttribute('inputmode') === 'none') {
+                        element.removeAttribute('inputmode');
+                    }
                     element.focus();
                     reapplying = false;
                 }
-                // Ending a composition also makes the editor refilter an open
+                // Ending a composition can make the editor refilter an open
                 // suggest list and focus its first item again, so a Tab or tap
                 // the list takes ends it only after the list has acted, still
                 // in the same task. A listener added while the event is on its
@@ -4139,8 +4424,21 @@ class MainActivity : AppCompatActivity() {
                 // inputmode, and the next touch on it, a scroll included, raised
                 // the keyboard again. A host still composing is left to apply()'s
                 // usual rule.
+                //
+                // Only a keyboard that goes down while text has focus counts as
+                // put away, so Back with an extension's webview focused is not
+                // one. Chromium takes it down itself when focus leaves text, and
+                // Enter can do that on its way into an editor: Quick Open on a
+                // file not open yet takes the old editor's host away and leaves
+                // focus on the page while the file loads, and New File leaves it
+                // on the Explorer's list. Read as a keyboard put away, that
+                // cleared aimedAtText, and the file typed for opened held, with
+                // the keyboard down. Kept, the new host's focus raises it again.
                 window.__vscodroidKeyboardDismissed = function() {
-                    aimedAtText = false;
+                    restorePolicy();
+                    var focused = document.activeElement;
+                    if (focused && focused.matches && focused.matches(TEXT)) aimedAtText = false;
+                    heldAtFocus = null;
                     applyAll();
                 };
                 applyAll();

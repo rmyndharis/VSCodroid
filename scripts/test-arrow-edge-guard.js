@@ -1,5 +1,7 @@
 /**
- * Self-check for the guard that ends a Left or Right at the edge of a text box.
+ * Self-check for the guard that ends a Left or Right at the edge of a text box,
+ * and, in the same script, for a latched Ctrl or Alt over a keyboard that
+ * composes (the cases at the end say how that one is driven).
  *
  *   node scripts/test-arrow-edge-guard.js
  *
@@ -59,10 +61,10 @@ const KEY_INJECTOR = path.join(
  * The body of the raw string in `setupModifierInterceptor()`, with the
  * indentation `trimIndent()` removes taken off. `$keyLookup` and
  * `$RELEASE_MODIFIERS_JS` are its interpolations, and the guard reads neither,
- * so an empty table and an empty function stand in;
- * `scripts/test-modifier-release.js` runs the real function.
+ * so an empty table, unless a case needs the chord table, and an empty
+ * function stand in; `scripts/test-modifier-release.js` runs the real function.
  */
-function extractInterceptor() {
+function extractInterceptor(keyLookup = '{}') {
     const lines = fs.readFileSync(KEY_INJECTOR, 'utf8').split('\n');
     const fn = lines.findIndex((l) => l.includes('fun setupModifierInterceptor()'));
     assert.notStrictEqual(
@@ -82,7 +84,7 @@ function extractInterceptor() {
     );
     const js = body.map((l) => (l.trim() ? l.slice(indent) : '')).join('\n');
 
-    const substituted = js.split('$keyLookup').join('{}')
+    const substituted = js.split('$keyLookup').join(keyLookup)
         .split('$RELEASE_MODIFIERS_JS').join('function releaseModifiers() {}');
     assert.ok(!substituted.includes('$'),
         'the interceptor gained a Kotlin interpolation this check does not know how to fill');
@@ -343,6 +345,231 @@ const cases = [
         press(page, field, 'a').includes('guard'), false]);
     cases.push(['and the next Right at the end is cancelled once',
         press(page, field, 'ArrowRight').filter((by) => by === 'guard').length, 1]);
+}
+
+
+// A latch over a keyboard that composes. Gboard 12.4 types every letter on the
+// EditContext path as a composition: the character goes to whichever
+// EditContext the host has, with no beforeinput, and the editor's own
+// textupdate listener types it. A keyboard that commits instead fires a
+// cancelable beforeinput on the host first. The interceptor lends the host an
+// empty EditContext while Ctrl or Alt is latched, so the next character becomes
+// the chord, and gives the editor's back afterwards, blurring and focusing the
+// host while it keeps focus, which restarts input, so that the keyboard reads
+// the editor's text again rather than keeping the chord's letter in its copy.
+//
+// NEGATIVE CONTROL, measured: against the interceptor as it was before the
+// swap (main at f66e462f) 9 of these 13 cases fail, each with the letter typed
+// into the file, the Backspace sent plain, or no restart after the chord. The
+// four that pass hold what main already did: a chord that takes focus
+// elsewhere, typing in the box it took focus to, focus leaving the host, and a
+// Backspace with nothing latched. With the swap but without the restart
+// (1fda5cdf) 10 fail: the 8 that expect a blur and focus after the chord or
+// after the latch is cleared, and the two that need focus to have left the
+// host before the EditContext is given back, typing in Quick Open and a blur
+// and focus in one task. With the restart but the EditContext given back as
+// focus leaves (099d0235) those two fail alone, the box left empty as on the
+// emulator. With the restart made before the chord instead of after it, the
+// 7 cases whose chord comes from the empty EditContext or the Backspace
+// listener fail. Without the Backspace listener the Backspace case fails: a
+// plain Backspace, the empty EditContext still lent and Ctrl still latched, as
+// measured on an API 33 emulator with Gboard 12.4. Without the empty
+// EditContext marked as hooked, the blur and focus case fails alone: the focus
+// hooks the lent EditContext, its compositionstart spends the latch, and the
+// letter composed there goes nowhere, with no chord.
+{
+    const LATCH_INTERCEPTOR = extractInterceptor('{"/":["Slash",191,0]}');
+
+    function latchPage() {
+        const log = [];
+        const timers = [];
+        const listen = (node) => Object.assign(node, {
+            listeners: [],
+            addEventListener(type, fn, options) {
+                this.listeners.push({ type, fn, capture: captureOf(options) });
+            },
+            removeEventListener(type, fn, options) {
+                const capture = captureOf(options);
+                this.listeners = this.listeners.filter((l) => !(l.type === type && l.fn === fn && l.capture === capture));
+            },
+        });
+        const window = listen({});
+        const document = listen({});
+        let page = null;
+        function dispatch(target, event) {
+            let stopped = false;
+            Object.assign(event, {
+                target,
+                defaultPrevented: false,
+                preventDefault() { if (this.cancelable) this.defaultPrevented = true; },
+                stopPropagation() { stopped = true; },
+                stopImmediatePropagation() { stopped = true; },
+                composedPath: () => [target, document, window],
+            });
+            const phases = [[window, true], [document, true], [target, true], [target, false]];
+            if (event.bubbles) phases.push([document, false], [window, false]);
+            for (const [node, capture] of phases) {
+                for (const l of node.listeners.slice()) {
+                    if (l.type !== event.type || l.capture !== capture) continue;
+                    l.fn.call(node, event);
+                    if (stopped) return !event.defaultPrevented;
+                }
+            }
+            return !event.defaultPrevented;
+        }
+        class FakeEditContext {
+            constructor(name = 'empty') { this.name = name; listen(this); }
+            fire(type, init = {}) {
+                for (const l of this.listeners.slice()) if (l.type === type) l.fn({ type, ...init });
+            }
+        }
+        const own = new FakeEditContext('editor');
+        own.addEventListener('textupdate', (e) => log.push(`editor typed ${e.text}`));
+        // The EditContext the keyboard's input goes to, as Blink keeps it: the
+        // focused element's, taken when the element gains focus or is given
+        // another while focused, and given up once focus has left the element
+        // if the element still has it. One swapped in while focus is leaving
+        // is not the one given up, so the one taken out stays active.
+        const ime = { active: own };
+        let attached = own;
+        const host = listen({
+            tagName: 'DIV',
+            classList: { contains: (name) => name === 'native-edit-context' },
+            get editContext() { return attached; },
+            set editContext(ec) {
+                if (document.activeElement === host && ime.active === attached) ime.active = ec;
+                attached = ec;
+            },
+            blur() {
+                log.push('blur host');
+                if (document.activeElement !== host) return;
+                document.activeElement = null;
+                // Blink finishes the composition of the element it takes focus from.
+                if (attached.composing) { attached.composing = false; attached.fire('compositionend'); }
+                dispatch(host, { type: 'focusout', bubbles: true });
+                if (ime.active === attached) ime.active = null;
+            },
+            focus() {
+                log.push('focus host');
+                document.activeElement = host;
+                ime.active = attached;
+                dispatch(host, { type: 'focusin', bubbles: true });
+            },
+            dispatchEvent(event) { return dispatch(host, event); },
+        });
+        // The workbench's keybinding service, as far as a chord goes. A chord
+        // that opens Quick Open moves focus into its box.
+        const quickOpen = { tagName: 'INPUT', value: '', classList: { contains: () => false } };
+        host.addEventListener('keydown', (e) => {
+            log.push(`chord ${e.key}${e.ctrlKey ? ' ctrl' : ''}${e.altKey ? ' alt' : ''}${e.shiftKey ? ' shift' : ''} ${e.code} ${e.keyCode}`);
+            if (page.chordTakesFocus && e.ctrlKey) { host.blur(); document.activeElement = quickOpen; }
+        });
+        document.activeElement = host;
+        window.__vscodroid = {};
+        const event = function (type, init) { return { type, ...init }; };
+        vm.runInContext(LATCH_INTERCEPTOR, vm.createContext({
+            window, document, navigator: { userAgent: AT_149 },
+            EditContext: FakeEditContext,
+            InputEvent: event,
+            KeyboardEvent: event,
+            setTimeout: (fn) => { timers.push(fn); },
+        }));
+        page = {
+            log, host, own,
+            flush() { for (const fn of timers.splice(0)) fn(); },
+            // What ExtraKeyRow pushes, all three flags at once.
+            latch(mods = {}) {
+                const m = window.__vscodroid;
+                m.ctrl = !!mods.ctrl; m.alt = !!mods.alt; m.shift = !!mods.shift;
+                page.flush();
+            },
+            // A composing keyboard: no beforeinput, the text goes to the host's
+            // EditContext, the lent one included, opening a composition there.
+            compose(text) {
+                const ec = host.editContext;
+                if (!ec.composing) { ec.composing = true; ec.fire('compositionstart'); }
+                ec.fire('textupdate', { text });
+            },
+            // A committing keyboard: no beforeinput on this path either, and
+            // the text goes to the host's EditContext with no composition, as
+            // measured on an API 36 emulator with Gboard 18.4.1.
+            commit(text) {
+                host.editContext.fire('textupdate', { text });
+            },
+            // What the keyboard types where focus is now: into the active
+            // EditContext if one is, otherwise into Quick Open's box.
+            typeIme(text) {
+                if (ime.active) ime.active.fire('textupdate', { text });
+                else if (document.activeElement === quickOpen) quickOpen.value += text;
+            },
+            quickOpen,
+            // A key the keyboard sends as a press, as Gboard sends Backspace
+            // when there is nothing before the caret: no code, no modifiers.
+            key(key, keyCode) {
+                dispatch(host, { type: 'keydown', key, code: '', keyCode, bubbles: true, cancelable: true });
+            },
+            mods: () => window.__vscodroid,
+        };
+        return page;
+    }
+
+    const latchCase = (name, act, want) => {
+        const page = latchPage();
+        const got = act(page);
+        cases.push([name, JSON.stringify(got), JSON.stringify(want)]);
+    };
+    const state = (p) => ({ log: p.log, editContext: p.host.editContext.name, ctrl: p.mods().ctrl, alt: p.mods().alt });
+
+    latchCase('Ctrl latched, a composing keyboard\'s p is Ctrl+P and reaches no text',
+        (p) => { p.latch({ ctrl: true }); p.compose('p'); return state(p); },
+        { log: ['chord p ctrl KeyP 80', 'blur host', 'focus host'], editContext: 'editor', ctrl: false, alt: false });
+    latchCase('Ctrl latched over a word still composing: the word ends first, then p is the chord',
+        (p) => { p.compose('al'); p.latch({ ctrl: true }); p.compose('p'); return state(p); },
+        { log: ['editor typed al', 'blur host', 'focus host', 'chord p ctrl KeyP 80', 'blur host', 'focus host'], editContext: 'editor', ctrl: false, alt: false });
+    latchCase('Ctrl+/ resolves through the chord table',
+        (p) => { p.latch({ ctrl: true }); p.compose('/'); return state(p); },
+        { log: ['chord / ctrl Slash 191', 'blur host', 'focus host'], editContext: 'editor', ctrl: false, alt: false });
+    latchCase('Alt latched, a composing keyboard\'s x is Alt+X',
+        (p) => { p.latch({ alt: true }); p.compose('x'); return state(p); },
+        { log: ['chord x alt KeyX 88', 'blur host', 'focus host'], editContext: 'editor', ctrl: false, alt: false });
+    // The keyboard committed the chord's letter into the empty EditContext and
+    // keeps it in its own copy of the text: Gboard 12.4 then built the next
+    // word from that copy, `ab`, Ctrl, `s` and `c` leaving `ababsc`. So input
+    // is restarted, after the chord has run, which the order of the log shows.
+    latchCase('a committing keyboard\'s letter is the chord too, once, then input restarts',
+        (p) => { p.latch({ ctrl: true }); p.commit('s'); return state(p); },
+        { log: ['chord s ctrl KeyS 83', 'blur host', 'focus host'], editContext: 'editor', ctrl: false, alt: false });
+    latchCase('a chord that takes focus elsewhere, as Ctrl+P does, restarts nothing',
+        (p) => { p.chordTakesFocus = true; p.latch({ ctrl: true }); p.commit('p'); return state(p); },
+        { log: ['chord p ctrl KeyP 80', 'blur host'], editContext: 'editor', ctrl: false, alt: false });
+    // Given back while focus was still leaving, the editor's EditContext was
+    // the one Blink took from the keyboard, and the empty one went on taking
+    // what was typed in Quick Open: on an API 33 emulator with Gboard 12.4,
+    // `sugg` typed after Ctrl then `p` left the box empty.
+    latchCase('what is typed in the box a chord moved focus to reaches that box',
+        (p) => { p.chordTakesFocus = true; p.latch({ ctrl: true }); p.commit('p'); p.flush(); p.typeIme('sugg'); return { log: p.log, box: p.quickOpen.value, editContext: p.host.editContext.name }; },
+        { log: ['chord p ctrl KeyP 80', 'blur host'], box: 'sugg', editContext: 'editor' });
+    latchCase('a blur and focus in one task, as the keyboard guard makes, keeps the EditContext lent',
+        (p) => { p.latch({ ctrl: true }); p.host.blur(); p.host.focus(); p.flush(); p.compose('p'); return state(p); },
+        { log: ['blur host', 'focus host', 'chord p ctrl KeyP 80', 'blur host', 'focus host'], editContext: 'editor', ctrl: false, alt: false });
+    latchCase('clearing the latch gives the editor its EditContext back, restarts input, and the next letter is typed',
+        (p) => { p.latch({ ctrl: true }); p.latch({}); p.compose('p'); return state(p); },
+        { log: ['blur host', 'focus host', 'editor typed p'], editContext: 'editor', ctrl: false, alt: false });
+    latchCase('focus leaving the host gives the editor its EditContext back, and restarts nothing',
+        (p) => { p.latch({ ctrl: true }); p.host.blur(); p.flush(); return { log: p.log, editContext: p.host.editContext.name }; },
+        { log: ['blur host'], editContext: 'editor' });
+    latchCase('a selection-only update waits for the character',
+        (p) => { p.latch({ ctrl: true }); p.compose(''); p.compose('p'); return state(p); },
+        { log: ['chord p ctrl KeyP 80', 'blur host', 'focus host'], editContext: 'editor', ctrl: false, alt: false });
+    // The empty EditContext has nothing before the caret to delete, so the
+    // keyboard's Backspace comes as a key press, which the editor would take
+    // as a plain Backspace with the latch still on.
+    latchCase('Ctrl latched, the keyboard\'s Backspace sent as a key press is Ctrl+Backspace',
+        (p) => { p.latch({ ctrl: true }); p.key('Backspace', 8); return state(p); },
+        { log: ['chord Backspace ctrl Backspace 8', 'blur host', 'focus host'], editContext: 'editor', ctrl: false, alt: false });
+    latchCase('with nothing latched that Backspace reaches the editor as it came',
+        (p) => { p.key('Backspace', 8); return state(p); },
+        { log: ['chord Backspace  8'], editContext: 'editor', ctrl: false, alt: false });
 }
 
 let failed = 0;
