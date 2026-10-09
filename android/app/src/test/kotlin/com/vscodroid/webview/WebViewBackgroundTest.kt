@@ -49,20 +49,21 @@ import org.junit.jupiter.api.Test
  *
  * NEGATIVE CONTROL: without the `setBackgroundColor` call in `configure` the
  * first case fails, and with the window colour there rather than `lastPageColor`
- * the second. Without the `addPlainTextPageScript` call in `setupWebView`, or with
- * it after the first load, the plain-text case. Without the `addPageColorListener`
- * call, or with it after the first load, the listener case; taking a frame's
- * message, another host's, a short or translucent colour or one in another
- * notation fails the message case, and reading an ArrayBuffer's data, which
- * throws as it would in the listener, fails it too. Without the
- * `setBackgroundColor` or `onColor` call in the listener, or the
+ * the second. Without the `addPlainTextPageScript` call in `setupWebView`, or
+ * with it after the first load, the plain-text case. Without the
+ * `addPageColorListener` call, or with it after the first load, the listener
+ * case; taking a frame's message, another host's, a short or translucent colour
+ * or one in another notation fails the message case, and reading an
+ * ArrayBuffer's data, which throws as it would in the listener, fails it too.
+ * Without the `setBackgroundColor` or `onColor` call in the listener, or the
  * `paintWindowWhenDrawn` call in `showPageColor`, or with `paintWindow` there in
- * its place, or with the visual state callback gone from `paintWindowWhenDrawn`
- * or its test of the request, or with no `paintWindowNow` before the load in
- * `setupWebView`, `retryServerStart` or `showErrorPage`, or one there with the
- * other page's colour, or one that leaves a waiting colour, the window case; and
- * so does `paintWindow` without its background call or with either bar
- * appearance pinned.
+ * its place, or with the visual state callback gone from `paintWindowWhenDrawn`,
+ * or its test of the request, or its paint where there is no view or no
+ * callback, or with no `paintWindowNow` before the load in `setupWebView`,
+ * `retryServerStart` or `showErrorPage`, or one there with the other page's
+ * colour, or one that leaves a waiting colour, the window case; and so does
+ * `paintWindow` without its background call or with either bar appearance
+ * pinned.
  */
 class WebViewBackgroundTest {
 
@@ -226,6 +227,13 @@ class WebViewBackgroundTest {
                 "paintWindowWhenDrawn no longer has `$line`, so the window takes a page's colour before the view " +
                     "draws that page, or an older colour lands over a later one"
             }
+        }
+        // With no view to wait for, or a WebView that cannot report its frames,
+        // the colour is painted at once rather than not at all.
+        assertTrue("} else {\npaintWindow(color)\n}" in drawn.joinToString("\n")) {
+            "paintWindowWhenDrawn no longer paints the window when there is no view or the WebView has no visual " +
+                "state callback, so the window keeps the colour it had: #1E1E1E under a light theme, where the " +
+                "keyboard was and behind the bars"
         }
         // The app's own pages paint at once, and drop a colour still waiting, which
         // would otherwise land over theirs.
