@@ -1,0 +1,101 @@
+Keep a folder's cached settings until its settings file has been read.
+
+For a remote folder, FolderConfiguration starts on the copy of the folder's
+settings that its last load cached, and swaps in a FileServiceBasedConfiguration
+once the vscode-remote file system provider registers. The new object reads the
+folder's files only when the workspace service next loads it, and until then
+it holds no settings: its reparse() answers an empty model.
+
+WorkspaceService.onDefaultConfigurationChanged reparses the folder
+configuration and puts the result in place of the folder's and the workspace's
+settings, without an event, since a reparse is meant to change how settings
+are read rather than which ones there are. The default configuration changes
+as the extensions register, since every extension that contributes settings or
+configurationDefaults changes it. So whenever the read was still running when
+the extensions registered, every setting of the folder's own was gone from the
+configuration until the read ended, and whatever read the configuration in
+between, the theme service and the extensions activating, got the user's
+values instead.
+
+FolderConfiguration now remembers which of its two configurations the
+workspace service loaded last, and reparses that one: the cached copy until
+the file based configuration has been loaded, which is what the workspace
+service holds until then. The swap and the reads are as before, so a folder's
+first load, which has no cached copy, gets its settings when it did and with
+the same change event. From the second load on, the event at the end of the
+read names only the settings that differ between the cached copy and the
+file; it used to name every setting of the folder's whenever the extensions
+registered during the read, since it was putting them back.
+
+On an Android emulator the read ends seconds after the extensions register. On
+API 36 a folder whose .vscode/settings.json names Light Modern, under a user
+theme of Dark Modern, showed Dark Modern for 6 to 7.5 s on every load from its
+second on: from the extensions registering (code/didLoadExtensions at 12.3 s
+in one load) until the read ended (Light Modern back at 20.7 s, at the moment
+the explorer filled). The mirror case, a folder naming Dark Modern under Light
+Modern, showed Light Modern in the same window.
+
+Verified in headless Chromium against the web workbench of server trees built
+with and without this patch, served on macOS with Dark Modern in the Machine
+settings, Light Modern in the folder's, and the editor server's open of the
+folder's settings.json held. Held 6 s: from the folder's second load on, the
+unpatched tree showed Dark Modern from the extensions registering, at 0.4 s,
+until 12.2 s, and on the third load still at 14 s; the patched tree showed
+Light Modern from the extensions registering on, and the same with the two
+themes swapped. A first load applied the folder's theme at 12.8 s patched and
+12.7 s unpatched, and held 0.3, 0.8 and 1.5 s at 1.4, 2.3 and 3.7 s patched.
+
+A first version of this patch swapped only once the new object had read the
+files. That moved the drop rather than removing it: the settings it had read
+then reached the configuration through a reparse, without an event, before the
+workspace service's own load compared them, so on a folder's first load
+nothing listening for configuration changes heard of them. A new folder naming
+Light Modern stayed on Dark Modern on the emulator, and in Chromium with the
+open held 0.3 s or 1.5 s.
+
+One note for whoever tidies this later. The reparse is written as
+`(this.loadedFolderConfiguration ?? this.folderConfiguration).reparse(` because
+that text, with the spaces gone, is the token patches/fingerprints.txt matches
+to prove this patch reached the packaged bundle; property names survive the
+bundler and locals do not. If you hoist it into a local, move that row to
+something the new shape introduces and check the replacement occurs zero times
+in an unpatched bundle first.
+
+diff --git a/src/vs/workbench/services/configuration/browser/configuration.ts b/src/vs/workbench/services/configuration/browser/configuration.ts
+index a83c04f..aeb45e3 100644
+--- a/src/vs/workbench/services/configuration/browser/configuration.ts
++++ b/src/vs/workbench/services/configuration/browser/configuration.ts
+@@ -1018,6 +1018,7 @@ export class FolderConfiguration extends Disposable {
+ 	readonly onDidChange: Event<void> = this._onDidChange.event;
+ 
+ 	private folderConfiguration: CachedFolderConfiguration | FileServiceBasedConfiguration;
++	private loadedFolderConfiguration: CachedFolderConfiguration | FileServiceBasedConfiguration | undefined;
+ 	private readonly scopes: ConfigurationScope[];
+ 	private readonly configurationFolder: URI;
+ 	private cachedFolderConfiguration: CachedFolderConfiguration;
+@@ -1053,7 +1054,11 @@ export class FolderConfiguration extends Disposable {
+ 	}
+ 
+ 	loadConfiguration(): Promise<ConfigurationModel> {
+-		return this.folderConfiguration.loadConfiguration();
++		const folderConfiguration = this.folderConfiguration;
++		return folderConfiguration.loadConfiguration().then(configurationModel => {
++			this.loadedFolderConfiguration = folderConfiguration;
++			return configurationModel;
++		});
+ 	}
+ 
+ 	updateWorkspaceTrust(trusted: boolean): ConfigurationModel {
+@@ -1062,7 +1067,11 @@ export class FolderConfiguration extends Disposable {
+ 	}
+ 
+ 	reparse(): ConfigurationModel {
+-		const configurationModel = this.folderConfiguration.reparse({ scopes: this.scopes, skipRestricted: this.isUntrusted() });
++		// Reparse the configuration whose settings were last loaded, which are the ones in use.
++		// The file based configuration is swapped in before it has read the folder's files and
++		// holds no settings until then, so reparsing it, as every change to the default
++		// configuration does, would drop the folder's settings until the read ends.
++		const configurationModel = (this.loadedFolderConfiguration ?? this.folderConfiguration).reparse({ scopes: this.scopes, skipRestricted: this.isUntrusted() });
+ 		this.updateCache();
+ 		return configurationModel;
+ 	}

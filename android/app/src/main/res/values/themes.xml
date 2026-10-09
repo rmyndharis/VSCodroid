@@ -60,4 +60,25 @@
         <item name="android:enforceNavigationBarContrast">false</item>
     </style>
 
+    <!-- The starting window the system draws on a launch while the editor's theme
+         is light, before any of this app runs. keepStartColor (VSCodroidWebView.kt)
+         names it through SplashScreen.setSplashScreenTheme, which the system keeps
+         for later launches; nothing else applies it. The bar icons on it follow its
+         colour by themselves.
+         Theme.VSCodroid, the manifest's theme, stays dark. A launch draws it
+         whenever this one is not named: under a dark editor colour, on a fresh
+         install, whose editor starts on the dark default, and on the first start
+         after updating from a build that never named this, whatever the editor's
+         theme. A resource cannot know the editor's theme, and one following the
+         device's night mode would turn those starts white for a dark editor on a
+         device in light mode.
+         ⚠️ Keep the name. The system stores it as a name and looks it up on every
+         launch, and one that no longer resolves falls back to the manifest's dark
+         theme without an error. keepStartColor names the theme again only when the
+         editor's colour changes, so after a rename an install stays dark until it
+         does. -->
+    <style name="Theme.VSCodroid.LightStart">
+        <item name="android:windowSplashScreenBackground">@android:color/white</item>
+    </style>
+
 </resources>

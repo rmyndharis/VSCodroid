@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.content.Intent
 import android.os.Bundle
 import android.view.View
+import android.webkit.WebView
 import android.widget.Button
 import android.widget.LinearLayout
 import android.widget.ProgressBar
@@ -25,8 +26,15 @@ import com.vscodroid.setup.ToolchainPickerAdapter
 import com.vscodroid.setup.ToolchainRegistry
 import com.vscodroid.storage.SafStorageManager
 import com.vscodroid.util.drawBehindSystemBars
+import com.vscodroid.util.isLightColor
 import com.vscodroid.util.Logger
 import com.vscodroid.util.padForSystemBars
+import com.vscodroid.util.paintWindow
+import com.vscodroid.util.PortFinder
+import com.vscodroid.webview.hasKeptPageColor
+import com.vscodroid.webview.keepStartColor
+import com.vscodroid.webview.lastPageColor
+import com.vscodroid.webview.readSavedPageColor
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -64,6 +72,9 @@ class SplashActivity : AppCompatActivity() {
      */
     private var progressSink: ((String, Int) -> Unit)? = null
 
+    /** The view reading the editor's last colour while it does; see [readSavedPageColor]. */
+    private var colorProbe: WebView? = null
+
     // Progress UI refs (only valid after setContentView to progress layout)
     private val progressRows = mutableMapOf<String, ProgressRow>()
 
@@ -77,6 +88,9 @@ class SplashActivity : AppCompatActivity() {
         // Before super.onCreate(), as the call it replaces required.
         drawBehindSystemBars()
         super.onCreate(savedInstanceState)
+        // The colour the editor last showed, for the window this screen and the
+        // setup it hosts are drawn on; see lastPageColor.
+        paintWindow(lastPageColor(this))
 
         val setup = FirstRunSetup(this)
 
@@ -207,6 +221,22 @@ class SplashActivity : AppCompatActivity() {
             statusText.text = getString(R.string.status_updating_app)
         }
 
+        // A colour is kept once the workbench first shows one, so none is kept on
+        // the first start after an update from a build that kept none, and setup
+        // then runs for a minute on the dark window whatever the editor's theme.
+        // Only with a port remembered: a fresh install, or one after Clear storage,
+        // has no workbench storage to read either.
+        if (!hasKeptPageColor(this)) {
+            val port = PortFinder.rememberedPort(this)
+            if (port > 0) {
+                colorProbe = readSavedPageColor(this, port) { color ->
+                    colorProbe?.destroy()
+                    colorProbe = null
+                    if (color != null) showSavedPageColor(color)
+                }
+            }
+        }
+
         // Named rather than assigned inline, so [onDestroy] can hand back exactly
         // this closure and nobody else's.
         val sink: (String, Int) -> Unit = { message, percent ->
@@ -259,6 +289,33 @@ class SplashActivity : AppCompatActivity() {
     private fun showSplashLayout() {
         setContentView(R.layout.activity_splash)
         findViewById<View>(R.id.splashRoot).padForSystemBars()
+        tintSplashText()
+    }
+
+    /**
+     * The layout's text is light, for the theme's dark window, and the window is
+     * the editor's colour now. Dimmed as the status line is, 6.2:1 on white.
+     */
+    private fun tintSplashText() {
+        if (isLightColor(lastPageColor(this))) {
+            val text = getColor(R.color.colorOnLightBackground)
+            findViewById<TextView>(R.id.appName).setTextColor(text)
+            findViewById<TextView>(R.id.statusText).setTextColor(text)
+        }
+    }
+
+    /**
+     * Takes the colour [readSavedPageColor] found as the editor's: kept for the
+     * screens after this one, and given to the setup screen if that is still up.
+     * A screen that replaced it keeps the colour it is drawn for: the toolchain
+     * picker, whose text is light.
+     */
+    private fun showSavedPageColor(color: Int) {
+        if (isDestroyed) return
+        keepStartColor(color)
+        if (findViewById<View>(R.id.splashRoot) == null) return
+        paintWindow(color)
+        tintSplashText()
     }
 
     /**
@@ -493,6 +550,8 @@ class SplashActivity : AppCompatActivity() {
         // new one is created -- so ordering alone would have covered that one.
         FirstRunSetup.detachProgress(progressSink)
         progressSink = null
+        colorProbe?.destroy()
+        colorProbe = null
         super.onDestroy()
     }
 
@@ -571,6 +630,9 @@ class SplashActivity : AppCompatActivity() {
     }
 
     private fun showToolchainPicker() {
+        // Its cards and text are drawn for the theme's dark window, whatever the
+        // editor's colour onCreate gave this one.
+        paintWindow(getColor(R.color.colorBackground))
         setContentView(R.layout.layout_toolchain_picker)
         findViewById<View>(R.id.pickerRoot)
             .padForSystemBars(basePx = (24 * resources.displayMetrics.density).toInt())

@@ -64,6 +64,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - In text boxes and the terminal, Ctrl or Alt latched on the key row combines with the next letter on a keyboard that underlines words, as some Gboard versions do: Ctrl then C stops a running command instead of typing c.
 - A key row chord typed in the terminal that opens a view, such as Ctrl then P, no longer deletes the last letter at the prompt on a keyboard that does not underline words, such as Gboard 18.
 - A key row modifier no longer stays lit after a split-screen resize that interrupts a hold on it or a trackpad drag.
+- Opening a folder, reloading the window and starting the app no longer show a white screen and then the light theme for a few seconds before the dark theme.
+- A folder's own settings, such as a colour theme in its `.vscode/settings.json`, apply from the start of a load, the first time the folder opens included, instead of giving way to your settings for several seconds.
+- Under a light theme, the status and navigation bars and the space the keyboard leaves while a folder opens or the window reloads take the theme's background instead of staying dark.
+- Under a light theme the app also starts light: the setup screen and the "Starting server..." page take the background the editor last showed, and the launch screen is white from the second start after updating.
 
 ### Security
 

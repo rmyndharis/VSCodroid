@@ -488,6 +488,58 @@ first so that a file that cannot parse costs musl clients their DNS rather than
 costing the app its editor server, and it is passed as one token, because
 `process-monitor.js` names a process by its first non-option argument.
 
+The bootstrap also adds three scripts to the workbench page template,
+`vscode-reh/out/vs/code/browser/workbench/workbench.html`, through `extendWorkbenchPage`, because
+the page cannot take them from `product.json`: the trusted link domains, the extension
+recommendations, and the theme a page load starts on. The last one first reads the settings file of
+the window it opens, the folder's `.vscode/settings.json` or the workspace file, with a synchronous
+GET of `/vscode-remote-resource`, because the page has to be coloured before its first paint and the
+workbench reads its configuration element once. The text goes to the workbench as
+`initialWorkspaceSettings`, which patch 0027 adds: a remote folder's configuration used to hold the
+folder's own settings only as the copy its last load cached, so a folder opened for the first time
+ran on the user's settings, the theme among them, until its file had been read through the remote
+file system, 8.5 to 20.6 s into the load on an API 36 emulator. The theme the file names decides the
+start. A folder that names one starts on its own record in `localStorage`
+(`vscodroid-folder-themes`, the twenty folders or workspaces most recently shown, each with the base
+theme and colours it showed and, for a theme of the folder's own, the name its settings gave it)
+when that record was taken under the same name, and otherwise on that theme's look among the server
+tree's own themes, which the bootstrap reads from the tree's theme files when it writes the script.
+Any other window starts on the record of the window that most recently followed the user's theme;
+before the script has recorded any window, on the splash the workbench saves (`monaco-parts-splash`);
+and once it has recorded only windows with a theme of their own, on the dark default this app
+configures.
+Before the first paint the script colours the page background from that look, and it hands the same
+look to the workbench as `initialColorTheme`, which the workbench uses only when it cannot use the
+theme it stored; never on a load after the device switched between light and dark, when
+`window.autoDetectColorScheme` makes the workbench's own pick the right one, and not for a theme of
+the folder's own it has no look for. After that it keeps the background on the editor colour of the
+theme the workbench shows, and the record with it, because the background also fills the space the
+soft keyboard gives back until the workbench lays itself out again, and it posts each colour it paints
+to the app, which gives it to the window behind the view as well (§4.1). The workbench keeps its
+stored theme, one per profile, only while the configured `workbench.colorTheme` equals the theme's
+id, so it drops that theme in a folder whose own settings name another and in any folder entered from
+one, and the default the welcome extension sets must be an id the server tree contributes, not an
+older name upstream migrates; `verify-server-tree.py` checks it.
+
+What still starts on another theme: a folder naming a theme an installed extension contributes, on
+its first load and its first after twenty other folders were shown, which the script has no look for,
+so it takes the user's colour and, where the workbench cannot use its stored theme, the web default,
+the light one with the registry's default colours, until the extensions register; a window following
+the user's theme while every window recorded has a theme of its own, once after the update when the
+first window it opens has one and after twenty such windows in a row, which starts on the dark
+default whatever the user's theme, so under a light one it is dark until the workbench paints and,
+where the workbench cannot use its stored theme, until the extensions register; the first window
+after the update when it follows the user's theme and the window shown last before the update had
+a theme of its own, which starts on that theme, from the workbench's splash, until the extensions
+register, and is rare because `MainActivity` reopens the folder last open; with
+`window.autoDetectColorScheme` on, a folder naming a theme of its own on its first load, which starts
+on that theme where the workbench shows the one it picks for the device's mode; a window whose
+settings file cannot be read, which starts as one following the user's theme would and is not
+recorded; and a window after the user's theme was changed by an edit of the user's settings while a
+folder with a theme of its own was open, whose record of the user's theme is then older than the
+theme. Patch 0026 keeps the folder's settings in force between the extensions registering and the
+file being read, which a folder's settings given by the page or by its cached copy both need.
+
 Readiness is `GET /version`, and only a `200` counts. There is no `/healthz`:
 what used to serve one was a fallback server in `assets/server.js` that bound the
 port when `vscode-reh/out/server-main.js` was missing and answered 200 to every
@@ -556,6 +608,63 @@ Read `VSCodroidWebView.configure` for the live set. Three notes on what is **not
   `android:windowSoftInputMode="adjustResize"` on the activity in `AndroidManifest.xml`.
 - **`textZoom = 100` is a pin, not a default.** It is why changing the system font size has no
   effect on editor text, which is a live accessibility gap rather than a setting anyone tuned.
+
+Outside the settings block, `configure` gives the view the colour the workbench page last
+painted (`lastPageColor`, below), or the window background, `R.color.colorBackground` (#1E1E1E),
+before it ever has. An unset WebView paints white wherever no page has painted yet, which showed
+before the loading placeholder on the first launch after an update.
+The workbench page paints its own background before its first paint, from the theme it expects
+to show (§3.1), so this colour shows only where no page has painted yet and behind a page that
+paints no background of its own. Two kinds of page paint none. The server's refusals, bare
+`text/plain` bodies such as "Forbidden.", set their text in the device's mode, which left it black
+on this colour in light mode. The WebView's own page for a load that failed, "Webpage not
+available", which the workbench gets when it navigates while the editor server restarts, names no
+colour scheme and sets black text in both modes. So `addPlainTextPageScript`, a document-start
+script, gives a top-level document of either kind the `Canvas` background of its own colour
+scheme: white in light mode and Chromium's dark canvas in dark mode for a plain-text page, white
+in both for the error page, which Chromium commits as an HTML document at
+`chrome-error://chromewebdata/`.
+
+The window behind the view shows wherever no view draws: behind the transparent status and
+navigation bars, below the extra key row while the soft keyboard slides away, and, when the
+keyboard goes down as a reload or a folder opened from a box that had it up begins, below the
+last page's frame, which the view holds at its old height until the next page paints. The view's
+own background never shows in that last space (measured on an API 36 emulator with a magenta
+one), so under a light theme it was a dark band of the theme's window colour, #1E1E1E, for up to
+2.1 s. So the page script posts the colour it paints the page with, at the start of each load and
+on each theme change, to the object `addPageColorListener` adds (`vscodroidPageColor`), which
+gives it to the view, and `MainActivity` gives it to the window through `paintWindow`, with dark
+bar icons on a light colour. Only an opaque `#rrggbb` from the top frame on the loopback address is
+taken. The window takes it once the view draws the page that posted it, through a visual state
+callback, and not as the page posts: a page posts as its load starts, while the view goes on
+drawing the last page's frame, and painted at once the bars around that frame showed the new colour
+for 0.55 to 1.7 s at every change between a dark and a light theme. The loading page and the error
+pages are this app's own and post nothing, so each gives the window its own colour before it loads
+and drops a page's colour still waiting for its frame.
+
+`MainActivity` also keeps the colour (`keepStartColor`), and every screen of the next start begins on
+it (`lastPageColor`): the windows of `SplashActivity` and `MainActivity` with their bars, the setup
+screen's text, the view and the "Starting server..." page. Under a light theme a cold start had been
+dark until the workbench painted, 2.3 s on the emulator, and the first launch after an update for
+the whole of setup. The system draws its starting window from a theme before any of the app runs, so
+while the colour is light it is pointed at `Theme.VSCodroid.LightStart` through
+`SplashScreen.setSplashScreenTheme`, which the system keeps for later launches, and back at the
+manifest's theme when it is dark. The system keeps that theme by its name and looks it up on each
+launch, falling back to the manifest's without an error when the name no longer resolves, and the
+app names it again only when the colour changes, so the style must keep its name. A light theme's
+starting window is white whatever that theme's own background is. The choice is the package's, so
+under a light colour a launch into a dark screen, as from the Toolchains shortcut, starts white too,
+and "Clear storage" keeps the choice but drops the colour, so the next start is white before the
+dark setup until the workbench's first dark colour resets it (read in the platform sources, not
+measured). The toolchain picker, the Toolchains screen, the extra key row and the error pages stay
+on the theme's dark colours, which their layouts are drawn for. The first start after updating from
+a release without this has no colour kept yet, and the editor's theme is then known only to the
+storage of the workbench page's origin, which no Android API reads. So `SplashActivity`, before
+setup runs, loads a page on that origin in a view of its own (`readSavedPageColor`), reads the
+colour of the splash the workbench saved there, and keeps it, and the setup screen and every screen
+after it take it. That start's own starting window is drawn before any of the app runs, from the
+manifest's theme, so it is dark. With `window.autoDetectColorScheme` on, a start after the device
+switched between light and dark while the app was closed begins on the colour from before.
 
 ### 4.2 Crash Recovery
 
@@ -885,6 +994,8 @@ flowchart TD
   P --> P21["0021 terminal hint: no Copilot CLI line on Android"]
   P --> P22["0022 EditContext: keep the IME buffer and caret in step"]
   P --> P23["0023 suggest: drop a pending quick suggest on a caret key"]
+  P --> P26["0026 configuration: keep a folder's cached settings until its file is read"]
+  P --> P27["0027 configuration: start a remote workspace from the settings the page read"]
 ```
 
 Five of these are load-bearing in ways their titles understate:

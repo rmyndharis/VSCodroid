@@ -1,0 +1,190 @@
+Start a remote workspace from the settings the page read for it.
+
+For a remote folder, the configuration a window starts with holds the folder's
+own settings only as the copy its last load cached. A folder opened for the
+first time has no such copy, so until its .vscode/settings.json has been read
+through the remote file system, which waits for that provider to register and
+then for the read, the window runs on the user's settings alone. On an Android
+emulator that read ended 8.5 to 20.6 s into the load. Whatever read the
+configuration in that time got the user's values, the theme service first of
+all: a folder whose settings name Light Modern under a user theme of Dark
+Modern showed Dark Modern from the start of the load until the file had been
+read. A remote workspace file is held the same way, folders included.
+
+The page that hosts the workbench, which VSCodroid adds a script to, reads the
+folder's settings file, or the workspace file, over HTTP as it loads, before
+the workbench starts, and hands its text over in the new construction option
+initialWorkspaceSettings: null where there is no such file, nothing where the
+read failed. The configuration of the window's first load starts from that
+text in place of the cached copy: the folder's settings, with the cached tasks,
+launch and MCP configurations kept, since the page reads the settings file
+alone; or the whole workspace file. The swap to the file system and the read
+through it are unchanged, so the read still ends with the change event for
+whatever differs, which is nothing unless the file changed in between. Any
+later load, a folder of a multi-root workspace, and an embedder that does not
+pass the option are as before.
+
+The option names the workspace by nothing but the window it is given to, so
+the workspace service drops it once its first initialization is done.
+
+This rests on 0026. The folder's settings from the page live in the cached
+configuration, which the file based one replaces as soon as the provider
+registers and before it has read anything; without 0026 the reparse that every
+change to the default configuration makes, as the extensions register, would
+reparse the empty replacement and drop them until the read ends.
+
+For patches/fingerprints.txt: the option is read as
+`environmentService.options?.initialWorkspaceSettings`, and property names
+survive this bundle, so that read is the token the row matches. Reading the
+option anywhere else, or into a local first, deletes it; move the row with it.
+
+diff --git a/src/vs/workbench/browser/web.api.ts b/src/vs/workbench/browser/web.api.ts
+index 5d52998..42f0191 100644
+--- a/src/vs/workbench/browser/web.api.ts
++++ b/src/vs/workbench/browser/web.api.ts
+@@ -314,6 +314,16 @@ export interface IWorkbenchConstructionOptions {
+ 	 */
+ 	readonly configurationDefaults?: Record<string, unknown>;
+ 
++	/**
++	 * The settings of the workspace this window opens, as the page that hosts the
++	 * workbench read them just before: the text of the folder's `.vscode/settings.json`
++	 * for a folder, of the workspace file for a workspace, or `null` where there is no
++	 * such file. A remote workspace's configuration starts from these rather than from
++	 * the copy its last load cached, which a workspace opened for the first time does
++	 * not have, until the file has been read through the remote file system.
++	 */
++	readonly initialWorkspaceSettings?: string | null;
++
+ 	//#endregion
+ 
+ 	//#region Profile options
+diff --git a/src/vs/workbench/services/configuration/browser/configuration.ts b/src/vs/workbench/services/configuration/browser/configuration.ts
+index aeb45e3..62d5baa 100644
+--- a/src/vs/workbench/services/configuration/browser/configuration.ts
++++ b/src/vs/workbench/services/configuration/browser/configuration.ts
+@@ -662,12 +662,13 @@ export class WorkspaceConfiguration extends Disposable {
+ 		this._workspaceConfiguration = this._cachedConfiguration = new CachedWorkspaceConfiguration(configurationCache, logService);
+ 	}
+ 
+-	async initialize(workspaceIdentifier: IWorkspaceIdentifier, workspaceTrusted: boolean): Promise<void> {
++	async initialize(workspaceIdentifier: IWorkspaceIdentifier, workspaceTrusted: boolean, initialContents?: string | null): Promise<void> {
+ 		this._workspaceIdentifier = workspaceIdentifier;
+ 		this._isWorkspaceTrusted = workspaceTrusted;
+ 		if (!this._initialized) {
+ 			if (this.configurationCache.needsCaching(this._workspaceIdentifier.configPath)) {
+ 				this._workspaceConfiguration = this._cachedConfiguration;
++				this._cachedConfiguration.initialContents = initialContents;
+ 				this.waitAndInitialize(this._workspaceIdentifier);
+ 			} else {
+ 				this.doInitialize(new FileServiceBasedWorkspaceConfiguration(this.fileService, this.uriIdentityService, this.logService));
+@@ -854,6 +855,9 @@ class CachedWorkspaceConfiguration {
+ 	workspaceConfigurationModelParser: WorkspaceConfigurationModelParser;
+ 	workspaceSettings: ConfigurationModel;
+ 
++	/** The workspace file as the page read it, loaded in place of the cached copy; see IWorkbenchConstructionOptions.initialWorkspaceSettings. */
++	initialContents: string | null | undefined;
++
+ 	constructor(
+ 		private readonly configurationCache: IConfigurationCache,
+ 		private readonly logService: ILogService
+@@ -865,7 +869,7 @@ class CachedWorkspaceConfiguration {
+ 	async load(workspaceIdentifier: IWorkspaceIdentifier, configurationParseOptions: ConfigurationParseOptions): Promise<void> {
+ 		try {
+ 			const key = this.getKey(workspaceIdentifier);
+-			const contents = await this.configurationCache.read(key);
++			const contents = this.initialContents !== undefined ? JSON.stringify({ content: this.initialContents ?? '' }) : await this.configurationCache.read(key);
+ 			const parsed: { content: string } = JSON.parse(contents);
+ 			if (parsed.content) {
+ 				this.workspaceConfigurationModelParser = new WorkspaceConfigurationModelParser(key.key, this.logService);
+@@ -945,7 +949,8 @@ class CachedFolderConfiguration {
+ 		configFolderRelativePath: string,
+ 		configurationParseOptions: ConfigurationParseOptions,
+ 		private readonly configurationCache: IConfigurationCache,
+-		private readonly logService: ILogService
++		private readonly logService: ILogService,
++		private readonly initialSettings?: string | null
+ 	) {
+ 		this.key = { type: 'folder', key: hash(joinPath(folder, configFolderRelativePath).toString()).toString(16) };
+ 		this._folderSettingsModelParser = new ConfigurationModelParser('CachedFolderConfiguration', logService);
+@@ -972,6 +977,14 @@ class CachedFolderConfiguration {
+ 			this.consolidate();
+ 		} catch (e) {
+ 		}
++		// The settings as the page read them, over whatever the cache held for them, which
++		// for a folder opened for the first time is nothing; see
++		// IWorkbenchConstructionOptions.initialWorkspaceSettings. The cached tasks, launch
++		// and MCP configurations are kept: the page reads the settings file alone.
++		if (this.initialSettings !== undefined) {
++			this._folderSettingsModelParser.parse(this.initialSettings ?? '', this._folderSettingsParseOptions);
++			this.consolidate();
++		}
+ 		return this.configurationModel;
+ 	}
+ 
+@@ -1032,13 +1045,14 @@ export class FolderConfiguration extends Disposable {
+ 		fileService: IFileService,
+ 		uriIdentityService: IUriIdentityService,
+ 		logService: ILogService,
+-		private readonly configurationCache: IConfigurationCache
++		private readonly configurationCache: IConfigurationCache,
++		initialSettings?: string | null
+ 	) {
+ 		super();
+ 
+ 		this.scopes = WorkbenchState.WORKSPACE === this.workbenchState ? FOLDER_SCOPES : WORKSPACE_SCOPES;
+ 		this.configurationFolder = uriIdentityService.extUri.joinPath(workspaceFolder.uri, configFolderRelativePath);
+-		this.cachedFolderConfiguration = new CachedFolderConfiguration(workspaceFolder.uri, configFolderRelativePath, { scopes: this.scopes, skipRestricted: this.isUntrusted() }, configurationCache, logService);
++		this.cachedFolderConfiguration = new CachedFolderConfiguration(workspaceFolder.uri, configFolderRelativePath, { scopes: this.scopes, skipRestricted: this.isUntrusted() }, configurationCache, logService, initialSettings);
+ 		if (useCache && this.configurationCache.needsCaching(workspaceFolder.uri)) {
+ 			this.folderConfiguration = this.cachedFolderConfiguration;
+ 			whenProviderRegistered(workspaceFolder.uri, fileService)
+diff --git a/src/vs/workbench/services/configuration/browser/configurationService.ts b/src/vs/workbench/services/configuration/browser/configurationService.ts
+index e33753b..5629748 100644
+--- a/src/vs/workbench/services/configuration/browser/configurationService.ts
++++ b/src/vs/workbench/services/configuration/browser/configurationService.ts
+@@ -82,6 +82,8 @@ export class WorkspaceService extends Disposable implements IWorkbenchConfigurat
+ 	private readonly remoteUserConfiguration: RemoteUserConfiguration | null = null;
+ 	private readonly workspaceConfiguration: WorkspaceConfiguration;
+ 	private cachedFolderConfigs: DisposableMap<URI, FolderConfiguration> = this._register(new DisposableMap(new ResourceMap()));
++	// The settings the page read for the workspace the first load opens; see IWorkbenchConstructionOptions.initialWorkspaceSettings.
++	private initialWorkspaceSettings: string | null | undefined;
+ 	private readonly workspaceEditingQueue: Queue<void>;
+ 
+ 	private readonly _onDidChangeConfiguration: Emitter<IConfigurationChangeEvent> = this._register(new Emitter<IConfigurationChangeEvent>());
+@@ -125,6 +127,7 @@ export class WorkspaceService extends Disposable implements IWorkbenchConfigurat
+ 		super();
+ 
+ 		this.configurationRegistry = Registry.as<IConfigurationRegistry>(Extensions.Configuration);
++		this.initialWorkspaceSettings = environmentService.options?.initialWorkspaceSettings;
+ 
+ 		this.initRemoteUserConfigurationBarrier = new Barrier();
+ 		this.completeWorkspaceBarrier = new Barrier();
+@@ -452,6 +455,8 @@ export class WorkspaceService extends Disposable implements IWorkbenchConfigurat
+ 		const workspace = await this.createWorkspace(arg);
+ 		await this.updateWorkspaceAndInitializeConfiguration(workspace, trigger);
+ 		this.checkAndMarkWorkspaceComplete(false);
++		// Read for the workspace the page opened, so for no other.
++		this.initialWorkspaceSettings = undefined;
+ 
+ 		mark('code/didInitWorkspaceService');
+ 	}
+@@ -523,7 +528,7 @@ export class WorkspaceService extends Disposable implements IWorkbenchConfigurat
+ 	}
+ 
+ 	private async createMultiFolderWorkspace(workspaceIdentifier: IWorkspaceIdentifier): Promise<Workspace> {
+-		await this.workspaceConfiguration.initialize({ id: workspaceIdentifier.id, configPath: workspaceIdentifier.configPath }, this.isWorkspaceTrusted);
++		await this.workspaceConfiguration.initialize({ id: workspaceIdentifier.id, configPath: workspaceIdentifier.configPath }, this.isWorkspaceTrusted, this.initialWorkspaceSettings);
+ 		const workspaceConfigPath = workspaceIdentifier.configPath;
+ 		const workspaceFolders = toWorkspaceFolders(this.workspaceConfiguration.getFolders(), workspaceConfigPath, this.uriIdentityService.extUri);
+ 		const workspaceId = workspaceIdentifier.id;
+@@ -968,7 +973,8 @@ export class WorkspaceService extends Disposable implements IWorkbenchConfigurat
+ 		return Promise.all([...folders.map(folder => {
+ 			let folderConfiguration = this.cachedFolderConfigs.get(folder.uri);
+ 			if (!folderConfiguration) {
+-				folderConfiguration = new FolderConfiguration(!this.initialized, folder, FOLDER_CONFIG_FOLDER_NAME, this.getWorkbenchState(), this.isWorkspaceTrusted, this.fileService, this.uriIdentityService, this.logService, this.configurationCache);
++				folderConfiguration = new FolderConfiguration(!this.initialized, folder, FOLDER_CONFIG_FOLDER_NAME, this.getWorkbenchState(), this.isWorkspaceTrusted, this.fileService, this.uriIdentityService, this.logService, this.configurationCache,
++					!this.initialized && this.getWorkbenchState() === WorkbenchState.FOLDER ? this.initialWorkspaceSettings : undefined);
+ 				folderConfiguration.addRelated(folderConfiguration.onDidChange(() => this.onWorkspaceFolderConfigurationChanged(folder)));
+ 				this.cachedFolderConfigs.set(folder.uri, folderConfiguration);
+ 			}

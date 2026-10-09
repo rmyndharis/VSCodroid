@@ -41,6 +41,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import androidx.activity.OnBackPressedCallback
 import com.vscodroid.util.drawBehindSystemBars
+import com.vscodroid.util.isLightColor
+import com.vscodroid.util.paintWindow
 import com.vscodroid.util.CrashReporter
 import com.vscodroid.util.StorageManager
 import com.vscodroid.util.WebViewVersion
@@ -79,6 +81,10 @@ import com.vscodroid.webview.DownloadOutcome
 import com.vscodroid.webview.VSCodroidWebChromeClient
 import com.vscodroid.webview.VSCodroidWebView
 import com.vscodroid.webview.VSCodroidWebViewClient
+import com.vscodroid.webview.addPageColorListener
+import com.vscodroid.webview.addPlainTextPageScript
+import com.vscodroid.webview.keepStartColor
+import com.vscodroid.webview.lastPageColor
 import com.vscodroid.webview.urlLogLabel
 import com.vscodroid.webview.COPY_DIAGNOSTICS_URL
 import com.vscodroid.webview.RETRY_URL
@@ -2021,10 +2027,16 @@ class MainActivity : AppCompatActivity() {
         webView = findViewById(R.id.webView)
         webView?.let { wv ->
             VSCodroidWebView.configure(wv)
+            // The loading page's colour, before the first frame: the one the
+            // workbench last painted, so a light theme starts light.
+            paintWindowNow(lastPageColor(this))
             // Before the first load below: a document-start script runs only in
-            // documents that begin loading after it was added. The view
-            // recreateWebView builds comes through here as well.
+            // documents that begin loading after it was added, and the object a
+            // page posts to is there only in those. The view recreateWebView
+            // builds comes through here as well.
             addUiScaleScript(wv)
+            addPlainTextPageScript(wv)
+            addPageColorListener(wv, ::showPageColor)
             dropCacheLeftByEarlierBuild(wv)
             applyWindowInsetsPadding(wv)
             // Here and not in initBridge, which does its work once per WebView
@@ -2049,6 +2061,60 @@ class MainActivity : AppCompatActivity() {
             rendererCrashLoopShown = false
             wv.loadData(dataUrlSafe(loadingPage()), "text/html", "utf-8")
         }
+    }
+
+    /**
+     * Gives the window the colour the workbench page paints itself with, and keeps
+     * it for the screens of the next start.
+     *
+     * Where the window shows, see [paintWindow]: under a light theme the space the
+     * keyboard gave back stayed #1E1E1E for up to 2.1 s while a reload or a folder
+     * opened from the path box held the last frame, on an API 36 emulator, and the
+     * status and navigation bars were that colour throughout. What the next start
+     * shows before the workbench, see [lastPageColor].
+     */
+    private fun showPageColor(color: Int) {
+        paintWindowWhenDrawn(color)
+        keepStartColor(color)
+    }
+
+    /**
+     * The last window colour asked for, so that a page's colour still waiting for
+     * the frame that draws it does not land over a later one.
+     */
+    private var windowColorRequest = 0L
+
+    /**
+     * Gives the window [color] once the view draws the page that posted it, not
+     * before.
+     *
+     * A page posts its colour as its load starts, and the view goes on drawing the
+     * last page's frame until the new page paints, a second or more for the
+     * workbench. Painted at once, the bars around that frame took the new colour
+     * while it still showed the old: for 0.55 to 1.7 s at every change between a
+     * dark and a light theme on an API 36 emulator, and white around the dark
+     * loading page on the first launch after an update. A visual state callback
+     * runs once a frame holding the page as it is when the callback is posted is
+     * ready to draw, which for a page that has just started is its first.
+     */
+    private fun paintWindowWhenDrawn(color: Int) {
+        val request = ++windowColorRequest
+        val wv = webView
+        if (wv != null && WebViewFeature.isFeatureSupported(WebViewFeature.VISUAL_STATE_CALLBACK)) {
+            WebViewCompat.postVisualStateCallback(wv, request) { if (it == windowColorRequest) paintWindow(color) }
+        } else {
+            paintWindow(color)
+        }
+    }
+
+    /**
+     * Gives the window [color] now, for a page of this app's own, which posts
+     * nothing, and drops a page's colour still waiting for its frame, which would
+     * otherwise land over it.
+     */
+    private fun paintWindowNow(color: Int) {
+        windowColorRequest++
+        paintWindow(color)
     }
 
     /**
@@ -2620,11 +2686,7 @@ class MainActivity : AppCompatActivity() {
      * carry an ampersand or a bracket.
      */
     private fun loadingPage(): String =
-        """<html><head><meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"></head>
-           <body style="background:#1e1e1e;color:#888;font-family:sans-serif;
-           display:flex;align-items:center;justify-content:center;height:100vh;margin:0;">
-           <div style="text-align:center"><h2 style="color:#ccc;">VSCodroid</h2>
-           <p>${escapeHtml(getString(R.string.server_starting))}</p></div></body></html>"""
+        loadingPageHtml(lastPageColor(this), getString(R.string.server_starting))
 
     /**
      * The page both terminal states put up, with the one control that changes the
@@ -2699,6 +2761,9 @@ class MainActivity : AppCompatActivity() {
         // written here and needs no server at all. The veto the dead server does
         // cause is the other one, a save still in flight.
         markAppNavigation()
+        // The page below is dark whatever the editor's theme, and the window
+        // around it, which a light one had made light, goes with it.
+        paintWindowNow(getColor(R.color.colorBackground))
         webView?.loadDataWithBaseURL(
             null,
             """<html><head><meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"></head>
@@ -2758,6 +2823,9 @@ class MainActivity : AppCompatActivity() {
         // refusing costs is the page carrying the folder and the only control that
         // can start the server again.
         markAppNavigation()
+        // The loading page's colour, as setupWebView gives it: this can replace an
+        // error page, which painted the window its own.
+        paintWindowNow(lastPageColor(this))
         webView?.loadData(dataUrlSafe(loadingPage()), "text/html", "utf-8")
         // Guarded for the reason [startAndBindService] is, and put back rather
         // than only logged. The loading page is already on screen by the time this
@@ -7144,6 +7212,25 @@ internal fun escapeHtml(s: String): String = s
     .replace(">", "&gt;")
     .replace("\"", "&quot;")
     .replace("'", "&#39;")
+
+/**
+ * The page [MainActivity] shows while the server starts, on [background], with
+ * text that reads on it: light grey on a dark colour, dark grey on a light one.
+ * The background is the editor colour the workbench last showed, so each text
+ * clears 4.5:1 on that of every theme the server ships, and on any colour at most
+ * as luminous as #3f3f3f or at least as luminous as #dcdcdc; a third-party
+ * theme's colour between those can measure less. The #888 the line had on
+ * #1e1e1e measures 4.19:1 on Monokai's #272822. Top-level for the reason
+ * [escapeHtml] is.
+ */
+internal fun loadingPageHtml(background: Int, message: String): String {
+    val light = isLightColor(background)
+    return """<html><head><meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"></head>
+           <body style="background:${"#%06x".format(background and 0xFFFFFF)};color:${if (light) "#616161" else "#aaa"};font-family:sans-serif;
+           display:flex;align-items:center;justify-content:center;height:100vh;margin:0;">
+           <div style="text-align:center"><h2 style="color:${if (light) "#333" else "#ccc"};">VSCodroid</h2>
+           <p>${escapeHtml(message)}</p></div></body></html>"""
+}
 
 /**
  * Markup made safe for the `data:` URL that `WebView.loadData` splices it into.

@@ -41,8 +41,8 @@ class ThemeEdgeToEdgeTest {
                 "pass by reading nothing",
         )
         val text = themes.readText()
-        // The one style this app declares. Bounded to it rather than scanning the file,
-        // so a second style added later cannot answer for this one.
+        // The app's theme, not Theme.VSCodroid.LightStart beside it. Bounded to it
+        // rather than scanning the file, so another style cannot answer for this one.
         val style = Regex("""<style\s+name="Theme\.VSCodroid".*?</style>""", RegexOption.DOT_MATCHES_ALL)
             .find(text)
         assertTrue(style != null, "Theme.VSCodroid is not declared in themes.xml")

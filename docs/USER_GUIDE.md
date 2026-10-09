@@ -1235,9 +1235,9 @@ Core installation extracts approximately 603 MB to internal storage. With both t
 
 ## Troubleshooting
 
-### White Screen on Launch
+### Blank Screen on Launch
 
-If the app shows a white screen after opening:
+If the app shows a blank screen after opening:
 
 1. Wait 10-15 seconds -- the Node.js server may still be starting.
 2. If it persists, force-close the app and reopen it.
@@ -1255,7 +1255,7 @@ If the app shows a white screen after opening:
 > failed there on the first package that ships an executable.
 
 Rescue anything unsaved first. Which route is open to you depends on whether the
-editor still works, and on a white screen it does not:
+editor still works, and on a blank screen it does not:
 
 **If the editor will not open**, nothing outside the app reaches a new install's
 projects: internal storage is not exposed over USB or MTP, and `adb pull` cannot

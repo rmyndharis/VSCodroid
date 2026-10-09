@@ -181,3 +181,16 @@
 # patch. Folding the block into the else-if chain below it deletes the token;
 # the patch header says so at the call site too.
 0023 suggest caret move|out/vs/code/browser/workbench/workbench.js|this._triggerQuickSuggest.cancel();return
+# 0026 gates on the reparse it redirects. Property names survive this bundle
+# (folderConfiguration and cachedFolderConfiguration are emitted readable), so
+# the new field and the `??` beside the old one make a token only this patch
+# introduces; hoisting the expression into a local would delete it, and the
+# patch header says so at the call site too. Against the shipped 1.139.1
+# workbench.js `loadedFolderConfiguration` occurs 0 times.
+0026 folder settings kept until read|out/vs/code/browser/workbench/workbench.js|(this.loadedFolderConfiguration??this.folderConfiguration).reparse(
+# 0027 gates on the one read of the option it adds. Property names survive this
+# bundle, so `options?.initialWorkspaceSettings` is a token only this patch
+# introduces; reading the option anywhere else first, or into a local, deletes
+# it, and the patch header says so too. Against the shipped 1.139.1
+# workbench.js `initialWorkspaceSettings` occurs 0 times.
+0027 workspace settings from the page|out/vs/code/browser/workbench/workbench.js|options?.initialWorkspaceSettings
