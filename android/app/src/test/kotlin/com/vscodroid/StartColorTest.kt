@@ -42,9 +42,10 @@ import kotlin.math.pow
  * starting window's light theme, swapping it with the app's own, or choosing it
  * only when the kept colour stays the same, the fifth; and reading the saved
  * colour where one is kept, without a port, after setup has started, from another
- * key or without storage, taking a short colour, painting it over the picker or not
- * keeping it, leaving the view that reads it alive once it has answered or once the
- * screen goes, or letting a view that cannot be made end the launch, the sixth.
+ * key, without storage or without JavaScript, taking a short colour, handing it to
+ * nobody, painting it over the picker or not keeping it, leaving the view that
+ * reads it alive once it has answered or once the screen goes, or letting a view
+ * that cannot be made end the launch, the sixth.
  */
 class StartColorTest {
 
@@ -240,13 +241,17 @@ class StartColorTest {
             "SplashActivity no longer destroys the view that read the colour once it has answered, and the callback " +
                 "drops the only reference to it, so nothing destroys it"
         }
-        // On the workbench page's own origin, as MainActivity loads it, with storage.
+        // On the workbench page's own origin, as MainActivity loads it, with storage
+        // and JavaScript: evaluateJavascript runs nothing in a view with JavaScript
+        // off and answers null.
         // Without the comment strip, which takes the `//` of the address for one.
         val read = SourceScan.body(
             SourceScan.read("src/main/kotlin/com/vscodroid/webview/VSCodroidWebView.kt"),
             "internal fun readSavedPageColor(",
         ).lines().map { it.trim() }
         val noColor = "it reads no colour, or another origin's"
+        // The caller hears of the colour only through the answer.
+        val unheard = "the colour it reads reaches nobody"
         // A WebView provider missing or being replaced throws from the constructor,
         // and the setup beside this needs no view.
         val noView = "a WebView that cannot be made ends the launch, where the setup needs none"
@@ -254,9 +259,11 @@ class StartColorTest {
         // takes the app down with it.
         val lost = "a renderer lost while it reads takes the app down with it"
         for ((line, why) in listOf(
+            "probe.settings.javaScriptEnabled = true" to noColor,
             "probe.settings.domStorageEnabled = true" to noColor,
             "probe.loadDataWithBaseURL(\"http://127.0.0.1:\$port/\", \"<!DOCTYPE html><title></title>\", \"text/html\", \"utf-8\", null)" to noColor,
             "if (!answered) view.evaluateJavascript(SAVED_SPLASH_COLOR_SCRIPT) { answer(savedPageColor(it)) }" to noColor,
+            "onColor(color)" to unheard,
             "} catch (t: Throwable) {" to noView,
             "return null" to noView,
             "override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {" to lost,
