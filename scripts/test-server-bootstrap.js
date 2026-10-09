@@ -610,14 +610,13 @@ async function stoppingTakesTheEditorServerWithIt() {
 // folder never opened fails; without the server's own themes, the case of a
 // folder opened before the update fails; with comments or trailing commas left
 // in the text, the case of a settings file that has them fails; recording a
-// window whose settings could not be read fails that case; telling themes apart
-// by their colours rather than their ids fails the case of a theme with the
-// user's colours; handing over nothing without any record or splash fails the
-// case of a load before any splash; without the bound, or without moving a
-// folder shown again to the end, the case of twenty folders fails; writing on
-// every change of the head fails the title case; without the catch around the
-// write, the case of full storage fails; and reading the theme files on every
-// start, the case of a second start fails.
+// window whose settings could not be read fails that case; handing over nothing
+// without any record or splash fails the case of a load before any splash;
+// without the bound, or without moving a folder shown again to the end, the
+// case of twenty folders fails; writing on every change of the head fails the
+// title case; without the catch around the write, the case of full storage
+// fails; and reading the theme files on every start, the case of a second start
+// fails.
 {
     const anchor =
         '<meta id="vscode-workbench-web-configuration" data-settings="{{WORKBENCH_WEB_CONFIGURATION}}">';
