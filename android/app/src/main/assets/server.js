@@ -562,14 +562,15 @@ if (!fs.existsSync(rehEntryPoint)) {
     //
     // The look a load starts on is recorded per folder or workspace, as the
     // workbench records its own splash, the one for the whole app, in
-    // localStorage: the base theme, the theme's id, which the workbench writes
-    // as two classes of its element, and the colours of each part, read back
-    // from what the workbench shows, so a folder's own customizations, Peacock's
-    // bar colours among them, are kept with it. A folder whose settings name a
-    // theme starts on its own record when that was taken under the same name,
-    // and otherwise on that theme's look among the server's own themes
-    // (builtInThemeLooks above), which a folder opened for the first time, or for
-    // the first time since this script came with an update, has to start on.
+    // localStorage: the base theme, which the workbench writes as a class of
+    // its element, and the colours of each part, read back from what the
+    // workbench shows, so a folder's own customizations, Peacock's bar colours
+    // among them, are kept with it; and for a folder whose settings name a
+    // theme, that name. A folder whose settings name a theme starts on its own
+    // record when that was taken under the same name, and otherwise on that
+    // theme's look among the server's own themes (builtInThemeLooks above),
+    // which a folder opened for the first time, or for the first time since
+    // this script came with an update, has to start on.
     // Any other window starts on the record of the window shown most recently
     // that follows the user's theme, which is that theme as it is now. Before
     // the script has recorded any window it starts on the workbench's splash,
@@ -620,9 +621,10 @@ if (!fs.existsSync(rehEntryPoint)) {
     // workbench's colours again. So does every change of the window title,
     // which the workbench makes on each editor switch and change of dirty state,
     // at the cost of that style read: storage is written on a load's first
-    // reading and then only when the theme changed, and a colour is posted only
-    // when it changed. Taking the colour as the page is left was tried and is
-    // too late: the keyboard starts to go down before the workbench navigates.
+    // reading and then only when what it records changed, and a colour is
+    // posted only when it changed. Taking the colour as the page is left was
+    // tried and is too late: the keyboard starts to go down before the
+    // workbench navigates.
     //
     // Twenty folders are kept, the most recently shown, so the record cannot grow
     // into the storage the workbench's sealed secrets share. A window whose
@@ -708,8 +710,7 @@ if (!fs.existsSync(rehEntryPoint)) {
                 '\t\t\t\t\t\tif (!now) { return; }',
                 '\t\t\t\t\t\tpaint(now);',
                 '\t\t\t\t\t\tvar base = Object.keys(types).filter(function (t) { return wb.classList.contains(t); })[0];',
-                '\t\t\t\t\t\tvar classes = [].slice.call(wb.classList), at = classes.indexOf(base);',
-                "\t\t\t\t\t\tvar shown = { baseTheme: base, theme: classes.slice(at, at + 2).join(' '), colorInfo: { background: now } };",
+                '\t\t\t\t\t\tvar shown = { baseTheme: base, colorInfo: { background: now } };',
                 "\t\t\t\t\t\tfor (var key in ids) { shown.colorInfo[key] = style.getPropertyValue('--vscode-' + ids[key].replace(/\\./g, '-')).trim(); }",
                 '\t\t\t\t\t\tvar entry = JSON.stringify(shown);',
                 '\t\t\t\t\t\tif (entry === written || named === undefined) { return; }',

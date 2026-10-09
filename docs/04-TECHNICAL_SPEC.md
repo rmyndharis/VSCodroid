@@ -500,8 +500,8 @@ folder's own settings only as the copy its last load cached, so a folder opened 
 ran on the user's settings, the theme among them, until its file had been read through the remote
 file system, 8.5 to 20.6 s into the load on an API 36 emulator. The theme the file names decides the
 start. A folder that names one starts on its own record in `localStorage`
-(`vscodroid-folder-themes`, the twenty folders or workspaces most recently shown, each with the theme
-it showed by id, its colours and, for a theme of the folder's own, the name its settings gave it)
+(`vscodroid-folder-themes`, the twenty folders or workspaces most recently shown, each with the base
+theme and colours it showed and, for a theme of the folder's own, the name its settings gave it)
 when that record was taken under the same name, and otherwise on that theme's look among the server
 tree's own themes, which the bootstrap reads from the tree's theme files when it writes the script.
 Any other window starts on the record of the window that most recently followed the user's theme,
