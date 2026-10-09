@@ -528,7 +528,10 @@ the light one with the registry's default colours, until the extensions register
 the user's theme while every window recorded has a theme of its own, once after the update when the
 first window it opens has one and after twenty such windows in a row, which starts on the dark
 default whatever the user's theme, so under a light one it is dark until the workbench paints and,
-where the workbench cannot use its stored theme, until the extensions register; with
+where the workbench cannot use its stored theme, until the extensions register; the first window
+after the update when it follows the user's theme and the window shown last before the update had
+a theme of its own, which starts on that theme, from the workbench's splash, until the extensions
+register, and is rare because `MainActivity` reopens the folder last open; with
 `window.autoDetectColorScheme` on, a folder naming a theme of its own on its first load, which starts
 on that theme where the workbench shows the one it picks for the device's mode; a window whose
 settings file cannot be read, which starts as one following the user's theme would and is not

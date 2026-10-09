@@ -643,7 +643,11 @@ if (!fs.existsSync(rehEntryPoint)) {
     // window it opens has one and after twenty such windows in a row, and which
     // starts on the dark default whatever the user's theme, so under a light one
     // it is dark until the workbench paints and, where the workbench cannot use
-    // its stored theme, until the extensions register; a load after the device
+    // its stored theme, until the extensions register; the first window after
+    // the update when it follows the user's theme and the window shown last
+    // before the update had a theme of its own, which starts on that theme, from
+    // the workbench's splash, until the extensions register, and is rare because
+    // MainActivity reopens the folder last open; a load after the device
     // switched, as above, which is handed nothing with the setting off as well;
     // with the setting on, the first load of a folder naming a theme of its own,
     // which starts on that theme where the workbench shows the one it picks for
