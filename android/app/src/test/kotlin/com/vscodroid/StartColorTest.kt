@@ -42,10 +42,11 @@ import kotlin.math.pow
  * starting window's light theme, swapping it with the app's own, or choosing it
  * only when the kept colour stays the same, the fifth; and reading the saved
  * colour where one is kept, without a port, after setup has started, from another
- * key, without storage or without JavaScript, taking a short colour, handing it to
- * nobody, painting it over the picker or not keeping it, leaving the view that
- * reads it alive once it has answered or once the screen goes, or letting a view
- * that cannot be made end the launch, the sixth.
+ * key, without storage, without JavaScript or without a client of its own,
+ * taking a short colour, handing it to nobody, painting it over the picker or
+ * not keeping it, leaving the view that reads it alive once it has answered or
+ * once the screen goes, or letting a view that cannot be made end the launch,
+ * the sixth.
  */
 class StartColorTest {
 
@@ -258,9 +259,14 @@ class StartColorTest {
         // The renderer is the editor's too, and a client that does not take its loss
         // takes the app down with it.
         val lost = "a renderer lost while it reads takes the app down with it"
+        // The client hears the page finish and takes that loss. Left unassigned,
+        // the object still compiles, overrides and all, and the view keeps the
+        // default client, which does neither.
+        val unhooked = "it reads no colour, and $lost"
         for ((line, why) in listOf(
             "probe.settings.javaScriptEnabled = true" to noColor,
             "probe.settings.domStorageEnabled = true" to noColor,
+            "probe.webViewClient = object : WebViewClient() {" to unhooked,
             "probe.loadDataWithBaseURL(\"http://127.0.0.1:\$port/\", \"<!DOCTYPE html><title></title>\", \"text/html\", \"utf-8\", null)" to noColor,
             "if (!answered) view.evaluateJavascript(SAVED_SPLASH_COLOR_SCRIPT) { answer(savedPageColor(it)) }" to noColor,
             "onColor(color)" to unheard,
