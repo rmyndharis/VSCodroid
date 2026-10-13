@@ -104,7 +104,7 @@ class ExtraKeyToggleStateTest {
                 "the field check below is not looking at a row that reads the shared store",
         )
 
-        // The two booleans this row is allowed to keep, named here because the KDoc
+        // The three booleans this row is allowed to keep, named here because the KDoc
         // above asks for exactly that rather than for the ban to be widened.
         //
         // `suppressedForHeight` is not modifier state and cannot drift the way a
@@ -119,7 +119,14 @@ class ExtraKeyToggleStateTest {
         // from the stored preference at startup and after persisting a toggle, and
         // read only by the same inset listener. Nothing paints it and nothing sends
         // it anywhere.
-        val notModifierState = setOf("suppressedForHeight", "hiddenByUser")
+        //
+        // `hiddenForHardwareKeyboard` is the same kind of flag as `hiddenByUser` and
+        // for the same reasons. It is written only by `MainActivity`, from a key of a
+        // hardware keyboard and from the next touch of the screen, and read only by
+        // the same inset listener, which folds it into the one decision about showing
+        // the row. Nothing paints it, nothing sends it anywhere, and it is not
+        // persisted, so there is no second copy for it to drift from.
+        val notModifierState = setOf("suppressedForHeight", "hiddenByUser", "hiddenForHardwareKeyboard")
 
         // Control: an allowance for a field that no longer exists hides nothing and
         // would quietly excuse the next boolean that took the same name. Every name,
