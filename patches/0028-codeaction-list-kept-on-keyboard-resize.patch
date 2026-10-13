@@ -1,0 +1,72 @@
+Keep the Code Action list open when the soft keyboard goes down.
+
+CodeActionController hides the list on every layout change of its editor,
+because the list sits at page coordinates taken when it opened. On Android
+the soft keyboard goes down whenever focus leaves text, and the list takes
+focus from the editor as it opens, so with the keyboard up a tap on the light
+bulb made the window grow under the list, the editor's layout changed, and
+the list closed, its onHide giving the editor focus back. On an API 37
+emulator with Gboard 17.7.4 the list was on screen for 277 ms. The page's
+keyboard guard asked for nothing there, and the same close happened in
+headless Chromium with an Android user agent and no guard at all, when the
+viewport grew by the height of a keyboard.
+
+On Android a change of the editor's height alone now leaves the list open.
+The editor grows downward when the keyboard goes down, so the light bulb and
+the list beside it stay where they were. A change of width, as a turn of the
+phone makes, still closes it, and elsewhere every layout change does, as
+before.
+
+Verified in headless Chromium with an Android user agent: opened from the
+light bulb, the list stayed open beside it while the viewport grew from 460
+to 845 pixels, where the bundle without this patch closed it and focused the
+editor; a tap on a row then applied that row and gave the editor focus back;
+a viewport turned to landscape closed the list in both bundles; and with a
+desktop user agent the list closed at the height change, as before. The same
+edit was first tried over the minified bundle, then built. With the built
+tree on API 33 and 37 emulators, with Gboard 12.4 and 17.7.4, the list opened
+from the light bulb with the keyboard up stayed open while the keyboard went
+down, and a tap outside it closed it.
+
+diff --git a/src/vs/editor/contrib/codeAction/browser/codeActionController.ts b/src/vs/editor/contrib/codeAction/browser/codeActionController.ts
+index 77acc6f..e83667b 100644
+--- a/src/vs/editor/contrib/codeAction/browser/codeActionController.ts
++++ b/src/vs/editor/contrib/codeAction/browser/codeActionController.ts
+@@ -15,6 +15,7 @@ import { Lazy } from '../../../../base/common/lazy.js';
+ import { Disposable, MutableDisposable } from '../../../../base/common/lifecycle.js';
+ import { derivedOpts, IObservable, observableValue } from '../../../../base/common/observable.js';
+ import { Event } from '../../../../base/common/event.js';
++import { isAndroid } from '../../../../base/common/platform.js';
+ import { localize } from '../../../../nls.js';
+ import { IActionListDelegate } from '../../../../platform/actionWidget/browser/actionList.js';
+ import { IActionWidgetService } from '../../../../platform/actionWidget/browser/actionWidget.js';
+@@ -68,6 +69,10 @@ export class CodeActionController extends Disposable implements IEditorContribut
+ 
+ 	private readonly _resolver: CodeActionKeybindingResolver;
+ 
++	// The editor's width at its last layout, which on Android decides whether a layout change
++	// closes the list.
++	private _editorLayoutWidth: number;
++
+ 	private _disposed = false;
+ 
+ 	set onlyLightBulbWithEmptySelection(value: boolean) {
+@@ -136,7 +141,17 @@ export class CodeActionController extends Disposable implements IEditorContribut
+ 
+ 		this._resolver = instantiationService.createInstance(CodeActionKeybindingResolver);
+ 
+-		this._register(this._editor.onDidLayoutChange(() => this._actionWidgetService.hide()));
++		// On Android the soft keyboard going down makes the editor taller, and it goes down as soon as
++		// the list takes focus from the editor, so a list opened from the light bulb while the
++		// keyboard was up closed again as it opened. A change of the editor's height alone keeps it.
++		this._editorLayoutWidth = this._editor.getLayoutInfo().width;
++		this._register(this._editor.onDidLayoutChange(layout => {
++			const widthChanged = layout.width !== this._editorLayoutWidth;
++			this._editorLayoutWidth = layout.width;
++			if (widthChanged || !isAndroid) {
++				this._actionWidgetService.hide();
++			}
++		}));
+ 	}
+ 
+ 	override dispose() {

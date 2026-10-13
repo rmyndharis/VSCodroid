@@ -305,3 +305,9 @@
 # it, and the patch header says so too. Against the shipped 1.139.1
 # workbench.js `initialWorkspaceSettings` occurs 0 times.
 0027 workspace settings from the page|out/vs/code/browser/workbench/workbench.js|options?.initialWorkspaceSettings
+# 0028's row: the editor's width kept from its last layout, set where the
+# controller is built, compared and updated at each layout change, a property
+# name as for 0024, 0 times in the shipped bundle. On Android a change of height
+# alone, the keyboard going down as the list takes focus, no longer closes the
+# Code Action list; without the compare it closed at every layout change again.
+0028 code action list at a height change|out/vs/code/browser/workbench/workbench.js x3|this._editorLayoutWidth
