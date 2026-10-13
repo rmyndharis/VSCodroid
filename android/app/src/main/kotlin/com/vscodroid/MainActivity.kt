@@ -12,6 +12,7 @@ import android.content.ComponentCallbacks2.TRIM_MEMORY_MODERATE
 import android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL
 import android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.graphics.Typeface
 import android.os.Bundle
 import android.net.Uri
@@ -64,6 +65,7 @@ import com.vscodroid.bridge.ClipboardBridge
 import com.vscodroid.bridge.SecurityManager
 import com.vscodroid.keyboard.ExtraKeyRow
 import com.vscodroid.keyboard.KeyInjector
+import com.vscodroid.keyboard.KeyboardDismissal
 import com.vscodroid.service.NodeService
 import com.vscodroid.service.StartupNotice
 import com.vscodroid.setup.FirstRunSetup
@@ -117,6 +119,24 @@ class MainActivity : AppCompatActivity() {
 
     private var webView: WebView? = null
     private var extraKeyRow: ExtraKeyRow? = null
+    private val keyboardHandler = Handler(Looper.getMainLooper())
+
+    /**
+     * What the page is told when the keyboard goes away, held back for a moment:
+     * see [KeyboardDismissal] for why a turn of the phone must not reach it.
+     */
+    private val keyboardDismissal = KeyboardDismissal(
+        schedule = { task, delayMs -> keyboardHandler.postDelayed(task, delayMs) },
+        cancel = { task -> keyboardHandler.removeCallbacks(task) },
+        now = { SystemClock.uptimeMillis() },
+        imeVisible = { extraKeyRow?.imeVisible == true },
+        onDismissed = {
+            webView?.evaluateJavascript(
+                "if (window.__vscodroidKeyboardDismissed) window.__vscodroidKeyboardDismissed();",
+                null,
+            )
+        },
+    )
 
     /**
      * The bound service, or null while nothing is bound.
@@ -1037,6 +1057,7 @@ class MainActivity : AppCompatActivity() {
         // which is why the manager is built on the application context and why the
         // five notices in onCreate close over that and a main-thread Handler
         // rather than over this Activity.
+        keyboardDismissal.release()
         val stopping = if (::safManager.isInitialized) safManager else null
         val logTag = tag
         if (stopping != null) {
@@ -1119,6 +1140,17 @@ class MainActivity : AppCompatActivity() {
                 Logger.w(tag, "Could not refresh the toolchain commands: ${e.message}")
             }
         }
+    }
+
+    /**
+     * The manifest's `configChanges` keeps the activity across a turn of the phone,
+     * a resize or a fold, so this is where one is seen. The keyboard is reported
+     * hidden with it and comes back by itself, and [keyboardDismissal] must not
+     * hold the page's editor down for that.
+     */
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        keyboardDismissal.turned()
     }
 
     override fun onTrimMemory(level: Int) {
@@ -2301,9 +2333,8 @@ class MainActivity : AppCompatActivity() {
         // is up, which is the one state where moving focus resizes the window.
         // The keyboard guard holds the keyboard down again once it has gone.
         extraKeyRow?.onImeVisibilityChanged = { visible ->
-            val dismissed = if (visible) "" else
-                " if (window.__vscodroidKeyboardDismissed) window.__vscodroidKeyboardDismissed();"
-            webView?.evaluateJavascript("window.__vscodroidImeVisible = $visible;$dismissed", null)
+            webView?.evaluateJavascript("window.__vscodroidImeVisible = $visible;", null)
+            if (!visible) keyboardDismissal.hidden()
         }
     }
 
@@ -3729,9 +3760,9 @@ class MainActivity : AppCompatActivity() {
      * without `inputmode`, and Chromium raises the keyboard again for any touch
      * on a focused editable element, so the next scroll of the file brought it
      * back. [ExtraKeyRow] reports the keyboard going down from its inset
-     * listener, and `window.__vscodroidKeyboardDismissed` puts the hold back on
-     * every host that is not composing, which leaves a tap on text as the only
-     * way up again. A keyboard that went down because this script held it, or
+     * listener, and half a second later, if it is still away,
+     * `window.__vscodroidKeyboardDismissed` puts the hold back on every host that
+     * is not composing, which leaves a tap on text as the only way up again. A keyboard that went down because this script held it, or
      * because a touch outside text took focus away, finds nothing to change,
      * except a host that was still composing at that touch: apply() skipped it
      * then, and it gets the hold now, which the focus returning would give it
@@ -3759,18 +3790,22 @@ class MainActivity : AppCompatActivity() {
      * ended the word first and the hold came back. Turning the phone with the
      * keyboard up never reported it down there, so on that emulator a
      * rotation does not reach the hook. On an API 36 emulator with Gboard 18.2
-     * it does: each turn reports the keyboard down and, about 350 ms later, up
-     * again, so the hook puts the hold back on the focused host in between.
-     * Measured there, the keyboard was up again after turning to landscape and
-     * back, and the next letter landed at the caret. That emulator reports a
-     * hardware keyboard, where the hold never takes a keyboard down; on a phone
-     * the hold written at that report would itself be the change of input mode
-     * that takes the keyboard down, at the turn, and it would stay down until a
-     * tap on text (read from Chromium's source, not measured on a phone). Not
-     * measured: switching keyboards with the globe key and leaving the app with
-     * the keyboard up, either of which may report the same down and up; a
-     * hardware keyboard; a floating or split keyboard; and keyboards other than
-     * Gboard.
+     * it does: each turn reports the keyboard down and, 150 to 650 ms later, up
+     * again. That emulator reports a hardware keyboard, where a hold never
+     * takes a keyboard down, so with the hook running at the report the
+     * keyboard was up again after turning to landscape and back and the next
+     * letter landed at the caret. On an API 36 emulator with `hw.keyboard=no`,
+     * which reports none as a phone does, the same hook took the keyboard down
+     * at the turn to landscape, and it stayed down, with `inputmode="none"` on
+     * the host, for as long as it was watched; with the hook replaced by a
+     * function that does nothing it stayed up. [KeyboardDismissal] therefore
+     * calls the hook half a second after the report, and not if the keyboard is
+     * back by then or the configuration changed within two seconds. The cost is
+     * that a scroll in that half second can raise a keyboard put away with Back,
+     * as it did before the hold existed. Not measured: switching keyboards with
+     * the globe key and leaving the app with the keyboard up, either of which
+     * may report the same down and up; a hardware keyboard attached to a phone;
+     * a floating or split keyboard; and keyboards other than Gboard.
      *
      * A read-only editor never lets the keyboard up, so a file made read-only
      * with File: Toggle Active Editor Read-only in Session or matched by
@@ -4423,7 +4458,10 @@ class MainActivity : AppCompatActivity() {
                 // it a keyboard put away with Back left the focused host without
                 // inputmode, and the next touch on it, a scroll included, raised
                 // the keyboard again. A host still composing is left to apply()'s
-                // usual rule.
+                // usual rule. Kotlin calls it half a second after the report and
+                // not for a turn of the phone, because on a device with no
+                // hardware keyboard the hold written here takes a visible
+                // keyboard down for real (KeyboardDismissal).
                 //
                 // Only a keyboard that goes down while text has focus counts as
                 // put away, so Back with an extension's webview focused is not

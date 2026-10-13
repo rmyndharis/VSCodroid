@@ -1,5 +1,6 @@
 package com.vscodroid
 
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.Test
@@ -187,7 +188,7 @@ class KeyboardGuardWiringTest {
     }
 
     /**
-     * That putting the keyboard away puts the hold back, and only that.
+     * That putting the keyboard away puts the hold back, and only that, and not at once.
      *
      * Once a tap on text has let the keyboard up, the editing host is left
      * without `inputmode`, and Chromium raises the keyboard for any touch on a
@@ -196,6 +197,13 @@ class KeyboardGuardWiringTest {
      * half; this holds the call from the inset listener's report, which that
      * script cannot see. Made on the keyboard coming up as well, the same call
      * would put `inputmode="none"` on the host the user had just tapped into.
+     *
+     * And made at once, it is what takes the keyboard down at a turn of the phone
+     * on a device with no hardware keyboard: the report of hidden that a turn
+     * brings reached the hook directly, and the hold it wrote kept the keyboard
+     * away. The call goes through [com.vscodroid.keyboard.KeyboardDismissal], which
+     * `KeyboardDismissalTest` runs; this holds that the report of hidden and the
+     * change of configuration are wired to it.
      */
     @Test
     fun `the keyboard going away restores the hold`() {
@@ -208,18 +216,34 @@ class KeyboardGuardWiringTest {
         )
         val wiring = SourceScan.body(source, "private fun setupExtraKeyRow(")
         assertTrue(
-            Regex("""if \(visible\) "" else\s*"[^"]*__vscodroidKeyboardDismissed\(\)""").containsMatchIn(wiring),
-            "setupExtraKeyRow no longer calls __vscodroidKeyboardDismissed when the keyboard " +
-                "goes away, and only then. Without the call a keyboard put away with Back comes " +
-                "back on the next scroll; made when it comes up, the call holds down the " +
-                "keyboard the user just raised.",
+            Regex("""if \(!visible\) keyboardDismissal\.hidden\(\)""").containsMatchIn(wiring),
+            "setupExtraKeyRow no longer hands the report of hidden, and only that, to " +
+                "keyboardDismissal. Without it a keyboard put away with Back comes back on the " +
+                "next scroll; made when the keyboard comes up, the call holds down the keyboard " +
+                "the user just raised.",
         )
-        // The call is built into a string above; this holds the string being sent,
-        // so dropping it from evaluateJavascript cannot leave the case green.
+        assertFalse(
+            wiring.contains("__vscodroidKeyboardDismissed"),
+            "setupExtraKeyRow calls __vscodroidKeyboardDismissed itself again. A turn of the " +
+                "phone reports the keyboard hidden before it comes back, and a hold written at " +
+                "that report takes it down for good on a device with no hardware keyboard.",
+        )
+        // The call is the dismissal's callback; this holds the string being sent, so
+        // dropping it from evaluateJavascript cannot leave the case green.
         assertTrue(
-            Regex("evaluateJavascript\\(\"[^\"]*\\\$dismissed").containsMatchIn(wiring),
-            "setupExtraKeyRow builds the __vscodroidKeyboardDismissed call but no longer sends " +
-                "it with evaluateJavascript, so the hold never comes back.",
+            Regex(
+                """private val keyboardDismissal = KeyboardDismissal\([\s\S]*?onDismissed = \{[\s\S]*?""" +
+                    """evaluateJavascript\(\s*"[^"]*__vscodroidKeyboardDismissed\(\)""",
+            ).containsMatchIn(source),
+            "the callback of keyboardDismissal no longer sends __vscodroidKeyboardDismissed with " +
+                "evaluateJavascript, so the hold never comes back.",
+        )
+        assertTrue(
+            Regex("""override fun onConfigurationChanged\(newConfig: Configuration\)[^}]*keyboardDismissal\.turned\(\)""")
+                .containsMatchIn(source),
+            "onConfigurationChanged no longer tells keyboardDismissal about the turn, so the " +
+                "hold is written for the hide a turn of the phone brings and keeps the keyboard " +
+                "away on a device with no hardware keyboard.",
         )
     }
 

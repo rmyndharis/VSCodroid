@@ -1062,9 +1062,9 @@ focused again in one task, as patch 0024 and the key row restart input, keeps a 
 is up: that focus holds nothing, though the touch before it was outside text and left the
 keyboard up, a drag on the activity bar, a long press or a button that opens a menu, because a
 hold written at that focus would take the keyboard down on a phone (below). It takes off a hold
-already on the host, which a turn of the phone that reports the keyboard down and up again
-leaves, and the composition finish takes such a hold off too; that hold reached Chromium when
-it was written, so a restart that meets it changes no input mode. A hold the focus handler put
+already on the host, which a keyboard put away and then raised by a touch inside the delay
+below leaves, and the composition finish takes such a hold off too; that hold reached Chromium
+when it was written, so a restart that meets it changes no input mode. A hold the focus handler put
 on with the keyboard up, to take it down, stays until the keyboard is reported down or a tap on
 text lets it up. A tap anywhere inside an editor counts, the margin and the space under the
 last line included, because the editor moves the caret there. When the keyboard goes away, by
@@ -1088,10 +1088,15 @@ outside text leaves the focused host without the hold, and after a tap outside t
 leaves an editing host focused the script asks for the keyboard down with
 `navigator.virtualKeyboard.hide()` under a manual `virtualKeyboardPolicy`, which goes back
 to auto when the keyboard is reported down, on the next tap on text, after a second, or when
-another host is asked; the dismissal hook then holds the host. The hold that hook writes when
-a turn of the phone reports the keyboard down and up again, as an API 36 emulator does, would
-take a phone's keyboard down at the turn and leave it down until a tap on text (read from the
-same source, not measured). A tap is the script's own test,
+another host is asked; the dismissal hook then holds the host. The hook is not called at
+the report. A turn of the phone reports the keyboard hidden with the change of configuration
+and visible again 150 to 650 ms later, and on an API 36 emulator with `hw.keyboard=no`, which
+reports no keyboard as a phone does, the hold the hook writes at the first report took the
+keyboard down at the turn to landscape and kept it down, where with the hook replaced by a
+function that did nothing it stayed up. `KeyboardDismissal` therefore calls the hook half a
+second after the report, and not if the keyboard is visible by then or the configuration
+changed within two seconds. A scroll inside that half second can raise a keyboard put away
+with Back, as it did before the hold existed. A tap is the script's own test,
 12 CSS px and 500 ms, or a tap by the workbench's touch gesture, which the activity bar, the
 status bar and the tabs act on and which is looser, under 700 ms within 30 px on each axis:
 with only the script's test, a touch on the Search icon that slid 20 px, or a press of 620 ms
