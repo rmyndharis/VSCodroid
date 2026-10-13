@@ -78,6 +78,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - With the terminal focused, a tap outside it no longer brings back a soft keyboard put away with Back.
 - A suggestion list closes when a tap lands outside the editor; it stayed open over the view the tap opened, and a tap meant for a file in the Explorer could accept a suggestion into the editor.
 - Gboard's suggestion strip follows the text when a tap or a cursor key lands at the same column of another line; it went on offering the old words, and picking one wrote over the text at the cursor.
+- The light bulb's Code Action list stays open when tapped with the soft keyboard up; it closed again at once.
 
 ### Security
 

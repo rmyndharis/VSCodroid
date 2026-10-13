@@ -1164,6 +1164,7 @@ flowchart TD
   P --> P25["0025 suggest: only from compositions that typed; a touch elsewhere ends it"]
   P --> P26["0026 configuration: keep a folder's cached settings until its file is read"]
   P --> P27["0027 configuration: start a remote workspace from the settings the page read"]
+  P --> P28["0028 code actions: keep the list open as the keyboard goes"]
 ```
 
 Five of these are load-bearing in ways their titles understate:
