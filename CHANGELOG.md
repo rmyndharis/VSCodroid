@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A save to a network device folder while it is offline can now wait inside VSCodroid, with a notice, until the folder's version of the file can be read, and is then sent while the folder is open, or, if the folder reports file times, when it is next opened.
 - Holding a key row key that has no alternates, such as Tab or Esc, presses it when you lift your finger rather than after the long-press delay; Ctrl, Alt and Shift still switch at the delay.
 - A terminal focused from a tap outside it, such as its tab in the panel, opens with the soft keyboard down until it is tapped, as a file opened from the Explorer does; one opened with Enter after typing in the Command Palette keeps it up, and the keyboard is up once a file opened that way from Quick Open, or created with Enter in the Explorer's New File box, has loaded.
+- The extra key row steps away while you type on a hardware keyboard and comes back at the next touch of the screen, so a soft keyboard kept up beside one no longer costs the editor the row's height; a mouse click or a touchpad does not bring it back.
 
 ### Removed
 

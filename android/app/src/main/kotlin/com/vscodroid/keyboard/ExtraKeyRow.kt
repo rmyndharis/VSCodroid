@@ -436,6 +436,27 @@ class ExtraKeyRow @JvmOverloads constructor(
             ViewCompat.requestApplyInsets(this)
         }
 
+    /**
+     * Whether the last key came from a hardware keyboard and the screen has not
+     * been touched since, as `MainActivity` tells it through [HardwareTyping].
+     *
+     * The same row-off decision as [hiddenByUser], reached automatically for the
+     * length of a run of typing: the row repeats keys a hardware keyboard has, and
+     * a soft keyboard kept up beside one gave it height of the editor for
+     * nothing. Transient where that one is persisted, because it is what the row
+     * does for now and not a choice, so a restart starts with the row where the
+     * soft keyboard puts it. It folds into the one decision below for the same
+     * reason the other does: leaving by the door the keyboard going away uses
+     * dismisses the alternates window and clears a latched modifier on the page as
+     * well as on the row.
+     */
+    var hiddenForHardwareKeyboard = false
+        set(value) {
+            if (field == value) return
+            field = value
+            ViewCompat.requestApplyInsets(this)
+        }
+
     fun setupWithRootView(rootView: View) {
         ViewCompat.setOnApplyWindowInsetsListener(rootView) { v, insets ->
             // The display cutout is its own inset type, not part of systemBars().
@@ -473,7 +494,7 @@ class ExtraKeyRow @JvmOverloads constructor(
             } else if (pageHeightPx >= dpToPx(RELEASE_PAGE_HEIGHT_DP)) {
                 suppressedForHeight = false
             }
-            val showRow = imeVisible && !suppressedForHeight && !hiddenByUser
+            val showRow = imeVisible && !suppressedForHeight && !hiddenByUser && !hiddenForHardwareKeyboard
             if (this.imeVisible != imeVisible) {
                 this.imeVisible = imeVisible
                 onImeVisibilityChanged?.invoke(imeVisible)

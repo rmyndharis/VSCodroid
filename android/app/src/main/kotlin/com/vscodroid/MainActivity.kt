@@ -23,6 +23,7 @@ import android.os.SystemClock
 import android.provider.DocumentsContract
 import android.text.util.Linkify
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.View
 import android.webkit.CookieManager
 import android.webkit.RenderProcessGoneDetail
@@ -64,6 +65,7 @@ import com.vscodroid.bridge.AuthTabWindow
 import com.vscodroid.bridge.ClipboardBridge
 import com.vscodroid.bridge.SecurityManager
 import com.vscodroid.keyboard.ExtraKeyRow
+import com.vscodroid.keyboard.HardwareTyping
 import com.vscodroid.keyboard.KeyInjector
 import com.vscodroid.keyboard.KeyboardDismissal
 import com.vscodroid.service.NodeService
@@ -2412,7 +2414,40 @@ class MainActivity : AppCompatActivity() {
      */
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         val handled = super.dispatchKeyEvent(event)
+        noteHardwareTyping(event)
         return handled || event.keyCode == KeyEvent.KEYCODE_ESCAPE
+    }
+
+    /**
+     * Takes the extra key row off the screen while the user types on a hardware
+     * keyboard, from the key as it went by and after it was delivered, so nothing
+     * about the key itself changes.
+     *
+     * Observation only, and after the delegate on purpose: `HardwareKeyboardTest`
+     * pins that the page receives every key exactly as dispatched. Which keys
+     * count is [HardwareTyping]'s, and the row comes back at the next touch of the
+     * screen, [dispatchTouchEvent].
+     */
+    private fun noteHardwareTyping(event: KeyEvent) {
+        if (event.action != KeyEvent.ACTION_DOWN) return
+        val device = event.device ?: return
+        if (HardwareTyping.isHardwareKeyboardKey(device.isVirtual, event.source, device.keyboardType)) {
+            extraKeyRow?.hiddenForHardwareKeyboard = true
+        }
+    }
+
+    /**
+     * Gives the extra key row back at the first touch of the screen after a run of
+     * typing on a hardware keyboard. A finger on the screen is the way back to the
+     * soft keyboard; a mouse click or a touchpad on a keyboard cover is not, and
+     * [HardwareTyping.isScreenTouch] leaves those out. The event is passed on
+     * untouched.
+     */
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        if (ev.actionMasked == MotionEvent.ACTION_DOWN && HardwareTyping.isScreenTouch(ev.source)) {
+            extraKeyRow?.hiddenForHardwareKeyboard = false
+        }
+        return super.dispatchTouchEvent(ev)
     }
 
     private fun requestNotificationPermission() {
