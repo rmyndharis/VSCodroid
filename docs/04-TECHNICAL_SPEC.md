@@ -666,6 +666,30 @@ after it take it. That start's own starting window is drawn before any of the ap
 manifest's theme, so it is dark. With `window.autoDetectColorScheme` on, a start after the device
 switched between light and dark while the app was closed begins on the colour from before.
 
+The view holds the last page's frame at a reload or a folder switch as well, and that frame is not
+the page the user saw. The workbench shuts itself down from its `beforeunload` listener, in one
+task: terminals are disposed, the `modern-ui` classes come off its container and the styles the
+terminal and the diff decorations added are removed, so the page falls back to its classic skin,
+with upper-case panel titles, and the extension host's contributions are gone. On an API 33
+emulator the view held that for about half a second after Developer: Reload Window and then went
+blank until the new page came. `injectLeaveCurtain` raises a full-window element in the page's
+background colour, the root's, from its own `beforeunload` listener, so the frame after the
+shutdown is the curtain whichever listener runs first; on the shipped build it runs ahead of the
+workbench's, 44 ms before `modern-ui` comes off. A leave the workbench vetoes (`vetoBeforeUnload`
+cancels the event with `preventDefault` and `returnValue`) lowers it in the next task, a timer
+lowers it after five seconds for a navigation that never commits, and `pageshow` lowers it for a
+page restored from the back-forward cache. A page with no background colour of its own gets no
+curtain, since a guessed dark one is a flash under a light theme.
+
+Cut every 50 ms from a recording of Developer: Reload Window, the intact page was followed at once
+by the plain colour on API 33, on API 36 with no hardware keyboard and on API 37, with no frame of
+the dismantled one. So it was for a reload started from outside the page (`Page.reload`, standing
+in for the app's own reload after a long time in the background) on API 36. With a veto the page
+behind the dialog was the intact one on API 33, and nothing was left on the root after "Stay on
+this page". `scripts/test-leave-curtain.js` runs the script against a stub page, and
+`LeaveCurtainWiringTest` holds it, and the three things in the shipped bundle it depends on, to
+the sources.
+
 ### 4.2 Crash Recovery
 
 ```kotlin

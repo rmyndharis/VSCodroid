@@ -98,6 +98,7 @@
 | SC-10 | The side bar setting has a control | Settings, search `autoHideSideBar` | The row draws a dropdown offering auto, on and off, not an "Edit in settings.json" link. Pick `on` on a tablet and `off` on a phone and check each one overrides the screen | | |
 | SC-9 | A setting you change is the one that applies | Settings, User tab, set `editor.minimap.enabled` true, reopen a file, then restart the app | The minimap appears and is still there after the restart. It is the app's own defaults that must not win here | | |
 | SC-11 | UI scale | Command Palette, **VSCodroid: UI Scale**, note the sizes offered and pick the largest. Tap a file in the Explorer, place the caret in a word, type, open a context menu, the Command Palette, a hover and a terminal, rotate, then reload the window and restart the app. Finish with 100% | The offer stops where the page would be under 320 CSS px wide (125% on a 411 dp phone). The whole interface is larger and fills the screen with nothing cut off at the right; taps, the caret, menus, the keyboard and the key row land where they should; the terminal is legible; the size survives the rotation, the reload and the restart, with no flash at 100% on load; 100% restores the original layout | | |
+| SC-12 | A reload does not show the workbench half dismantled | With a folder open and a terminal running, run **Developer: Reload Window**, and again open another folder from **File > Open Recent**. Record the screen and step the recording through, or watch it from the command to the new page. Then make an edit and reload at once, so that the editor asks to leave, and tap **Stay on this page** | In both reloads the editor is followed by its plain background until the new page paints. A frame with upper-case panel titles, an empty terminal and the editor's own status items (Spaces, UTF-8, LF) is the failure: it stayed for about half a second on an API 33 emulator. When the editor asks to leave, the dialog is drawn over the intact editor, and after Stay nothing covers it | | |
 
 ## 5. Editor Operations
 
@@ -293,7 +294,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | Device Matrix | 4 | | | |
 | Android Versions | 4 | | | |
 | Keyboard Input | 44 | | | |
-| Screen & Orientation | 11 | | | |
+| Screen & Orientation | 12 | | | |
 | Editor Operations | 14 | | | |
 | Extensions | 7 | | | |
 | Background/Foreground | 9 | | | |
@@ -303,7 +304,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | Terminal & Tools | 13 | | | |
 | SAF & Files | 24 | | | |
 | Display Language | 6 | | | |
-| **Total** | **158** | | | |
+| **Total** | **159** | | | |
 
 **Overall Result**: [ ] PASS / [ ] FAIL
 

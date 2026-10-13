@@ -68,6 +68,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Opening a folder, reloading the window and starting the app no longer show a white screen and then the light theme for a few seconds before the dark theme.
 - A folder's own settings, such as a colour theme in its `.vscode/settings.json`, apply from the start of a load, the first time the folder opens included, instead of giving way to your settings for several seconds.
 - Under a light theme, the status and navigation bars and the space the keyboard leaves while a folder opens or the window reloads take the theme's background instead of staying dark.
+- A reload or a folder switch no longer shows the editor half dismantled, with upper-case panel titles and an empty terminal, for about half a second; the editor's background shows until the next page paints.
 - Under a light theme the app also starts light: the setup screen and the "Starting server..." page take the background the editor last showed, and the launch screen is white from the second start after updating.
 - Pressing Enter on Gboard with the cursor inside or at the start of a word no longer writes that word over the next line; text such as `ha1 = 1, aha1a2 = 2` could be saved.
 - Backspace on Gboard right after Enter at the start of a line deletes the line break instead of doing nothing.

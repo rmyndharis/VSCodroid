@@ -3489,6 +3489,9 @@ class MainActivity : AppCompatActivity() {
         // Makes Enter on the soft keyboard commit an inline edit or a Quick Open pick,
         // and the quick input's keys work while a word is composing
         injectComposingEnter()
+        // Shows the page's background, not the dismantled workbench, from the moment the
+        // page is told to leave until the next one paints
+        injectLeaveCurtain()
         // Fix #7: Override window.open() to route through AndroidBridge
         injectWindowOpenOverride()
         // Answers a paste out of Android's clipboard, which the WebView will not
@@ -5099,6 +5102,97 @@ class MainActivity : AppCompatActivity() {
                     Object.defineProperty(enter, 'which', { value: 13 });
                     if (!target.dispatchEvent(enter)) e.preventDefault();
                 }, true);
+            })();
+            """.trimIndent(),
+            null
+        )
+    }
+
+    /**
+     * Puts the page's own background over the workbench from the moment it is told
+     * to leave, so that the half-dismantled workbench is never what is on screen
+     * while the next page loads.
+     *
+     * The workbench dismantles itself inside `beforeunload`: its lifecycle service
+     * runs the whole shutdown from that listener, with no veto, before the event
+     * has finished dispatching. In that one task the terminals are disposed, the
+     * `modern-ui` classes come off the workbench container, and the styles the
+     * terminal and the diff decorations added are removed, so the page drops to its
+     * classic skin (upper-case panel titles, the editor's status items, a tab strip
+     * without its labels) and the extension host's contributions are gone. The
+     * WebView then holds that frame until the next document paints: on an API 33
+     * emulator, with Developer: Reload Window, the dismantled page stayed on screen
+     * for about half a second and then the screen went blank until the new page
+     * came. A page cannot stop the workbench doing this, only what is painted.
+     *
+     * This listener raises a full-window element in the colour the page paints
+     * itself with, which `assets/server.js` keeps on the editor's background and
+     * which is what the new page starts on, in the same dispatch. Nothing is drawn
+     * between a task's end and the next frame, so the first frame painted after the
+     * dismantling is the curtain: measured on the same emulator, with frames cut
+     * every 50 ms, the intact page was followed at once by the plain colour and no
+     * frame of the dismantled one. It does not matter which listener runs first. On
+     * the shipped build this one runs ahead of the workbench's, since the workbench
+     * registers its own long after the page's load event: the curtain was on the
+     * root 44 ms before `modern-ui` came off. Added by hand to a page that is
+     * already running, behind it, the dismantling was already done and the first
+     * frame was still the curtain.
+     *
+     * A veto is the one case where leaving is not certain. The workbench cancels
+     * the event (`vetoBeforeUnload`) when it holds work it has no backup of, and
+     * the platform then asks the user. The check runs in the next task, after every
+     * listener has had its turn, and lowers the curtain for a cancelled event, so
+     * the page the user is asked about is the intact one: measured, with the
+     * dialog's "Stay on this page" the page is intact and no element is left on the
+     * root. A second timer lowers it anyway after five seconds, so a
+     * navigation that never commits, which leaves the workbench shut down but the
+     * page alive, does not leave a window nobody can see through; and `pageshow`
+     * lowers it for a page restored from the back-forward cache.
+     *
+     * No colour known, no curtain: the root has none until the page script that
+     * `assets/server.js` adds runs, and a guess would be a dark flash under a light
+     * theme. Taps are not let through, because what is behind it is no longer a
+     * workbench that can answer them.
+     *
+     * `LeaveCurtainWiringTest` holds the script to where it is installed, and
+     * `scripts/test-leave-curtain.js` runs it.
+     */
+    private fun injectLeaveCurtain() {
+        webView?.evaluateJavascript(
+            """
+            (function() {
+                if (window.__vscodroidLeaveCurtain) return;
+                window.__vscodroidLeaveCurtain = true;
+                var curtain = null;
+                var failsafe = 0;
+                function lower() {
+                    if (failsafe) { clearTimeout(failsafe); failsafe = 0; }
+                    if (curtain) { curtain.remove(); curtain = null; }
+                }
+                // The root's colour is the one the page script keeps on the editor's
+                // background; the body's is the workbench's own where that never ran.
+                function pageColor() {
+                    var color = document.documentElement.style.backgroundColor;
+                    if (!color && document.body) color = getComputedStyle(document.body).backgroundColor;
+                    return color && color !== 'transparent' && color !== 'rgba(0, 0, 0, 0)' ? color : '';
+                }
+                window.addEventListener('beforeunload', function(e) {
+                    lower();
+                    var color = pageColor();
+                    if (!color) return;
+                    curtain = document.createElement('div');
+                    curtain.setAttribute('aria-hidden', 'true');
+                    curtain.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;' +
+                        'z-index:2147483647;background:' + color;
+                    document.documentElement.appendChild(curtain);
+                    // Whether the workbench vetoed is known only once its own listener
+                    // has run, which may be after this one, so it is asked a task later.
+                    setTimeout(function() {
+                        if (e.defaultPrevented || e.returnValue) lower();
+                    }, 0);
+                    failsafe = setTimeout(lower, 5000);
+                }, true);
+                window.addEventListener('pageshow', lower);
             })();
             """.trimIndent(),
             null
