@@ -1116,6 +1116,15 @@ Output editor is held too (read from the bundle, not measured). On the textarea 
 the marker is written only when the host is created, so that path is not gated and a
 read-only editor behaves there as before.
 
+The light bulb's Code Action list takes focus from the editor as it opens, so Chromium takes the
+keyboard down, and the window growing under the list changes the editor's layout, on which
+`CodeActionController` hides the list: with the keyboard up the list was on screen for about 40 ms
+on an API 33 emulator with Gboard 12.4. On Android patch 0028 keeps the list across a change of
+the editor's height alone; a change of width, as a turn of the phone makes, still closes it. With
+it the list stayed open while the keyboard went down on API 33, API 36 with no hardware keyboard
+and API 37 emulators, a tap on a row ran it, a tap outside it closed it and brought the keyboard
+back, and a turn to landscape closed it (API 33 and 36).
+
 ### 5.3 Visibility Control
 
 The row decides whether to show in one place, the inset listener installed by
