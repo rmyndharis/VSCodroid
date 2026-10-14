@@ -384,9 +384,9 @@ object CrashReporter {
  * The crashing thread, named and numbered, using the accessor every supported
  * API level has.
  *
- * `Thread.threadId()` is API 36 and `minSdk` is 33, and nothing backports it
+ * `Thread.threadId()` is API 36 and `minSdk` is 30, and nothing backports it
  * here: `coreLibraryDesugaring` is off, and lint did not stop it: `abortOnError`
- * was still false when the call was written. On 33, 34 and 35 the call
+ * was still false when the call was written. On 30 to 35 the call
  * therefore raises `NoSuchMethodError`, and it sat above `file.writeText` inside
  * a `catch (_: Throwable)`: the write never happened, `hasPendingCrash()` stayed
  * false, the dialog in `MainActivity.checkPreviousCrash` never appeared, and the
@@ -398,13 +398,13 @@ object CrashReporter {
  * android-36 stub, so this needs no suppression and no desugaring. Verified by
  * dumping `java/lang/Thread.class` out of `platforms/android-36/android.jar`:
  * `getId()` carries no deprecation attribute, and `threadId()` is absent from
- * the android-33 jar entirely.
+ * the android-33 jar entirely (and from every platform before 36).
  *
  * ⚠️ The Kotlin compiler warns here anyway, "'val id: Long' is deprecated.
  * Deprecated in Java", and that warning is about the JDK's own `Thread`, not
  * about the platform this ships against. Do not silence it by switching to
  * `threadId()`. That is the exact call this function exists to avoid, and the
- * paragraph above is what it costs on 33, 34 and 35.
+ * paragraph above is what it costs on 30 to 35.
  */
 internal fun threadIdentity(thread: Thread): String =
     "Thread: ${thread.name} (id=${thread.id})"
@@ -428,7 +428,7 @@ private fun exitLine(exit: ApplicationExitInfo, dateFormat: SimpleDateFormat): S
  * The name of an `ApplicationExitInfo.REASON_*` value. The platform numbers
  * them from 0 with no gap, so the list is indexed by the value, and
  * `CrashReporterTest` holds it to the constants. Written out rather than read
- * off the constants because the last two are API 34 and minSdk is 33; a value
+ * off the constants because the last three are API 33 and 34 and minSdk is 30; a value
  * newer than the list is printed as its number.
  */
 internal fun exitReasonName(reason: Int): String =

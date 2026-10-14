@@ -294,7 +294,8 @@ object Environment {
      * It used to be `getExternalFilesDir(null)/projects` for everyone, chosen so
      * that a file manager could reach the code. That reachability is gone:
      * Android 11 closed `Android/data` to other apps and to the system Files
-     * app, and minSdk here is 33, so no supported device has it. A few routes
+     * app, and minSdk here is 30, which is that release, so no supported device
+     * has it. A few routes
      * remain (MTP over USB, some OEM managers), which is how the folder gets
      * deleted from outside at all, but nothing a user can rely on.
      *

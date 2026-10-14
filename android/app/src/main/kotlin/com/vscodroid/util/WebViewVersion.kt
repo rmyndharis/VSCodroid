@@ -26,7 +26,7 @@ object WebViewVersion {
      * below 125 the webview keeps its default place and size, under the bottom
      * of the page, and its tab stays blank while the rest of the editor works.
      * Measured on an API 34 emulator image with WebView 113. This was 105, the
-     * version `minSdk` 33 shipped with, which let exactly those devices through
+     * version Android 13 shipped with, which let exactly those devices through
      * without a word.
      *
      * Raising this means raising it in the documents too; `WebViewVersionTest`

@@ -12,8 +12,9 @@ import org.junit.jupiter.api.Test
  * all of it. Android 13 and later render a preview of whatever is put on the
  * clipboard, so without `ClipDescription.EXTRA_IS_SENSITIVE` that material is
  * shown over the editor at the one moment the user is most likely to be handing
- * the device to somebody or taking a screenshot of it. `minSdk` is 33, so every
- * device this ships to draws that preview and no version guard is involved.
+ * the device to somebody or taking a screenshot of it. The key and the preview
+ * are both API 33, so `copyBugReport` sets it under a version guard and a
+ * release without the preview is not handed an extra nothing reads.
  *
  * Read out of the source, which is the weaker kind of test in this suite and is
  * used here for the reason `DownloadListenerWiringTest` gives: there is no seam.

@@ -52,16 +52,16 @@ fun View.padForSystemBars(basePx: Int = 0) {
  * `SHORT_EDGES` for both until it was read from the bytecode.
  * `Api28.adjustLayoutInDisplayCutoutMode` stores `1` (`SHORT_EDGES`);
  * `Api30` stores `3` (`ALWAYS`), and `Api35` extends `Api30` without overriding
- * it. minSdk is 33, so the only implementation that ever ran here wrote
- * `ALWAYS`. That is why the theme names `always`: it is what this app already
- * had, not a new choice, and changing it to `shortEdges` to match the old
- * comment would be a real behaviour change.
+ * it. minSdk is 30, so `Api28`, which serves 28 and 29, never ran here and the
+ * only implementation that did wrote `ALWAYS`. That is why the theme names
+ * `always`: it is what this app already had, not a new choice, and changing it
+ * to `shortEdges` to match the old comment would be a real behaviour change.
  *
  * Nothing is lost by dropping it, because `targetSdk` is 36:
  *
  *  - API 35+ enforces edge-to-edge with no opt-out, and the colour setters
  *    `enableEdgeToEdge` calls there are already no-ops.
- *  - API 33 and 34 still need the opt-in, which is the `setDecorFitsSystemWindows`
+ *  - API 30 to 34 still need the opt-in, which is the `setDecorFitsSystemWindows`
  *    below. That one is not among the three Play names, and Play Core's asset
  *    pack code already puts it in the bundle regardless.
  *  - The scrims were `Color.TRANSPARENT` at every call site, so the deprecated
