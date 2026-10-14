@@ -354,12 +354,19 @@ class SafStorageManager(context: Context) {
                 continue
             }
 
+            // A name the provider gave, or none: a stored name that is the fallback was
+            // written by a build that did not tell the two apart, and is no more an answer
+            // than a missing one. Either way the label is never empty, which the list
+            // and the notices print as it stands.
+            val fallback = fallbackDisplayName(uri)
+            val answered = obj.optString("name", "").takeIf { it.isNotBlank() && it != fallback }
             result.add(
                 SafFolderInfo(
                     uri = uri,
-                    displayName = obj.optString("name", uri.lastPathSegment ?: "Unknown"),
+                    displayName = answered ?: fallback,
                     lastOpened = obj.optLong("lastOpened", 0),
-                    mirrorPath = getMirrorDir(uri).absolutePath
+                    mirrorPath = getMirrorDir(uri).absolutePath,
+                    named = answered != null,
                 )
             )
         }
@@ -1036,17 +1043,52 @@ class SafStorageManager(context: Context) {
     }
 
     /**
+     * The named path [mirrorDir]'s copy already has, when it has exactly one, and null
+     * otherwise. Makes nothing.
+     *
+     * For an open whose name query was not answered, which has nothing true to name a link
+     * after: [namedPathFor] would take the fallback for a name and, where that is not the
+     * folder's own, make a second link, a second path for the workbench, which keeps open
+     * editors, unsaved changes and terminals per path. The one link the copy has is the
+     * path the page was on. With none, or with two or more, as a folder renamed on the
+     * device has, there is no link to take, or no telling which the page was on, and the
+     * copy opens by its hash.
+     *
+     * Read as [namedPathFor] reads a link: one to `../../<hash>`, under a directory that
+     * is a directory and not a link put in its place, and no other entry beside it.
+     *
+     * ⚠️ Disk work, so not on the main thread.
+     */
+    fun existingNamedPath(mirrorDir: File): File? {
+        val dir = File(File(mirrorDir.parentFile, NAMED_DIR), mirrorDir.name)
+        val target = Paths.get("..", "..", mirrorDir.name)
+        return try {
+            if (!Files.isDirectory(dir.toPath(), LinkOption.NOFOLLOW_LINKS)) return null
+            val link = dir.listFiles()?.singleOrNull() ?: return null
+            val path = link.toPath()
+            link.takeIf { Files.isSymbolicLink(path) && Files.readSymbolicLink(path) == target }
+        } catch (e: Exception) {
+            // The digest and the exception's type only: the path holds the folder's name.
+            Logger.w(tag, "Could not read the names of ${mirrorDir.name}: ${e.javaClass.simpleName}")
+            null
+        }
+    }
+
+    /**
      * Records how the workbench has [folder]'s copy open, from [opened], the path it
      * opened.
      *
      * A page on the named path is noted, which [wasShownByName] answers from then on. A
      * page on the hash path gets a named path made for it, so that the bundled
-     * extension can offer to move the page there.
+     * extension can offer to move the page there, unless the folder has no name a
+     * provider answered ([SafFolderInfo.named]), which waits for an open that is.
      */
     fun noteOpened(opened: String, folder: SafFolderInfo) {
         val mirror = File(folder.mirrorPath)
         if (namedRootOf(opened, mirror.parent.orEmpty()) == null) {
-            namedPathFor(mirror, folder.displayName)
+            // Not for a folder whose name no provider has answered: its label is the
+            // tree's document id, and a link named for that is a second path for the copy.
+            if (folder.named) namedPathFor(mirror, folder.displayName)
             return
         }
         try {
@@ -1072,9 +1114,29 @@ class SafStorageManager(context: Context) {
         File(File(mirrorDir.parentFile, NAMED_DIR), mirrorDir.name + SHOWN_SUFFIX)
 
     /**
-     * Resolves a human-readable display name for a SAF tree URI.
+     * Resolves a human-readable display name for a SAF tree URI, falling back to
+     * [fallbackDisplayName] where the provider does not answer.
+     *
+     * For the shown name only. A caller that makes something from the name, as
+     * [namedPathFor] does a path, has to ask [queryDisplayName] and tell an answer from
+     * the fallback, which is the tree's document id and names the folder only where the
+     * provider spells its ids as paths.
      */
-    fun getDisplayName(safUri: Uri): String {
+    fun getDisplayName(safUri: Uri): String =
+        queryDisplayName(safUri) ?: fallbackDisplayName(safUri)
+
+    /**
+     * The folder's name as its provider answers it, or null where the query returned no
+     * row, returned no name, or failed.
+     *
+     * Not [getDisplayName], whose fallback is indistinguishable from an answer: handed to
+     * [namedPathFor] it made a second, differently named link for the same copy, and the
+     * workbench, which keeps open editors, unsaved changes and terminals per path, was
+     * moved onto it from the one it had them under.
+     *
+     * ⚠️ A provider round trip, so not on the main thread.
+     */
+    fun queryDisplayName(safUri: Uri): String? {
         return try {
             val docId = DocumentsContract.getTreeDocumentId(safUri)
             val docUri = DocumentsContract.buildDocumentUriUsingTree(safUri, docId)
@@ -1085,10 +1147,10 @@ class SafStorageManager(context: Context) {
             )
             cursor?.use {
                 if (it.moveToFirst()) it.getString(0) else null
-            } ?: safUri.lastPathSegment ?: "Unknown"
+            }
         } catch (e: Exception) {
             Logger.d(tag, "Failed to resolve display name: ${e.message}")
-            safUri.lastPathSegment ?: "Unknown"
+            null
         }
     }
 
@@ -1097,9 +1159,17 @@ class SafStorageManager(context: Context) {
     private fun addToRecentFolders(uri: Uri) {
         // Resolved before the lock: it is a provider round trip, and a network or MTP
         // provider can make it a long one. Nothing in the list is read to compute it.
-        val name = getDisplayName(uri)
+        //
+        // The provider's answer and not [getDisplayName]'s fallback, which is the tree's
+        // document id: stored as the folder's name it was the label in Open Recent, and
+        // [noteOpened] made a link from it, a second path for the same copy.
+        val answered = queryDisplayName(uri)?.takeIf { it.isNotBlank() }
         val dropped = synchronized(recentFoldersLock) {
             val folders = getPersistedFolders().toMutableList()
+
+            // The name the provider last gave stands where it does not answer now, and
+            // without one the entry is left unnamed.
+            val name = answered ?: folders.firstOrNull { it.uri == uri && it.named }?.displayName
 
             // Remove existing entry for this URI (will re-add with updated timestamp)
             folders.removeAll { it.uri == uri }
@@ -1108,9 +1178,10 @@ class SafStorageManager(context: Context) {
                 0,
                 SafFolderInfo(
                     uri = uri,
-                    displayName = name,
+                    displayName = name ?: fallbackDisplayName(uri),
                     lastOpened = System.currentTimeMillis(),
-                    mirrorPath = getMirrorDir(uri).absolutePath
+                    mirrorPath = getMirrorDir(uri).absolutePath,
+                    named = name != null,
                 )
             )
 
@@ -1168,7 +1239,10 @@ class SafStorageManager(context: Context) {
         folders.forEach { f ->
             array.put(JSONObject().apply {
                 put("uri", f.uri.toString())
-                put("name", f.displayName)
+                // Only a name the provider gave. An entry without one is read back as
+                // unnamed, with the fallback for a label, and waits for an open that
+                // is answered.
+                if (f.named) put("name", f.displayName)
                 put("lastOpened", f.lastOpened)
             })
         }
@@ -1372,6 +1446,15 @@ class SafStorageManager(context: Context) {
          */
         internal const val SHOWN_SUFFIX = ".shown"
 
+        /**
+         * What [getDisplayName] answers where the provider does not: the tree's last path
+         * segment, which is its document id: `primary:Documents/notes` on the platform
+         * provider, whose last part is the folder's name, and whatever the provider chose
+         * elsewhere. Never blank, because a list and a notice print it as it stands.
+         */
+        internal fun fallbackDisplayName(safUri: Uri): String =
+            safUri.lastPathSegment?.takeIf { it.isNotBlank() } ?: "Unknown"
+
         /** The longest name the filesystems Android keeps app data on take, in bytes. */
         private const val MAX_NAME_BYTES = 255
 
@@ -1539,12 +1622,19 @@ class SafStorageManager(context: Context) {
 
 /**
  * Data class representing a SAF folder that the user has granted access to.
+ *
+ * [displayName] is never empty, so a list or a notice can print it as it stands. Where no
+ * provider has answered for the folder's name, [named] is false and [displayName] is the
+ * tree's own last path segment, [SafStorageManager.fallbackDisplayName], which reads as a
+ * name and is a document id. Anything that makes something from the name, as
+ * [SafStorageManager.noteOpened] does a path, has to ask [named] first.
  */
 data class SafFolderInfo(
     val uri: Uri,
     val displayName: String,
     val lastOpened: Long,
-    val mirrorPath: String
+    val mirrorPath: String,
+    val named: Boolean = true,
 )
 
 /**

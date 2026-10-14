@@ -1401,13 +1401,17 @@ class MainActivity : AppCompatActivity() {
                 // missing from the recent list with nothing to explain it. The sync
                 // below must still be skipped in that case, which the ordinary hop
                 // after this one does by throwing.
-                val (displayName, copyIsNew) = withContext(NonCancellable + Dispatchers.IO) {
+                val (answeredName, copyIsNew) = withContext(NonCancellable + Dispatchers.IO) {
                     safManager.persistPermission(uri)
                     // Asked before the sync below makes the copy. A copy older than this
                     // open may have been opened by its hash path, which the workbench
                     // keeps its own state under; see deviceFolderTarget.
-                    safManager.getDisplayName(uri) to !safManager.getMirrorDir(uri).exists()
+                    safManager.queryDisplayName(uri) to !safManager.getMirrorDir(uri).exists()
                 }
+                // The name the provider gave, or the tree's own last segment where it did
+                // not. The dialog says either, but only the first is a name: the second is
+                // a document id, which names no link below.
+                val displayName = answeredName ?: SafStorageManager.fallbackDisplayName(uri)
                 dialog.setMessage(getString(R.string.saf_sync_message, displayName))
 
                 // Before the sync, and this call was moved rather than added:
@@ -1499,10 +1503,20 @@ class MainActivity : AppCompatActivity() {
                         if (opened != mirrorDir.absolutePath) {
                             Logger.i(tag, "The granted folder holds a workspace; opening that")
                         }
+                        // A name the provider did not answer makes no link. The copy's own,
+                        // where it has exactly one, keeps the page on the path its editors,
+                        // unsaved changes and terminals are under; a new link named for the
+                        // fallback moved it to a path with none of them. With none, or
+                        // several, there is no link to take and the copy opens by its hash.
+                        val namedPath = if (answeredName != null) {
+                            safManager.namedPathFor(mirrorDir, answeredName)
+                        } else {
+                            safManager.existingNamedPath(mirrorDir)
+                        }
                         deviceFolderTarget(
                             target = opened,
                             mirrorPath = mirrorDir.absolutePath,
-                            namedPath = safManager.namedPathFor(mirrorDir, displayName)?.path,
+                            namedPath = namedPath?.path,
                             byName = copyIsNew || safManager.wasShownByName(mirrorDir),
                             openNow = openWorkspaceFolder,
                         )

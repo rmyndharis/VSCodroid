@@ -1,6 +1,7 @@
 package com.vscodroid
 
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
@@ -89,7 +90,7 @@ class DeviceFolderTargetTest {
         val open = body("private fun openSafFolder(")
         listOf(
             "deviceFolderTarget(",
-            "namedPath = safManager.namedPathFor(mirrorDir, displayName)?.path",
+            "namedPath = namedPath?.path",
             "byName = copyIsNew || safManager.wasShownByName(mirrorDir)",
             "openNow = openWorkspaceFolder",
             "!safManager.getMirrorDir(uri).exists()",
@@ -103,6 +104,39 @@ class DeviceFolderTargetTest {
         }
         assertTrue(open.indexOf("getMirrorDir(uri).exists()") < open.indexOf("safManager.syncToLocal(")) {
             "whether the copy is new is asked after the sync has made it, so every copy reads as old"
+        }
+    }
+
+    /**
+     * A name the provider did not answer is the tree's document id, which is the folder's
+     * name only where ids are paths, and a link named for it is a second path for the same
+     * copy: the page was moved onto it from the path its editors, unsaved changes and
+     * terminals are under.
+     * Only an answered name makes a link; without one the copy's own is taken, and
+     * `SafStorageManager.existingNamedPath` answers null for none and for several.
+     *
+     * NEGATIVE CONTROL, measured: handing `namedPathFor` `displayName`, the fallback
+     * included, as the call did, reddens this case and nothing else.
+     */
+    @Test
+    fun `a name the provider did not answer makes no link`() {
+        val open = body("private fun openSafFolder(").replace(Regex("\\s+"), " ")
+
+        assertTrue(open.contains("safManager.queryDisplayName(uri)")) {
+            "the open no longer asks which name the provider answered, so the fallback " +
+                "cannot be told from it"
+        }
+        assertTrue(
+            open.contains(
+                "if (answeredName != null) { safManager.namedPathFor(mirrorDir, answeredName) } " +
+                    "else { safManager.existingNamedPath(mirrorDir) }",
+            ),
+        ) {
+            "a link is made for a name the provider did not answer, or the copy's own is " +
+                "not what an unanswered name takes"
+        }
+        assertFalse(open.contains("namedPathFor(mirrorDir, displayName)")) {
+            "the fallback text is handed to namedPathFor again"
         }
     }
 

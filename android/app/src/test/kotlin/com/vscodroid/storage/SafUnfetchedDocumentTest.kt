@@ -4,6 +4,7 @@ import android.content.ContentResolver
 import android.content.Context
 import android.database.Cursor
 import android.os.FileObserver
+import android.os.SystemClock
 import android.net.Uri
 import android.provider.DocumentsContract
 import com.vscodroid.util.Logger
@@ -18,6 +19,7 @@ import io.mockk.verify
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -563,6 +565,269 @@ class SafUnfetchedDocumentTest {
 
         verify(exactly = 0) { DocumentsContract.deleteDocument(any(), any()) }
         assertEquals(listOf("archive"), kept, "the rename left the declined file's memory at the old name")
+    }
+
+    /**
+     * `mv [from] [to]` in the editor, as the observer reports it: the old name leaves, the
+     * new one arrives, and the write-back that renames the device's own document runs.
+     *
+     * The new name is not on disk while its event is delivered, because a directory that
+     * exists is watched through a `FileObserver`, which a JVM test cannot build; the move
+     * on disk follows, for the cases that go on to save into the directory.
+     */
+    private fun renameDirectory(from: String, to: String) {
+        engine.handleMirrorEvent(FileObserver.MOVED_FROM or isDirFlag, File(mirror, from), mirror, treeUri)
+        deliver(FileObserver.MOVED_TO or isDirFlag, to)
+        File(mirror, from).renameTo(File(mirror, to))
+    }
+
+    /**
+     * `docs`, which the rename cases move, beside `docs2`, whose name starts the same as
+     * text and is not below it as a path. Each holds one file by a name of its own, because
+     * a document id here is its name.
+     */
+    private val docsBesideDocs2 = mapOf(
+        "root" to listOf(Entry("docs", isDirectory = true), Entry("docs2", isDirectory = true)),
+        "doc:docs" to listOf(Entry("notes.md")),
+        "doc:docs2" to listOf(Entry("other.md")),
+    )
+
+    /** The same device folder once `docs` has been renamed to `archive` on it. */
+    private val archiveBesideDocs2 = mapOf(
+        "root" to listOf(Entry("archive", isDirectory = true), Entry("docs2", isDirectory = true)),
+        "doc:archive" to listOf(Entry("notes.md")),
+        "doc:docs2" to listOf(Entry("other.md")),
+    )
+
+    /** The `.device-` copies in [directory] of the mirror, by name, with what each holds. */
+    private fun deviceCopiesIn(directory: String): List<String> =
+        File(mirror, directory).listFiles()!!
+            .filter { it.name.contains(SafSyncEngine.DEVICE_COPY_SUFFIX) }
+            .map { it.readText() }
+
+    /**
+     * What the device last reported for each document is what the guard on a save asks
+     * about another app's edit, and it is kept by mirror path. A path with no entry fails
+     * open, so a file below a renamed directory was saved over a newer device copy with no
+     * copy of it kept, until the next open filled the entry in again.
+     *
+     * The sibling beside it is the other half: its name begins with the renamed one's, and
+     * an entry moved because of that would leave its own file unguarded instead.
+     */
+    @Test
+    fun `a file below a renamed directory still keeps another app's edit when it is saved`() {
+        deviceTree(docsBesideDocs2)
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        renameDirectory("docs", "archive")
+        deviceTree(archiveBesideDocs2)
+        changedByAnotherApp("doc:notes.md")
+        changedByAnotherApp("doc:other.md")
+
+        File(mirror, "archive/notes.md").writeText("typed in the editor")
+        deliver(FileObserver.MODIFY, "archive/notes.md")
+        File(mirror, "docs2/other.md").writeText("typed in the editor too")
+        deliver(FileObserver.MODIFY, "docs2/other.md")
+
+        assertEquals(
+            listOf("changed by another app"), deviceCopiesIn("archive"),
+            "a save below the renamed directory went over another app's edit unguarded",
+        )
+        assertEquals(
+            listOf("changed by another app"), deviceCopiesIn("docs2"),
+            "a directory whose name only starts like the renamed one lost its guard",
+        )
+    }
+
+    /** The same entry for a delete, which declines rather than keeps a copy. */
+    @Test
+    fun `a file below a renamed directory is still kept on the device when another app changed it`() {
+        val kept = mutableListOf<String>()
+        engine.onKeptOnDevice = { file, _, _ -> kept.add(file.name) }
+        deviceTree(docsBesideDocs2)
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        renameDirectory("docs", "archive")
+        deviceTree(archiveBesideDocs2)
+        changedByAnotherApp("doc:notes.md")
+        changedByAnotherApp("doc:other.md")
+
+        File(mirror, "archive/notes.md").delete()
+        deliver(FileObserver.DELETE, "archive/notes.md")
+        File(mirror, "docs2/other.md").delete()
+        deliver(FileObserver.DELETE, "docs2/other.md")
+
+        verify(exactly = 0) { DocumentsContract.deleteDocument(any(), any()) }
+        assertEquals(
+            listOf("notes.md", "other.md"), kept,
+            "a delete went over another app's edit of a file below a renamed directory, or " +
+                "of one below a directory whose name only starts like it",
+        )
+    }
+
+    /**
+     * The unread documents of a directory, and of a sibling whose name starts the same:
+     * both are kept on the device when deleted after the rename, which fails for the
+     * sibling if the match is by text rather than by path.
+     */
+    @Test
+    fun `a renamed directory keeps its unread documents and not a sibling's by name alone`() {
+        val kept = mutableListOf<String>()
+        engine.onKeptOnDevice = { file, _, _ -> kept.add(file.name) }
+        val unread = SafSyncEngine.MAX_FILE_SIZE + 1
+        deviceTree(
+            mapOf(
+                "root" to listOf(Entry("docs", isDirectory = true), Entry("docs2", isDirectory = true)),
+                "doc:docs" to listOf(Entry("big.zip", size = unread)),
+                "doc:docs2" to listOf(Entry("big2.zip", size = unread)),
+            )
+        )
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        renameDirectory("docs", "archive")
+        deviceTree(
+            mapOf(
+                "root" to listOf(Entry("archive", isDirectory = true), Entry("docs2", isDirectory = true)),
+                "doc:archive" to listOf(Entry("big.zip", size = unread)),
+                "doc:docs2" to listOf(Entry("big2.zip", size = unread)),
+            )
+        )
+
+        deleteDirectory("archive")
+        deleteDirectory("docs2")
+
+        verify(exactly = 0) { DocumentsContract.deleteDocument(any(), any()) }
+        assertEquals(listOf("archive", "docs2"), kept)
+    }
+
+    /**
+     * The files whose delete was declined, below a renamed directory and below a sibling
+     * whose name starts the same: `rm -r` of either is kept on the device after the
+     * rename, which fails for the sibling if the match is by text rather than by path.
+     */
+    @Test
+    fun `a renamed directory keeps its declined deletes and not a sibling's by name alone`() {
+        val kept = mutableListOf<String>()
+        engine.onKeptOnDevice = { file, _, _ -> kept.add(file.name) }
+        deviceTree(docsBesideDocs2)
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        changedByAnotherApp("doc:notes.md")
+        changedByAnotherApp("doc:other.md")
+        File(mirror, "docs/notes.md").delete()
+        deliver(FileObserver.DELETE, "docs/notes.md")
+        File(mirror, "docs2/other.md").delete()
+        deliver(FileObserver.DELETE, "docs2/other.md")
+        assertEquals(listOf("notes.md", "other.md"), kept, "setup: the deletes went through")
+        renameDirectory("docs", "archive")
+        deviceTree(archiveBesideDocs2)
+        kept.clear()
+
+        deleteDirectory("archive")
+        deleteDirectory("docs2")
+
+        verify(exactly = 0) { DocumentsContract.deleteDocument(any(), any()) }
+        assertEquals(listOf("archive", "docs2"), kept)
+    }
+
+    /**
+     * A directory the open could not enumerate is recorded by its own path, since nothing
+     * below it was read to be recorded. The memory followed only what lay below the
+     * renamed path, so the directory's own entry stayed at the old name and `rm -r` of the
+     * new one sent `deleteDocument` for documents the editor never had.
+     */
+    @Test
+    fun `a renamed directory whose enumeration failed is still kept on the device`() {
+        val kept = mutableListOf<String>()
+        engine.onKeptOnDevice = { file, _, _ -> kept.add(file.name) }
+        deviceTree(docsHoldingNotes, unenumerable = setOf("doc:docs"))
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        renameDirectory("docs", "archive")
+        deviceTree(
+            mapOf(
+                "root" to listOf(Entry("archive", isDirectory = true)),
+                "doc:archive" to listOf(Entry("notes.md")),
+            )
+        )
+
+        deleteDirectory("archive")
+
+        verify(exactly = 0) { DocumentsContract.deleteDocument(any(), any()) }
+        assertEquals(listOf("archive"), kept, "the rename left the directory's own entry at the old name")
+    }
+
+    /**
+     * A save held back names its document by the URI it had, which on a provider whose ids
+     * are paths is dead once the directory is renamed, or is whatever is made at the old
+     * path next. It ends with the rename, so no try is made at the old path or at the new,
+     * and the file waits for its next save, which its entry now guards.
+     *
+     * The old path is made again, because that is where a hold left behind would be tried:
+     * one left at a path nothing is at is dropped by the next try anyway. The sibling's
+     * hold is the control, and it is tried.
+     */
+    @Test
+    fun `a save held back below a renamed directory ends there and a sibling's does not`() {
+        var clock = 0L
+        mockkStatic(SystemClock::class)
+        every { SystemClock.elapsedRealtime() } answers { clock }
+        val lost = mutableListOf<String>()
+        engine.onWriteBackFailed = { lost.add(it.name) }
+        deviceTree(docsBesideDocs2)
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        // A set-aside needs a fetch, which the floor refuses: another app's edit that cannot
+        // be kept holds the save back.
+        engine.usableSpaceOf = { SafSyncEngine.OPEN_SPACE_FLOOR_BYTES - 1 }
+        changedByAnotherApp("doc:notes.md")
+        changedByAnotherApp("doc:other.md")
+        File(mirror, "docs/notes.md").writeText("typed in the editor")
+        deliver(FileObserver.MODIFY, "docs/notes.md")
+        File(mirror, "docs2/other.md").writeText("typed in the editor too")
+        deliver(FileObserver.MODIFY, "docs2/other.md")
+        assertEquals(listOf("notes.md", "other.md"), lost, "setup: the saves were not held back")
+        renameDirectory("docs", "archive")
+        File(mirror, "docs").mkdirs()
+        File(mirror, "docs/notes.md").writeText("made again at the old name")
+        clock += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+        val watching = WatchSession(mirror)
+
+        // One try per call, and one that is made puts its hold back with a longer wait.
+        var tried = 0
+        while (tried < 5 && engine.retryHeldBack(watching)) tried++
+
+        assertEquals(
+            1, tried,
+            "a save held back below the renamed directory was tried, at the old name or the new",
+        )
+    }
+
+    /**
+     * What the user guide says of a held save whose directory is renamed: the trying ends,
+     * and the file's next save keeps the other app's version beside it, which the entry
+     * that moved with the rename still asks about. The floor is lifted by then, so the
+     * other app's version can be copied.
+     */
+    @Test
+    fun `the next save of a file whose held save ended with a rename keeps the other app's version`() {
+        var clock = 0L
+        mockkStatic(SystemClock::class)
+        every { SystemClock.elapsedRealtime() } answers { clock }
+        deviceTree(docsBesideDocs2)
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        engine.usableSpaceOf = { SafSyncEngine.OPEN_SPACE_FLOOR_BYTES - 1 }
+        changedByAnotherApp("doc:notes.md")
+        File(mirror, "docs/notes.md").writeText("typed in the editor")
+        deliver(FileObserver.MODIFY, "docs/notes.md")
+        renameDirectory("docs", "archive")
+        deviceTree(archiveBesideDocs2)
+        changedByAnotherApp("doc:notes.md")
+        engine.usableSpaceOf = { Long.MAX_VALUE }
+        clock += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+        assertFalse(engine.retryHeldBack(WatchSession(mirror)), "setup: a held save was tried")
+
+        File(mirror, "archive/notes.md").writeText("typed again in the editor")
+        deliver(FileObserver.MODIFY, "archive/notes.md")
+
+        assertEquals(
+            listOf("changed by another app"), deviceCopiesIn("archive"),
+            "the save after the rename went over another app's version with no copy kept",
+        )
     }
 
     /**
