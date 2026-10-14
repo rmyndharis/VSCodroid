@@ -1153,6 +1153,12 @@ class MainActivity : AppCompatActivity() {
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         keyboardDismissal.turned()
+        // The keyboard the extra key row stood aside for is gone, a Bluetooth one
+        // asleep or unpaired, and the soft keyboard is what is left. A touch would
+        // bring the row back, but the person may well carry on typing on the screen.
+        if (newConfig.keyboard == Configuration.KEYBOARD_NOKEYS) {
+            extraKeyRow?.hiddenForHardwareKeyboard = false
+        }
     }
 
     override fun onTrimMemory(level: Int) {
@@ -2425,29 +2431,43 @@ class MainActivity : AppCompatActivity() {
      *
      * Observation only, and after the delegate on purpose: `HardwareKeyboardTest`
      * pins that the page receives every key exactly as dispatched. Which keys
-     * count is [HardwareTyping]'s, and the row comes back at the next touch of the
-     * screen, [dispatchTouchEvent].
+     * count is [HardwareTyping]'s, and the row comes back when a finger has been
+     * on the screen, [dispatchTouchEvent], or when the keyboard is no longer there,
+     * [onConfigurationChanged].
      */
     private fun noteHardwareTyping(event: KeyEvent) {
         if (event.action != KeyEvent.ACTION_DOWN) return
         val device = event.device ?: return
-        if (HardwareTyping.isHardwareKeyboardKey(device.isVirtual, event.source, device.keyboardType)) {
+        if (HardwareTyping.isTypingOnHardwareKeyboard(
+                isVirtual = device.isVirtual,
+                source = event.source,
+                keyboardType = device.keyboardType,
+                isPrintingKey = event.isPrintingKey,
+            )
+        ) {
             extraKeyRow?.hiddenForHardwareKeyboard = true
         }
     }
 
     /**
-     * Gives the extra key row back at the first touch of the screen after a run of
+     * Gives the extra key row back when a finger leaves the screen after a run of
      * typing on a hardware keyboard. A finger on the screen is the way back to the
      * soft keyboard; a mouse click or a touchpad on a keyboard cover is not, and
-     * [HardwareTyping.isScreenTouch] leaves those out. The event is passed on
-     * untouched.
+     * [HardwareTyping.isScreenTouch] leaves those out.
+     *
+     * At the lift, and after the event was delivered. The row takes its height out
+     * of the page, so bringing it back at the first contact moved everything that
+     * sits at the bottom of the page, the status bar and the terminal among it, up
+     * from under the finger before the tap was over, and a tap is placed on the page
+     * as it is when the finger lifts. Delivered first, the tap lands on the page the
+     * finger was put on and only then does the page give way.
      */
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
-        if (ev.actionMasked == MotionEvent.ACTION_DOWN && HardwareTyping.isScreenTouch(ev.source)) {
+        val handled = super.dispatchTouchEvent(ev)
+        if (ev.actionMasked == MotionEvent.ACTION_UP && HardwareTyping.isScreenTouch(ev.source)) {
             extraKeyRow?.hiddenForHardwareKeyboard = false
         }
-        return super.dispatchTouchEvent(ev)
+        return handled
     }
 
     private fun requestNotificationPermission() {
@@ -3069,7 +3089,12 @@ class MainActivity : AppCompatActivity() {
             onToggleExtraKeyRow = {
                 val hidden = !workspacePrefs.getBoolean(KEY_EXTRA_KEY_ROW_HIDDEN, false)
                 workspacePrefs.edit { putBoolean(KEY_EXTRA_KEY_ROW_HIDDEN, hidden) }
-                runOnUiThread { extraKeyRow?.hiddenByUser = hidden }
+                runOnUiThread {
+                    extraKeyRow?.hiddenByUser = hidden
+                    // Asked for by name, so the row is not held back by the stand-aside
+                    // a run of typing on a hardware keyboard put on it.
+                    if (!hidden) extraKeyRow?.hiddenForHardwareKeyboard = false
+                }
                 hidden
             },
             safManager = safManager,

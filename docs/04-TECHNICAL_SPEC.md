@@ -1155,23 +1155,32 @@ The row decides whether to show in one place, the inset listener installed by
 `ExtraKeyRow.setupWithRootView`, and shows only when all four hold: the soft keyboard
 is visible, the page has height to spare (`suppressedForHeight`), the user has not
 hidden it (`hiddenByUser`, which `MainActivity` persists under `extra_key_row_hidden`
-and flips through **VSCodroid: Toggle Extra Key Row**), and no hardware keyboard has
-been typed on since the screen was last touched (`hiddenForHardwareKeyboard`, which
-is not persisted). Any new reason to hide it belongs in that decision rather than in a
-direct write to `visibility`, because the branch that hides it also dismisses the
-long-press popup and clears a latched modifier. No snippet is reproduced here, for the
-reason 5.2 gives.
+and flips through **VSCodroid: Toggle Extra Key Row**), and no character has been
+typed on a hardware keyboard since a finger last left the screen
+(`hiddenForHardwareKeyboard`, which is not persisted). Any new reason to hide it
+belongs in that decision rather than in a direct write to `visibility`, because the
+branch that hides it also dismisses the long-press popup and clears a latched
+modifier. No snippet is reproduced here, for the reason 5.2 gives.
 
 `MainActivity.dispatchKeyEvent` hands the key to the view tree first and only then
 looks at it (`HardwareKeyboardTest` pins that nothing takes a key from the page), and
-`HardwareTyping` decides what counts: a key from an alphabetic keyboard that is not the
-virtual one, which leaves out the soft keyboard's own keys, the row's, the volume and
-power keys and a game controller. `dispatchTouchEvent` gives the row back at a touch
-of the touchscreen and ignores a mouse or a touchpad, which is how someone at a
-hardware keyboard places the caret. On an API 33 emulator with a keyboard made through
-`uinput` and the soft keyboard up, the page was 439 CSS px high with the row, 514 after
-a key, 439 after a tap of the screen, 514 after the next key and still 514 after a
-mouse click.
+`HardwareTyping` decides what counts: a key that types a character, from an alphabetic
+keyboard that is not the virtual one. That leaves out the soft keyboard's own keys,
+the row's, a modifier held for a tap, Escape, the arrows and Enter, the volume and
+power keys and a game controller. The first key that counts resizes the page by the
+row's height, which closes a context menu opened by touch, so the keys used to steer
+are not among them. `dispatchTouchEvent` gives the row back when a finger lifts from
+the touchscreen, after the touch was delivered, and ignores a mouse or a touchpad,
+which is how someone at a hardware keyboard places the caret. At the lift and not at
+the first contact, because the row takes its height out of the page and a tap is
+placed on the page as it is when the finger leaves: with the row back at the first
+contact the bottom of the page, the status bar and the terminal, moved up from under
+a finger that was still down. Running **Toggle Extra Key Row** to show it, and
+`onConfigurationChanged` reporting no keyboard (a Bluetooth one asleep or unpaired),
+give it back as well. On an API 33 emulator with a keyboard made through `uinput` and
+the soft keyboard up, the page was 439 CSS px high with the row, 514 after a letter,
+439 after a tap of the screen, 514 after the next letter and still 514 after a mouse
+click.
 
 ---
 

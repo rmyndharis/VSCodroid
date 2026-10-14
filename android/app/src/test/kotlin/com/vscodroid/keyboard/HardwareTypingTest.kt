@@ -19,10 +19,23 @@ class HardwareTypingTest {
     private val keyboard = InputDevice.SOURCE_KEYBOARD
     private val alphabetic = InputDevice.KEYBOARD_TYPE_ALPHABETIC
 
+    /** The decision, with the key a printing one unless a case says it was not. */
+    private fun typing(
+        isVirtual: Boolean,
+        source: Int,
+        keyboardType: Int,
+        isPrintingKey: Boolean = true,
+    ): Boolean = HardwareTyping.isTypingOnHardwareKeyboard(
+        isVirtual = isVirtual,
+        source = source,
+        keyboardType = keyboardType,
+        isPrintingKey = isPrintingKey,
+    )
+
     @Test
     fun `a key from an alphabetic keyboard that is not the virtual one is hardware typing`() {
         assertTrue(
-            HardwareTyping.isHardwareKeyboardKey(isVirtual = false, source = keyboard, keyboardType = alphabetic),
+            typing(isVirtual = false, source = keyboard, keyboardType = alphabetic),
             "typing on a hardware keyboard did not count, so the row stays up beside it",
         )
     }
@@ -31,7 +44,7 @@ class HardwareTypingTest {
     fun `a key of a source with more than the keyboard bit still counts`() {
         val combined = keyboard or InputDevice.SOURCE_DPAD
         assertTrue(
-            HardwareTyping.isHardwareKeyboardKey(isVirtual = false, source = combined, keyboardType = alphabetic),
+            typing(isVirtual = false, source = combined, keyboardType = alphabetic),
             "a keyboard that also reports a directional pad was taken for something else",
         )
     }
@@ -39,9 +52,32 @@ class HardwareTypingTest {
     @Test
     fun `the soft keyboard and the row, which come from the virtual keyboard, are not`() {
         assertFalse(
-            HardwareTyping.isHardwareKeyboardKey(isVirtual = true, source = keyboard, keyboardType = alphabetic),
+            typing(isVirtual = true, source = keyboard, keyboardType = alphabetic),
             "a key from the virtual keyboard counted, so tapping Enter on the soft keyboard or a " +
                 "row key would take the row away from the person using it",
+        )
+    }
+
+    /**
+     * A key that types nothing is the keyboard being used to steer: a modifier held
+     * for a tap, Escape, an arrow, Enter. It must not take the row away, and the
+     * first of them must not resize the page under a menu opened by touch.
+     */
+    @Test
+    fun `a key that types nothing is not`() {
+        assertFalse(
+            typing(isVirtual = false, source = keyboard, keyboardType = alphabetic, isPrintingKey = false),
+            "a modifier or a navigation key took the row away from someone who had not typed",
+        )
+    }
+
+    @Test
+    fun `the arguments are not interchangeable`() {
+        // Four values of two kinds, in a call that compiles in any order of the
+        // integers: a source passed as the keyboard type is not a keyboard.
+        assertFalse(
+            typing(isVirtual = false, source = alphabetic, keyboardType = keyboard),
+            "the source and the keyboard type were read the wrong way round",
         )
     }
 
@@ -49,7 +85,7 @@ class HardwareTypingTest {
     fun `a device that is not an alphabetic keyboard is not`() {
         for (type in listOf(InputDevice.KEYBOARD_TYPE_NONE, InputDevice.KEYBOARD_TYPE_NON_ALPHABETIC)) {
             assertFalse(
-                HardwareTyping.isHardwareKeyboardKey(isVirtual = false, source = keyboard, keyboardType = type),
+                typing(isVirtual = false, source = keyboard, keyboardType = type),
                 "the volume and power keys, a media remote or a pad counted as a keyboard to " +
                     "type on (keyboard type $type)",
             )
@@ -60,7 +96,7 @@ class HardwareTypingTest {
     fun `a source that is not a keyboard is not`() {
         for (source in listOf(InputDevice.SOURCE_GAMEPAD, InputDevice.SOURCE_TOUCHSCREEN, InputDevice.SOURCE_MOUSE)) {
             assertFalse(
-                HardwareTyping.isHardwareKeyboardKey(isVirtual = false, source = source, keyboardType = alphabetic),
+                typing(isVirtual = false, source = source, keyboardType = alphabetic),
                 "a key event whose source is not a keyboard counted (source $source)",
             )
         }

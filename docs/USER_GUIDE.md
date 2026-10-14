@@ -178,9 +178,11 @@ the remote indicator at the left end of the status bar and choose
 **VSCodroid: Toggle Extra Key Row**, or run it from the Command Palette. The row
 stays hidden, across restarts, until you run the command again.
 
-The row also steps away by itself while you type on a hardware keyboard, and comes
-back the next time you touch the screen with a finger. A mouse click or a touchpad
-does not bring it back, and nothing typed on the soft keyboard takes it away.
+The row also steps away by itself once you type a character on a hardware keyboard,
+and comes back when a finger leaves the screen: a tap on the editor, the end of a
+scroll, or running the command above to show it. A mouse click or a touchpad does
+not bring it back, and nothing typed on the soft keyboard or on the row takes it
+away. If the hardware keyboard is disconnected the row comes back at once.
 
 How many pages there are depends on how wide your phone is. The row divides its width
 evenly among the keys on a page, so on a narrower screen it carries fewer keys per

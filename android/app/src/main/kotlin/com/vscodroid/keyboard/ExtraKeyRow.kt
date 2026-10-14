@@ -437,8 +437,8 @@ class ExtraKeyRow @JvmOverloads constructor(
         }
 
     /**
-     * Whether the last key came from a hardware keyboard and the screen has not
-     * been touched since, as `MainActivity` tells it through [HardwareTyping].
+     * Whether the last key typed came from a hardware keyboard and no finger has
+     * left the screen since, as `MainActivity` tells it through [HardwareTyping].
      *
      * The same row-off decision as [hiddenByUser], reached automatically for the
      * length of a run of typing: the row repeats keys a hardware keyboard has, and
