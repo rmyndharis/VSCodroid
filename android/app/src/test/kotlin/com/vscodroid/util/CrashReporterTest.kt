@@ -1,6 +1,10 @@
 package com.vscodroid.util
 
+import android.app.ActivityManager
+import android.app.ApplicationExitInfo
 import android.content.Context
+import android.webkit.RenderProcessGoneDetail
+import android.webkit.WebView
 import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
@@ -609,6 +613,200 @@ class CrashReporterTest {
 
             assertTrue(report.contains("--- No crash logs ---"), "$report")
         }
+
+        private fun exit(
+            reason: Int,
+            timestamp: Long,
+            importance: Int,
+            description: String?,
+        ): ApplicationExitInfo = mockk {
+            every { this@mockk.reason } returns reason
+            every { this@mockk.timestamp } returns timestamp
+            every { this@mockk.importance } returns importance
+            every { this@mockk.description } returns description
+            every { processName } returns "com.vscodroid"
+            every { status } returns 0
+            every { pss } returns 204_800L
+            every { rss } returns 307_200L
+        }
+
+        /** The system's record, newest first, as `getHistoricalProcessExitReasons` returns it. */
+        private fun systemRecords(vararg exits: ApplicationExitInfo) {
+            val activityManager = mockk<ActivityManager>()
+            every { context.packageName } returns "com.vscodroid"
+            every { context.getSystemService(ActivityManager::class.java) } returns activityManager
+            every {
+                activityManager.getHistoricalProcessExitReasons("com.vscodroid", 0, any())
+            } returns exits.toList()
+        }
+
+        /**
+         * The endings a freeze or a crash leaves behind. None of them writes a
+         * crash log, which only an uncaught Kotlin exception does: not an app
+         * Android declared not responding, not one killed to free memory, not a
+         * native fault. A report without them reads as a device where nothing
+         * happened.
+         *
+         * NEGATIVE CONTROL, run: with the Recent Exits section deleted from
+         * `generateBugReport`, this case and the two after it redden.
+         */
+        @Test
+        fun `the report says how the app's recent processes ended`() {
+            initCrashDir()
+            systemRecords(
+                exit(ApplicationExitInfo.REASON_ANR, 3_000L, 100, "Input dispatching timed out"),
+                exit(ApplicationExitInfo.REASON_LOW_MEMORY, 2_000L, 125, null),
+                exit(
+                    ApplicationExitInfo.REASON_CRASH_NATIVE, 1_000L, 400,
+                    "crash after GET http://127.0.0.1:41234/?tkn=$token",
+                ),
+            )
+
+            val report = CrashReporter.generateBugReport(context)
+
+            val section = report.substringAfter("--- Recent Exits (newest first) ---\n", "")
+                .substringBefore("\n\n")
+            val lines = section.lines()
+            assertEquals(3, lines.size, "one line per exit the system recorded:\n$report")
+            assertTrue(
+                lines[0].contains("com.vscodroid ANR (status 0, importance 100, pss 200 MB, rss 300 MB)") &&
+                    lines[0].endsWith(": Input dispatching timed out"),
+                "an ANR has to be named, with what timed out:\n$report",
+            )
+            assertTrue(
+                lines[1].contains("LOW_MEMORY (status 0, importance 125") && !lines[1].contains(": "),
+                "a kill to free memory has to be named, in the system's order, and a " +
+                    "record with no description gets no empty one:\n$report",
+            )
+            assertTrue(lines[2].contains("CRASH_NATIVE"), "a native fault has to be named:\n$report")
+            assertFalse(
+                report.contains(token),
+                "an exit's description crosses the same boundary as every other section:\n$report",
+            )
+        }
+
+        @Test
+        fun `the exits section says so when the system recorded none`() {
+            initCrashDir()
+            systemRecords()
+
+            val report = CrashReporter.generateBugReport(context)
+
+            assertTrue(
+                report.contains("--- Recent Exits (newest first) ---\n(none recorded)\n"),
+                "$report",
+            )
+        }
+
+        /**
+         * A report is asked for when something has already gone wrong, so a
+         * section that cannot be read says so and leaves the rest standing.
+         */
+        @Test
+        fun `an unreadable exit record leaves the rest of the report intact`() {
+            val crashDir = initCrashDir()
+            File(crashDir, "crash_20260214_120000.txt").writeText("the crash that can still be read")
+            every { context.getSystemService(ActivityManager::class.java) } throws
+                SecurityException("refused")
+
+            val report = CrashReporter.generateBugReport(context)
+
+            assertTrue(
+                report.contains("--- Recent Exits (newest first) ---\n(could not be read)\n"),
+                "$report",
+            )
+            assertTrue(report.contains("the crash that can still be read"), "$report")
+        }
+
+        private fun death(crashed: Boolean, priority: Int): RenderProcessGoneDetail = mockk {
+            every { didCrash() } returns crashed
+            every { rendererPriorityAtExit() } returns priority
+        }
+
+        /**
+         * A renderer death the app recovers from shows the loading page for a
+         * few seconds and then the editor again, which a user can only describe
+         * as a freeze, and it reached logcat and nothing else.
+         *
+         * NEGATIVE CONTROL, run: with the Renderer Deaths section deleted from
+         * `generateBugReport`, or with `recordRendererDeath` writing nothing,
+         * this case reddens.
+         */
+        @Test
+        fun `a renderer death the app recovered from reaches the report`() {
+            initCrashDir()
+            CrashReporter.recordRendererDeath(
+                context, death(crashed = false, WebView.RENDERER_PRIORITY_IMPORTANT),
+            ).join()
+            CrashReporter.recordRendererDeath(
+                context, death(crashed = true, WebView.RENDERER_PRIORITY_BOUND),
+            ).join()
+            CrashReporter.recordRendererDeath(
+                context, death(crashed = false, WebView.RENDERER_PRIORITY_WAIVED),
+            ).join()
+
+            val report = CrashReporter.generateBugReport(context)
+
+            val section = report.substringAfter("--- Renderer Deaths (newest first) ---\n", "")
+                .substringBefore("\n\n")
+                .lines()
+                .drop(1)
+            assertEquals(3, section.size, "one line per death:\n$report")
+            assertTrue(
+                section[0].endsWith(" killed by the system, priority waived") &&
+                    section[1].endsWith(" crashed, priority bound") &&
+                    section[2].endsWith(" killed by the system, priority important"),
+                "each death says whether it was a crash or a kill, with its priority, " +
+                    "newest first:\n$report",
+            )
+            assertTrue(
+                Regex("""^\d{4}-\d{2}-\d{2} \d{2}:\d{2}:\d{2} [+-]\d{4} """).containsMatchIn(section[0]),
+                "a death has to say when it happened, to be read beside the exits:\n$report",
+            )
+        }
+
+        @Test
+        fun `the renderer section says so when no death was recorded`() {
+            initCrashDir()
+
+            val report = CrashReporter.generateBugReport(context)
+
+            assertTrue(
+                report.contains("--- Renderer Deaths (newest first) ---\n(each time ") &&
+                    report.contains(" died)\n(none recorded)\n"),
+                "$report",
+            )
+        }
+    }
+
+    /**
+     * The names the report prints, against the platform's own numbering, which
+     * runs from 0 with no gap; the list is indexed by it.
+     */
+    @Test
+    fun `every exit reason is printed under its platform name`() {
+        val reasons = mapOf(
+            ApplicationExitInfo.REASON_UNKNOWN to "UNKNOWN",
+            ApplicationExitInfo.REASON_EXIT_SELF to "EXIT_SELF",
+            ApplicationExitInfo.REASON_SIGNALED to "SIGNALED",
+            ApplicationExitInfo.REASON_LOW_MEMORY to "LOW_MEMORY",
+            ApplicationExitInfo.REASON_CRASH to "CRASH",
+            ApplicationExitInfo.REASON_CRASH_NATIVE to "CRASH_NATIVE",
+            ApplicationExitInfo.REASON_ANR to "ANR",
+            ApplicationExitInfo.REASON_INITIALIZATION_FAILURE to "INITIALIZATION_FAILURE",
+            ApplicationExitInfo.REASON_PERMISSION_CHANGE to "PERMISSION_CHANGE",
+            ApplicationExitInfo.REASON_EXCESSIVE_RESOURCE_USAGE to "EXCESSIVE_RESOURCE_USAGE",
+            ApplicationExitInfo.REASON_USER_REQUESTED to "USER_REQUESTED",
+            ApplicationExitInfo.REASON_USER_STOPPED to "USER_STOPPED",
+            ApplicationExitInfo.REASON_DEPENDENCY_DIED to "DEPENDENCY_DIED",
+            ApplicationExitInfo.REASON_OTHER to "OTHER",
+            ApplicationExitInfo.REASON_FREEZER to "FREEZER",
+            ApplicationExitInfo.REASON_PACKAGE_STATE_CHANGE to "PACKAGE_STATE_CHANGE",
+            ApplicationExitInfo.REASON_PACKAGE_UPDATED to "PACKAGE_UPDATED",
+        )
+
+        assertEquals(reasons, reasons.mapValues { (value, _) -> exitReasonName(value) })
+        assertEquals("REASON_99", exitReasonName(99), "a reason newer than the list keeps its number")
     }
 
     /**

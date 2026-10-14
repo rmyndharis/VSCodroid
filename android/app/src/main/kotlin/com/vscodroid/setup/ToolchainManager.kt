@@ -271,9 +271,9 @@ class ToolchainManager(private val context: Context) {
         private const val GIT_HELPER_SUFFIX = ".script"
 
         /**
-         * What runs a git helper. The scripts are POSIX `sh`, and this is a file
-         * the app may execute, which the trampoline hands to the loader with the
-         * kept script as its argument.
+         * What runs a git helper or an npm launcher. The scripts are POSIX `sh`,
+         * and this is a file the app may execute, which the trampoline hands to
+         * the loader with the script as its argument.
          */
         private const val SYSTEM_SHELL = "/system/bin/sh"
 
@@ -2832,15 +2832,37 @@ class ToolchainManager(private val context: Context) {
                         // in the joined "$*" took a path holding that for an engine
                         // choice, and missed a later --execution under an IFS that does
                         // not start with a space.
-                        // An option value that itself starts with -ex still reads as
-                        // one; telling them apart means repeating jshell's parser.
+                        // It also steps over the value of each option that takes one,
+                        // because jshell's parser (jopt-simple, in jdk.internal.opt)
+                        // hands such an option the next argument whatever it looks
+                        // like: in `--startup -extras.jsh` that is a file name. The
+                        // patterns follow that parser's grammar: one dash or two, any
+                        // unambiguous abbreviation (`--st`, and `-c` or `-m` alone for
+                        // --class-path and --module-path), `-R` or `-C` alone, and any
+                        // of `-R`, `-C`, `-c` and `-m` closing a cluster of flags such
+                        // as `-qR`. A value given with `=`, or written on after the
+                        // letter as in `-cfoo` and `-R-Dx`, takes nothing more. `--`
+                        // ends the options. `-J` arguments are the launcher's: it
+                        // hands them to the JVM before jshell parses, so they are
+                        // nobody's value. A class path that itself starts with `-J`
+                        // is not modelled: right after an exact `-cp`, `-classpath`
+                        // or `--class-path` the launcher also passes such an
+                        // argument on to jshell, and then drops the last argument of
+                        // the line.
                         // VFORK lets jline start stty, without which Tab and ArrowUp
                         // do not work, and user.home replaces Termux's compiled-in
                         // home, where the preferences store cannot be written and
                         // exit stalls.
                         lines.add(
-                            "jshell() { local arg chosen=; for arg in \"\$@\"; do " +
-                                "case \"\$arg\" in -ex*|--ex*) chosen=1 ;; esac; done; " +
+                            "jshell() { local arg skip= chosen=; for arg in \"\$@\"; do " +
+                                "case \"\$arg\" in -J*) continue ;; esac; " +
+                                "if [ -n \"\$skip\" ]; then skip=; continue; fi; " +
+                                "case \"\$arg\" in --) break ;; -ex*|--ex*) chosen=1; break ;; *=*) ;; " +
+                                "--c*|--m*|--add-[em]*|--st*|--fe*|--[RC]|-add-[em]*|-st*|-fe*) skip=1 ;; " +
+                                "-c*) case class-path in \"\${arg#-}\"*) skip=1 ;; esac ;; " +
+                                "-m*) case module-path in \"\${arg#-}\"*) skip=1 ;; esac ;; " +
+                                "-*[RCcm]) case \"\${arg%?}\" in -*[!nqsvhX?]*) ;; *) skip=1 ;; esac ;; " +
+                                "esac; done; " +
                                 "[ -n \"\$chosen\" ] || set -- --execution local \"\$@\"; " +
                                 "$systemLoader \"\$PREFIX/../$relPath\" " +
                                 "-J-Djdk.lang.Process.launchMechanism=VFORK " +
@@ -3110,7 +3132,7 @@ class ToolchainManager(private val context: Context) {
             }
         }
 
-        // The one row this app owns rather than a toolchain. `putIfAbsent`, and
+        // A row this app owns rather than a toolchain. `putIfAbsent`, and
         // after the loop, so a toolchain shipping its own `xdg-open` keeps the
         // name: rows are keyed by command and the toolchain's went in first, and
         // an opener that came with a toolchain knows more about it than this does.
@@ -3127,6 +3149,7 @@ class ToolchainManager(private val context: Context) {
             "xdg-open",
             "xdg-open\t${Environment.getNodePath(context)}\t$filesDir/server/xdg-open.js",
         )
+        addNpmRows(rows)
         val setAside = addGitHelperRows(rows, GIT_EXTENSION_DIST, GIT_HELPER_SCRIPTS) +
             addGitHelperRows(rows, REMOTE_CLI_DIR, listOf(REMOTE_CLI))
         linkServerNode()
@@ -3150,6 +3173,68 @@ class ToolchainManager(private val context: Context) {
         refreshTrampolineLinks(rows.keys - setAside)
         Logger.i(tag, "Regenerated toolchain-exec.tsv (${rows.size} commands, " +
             "${envRows.size} variables)")
+    }
+
+    /**
+     * Gives `npm` and `npx` rows, so a program that starts either by name finds it.
+     *
+     * In bash both are functions ([FirstRunSetup.createNpmWrappers]), because
+     * npm's CLI is a `#!` script under filesDir that SELinux will not execve, and
+     * a function does not exist for anything that looks the name up on PATH
+     * itself. Measured in the app's terminal: create-vite's
+     * `spawnSync("npm", ["install"])` failed with ENOENT and `timeout 20 npm
+     * --version` with "exec npm: No such file or directory"; `sh -c`, a git hook
+     * and an extension's spawn are the same case. Bash looks a function up before
+     * PATH, so a shell goes on running the function.
+     *
+     * Not the `xdg-open` shape, Node with the CLI as its one argument, because
+     * that cannot run what the functions run. The trampoline passes a row one
+     * argument and applies its environment rows to every command, which leaves no
+     * place for `--prefer-offline` on npm alone or for `VSCODROID_PLATFORM_FIX` on
+     * this one process. It also starts Node through linker64, which leaves
+     * `process.execPath` naming the linker (measured), and npm hands that to its
+     * scripts as `$NODE` and runs it again to prepare a git dependency. So each
+     * row runs a generated script with the system shell, the git helpers' shape.
+     * The script puts back the platform-fix preload a spawn from the extension
+     * host lacks, as BASH_ENV does for a shell, and then `exec`s Node itself: one
+     * process, which a signal reaches directly, and no shell left behind to print
+     * the shared-storage note the npm function adds to a failure.
+     *
+     * Rewritten when its text changes, which a reinstall causes by moving
+     * nativeLibraryDir. With no npm on disk, as on the first pass of a fresh
+     * install, there is no row and the name stays unknown, rather than becoming a
+     * command that always fails. A name a toolchain already took stays its own.
+     */
+    private fun addNpmRows(rows: LinkedHashMap<String, String>) {
+        val cliDir = "$filesDir/usr/lib/node_modules/npm/bin"
+        val node = Environment.getNodePath(context)
+        val platformFix = "$filesDir/server/platform-fix.js"
+        for ((command, cli, flags) in listOf(
+            Triple("npm", "npm-cli.js", " --prefer-offline"),
+            Triple("npx", "npx-cli.js", ""),
+        )) {
+            if (command in rows || !File(cliDir, cli).isFile) continue
+            val launcher = File(execTable.parentFile, "$command.sh")
+            val body = """
+                |# Auto-generated by ToolchainManager: do not edit
+                |# $command for a program that starts it by name, run through the exec
+                |# trampoline with /system/bin/sh. Bash runs the $command() function instead.
+                |case " ${'$'}{NODE_OPTIONS-} " in
+                |    *"/server/platform-fix.js"*) ;;
+                |    *) export NODE_OPTIONS="--require=$platformFix${'$'}{NODE_OPTIONS:+ ${'$'}NODE_OPTIONS}" ;;
+                |esac
+                |export VSCODROID_PLATFORM_FIX=1
+                |exec '$node' '$cliDir/$cli'$flags "${'$'}@"
+                |""".trimMargin()
+            launcher.parentFile?.mkdirs()
+            if (runCatching { launcher.readText() }.getOrNull() != body &&
+                !writeAtomically(launcher) { it.write(body.toByteArray()) }
+            ) {
+                Logger.w(tag, "Could not write ${launcher.name}; $command stays a bash function only")
+                continue
+            }
+            rows[command] = "$command\t$SYSTEM_SHELL\t${launcher.absolutePath}"
+        }
     }
 
     /**

@@ -1,0 +1,73 @@
+Keep the Code Action list open when the soft keyboard goes down.
+
+CodeActionController hides the list on every layout change of its editor,
+because the list sits at page coordinates taken when it opened. On Android
+the soft keyboard goes down whenever focus leaves text, and the list takes
+focus from the editor as it opens, so with the keyboard up a tap on the light
+bulb made the window grow under the list, the editor's layout changed, and
+the list closed, its onHide giving the editor focus back.
+
+On Android a change of the editor's height alone now leaves the list open.
+With one editor group and the default scrolling the editor grows downward when
+the keyboard goes down, so the light bulb and the list beside it stay where
+they were. Below a split editor, or at the end of a file with
+editor.scrollBeyondLastLine off, the content can move under the list, which
+then stays where the bulb was: still on screen, its rows run, and a tap outside
+closes it. The same relaxation holds for the other lists the action widget
+service shows, the paste widget and the terminal quick fix. A change of width,
+as a turn of the phone makes, still closes it, and elsewhere every layout
+change does, as before.
+
+Measured with a tap on the light bulb and the keyboard up, in a .js file
+with an unused const. Without the patch, on an API 33 emulator with Gboard
+12.4, the list was on screen for about 40 ms in two runs, and the editor had
+focus again before it went. With it,
+on API 33 with Gboard 12.4, on API 36 with no hardware keyboard and Gboard
+18.4.1, and on API 37 with Gboard 17.7.4, the list was still on screen
+three seconds later with the keyboard down. A tap on its first row ran the
+command and raised the keyboard for the quick input it opened, a tap outside
+the list closed it and brought the keyboard back, and a turn to landscape
+closed it (API 33 and 36).
+
+diff --git a/src/vs/editor/contrib/codeAction/browser/codeActionController.ts b/src/vs/editor/contrib/codeAction/browser/codeActionController.ts
+index 77acc6f..e83667b 100644
+--- a/src/vs/editor/contrib/codeAction/browser/codeActionController.ts
++++ b/src/vs/editor/contrib/codeAction/browser/codeActionController.ts
+@@ -15,6 +15,7 @@ import { Lazy } from '../../../../base/common/lazy.js';
+ import { Disposable, MutableDisposable } from '../../../../base/common/lifecycle.js';
+ import { derivedOpts, IObservable, observableValue } from '../../../../base/common/observable.js';
+ import { Event } from '../../../../base/common/event.js';
++import { isAndroid } from '../../../../base/common/platform.js';
+ import { localize } from '../../../../nls.js';
+ import { IActionListDelegate } from '../../../../platform/actionWidget/browser/actionList.js';
+ import { IActionWidgetService } from '../../../../platform/actionWidget/browser/actionWidget.js';
+@@ -68,6 +69,10 @@ export class CodeActionController extends Disposable implements IEditorContribut
+ 
+ 	private readonly _resolver: CodeActionKeybindingResolver;
+ 
++	// The editor's width at its last layout, which on Android decides whether a layout change
++	// closes the list.
++	private _editorLayoutWidth: number;
++
+ 	private _disposed = false;
+ 
+ 	set onlyLightBulbWithEmptySelection(value: boolean) {
+@@ -136,7 +141,17 @@ export class CodeActionController extends Disposable implements IEditorContribut
+ 
+ 		this._resolver = instantiationService.createInstance(CodeActionKeybindingResolver);
+ 
+-		this._register(this._editor.onDidLayoutChange(() => this._actionWidgetService.hide()));
++		// On Android the soft keyboard going down makes the editor taller, and it goes down as soon as
++		// the list takes focus from the editor, so a list opened from the light bulb while the
++		// keyboard was up closed again as it opened. A change of the editor's height alone keeps it.
++		this._editorLayoutWidth = this._editor.getLayoutInfo().width;
++		this._register(this._editor.onDidLayoutChange(layout => {
++			const widthChanged = layout.width !== this._editorLayoutWidth;
++			this._editorLayoutWidth = layout.width;
++			if (widthChanged || !isAndroid) {
++				this._actionWidgetService.hide();
++			}
++		}));
+ 	}
+ 
+ 	override dispose() {

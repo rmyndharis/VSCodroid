@@ -11,6 +11,8 @@
   "command.clearCaches": "VSCodroid: キャッシュを消去",
   "command.manageToolchains": "VSCodroid: ツールチェーンの管理",
   "command.toggleExtraKeyRow": "VSCodroid: 追加キー行の表示を切り替え",
+  "command.uiScale": "VSCodroid: UI の拡大率",
   "command.about": "VSCodroid: バージョン情報",
+  "command.copyBugReport": "VSCodroid: バグレポートをコピー",
   "viewsWelcome.explorer.deviceFolder": "Documents や Download の中のフォルダーなど、デバイスのストレージにあるフォルダーで作業するには、デバイスから開いてください。他のアプリが保存したファイルも表示されます。\n[デバイスのフォルダーを開く](command:vscodroid.openFolderFromDevice)"
 }

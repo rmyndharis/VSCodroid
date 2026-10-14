@@ -254,6 +254,15 @@
          because that one says the thing holds files, which is false of a file, and
          apart from saf_write_back_failed because the app holds nothing here at all. -->
     <string name="saf_document_kept">%1$s a été conservé dans le dossier de l\'appareil : l\'éditeur n\'en a jamais eu de copie. Supprimez-le à cet endroit si vous n\'en avez plus besoin.</string>
+
+    <!-- The same refusal for a file the editor did have and the user deleted, kept
+         because the device's version may have changed since the editor last read or
+         saved it, as another app's edit does. saf_document_kept would tell that user the
+         editor never had the file they just deleted in it. -->
+    <string name="saf_document_changed_kept">%1$s a été conservé dans le dossier de l\'appareil : une autre application l\'a peut-être modifié depuis que l\'éditeur l\'a lu ou enregistré pour la dernière fois. Supprimez-le à cet endroit si vous n\'en avez plus besoin.</string>
+    <!-- A directory deleted in the editor that holds such a file, and no file the editor
+         never had, which is what saf_directory_kept says. -->
+    <string name="saf_directory_changed_kept">%1$s a été conservé dans le dossier de l\'appareil : une autre application a peut-être modifié un fichier qu\'il contient depuis que l\'éditeur l\'a lu ou enregistré pour la dernière fois. Supprimez-le à cet endroit si vous n\'en avez plus besoin.</string>
     <string name="saf_delete_refused">%1$s n\'a pas pu être supprimé du dossier de l\'appareil et réapparaîtra à la prochaine ouverture du dossier. Supprimez-le dans le gestionnaire de fichiers de l\'appareil.</string>
 
     <!-- Removing the local copy of a device folder, from the storage screen. The
@@ -454,7 +463,9 @@
          It is a version number, not a quantity: nothing about the sentence
          changes when it does, and passing it as a number invites a translator to
          treat "105 and newer" as something to inflect. -->
-    <string name="webview_below_minimum">La version d\'Android System WebView est %1$s. VSCodroid est testé avec la version %2$s et les suivantes, certaines parties de l\'éditeur peuvent donc ne pas fonctionner. Mettez-le à jour depuis le Play Store.</string>
+    <string name="webview_below_minimum_title">Android System WebView n\'est pas à jour</string>
+    <string name="webview_below_minimum">Android System WebView est en version %1$s sur cet appareil. VSCodroid a besoin de la version %2$s ou d\'une version plus récente : en dessous, les aperçus Markdown et les panneaux d\'extensions, comme le chat, restent vides. Mettez à jour Android System WebView depuis le Play Store.</string>
+    <string name="webview_update">Mettre à jour</string>
 
     <!-- The extra key row, all of it spoken rather than drawn.
 

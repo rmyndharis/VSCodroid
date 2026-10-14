@@ -167,6 +167,55 @@ def check_branded_artwork(tree):
         print(f"  ok      {len(BRANDED_ARTWORK)} branded files match branding/")
 
 
+# Resolved from this script's own location, like the branding directory above.
+# The build container mounts scripts/ and not android/, so there it is absent.
+BUNDLED_EXTENSIONS = (pathlib.Path(__file__).resolve().parent.parent
+                      / "android/app/src/main/assets/extensions")
+
+
+def check_default_theme(tree, bundled=BUNDLED_EXTENSIONS):
+    """That a colour theme a bundled extension makes the default is one this tree
+    contributes, under the exact name the workbench stores it by.
+
+    At startup the workbench repaints the theme it saved last time only when the
+    configured name equals that theme's settingsId, which is its `id` in the
+    manifest contributing it, and the comparison is raw: the lookup that maps an
+    old name to its successor ("Default Dark Modern" to "Dark Modern") runs only
+    once the extensions have registered. A default spelled the old way therefore
+    threw the saved dark theme away on every page load, and the editor showed the
+    web default, the light theme, for about one to three seconds of every
+    reload, folder switch and cold start (measured on an API 36 emulator). A VS
+    Code bump that renames a theme does the same with nothing in this repository
+    changing, which is why the name is compared with the tree, not with a list.
+    """
+    if not bundled.is_dir():
+        print(f"  note    no bundled extensions at {bundled}: the default theme is not checked")
+        return
+    themes = set()
+    for manifest in tree.glob("extensions/*/package.json"):
+        try:
+            contributed = json.loads(manifest.read_text()).get("contributes", {}).get("themes", [])
+        except (OSError, ValueError, AttributeError) as e:
+            check(False, f"{manifest.relative_to(tree)} is readable", str(e))
+            continue
+        themes.update(t.get("id") or t.get("label") for t in contributed if isinstance(t, dict))
+    for manifest in sorted(bundled.glob("*/package.json")):
+        try:
+            defaults = json.loads(manifest.read_text()).get("contributes", {}).get(
+                "configurationDefaults", {})
+            value = defaults.get("workbench.colorTheme")
+        except (OSError, ValueError, AttributeError) as e:
+            check(False, f"{manifest.parent.name}/package.json is readable", str(e))
+            continue
+        if value is not None:
+            check(value in themes,
+                  f"{manifest.parent.name} makes the default theme one this tree contributes",
+                  f"workbench.colorTheme is {value!r}, which is not the id of any of the "
+                  f"{len(themes)} themes here, so every page load throws the saved theme "
+                  "away and paints the light one first. Use the theme's `id`, as "
+                  "extensions/theme-defaults/package.json spells it.")
+
+
 def main(tree):
     for rel in REQUIRED:
         found = present(tree / rel, rel)
@@ -455,12 +504,13 @@ def main(tree):
               "naming an armed request id would be accepted")
 
     # server.js appends its own <script> to workbench.html at every start, by
-    # matching the configuration element the page carries, and two things reach
+    # matching the configuration element the page carries, and three things reach
     # the editor only that way: the trusted-domain list that decides whether a
-    # link opens without a confirmation, and the extension recommendation that
-    # offers the Python formatter. Neither can travel in product.json, because
-    # the product the workbench consults is inlined into its bundle at build
-    # time and the one the server hands the page at runtime carries three keys.
+    # link opens without a confirmation, the extension recommendation that offers
+    # the Python formatter, and the theme a page load starts on. None can travel
+    # in product.json, because the product the workbench consults is inlined into
+    # its bundle at build time and the one the server hands the page at runtime
+    # carries three keys; the theme is read from the page's own storage.
     #
     # The match is a literal, so a page whose element is written differently is
     # left untouched, and the failure is silent by design: the bootstrap logs and
@@ -481,9 +531,12 @@ def main(tree):
     else:
         check(carries_anchor,
               "workbench.html carries the configuration element server.js extends",
-              "server.js could not add its script, so github.com would open behind a "
-              "confirmation dialog and no formatter would ever be recommended; update "
-              "the anchor in extendWorkbenchPage in assets/server.js to match the page")
+              "server.js could not add its scripts, so github.com would open behind a "
+              "confirmation dialog, no formatter would ever be recommended and a "
+              "light theme would start every page load dark; update the anchor in "
+              "extendWorkbenchPage in assets/server.js to match the page")
+
+    check_default_theme(tree)
 
     # The Mobile CSS block is appended to the packaged workbench.css at server
     # build time, and on 2026-08-15 its content changed (the Accounts/Manage
@@ -740,7 +793,8 @@ def main(tree):
 
 def self_test() -> int:
     """Hand main() a tree missing the Copilot CLI licence, then one carrying it;
-    then a tree without the helpers the Prune stage removes, and one with them.
+    then a tree without the helpers the Prune stage removes, and one with them;
+    then a default theme spelled the old way, and the id the tree contributes.
 
     A required path that is never absent in a real tree is a rule whose
     refusal nobody has seen fire, and a rule that has stopped firing prints
@@ -792,6 +846,25 @@ def self_test() -> int:
                       f"{'present' if carrying else 'absent'}, no line read {unread[0]!r}")
                 return 1
     print("  ok     self-test: a tree still carrying the pruned helpers is refused")
+
+    with tempfile.TemporaryDirectory() as tmp:
+        tree, bundled = pathlib.Path(tmp, "tree"), pathlib.Path(tmp, "bundled")
+        (tree / "extensions/theme-defaults").mkdir(parents=True)
+        (tree / "extensions/theme-defaults/package.json").write_text(json.dumps(
+            {"contributes": {"themes": [{"id": "Dark Modern", "label": "%darkModern%"}]}}))
+        welcome = bundled / "vscodroid.vscodroid-welcome-1.0.0"
+        welcome.mkdir(parents=True)
+        for name, verdict in (("Default Dark Modern", "FAIL    "), ("Dark Modern", "ok      ")):
+            (welcome / "package.json").write_text(json.dumps(
+                {"contributes": {"configurationDefaults": {"workbench.colorTheme": name}}}))
+            want = f"{verdict}{welcome.name} makes the default theme"
+            out = io.StringIO()
+            with contextlib.redirect_stdout(out):
+                check_default_theme(tree, bundled)
+            if want not in out.getvalue():
+                print(f"  FAIL   self-test: with the default theme {name!r}, no line read {want!r}")
+                return 1
+    print("  ok     self-test: a default theme the tree does not contribute is refused")
     return 0
 
 

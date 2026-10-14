@@ -161,7 +161,7 @@ class ResourceInterceptionWiringTest {
 
         VSCodroidWebViewClient.interceptCdnRequest(
             requestFor(unreadable.absolutePath, origin = "https://evil.example"),
-            PORT, null, published, sensitive, { workspace.absolutePath },
+            PORT, { null }, published, sensitive, { workspace.absolutePath },
         )
 
         assertTrue(
@@ -186,7 +186,7 @@ class ResourceInterceptionWiringTest {
 
         VSCodroidWebViewClient.interceptCdnRequest(
             requestFor(file.absolutePath, origin = "http://127.0.0.1:$PORT"),
-            PORT, null, published, sensitive, { workspace.absolutePath },
+            PORT, { null }, published, sensitive, { workspace.absolutePath },
         )
 
         assertTrue(
@@ -208,7 +208,7 @@ class ResourceInterceptionWiringTest {
 
         VSCodroidWebViewClient.interceptCdnRequest(
             requestFor(file.absolutePath, origin = "https://0f7c2b1a-uuid.vscode-cdn.net"),
-            PORT, null, published, sensitive, { workspace.absolutePath },
+            PORT, { null }, published, sensitive, { workspace.absolutePath },
         )
 
         assertTrue(
@@ -248,7 +248,7 @@ class ResourceInterceptionWiringTest {
                 file.absolutePath,
                 origin = "https://file+.vscode-resource.vscode-cdn.net",
             ),
-            PORT, null, published, sensitive, { workspace.absolutePath },
+            PORT, { null }, published, sensitive, { workspace.absolutePath },
         )
 
         assertTrue(
@@ -276,7 +276,7 @@ class ResourceInterceptionWiringTest {
 
         VSCodroidWebViewClient.interceptCdnRequest(
             requestFor(file.absolutePath, query = "parentOrigin=https%3A%2F%2Fevil.example&id=1"),
-            PORT, null, published, sensitive, { workspace.absolutePath },
+            PORT, { null }, published, sensitive, { workspace.absolutePath },
         )
 
         assertTrue(
@@ -310,7 +310,7 @@ class ResourceInterceptionWiringTest {
                 query = "id=1%26parentOrigin%3Dhttp%3A%2F%2F127.0.0.1%3A$PORT" +
                     "&parentOrigin=https%3A%2F%2Fevil.example",
             ),
-            PORT, null, published, sensitive, { workspace.absolutePath },
+            PORT, { null }, published, sensitive, { workspace.absolutePath },
         )
 
         assertTrue(
@@ -334,7 +334,7 @@ class ResourceInterceptionWiringTest {
                 file.absolutePath,
                 query = "parentOrigin=http%3A%2F%2F127.0.0.1%3A$PORT&id=1",
             ),
-            PORT, null, published, sensitive, { workspace.absolutePath },
+            PORT, { null }, published, sensitive, { workspace.absolutePath },
         )
 
         assertTrue(
@@ -348,7 +348,7 @@ class ResourceInterceptionWiringTest {
         path: String, openFolder: String?, referer: String? = WEBVIEW_REFERER,
     ) = assertNotNull(
         VSCodroidWebViewClient.interceptCdnRequest(
-            requestFor(path, referer = referer), PORT, null, published, sensitive, { openFolder }
+            requestFor(path, referer = referer), PORT, { null }, published, sensitive, { openFolder }
         ),
         "the request never reached a branch that builds a response, so nothing below was exercised"
     )

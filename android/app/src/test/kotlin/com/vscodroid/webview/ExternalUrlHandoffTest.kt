@@ -161,6 +161,9 @@ class ExternalUrlHandoffTest {
     /** The same, for the copy control beside it on the server-gave-up page. */
     private var copied = false
 
+    /** How many times the client said a main-frame navigation will not happen. */
+    private var declined = 0
+
     private fun request(
         scheme: String, host: String, port: Int, address: String = "",
         fromMainFrame: Boolean = true, withGesture: Boolean = false, path: String = "/"
@@ -234,6 +237,7 @@ class ExternalUrlHandoffTest {
     fun setUp() {
         announced.clear()
         logged.clear()
+        declined = 0
         mockkObject(Logger)
         every { Logger.i(any(), any()) } answers { logged += secondArg<String>() }
         every { Logger.e(any(), any(), any()) } answers { logged += secondArg<String>() }
@@ -269,6 +273,7 @@ class ExternalUrlHandoffTest {
             onHandoffFailed = { uri, error ->
                 announced += uri.scheme to error.javaClass.simpleName
             },
+            onNavigationDeclined = { declined += 1 },
         )
     }
 
@@ -1006,5 +1011,81 @@ class ExternalUrlHandoffTest {
 
         assertTrue(retried, "the retry branch did not run")
         assertTrue(announced.isEmpty(), "announced $announced for our own control")
+    }
+
+    /**
+     * The page raises a curtain when it is told to leave, and `beforeunload` runs
+     * ahead of this method, so a navigation the client then hands away leaves the
+     * page covered with nothing coming to replace it. The client says so once.
+     *
+     * Measured on an API 33 emulator before this existed: a link to a scheme no
+     * app answers left the screen blank, a toast over it, for five seconds.
+     */
+    @Test
+    fun `a main frame navigation handed to another app is reported as declined`() {
+        client.shouldOverrideUrlLoading(view, request("mailto", "", -1, "mailto:someone@example.com"))
+        verify(exactly = 1) { context.startActivity(any()) }
+        assertEquals(1, declined, "the page was left covered by a navigation that went to another app")
+    }
+
+    /** The case the measurement above came from: nobody answers the scheme. */
+    @Test
+    fun `a hand-off no app answered is reported as declined too`() {
+        every { context.startActivity(any()) } throws ActivityNotFoundException("no handler")
+
+        val handled = client.shouldOverrideUrlLoading(view, request("ssh", "example.org", -1, "ssh://example.org/"))
+
+        assertTrue(handled)
+        assertEquals(1, declined, "the page stayed covered after the toast, with no navigation coming")
+    }
+
+    /** A refusal leaves the page where it was just as a hand-off does. */
+    @Test
+    fun `a path on the workbench origin that is not the workbench is reported as declined`() {
+        val handled = client.shouldOverrideUrlLoading(
+            view, request("http", "127.0.0.1", ALLOWED_PORT, path = "/vscode-remote-resource")
+        )
+
+        assertTrue(handled)
+        assertEquals(1, declined, "a refused load left the page covered")
+    }
+
+    @Test
+    fun `this app's own callback refused is reported as declined`() {
+        val handled = client.shouldOverrideUrlLoading(
+            view, request("vscodroid", "callback", -1, OWN_CALLBACK)
+        )
+
+        assertTrue(handled)
+        assertEquals(1, declined, "a refused callback left the page covered")
+    }
+
+    /**
+     * The control that keeps the cases above from being a client that says it
+     * always: a navigation that proceeds replaces the page, and the cover going
+     * down first would show the half dismantled one the cover is there for.
+     */
+    @Test
+    fun `the workbench origin is not reported as declined`() {
+        val handled = client.shouldOverrideUrlLoading(view, request("http", "127.0.0.1", ALLOWED_PORT))
+
+        assertFalse(handled)
+        assertEquals(0, declined, "a navigation that goes ahead was reported as declined")
+    }
+
+    /**
+     * Only the page itself wears a curtain. A subframe handed away or refused is
+     * somebody else's navigation, and the document that covered itself is not the
+     * one that stayed.
+     */
+    @Test
+    fun `a subframe hand-off is not reported as declined`() {
+        client.shouldOverrideUrlLoading(
+            view,
+            request("mailto", "", -1, "mailto:someone@example.com", fromMainFrame = false, withGesture = true)
+        )
+
+        verify(exactly = 1) { context.startActivity(any()) }
+        assertEquals(0, declined, "a subframe's navigation lifted the page's curtain")
     }
 }

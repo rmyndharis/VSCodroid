@@ -250,6 +250,15 @@
          because that one says the thing holds files, which is false of a file, and
          apart from saf_write_back_failed because the app holds nothing here at all. -->
     <string name="saf_document_kept">%1$s은(는) 기기 폴더에 남겨 두었습니다. 편집기에 사본이 없었기 때문입니다. 더 이상 필요하지 않으면 기기 폴더에서 삭제하세요.</string>
+
+    <!-- The same refusal for a file the editor did have and the user deleted, kept
+         because the device's version may have changed since the editor last read or
+         saved it, as another app's edit does. saf_document_kept would tell that user the
+         editor never had the file they just deleted in it. -->
+    <string name="saf_document_changed_kept">%1$s은(는) 기기 폴더에 남겨 두었습니다. 편집기가 마지막으로 읽거나 저장한 뒤에 다른 앱이 변경했을 수 있기 때문입니다. 더 이상 필요하지 않으면 기기 폴더에서 삭제하세요.</string>
+    <!-- A directory deleted in the editor that holds such a file, and no file the editor
+         never had, which is what saf_directory_kept says. -->
+    <string name="saf_directory_changed_kept">%1$s은(는) 기기 폴더에 남겨 두었습니다. 편집기가 그 안의 파일을 마지막으로 읽거나 저장한 뒤에 다른 앱이 그 파일을 변경했을 수 있기 때문입니다. 더 이상 필요하지 않으면 기기 폴더에서 삭제하세요.</string>
     <string name="saf_delete_refused">%1$s 을(를) 기기 폴더에서 삭제하지 못했습니다. 폴더를 다시 열면 파일이 다시 나타납니다. 기기의 파일 관리자에서 삭제하세요.</string>
 
     <!-- Removing the local copy of a device folder, from the storage screen. The
@@ -446,7 +455,9 @@
          It is a version number, not a quantity: nothing about the sentence
          changes when it does, and passing it as a number invites a translator to
          treat "105 and newer" as something to inflect. -->
-    <string name="webview_below_minimum">Android System WebView 버전은 %1$s입니다. VSCodroid는 %2$s 이상에서 테스트되므로 편집기 일부가 작동하지 않을 수 있습니다. Play Store에서 업데이트하세요.</string>
+    <string name="webview_below_minimum_title">Android System WebView가 오래되었습니다</string>
+    <string name="webview_below_minimum">이 기기의 Android System WebView 버전은 %1$s입니다. VSCodroid에는 %2$s 이상이 필요합니다. 그보다 낮으면 Markdown 미리 보기와 채팅 같은 확장 패널이 빈 화면으로 남습니다. Play Store에서 Android System WebView를 업데이트하세요.</string>
+    <string name="webview_update">업데이트</string>
 
     <!-- The extra key row, all of it spoken rather than drawn.
 

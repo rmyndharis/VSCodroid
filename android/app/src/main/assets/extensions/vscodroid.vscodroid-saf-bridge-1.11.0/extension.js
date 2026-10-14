@@ -21,10 +21,13 @@
  * - vscodroid.clearCaches          : Deletes cached data, reports bytes freed
  * - vscodroid.manageToolchains     : Opens the Android Toolchains screen
  * - vscodroid.toggleExtraKeyRow    : Hides or shows the key row above the keyboard
+ * - vscodroid.uiScale              : Sets the size of the whole interface
  * - vscodroid.about                : Opens the Android About dialog
+ * - vscodroid.copyBugReport        : Opens a bug report to read, then copies it
  *
  * It also warns about a workspace folder opened by path on shared storage, and
- * offers Open Folder from Device instead.
+ * offers Open Folder from Device instead; and it offers to reopen a device
+ * folder still shown by its copy's hash under the folder's own name.
  */
 
 const vscode = require('vscode');
@@ -540,6 +543,49 @@ function activate(context) {
         }
     );
 
+    // -- UI scale --
+
+    // The editor and terminal font sizes reach those two and nothing else, and
+    // the side bar, tabs, menus and status bar are drawn at a fixed size that is
+    // small on a phone. This sets the size of the whole page, which the page
+    // keeps and applies on every load. The page also says which sizes to offer,
+    // since it is the side that knows the screen: those that leave the page at
+    // least 320 pixels wide.
+    const uiScaleCmd = vscode.commands.registerCommand('vscodroid.uiScale', async () => {
+        try {
+            const { scale, choices } = /** @type {{ scale: number, choices: number[] }} */ (
+                await sendBridgeCommand('getUiScale')
+            );
+            if (choices.length < 2) {
+                vscode.window.showInformationMessage(
+                    'This screen is too narrow to show the interface any larger.'
+                );
+                return;
+            }
+            const picked = await vscode.window.showQuickPick(
+                choices.map((s) => ({
+                    label: `${Math.round(s * 100)}%`,
+                    description: s === scale ? 'current' : undefined,
+                    scale: s
+                })),
+                { placeHolder: 'Size of the whole interface: side bar, tabs, menus and editor' }
+            );
+            if (!picked || picked.scale === scale) return;
+            // The page answers with the size in force, which is 100% when the one
+            // picked did not take effect on this device.
+            const now = await sendBridgeCommand('setUiScale', { scale: picked.scale });
+            if (now === picked.scale) {
+                vscode.window.showInformationMessage(`UI scale set to ${picked.label}.`);
+            } else {
+                vscode.window.showWarningMessage(
+                    `${picked.label} did not take effect on this device, so the UI scale is back at 100%.`
+                );
+            }
+        } catch (/** @type {*} */ err) {
+            vscode.window.showErrorMessage(`Could not change the UI scale: ${err.message}`);
+        }
+    });
+
     // -- About --
 
     const aboutCmd = vscode.commands.registerCommand('vscodroid.about', async () => {
@@ -550,6 +596,74 @@ function activate(context) {
         }
     });
 
+    // -- Bug report --
+
+    // The relay has answered generateBugReport all along and nothing sent it,
+    // so a user whose editor froze or reloaded by itself had no report to send.
+    // Opened in an editor rather than put straight on the clipboard: the report
+    // quotes the server's output, which can name the user's files and folders,
+    // and asks to be read before it is shared. Copy then takes what the editor
+    // holds, so a line the user deleted stays out of what they paste.
+    //
+    // The notice hides itself after ten seconds, long before a report of a few
+    // hundred lines has been read, so Copy also waits in the status bar for as
+    // long as the newest report is open. The item needs an id: the workbench
+    // keeps every extension host's items in one table, and an item without one
+    // is numbered per host, so it took the process monitor's slot and lost it
+    // again at that item's next update.
+    const copyReportItem = vscode.window.createStatusBarItem('copyBugReport');
+    copyReportItem.text = '$(copy) Copy Bug Report';
+    /** @type {vscode.TextDocument | undefined} */
+    let openReport;
+    /** @param {vscode.TextDocument} doc */
+    const copyReport = async (doc) => {
+        await vscode.env.clipboard.writeText(doc.getText());
+        vscode.window.showInformationMessage('Bug report copied.');
+    };
+    const reportClosedListener = vscode.workspace.onDidCloseTextDocument((closed) => {
+        // A language change is reported as a close too, of a document that
+        // stays open.
+        if (closed !== openReport || vscode.workspace.textDocuments.includes(closed)) return;
+        openReport = undefined;
+        copyReportItem.hide();
+    });
+    const bugReportCmd = vscode.commands.registerCommand(
+        'vscodroid.copyBugReport',
+        // The status bar entry runs it with the report to copy; the palette
+        // runs it with nothing, for a new report.
+        async (/** @type {vscode.TextDocument | undefined} */ report) => {
+            if (report) {
+                await copyReport(report);
+                return;
+            }
+            /** @type {vscode.TextDocument} */
+            let doc;
+            try {
+                const report = /** @type {string} */ (await sendBridgeCommand('generateBugReport'));
+                // Empty only when the bridge refused the session token.
+                if (!report) {
+                    throw new Error('VSCodroid did not accept the request. Reload the window and try again.');
+                }
+                // Plain text, so the editor does not run language detection on it.
+                doc = await vscode.workspace.openTextDocument({ content: report, language: 'plaintext' });
+                await vscode.window.showTextDocument(doc);
+            } catch (/** @type {*} */ err) {
+                vscode.window.showErrorMessage(`Could not create the bug report: ${err.message}`);
+                return;
+            }
+            openReport = doc;
+            copyReportItem.command = { title: 'Copy Bug Report', command: 'vscodroid.copyBugReport', arguments: [doc] };
+            copyReportItem.show();
+            const action = await vscode.window.showInformationMessage(
+                'Read the bug report before you share it: the server log can name your files ' +
+                    'and folders. Delete what you want kept private, then tap Copy, here or in ' +
+                    'the status bar.',
+                COPY
+            );
+            if (action === COPY) await copyReport(doc);
+        }
+    );
+
     // -- Shared storage opened by path --
 
     // The app holds no storage permission, so Android lets it list every
@@ -559,50 +673,147 @@ function activate(context) {
     // and none of its files, with nothing on screen to say why. Run once here,
     // which covers every route that loads the page (Open Folder, Open Recent,
     // the folder reopened at launch, a workspace file), and again when a folder
-    // is added to an open workspace in place. Once per folder: the set lives as
-    // long as this extension host, which a page load replaces. Don't Show Again
-    // silences a folder for good, by path, for a user who works there knowingly,
-    // such as in a folder whose files this app made and can see.
-    /** @type {Set<string>} */
-    const warnedSharedStorage = new Set();
+    // is added to an open workspace in place.
+    //
+    // Once per folder each time the editor server starts. Every reload and every
+    // folder switch loads a new page, and with it a new extension host, so a set
+    // kept here alone raised the same warning on each of them. The server
+    // outlives its pages, and server.js notes the pid and port of every editor
+    // server it starts, so the folders already warned about are kept in global
+    // state with that note and forgotten once it changes. A server adopted after
+    // its bootstrap died keeps its note, and it is the same server.
+    //
+    // A dialog, not a notification. The warning matters at the moment the folder
+    // opens, and a warning toast hides itself after 12 seconds and is then only
+    // a dot on the bell, which a phone user has no reason to open; on a first
+    // open the toast is up while the user is reading the Explorer for the
+    // missing files. Shown once per folder per start, stopping the user once
+    // costs less than files that seem to be gone. Don't Show Again silences a
+    // folder for good, for a user who works there knowingly, such as in a folder
+    // whose files this app made and can see. The folders warned about and the
+    // ones silenced are both kept by the key sharedStorageFolder gives them, so
+    // opening a folder again under another spelling undoes neither.
+    const readWarnedThisServer = async () => {
+        let server = '';
+        try {
+            server = new TextDecoder().decode(await vscode.workspace.fs.readFile(
+                vscode.Uri.joinPath(context.extensionUri, ...EDITOR_SERVER_NOTE)
+            ));
+        } catch (_) {
+            // No note to tie the warnings to, so they last as long as this page,
+            // which is no worse than before there was one.
+        }
+        const shown = /** @type {{ server?: string, folders?: string[] } | undefined} */ (
+            context.globalState.get(SHOWN_SHARED_STORAGE)
+        );
+        return {
+            server,
+            folders: new Set(server && shown && shown.server === server ? shown.folders : []),
+        };
+    };
+    // Read when the first folder on shared storage turns up, not on every page
+    // load: most never open one.
+    /** @type {ReturnType<typeof readWarnedThisServer> | undefined} */
+    let warnedThisServer;
     const silencedSharedStorage = () =>
         /** @type {string[]} */ (context.globalState.get(SILENCED_SHARED_STORAGE, []));
-    const warnSharedStorage = () => {
+    const warnSharedStorage = async () => {
         for (const folder of vscode.workspace.workspaceFolders || []) {
-            const folderPath = folder.uri.path;
-            const below = sharedStorageSubpath(folderPath);
-            if (below === null || warnedSharedStorage.has(folderPath) ||
-                silencedSharedStorage().includes(folderPath)) continue;
-            warnedSharedStorage.add(folderPath);
-            const name = below ? folder.name : 'your device storage';
-            // From Android 11 the folder picker will not grant the top of a volume,
-            // its Download folder or its Android folder, so the button cannot reach
-            // these as they are. A USB drive's top is the exception, and a folder
-            // inside it works there too.
-            const route = /^(Download|Android)?$/i.test(below)
-                ? 'Android does not let an app open this folder itself from the device, ' +
-                  'so pick a folder inside it with Open Folder from Device, which shows them'
-                : 'Open Folder from Device shows them';
-            vscode.window.showWarningMessage(
-                `Android hides the files other apps saved in ${name}, so they do not ` +
-                    `show here and cannot be opened. ${route}, apart from files over ` +
-                    '50 MB and folders such as .git and node_modules.',
-                OPEN_FROM_DEVICE,
-                DONT_SHOW_AGAIN
-            ).then((action) => {
-                if (action === OPEN_FROM_DEVICE) {
-                    vscode.commands.executeCommand('vscodroid.openFolderFromDevice');
-                } else if (action === DONT_SHOW_AGAIN) {
-                    context.globalState.update(
-                        SILENCED_SHARED_STORAGE, [...silencedSharedStorage(), folderPath]
-                    );
-                }
-            });
+            const where = sharedStorageFolder(folder.uri.path);
+            if (!where || silencedSharedStorage().includes(where.key)) continue;
+            const warned = await (warnedThisServer = warnedThisServer || readWarnedThisServer());
+            if (warned.folders.has(where.key)) continue;
+            // Marked before the dialog, which stays up for as long as the user
+            // takes and may end in a page load: Open Folder from Device opens
+            // the device folder in place of this one.
+            warned.folders.add(where.key);
+            if (warned.server) {
+                context.globalState.update(
+                    SHOWN_SHARED_STORAGE, { server: warned.server, folders: [...warned.folders] }
+                );
+            }
+            const { message, detail, buttons } = sharedStorageWarning(where, folder.name);
+            const action = await vscode.window.showWarningMessage(
+                message, { modal: true, detail }, ...buttons
+            );
+            if (action === OPEN_FROM_DEVICE) {
+                vscode.commands.executeCommand('vscodroid.openFolderFromDevice');
+            } else if (action === DONT_SHOW_AGAIN) {
+                context.globalState.update(
+                    SILENCED_SHARED_STORAGE, [...silencedSharedStorage(), where.key]
+                );
+            }
         }
     };
     warnSharedStorage();
     const workspaceFoldersListener =
         vscode.workspace.onDidChangeWorkspaceFolders(warnSharedStorage);
+
+    // -- A device folder shown by its copy's hash --
+
+    // A device folder is copied to saf-mirrors/<hash>, and the workbench names a
+    // folder after the last segment of its path, so a copy opened there showed
+    // the hash in the Explorer and the title. The app opens a copy through
+    // saf-mirrors/by-name/<hash>/<the folder's name> instead, a link to it. A
+    // copy made before that still opens by its hash, as the folder reopened at
+    // launch after an update does, and moving it is not the app's to do
+    // unasked: the workbench keeps a folder's open editors, unsaved changes and
+    // terminals under the path it was opened by, so whatever was left unsaved
+    // under the hash would stay there, out of sight. So the move is offered, and
+    // made once nothing unsaved is held and no terminal is open; the editors
+    // that were open are opened again under the new path.
+    const offerNamedPath = async () => {
+        const open = copyOpenByHash();
+        if (!open) return;
+        const hash = open.copy.slice(open.copy.lastIndexOf('/') + 1);
+        const declined = /** @type {string[]} */ (context.globalState.get(DECLINED_NAMED_PATH, []));
+        if (declined.includes(hash)) return;
+        const named = await namedPathOf(open);
+        if (!named) return;
+        const name = named.slice(named.lastIndexOf('/') + 1);
+        const action = await vscode.window.showInformationMessage(
+            `This device folder is shown as ${hash}, the name of its copy in VSCodroid. ` +
+                `Reopen it as ${name}?`,
+            REOPEN, DONT_ASK_AGAIN
+        );
+        if (action === DONT_ASK_AGAIN) {
+            context.globalState.update(DECLINED_NAMED_PATH, [...declined, hash]);
+            return;
+        }
+        if (action !== REOPEN) return;
+        if (moveWouldLose() || (await holdsBackups(context))) {
+            vscode.window.showWarningMessage(
+                `Save or close the files with unsaved changes and close the terminals first, ` +
+                    `or they stay behind with ${hash}. The folder offers this again the next ` +
+                    'time it opens.'
+            );
+            return;
+        }
+        const target = open.uri.with({ path: open.file ? `${named}/${open.file}` : named });
+        await context.globalState.update(CARRIED_EDITORS, {
+            to: target.path, root: named, files: editorsUnder(open.copy), at: Date.now()
+        });
+        await vscode.commands.executeCommand('vscode.openFolder', target, { forceReuseWindow: true });
+    };
+    // The page the move lands on opens the editors carried to it.
+    const reopenCarriedEditors = async () => {
+        const carried = context.globalState.get(CARRIED_EDITORS);
+        if (!carried) return;
+        await context.globalState.update(CARRIED_EDITORS, undefined);
+        const here = vscode.workspace.workspaceFile ||
+            ((vscode.workspace.workspaceFolders || [])[0] || {}).uri;
+        if (!here || here.path !== carried.to || !(Date.now() - carried.at < CARRY_MS)) return;
+        for (const file of carried.files) {
+            try {
+                await vscode.window.showTextDocument(
+                    here.with({ path: `${carried.root}/${file}` }), { preview: false }
+                );
+            } catch (_) {
+                // Deleted since the move: nothing to open.
+            }
+        }
+    };
+    reopenCarriedEditors().then(offerNamedPath).catch(() => {});
 
     context.subscriptions.push(
         workspaceFoldersListener,
@@ -616,7 +827,11 @@ function activate(context) {
         clearCachesCmd,
         toolchainsCmd,
         toggleKeyRowCmd,
-        aboutCmd
+        uiScaleCmd,
+        aboutCmd,
+        copyReportItem,
+        reportClosedListener,
+        bugReportCmd
     );
 }
 
@@ -629,37 +844,228 @@ function deactivate() {
 
 // -- Helpers --
 
+/** The bug report notice's button, compared against the choice it returns. */
+const COPY = 'Copy';
+
 /** The shared-storage warning's buttons, compared against the choice it returns. */
 const OPEN_FROM_DEVICE = 'Open Folder from Device';
 const DONT_SHOW_AGAIN = "Don't Show Again";
 
-/** The globalState key holding the paths Don't Show Again silenced. */
+/** The globalState key holding the folders Don't Show Again silenced, by key. */
 const SILENCED_SHARED_STORAGE = 'sharedStorageWarning.silenced';
 
 /**
+ * The globalState key holding the folders warned about while one editor server
+ * runs, with that server's note: `{ server, folders }`.
+ */
+const SHOWN_SHARED_STORAGE = 'sharedStorageWarning.shown';
+
+/**
+ * The editor server's note, from this extension's own directory.
+ *
+ * Bundled extensions live in the server's `--extensions-dir`,
+ * `<files>/home/.vscodroid/extensions/<this one>`, and server.js writes the pid
+ * and port of each editor server it starts to `<files>/server/editor-server.pid`
+ * (`Environment.getExtensionsDir`, `Environment.getServerDir`, `EDITOR_PID_FILE`).
+ * Read through the editor's own file access, which reaches the server's files.
+ */
+const EDITOR_SERVER_NOTE = ['..', '..', '..', '..', 'server', 'editor-server.pid'];
+
+/**
  * Where a workspace folder sits on shared storage, where this app sees the
- * directories and not the files other apps saved: its path below the storage
- * volume, '' at the top of the volume, or null for a folder the app sees in full.
+ * directories and not the files other apps saved, or null for a folder the app
+ * sees in full. `below` is its path below the storage volume, '' at the top of
+ * the volume, and `key` names the folder however its path was spelled.
  *
  * `/sdcard`, `/mnt/sdcard` and `/storage/self/primary` lead to
  * `/storage/emulated/<user>`, and the workbench keeps whichever spelling the
- * user typed; any other `/storage/<name>` is an SD card or a USB drive. A
- * device folder's copy never matches: it lives in the app's files directory
+ * user typed, a trailing slash included; any other `/storage/<name>` is an SD
+ * card or a USB drive, which a path cannot tell apart (`removable`).
+ * `/storage/emulated` and `/storage/self` themselves are neither. Below the
+ * volume, shared storage ignores case. So the key is the volume and the path
+ * below it in lower case: `/sdcard/Documents/notes` and
+ * `/storage/emulated/0/documents/notes/` are one folder, and the folders already
+ * warned about and the ones silenced are matched by it.
+ *
+ * `picker` is what Android's folder picker does with the folder, in
+ * ExternalStorageProvider from Android 11: on the device's storage and on an SD
+ * card it does not grant the top of the volume, its Download folder or its
+ * Android folder, though it grants a folder inside them ('inside'), and it does
+ * not even list Android/data, Android/obb or Android/sandbox, so nothing in
+ * those can be granted ('none'). A USB drive is granted whole, its top included.
+ *
+ * A device folder's copy never matches: it lives in the app's files directory
  * under `/data`. Nor does `Android/data/<package>/` at the top of a volume, the
  * old home of `~/projects`, whose files the app created and can see; any
  * package there is this one, since Android 11 keeps an app out of every other
- * app's directory there. Below the volume, shared storage ignores case, and so
- * does that match.
+ * app's directory there.
  * @param {string} folderPath
- * @returns {string | null}
+ * @returns {{ key: string, below: string, removable: boolean, picker: 'open' | 'inside' | 'none' } | null}
  */
-function sharedStorageSubpath(folderPath) {
+function sharedStorageFolder(folderPath) {
     const volume =
-        /^\/(?:storage\/emulated\/\d+|storage\/self\/primary|storage\/[^/]+|sdcard|mnt\/sdcard)(?:\/(.*))?$/
+        /^\/(?:(storage\/emulated\/\d+|storage\/self\/primary|sdcard|mnt\/sdcard)|storage\/(?!(?:emulated|self)(?:\/|$))([^/]+))(?:\/(.*))?$/
             .exec(folderPath);
     if (!volume) return null;
-    const below = (volume[1] || '').replace(/\/+$/, '');
-    return /^Android\/data\/[^/]+(\/|$)/i.test(below) ? null : below;
+    const below = (volume[3] || '').replace(/\/+$/, '');
+    if (/^Android\/data\/[^/]+(\/|$)/i.test(below)) return null;
+    return {
+        key: `${volume[1] ? 'primary' : volume[2]}:${below}`.toLowerCase(),
+        below,
+        removable: !volume[1],
+        picker: /^Android\/(data|obb|sandbox)(\/|$)/i.test(below) ? 'none'
+            : /^(Download|Android)?$/i.test(below) ? 'inside' : 'open',
+    };
+}
+
+/**
+ * What the shared-storage warning says about a folder, and the buttons it offers.
+ *
+ * Open Folder from Device is offered wherever it can show the files, which is
+ * not in Android/data, Android/obb or Android/sandbox. The wording for an SD
+ * card or a USB drive covers both, since the path cannot say which it is.
+ * @param {{ below: string, removable: boolean, picker: string }} where
+ * @param {string} folderName
+ * @returns {{ message: string, detail: string, buttons: string[] }}
+ */
+function sharedStorageWarning(where, folderName) {
+    const place = where.below ? `in ${folderName}`
+        : where.removable ? 'on this SD card or USB drive' : 'on your device storage';
+    const message = `Android hides the files other apps saved ${place}.`;
+    const hidden = 'They do not show here and cannot be opened.';
+    const leftOut = 'apart from files over 50 MB and folders such as .git and node_modules';
+    if (where.picker === 'none') {
+        return {
+            message,
+            detail: `${hidden} Android keeps each folder in Android/data, Android/obb and ` +
+                'Android/sandbox private to the app it belongs to, and on the device\'s ' +
+                'storage and SD cards, Open Folder from Device cannot open them either.',
+            buttons: [DONT_SHOW_AGAIN],
+        };
+    }
+    const detail = where.picker === 'open'
+        ? `${hidden} Open Folder from Device shows them, ${leftOut}.`
+        : where.removable
+            ? `${hidden} Open Folder from Device shows them, ${leftOut}. It can open this ` +
+              'folder itself on a USB drive; on an SD card Android does not allow that, so ' +
+              'pick a folder inside it.'
+            : `${hidden} Android does not let an app open this folder itself from the device, ` +
+              `so pick a folder inside it with Open Folder from Device, which shows them, ${leftOut}.`;
+    return { message, detail, buttons: [OPEN_FROM_DEVICE, DONT_SHOW_AGAIN] };
+}
+
+/** The named path offer's buttons, compared against the choice it returns. */
+const REOPEN = 'Reopen';
+const DONT_ASK_AGAIN = "Don't Ask Again";
+
+/** The globalState key holding the copies whose move to a named path was declined. */
+const DECLINED_NAMED_PATH = 'namedPath.declined';
+
+/**
+ * The globalState key carrying the open editors across that move:
+ * `{ to, root, files, at }`, the path moved to, the named path the files are
+ * relative to, the files, the active one last, and when.
+ */
+const CARRIED_EDITORS = 'namedPath.carried';
+
+/** How long carried editors wait for their page, which a slow start can delay. */
+const CARRY_MS = 120000;
+
+/** Where the copies' named paths live under saf-mirrors: SafStorageManager.NAMED_DIR. */
+const NAMED_DIR = 'by-name';
+
+/**
+ * The device folder copy this page has open by its hash: the folder itself, or
+ * a workspace file at the top of one. `uri` is what is open, `copy` the copy's
+ * path and `file` the workspace file's name, or '' for the folder. Null for
+ * anything else, a workspace of several folders included.
+ * @returns {{ uri: *, copy: string, file: string } | null}
+ */
+function copyOpenByHash() {
+    const workspaceFile = vscode.workspace.workspaceFile;
+    if (workspaceFile) {
+        const m = /^(.*\/saf-mirrors\/[0-9a-f]{12})\/([^/]+\.code-workspace)$/.exec(workspaceFile.path);
+        return m ? { uri: workspaceFile, copy: m[1], file: m[2] } : null;
+    }
+    const folders = vscode.workspace.workspaceFolders || [];
+    if (folders.length !== 1 || !/\/saf-mirrors\/[0-9a-f]{12}$/.test(folders[0].uri.path)) return null;
+    return { uri: folders[0].uri, copy: folders[0].uri.path, file: '' };
+}
+
+/**
+ * The copy's named path, `saf-mirrors/by-name/<hash>/<name>`, which the app
+ * makes when a page opens the copy, or null while there is not exactly one.
+ * @param {{ uri: *, copy: string }} open
+ * @returns {Promise<string | null>}
+ */
+async function namedPathOf(open) {
+    const at = open.copy.lastIndexOf('/');
+    const dir = open.uri.with({
+        path: `${open.copy.slice(0, at)}/${NAMED_DIR}/${open.copy.slice(at + 1)}`
+    });
+    try {
+        const links = (await vscode.workspace.fs.readDirectory(dir)).filter(([, type]) =>
+            (type & vscode.FileType.SymbolicLink) && (type & vscode.FileType.Directory));
+        return links.length === 1 ? `${dir.path}/${links[0][0]}` : null;
+    } catch (_) {
+        return null;
+    }
+}
+
+/** Whether moving this page would lose a terminal or unsaved changes it shows. */
+function moveWouldLose() {
+    return vscode.window.terminals.length > 0 ||
+        vscode.workspace.textDocuments.some((d) => d.isDirty) ||
+        (vscode.workspace.notebookDocuments || []).some((d) => d.isDirty) ||
+        vscode.window.tabGroups.all.some((g) => g.tabs.some((t) => t.isDirty));
+}
+
+/**
+ * Whether the workbench holds a backup of unsaved changes for this page's folder.
+ *
+ * The editors with unsaved changes are reopened by the workbench after this
+ * extension starts, so `moveWouldLose` can miss them for a moment, and a Reopen
+ * chosen then would leave them behind. Their backups can be asked for at once:
+ * the workbench keeps them under `Backups/<id>`, beside `workspaceStorage/<id>`,
+ * which holds this extension's storageUri for the folder. A layout that moves
+ * reads as no such directory, which leaves the check above as the guard it was.
+ * Any other failure reads as yes.
+ * @param {vscode.ExtensionContext} context
+ * @returns {Promise<boolean>}
+ */
+async function holdsBackups(context) {
+    const storage = context.storageUri;
+    if (!storage) return true;
+    const id = storage.path.split('/').slice(-2)[0];
+    const backups = vscode.Uri.joinPath(storage, '..', '..', '..', 'Backups', id);
+    try {
+        for (const [name, type] of await vscode.workspace.fs.readDirectory(backups)) {
+            if (!(type & vscode.FileType.Directory)) return true;
+            if ((await vscode.workspace.fs.readDirectory(vscode.Uri.joinPath(backups, name))).length) {
+                return true;
+            }
+        }
+        return false;
+    } catch (/** @type {*} */ err) {
+        return !(err && err.code === 'FileNotFound');
+    }
+}
+
+/**
+ * The files open in text editors under `copy`, as paths relative to it, each
+ * once, with the active editor's file last so that it ends up in front.
+ * @param {string} copy
+ * @returns {string[]}
+ */
+function editorsUnder(copy) {
+    const groups = vscode.window.tabGroups;
+    const active = groups.activeTabGroup && groups.activeTabGroup.activeTab;
+    const tabs = groups.all.flatMap((g) => g.tabs).filter((t) => t !== active);
+    const files = [...tabs, active]
+        .map((t) => (t && t.input instanceof vscode.TabInputText ? t.input.uri.path : ''))
+        .filter((p) => p.startsWith(`${copy}/`))
+        .map((p) => p.slice(copy.length + 1));
+    return files.filter((f, i) => files.lastIndexOf(f) === i);
 }
 
 /**

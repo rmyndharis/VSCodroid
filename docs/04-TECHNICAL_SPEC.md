@@ -96,6 +96,7 @@ the server cannot run without, and zeromq for the Jupyter extension, against Bio
 # zeromq          -> assets/usr/lib/node-addons/zeromq/build/Release/zeromq.node (libzmq static)
 #
 # Linked with -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384
+# and with -static-libstdc++ -Wl,-Bsymbolic (ADDON_LINK_FLAGS)
 # OUTPUT_ROOT defaults to android/app/src/main/assets/vscode-reh
 ```
 
@@ -106,6 +107,13 @@ through the system linker instead; the server and the extension host have no suc
 those three is checked against
 the `package.json` the server was built with, since an addon compiled for a different Node ABI
 loads and then fails at the first call.
+
+Every addon carries its own libc++, and the process it loads into already holds another in
+`libnode.so` and `libc++_shared.so`. `-Bsymbolic` keeps the dynamic loader from binding the
+addon's libc++ symbols to that copy, and `verify()` in the script fails the build if any
+relocation still names a `std::__ndk1` symbol. Without it `@parcel/watcher`'s `std::regex` objects
+were destroyed by `libnode.so`'s code and `free()` aborted the file watcher process on every
+unsubscribe that carried a glob, as the default `files.watcherExclude` patterns do.
 
 `zeromq` is for the Jupyter extension users install from Open VSX, not for the server. That
 extension carries zeromq 6.0.0-beta.16 with glibc and musl prebuilds only, so without an Android
@@ -250,8 +258,8 @@ android {
         applicationId = "com.vscodroid"
         minSdk = 33
         targetSdk = 36
-        versionCode = 15            // moves every release; read build.gradle.kts, never this block
-        versionName = "1.4.0"      // both are persisted by markSetupComplete() and either one
+        versionCode = 16            // moves every release; read build.gradle.kts, never this block
+        versionName = "1.5.0"      // both are persisted by markSetupComplete() and either one
                                    // changing re-runs the whole of first-run extraction
 
         ndk {
@@ -536,6 +544,58 @@ first so that a file that cannot parse costs musl clients their DNS rather than
 costing the app its editor server, and it is passed as one token, because
 `process-monitor.js` names a process by its first non-option argument.
 
+The bootstrap also adds three scripts to the workbench page template,
+`vscode-reh/out/vs/code/browser/workbench/workbench.html`, through `extendWorkbenchPage`, because
+the page cannot take them from `product.json`: the trusted link domains, the extension
+recommendations, and the theme a page load starts on. The last one first reads the settings file of
+the window it opens, the folder's `.vscode/settings.json` or the workspace file, with a synchronous
+GET of `/vscode-remote-resource`, because the page has to be coloured before its first paint and the
+workbench reads its configuration element once. The text goes to the workbench as
+`initialWorkspaceSettings`, which patch 0027 adds: a remote folder's configuration used to hold the
+folder's own settings only as the copy its last load cached, so a folder opened for the first time
+ran on the user's settings, the theme among them, until its file had been read through the remote
+file system, 8.5 to 20.6 s into the load on an API 36 emulator. The theme the file names decides the
+start. A folder that names one starts on its own record in `localStorage`
+(`vscodroid-folder-themes`, the twenty folders or workspaces most recently shown, each with the base
+theme and colours it showed and, for a theme of the folder's own, the name its settings gave it)
+when that record was taken under the same name, and otherwise on that theme's look among the server
+tree's own themes, which the bootstrap reads from the tree's theme files when it writes the script.
+Any other window starts on the record of the window that most recently followed the user's theme;
+before the script has recorded any window, on the splash the workbench saves (`monaco-parts-splash`);
+and once it has recorded only windows with a theme of their own, on the dark default this app
+configures.
+Before the first paint the script colours the page background from that look, and it hands the same
+look to the workbench as `initialColorTheme`, which the workbench uses only when it cannot use the
+theme it stored; never on a load after the device switched between light and dark, when
+`window.autoDetectColorScheme` makes the workbench's own pick the right one, and not for a theme of
+the folder's own it has no look for. After that it keeps the background on the editor colour of the
+theme the workbench shows, and the record with it, because the background also fills the space the
+soft keyboard gives back until the workbench lays itself out again, and it posts each colour it paints
+to the app, which gives it to the window behind the view as well (§4.1). The workbench keeps its
+stored theme, one per profile, only while the configured `workbench.colorTheme` equals the theme's
+id, so it drops that theme in a folder whose own settings name another and in any folder entered from
+one, and the default the welcome extension sets must be an id the server tree contributes, not an
+older name upstream migrates; `verify-server-tree.py` checks it.
+
+What still starts on another theme: a folder naming a theme an installed extension contributes, on
+its first load and its first after twenty other folders were shown, which the script has no look for,
+so it takes the user's colour and, where the workbench cannot use its stored theme, the web default,
+the light one with the registry's default colours, until the extensions register; a window following
+the user's theme while every window recorded has a theme of its own, once after the update when the
+first window it opens has one and after twenty such windows in a row, which starts on the dark
+default whatever the user's theme, so under a light one it is dark until the workbench paints and,
+where the workbench cannot use its stored theme, until the extensions register; the first window
+after the update when it follows the user's theme and the window shown last before the update had
+a theme of its own, which starts on that theme, from the workbench's splash, until the extensions
+register, and is rare because `MainActivity` reopens the folder last open; with
+`window.autoDetectColorScheme` on, a folder naming a theme of its own on its first load, which starts
+on that theme where the workbench shows the one it picks for the device's mode; a window whose
+settings file cannot be read, which starts as one following the user's theme would and is not
+recorded; and a window after the user's theme was changed by an edit of the user's settings while a
+folder with a theme of its own was open, whose record of the user's theme is then older than the
+theme. Patch 0026 keeps the folder's settings in force between the extensions registering and the
+file being read, which a folder's settings given by the page or by its cached copy both need.
+
 Readiness is `GET /version`, and only a `200` counts. There is no `/healthz`:
 what used to serve one was a fallback server in `assets/server.js` that bound the
 port when `vscode-reh/out/server-main.js` was missing and answered 200 to every
@@ -605,6 +665,98 @@ Read `VSCodroidWebView.configure` for the live set. Three notes on what is **not
 - **`textZoom = 100` is a pin, not a default.** It is why changing the system font size has no
   effect on editor text, which is a live accessibility gap rather than a setting anyone tuned.
 
+Outside the settings block, `configure` gives the view the colour the workbench page last
+painted (`lastPageColor`, below), or the window background, `R.color.colorBackground` (#1E1E1E),
+before it ever has. An unset WebView paints white wherever no page has painted yet, which showed
+before the loading placeholder on the first launch after an update.
+The workbench page paints its own background before its first paint, from the theme it expects
+to show (§3.1), so this colour shows only where no page has painted yet and behind a page that
+paints no background of its own. Two kinds of page paint none. The server's refusals, bare
+`text/plain` bodies such as "Forbidden.", set their text in the device's mode, which left it black
+on this colour in light mode. The WebView's own page for a load that failed, "Webpage not
+available", which the workbench gets when it navigates while the editor server restarts, names no
+colour scheme and sets black text in both modes. So `addPlainTextPageScript`, a document-start
+script, gives a top-level document of either kind the `Canvas` background of its own colour
+scheme: white in light mode and Chromium's dark canvas in dark mode for a plain-text page, white
+in both for the error page, which Chromium commits as an HTML document at
+`chrome-error://chromewebdata/`.
+
+The window behind the view shows wherever no view draws: behind the transparent status and
+navigation bars, below the extra key row while the soft keyboard slides away, and, when the
+keyboard goes down as a reload or a folder opened from a box that had it up begins, below the
+last page's frame, which the view holds at its old height until the next page paints. The view's
+own background never shows in that last space (measured on an API 36 emulator with a magenta
+one), so under a light theme it was a dark band of the theme's window colour, #1E1E1E, for up to
+2.1 s. So the page script posts the colour it paints the page with, at the start of each load and
+on each theme change, to the object `addPageColorListener` adds (`vscodroidPageColor`), which
+gives it to the view, and `MainActivity` gives it to the window through `paintWindow`, with dark
+bar icons on a light colour. Only an opaque `#rrggbb` from the top frame on the loopback address is
+taken. The window takes it once the view draws the page that posted it, through a visual state
+callback, and not as the page posts: a page posts as its load starts, while the view goes on
+drawing the last page's frame, and painted at once the bars around that frame showed the new colour
+for 0.55 to 1.7 s at every change between a dark and a light theme. The loading page and the error
+pages are this app's own and post nothing, so each gives the window its own colour before it loads
+and drops a page's colour still waiting for its frame.
+
+`MainActivity` also keeps the colour (`keepStartColor`), and every screen of the next start begins on
+it (`lastPageColor`): the windows of `SplashActivity` and `MainActivity` with their bars, the setup
+screen's text, the view and the "Starting server..." page. Under a light theme a cold start had been
+dark until the workbench painted, 2.3 s on the emulator, and the first launch after an update for
+the whole of setup. The system draws its starting window from a theme before any of the app runs, so
+while the colour is light it is pointed at `Theme.VSCodroid.LightStart` through
+`SplashScreen.setSplashScreenTheme`, which the system keeps for later launches, and back at the
+manifest's theme when it is dark. The system keeps that theme by its name and looks it up on each
+launch, falling back to the manifest's without an error when the name no longer resolves, and the
+app names it again only when the colour changes, so the style must keep its name. A light theme's
+starting window is white whatever that theme's own background is. The choice is the package's, so
+under a light colour a launch into a dark screen, as from the Toolchains shortcut, starts white too,
+and "Clear storage" keeps the choice but drops the colour, so the next start is white before the
+dark setup until the workbench's first dark colour resets it (read in the platform sources, not
+measured). The toolchain picker, the Toolchains screen, the extra key row and the error pages stay
+on the theme's dark colours, which their layouts are drawn for. The first start after updating from
+a release without this has no colour kept yet, and the editor's theme is then known only to the
+storage of the workbench page's origin, which no Android API reads. So `SplashActivity`, before
+setup runs, loads a page on that origin in a view of its own (`readSavedPageColor`), reads the
+colour of the splash the workbench saved there, and keeps it, and the setup screen and every screen
+after it take it. That start's own starting window is drawn before any of the app runs, from the
+manifest's theme, so it is dark. With `window.autoDetectColorScheme` on, a start after the device
+switched between light and dark while the app was closed begins on the colour from before.
+
+The view holds the last page's frame at a reload or a folder switch as well, and that frame is not
+the page the user saw. The workbench shuts itself down from its `beforeunload` listener, in one
+task: terminals are disposed, the `modern-ui` classes come off its container and the styles the
+terminal and the diff decorations added are removed, so the page falls back to its classic skin,
+with upper-case panel titles, and the extension host's contributions are gone. On an API 33
+emulator the view held that for about half a second after Developer: Reload Window and then went
+blank until the new page came. `injectLeaveCurtain` raises a full-window element in the page's
+background colour, the root's, from its own `beforeunload` listener, so the frame after the
+shutdown is the curtain whichever listener runs first; on the shipped build it runs ahead of the
+workbench's, 44 ms before `modern-ui` comes off. A leave the workbench vetoes (`vetoBeforeUnload`
+cancels the event with `preventDefault` and `returnValue`) lowers it in the next task, and
+`pageshow` lowers it for a page restored from the back-forward cache. A page with no background
+colour of its own gets no curtain, since a guessed dark one is a flash under a light theme.
+
+`beforeunload` also fires for a navigation that then never replaces the page. A link to `mailto:` or
+another scheme goes to another app, and a path on the editor's own origin that is not the workbench
+is refused. The workbench itself is untouched by those, since its opener assigns `location.href`
+inside `withExpectedShutdown` with the shutdown handling disabled, so only the curtain is left, and
+over a screen that answers nothing for as long as it stands. `VSCodroidWebViewClient` says so
+through `onNavigationDeclined` whenever `shouldOverrideUrlLoading` takes a main-frame navigation
+(handed away, or refused), `MainActivity.liftLeaveCurtain` dispatches `vscodroid-navigation-declined`
+into the page, and the script lowers on it: on API 33 the curtain stood for 11 ms over a `mailto:`
+link tapped in a Markdown preview with the workbench intact, and 58 ms over a scheme no app answers,
+where it had stood for the whole five seconds, the toast over a blank screen. A timer still lowers
+it after five seconds for anything the client never hears of.
+
+Cut every 50 ms from a recording of Developer: Reload Window, the intact page was followed at once
+by the plain colour on API 33, on API 36 with no hardware keyboard and on API 37, with no frame of
+the dismantled one. So it was for a reload started from outside the page (`Page.reload`, standing
+in for the app's own reload after a long time in the background) on API 36. With a veto the page
+behind the dialog was the intact one on API 33, and nothing was left on the root after "Stay on
+this page". `scripts/test-leave-curtain.js` runs the script against a stub page, and
+`LeaveCurtainWiringTest` holds it, and the three things in the shipped bundle it depends on, to
+the sources.
+
 ### 4.2 Crash Recovery
 
 ```kotlin
@@ -665,7 +817,11 @@ and a half) come to 48.4dp. `KeyPages.forSmallestWidthDp` repacks the same items
 order, whenever a page's share would put a key under `MIN_TOUCH_TARGET_DP`: five pages at
 411dp, six at 360dp, seven at 320dp. The argument is `smallestScreenWidthDp`, so rotating
 does not repack, but a drop into a narrow split-screen pane does, through
-`ExtraKeyRow.onConfigurationChanged`.
+`ExtraKeyRow.onConfigurationChanged`. The latched modifiers are carried into the new pages'
+adapter before it replaces the old one (`ExtraKeyRow.setupAdapter`): replacing it cancels a
+touch still on a key or the trackpad, that cancel can switch back a modifier a hold had
+switched (as below) or ends the drag, which spends the latches, and the row tells the page
+what it did.
 
 | Page | Contents at 411dp and wider |
 |------|----------|
@@ -684,7 +840,24 @@ Ctrl, Alt and Shift latch rather than repeat. The bracket and parenthesis keys i
 opening character, because Monaco closes the pair and places the caret inside. Several keys carry
 long-press alternates, which `KeyPageConfig.kt` lists beside them; `)` is on the `()` key's
 list because no other route on the row reaches it, since `shiftedForm` leaves `(` unchanged
-and `)` sits on a digit key no page carries.
+and `)` sits on a digit key no page carries. Only those keys and the three modifiers
+have a long press (`ExtraKeyButton`'s touch listener turns the `GestureDetector`'s on or
+off at each touch), and the row dismisses an open popup when the pager starts a drag. A
+modifier's long press switches the latch while the finger is still down, so what is
+typed during the hold meets it as it would after a tap, and a touch that then ends in a
+cancel switches the latch back: the pager taking the drag, the system cancelling the
+gesture, or a repack removing the key under the finger. Not while another finger is on the
+row, which `ExtraKeyRow.dispatchTouchEvent` counts: the pager drags with the finger that
+went down last and cancels every key under a finger when it takes the drag, so the cancel
+can be that finger's swipe, and Ctrl held with one thumb while the other swipes to F5 has to
+stay latched for Ctrl+F5. Nor once the row has stood down during the touch: the keyboard
+going away hides the row and clears every latch, but going GONE sends the key no cancel, so
+the finger can still slide and the pager take the drag, and its cancel would latch a
+modifier on a row that is gone. The stand-down drops what each hold would put back
+(`KeyPageAdapter.dropPendingRestores`). Every other key presses on release, and only if the
+finger never left the touch slop around where it landed, so a swipe the pager takes presses
+nothing, and so does a long hold that drifted. The detector has no double-tap listener, so
+two quick taps are two presses.
 
 There are **no discrete arrow buttons anywhere on the row.** The gesture trackpad replaced them and
 emits arrow keys as the finger moves (`TrackpadGesture.accumulate`). A drag is the only route for a
@@ -715,18 +888,26 @@ dispatch as real `KeyEvent` pairs, with any latched Ctrl, Alt or Shift as meta s
 they move the caret and select in text boxes and reach extension webviews, where an
 announced key did nothing. Each carries the evdev scan code a hardware keyboard sends,
 because Chromium derives `KeyboardEvent.code` from it, and Home and End use
-`KEYCODE_MOVE_HOME`/`KEYCODE_MOVE_END`, not the system Home key. A press the WebView
-refuses falls back to the announce route. A real arrow turns WebView spatial navigation on
+`KEYCODE_MOVE_HOME`/`KEYCODE_MOVE_END`, not the system Home key. Each latched modifier then
+comes up as a real `ACTION_UP` of its left-hand key, in the same dispatch
+(`modifierReleases`): the row's modifiers are latches, so without it the page saw a
+modifier go down and never come up, and the workbench, which tells its toolbars about a
+modifier only when one goes down or comes up, left the editor's split button on Split
+Editor Down after Alt+Left. Chromium sends that release to whatever has focus, and the
+modifier interceptor stops it at the window (below). A press the WebView refuses falls
+back to the announce route. A real arrow turns WebView spatial navigation on
 until the next touch on the page, so a Left or Right that leaves a collapsed caret at the
 start or end of a text box would move focus out of it. A guard installed with the modifier
 interceptor cancels such a press when none of the box's own handlers used it. It decides
-on the box itself: a capture `keydown` listener on the window adds a one-shot listener to
-the event's innermost target, which runs after the box's own listeners and before the key
+on the box itself: a capture `keydown` listener on the window adds a listener for that key
+to the event's innermost target, which runs after the box's own listeners and before the key
 bubbles to any container, so a box or container that calls `stopPropagation` on the key in
 the bubble phase, as the Problems, Output, Debug Console and Comments filters and the chat
-model picker's filter do, cannot hide it. A number or email box has no selection API, so
-its caret cannot be read and every unmodified Left and Right there is cancelled. Before
-Chromium 149, Blink on Android has no command for Alt+Left or Alt+Right, so the press
+model picker's filter do, cannot hide it. A zero timeout removes that listener once the key
+is over, because a box that stops the key before it, as the terminal's textarea does with
+every arrow in its capture listener, never runs it. A number or email box has no selection
+API, so its caret cannot be read and every unmodified Left and Right there is cancelled.
+Before Chromium 149, Blink on Android has no command for Alt+Left or Alt+Right, so the press
 reaches spatial navigation wherever the caret is; below 149, read from the user agent, the
 guard cancels it in any text box and on the editor's EditContext host. From 149 they move
 to the start and end of the line, which Blink counts as handled even where the caret
@@ -740,7 +921,22 @@ ViewPager2's RecyclerView is one.
 **Everything else is announced.** A key that names a command rather than a character
 (`Tab`, `Escape`, `F7`), the trackpad's Up and Down, and any character held with Ctrl, Alt
 or Meta, is sent as a `keydown`/`keyup` pair built by `evaluateJavascript` at
-`document.activeElement`, since that is what the workbench resolves its key bindings from.
+`document.activeElement`, since that is what the workbench resolves its key bindings from,
+followed by a `keyup` for each modifier it carried, at the same element; the modifier
+interceptor's chords from the soft keyboard end the same way. No modifier `keydown` is sent,
+at the latch or later: a latch undone would then read as Alt pressed and released alone,
+which focuses the menu bar. The interceptor stops every keyup of a modifier that had no
+keydown, which is what the row's releases are by either route, at the window's capture
+phase. The workbench reads which modifiers are held from capture listeners there
+(`ModifierKeyEmitter`), so it still hears them. A quick pick opened with quick navigate, as
+Ctrl+Tab's recently used editors are, does not: it accepts on a modifier's keyup in its own
+container. Opened in the Command Palette it keeps the palette's input box, and with it the
+focus, the keyboard and the row, so a Ctrl+Tab from the row is typed inside that container
+and its release would open the highlighted editor at once instead of leaving the list for
+the next Ctrl+Tab. Opened from a file it focuses its list, and the keyboard goes down with
+the row, since Chromium hides the keyboard whenever focus leaves an editable element. A
+keyboard's own release follows the keydown of the same key and goes on: the two are paired
+by `code`, so each of two Shifts held at once comes up.
 Tab stays here because a real one moves focus, and the Explorer's rename and New File boxes
 commit the typed name when they lose it; Escape because under spatial navigation an
 unhandled real Escape blurs the focused element. Up and Down stay because they are the
@@ -759,6 +955,30 @@ changes which character is typed rather than whether it is typed. If `typeCharac
 cannot produce a press on the layout in force it returns false and the announce route
 runs instead; that preserves the keystroke but still inserts nothing, and it logs a
 warning rather than a debug line so the case is visible in a release build.
+
+A latched Ctrl or Alt reaches what the soft keyboard types through the modifier
+interceptor (`KeyInjector.setupModifierInterceptor`), which cancels a `beforeinput` of one
+character and sends the chord in its place. On the EditContext path the soft keyboard sends
+no such event: Chromium reports what it composes or commits to the EditContext object, and
+the editor's own `textupdate` listener types it first, as Gboard 18.4.1 showed on an API 36
+emulator for a committed letter and Gboard 12.4, which composes every word, on an API 33
+emulator. So while Ctrl or Alt is latched the focused EditContext host is lent an empty
+EditContext of the interceptor's own, after any word still composing is ended. A character
+composed or committed into it reaches the `beforeinput` listener as the event it never got;
+Gboard 12.4 committed rather than composed over the empty EditContext on that emulator.
+Either way the chord is sent first and the editor's EditContext is then given back, and while
+the host keeps focus it is blurred and focused again, which restarts input. Without that the
+keyboard went on from its own copy of the text, which held the chord's letter: on that
+emulator `ab`, Ctrl, `s` (the file saved) and `c` left `ababsc`, and with Gboard 17.7.4 on
+an API 37 emulator the suggestion strip went on offering `s` after Ctrl then `s` at the start
+of a line. Clearing the latch, spending it and focus leaving the host give the EditContext
+back too, focus leaving only once it has left: Blink deactivates the EditContext an element
+has when the focus change is done, so one given back during `focusout` left the empty one
+active, and after Ctrl then `p` what was typed in Quick Open went into it, leaving the box
+empty. A Backspace finds nothing to delete in the empty EditContext, so the keyboard
+sends it as a key press, which is turned into the delete edit the listener makes
+Ctrl+Backspace of. Text committed in one piece while the latch is on, a suggestion chip
+say, has no chord and is lost with the empty EditContext.
 
 The soft keyboard's own Enter is handled in the page by `MainActivity.injectComposingEnter`.
 A composing Enter is replaced with one the workbench recognises, and a non-composing Enter
@@ -781,6 +1001,31 @@ without closing it. Every other target keeps `isComposing`, because there the ke
 does the work. An editor inside the quick input, such as Quick Chat's, keeps it too, like
 any other editor.
 
+A letter typed on the soft keyboard with Ctrl or Alt latched is made a chord by the modifier
+interceptor (`KeyInjector.setupModifierInterceptor`) from the `beforeinput` the letter fires,
+which it cancels. A keyboard that composes, as Gboard 12.4 composes every word, reports a
+letter in a text box as `insertCompositionText`, which cannot be cancelled. So when such an
+update adds one character with a key to the composition in an `input` or `textarea`, the
+terminal's included, the interceptor keeps its `beforeinput` and `input` from the box's own
+listeners and, in the next task, puts back the box's text and selection as they were before
+the character, if nothing changed them in between, which also ends the composition, and makes
+the chord from the character. The word composed before it stays. The terminal sends a
+composition only once it ends, in a zero timeout, reading it back from its textarea, which it
+empties on blur. So in the terminal alone the composition is first ended with a blur and a
+refocus, and the chord waits a task for that send: Quick Open, a chord the terminal hands to
+the workbench, takes the focus at once, and would leave the send an empty textarea. The
+chord of every letter in the terminal waits that task, a committed letter's too. A
+keyboard that commits, as Gboard 18 commits each letter, sends a keydown of key code 229
+first, on which the terminal reads its textarea back in a zero timeout and sends what
+changed; a chord that emptied the textarea before that read had it send a delete, and `ab`,
+Ctrl and `p` left `a` at the prompt. No other box is blurred: the debug view's inline boxes,
+the terminal tab rename box and the Ports view's commit what they hold when they lose the
+focus, the letter included, and close. On the EditContext path no `beforeinput` reaches the
+element, so the editor makes no chord of a soft keyboard letter. The editor's own textarea,
+which reads compositions itself, is left alone, and so is an `input` with no selection API,
+such as an email box, whose selection could not be put back: each keeps a composed letter,
+and the latch is spent.
+
 A key or a touch that moves the editor's caret while the soft keyboard is still composing a
 word ends that composition. Chromium keeps an EditContext composition's range where it was
 when the page moves the selection (crbug 379170477), so a keyboard that recomposes the word
@@ -790,27 +1035,169 @@ refocuses the composing host in the same task as the caret move, from a window c
 `keydown` listener for the arrows, Home, End, PageUp, PageDown, Tab, Backspace and Delete,
 and from the editor's own `-monaco-gesturetap` and `-monaco-gesturecontextmenu`. It does so
 before the editor handles the key or the tap, except where an open suggestion list takes a
-key without modifiers, or a tap: ending a composition makes the editor refilter the list and
-highlight its first row again, so Up, Down, PageUp and PageDown that move the highlight end
-nothing, and Tab accepting the highlighted suggestion or a tap on a row end the composition
-after the list has acted. With no list open, ending a composition also makes the editor
-schedule a quick suggestion, which 10 ms later opens the list wherever the caret then ends a
-word. Patch 0023 cancels it when a cursor key moves the caret; without it, End on a line
-ending in an identifier, or a trackpad drag down onto one, opened the list there, and Enter
-then accepted a suggestion instead of starting a new line. The word is committed as typed,
-so on a Japanese keyboard the kana are committed unconverted. A caret moved by a command,
-such as Undo, Find or Go to Line, is not covered.
+key without modifiers, or a tap. Up, Down, PageUp and PageDown that move the list's highlight
+end nothing, and Tab accepting the highlighted suggestion or a tap on a row end the
+composition after the list has acted, because ending a composition makes the editor
+refilter the list and highlight its first row again. With no list open, a quick suggestion
+can still be pending when a cursor key moves the caret, scheduled 10 ms after the last letter
+typed or the end of a composition that typed, patch 0025 scheduling none for one that typed
+nothing, and it opens the list wherever the caret then ends a word. Patch 0023 cancels it when
+a cursor key moves the caret; without it, End on a line ending in an identifier, or a trackpad
+drag down onto one, opened the list there, and Enter then accepted a suggestion instead of
+starting a new line. The word is committed as typed, so on a Japanese keyboard the kana are
+committed unconverted. A caret moved by a command, such as Undo, Find or Go to Line, is not
+covered.
+
+Gboard 12.4 also sends Enter as a key press when the caret is inside an underlined word or at
+its start, as after a tap on the word or Home, and at once recomposes the word after the
+caret at the offsets of its own copy of the text: the old line with a line break at the
+caret. The editor's EditContext buffer used to restart at the new line, so that range fell on
+other characters, and a tap inside `alpha1` in `const alpha1 = 1, alpha2 = 2` followed by
+Enter left `ha1 = 1, aha1a2 = 2` on the new line. At column 1 the buffer did not change at
+all, so the keyboard was never told, and its next Backspace deleted nothing. Patch 0024, on
+Android, keeps the buffer's start after an edit the keyboard made, so the line break it typed
+stays in the buffer and a Backspace it sends for that line break joins the lines. Where text
+follows the caret it starts the buffer instead where the caret sits at the offset the
+keyboard expects, so the recomposition lands on the text after the caret whatever
+indentation the editor added. It does that only there, because the keyboard's copy of the
+text before the caret then lacks the indentation and nothing tells the keyboard: moving the
+start at the end of a line as well, measured, let Gboard recompose a word over other
+characters after Enter at the end of an indented line, and three Backspaces turned `alpha1;`
+into `alphalpha`. With the start kept, the indentation moves the caret off the offset the
+keyboard expects, and it reads the text again. A selection the keyboard sets without changing
+any text, as Gboard does for a space bar swipe and before it commits a suggestion, goes where
+the keyboard asked, on whichever line of the buffer that is, as a cursor key moves the caret,
+and the buffer keeps its start and its end. The keyboard goes on from its own copy of the
+text as if its selection had landed: with the caret moved only along its line, a swipe past
+the start of a line typed after Enter left Gboard 12.4's own caret at the end of the line
+above, and on an API 33 emulator it wrote the word there, `one`, over `alph`. So the caret
+follows the swipe into the line above, as in a text box, and the buffer keeps the lines after
+the caret's, which the keyboard's copy holds, until the next tap, cursor key or command. What
+the keyboard replaces reaches across the line breaks the buffer holds, after the caret as well
+as before it. A Backspace the keyboard sends as a key press, as Gboard 17.7 and 18.4 do, keeps
+the buffer as it is too, from the press to its release, because the keyboard counts the
+character in its own copy: reset as after a command, the buffer dropped the lines a swipe into
+the line above had kept while the caret moved where the keyboard expected, and on an API 37
+emulator the next suggestion Gboard 17.7.4 committed for the line below was written over the
+line above, `gama` becoming `gabra `; with the buffer kept, the same steps replaced only the word
+on the line below.
+Several cursors become one, as they do on the textarea input. Moved as a cursor key moves it,
+the caret also takes an open suggestion list along: the list is refiltered at the new caret
+and closes once the caret leaves the word, where a move made as typing would leave it open for
+Enter to accept a suggestion at the new caret. Every other cursor change, and every edit and
+selection on other platforms, starts the buffer at the caret's line, as upstream does.
+
+A keyboard hears of a selection that moved and of nothing else, because Android passes a
+selection on only when it changed. So a buffer rewritten with the caret at the offset it had
+left the keyboard on the text it had: on an API 36 emulator with Gboard 18.4, after Tab
+accepted `delta` over a `d` typed on a new line, the strip went on offering `do`, which made
+the line `deltao `, and after a tap from the end of `delta` to the end of `alpha` on another
+line its `Delta` replaced `alpha`. The tap route comes from upstream's per-line buffer and the
+Tab route from the start kept after Enter. On Android patch 0024 therefore keeps what the
+keyboard knew before the first rewrite of a task that is not an edit or a selection of the
+keyboard's, and once the code that rewrote the buffer has returned, still in the same task,
+restarts input if the text then differs from it and the selection does not: the editing host
+is blurred and focused again with the editor's focus tracking paused, and the keyboard reads
+the text again. Decided at the end of the task, an accepted suggestion or a paste, which
+rewrites the buffer before the caret moves, restarts nothing. It costs a restart at each tap,
+cursor key or command that leaves the caret at the same offset of another line, column 1
+included, at each command that rewrites the caret's line without moving the caret, such as a
+forward Delete and its undo, and at each edit made after the caret on its line in a later
+task, as linked editing makes while a tag is typed, or a replacement before the caret by text
+as long; an edit before the caret that changes its length moves the caret's offset, which the
+keyboard is told of, and restarts nothing. The keyboard guard keeps a
+keyboard that is up across that blur and focus (below). Text the editor adds inside an edit
+of the keyboard's, such as an auto-closed bracket or quote, restarts nothing, because that
+rewrite counts as the keyboard's own, so the keyboard's copy goes on without it, as before
+(read from the code).
+
+Patch 0025 changes how the editor's suggestions meet a composition. A composition counts as
+typed only when its last caret move was typing, so the word Gboard underlines under a tap,
+by rewriting it with itself, opens no suggestion list when the keyboard is put away, and the
+end of such a composition checks no trigger character either.
+
+A touch on another part of the workbench, an activity bar icon or a status bar item, leaves
+focus in the editor on Android, because the workbench's touch gestures cancel the events that
+would move it, so the blur that ends a suggestion session on a desktop never comes. A list
+stayed open over the view the touch opened, and the next tap there accepted a suggestion into
+the file: with Gboard 12.4 on an API 33 emulator, `hello world` became `hello
+WebTransportDatagramDuplexStream` from a tap meant for a file in the Explorer. The keyboard
+guard puts the keyboard away at such a touch (below), which ends a word still underlined, and
+the end of that composition would arm a quick suggestion (read from the code). On Android patch
+0025 ends the session on a `pointerdown` outside the editor and its overflow widgets, a request
+still out or a quick suggestion still pending included, and the composition the keyboard then
+ends counts as one that typed nothing, so its end arms nothing either. A list left open when
+the keyboard is put away with Back, which no touch precedes, stays until a tap, as before.
 
 The same script decides when the soft keyboard comes up for the editor. It holds it down
 with `inputmode="none"` on the editor's editing host and lets it up only for a tap on text,
-anywhere inside an editor or in a text box, decided at `pointerup` so that a drag to scroll
-never raises it; text boxes themselves are not held. A tap anywhere inside an editor
-counts, the margin and the space under the last line included, because the editor moves the
-caret there. When the keyboard goes away, by Back, the navigation bar's hide key or
-anything else, `ExtraKeyRow`'s inset listener reports it and
-`window.__vscodroidKeyboardDismissed` puts the hold back, so the next scroll of the file
+anywhere inside an editor or a terminal or in a text box, decided at `pointerup` so that a
+drag to scroll never raises it; text boxes themselves are not held. The terminal's helper
+textarea is held like the editor's host, so a terminal focused from a tap outside text, its
+tab in the panel say, opens with the keyboard down until it is tapped; left out, as it was,
+the terminal kept the keyboard up over the view an activity bar icon opened, with typing
+going to the shell, and after Back the same icon raised it again. Typing with the keyboard up
+counts as a tap on text, in a text box as in an editor, so a terminal that Enter opens from the
+Command Palette, or a file from Quick Open, keeps the keyboard up when the palette was opened
+from a menu: held there, as after the tap on the menu, the keyboard went down under a terminal
+opened to be typed into. A file not open yet goes through a gap first: Quick Open's Enter takes
+the old editor's host away while the file loads, and Enter in the Explorer's New File box
+leaves focus on the Explorer's list, and Chromium takes the keyboard down there. A keyboard
+reported down while nothing that takes text has focus clears nothing a tap or typing counted,
+so the new editor's focus raises it again, as it did on API 33 and 37 emulators; read as put
+away, it left the file held with the keyboard down on API 33, 36 and 37 emulators. The test is
+what has focus, so Back while an extension's webview, an iframe, has focus is read the same
+way, as is the keyboard Chromium takes down when a terminal that was typed into goes away, and
+an editor focused next without a touch can raise it (read from the code). A host blurred and
+focused again in one task, as patch 0024 and the key row restart input, keeps a keyboard that
+is up: that focus holds nothing, though the touch before it was outside text and left the
+keyboard up, a drag on the activity bar, a long press or a button that opens a menu, because a
+hold written at that focus would take the keyboard down on a phone (below). It takes off a hold
+already on the host, which a keyboard put away and then raised by a touch inside the delay
+below leaves, and the composition finish takes such a hold off too; that hold reached Chromium
+when it was written, so a restart that meets it changes no input mode. A hold the focus handler put
+on with the keyboard up, to take it down, stays until the keyboard is reported down or a tap on
+text lets it up. A tap anywhere inside an editor counts, the margin and the space under the
+last line included, because the editor moves the caret there. When the keyboard goes away, by
+Back, the navigation bar's hide key or anything else, `ExtraKeyRow`'s inset listener reports
+it and `window.__vscodroidKeyboardDismissed` puts the hold back, so the next scroll of the file
 leaves it down; without that the host kept no `inputmode` and Chromium raised the keyboard
-again for any touch on it. A read-only editor never lets it up: its EditContext host
+again for any touch on it. A keyboard reported down while nothing
+that takes text has focus is taken as one Chromium took down as focus left text, and the hook
+keeps what a tap or typing counted (above).
+
+With the keyboard up, `inputmode="none"` on the focused host takes it down only where no
+hardware keyboard is attached: Chromium's `ImeAdapterImpl.updateState` hides the keyboard when
+the focused element's input mode turns to none unless the configuration reports a keyboard,
+and every emulator these flows were measured on does (`hw.keyboard=yes`, `qwerty` in its
+configuration). There a tap on an activity bar icon, which leaves focus on the editor's host,
+left the keyboard over the Explorer, and over the Search view with typing still going to the
+file. On a phone the hold took it down instead, over anything but a word still composing, and
+for every touch outside text: a drag, a long press and a button that opens a menu as well
+(read from Chromium's source, not measured on a phone). So while the keyboard is up a touch
+outside text leaves the focused host without the hold, and after a tap outside text that
+leaves an editing host focused the script asks for the keyboard down with
+`navigator.virtualKeyboard.hide()` under a manual `virtualKeyboardPolicy`, which goes back
+to auto when the keyboard is reported down, on the next tap on text, after a second, or when
+another host is asked; the dismissal hook then holds the host. The hook is not called at
+the report. A turn of the phone reports the keyboard hidden with the change of configuration
+and visible again 150 to 650 ms later, and on an API 36 emulator with `hw.keyboard=no`, which
+reports no keyboard as a phone does, the hold the hook writes at the first report took the
+keyboard down at the turn to landscape and kept it down, where with the hook replaced by a
+function that did nothing it stayed up. `KeyboardDismissal` therefore calls the hook half a
+second after the report, and not if the keyboard is visible by then or the configuration
+changed within two seconds. A scroll inside that half second can raise a keyboard put away
+with Back, as it did before the hold existed. A tap is the script's own test,
+12 CSS px and 500 ms, or a tap by the workbench's touch gesture, which the activity bar, the
+status bar and the tabs act on and which is looser, under 700 ms within 30 px on each axis:
+with only the script's test, a touch on the Search icon that slid 20 px, or a press of 620 ms
+on the Explorer icon, opened the view with the keyboard left up and typing going to the file,
+on an API 33 emulator, and with the gesture's tap counted the same touches took it down there
+and on an API 37 emulator. A button that opens a menu, marked `aria-haspopup="true"` as the
+views' and the editor's More Actions, Accounts, Manage and the Application Menu are, is left
+alone, because the keyboard going down resizes the window and the menu closed with it; so is
+a touch whose target has left the page, the block of a menu that a tap outside it has just
+closed. A read-only editor never lets it up: its EditContext host
 carries `aria-autocomplete="none"`, which the editor writes while it is read-only, so with
 File: Toggle Active Editor Read-only in Session a tap only moves the caret;
 `files.readonlyInclude` reaches the same editor option (read from the bundle, not
@@ -820,16 +1207,59 @@ Output editor is held too (read from the bundle, not measured). On the textarea 
 the marker is written only when the host is created, so that path is not gated and a
 read-only editor behaves there as before.
 
+The light bulb's Code Action list takes focus from the editor as it opens, so Chromium takes the
+keyboard down, and the window growing under the list changes the editor's layout, on which
+`CodeActionController` hides the list: with the keyboard up the list was on screen for about 40 ms
+on an API 33 emulator with Gboard 12.4. On Android patch 0028 keeps the list across a change of
+the editor's height alone; a change of width, as a turn of the phone makes, still closes it. With
+it the list stayed open while the keyboard went down on API 33, API 36 with no hardware keyboard
+and API 37 emulators, a tap on a row ran it, a tap outside it closed it and brought the keyboard
+back, and a turn to landscape closed it (API 33 and 36).
+
+A keyboard that pastes from its own clipboard, as the suggestion strip of Gboard does, commits the
+text in one piece, and `NativeEditContext` typed it: `viewController.type` runs every character
+through the typing handlers, so 4720 characters of code held the page for 1.1 s on an API 33
+emulator with Gboard 12.4, and every line break was indented again on top of the indentation the
+text already carried (five lines of nested braces, four spaces apiece, came out at 8, 16 and 20).
+On Android patch 0029 hands a plain commit of more than 64 characters, or of any text with a
+line break before its end, to `viewController.paste`, which inserts it in one edit and leaves it
+as it is: the same paste took 3 ms and the braces arrived unchanged. One character, an Enter, a
+composition and a word committed together with the Enter after it are untouched, since that is
+typing and Enter has to indent. A DOM paste event, which Ctrl+V and the long-press Paste use,
+never took this path.
+
 ### 5.3 Visibility Control
 
 The row decides whether to show in one place, the inset listener installed by
-`ExtraKeyRow.setupWithRootView`, and shows only when all three hold: the soft keyboard
-is visible, the page has height to spare (`suppressedForHeight`), and the user has not
+`ExtraKeyRow.setupWithRootView`, and shows only when all four hold: the soft keyboard
+is visible, the page has height to spare (`suppressedForHeight`), the user has not
 hidden it (`hiddenByUser`, which `MainActivity` persists under `extra_key_row_hidden`
-and flips through **VSCodroid: Toggle Extra Key Row**). Any new reason to hide it
+and flips through **VSCodroid: Toggle Extra Key Row**), and no character has been
+typed on a hardware keyboard since a finger last left the screen
+(`hiddenForHardwareKeyboard`, which is not persisted). Any new reason to hide it
 belongs in that decision rather than in a direct write to `visibility`, because the
 branch that hides it also dismisses the long-press popup and clears a latched
 modifier. No snippet is reproduced here, for the reason 5.2 gives.
+
+`MainActivity.dispatchKeyEvent` hands the key to the view tree first and only then
+looks at it (`HardwareKeyboardTest` pins that nothing takes a key from the page), and
+`HardwareTyping` decides what counts: a key that types a character, from an alphabetic
+keyboard that is not the virtual one. That leaves out the soft keyboard's own keys,
+the row's, a modifier held for a tap, Escape, the arrows and Enter, the volume and
+power keys and a game controller. The first key that counts resizes the page by the
+row's height, which closes a context menu opened by touch, so the keys used to steer
+are not among them. `dispatchTouchEvent` gives the row back when a finger lifts from
+the touchscreen, after the touch was delivered, and ignores a mouse or a touchpad,
+which is how someone at a hardware keyboard places the caret. At the lift and not at
+the first contact, because the row takes its height out of the page and a tap is
+placed on the page as it is when the finger leaves: with the row back at the first
+contact the bottom of the page, the status bar and the terminal, moved up from under
+a finger that was still down. Running **Toggle Extra Key Row** to show it, and
+`onConfigurationChanged` reporting no keyboard (a Bluetooth one asleep or unpaired),
+give it back as well. On an API 33 emulator with a keyboard made through `uinput` and
+the soft keyboard up, the page was 439 CSS px high with the row, 514 after a letter,
+439 after a tap of the screen, 514 after the next letter and still 514 after a mouse
+click.
 
 ---
 
@@ -864,6 +1294,12 @@ flowchart TD
   P --> P21["0021 terminal hint: no Copilot CLI line on Android"]
   P --> P22["0022 EditContext: keep the IME buffer and caret in step"]
   P --> P23["0023 suggest: drop a pending quick suggest on a caret key"]
+  P --> P24["0024 EditContext: keep the buffer where the keyboard expects it"]
+  P --> P25["0025 suggest: only from compositions that typed; a touch elsewhere ends it"]
+  P --> P26["0026 configuration: keep a folder's cached settings until its file is read"]
+  P --> P27["0027 configuration: start a remote workspace from the settings the page read"]
+  P --> P28["0028 code actions: keep the list open as the keyboard goes"]
+  P --> P29["0029 EditContext: a keyboard's long or multi-line commit is one paste"]
 ```
 
 Five of these are load-bearing in ways their titles understate:

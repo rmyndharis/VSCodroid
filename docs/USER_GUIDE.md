@@ -52,33 +52,72 @@ VSCodroid is VS Code. If you have used VS Code on desktop, everything works the 
   dialog reaches Documents, Downloads or an SD card, but VSCodroid holds no
   storage permission, so Android shows it the folders there and hides every file
   another app saved in them. Such a folder opens with its subfolders and none of
-  those files; the editor then warns and offers the route below.
+  those files; the editor then says so in a dialog, once per folder each time its
+  server starts rather than on every reload, and offers the route below.
 - For a folder anywhere else on the device, run **VSCodroid: Open Folder from
   Device**: tap the remote indicator at the left end of the status bar, tap the
   button in the empty Explorer, or use the Command Palette. It opens Android's
   folder picker; pick the folder and allow access, and the files other apps
   saved in it show as well, apart from what the copy below leaves out. Android
-  grants access one folder at a time, and not to the top of the storage, the
-  top of an SD card or the Download folder itself, so pick a folder inside
-  those. **VSCodroid: Open Recent Folder**, in the same menu, lists the folders
-  you have granted, with **Browse device...** at the end to add another.
+  grants access one folder at a time, and not to the top of the storage or of an
+  SD card, nor to the Download or Android folder itself, so pick a folder inside
+  those. Nothing in `Android/data`, `Android/obb` or `Android/sandbox` can be
+  granted, since Android keeps each app's folder there to that app. A USB drive
+  can be granted whole. **VSCodroid: Open Recent Folder**, in the same menu,
+  lists the folders you have granted, with **Browse device...** at the end to
+  add another.
 - A device folder is edited as a copy inside the app. The copy is read from the
   device when you open the folder, and each save is written back to the device
-  as you make it. It leaves out files over 50 MB, and the directories `.git`,
-  `node_modules`, `.gradle`, `.idea`, `venv`, `.env` and `__pycache__` are
-  neither read in nor written back, so a git repository opened this way has no
-  history here. Changes another app makes while the folder is open do not
-  reach the editor until you open the folder again. If you save a file that
-  another app changed since you opened the folder or last saved that file, the
-  other app's version is normally kept beside yours as `<name>.device-<time>`,
-  in the editor and in the device folder. The check goes by the time and size
-  the device folder reports for the file: in a folder that reports no times, or
-  keeps a file's old time when the file changes, as some USB and network folders
-  do, a change that keeps the file's size goes unnoticed, and a folder that
-  changes a file's time on its own can occasionally leave such a copy holding
-  the file as you opened it. If the device folder's version cannot be copied, as
-  can happen in a network folder while it is offline even when no other app
-  changed the file, your save stays inside VSCodroid and a notice says so.
+  as you make it. It leaves out files the device folder reports as over 50 MB,
+  and the directories `.git`, `node_modules`, `.gradle`, `.idea`, `venv`, `.env`
+  and `__pycache__` are neither read in nor written back, so a git repository
+  opened this way has no history here. Changes another app makes while the
+  folder is open do not reach the editor until you open the folder again. If you
+  save a file that another app changed since you opened the folder or last saved
+  that file, the other app's version is normally kept beside yours as
+  `<name>.device-<time>`, in the editor and in the device folder. The check goes
+  by the time and size the device folder reports for the file: in a folder that
+  reports no times, or keeps a file's old time when the file changes, as some
+  USB and network folders do, a change that keeps the file's size goes
+  unnoticed, and a folder over 64 MB that changes a file's time on its own can
+  occasionally leave such a copy holding the file as you opened it, until
+  VSCodroid has read each of its files once after an update from version 1.4.0
+  or earlier, which it does 64 MB per opening of the folder. A folder that
+  reports no times cannot say which copy is newer when yours and the device
+  folder's differ as you open it, as when another app changed a file you saved
+  there in an earlier session: the editor keeps showing your version, and your
+  next save of the file keeps the other app's beside it. If the device folder's
+  version cannot be copied, as can happen in a network folder while it is
+  offline even when no other app changed the file, or when the device folder
+  reports that version as over 50 MB, your save stays inside VSCodroid and a
+  notice says so. While the folder is open VSCodroid tries the save again by
+  itself, at least every five minutes, and it goes through, without a second
+  notice, once that version can be read or copied. If the folder reports file
+  times, opening it again tries the save too; if that version cannot be read or
+  copied then either, saves of the file wait inside VSCodroid until an open can.
+  If it reports none, opening it again leaves both versions as they are, as
+  above: VSCodroid goes on trying the save, and after VSCodroid restarts, your
+  next save of the file sends it. In either kind of folder, an open that finds
+  that version reported as over 50 MB keeps saves of the file inside VSCodroid
+  until an open finds it smaller.
+- A file of a device folder that you delete in the editor is deleted in the
+  device folder too, unless the device folder's version is one VSCodroid has not
+  read: another app may have changed it since you opened the folder or last
+  saved the file, by the same check as a save, or opening the folder could not
+  read it. Such a file is kept in the device folder, and so is a folder holding
+  it that you delete from the terminal; a notice says so, and the file comes
+  back into the editor the next time you open the folder.
+- An open that cannot list the folder holding a file leaves VSCodroid nothing
+  to check that file against until an open can: a save held back before that
+  open is no longer tried, and your next save or delete of the file replaces or
+  removes the device folder's version without keeping a copy.
+- The Explorer and the title bar show a device folder under its own name. A
+  folder opened in an earlier version is shown under a twelve-character code
+  such as `8e440ff38c8e`, the name of its copy, and offers to reopen under its
+  own name. While a file has unsaved changes or a terminal is open, **Reopen**
+  asks you to save or close them first, since they would stay with the code;
+  the files that were open come back with the folder. **Don't Ask Again** keeps
+  the code for that folder.
 - A `.code-workspace` file opens as a multi-root workspace: open the file and
   choose **Open Workspace**. On a device folder its roots have to sit inside the
   folder you granted, because nothing outside that folder is reachable.
@@ -114,6 +153,14 @@ VSCodroid stores settings in `~/.vscodroid/`. Key defaults:
 
 To edit settings as JSON, use the Command Palette: `Preferences: Open User Settings (JSON)`.
 
+### Text Size
+
+**VSCodroid: UI Scale**, in the Command Palette, sets the size of the whole interface: the side bar, tabs, menus, status bar, panels and editor together. It offers 100%, 110%, 125% and 150%, but only the sizes that keep the page at least 320 CSS pixels wide, so most phones go up to 110% or 125% and tablets to 150%. The size is kept when the window reloads and when the app restarts. A size that does not take effect on your device is put back to 100%, and the command says so when you pick it.
+
+To change the text in one place only, use the `editor.fontSize` and `terminal.integrated.fontSize` settings, which are remembered. **Increase Editor Font Size** in the Command Palette also works, but it is not bound to a key and it resets when the window reloads.
+
+Android's Font size setting does not reach the editor's interface. Its Display size setting does, and it enlarges every app on the device.
+
 ### Extra Key Row
 
 When the soft keyboard is visible, a row of extra keys appears above it. Swipe it
@@ -130,6 +177,12 @@ To hide the row altogether, for example while typing on a hardware keyboard, tap
 the remote indicator at the left end of the status bar and choose
 **VSCodroid: Toggle Extra Key Row**, or run it from the Command Palette. The row
 stays hidden, across restarts, until you run the command again.
+
+The row also steps away by itself once you type a character on a hardware keyboard,
+and comes back when a finger leaves the screen: a tap on the editor, the end of a
+scroll, or running the command above to show it. A mouse click or a touchpad does
+not bring it back, and nothing typed on the soft keyboard or on the row takes it
+away. If the hardware keyboard is disconnected the row comes back at once.
 
 How many pages there are depends on how wide your phone is. The row divides its width
 evenly among the keys on a page, so on a narrower screen it carries fewer keys per
@@ -205,8 +258,14 @@ because auto-closing brackets usually supply it and leave you with no way to typ
 one when they do not. `~` is in the popup too, but it is not stranded there: the
 row carries `` ` `` as a key of its own, and a latched Shift over it types `~`.
 
-Every other key, Tab, Esc and the three modifiers included, sends one press on a
-long hold, the same press a tap sends. Nothing on this row repeats.
+Every other key sends one press, the same press a tap sends, and nothing on this
+row repeats. Tab, Esc and the rest press when you lift your finger, however long you
+held it, provided the finger stayed where it landed; one that slid away at any point
+sends nothing. Ctrl, Alt and Shift switch as soon as the hold is long enough for a
+long press, before you lift your finger, so what you type while still holding a lit
+Ctrl meets it just as it would after a tap, and lifting the finger changes nothing. A
+swipe that starts on a key turns the page, sends nothing and leaves a modifier as it
+was, and two quick taps send two presses.
 
 #### Modifiers
 
@@ -899,7 +958,7 @@ In the file tree:
 
 - Connect a Bluetooth keyboard for the best experience with complex editing.
 - Without an external keyboard, rely heavily on the Command Palette (**Ctrl+Shift+P**) and the Extra Key Row.
-- Pinch-to-zoom is disabled to prevent layout issues. Change text size with the `editor.fontSize` and `terminal.integrated.fontSize` settings, which are remembered. **Increase Editor Font Size** in the Command Palette also works, but it is not bound to a key and it resets when the window reloads.
+- Pinch-to-zoom is disabled to prevent layout issues; [Text Size](#text-size) lists what makes things larger.
 
 ---
 
@@ -1092,8 +1151,9 @@ itself:
 In a terminal, in a shell task, and in whatever a process task's command starts,
 an absolute path, a forked helper and a script run by its own path all work.
 
-`npm` and `npx` are bash functions and nothing else, so those two are still
-reachable only from bash. `sh -c 'npm -v'` fails where `bash -c 'npm -v'` works.
+`npm` and `npx` are reached the same two ways: a bash function in a shell, and a
+program on `PATH` for everything else. So `sh -c 'npm -v'`, `timeout 60 npm install`
+and a tool that runs `npm install` itself all find them, as the terminal does.
 
 ### Android Phantom Process Limit
 
@@ -1248,9 +1308,9 @@ Core installation extracts approximately 603 MB to internal storage. With both t
 
 ## Troubleshooting
 
-### White Screen on Launch
+### Blank Screen on Launch
 
-If the app shows a white screen after opening:
+If the app shows a blank screen after opening:
 
 1. Wait 10-15 seconds -- the Node.js server may still be starting.
 2. If it persists, force-close the app and reopen it.
@@ -1268,7 +1328,7 @@ If the app shows a white screen after opening:
 > failed there on the first package that ships an executable.
 
 Rescue anything unsaved first. Which route is open to you depends on whether the
-editor still works, and on a white screen it does not:
+editor still works, and on a blank screen it does not:
 
 **If the editor will not open**, nothing outside the app reaches a new install's
 projects: internal storage is not exposed over USB or MTP, and `adb pull` cannot
@@ -1321,7 +1381,7 @@ If `node`, `python3`, `git`, or other tools show "command not found":
 
 If `npm install` fails with errors:
 
-- **EACCES / permission errors** -- make sure you are working inside `~/projects/` or your home directory, not in a system path.
+- **EACCES / permission errors** can mean an install step tried to run a program the package downloaded, which Android does not allow inside the app's storage; esbuild is one such package (see [Known Limitations](#packages-with-prebuilt-binaries)). If it is about writing a file or folder (`mkdir`, `open`) rather than running a program, make sure you are working inside `~/projects/` or your home directory, not in a system path.
 - **node-gyp / compilation errors** -- the package requires native compilation. Use a pure JS alternative (see [Known Limitations](#native-npm-packages)).
 - **Unsupported platform errors** come from a package whose prebuilt binaries have no Android build, so there is nothing to install (see [Known Limitations](#packages-with-prebuilt-binaries)).
 - **Network timeout** -- check your internet connection. npm uses `--prefer-offline` by default, so cached packages install without network.
@@ -1369,6 +1429,7 @@ This is usually caused by Android's memory management killing background process
 2. Reduce the number of open terminal tabs.
 3. Check the process monitor in the status bar -- if phantom count is high, close unused terminals.
 4. On devices with 4 GB RAM or less, consider keeping only one project open at a time.
+5. If it keeps happening, send a report; see [Sending a Bug Report](#sending-a-bug-report).
 
 ### Dev Server Not Accessible in Browser
 
@@ -1388,6 +1449,12 @@ If the preview tab or the device browser opens but the page does not load:
 If the editor UI crashes but the app stays open, VSCodroid automatically recovers the WebView and reconnects to the running server. Your terminal sessions and unsaved work in the editor state are preserved.
 
 Recovery is bounded, because reloading a page that is itself the cause only repeats the crash. Three crashes inside a minute are recovered from as normal; a fourth stops the automatic reload and puts up a page saying so, with a **Try again** button that reloads the editor when you are ready. The server keeps running behind it either way, so nothing needs force-closing.
+
+### Sending a Bug Report
+
+If the editor freezes, reloads by itself or the app closes, run **VSCodroid: Copy Bug Report** from the Command Palette once the editor is back. The report opens in a new editor tab: the device and app version, how Android recorded the app's recent exits (one it declared not responding shows as `ANR`, one closed to free memory as `LOW_MEMORY`), each time the process that draws the editor died, the newest crash logs and the last 200 lines of the server log. Nothing is sent anywhere.
+
+Read it before you share it. The server log can name your files and folders, and you can delete any line you want kept private. Then tap **Copy** in the notification that comes with it, or **Copy Bug Report** in the status bar, which stays there while the report is open, and paste the report into an issue at [github.com/rmyndharis/VSCodroid/issues](https://github.com/rmyndharis/VSCodroid/issues).
 
 ---
 

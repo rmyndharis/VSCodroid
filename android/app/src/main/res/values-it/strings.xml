@@ -254,6 +254,15 @@
          because that one says the thing holds files, which is false of a file, and
          apart from saf_write_back_failed because the app holds nothing here at all. -->
     <string name="saf_document_kept">%1$s è stato mantenuto nella cartella del dispositivo: l\'editor non ne ha mai avuto una copia. Eliminalo lì se non ti serve più.</string>
+
+    <!-- The same refusal for a file the editor did have and the user deleted, kept
+         because the device's version may have changed since the editor last read or
+         saved it, as another app's edit does. saf_document_kept would tell that user the
+         editor never had the file they just deleted in it. -->
+    <string name="saf_document_changed_kept">%1$s è stato mantenuto nella cartella del dispositivo: un\'altra app potrebbe averlo modificato da quando l\'editor lo ha letto o salvato l\'ultima volta. Eliminalo lì se non ti serve più.</string>
+    <!-- A directory deleted in the editor that holds such a file, and no file the editor
+         never had, which is what saf_directory_kept says. -->
+    <string name="saf_directory_changed_kept">%1$s è stata mantenuta nella cartella del dispositivo: un\'altra app potrebbe aver modificato un file al suo interno da quando l\'editor lo ha letto o salvato l\'ultima volta. Eliminala lì se non ti serve più.</string>
     <string name="saf_delete_refused">Non è stato possibile eliminare %1$s dalla cartella del dispositivo, quindi ricomparirà alla prossima apertura della cartella. Eliminalo nel gestore file del dispositivo.</string>
 
     <!-- Removing the local copy of a device folder, from the storage screen. The
@@ -454,7 +463,9 @@
          It is a version number, not a quantity: nothing about the sentence
          changes when it does, and passing it as a number invites a translator to
          treat "105 and newer" as something to inflect. -->
-    <string name="webview_below_minimum">La versione di Android System WebView è %1$s. VSCodroid è testato con la versione %2$s e successive, quindi alcune parti dell\'editor potrebbero non funzionare. Aggiornalo dal Play Store.</string>
+    <string name="webview_below_minimum_title">Android System WebView non è aggiornato</string>
+    <string name="webview_below_minimum">La versione di Android System WebView su questo dispositivo è %1$s. VSCodroid richiede la %2$s o successive: con versioni precedenti, le anteprime Markdown e i pannelli delle estensioni, come la chat, restano vuoti. Aggiorna Android System WebView dal Play Store.</string>
+    <string name="webview_update">Aggiorna</string>
 
     <!-- The extra key row, all of it spoken rather than drawn.
 

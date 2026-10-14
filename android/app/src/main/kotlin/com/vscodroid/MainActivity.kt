@@ -12,6 +12,7 @@ import android.content.ComponentCallbacks2.TRIM_MEMORY_MODERATE
 import android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_CRITICAL
 import android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW
 import android.content.pm.PackageManager
+import android.content.res.Configuration
 import android.graphics.Typeface
 import android.os.Bundle
 import android.net.Uri
@@ -22,6 +23,7 @@ import android.os.SystemClock
 import android.provider.DocumentsContract
 import android.text.util.Linkify
 import android.view.KeyEvent
+import android.view.MotionEvent
 import android.view.View
 import android.webkit.CookieManager
 import android.webkit.RenderProcessGoneDetail
@@ -41,6 +43,8 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import androidx.activity.OnBackPressedCallback
 import com.vscodroid.util.drawBehindSystemBars
+import com.vscodroid.util.isLightColor
+import com.vscodroid.util.paintWindow
 import com.vscodroid.util.CrashReporter
 import com.vscodroid.util.StorageManager
 import com.vscodroid.util.WebViewVersion
@@ -51,6 +55,8 @@ import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowInsetsCompat
 import androidx.lifecycle.lifecycleScope
+import androidx.webkit.WebViewCompat
+import androidx.webkit.WebViewFeature
 import com.vscodroid.util.EditorLocale
 import com.vscodroid.util.Environment
 import com.vscodroid.bridge.AUTH_TAB_WINDOW_MILLIS
@@ -59,7 +65,9 @@ import com.vscodroid.bridge.AuthTabWindow
 import com.vscodroid.bridge.ClipboardBridge
 import com.vscodroid.bridge.SecurityManager
 import com.vscodroid.keyboard.ExtraKeyRow
+import com.vscodroid.keyboard.HardwareTyping
 import com.vscodroid.keyboard.KeyInjector
+import com.vscodroid.keyboard.KeyboardDismissal
 import com.vscodroid.service.NodeService
 import com.vscodroid.service.StartupNotice
 import com.vscodroid.setup.FirstRunSetup
@@ -77,6 +85,10 @@ import com.vscodroid.webview.DownloadOutcome
 import com.vscodroid.webview.VSCodroidWebChromeClient
 import com.vscodroid.webview.VSCodroidWebView
 import com.vscodroid.webview.VSCodroidWebViewClient
+import com.vscodroid.webview.addPageColorListener
+import com.vscodroid.webview.addPlainTextPageScript
+import com.vscodroid.webview.keepStartColor
+import com.vscodroid.webview.lastPageColor
 import com.vscodroid.webview.urlLogLabel
 import com.vscodroid.webview.COPY_DIAGNOSTICS_URL
 import com.vscodroid.webview.RETRY_URL
@@ -109,6 +121,24 @@ class MainActivity : AppCompatActivity() {
 
     private var webView: WebView? = null
     private var extraKeyRow: ExtraKeyRow? = null
+    private val keyboardHandler = Handler(Looper.getMainLooper())
+
+    /**
+     * What the page is told when the keyboard goes away, held back for a moment:
+     * see [KeyboardDismissal] for why a turn of the phone must not reach it.
+     */
+    private val keyboardDismissal = KeyboardDismissal(
+        schedule = { task, delayMs -> keyboardHandler.postDelayed(task, delayMs) },
+        cancel = { task -> keyboardHandler.removeCallbacks(task) },
+        now = { SystemClock.uptimeMillis() },
+        imeVisible = { extraKeyRow?.imeVisible == true },
+        onDismissed = {
+            webView?.evaluateJavascript(
+                "if (window.__vscodroidKeyboardDismissed) window.__vscodroidKeyboardDismissed();",
+                null,
+            )
+        },
+    )
 
     /**
      * The bound service, or null while nothing is bound.
@@ -119,9 +149,9 @@ class MainActivity : AppCompatActivity() {
      * resource-interception thread, through the connection-token suppliers
      * [initBridge] hands to the client and to the service worker.
      * `shouldInterceptRequest` performs synchronous HTTP, so it cannot be on the
-     * UI thread. A stale null there is a proxied request that goes out without the
-     * connection token, which the server answers 403: a workbench asset that fails
-     * to load with nothing anywhere saying why.
+     * UI thread. A stale null there reads as a server that is not ready: the
+     * request waits for a token that this read would never see and is refused,
+     * a webview that stays blank with nothing anywhere saying why.
      */
     @Volatile
     private var nodeService: NodeService? = null
@@ -741,10 +771,17 @@ class MainActivity : AppCompatActivity() {
         // exactly backwards. Two sentences rather than one, because a directory was
         // kept for what is inside it and a document was kept for what it is, and the
         // engine has to say which: the entry is already unlinked by the time the event
-        // arrives, so nothing here can ask the disk.
-        safManager.onKeptOnDevice { kept, isDirectory ->
+        // arrives, so nothing here can ask the disk. Each comes twice, because a file the
+        // editor had and the user deleted is kept for a change on the device, which "the
+        // editor never had a copy of it" gets backwards too.
+        safManager.onKeptOnDevice { kept, isDirectory, changed ->
             val message = appContext.getString(
-                if (isDirectory) R.string.saf_directory_kept else R.string.saf_document_kept,
+                when {
+                    changed && isDirectory -> R.string.saf_directory_changed_kept
+                    changed -> R.string.saf_document_changed_kept
+                    isDirectory -> R.string.saf_directory_kept
+                    else -> R.string.saf_document_kept
+                },
                 kept.name,
             )
             toMainThread.post {
@@ -1070,6 +1107,7 @@ class MainActivity : AppCompatActivity() {
         // which is why the manager is built on the application context and why the
         // five notices in onCreate close over that and a main-thread Handler
         // rather than over this Activity.
+        keyboardDismissal.release()
         val stopping = if (::safManager.isInitialized) safManager else null
         val logTag = tag
         if (stopping != null) {
@@ -1154,6 +1192,23 @@ class MainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * The manifest's `configChanges` keeps the activity across a turn of the phone,
+     * a resize or a fold, so this is where one is seen. The keyboard is reported
+     * hidden with it and comes back by itself, and [keyboardDismissal] must not
+     * hold the page's editor down for that.
+     */
+    override fun onConfigurationChanged(newConfig: Configuration) {
+        super.onConfigurationChanged(newConfig)
+        keyboardDismissal.turned()
+        // The keyboard the extra key row stood aside for is gone, a Bluetooth one
+        // asleep or unpaired, and the soft keyboard is what is left. A touch would
+        // bring the row back, but the person may well carry on typing on the screen.
+        if (newConfig.keyboard == Configuration.KEYBOARD_NOKEYS) {
+            extraKeyRow?.hiddenForHardwareKeyboard = false
+        }
+    }
+
     override fun onTrimMemory(level: Int) {
         super.onTrimMemory(level)
         // Nothing here branches on the level itself: memoryPressureOf maps it,
@@ -1218,8 +1273,12 @@ class MainActivity : AppCompatActivity() {
             // lookup asks the system server for every persisted grant and prunes
             // the recent list against the answer, and a cold start whose remembered
             // workspace is a mirror reaches it with the workbench already drawn.
+            //
+            // The note is disk work beside it: a page on the copy's named path is
+            // recorded, and a page on its hash path gets a named path to move to.
             val folder = withContext(Dispatchers.IO) {
                 safManager.folderForOpenedPath(folderPath)
+                    ?.also { safManager.noteOpened(folderPath, it) }
             }
             val mirror = SafStorageManager.mirrorNameFor(
                 folderPath, Environment.getSafMirrorsDir(this@MainActivity),
@@ -1341,9 +1400,12 @@ class MainActivity : AppCompatActivity() {
                 // missing from the recent list with nothing to explain it. The sync
                 // below must still be skipped in that case, which the ordinary hop
                 // after this one does by throwing.
-                val displayName = withContext(NonCancellable + Dispatchers.IO) {
+                val (displayName, copyIsNew) = withContext(NonCancellable + Dispatchers.IO) {
                     safManager.persistPermission(uri)
-                    safManager.getDisplayName(uri)
+                    // Asked before the sync below makes the copy. A copy older than this
+                    // open may have been opened by its hash path, which the workbench
+                    // keeps its own state under; see deviceFolderTarget.
+                    safManager.getDisplayName(uri) to !safManager.getMirrorDir(uri).exists()
                 }
                 dialog.setMessage(getString(R.string.saf_sync_message, displayName))
 
@@ -1422,19 +1484,27 @@ class MainActivity : AppCompatActivity() {
 
                 dialog.dismiss()
 
-                // Reload VS Code with the mirror, or with the workspace it holds.
-                // The listing is off the main thread for the reason every other
-                // disk read here is: `MainThreadWatch` installs a policy that
-                // logs one, and `folderOpenTarget` stats each candidate.
+                // Reload VS Code with the mirror, or with the workspace it holds,
+                // by the folder's own name where that is safe. The listing and the
+                // link are off the main thread for the reason every other disk
+                // read here is: `MainThreadWatch` installs a policy that logs one,
+                // and `folderOpenTarget` stats each candidate.
                 if (navigate && serverPort > 0) {
                     val target = withContext(Dispatchers.IO) {
-                        folderOpenTarget(
+                        val opened = folderOpenTarget(
                             mirrorDir.absolutePath,
                             mirrorDir.list()?.asList().orEmpty(),
                         )
-                    }
-                    if (target != mirrorDir.absolutePath) {
-                        Logger.i(tag, "The granted folder holds a workspace; opening that")
+                        if (opened != mirrorDir.absolutePath) {
+                            Logger.i(tag, "The granted folder holds a workspace; opening that")
+                        }
+                        deviceFolderTarget(
+                            target = opened,
+                            mirrorPath = mirrorDir.absolutePath,
+                            namedPath = safManager.namedPathFor(mirrorDir, displayName)?.path,
+                            byName = copyIsNew || safManager.wasShownByName(mirrorDir),
+                            openNow = openWorkspaceFolder,
+                        )
                     }
                     // Readiness rather than the port, for the reason recreateWebView
                     // gives: a device-folder sync can run for minutes, and a server
@@ -2045,6 +2115,16 @@ class MainActivity : AppCompatActivity() {
         webView = findViewById(R.id.webView)
         webView?.let { wv ->
             VSCodroidWebView.configure(wv)
+            // The loading page's colour, before the first frame: the one the
+            // workbench last painted, so a light theme starts light.
+            paintWindowNow(lastPageColor(this))
+            // Before the first load below: a document-start script runs only in
+            // documents that begin loading after it was added, and the object a
+            // page posts to is there only in those. The view recreateWebView
+            // builds comes through here as well.
+            addUiScaleScript(wv)
+            addPlainTextPageScript(wv)
+            addPageColorListener(wv, ::showPageColor)
             dropCacheLeftByEarlierBuild(wv)
             applyWindowInsetsPadding(wv)
             // Here and not in initBridge, which does its work once per WebView
@@ -2069,6 +2149,60 @@ class MainActivity : AppCompatActivity() {
             rendererCrashLoopShown = false
             wv.loadData(dataUrlSafe(loadingPage()), "text/html", "utf-8")
         }
+    }
+
+    /**
+     * Gives the window the colour the workbench page paints itself with, and keeps
+     * it for the screens of the next start.
+     *
+     * Where the window shows, see [paintWindow]: under a light theme the space the
+     * keyboard gave back stayed #1E1E1E for up to 2.1 s while a reload or a folder
+     * opened from the path box held the last frame, on an API 36 emulator, and the
+     * status and navigation bars were that colour throughout. What the next start
+     * shows before the workbench, see [lastPageColor].
+     */
+    private fun showPageColor(color: Int) {
+        paintWindowWhenDrawn(color)
+        keepStartColor(color)
+    }
+
+    /**
+     * The last window colour asked for, so that a page's colour still waiting for
+     * the frame that draws it does not land over a later one.
+     */
+    private var windowColorRequest = 0L
+
+    /**
+     * Gives the window [color] once the view draws the page that posted it, not
+     * before.
+     *
+     * A page posts its colour as its load starts, and the view goes on drawing the
+     * last page's frame until the new page paints, a second or more for the
+     * workbench. Painted at once, the bars around that frame took the new colour
+     * while it still showed the old: for 0.55 to 1.7 s at every change between a
+     * dark and a light theme on an API 36 emulator, and white around the dark
+     * loading page on the first launch after an update. A visual state callback
+     * runs once a frame holding the page as it is when the callback is posted is
+     * ready to draw, which for a page that has just started is its first.
+     */
+    private fun paintWindowWhenDrawn(color: Int) {
+        val request = ++windowColorRequest
+        val wv = webView
+        if (wv != null && WebViewFeature.isFeatureSupported(WebViewFeature.VISUAL_STATE_CALLBACK)) {
+            WebViewCompat.postVisualStateCallback(wv, request) { if (it == windowColorRequest) paintWindow(color) }
+        } else {
+            paintWindow(color)
+        }
+    }
+
+    /**
+     * Gives the window [color] now, for a page of this app's own, which posts
+     * nothing, and drops a page's colour still waiting for its frame, which would
+     * otherwise land over it.
+     */
+    private fun paintWindowNow(color: Int) {
+        windowColorRequest++
+        paintWindow(color)
     }
 
     /**
@@ -2183,6 +2317,7 @@ class MainActivity : AppCompatActivity() {
         override fun onRenderProcessGone(view: WebView, detail: RenderProcessGoneDetail): Boolean {
             Logger.e(tag, "Render process gone before the workbench loaded: " +
                 "didCrash=${detail.didCrash()}")
+            CrashReporter.recordRendererDeath(view.context, detail)
             recreateWebView()
             return true
         }
@@ -2254,9 +2389,8 @@ class MainActivity : AppCompatActivity() {
         // is up, which is the one state where moving focus resizes the window.
         // The keyboard guard holds the keyboard down again once it has gone.
         extraKeyRow?.onImeVisibilityChanged = { visible ->
-            val dismissed = if (visible) "" else
-                " if (window.__vscodroidKeyboardDismissed) window.__vscodroidKeyboardDismissed();"
-            webView?.evaluateJavascript("window.__vscodroidImeVisible = $visible;$dismissed", null)
+            webView?.evaluateJavascript("window.__vscodroidImeVisible = $visible;", null)
+            if (!visible) keyboardDismissal.hidden()
         }
     }
 
@@ -2334,7 +2468,54 @@ class MainActivity : AppCompatActivity() {
      */
     override fun dispatchKeyEvent(event: KeyEvent): Boolean {
         val handled = super.dispatchKeyEvent(event)
+        noteHardwareTyping(event)
         return handled || event.keyCode == KeyEvent.KEYCODE_ESCAPE
+    }
+
+    /**
+     * Takes the extra key row off the screen while the user types on a hardware
+     * keyboard, from the key as it went by and after it was delivered, so nothing
+     * about the key itself changes.
+     *
+     * Observation only, and after the delegate on purpose: `HardwareKeyboardTest`
+     * pins that the page receives every key exactly as dispatched. Which keys
+     * count is [HardwareTyping]'s, and the row comes back when a finger has been
+     * on the screen, [dispatchTouchEvent], or when the keyboard is no longer there,
+     * [onConfigurationChanged].
+     */
+    private fun noteHardwareTyping(event: KeyEvent) {
+        if (event.action != KeyEvent.ACTION_DOWN) return
+        val device = event.device ?: return
+        if (HardwareTyping.isTypingOnHardwareKeyboard(
+                isVirtual = device.isVirtual,
+                source = event.source,
+                keyboardType = device.keyboardType,
+                isPrintingKey = event.isPrintingKey,
+            )
+        ) {
+            extraKeyRow?.hiddenForHardwareKeyboard = true
+        }
+    }
+
+    /**
+     * Gives the extra key row back when a finger leaves the screen after a run of
+     * typing on a hardware keyboard. A finger on the screen is the way back to the
+     * soft keyboard; a mouse click or a touchpad on a keyboard cover is not, and
+     * [HardwareTyping.isScreenTouch] leaves those out.
+     *
+     * At the lift, and after the event was delivered. The row takes its height out
+     * of the page, so bringing it back at the first contact moved everything that
+     * sits at the bottom of the page, the status bar and the terminal among it, up
+     * from under the finger before the tap was over, and a tap is placed on the page
+     * as it is when the finger lifts. Delivered first, the tap lands on the page the
+     * finger was put on and only then does the page give way.
+     */
+    override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
+        val handled = super.dispatchTouchEvent(ev)
+        if (ev.actionMasked == MotionEvent.ACTION_UP && HardwareTyping.isScreenTouch(ev.source)) {
+            extraKeyRow?.hiddenForHardwareKeyboard = false
+        }
+        return handled
     }
 
     private fun requestNotificationPermission() {
@@ -2430,7 +2611,8 @@ class MainActivity : AppCompatActivity() {
                     // Only the bootstrap died, and the page is still connected to
                     // the editor server that was adopted back. A reload would
                     // restart the extension host to repair at most a webview opened
-                    // while readiness was withdrawn: see the 503 in
+                    // while readiness was withdrawn, and such a webview's request
+                    // waits for readiness instead: see
                     // VSCodroidWebViewClient.interceptCdnRequest.
                     Logger.i(tag, "Adopted the server the page is connected to; not reloading")
                 } else {
@@ -2638,11 +2820,7 @@ class MainActivity : AppCompatActivity() {
      * carry an ampersand or a bracket.
      */
     private fun loadingPage(): String =
-        """<html><head><meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"></head>
-           <body style="background:#1e1e1e;color:#888;font-family:sans-serif;
-           display:flex;align-items:center;justify-content:center;height:100vh;margin:0;">
-           <div style="text-align:center"><h2 style="color:#ccc;">VSCodroid</h2>
-           <p>${escapeHtml(getString(R.string.server_starting))}</p></div></body></html>"""
+        loadingPageHtml(lastPageColor(this), getString(R.string.server_starting))
 
     /**
      * The page both terminal states put up, with the one control that changes the
@@ -2717,6 +2895,9 @@ class MainActivity : AppCompatActivity() {
         // written here and needs no server at all. The veto the dead server does
         // cause is the other one, a save still in flight.
         markAppNavigation()
+        // The page below is dark whatever the editor's theme, and the window
+        // around it, which a light one had made light, goes with it.
+        paintWindowNow(getColor(R.color.colorBackground))
         webView?.loadDataWithBaseURL(
             null,
             """<html><head><meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"></head>
@@ -2776,6 +2957,9 @@ class MainActivity : AppCompatActivity() {
         // refusing costs is the page carrying the folder and the only control that
         // can start the server again.
         markAppNavigation()
+        // The loading page's colour, as setupWebView gives it: this can replace an
+        // error page, which painted the window its own.
+        paintWindowNow(lastPageColor(this))
         webView?.loadData(dataUrlSafe(loadingPage()), "text/html", "utf-8")
         // Guarded for the reason [startAndBindService] is, and put back rather
         // than only logged. The loading page is already on screen by the time this
@@ -2953,7 +3137,12 @@ class MainActivity : AppCompatActivity() {
             onToggleExtraKeyRow = {
                 val hidden = !workspacePrefs.getBoolean(KEY_EXTRA_KEY_ROW_HIDDEN, false)
                 workspacePrefs.edit { putBoolean(KEY_EXTRA_KEY_ROW_HIDDEN, hidden) }
-                runOnUiThread { extraKeyRow?.hiddenByUser = hidden }
+                runOnUiThread {
+                    extraKeyRow?.hiddenByUser = hidden
+                    // Asked for by name, so the row is not held back by the stand-aside
+                    // a run of typing on a hardware keyboard put on it.
+                    if (!hidden) extraKeyRow?.hiddenForHardwareKeyboard = false
+                }
                 hidden
             },
             safManager = safManager,
@@ -3032,6 +3221,10 @@ class MainActivity : AppCompatActivity() {
             openFolder = { openWorkspaceRoot },
             connectionToken = { nodeService?.getConnectionToken() },
             onCrash = { recreateWebView() },
+            // The page covers itself the moment it is told to leave, and a
+            // navigation this client hands to another app or refuses never comes
+            // to replace it: the cover has to be taken down from here.
+            onNavigationDeclined = { liftLeaveCurtain() },
             // A hand-off that no app accepted used to be indistinguishable from a
             // dead link: the WebView does not navigate either, so the tap did
             // nothing and said nothing. ActivityNotFoundException is separated
@@ -3408,6 +3601,9 @@ class MainActivity : AppCompatActivity() {
         // Makes Enter on the soft keyboard commit an inline edit or a Quick Open pick,
         // and the quick input's keys work while a word is composing
         injectComposingEnter()
+        // Shows the page's background, not the dismantled workbench, from the moment the
+        // page is told to leave until the next one paints
+        injectLeaveCurtain()
         // Fix #7: Override window.open() to route through AndroidBridge
         injectWindowOpenOverride()
         // Answers a paste out of Android's clipboard, which the WebView will not
@@ -3610,10 +3806,59 @@ class MainActivity : AppCompatActivity() {
      * finished when it loses focus.
      *
      * Measured on an API 37 emulator at 411dp, `dumpsys input_method` beside a
-     * screenshot each time. Tapping the Explorer icon: was `mInputShown=true`,
-     * now false. Opening a file from the tree: was true, now false. Dragging to
-     * scroll a file: was true, now false. Tapping a word: true, with the caret
-     * on it and the keyboard up.
+     * screenshot each time, each starting with the keyboard down. Tapping the
+     * Explorer icon: was `mInputShown=true`, now false. Opening a file from the
+     * tree: was true, now false. Dragging to scroll a file: was true, now false.
+     * Tapping a word: true, with the caret on it and the keyboard up.
+     *
+     * With the keyboard already up, `inputmode` on the focused host takes it
+     * down only where no hardware keyboard is attached. Chromium's
+     * `ImeAdapterImpl.updateState` hides the keyboard when the focused
+     * element's input mode turns to none, unless the configuration reports a
+     * keyboard, and every emulator measured here does (`hw.keyboard=yes`, so
+     * `qwerty` in its configuration): there a tap on an activity bar icon,
+     * which leaves focus on the editor's host, left the keyboard over the
+     * Explorer, and over the Search view with typing still going to the file.
+     * On a phone the hold did take it down, except over a word still composing,
+     * which apply() leaves alone, and it did so for every touch outside text,
+     * a drag, a long press or a button that opens a menu as well (read from
+     * Chromium's source, not measured on a phone). So the hold is no longer
+     * written on the focused host while the keyboard is up, and the keyboard
+     * is asked down only for a tap. On API 33 and 37 emulators a More Actions
+     * menu and a drag along the activity bar then left that host without the
+     * attribute, with the keyboard up.
+     * A tap outside text (the same travel and duration test as a tap on text,
+     * or a tap by the workbench's own touch gesture, which is looser and which
+     * the activity bar, the status bar and the tabs act on: a touch on the
+     * Search icon that slid 20 CSS px, or a press of 620 ms on the Explorer
+     * icon, opened the view with the keyboard left up and typing still going to
+     * the file, measured on an API 33 emulator with Gboard 12.4; with the
+     * gesture's tap counted, a press of 620 ms and a slide of 20 px took it down
+     * on API 33 and 37 emulators) therefore asks
+     * for the keyboard down with `navigator.virtualKeyboard.hide()`
+     * once the tap's own handlers have run, only if an editing host still has
+     * focus and the keyboard is reported up, under `virtualKeyboardPolicy`
+     * `manual`, which the dismissal hook, a tap on text or a one second timeout
+     * puts back to `auto`, and the dismissal hook then holds that host. A tab,
+     * which takes focus, needs none of it. Nor is
+     * it done for a button that opens a menu, marked `aria-haspopup="true"` as
+     * the views' and the editor's More Actions, Accounts, Manage and the
+     * Application Menu are: the keyboard going down resizes the window, and
+     * the menu the tap had just opened closed with it. Measured on an API 33
+     * emulator with Gboard 12.4: with the keyboard up, the Explorer's Views and
+     * More Actions and the editor's More Actions opened no lasting menu, and
+     * with `navigator.virtualKeyboard.hide` stubbed out over DevTools the first
+     * stayed open. Hiding
+     * the keyboard ends a word it was composing, as Back does, which is why
+     * this waits for patch 0025: before it, that end opened the suggestion
+     * list, and a list already open stayed open, since nothing took focus from
+     * the editor, floating over the view the tap had opened, where the next tap
+     * accepted a suggestion into the file. Patch 0025 ends the editor's
+     * suggestion session on any touch outside it and leaves that end nothing to
+     * arm. Measured on an API 33 emulator with Gboard 12.4, as a DevTools
+     * candidate: the Explorer icon put the keyboard down 43 ms after the tap,
+     * also over an underlined word, which stayed as it was; the Search icon put
+     * it down, and a tap in the search box raised it with focus in the box.
      *
      * A tap anywhere inside the editor counts as one on text, the margin and the
      * empty space under the last line included, because Monaco moves the caret
@@ -3630,13 +3875,29 @@ class MainActivity : AppCompatActivity() {
      * without `inputmode`, and Chromium raises the keyboard again for any touch
      * on a focused editable element, so the next scroll of the file brought it
      * back. [ExtraKeyRow] reports the keyboard going down from its inset
-     * listener, and `window.__vscodroidKeyboardDismissed` puts the hold back on
-     * every host that is not composing, which leaves a tap on text as the only
-     * way up again. A keyboard that went down because this script held it, or
+     * listener, and half a second later, if it is still away,
+     * `window.__vscodroidKeyboardDismissed` puts the hold back on every host that
+     * is not composing, which leaves a tap on text as the only way up again. A keyboard that went down because this script held it, or
      * because a touch outside text took focus away, finds nothing to change,
      * except a host that was still composing at that touch: apply() skipped it
      * then, and it gets the hold now, which the focus returning would give it
-     * anyway.
+     * anyway. A keyboard reported down while nothing that takes text has focus
+     * is not taken as put away: Chromium takes it down as focus leaves text,
+     * and Enter does that on its way into an editor when Quick Open opens a
+     * file not open yet, which leaves focus on the page while the file loads,
+     * or when New File leaves it on the Explorer's list. Read as put away, it
+     * cleared what the typing in the box had counted, and the file opened
+     * held, with the keyboard down: measured on API 33, 36 and 37 emulators.
+     * So that report clears nothing a tap or typing counted, and the new
+     * editor's focus raises the keyboard again, measured on the API 33
+     * emulator with Gboard 12.4 with the hook skipped in that gap over
+     * DevTools, and with this rule built in on API 33 and 37 emulators, with
+     * Gboard 12.4 and 17.7.4, for files opened from Quick Open and created in
+     * New File. The test is what has focus, so Back while an extension's
+     * webview has focus, an iframe, is read the same way, as is the keyboard
+     * Chromium takes down when a terminal that was typed into goes away: what a
+     * tap or typing counted stays, and an editor focused next without a touch
+     * can take the keyboard up again (read from the code, not measured).
      * Measured on the same emulator with the guard built in: a tap on a word,
      * then Back or the hide key, then a drag and a fling left the keyboard
      * down and a tap on a word raised it; the same scroll with the hook
@@ -3644,13 +3905,22 @@ class MainActivity : AppCompatActivity() {
      * ended the word first and the hold came back. Turning the phone with the
      * keyboard up never reported it down there, so on that emulator a
      * rotation does not reach the hook. On an API 36 emulator with Gboard 18.2
-     * it does: each turn reports the keyboard down and, about 350 ms later, up
-     * again, so the hook puts the hold back on the focused host in between.
-     * Measured there, the keyboard was up again after turning to landscape and
-     * back, and the next letter landed at the caret. Not measured: switching
-     * keyboards with the globe key and leaving the app with the keyboard up,
-     * either of which may report the same down and up; a hardware keyboard; a
-     * floating or split keyboard; and keyboards other than Gboard.
+     * it does: each turn reports the keyboard down and, 150 to 650 ms later, up
+     * again. That emulator reports a hardware keyboard, where a hold never
+     * takes a keyboard down, so with the hook running at the report the
+     * keyboard was up again after turning to landscape and back and the next
+     * letter landed at the caret. On an API 36 emulator with `hw.keyboard=no`,
+     * which reports none as a phone does, the same hook took the keyboard down
+     * at the turn to landscape, and it stayed down, with `inputmode="none"` on
+     * the host, for as long as it was watched; with the hook replaced by a
+     * function that does nothing it stayed up. [KeyboardDismissal] therefore
+     * calls the hook half a second after the report, and not if the keyboard is
+     * back by then or the configuration changed within two seconds. The cost is
+     * that a scroll in that half second can raise a keyboard put away with Back,
+     * as it did before the hold existed. Not measured: switching keyboards with
+     * the globe key and leaving the app with the keyboard up, either of which
+     * may report the same down and up; a hardware keyboard attached to a phone;
+     * a floating or split keyboard; and keyboards other than Gboard.
      *
      * A read-only editor never lets the keyboard up, so a file made read-only
      * with File: Toggle Active Editor Read-only in Session or matched by
@@ -3676,8 +3946,53 @@ class MainActivity : AppCompatActivity() {
      * checks the marker against the packaged bundle wherever the tree is
      * present, the release build's unit run included.
      *
-     * The terminal is left alone. It has an editing host of its own, and
-     * opening a terminal is asking to type.
+     * The terminal's helper textarea is held and let up like the editor's host,
+     * and a tap on the terminal counts as one on text. Left alone, as it was,
+     * the terminal kept the keyboard up after a tap outside text, with typing
+     * going to the shell behind the Source Control view, and after Back the
+     * same tap raised the keyboard again: measured on an API 36 emulator with
+     * Gboard 18.4. The cost is that a terminal focused from a tap outside text,
+     * its tab in the panel say, opens with the keyboard down until it is
+     * tapped, as a file opened from the Explorer does.
+     *
+     * Typing with the keyboard up counts as aiming at text, in a text box as in
+     * an editor. A box can take focus without a tap on text: the Command
+     * Palette opened from the Application Menu is typed into with the last
+     * touch on that menu, and Enter on Terminal: Create New Terminal moved focus
+     * into the new terminal, which was held, so the keyboard went down under a
+     * terminal opened to be typed into: measured on an API 33 emulator with
+     * Gboard 12.4. With this rule the terminal opened with the keyboard up on
+     * API 33, 36 and 37 emulators. A file Enter opens from Quick Open is the
+     * same case, as is one Enter creates in the Explorer's New File box: a file
+     * open already kept the keyboard up on those three emulators, and one not
+     * open yet needs the dismissal hook's rule above as well. A tap on the
+     * palette's row is a tap outside text, and what it opens starts with the
+     * keyboard down.
+     *
+     * A host blurred and focused again in one task, with the keyboard up, keeps
+     * it. Patch 0024 restarts input that way when the editor has rewritten the
+     * keyboard's text under a caret left at the same offset, and the key row
+     * does after a latched chord. The focus handler took that focus for a new
+     * one and held the host whenever the last touch had been outside text and
+     * left the keyboard up, a drag, a long press or a button that opens a menu.
+     * Written at that focus, `inputmode="none"` turns the focused element's
+     * input mode to none, which on a phone takes the keyboard down (read from
+     * Chromium's source, as above), so after a drag on the activity bar a
+     * trackpad Down along a column would put it away there. The emulators
+     * measured report a hardware keyboard and never show it. Such a focus now
+     * holds nothing. A hold already on the host, which a turn of the phone
+     * leaves on the API 36 emulator (above), comes off with a refocus of its
+     * own, and the composition finish below takes one off between its blur
+     * and its focus. That hold reached Chromium when it was written, so a
+     * restart that meets it changes no input mode and takes nothing down.
+     * A hold the focus handler put on with the keyboard up, to take it down,
+     * is left until the keyboard is reported down or a tap on text lets it up.
+     * Replayed in headless Chromium with the 1.139.1 bundle: after a drag
+     * outside text, a cursor key along a column left the host focused without
+     * the attribute, also with a word composed before or after the drag, where
+     * the script before this left it held. A touch on the Explorer's tree is no
+     * such touch: the list takes focus at the touch and the keyboard goes down
+     * with it.
      *
      * The same script ends a word the keyboard is still composing when a key or
      * a tap moves the editor's caret. Chromium keeps an EditContext
@@ -3711,10 +4026,11 @@ class MainActivity : AppCompatActivity() {
      * bubble phase, and the target for a gesture, which does not bubble. When
      * the event is stopped before that listener, a zero timeout ends it
      * instead, in a later task. A long press on the list ends nothing. With no
-     * list open, ending a composition makes the editor schedule a quick
-     * suggestion 10 ms later, and patch 0023 cancels it when a cursor key then
-     * moves the caret: otherwise the list opened at the key's destination, such
-     * as after End on a line ending in an identifier.
+     * list open, ending a composition that typed makes the editor schedule a
+     * quick suggestion 10 ms later, patch 0025 scheduling none for one that
+     * typed nothing, and patch 0023 cancels it when a cursor key then moves
+     * the caret: otherwise the list opened at the key's destination, such as
+     * after End on a line ending in an identifier.
      *
      * Measured on an API 33 emulator with Gboard 12.4, with this code installed
      * over DevTools rather than built in: End, Home, PageUp, the trackpad in
@@ -3732,11 +4048,9 @@ class MainActivity : AppCompatActivity() {
      * measured: keyboards other than Gboard, Korean and Chinese input, and the
      * other Monaco editors, such as the Source Control message box and the chat
      * input. What it costs: the word is committed as typed, so on a Japanese
-     * keyboard a guarded key or tap commits the kana unconverted; a word ended
-     * after an accept can make the editor offer the accepted word again as a
-     * one-row list; and a chord the suggestion list also binds, such as
-     * Shift+Tab or Ctrl+Down, ends the word first, so the list acts from its
-     * first row.
+     * keyboard a guarded key or tap commits the kana unconverted; and a chord
+     * the suggestion list also binds, such as Shift+Tab or Ctrl+Down, ends the
+     * word first, so the list acts from its first row.
      */
     private fun injectKeyboardGuard() {
         webView?.evaluateJavascript(
@@ -3770,8 +4084,21 @@ class MainActivity : AppCompatActivity() {
                 // introduces; the alternative is a selector that has to name
                 // each of them and be corrected on every VS Code bump that
                 // renames one.
-                var TEXT = '.monaco-editor, textarea, input, [contenteditable="true"], .native-edit-context';
-                var EDITING_HOST = '.native-edit-context, .monaco-editor textarea.inputarea';
+                //
+                // The terminal is text in the same way: a tap on it is how the
+                // shell is typed into, and its helper textarea is an editing host
+                // like the editor's. Left out, a tap outside text with the
+                // terminal focused left the keyboard up over the view it opened,
+                // with what was typed going to the shell behind it, and once the
+                // keyboard had been put away the same tap raised it again, as
+                // Chromium raises it for a tap anywhere while an editable element
+                // without inputmode="none" has focus: measured on an API 36
+                // emulator with Gboard 18.4, the Source Control and Explorer icons
+                // did both. The cost is that a terminal focused from a tap outside
+                // text, its tab in the panel say, opens with the keyboard down
+                // until it is tapped, as a file opened from the Explorer does.
+                var TEXT = '.monaco-editor, textarea, input, [contenteditable="true"], .native-edit-context, .xterm';
+                var EDITING_HOST = '.native-edit-context, .monaco-editor textarea.inputarea, .xterm-helper-textarea';
                 var aimedAtText = false;
                 // Set while this code is taking focus away and giving it back,
                 // so the focus it causes is not treated as one to answer.
@@ -3800,8 +4127,19 @@ class MainActivity : AppCompatActivity() {
                 // 700, so any press it turns into a menu is already past 500 here.
                 // The margin costs only that a deliberately slow tap between 500
                 // and 700ms leaves the keyboard down. That is a second tap, against
-                // a menu that could not be opened at all.
+                // a menu that could not be opened at all. It holds while the page
+                // keeps up: the gesture times the press with Date.now() as its
+                // touchstart and touchend handlers run, this with the events' own
+                // timestamps, so on an API 37 emulator under heavy host load, with
+                // the handlers about 700 ms late, the gesture opened the editor's
+                // menu for a press this read as a tap, and the keyboard it let up
+                // rose once the menu was closed.
                 var LONG_PRESS_MS = 500;
+                // Where a touch outside text went down, until it is lifted, and
+                // the host the keyboard was last asked down for, until it is
+                // down. See hideTheKeyboard().
+                var outsideTap = null;
+                var manualHost = null;
                 // Editing hosts holding a word the on-screen keyboard is still
                 // composing. Chromium answers a changed `inputmode` on the
                 // focused element by restarting input, which writes the composed
@@ -3840,13 +4178,34 @@ class MainActivity : AppCompatActivity() {
                 document.addEventListener('compositionend', function(e) {
                     if (e.target) composing.delete(e.target);
                 }, true);
+                // Typing in any box with the keyboard up is aiming at text too.
+                // The Command Palette opened from a menu is typed into with the
+                // last touch outside text, and Enter there can move focus into
+                // an editing host, a new terminal or a file from Quick Open,
+                // which the focus handler then held: the keyboard went down
+                // under a terminal opened to be typed into. Only real typing
+                // counts, not the untrusted events the key row's chords
+                // dispatch, and only with the keyboard up: typing on a hardware
+                // keyboard is no reason to bring the soft keyboard up.
+                document.addEventListener('beforeinput', function(e) {
+                    if (e.isTrusted && window.__vscodroidImeVisible && e.target && e.target.closest && e.target.closest(TEXT)) aimedAtText = true;
+                }, true);
                 // An empty commit ends an EditContext composition without a
                 // compositionend, and a host left in the set is one apply()
                 // never lets the keyboard up for again. Losing focus is the
                 // reliable end: Blink finishes the composition of the element
                 // it takes focus from, and of the page when the page loses it.
+                //
+                // The element that lost focus is kept until the script that
+                // blurred it has returned, the next microtask checkpoint, so
+                // the focus handler can tell a host blurred and focused again
+                // in one run of script, which never really lost focus, from
+                // one that takes focus later.
+                var blurred = null;
                 document.addEventListener('focusout', function(e) {
                     composing.delete(e.target);
+                    blurred = e.target;
+                    queueMicrotask(function() { blurred = null; });
                 }, true);
                 // A read-only editor takes no typing, so touching one is reading
                 // it, and its host never loses the hold. Monaco writes
@@ -3859,6 +4218,21 @@ class MainActivity : AppCompatActivity() {
                 // before.
                 function writable(element) {
                     return !element.editContext || element.getAttribute('aria-autocomplete') !== 'none';
+                }
+                // A host the focus handler held while the keyboard was up, to
+                // take it down: a file switched to with a chord from the key
+                // row after a drag outside text, say. Until the keyboard is
+                // reported down or a tap on text lets it up, a refocus of it
+                // keeps the hold, so that an input restart in the meantime does
+                // not undo it: the editor restarts input when it first writes a
+                // new host's buffer with the caret at offset 0, such as at Down
+                // from the first line's start.
+                var heldAtFocus = null;
+                // Whether a refocus of this host leaves the keyboard where it
+                // is: up, over an editor that takes typing, and not being taken
+                // down by this script.
+                function keepsTheKeyboard(element) {
+                    return window.__vscodroidImeVisible && element !== heldAtFocus && writable(element);
                 }
                 function apply(element) {
                     watch(element);
@@ -3884,6 +4258,8 @@ class MainActivity : AppCompatActivity() {
                 // a key or a tap moves the caret.
                 function letTheKeyboardUp() {
                     aimedAtText = true;
+                    heldAtFocus = null;
+                    restorePolicy();
                     var focused = document.activeElement;
                     var wasHeldDown = !!(focused && focused.getAttribute &&
                         focused.getAttribute('inputmode') === 'none');
@@ -3895,8 +4271,51 @@ class MainActivity : AppCompatActivity() {
                         reapplying = false;
                     }
                 }
+                // A tap outside text that leaves the editing host focused, as the
+                // activity bar's icons do, left a keyboard that was up where it
+                // was: inputmode on a host that already has focus takes a visible
+                // keyboard down only where no hardware keyboard is attached, the
+                // touch writes none on the focused host while the keyboard is up,
+                // and apply() leaves a composing host alone besides. So the
+                // keyboard is asked down directly, once the
+                // tap's own handlers have run and only if a host still has focus,
+                // under a manual policy, which makes Chromium hide it on request.
+                // The policy goes back to auto when the keyboard is reported
+                // down, or after a second if that report never comes, so the
+                // next tap on text raises it as before. A second request first
+                // puts back the host of the one before: only the last host is
+                // remembered, and one left on manual would never raise the
+                // keyboard for a tap again until the page reloads.
+                function hideTheKeyboard() {
+                    restorePolicy();
+                    var host = document.activeElement;
+                    if (!window.__vscodroidImeVisible || !navigator.virtualKeyboard ||
+                        !host || !host.matches || !host.matches(EDITING_HOST)) return;
+                    host.virtualKeyboardPolicy = 'manual';
+                    manualHost = host;
+                    navigator.virtualKeyboard.hide();
+                    setTimeout(restorePolicy, 1000);
+                }
+                function restorePolicy() {
+                    if (!manualHost) return;
+                    manualHost.virtualKeyboardPolicy = 'auto';
+                    manualHost = null;
+                }
+                // Whether the workbench's own touch gesture took the touch as a
+                // tap. The activity bar, the status bar and the tabs act on that
+                // tap, which it grants for a press under 700 ms that stays within
+                // 30 px on each axis, looser than the test here: a touch on the
+                // Search icon that slid 20 px, or a press of 620 ms on the
+                // Explorer icon, opened the view and left the keyboard up, with
+                // typing still going to the file, measured on an API 33 emulator.
+                // Its event is dispatched from touchend, after pointerup and
+                // before the zero timeout that pointerup schedules.
+                var gestureTapped = false;
+                window.addEventListener('-monaco-gesturetap', function() { gestureTapped = true; }, true);
                 document.addEventListener('pointerdown', function(e) {
                     var target = e.target;
+                    outsideTap = null;
+                    gestureTapped = false;
                     // A touch inside an open context menu decides nothing about the
                     // keyboard, and letting it decide destroys the menu.
                     //
@@ -3920,16 +4339,23 @@ class MainActivity : AppCompatActivity() {
                     //
                     // An early return rather than falling through to the branch under
                     // it: that branch clears `aimedAtText` and puts `inputmode="none"`
-                    // back on every editing host, which would take the keyboard away
-                    // from a menu opened while the user was typing. Nothing about the
-                    // keyboard should change because a menu was touched.
+                    // back on the editing hosts, which would hold whatever a menu
+                    // opened while the user was typing goes on to focus. Nothing
+                    // about the keyboard should change because a menu was touched.
                     //
                     // Both shapes are covered. A shadow-DOM menu retargets to the host
                     // itself, which carries the class; a light-DOM one (the explorer,
                     // the terminal, the menubar) leaves the target inside
                     // `.context-view`, and `closest` reaches it there.
+                    //
+                    // So does a target already gone from the page. A touch outside
+                    // an open menu closes it from a window listener that runs before
+                    // this one, which removes the menu's block, the touch's target,
+                    // so `closest` finds no menu above it. Read as a tap outside
+                    // text, closing a menu with the keyboard up asked the keyboard
+                    // down, measured on an API 33 emulator.
                     if (target && ((target.classList && target.classList.contains('shadow-root-host')) ||
-                        (target.closest && target.closest('.context-view')))) {
+                        (target.closest && target.closest('.context-view')) || target.isConnected === false)) {
                         pendingTap = null;
                         return;
                     }
@@ -3945,10 +4371,37 @@ class MainActivity : AppCompatActivity() {
                         return;
                     }
                     pendingTap = null;
+                    outsideTap = { id: e.pointerId, x: e.clientX, y: e.clientY, at: e.timeStamp,
+                        opensMenu: !!(target && target.closest && target.closest('[aria-haspopup="true"]')) };
                     aimedAtText = false;
-                    applyAll();
+                    // Every host but the focused one while the keyboard is up. On
+                    // a phone Chromium takes the keyboard down as soon as the
+                    // focused element's inputmode turns to none, at the next frame,
+                    // unless a hardware keyboard is attached (ImeAdapterImpl's
+                    // updateState), so the hold alone would put it away for a drag,
+                    // a long press or a button that opens a menu, where it stays
+                    // up. Every emulator here reports a hardware keyboard, so none
+                    // of them shows the difference. A tap asks for the keyboard
+                    // down below, and the dismissal hook then holds that host.
+                    var focused = document.activeElement;
+                    document.querySelectorAll(EDITING_HOST).forEach(function(element) {
+                        if (element !== focused || !window.__vscodroidImeVisible) apply(element);
+                    });
                 }, true);
                 document.addEventListener('pointerup', function(e) {
+                    // The same tap test as for text below, or the workbench's own,
+                    // which decides for the targets that act on it. A button that
+                    // opens a menu, such as a view's More Actions, keeps the
+                    // keyboard: putting it away resizes the window, and the menu the
+                    // tap had just opened closed with the resize.
+                    if (outsideTap && outsideTap.id === e.pointerId) {
+                        var tap = outsideTap;
+                        var moved = Math.abs(e.clientX - tap.x) + Math.abs(e.clientY - tap.y);
+                        var tapped = moved <= TAP_SLOP && e.timeStamp - tap.at < LONG_PRESS_MS;
+                        outsideTap = null;
+                        if (!tap.opensMenu) setTimeout(function() { if (tapped || gestureTapped) hideTheKeyboard(); }, 0);
+                        return;
+                    }
                     // Keyed by pointer, because a second finger anywhere on the
                     // page would otherwise answer for the first: the last touch
                     // down wins the single slot, and lifting either one is read
@@ -3967,6 +4420,7 @@ class MainActivity : AppCompatActivity() {
                     letTheKeyboardUp();
                 }, true);
                 document.addEventListener('pointercancel', function(e) {
+                    if (outsideTap && outsideTap.id === e.pointerId) outsideTap = null;
                     if (pendingTap && pendingTap.id !== e.pointerId) return;
                     // The gesture became the system's: a swipe from an edge, a
                     // pull down, a second finger. Nothing was decided, so
@@ -3991,7 +4445,30 @@ class MainActivity : AppCompatActivity() {
                     // answering it here would raise it for a scroll.
                     if (pendingTap) return;
                     if (!target || !target.matches || !target.matches(EDITING_HOST)) return;
+                    // A host blurred and focused again in one task never lost
+                    // focus: patch 0024 restarts input that way after the
+                    // editor rewrites the keyboard's text under a caret left at
+                    // the same offset, and the key row does after a latched
+                    // chord. Holding it below after a touch outside text that
+                    // left the keyboard up (a drag, a long press, a button that
+                    // opens a menu) would put that keyboard away on a phone at
+                    // a trackpad Down along a column. So with the keyboard up
+                    // such a host is not held, and a hold already on it, which a
+                    // turn of the phone leaves, comes off with a refocus of its
+                    // own, because the focus it got was granted with the
+                    // attribute in place.
+                    if (target === blurred && keepsTheKeyboard(target)) {
+                        if (target.getAttribute('inputmode') === 'none') {
+                            target.removeAttribute('inputmode');
+                            reapplying = true;
+                            target.blur();
+                            target.focus();
+                            reapplying = false;
+                        }
+                        return;
+                    }
                     if (aimedAtText && writable(target)) { target.removeAttribute('inputmode'); return; }
+                    if (window.__vscodroidImeVisible) heldAtFocus = target;
                     if (target.getAttribute('inputmode') === 'none') return;
                     target.setAttribute('inputmode', 'none');
                     reapplying = true;
@@ -4016,10 +4493,18 @@ class MainActivity : AppCompatActivity() {
                     if (!element) return;
                     reapplying = true;
                     element.blur();
+                    // A word typed into a host held under a keyboard that is up,
+                    // after a drag outside text say, is ended by now, so the
+                    // hold comes off without writing it in again; left on, it
+                    // would put the keyboard away at this focus, as at the
+                    // refocus the focus handler answers.
+                    if (keepsTheKeyboard(element) && element.getAttribute('inputmode') === 'none') {
+                        element.removeAttribute('inputmode');
+                    }
                     element.focus();
                     reapplying = false;
                 }
-                // Ending a composition also makes the editor refilter an open
+                // Ending a composition can make the editor refilter an open
                 // suggest list and focus its first item again, so a Tab or tap
                 // the list takes ends it only after the list has acted, still
                 // in the same task. A listener added while the event is on its
@@ -4088,9 +4573,25 @@ class MainActivity : AppCompatActivity() {
                 // it a keyboard put away with Back left the focused host without
                 // inputmode, and the next touch on it, a scroll included, raised
                 // the keyboard again. A host still composing is left to apply()'s
-                // usual rule.
+                // usual rule. Kotlin calls it half a second after the report and
+                // not for a turn of the phone, because on a device with no
+                // hardware keyboard the hold written here takes a visible
+                // keyboard down for real (KeyboardDismissal).
+                //
+                // Only a keyboard that goes down while text has focus counts as
+                // put away, so Back with an extension's webview focused is not
+                // one. Chromium takes it down itself when focus leaves text, and
+                // Enter can do that on its way into an editor: Quick Open on a
+                // file not open yet takes the old editor's host away and leaves
+                // focus on the page while the file loads, and New File leaves it
+                // on the Explorer's list. Read as a keyboard put away, that
+                // cleared aimedAtText, and the file typed for opened held, with
+                // the keyboard down. Kept, the new host's focus raises it again.
                 window.__vscodroidKeyboardDismissed = function() {
-                    aimedAtText = false;
+                    restorePolicy();
+                    var focused = document.activeElement;
+                    if (focused && focused.matches && focused.matches(TEXT)) aimedAtText = false;
+                    heldAtFocus = null;
                     applyAll();
                 };
                 applyAll();
@@ -4134,13 +4635,15 @@ class MainActivity : AppCompatActivity() {
      * listener below provides that.
      *
      * Only menus. Other context views, the action widget behind the chat
-     * pickers and Quick Fix and the select dropdowns among them, are laid out
-     * again on a resize rather than hidden, and they close when they lose
-     * focus: refused focus, they could never lose it, and a tap outside left
-     * them open. And only while the soft keyboard is up, which is the only
-     * state in which moving focus changes the window: with it down, or with a
-     * hardware keyboard in its place, a menu takes focus as it always did and
-     * Enter and the arrow keys reach it rather than the file behind it.
+     * pickers and the select dropdowns among them, are laid out again on a
+     * resize rather than hidden, and they close when they lose focus: refused
+     * focus, they could never lose it, and a tap outside left them open. The
+     * Quick Fix list is the exception that is not a context view's doing: its
+     * controller hides it at every layout change, which patch 0028 relaxes to
+     * a change of width. And only while the soft keyboard is up, which is the
+     * only state in which moving focus changes the window: with it down, or
+     * with a hardware keyboard in its place, a menu takes focus as it always
+     * did and Enter and the arrow keys reach it rather than the file behind it.
      * [ExtraKeyRow] reports the keyboard's state to the page.
      *
      * What focus was doing for the menu is keyboard handling, and one key
@@ -4720,6 +5223,121 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
+     * Puts the page's own background over the workbench from the moment it is told
+     * to leave, so that the half-dismantled workbench is never what is on screen
+     * while the next page loads.
+     *
+     * The workbench dismantles itself inside `beforeunload`: its lifecycle service
+     * runs the whole shutdown from that listener, with no veto, before the event
+     * has finished dispatching. In that one task the terminals are disposed, the
+     * `modern-ui` classes come off the workbench container, and the styles the
+     * terminal and the diff decorations added are removed, so the page drops to its
+     * classic skin (upper-case panel titles, the editor's status items, a tab strip
+     * without its labels) and the extension host's contributions are gone. The
+     * WebView then holds that frame until the next document paints: on an API 33
+     * emulator, with Developer: Reload Window, the dismantled page stayed on screen
+     * for about half a second and then the screen went blank until the new page
+     * came. A page cannot stop the workbench doing this, only what is painted.
+     *
+     * This listener raises a full-window element in the colour the page paints
+     * itself with, which `assets/server.js` keeps on the editor's background and
+     * which is what the new page starts on, in the same dispatch. Nothing is drawn
+     * between a task's end and the next frame, so the first frame painted after the
+     * dismantling is the curtain: measured on the same emulator, with frames cut
+     * every 50 ms, the intact page was followed at once by the plain colour and no
+     * frame of the dismantled one. It does not matter which listener runs first. On
+     * the shipped build this one runs ahead of the workbench's, since the workbench
+     * registers its own long after the page's load event: the curtain was on the
+     * root 44 ms before `modern-ui` came off. Added by hand to a page that is
+     * already running, behind it, the dismantling was already done and the first
+     * frame was still the curtain.
+     *
+     * A veto is the one case where leaving is not certain. The workbench cancels
+     * the event (`vetoBeforeUnload`) when it holds work it has no backup of, and
+     * the platform then asks the user. The check runs in the next task, after every
+     * listener has had its turn, and lowers the curtain for a cancelled event, so
+     * the page the user is asked about is the intact one: measured, with the
+     * dialog's "Stay on this page" the page is intact and no element is left on the
+     * root. `beforeunload` also fires for a navigation that then never replaces
+     * the page: a link to `mailto:` or another scheme goes to another app, and the
+     * client refuses a path on this origin that is not the workbench. The workbench
+     * itself is untouched by those (its opener wraps the assignment in
+     * `withExpectedShutdown`, which turns its own listener off), so only the curtain
+     * is left, and [liftLeaveCurtain] takes it down when the client declines the
+     * navigation. Measured on an API 33 emulator before it did: a link to a scheme
+     * no app answers left the screen blank but for the toast for five seconds, and
+     * a `mailto:` link in a Markdown preview kept the curtain over an intact
+     * workbench. The timer stays for anything the client never hears of, so a
+     * navigation that does not commit does not leave a window nobody can see
+     * through, and `pageshow` lowers it for a page restored from the back-forward
+     * cache.
+     *
+     * No colour known, no curtain: the root has none until the page script that
+     * `assets/server.js` adds runs, and a guess would be a dark flash under a light
+     * theme. Taps are not let through, because what is behind it is no longer a
+     * workbench that can answer them.
+     *
+     * `LeaveCurtainWiringTest` holds the script to where it is installed, and
+     * `scripts/test-leave-curtain.js` runs it.
+     */
+    private fun injectLeaveCurtain() {
+        webView?.evaluateJavascript(
+            """
+            (function() {
+                if (window.__vscodroidLeaveCurtain) return;
+                window.__vscodroidLeaveCurtain = true;
+                var curtain = null;
+                var failsafe = 0;
+                function lower() {
+                    if (failsafe) { clearTimeout(failsafe); failsafe = 0; }
+                    if (curtain) { curtain.remove(); curtain = null; }
+                }
+                // The root's colour is the one the page script keeps on the editor's
+                // background; the body's is the workbench's own where that never ran.
+                function pageColor() {
+                    var color = document.documentElement.style.backgroundColor;
+                    if (!color && document.body) color = getComputedStyle(document.body).backgroundColor;
+                    return color && color !== 'transparent' && color !== 'rgba(0, 0, 0, 0)' ? color : '';
+                }
+                window.addEventListener('beforeunload', function(e) {
+                    lower();
+                    var color = pageColor();
+                    if (!color) return;
+                    curtain = document.createElement('div');
+                    curtain.setAttribute('aria-hidden', 'true');
+                    curtain.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;' +
+                        'z-index:2147483647;background:' + color;
+                    document.documentElement.appendChild(curtain);
+                    // Whether the workbench vetoed is known only once its own listener
+                    // has run, which may be after this one, so it is asked a task later.
+                    setTimeout(function() {
+                        if (e.defaultPrevented || e.returnValue) lower();
+                    }, 0);
+                    failsafe = setTimeout(lower, 5000);
+                }, true);
+                window.addEventListener('pageshow', lower);
+                // The app took the navigation that fired beforeunload for itself, to
+                // another app or to a refusal, so nothing is coming to replace this page.
+                window.addEventListener('vscodroid-navigation-declined', lower);
+            })();
+            """.trimIndent(),
+            null
+        )
+    }
+
+    /**
+     * Tells the page that a navigation it was about to leave for was declined here,
+     * so the curtain [injectLeaveCurtain] raised for it comes down at once and not
+     * after its failsafe. A page with no curtain ignores it.
+     */
+    private fun liftLeaveCurtain() {
+        webView?.evaluateJavascript(
+            "window.dispatchEvent(new Event('vscodroid-navigation-declined'));",
+            null
+        )
+    }
+
+    /**
      * Fix #2: Injects CSS to enlarge touch targets when the pointer is a fingertip.
      * Targets WCAG 2.5.5 minimum 44×44px for primary actions, 36px for list items.
      *
@@ -4828,13 +5446,14 @@ class MainActivity : AppCompatActivity() {
                     // there because that strip is already far wider than 12px, but
                     // narrow it and this rule starts deciding its width.
                     '  .slider { min-width: 12px !important; }',
-                    // The chrome's own text, which no setting in this build can reach.
+                    // The chrome's own text, which no setting of the workbench's reaches.
                     // `editor.fontSize` governs the editor and nothing else; the
-                    // workbench styles itself from 622 literal `font-size` rules in
-                    // workbench.css, this build registers no window zoom action and
-                    // ignores `window.zoomLevel`, and `WebSettings.textZoom` is pinned
-                    // at 100. So the only lever left for the parts a phone user
-                    // actually reads is this stylesheet.
+                    // workbench styles itself from hundreds of literal pixel
+                    // `font-size` declarations in workbench.css, this build registers
+                    // no window zoom action and ignores `window.zoomLevel`, and
+                    // `WebSettings.textZoom` is pinned at 100. What does reach it is
+                    // VSCodroid: UI Scale, which scales the whole page through its
+                    // viewport (addUiScaleScript). These sizes are the 100% it scales.
                     //
                     // Measured on an API 37 emulator through the DevTools protocol, at
                     // the 411 CSS px viewport a phone gives: a pane header was 11px, a
@@ -5290,9 +5909,12 @@ class MainActivity : AppCompatActivity() {
      *    can open a terminal and run anything as this app's uid, so every reading
      *    command here (`getRecentFolders`, `getStorageBreakdown`, `listSafMirrors`,
      *    `getSshPublicKey`, `listSshKeys`, `generateBugReport`) discloses what the
-     *    caller could already read off the filesystem. They stay, and what changes
-     *    instead is that they hand over no more than they must: `listSshKeys` no
-     *    longer reports a key's comment, which is conventionally an email address.
+     *    caller could already read off the filesystem, apart from the system's
+     *    record of how this app's own processes ended, which `generateBugReport`
+     *    quotes: times, reasons and memory, nothing of the user's. They stay, and
+     *    what changes instead is that they hand over no more than they must:
+     *    `listSshKeys` no longer reports a key's comment, which is conventionally
+     *    an email address.
      *  - Commands that put an Android surface on screen (`openFolderPicker`,
      *    `openToolchainSettings`, `showAboutDialog`) are visible and dismissible,
      *    and none of them changes anything on its own. They stay.
@@ -5304,6 +5926,10 @@ class MainActivity : AppCompatActivity() {
      *    by every listener. That is accepted on the first bullet's terms: such a
      *    caller already has a terminal. What it costs is a convenience, not the
      *    user's work, and the user can always run the command again.
+     *  - `getUiScale` and `setUiScale` reach no Android code: the page answers
+     *    them from its own viewport and localStorage. Any caller can change the
+     *    size unasked, as with the key row, but only to a size this screen is
+     *    offered, and the user can run the command again.
      *  - `openExternalUrl` is the one command that reaches outside the app at all,
      *    and it is the one that was narrowed: see `AndroidBridge.openExternalUrl`,
      *    which now refuses this app's own `vscodroid://callback`.
@@ -5384,6 +6010,23 @@ class MainActivity : AppCompatActivity() {
                         } else if (d.cmd === 'toggleExtraKeyRow') {
                             result = AndroidBridge.toggleExtraKeyRow(token);
                             ch.postMessage({id: d.id, ok: true, data: result});
+                        } else if (d.cmd === 'getUiScale' && window.__vscodroidUiScale) {
+                            // This and the next are answered in the page, with no
+                            // bridge call: the scale is the page's own viewport and
+                            // is kept in its localStorage. The document-start
+                            // script from addUiScaleScript leaves the hook.
+                            ch.postMessage({id: d.id, ok: true, data: window.__vscodroidUiScale.state()});
+                        } else if (d.cmd === 'setUiScale' && window.__vscodroidUiScale) {
+                            window.__vscodroidUiScale.set(d.scale, function(scale) {
+                                ch.postMessage({id: d.id, ok: true, data: scale});
+                            });
+                        } else if (d.cmd === 'getUiScale' || d.cmd === 'setUiScale') {
+                            // No hook: the WebView cannot run document-start scripts.
+                            ch.postMessage({
+                                id: d.id, ok: false,
+                                error: 'The installed Android System WebView cannot scale the interface. ' +
+                                    'Update it from Google Play, then reopen VSCodroid.'
+                            });
                         } else if (d.cmd === 'openExternalUrl') {
                             // The only branch here whose bridge method can decline. Every
                             // other one either returns data or cannot fail in a way the
@@ -5884,15 +6527,18 @@ class MainActivity : AppCompatActivity() {
      * Warns when the installed WebView is older than the version this project
      * is tested against.
      *
-     * `minSdk` is 33, which ships Chrome 105 or newer, so a stock device passes
-     * and sees nothing. What this catches are the cases a user cannot diagnose:
-     * a System WebView disabled or downgraded by hand or by an OEM image, a
-     * device where WebView updates are blocked so the component ages while the
-     * OS does not, and emulators or custom ROMs carrying an older WebView than
-     * their API level implies. On those the workbench loads against something it
-     * was never tested on, and the failure is missing CSS or a blank editor
-     * rather than a clean refusal. `onReceivedError` announces a TLS handshake
-     * failure and otherwise only logs, so nothing else would reach the user.
+     * `minSdk` 33 shipped with Chrome 105, below the floor, so what this catches
+     * is a WebView that has not been updated since, the cases a user cannot
+     * diagnose: a System WebView disabled or downgraded by hand or by an OEM
+     * image, a device where WebView updates are blocked so the component ages
+     * while the OS does not, and emulators or custom ROMs carrying the WebView
+     * their image was built with. A device that takes WebView updates from the
+     * Play Store is far above the floor and sees nothing. Below it the
+     * workbench loads and the failure is quiet rather than a clean refusal:
+     * every webview, the Markdown preview and extension panels among them,
+     * stays blank (see [WebViewVersion.MINIMUM_CHROME_MAJOR]).
+     * `onReceivedError` announces a TLS handshake failure and otherwise only
+     * logs, so nothing else would reach the user.
      *
      * It warns and continues rather than refusing to start. The floor is a
      * tested one, not a hard incompatibility, and an editor that degrades is
@@ -5902,20 +6548,49 @@ class MainActivity : AppCompatActivity() {
     private fun checkWebViewVersion() {
         val pkg = WebView.getCurrentWebViewPackage()
         val version = pkg?.versionName
-        if (!WebViewVersion.isBelowMinimum(version)) {
+        if (pkg == null || !WebViewVersion.isBelowMinimum(version)) {
             Logger.i(tag, "WebView: ${pkg?.packageName ?: "unknown"} ${version ?: "unknown version"}")
             return
         }
-        Toast.makeText(
-            this,
-            getString(
-                R.string.webview_below_minimum,
-                version,
-                WebViewVersion.MINIMUM_CHROME_MAJOR.toString(),
-            ),
-            Toast.LENGTH_LONG
-        ).show()
         Logger.w(tag, "WebView $version is below the tested minimum ${WebViewVersion.MINIMUM_CHROME_MAJOR}")
+        // A dialog, where this was a toast: Android 12 and later cut a text toast
+        // to two lines, which showed "Android System WebView is version
+        // 113.0.5672.136. VSCodroid is tested a..." and never what to do about it
+        // (measured on an API 34 image).
+        if (!WebViewVersion.shouldWarn(version, workspacePrefs.getString(KEY_WEBVIEW_WARNED, null))) return
+        workspacePrefs.edit { putString(KEY_WEBVIEW_WARNED, version) }
+        AlertDialog.Builder(this)
+            .setTitle(getString(R.string.webview_below_minimum_title))
+            .setMessage(
+                getString(
+                    R.string.webview_below_minimum,
+                    version,
+                    WebViewVersion.MINIMUM_CHROME_MAJOR.toString(),
+                )
+            )
+            .setPositiveButton(getString(R.string.webview_update)) { _, _ -> openStoreListing(pkg.packageName) }
+            .setNegativeButton(getString(R.string.crash_dismiss), null)
+            .show()
+    }
+
+    /**
+     * The store page of [packageName], the WebView provider actually in use
+     * (Android System WebView on most devices, Chrome on some): the Play Store
+     * app when there is one, its web page otherwise.
+     */
+    private fun openStoreListing(packageName: String) {
+        for (page in listOf(
+            "market://details?id=$packageName",
+            "https://play.google.com/store/apps/details?id=$packageName",
+        )) {
+            try {
+                startActivity(Intent(Intent.ACTION_VIEW, page.toUri()))
+                return
+            } catch (e: ActivityNotFoundException) {
+                // No store app to take it: the next page is the same listing on the web.
+            }
+        }
+        Logger.w(tag, "No app can show the store page of $packageName")
     }
 
 
@@ -5945,6 +6620,9 @@ class MainActivity : AppCompatActivity() {
 
         /** Whether the user has hidden the Extra Key Row. Absent means shown. */
         private const val KEY_EXTRA_KEY_ROW_HIDDEN = "extra_key_row_hidden"
+
+        /** The WebView version the user was last warned is below the floor. */
+        private const val KEY_WEBVIEW_WARNED = "webview_below_minimum_warned"
 
         /** The build that last dropped the WebView's HTTP cache, `versionName/versionCode`. */
         private const val KEY_WEBVIEW_CACHE_BUILD = "webview_cache_build"
@@ -6777,6 +7455,48 @@ internal fun folderOpenTarget(
         ?: folderPath
 
 /**
+ * Where to send the workbench for a device folder that has just been synced: [target],
+ * the copy at [mirrorPath] or a workspace file in it, spelled through [namedPath] or
+ * left on the copy's hash path.
+ *
+ * The workbench names a folder after the last segment of its path, so the named path,
+ * `saf-mirrors/by-name/<hash>/<name>` (`SafStorageManager.namedPathFor`), is what shows
+ * the folder's own name in place of the hash. But it keeps open editors, unsaved changes
+ * and terminals per path, so moving a folder from one spelling to the other leaves all
+ * of that behind under the first, where nothing would bring it back. Hence three rules,
+ * in order:
+ *
+ * - A folder the page already has open keeps the spelling it is open under. Picking it
+ *   again is how fresh content is pulled down, and it must come back with its editors.
+ * - Otherwise the named path is used when [byName]: the copy was made by this open, or a
+ *   page has opened it by name before, so its state is there or nowhere.
+ * - Otherwise the hash path: a copy older than named paths, whose state may be under its
+ *   hash. The bundled extension offers the move from there, where it can see whether
+ *   anything would be left behind.
+ *
+ * [openNow] is the folder the page has open, as the page spells it.
+ */
+internal fun deviceFolderTarget(
+    target: String,
+    mirrorPath: String,
+    namedPath: String?,
+    byName: Boolean,
+    openNow: String?,
+): String {
+    val mirror = File(mirrorPath)
+    val onScreen = openNow?.let { open ->
+        if (open == mirrorPath || open.startsWith(mirrorPath + File.separator)) {
+            mirrorPath
+        } else {
+            SafStorageManager.namedRootOf(open, mirror.parent.orEmpty())
+                ?.takeIf { (_, hash) -> hash == mirror.name }?.first
+        }
+    }
+    val root = onScreen ?: namedPath?.takeIf { byName } ?: mirrorPath
+    return root + target.removePrefix(mirrorPath)
+}
+
+/**
  * Whether a folder switch that failed should leave the previous folder watched.
  *
  * The watcher is stopped before every sync, so something has to decide what a
@@ -6884,6 +7604,145 @@ internal fun connectionHealthProbe(): String =
     """.trimIndent()
 
 /**
+ * Applies the size chosen with **VSCodroid: UI Scale** to every workbench page,
+ * as the page is parsed.
+ *
+ * Nothing in the workbench scales its own chrome: `editor.fontSize` and the
+ * terminal's font size reach those two only, `window.zoomLevel` does nothing in
+ * the web workbench, and Android's font size never arrives because `textZoom` is
+ * pinned. The page's viewport does reach it. With its three scale keys set to the
+ * size, the WebView lays the page out narrower by that factor and draws it larger
+ * to fill the view, and taps, the caret, menus and the keyboard follow, measured
+ * on an API 33 emulator at 125%. CSS `zoom` on the root is no answer: the
+ * workbench still sized itself to the window, its right edge went off screen and
+ * a menu opened away from the finger.
+ *
+ * The element is rewritten as the parser inserts it, before the first layout, so
+ * a page is never laid out at 100% first; from `onPageFinished` the change would
+ * race the workbench's first layout. The relay's `getUiScale` and `setUiScale`
+ * read and change it live through the hook the script leaves, and the size is kept
+ * in the page's localStorage, which holds it across reloads and restarts. A port
+ * move loses it with everything else the page keeps by origin.
+ *
+ * Registered for every origin because a rule cannot leave the port open (one
+ * without a port names port 80 only) and the server's port is not known when the
+ * WebView is set up. The script returns at once anywhere but the top frame at `/`
+ * on the loopback address.
+ */
+internal fun addUiScaleScript(webView: WebView) {
+    if (WebViewFeature.isFeatureSupported(WebViewFeature.DOCUMENT_START_SCRIPT)) {
+        try {
+            WebViewCompat.addDocumentStartJavaScript(webView, uiScaleScript(), setOf("*"))
+        } catch (e: RuntimeException) {
+            // The editor matters more than its size: the page stays at 100%, and
+            // with no hook in it the command says the WebView needs updating.
+            Logger.w("MainActivity", "Could not add the UI scale script: ${e.message}")
+        }
+    } else {
+        Logger.w("MainActivity", "This WebView cannot run a script at document start, so the UI scale stays at 100%")
+    }
+}
+
+/** The document-start script [addUiScaleScript] adds. */
+internal fun uiScaleScript(): String =
+    """
+    (function() {
+        // Every frame of every origin starts with this, since the rule it is
+        // registered under cannot name the server's port. Only the workbench
+        // page is scaled: the top frame at / on the loopback address.
+        if (window.top !== window || location.pathname !== '/' ||
+            (location.hostname !== '127.0.0.1' && location.hostname !== 'localhost')) return;
+        var KEY = 'vscodroid.uiScale';
+        var SCALES = [1, 1.1, 1.25, 1.5];
+        // The narrowest the page may get at a size offered, in CSS px. At 329, a
+        // 411 dp phone at 125%, the editor beside an open side bar was 111 wide.
+        var MIN_WIDTH = 320;
+        var current = 1;
+
+        // The sizes that keep the page at least MIN_WIDTH wide on this screen,
+        // by its narrower side, since turning the phone does not reload the page.
+        function offered() {
+            var narrow = Math.min(screen.width, screen.height);
+            return SCALES.filter(function(s) { return s === 1 || narrow / s >= MIN_WIDTH; });
+        }
+
+        // Sets the scale keys of the page's own viewport element to s and keeps
+        // every other key, viewport-fit included. False while there is none.
+        function apply(s) {
+            var meta = document.querySelector('meta[name="viewport"]');
+            if (!meta) return false;
+            var keep = (meta.getAttribute('content') || '').split(',').map(function(p) {
+                return p.trim();
+            }).filter(function(p) {
+                return p && !/^(initial|minimum|maximum)-scale\s*=/.test(p);
+            });
+            meta.setAttribute('content', keep.concat(
+                ['initial-scale=' + s, 'minimum-scale=' + s, 'maximum-scale=' + s]).join(', '));
+            return true;
+        }
+
+        // Whether the page is drawn at s and laid out no wider than what is on
+        // screen. That layout is a WebView behaviour, not a standard: with wide
+        // viewport mode off, as this app leaves it, a device-width page is laid
+        // out at the view's width divided by its initial scale. Without that the
+        // page would stay as wide as the view and be drawn larger than it, its
+        // right edge off the screen.
+        function tookEffect(s) {
+            var vv = window.visualViewport;
+            return !!vv && Math.abs(vv.scale - s) < 0.01 &&
+                document.documentElement.clientWidth <= vv.width + 1;
+        }
+
+        // Judged two frames on, once the page has been laid out and drawn at s,
+        // and put back to 100% if s did not take effect. A size chosen in the
+        // meantime is left alone. Answers the size in force.
+        function settle(s, done) {
+            requestAnimationFrame(function() {
+                requestAnimationFrame(function() {
+                    if (s === current && s !== 1 && !tookEffect(s)) {
+                        console.warn('[VSCodroid] UI scale ' + s + ' did not take effect, back to 100%');
+                        localStorage.removeItem(KEY);
+                        current = 1;
+                        apply(1);
+                    }
+                    done(current);
+                });
+            });
+        }
+
+        // What the relay's getUiScale and setUiScale answer with.
+        window.__vscodroidUiScale = {
+            state: function() { return { scale: current, choices: offered() }; },
+            set: function(s, done) {
+                if (offered().indexOf(s) < 0) { done(current); return; }
+                if (s === 1) localStorage.removeItem(KEY);
+                else localStorage.setItem(KEY, String(s));
+                current = s;
+                apply(s);
+                settle(s, done);
+            }
+        };
+
+        // The size chosen, or the largest under it that this screen still allows.
+        var chosen = Number(localStorage.getItem(KEY));
+        current = offered().filter(function(s) { return s <= chosen; }).pop() || 1;
+        if (current === 1) return;
+        // As the parser inserts the element, which is before the first layout.
+        var watch = new MutationObserver(function() {
+            if (!apply(current)) return;
+            watch.disconnect();
+            settle(current, function() {});
+        });
+        watch.observe(document, { childList: true, subtree: true });
+        // A page without the element is not watched for the rest of its life.
+        document.addEventListener('DOMContentLoaded', function() {
+            watch.disconnect();
+            if (!document.querySelector('meta[name="viewport"]')) current = 1;
+        });
+    })();
+    """.trimIndent()
+
+/**
  * The newest [keep] lines of a log, with runs of the same line collapsed to one.
  *
  * Top-level and internal because the page that uses it is a private method on an
@@ -6921,6 +7780,25 @@ internal fun escapeHtml(s: String): String = s
     .replace(">", "&gt;")
     .replace("\"", "&quot;")
     .replace("'", "&#39;")
+
+/**
+ * The page [MainActivity] shows while the server starts, on [background], with
+ * text that reads on it: light grey on a dark colour, dark grey on a light one.
+ * The background is the editor colour the workbench last showed, so each text
+ * clears 4.5:1 on that of every theme the server ships, and on any colour at most
+ * as luminous as #3f3f3f or at least as luminous as #dcdcdc; a third-party
+ * theme's colour between those can measure less. The #888 the line had on
+ * #1e1e1e measures 4.19:1 on Monokai's #272822. Top-level for the reason
+ * [escapeHtml] is.
+ */
+internal fun loadingPageHtml(background: Int, message: String): String {
+    val light = isLightColor(background)
+    return """<html><head><meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"></head>
+           <body style="background:${"#%06x".format(background and 0xFFFFFF)};color:${if (light) "#616161" else "#aaa"};font-family:sans-serif;
+           display:flex;align-items:center;justify-content:center;height:100vh;margin:0;">
+           <div style="text-align:center"><h2 style="color:${if (light) "#333" else "#ccc"};">VSCodroid</h2>
+           <p>${escapeHtml(message)}</p></div></body></html>"""
+}
 
 /**
  * Markup made safe for the `data:` URL that `WebView.loadData` splices it into.

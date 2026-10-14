@@ -42,6 +42,10 @@ const commands = new Map();
 // details view is a user-facing render with branches of its own, and a stub that
 // throws its lines away certified every one of them.
 const printed = [];
+// How each status bar item was made. The workbench keeps the items of every
+// extension host in one table, and one made without an id is numbered per host,
+// so the first such item of a web extension took this item's slot.
+const statusItemArgs = [];
 const vscodeStub = {
     StatusBarAlignment: { Left: 1, Right: 2 },
     ThemeColor: class { constructor(id) { this.id = id; } },
@@ -49,7 +53,7 @@ const vscodeStub = {
         registerCommand: (id, fn) => { commands.set(id, fn); return { dispose() {} }; },
     },
     window: {
-        createStatusBarItem: () => ({ show() {}, hide() {}, dispose() {} }),
+        createStatusBarItem: (...args) => { statusItemArgs.push(args); return { show() {}, hide() {}, dispose() {} }; },
         createOutputChannel: () => ({
             // clear() empties it, exactly as the real channel does, so each
             // render below is read on its own rather than on everything the file
@@ -614,9 +618,16 @@ function snapshot(total, terminals, langservers, budget = { idle: 5, soft: 8, er
     );
 }
 
+assert.ok(
+    statusItemArgs.length > 0 && statusItemArgs.every((args) => typeof args[0] === 'string' && args[0] !== ''),
+    'the status bar item is made without an id, so it shares a slot with another extension ' +
+    'host\'s item: ' + JSON.stringify(statusItemArgs[0]),
+);
+
 console.log(
     'ok -- both notification tiers say the same thing whatever the counts, stay quiet below ' +
     'them, come from the snapshot rather than from literals and offer only the details view, ' +
     'nothing signals a process, and the details view marks idle servers, promises no reclaim, ' +
-    'marks a snapshot nobody is refreshing and does not count the chat backend as a language server',
+    'marks a snapshot nobody is refreshing and does not count the chat backend as a language server, ' +
+    'and its status bar item has an id of its own',
 );

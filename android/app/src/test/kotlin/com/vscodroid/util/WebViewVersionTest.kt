@@ -57,15 +57,25 @@ class WebViewVersionTest {
 
     @Test
     fun `a version below the floor is reported`() {
-        assertTrue(WebViewVersion.isBelowMinimum("104.0.5112.97"))
+        assertTrue(WebViewVersion.isBelowMinimum("124.0.6367.179"))
         assertTrue(WebViewVersion.isBelowMinimum("88.0.4324.181"))
+    }
+
+    /**
+     * The version a device was measured on with every webview blank, and the
+     * one `minSdk` 33 shipped with, which the floor used to be and let through.
+     */
+    @Test
+    fun `a WebView without anchor positioning is reported`() {
+        assertTrue(WebViewVersion.isBelowMinimum("113.0.5672.136"), "the measured API 34 image")
+        assertTrue(WebViewVersion.isBelowMinimum("105.0.5195.79"), "what minSdk 33 shipped with")
     }
 
     @Test
     fun `the floor itself passes`() {
         assertFalse(
-            WebViewVersion.isBelowMinimum("105.0.5195.79"),
-            "105 is the minimum, not the first rejected version",
+            WebViewVersion.isBelowMinimum("125.0.6422.165"),
+            "125 is the minimum, not the first rejected version",
         )
     }
 
@@ -84,6 +94,22 @@ class WebViewVersionTest {
         assertFalse(WebViewVersion.isBelowMinimum(null), "no WebView package")
         assertFalse(WebViewVersion.isBelowMinimum(""), "empty version")
         assertFalse(WebViewVersion.isBelowMinimum("dev-build"), "unparseable version")
+    }
+
+    // ---- when to say so ----------------------------------------------------
+
+    /**
+     * Told once per installed version: the dialog is not repeated over every
+     * launch of an editor that still works, and a different version, still too
+     * old, is told again.
+     */
+    @Test
+    fun `an old WebView is warned about once per version`() {
+        assertTrue(WebViewVersion.shouldWarn("113.0.5672.136", null), "never warned")
+        assertFalse(WebViewVersion.shouldWarn("113.0.5672.136", "113.0.5672.136"), "warned about this one")
+        assertTrue(WebViewVersion.shouldWarn("114.0.5735.196", "113.0.5672.136"), "updated, still too old")
+        assertFalse(WebViewVersion.shouldWarn("153.0.8010.36", null), "above the floor")
+        assertFalse(WebViewVersion.shouldWarn(null, null), "no version to judge")
     }
 
     // ---- the constant against the documents that state it ------------------

@@ -80,6 +80,99 @@ const EXTENSION_RECOMMENDATIONS = {
 // above so either script can be added to a page that already has the other.
 const RECOMMENDATIONS_MARKER = 'vscodroid-extension-recommendations';
 
+// What says the page already starts on the last theme; see the block that adds it.
+const INITIAL_THEME_MARKER = 'vscodroid-initial-theme';
+
+// The object the app gives the page to post the colour it paints itself with,
+// PAGE_COLOR_OBJECT in VSCodroidWebView.kt; see the block that adds the script.
+const PAGE_COLOR_OBJECT = 'vscodroidPageColor';
+
+// The theme type for each base theme, as the workbench names it in its splash
+// and in a class of its own element.
+const SPLASH_THEME_TYPES = { 'vs': 'light', 'vs-dark': 'dark', 'hc-black': 'hcDark', 'hc-light': 'hcLight' };
+
+// The splash colours the starting theme is given and a folder's record keeps,
+// keyed to the colour id each is.
+// The parts that fill the screen, and no more: everything else takes the registry
+// default for the theme type until the real theme arrives a few seconds later.
+const SPLASH_COLOR_IDS = {
+    foreground: 'foreground',
+    editorBackground: 'editor.background',
+    titleBarBackground: 'titleBar.activeBackground',
+    activityBarBackground: 'activityBar.background',
+    sideBarBackground: 'sideBar.background',
+    panelBackground: 'panel.background',
+    statusBarBackground: 'statusBar.background',
+    statusBarNoFolderBackground: 'statusBar.noFolderBackground',
+};
+
+// The older names a setting may still give a theme of the server's own, and the
+// id each now has: the names upstream's migrateThemeSettingsId maps, which the
+// theme service finds a theme by but its first comparison does not.
+const RENAMED_THEMES = {
+    'Default Dark Modern': 'Dark Modern',
+    'Default Light Modern': 'Light Modern',
+    'Default Dark+': 'Dark+',
+    'Default Light+': 'Light+',
+    'Experimental Dark': 'Dark 2026',
+    'VS Code Dark': 'Dark 2026',
+    'Experimental Light': 'Light 2026',
+    'VS Code Light': 'Light 2026',
+};
+
+/**
+ * The look of each colour theme the server tree's own extensions contribute, by
+ * the id a `workbench.colorTheme` setting names it with: its base theme and the
+ * splash colours its file and the files it includes set, in the shape of a
+ * folder's record in the page script below. A colour a theme leaves to the
+ * registry is left out, as the workbench would leave it.
+ *
+ * Read from the tree once, when the script is written into the page: these
+ * themes change only with the tree. A theme an installed extension contributes
+ * is not here, and a folder naming one starts on what its own record holds.
+ */
+function builtInThemeLooks(extensionsDir) {
+    const looks = {};
+    const colorsOf = (file, depth) => {
+        const theme = JSON.parse(fs.readFileSync(file, 'utf8'));
+        const included = theme.include && depth < 4 ? colorsOf(path.join(path.dirname(file), theme.include), depth + 1) : {};
+        return Object.assign(included, theme.colors);
+    };
+    let dirs;
+    try {
+        dirs = fs.readdirSync(extensionsDir);
+    } catch (e) {
+        return looks;
+    }
+    for (const dir of dirs) {
+        let themes;
+        try {
+            themes = JSON.parse(fs.readFileSync(path.join(extensionsDir, dir, 'package.json'), 'utf8')).contributes.themes;
+        } catch (e) {
+            continue;
+        }
+        for (const theme of Array.isArray(themes) ? themes : []) {
+            // The id the workbench gives a theme, its label when it has none; a
+            // label still to be localized cannot be what a setting holds.
+            const id = theme.id || theme.label;
+            if (typeof id !== 'string' || id.startsWith('%')) continue;
+            try {
+                const colors = colorsOf(path.join(extensionsDir, dir, theme.path), 0);
+                // In lower case, as the workbench writes a colour: the page posts
+                // its colour only when it changes, and once the workbench shows
+                // this theme its colour is then the same string.
+                const color = (colorId) => (typeof colors[colorId] === 'string' ? colors[colorId].toLowerCase() : undefined);
+                const colorInfo = { background: color('editor.background') };
+                for (const [key, colorId] of Object.entries(SPLASH_COLOR_IDS)) colorInfo[key] = color(colorId);
+                looks[id] = { baseTheme: theme.uiTheme || 'vs-dark', colorInfo };
+            } catch (e) {
+                // A theme whose file does not read is left to its record.
+            }
+        }
+    }
+    return looks;
+}
+
 /**
  * Replaces a file in one step, the way the product.json rewrite below does.
  *
@@ -104,8 +197,10 @@ function writeThroughRename(target, contents, mode) {
  *
  * Everything the page needs that `product.json` cannot carry arrives this way, so
  * the shape is shared rather than written out per caller. The caller supplies the
- * lines that read and mutate `settings`; the wrapper around them, the marker that
- * makes a second start a no-op, and the write are the same every time.
+ * lines that read and mutate `settings`, or a function answering them for lines
+ * that cost something to build, which runs only when the script is added; the
+ * wrapper around them, the marker that makes a second start a no-op, and the
+ * write are the same every time.
  *
  * The tag is written the way the page's own inline scripts are, because the policy
  * the server sends with the page trusts only that shape. From 1.138 each of them
@@ -140,7 +235,7 @@ function extendWorkbenchPage(pagePath, marker, lines) {
         '\t\t\t\tif (!el) { return; }',
         '\t\t\t\ttry {',
         "\t\t\t\t\tvar settings = JSON.parse(el.getAttribute('data-settings'));",
-        ...lines,
+        ...(typeof lines === 'function' ? lines() : lines),
         "\t\t\t\t\tel.setAttribute('data-settings', JSON.stringify(settings));",
         '\t\t\t\t} catch (e) { /* a broken configuration is the workbench own report to make */ }',
         '\t\t\t})();',
@@ -287,9 +382,10 @@ if (!fs.existsSync(rehEntryPoint)) {
             log('info', 'Product configuration updated');
         } catch (e) {
             // Carrying on beats exiting. The watchdog restarts this process, so
-            // an uncaught throw here is a crash loop that reaches the user as a
-            // white screen with no explanation; the server below will report the
-            // same file in its own terms, after this line has already named it.
+            // an uncaught throw here is a crash loop that ends on the page saying
+            // the server could not be restarted, with no editor at all; the
+            // server below will report the same file in its own terms, after this
+            // line has already named it.
             log('error', `Could not apply the product configuration to ${productJsonPath}: ${e.message}`);
             log('error', 'A truncated product.json is repaired by the asset extraction that ' +
                 'runs on the next app update, or by clearing app data.');
@@ -429,6 +525,226 @@ if (!fs.existsSync(rehEntryPoint)) {
     } catch (e) {
         log('error', `Could not add the extension recommendations: ${e.message}`);
         log('error', 'The editor still works; a formatter is just never suggested.');
+    }
+
+    // Start every page load on the theme it is about to show.
+    //
+    // Two gaps. On every reload, folder switch and cold start the page paints
+    // nothing of its own until the 18 MB workbench.js has loaded and applied a
+    // theme, about a second on an API 36 emulator, and the WebView's own
+    // background shows through, which is the colour the page before it painted
+    // (lastPageColor in VSCodroidWebView.kt): wrong whenever this page is to
+    // show another theme, as a folder with a theme of its own does. And a load
+    // that cannot use the theme the workbench stored starts on the web default,
+    // the light one, for the one to three seconds until the extensions register.
+    // The stored theme is the last window's, one per profile, and is dropped
+    // whenever the theme this window is configured for is another: on a fresh
+    // install, which has none stored; on the first load after an update that
+    // renamed the configured default, which is read from a cache holding the old
+    // name until then; in a folder whose own settings name another theme than
+    // the window before it showed; and in any folder entered from one like that.
+    //
+    // Which theme a window shows is the user's unless the settings of the folder
+    // or workspace it opens name one, so the script reads that file first, the
+    // folder's .vscode/settings.json or the workspace file, through the server's
+    // /vscode-remote-resource. Synchronously, because both things it does with
+    // the answer have to be done before the page goes on: the root has to be
+    // coloured before the first paint, and the workbench reads its configuration
+    // element once, when workbench.js runs. The request is one more round trip
+    // to the server on this device per load, ahead of the stylesheet, and for a
+    // folder without a settings file one more line in server.log, "File not
+    // found:" and the file's path, which the server prints for every file it
+    // cannot find.
+    // The text goes to the workbench as initialWorkspaceSettings (patch 0027),
+    // which its configuration starts from. Without it a remote folder's
+    // configuration held the folder's own settings only as the copy its last
+    // load cached, so a folder opened for the first time showed the user's
+    // theme, and gave every other setting of its own to the user's, until the
+    // file had been read through the remote file system: 8.5 to 20.6 s into the
+    // load on an API 36 emulator.
+    //
+    // The look a load starts on is recorded per folder or workspace, as the
+    // workbench records its own splash, the one for the whole app, in
+    // localStorage: the base theme, which the workbench writes as a class of
+    // its element, and the colours of each part, read back from what the
+    // workbench shows, so a folder's own customizations, Peacock's bar colours
+    // among them, are kept with it; and for a folder whose settings name a
+    // theme, that name. A folder whose settings name a theme starts on its own
+    // record when that was taken under the same name, and otherwise on that
+    // theme's look among the server's own themes (builtInThemeLooks above),
+    // which a folder opened for the first time, or for the first time since
+    // this script came with an update, has to start on.
+    // Any other window starts on the record of the window shown most recently
+    // that follows the user's theme, which is that theme as it is now. Before
+    // the script has recorded any window it starts on the workbench's splash,
+    // the last window's look; once it has recorded only windows with a theme of
+    // their own, that splash is one of theirs, and it starts on the dark default
+    // this app configures, as a fresh install does. Whichever it is colours the
+    // root before the first paint.
+    //
+    // The same look is handed to the workbench as initialColorTheme, which it
+    // uses only when its stored theme is unusable, so it can always be handed:
+    // where the stored theme is the one this window is configured for, it is
+    // kept. With nothing to start on, that is the dark default. Nothing is
+    // handed for a theme of the folder's own that the script has no look for,
+    // one an installed extension contributes on the folder's first load, where
+    // the workbench starts on its own default as upstream does. Hex colours only,
+    // because the workbench parses each one with Color.fromHex, which turns
+    // anything else into red, and a theme can hold a translucent colour, written
+    // as rgba(). Always with a colours object, an empty one included: without it
+    // the workbench colours the theme it starts on from the light map of "Light
+    // 2026", the web build's own default, which is the setting's value until the
+    // extensions register.
+    //
+    // Nothing is handed over when the device has switched between light and dark
+    // since the last load. With window.autoDetectColorScheme on, the stored theme
+    // is unusable on exactly that load because the workbench is following the
+    // device, and the type it picks for itself is then the right one, where the
+    // record holds the other. The page cannot read that setting, so the switch is
+    // what this goes by, and each load records the device's mode for the next one
+    // to compare. The root is still coloured from the record, which is right for
+    // everyone the setting does not apply to. The first load this script runs has
+    // no mode to compare, so with the setting on and the device switched since the
+    // last session, it starts on the old mode's theme until the extensions
+    // register.
+    //
+    // The root shows again after the first paint. When the window grows, as it
+    // does when the soft keyboard goes down, the space given back shows the root
+    // until the workbench has laid itself out again, a tenth of a second or more
+    // on an API 36 emulator: the usual case when a folder is opened from a box
+    // that had the keyboard up. So the root follows the theme the workbench shows
+    // rather than keeping the one the page started on, and the record is taken
+    // from the same reading. Where the page has not painted at the new size at
+    // all, as below the last frame that a reload or a folder opened that way
+    // holds until the next page paints, what shows is the window behind the
+    // view, so each colour the root is given is also posted to the app, which
+    // gives that window the colour and the bars on it icons that read on it
+    // (addPageColorListener in VSCodroidWebView.kt). A theme change rewrites a
+    // style element in the head, so each change to the head reads the
+    // workbench's colours again. So does every change of the window title,
+    // which the workbench makes on each editor switch and change of dirty state,
+    // at the cost of that style read: storage is written on a load's first
+    // reading and then only when what it records changed, and a colour is
+    // posted only when it changed. Taking the colour as the page is left was
+    // tried and is too late: the keyboard starts to go down before the
+    // workbench navigates.
+    //
+    // Twenty folders are kept, the most recently shown, so the record cannot grow
+    // into the storage the workbench's sealed secrets share. A window whose
+    // settings file could not be read, whose address names it by a URI rather than
+    // a path, or whose request failed, starts as one following the user's theme
+    // would and is not recorded, since whether it follows the user's theme is not
+    // known. Loads that still start on the wrong colour: a folder naming a theme
+    // of an installed extension, on its first load or its first after twenty other
+    // folders were shown, which takes the user's colour and, where the workbench
+    // cannot use its stored theme, its light default until the extensions
+    // register; a window following the user's theme while every window recorded
+    // has a theme of its own, which happens once after the update when the first
+    // window it opens has one and after twenty such windows in a row, and which
+    // starts on the dark default whatever the user's theme, so under a light one
+    // it is dark until the workbench paints and, where the workbench cannot use
+    // its stored theme, until the extensions register; the first window after
+    // the update when it follows the user's theme and the window shown last
+    // before the update had a theme of its own, which starts on that theme, from
+    // the workbench's splash, until the extensions register, and is rare because
+    // MainActivity reopens the folder last open; a load after the device
+    // switched, as above, which is handed nothing with the setting off as well;
+    // with the setting on, the first load of a folder naming a theme of its own,
+    // which starts on that theme where the workbench shows the one it picks for
+    // the device's mode; and the first window after the user's theme changed in a
+    // folder with a theme of its own, by an edit of the user's settings rather
+    // than the theme picker, which writes the folder's, since the record of the
+    // user's theme is then older than the theme. A record keeps the colours its
+    // folder showed, that folder's own customizations included, so a load started
+    // on another folder's record starts on those too: the blank page takes its
+    // editor colour, and a workbench that takes the record as its starting theme
+    // shows the parts that folder coloured in its colours until the extensions
+    // register.
+    //
+    // Anything that throws in here leaves the page as upstream ships it.
+    try {
+        // A function, so the theme files are read only when the page is given the
+        // script, once per extraction, and not on the way to every server start.
+        const added = extendWorkbenchPage(workbenchHtmlPath, INITIAL_THEME_MARKER, () => {
+            const looks = builtInThemeLooks(path.join(REH_DIR, 'extensions'));
+            return [
+                '\t\t\t\t\tvar query = new URLSearchParams(location.search);',
+                "\t\t\t\t\tvar where = query.get('folder') || query.get('workspace') || '';",
+                "\t\t\t\t\tvar named = where ? undefined : '';",
+                "\t\t\t\t\tif (where.charAt(0) === '/') {",
+                '\t\t\t\t\t\ttry {',
+                "\t\t\t\t\t\t\tvar file = query.get('folder') ? where.replace(/\\/$/, '') + '/.vscode/settings.json' : where;",
+                '\t\t\t\t\t\t\tvar request = new XMLHttpRequest();',
+                "\t\t\t\t\t\t\trequest.open('GET', '/vscode-remote-resource?path=' + encodeURIComponent(file), false);",
+                '\t\t\t\t\t\t\trequest.send();',
+                '\t\t\t\t\t\t\tvar text = request.status === 200 ? request.responseText : request.status === 404 ? null : undefined;',
+                "\t\t\t\t\t\t\tif (text !== undefined) { settings.initialWorkspaceSettings = text; named = ''; }",
+                '\t\t\t\t\t\t\tif (text) {',
+                "\t\t\t\t\t\t\t\tvar keep = function (match, string) { return string || ''; };",
+                '\t\t\t\t\t\t\t\tvar json = text.replace(/^\\uFEFF/, \'\')',
+                '\t\t\t\t\t\t\t\t\t.replace(/("(?:[^"\\\\]|\\\\.)*")|\\/\\/[^\\n]*|\\/\\*[\\s\\S]*?\\*\\//g, keep)',
+                '\t\t\t\t\t\t\t\t\t.replace(/("(?:[^"\\\\]|\\\\.)*")|,(?=\\s*[}\\]])/g, keep);',
+                '\t\t\t\t\t\t\t\tvar parsed = /\\S/.test(json) ? JSON.parse(json) : {};',
+                "\t\t\t\t\t\t\t\tvar value = ((query.get('folder') ? parsed : parsed.settings) || {})['workbench.colorTheme'];",
+                "\t\t\t\t\t\t\t\tnamed = typeof value === 'string' ? value : '';",
+                '\t\t\t\t\t\t\t}',
+                '\t\t\t\t\t\t} catch (e) { named = undefined; }',
+                '\t\t\t\t\t}',
+                "\t\t\t\t\tvar seen = JSON.parse(localStorage.getItem('vscodroid-folder-themes')) || {};",
+                '\t\t\t\t\tvar keys = Object.keys(seen), mine = seen[where];',
+                "\t\t\t\t\tvar shared = JSON.parse(localStorage.getItem('monaco-parts-splash'));",
+                '\t\t\t\t\tvar user = seen[keys.filter(function (k) { return !seen[k].own; }).pop()] || (keys.length ? undefined : shared);',
+                `\t\t\t\t\tvar themes = ${JSON.stringify(looks)}, renamed = ${JSON.stringify(RENAMED_THEMES)};`,
+                '\t\t\t\t\tvar own = !!named;',
+                '\t\t\t\t\tvar look = own ? (mine && mine.own && mine.name === named ? mine : themes[renamed[named] || named]) : undefined;',
+                '\t\t\t\t\tvar splash = look || user || {};',
+                '\t\t\t\t\tvar info = splash.colorInfo || {};',
+                `\t\t\t\t\tvar types = ${JSON.stringify(SPLASH_THEME_TYPES)}, type = types[splash.baseTheme] || 'dark';`,
+                `\t\t\t\t\tvar ids = ${JSON.stringify(SPLASH_COLOR_IDS)};`,
+                '\t\t\t\t\tvar hex = /^#[0-9a-f]{6}([0-9a-f]{2})?$/i;',
+                "\t\t\t\t\tvar mode = function () { return matchMedia('(prefers-color-scheme: dark)').matches ? 'dark' : 'light'; };",
+                "\t\t\t\t\tvar scheme = mode(), last = localStorage.getItem('vscodroid-device-scheme');",
+                "\t\t\t\t\tlocalStorage.setItem('vscodroid-device-scheme', scheme);",
+                "\t\t\t\t\tvar blank = type === 'light' || type === 'hcLight' ? '#ffffff' : '#1e1e1e';",
+                `\t\t\t\t\tvar sink = window.${PAGE_COLOR_OBJECT}, told;`,
+                '\t\t\t\t\tvar paint = function (color) {',
+                '\t\t\t\t\t\tdocument.documentElement.style.backgroundColor = color;',
+                '\t\t\t\t\t\tif (sink && color !== told) { told = color; sink.postMessage(color); }',
+                '\t\t\t\t\t};',
+                '\t\t\t\t\tpaint(hex.test(info.background) ? info.background : blank);',
+                '\t\t\t\t\tif (!settings.initialColorTheme && (last === null || last === scheme) && (look || !own)) {',
+                '\t\t\t\t\t\tvar colors = {};',
+                '\t\t\t\t\t\tfor (var key in ids) { if (hex.test(info[key])) { colors[ids[key]] = info[key]; } }',
+                '\t\t\t\t\t\tsettings.initialColorTheme = { themeType: type, colors: colors };',
+                '\t\t\t\t\t}',
+                '\t\t\t\t\tvar written;',
+                '\t\t\t\t\tnew MutationObserver(function () {',
+                "\t\t\t\t\t\tvar wb = document.querySelector('.monaco-workbench');",
+                '\t\t\t\t\t\tvar style = wb && getComputedStyle(wb);',
+                "\t\t\t\t\t\tvar now = style ? style.getPropertyValue('--vscode-editor-background').trim() : '';",
+                '\t\t\t\t\t\tif (!now) { return; }',
+                '\t\t\t\t\t\tpaint(now);',
+                '\t\t\t\t\t\tvar base = Object.keys(types).filter(function (t) { return wb.classList.contains(t); })[0];',
+                '\t\t\t\t\t\tvar shown = { baseTheme: base, colorInfo: { background: now } };',
+                "\t\t\t\t\t\tfor (var key in ids) { shown.colorInfo[key] = style.getPropertyValue('--vscode-' + ids[key].replace(/\\./g, '-')).trim(); }",
+                '\t\t\t\t\t\tvar entry = JSON.stringify(shown);',
+                '\t\t\t\t\t\tif (entry === written || named === undefined) { return; }',
+                '\t\t\t\t\t\twritten = entry;',
+                '\t\t\t\t\t\tif (own) { shown.own = true; shown.name = named; }',
+                '\t\t\t\t\t\tdelete seen[where];',
+                '\t\t\t\t\t\tseen[where] = shown;',
+                '\t\t\t\t\t\tvar kept = Object.keys(seen);',
+                '\t\t\t\t\t\tif (kept.length > 20) { delete seen[kept[0]]; }',
+                "\t\t\t\t\t\ttry { localStorage.setItem('vscodroid-folder-themes', JSON.stringify(seen)); } catch (e) { /* full: only the record is lost */ }",
+                '\t\t\t\t\t}).observe(document.head, { childList: true, subtree: true });',
+            ];
+        });
+        if (added) {
+            log('info', 'The workbench page starts on the last theme');
+        }
+    } catch (e) {
+        log('error', `Could not give the workbench page its starting theme: ${e.message}`);
+        log('error', 'The editor still works; a page load may show another theme for a moment first.');
     }
 
     // Build server arguments.

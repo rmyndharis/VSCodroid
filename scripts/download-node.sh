@@ -33,6 +33,9 @@ WORK_DIR="$ROOT_DIR/toolchains/termux-packages"
 
 TERMUX_REPO="${TERMUX_MIRROR:-https://mirror.mwt.me/termux/main}"
 PACKAGES_URL="$TERMUX_REPO/dists/stable/main/binary-aarch64/Packages"
+# For a .deb the mirror's index names but its pool lacks; see the same variable
+# in scripts/lib/termux-packages.sh.
+TERMUX_FALLBACK_REPO="https://packages-cf.termux.dev/apt/termux-main"
 
 # nodejs-lts, not nodejs: the LTS package tracks the line VS Code targets, while
 # the plain one runs ahead of it. Check what a VS Code version wants with
@@ -118,7 +121,10 @@ echo "  package : $PACKAGE $version"
 deb="debs/$(basename "$filename")"
 mkdir -p debs
 if [ ! -f "$deb" ]; then
-    curl -sL --fail --show-error -o "$deb" "$TERMUX_REPO/$filename"
+    if ! curl -sL --fail --show-error -o "$deb" "$TERMUX_REPO/$filename"; then
+        echo "  $(basename "$deb"): not served by $TERMUX_REPO, trying $TERMUX_FALLBACK_REPO"
+        curl -sL --fail --show-error -o "$deb" "$TERMUX_FALLBACK_REPO/$filename"
+    fi
 fi
 if [ -n "$sha256" ]; then
     actual=$( (sha256sum "$deb" 2>/dev/null || shasum -a 256 "$deb") | cut -d' ' -f1)

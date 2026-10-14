@@ -68,7 +68,7 @@ jobs:
         uses: android-actions/setup-android@be39fa834029ff78f1a44aa3bb0819b8fc2bd8fd # v4.0.4
 
       - name: Setup Gradle
-        uses: gradle/actions/setup-gradle@9c971963bec38e04b3d30dcc455b5382be2fdbfb # v6.3.0
+        uses: gradle/actions/setup-gradle@3f5f9adaf7d9fecd50b5935e54106014257a94e6 # v6.4.0
         with:
           # Pinned to the open-source implementation, not left to the default.
           #
@@ -95,7 +95,7 @@ jobs:
       # about the device. It ran on 20 while every APK carried 24, which
       # check-build-steps.py now refuses.
       - name: Set up Node.js
-        uses: actions/setup-node@820762786026740c76f36085b0efc47a31fe5020 # v7.0.0
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: "24"
 
@@ -299,9 +299,13 @@ jobs:
           node scripts/test-server-bootstrap.js
           node scripts/test-process-monitor-extension.js
           node scripts/test-bridge-relay.js
+          node scripts/test-ui-scale.js
+          node scripts/test-plain-text-page.js
           node scripts/test-download-capture.js
           node scripts/test-arrow-edge-guard.js
+          node scripts/test-modifier-release.js
           node scripts/test-composing-enter.js
+          node scripts/test-leave-curtain.js
           node scripts/test-keyboard-guard.js
           node scripts/test-serve-network.js
           node scripts/test-welcome.js
@@ -313,7 +317,7 @@ jobs:
 
       - name: Upload lint report
         if: always()
-        uses: actions/upload-artifact@043fb46d1a93c77aae656e7c1c64a875d1fc6a0a # v7.0.1
+        uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:
           name: lint-report
           path: |

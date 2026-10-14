@@ -183,7 +183,7 @@ reconciles back to the real documents.
 ```mermaid
 flowchart TD
   A["VSCodroid"] --> B["Command Palette:<br/>VSCodroid: Open Folder from Device"] --> C["Android SAF picker"]
-  C --> D["Folder mirrored into a hash-named<br/>directory under filesDir/saf-mirrors"]
+  C --> D["Folder mirrored into a hash-named<br/>directory under filesDir/saf-mirrors,<br/>opened through a link named after the folder"]
   D --> E["Folder opens in editor<br/>Terminal has python3 ready"]
   E --> F["Saves reconciled back to the device folder<br/>by SafSyncEngine"]
 ```

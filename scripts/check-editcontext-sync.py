@@ -8,10 +8,11 @@
 the line _updateEditContext last wrote. That is the right text only while both
 model listeners, the content listener and onCursorStateChanged, call
 _updateEditContext synchronously. Upstream 1.140.0 defers both to prepareRender
-(microsoft/vscode#310901), and 0022 still applies there with every fingerprint
-row passing, so nothing else in the build notices. Exits 1 naming what moved,
-the file itself included, since 0022 has to be reworked then too; 2 when the
-file is there but cannot be read, which says nothing about upstream. It sees
+(microsoft/vscode#310901), and 0022 still applies there. Going by the patched
+source every fingerprint row would pass there too, though no 1.140.0 bundle was
+built to confirm it, so nothing else in the build notices. Exits 1 naming what
+moved, the file itself included, since 0022 has to be reworked then too; 2 when
+the file is there but cannot be read, which says nothing about upstream. It sees
 only whether the direct call leaves those two bodies: a deferral inside
 _updateEditContext itself would pass.
 

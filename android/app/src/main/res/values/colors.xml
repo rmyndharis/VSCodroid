@@ -15,6 +15,9 @@
     <color name="colorBackground">#1E1E1E</color>
     <color name="colorSurface">#252526</color>
     <color name="colorOnSurface">#CCCCCC</color>
+    <!-- Text on the editor's own colour where that is light: the setup screen
+         takes the colour the workbench last painted (SplashActivity). -->
+    <color name="colorOnLightBackground">#1E1E1E</color>
 
     <!-- Extra key row colors -->
     <color name="colorExtraKeyBg">#2D2D2D</color>

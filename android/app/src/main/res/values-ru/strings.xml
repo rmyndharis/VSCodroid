@@ -256,6 +256,15 @@
          because that one says the thing holds files, which is false of a file, and
          apart from saf_write_back_failed because the app holds nothing here at all. -->
     <string name="saf_document_kept">Файл %1$s оставлен в папке на устройстве: у редактора не было его копии. Удалите его там, если он больше не нужен.</string>
+
+    <!-- The same refusal for a file the editor did have and the user deleted, kept
+         because the device's version may have changed since the editor last read or
+         saved it, as another app's edit does. saf_document_kept would tell that user the
+         editor never had the file they just deleted in it. -->
+    <string name="saf_document_changed_kept">Файл %1$s оставлен в папке на устройстве: другое приложение могло изменить его с тех пор, как редактор в последний раз прочитал или сохранил его. Удалите его там, если он больше не нужен.</string>
+    <!-- A directory deleted in the editor that holds such a file, and no file the editor
+         never had, which is what saf_directory_kept says. -->
+    <string name="saf_directory_changed_kept">Папка %1$s оставлена в папке на устройстве: другое приложение могло изменить файл в ней с тех пор, как редактор в последний раз прочитал или сохранил этот файл. Удалите её там, если она больше не нужна.</string>
     <string name="saf_delete_refused">Не удалось удалить %1$s из папки на устройстве, поэтому файл появится снова при следующем открытии папки. Удалите его в файловом менеджере устройства.</string>
 
     <!-- Removing the local copy of a device folder, from the storage screen. The
@@ -458,7 +467,9 @@
          It is a version number, not a quantity: nothing about the sentence
          changes when it does, and passing it as a number invites a translator to
          treat "105 and newer" as something to inflect. -->
-    <string name="webview_below_minimum">Установлена версия Android System WebView %1$s. VSCodroid тестируется с версией %2$s и новее, поэтому часть редактора может не работать. Обновите WebView в Play Store.</string>
+    <string name="webview_below_minimum_title">Android System WebView устарел</string>
+    <string name="webview_below_minimum">На этом устройстве установлен Android System WebView версии %1$s. VSCodroid нужна версия %2$s или новее: в более старой предпросмотр Markdown и панели расширений, например чат, остаются пустыми. Обновите Android System WebView в Play Store.</string>
+    <string name="webview_update">Обновить</string>
 
     <!-- The extra key row, all of it spoken rather than drawn.
 

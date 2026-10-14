@@ -127,7 +127,7 @@ class ConnectionTokenLoggingTest {
         Loopback(200).use { server ->
             VSCodroidWebViewClient.interceptCdnRequest(
                 cdnRequest("abc123.vscode-cdn.net", "/stable/deadbeef/out/vs/workbench/workbench.js"),
-                server.port, token, emptyList(), emptyList(), { null },
+                server.port, { token }, emptyList(), emptyList(), { null },
             )
             assertNothingLeaked()
         }
@@ -148,7 +148,7 @@ class ConnectionTokenLoggingTest {
 
         VSCodroidWebViewClient.interceptCdnRequest(
             cdnRequest("abc123.vscode-cdn.net", "/stable/deadbeef/out/vs/workbench/workbench.js"),
-            deadPort, token, emptyList(), emptyList(), { null },
+            deadPort, { token }, emptyList(), emptyList(), { null },
         )
         assertNothingLeaked()
     }
@@ -172,7 +172,7 @@ class ConnectionTokenLoggingTest {
 
         VSCodroidWebViewClient.interceptCdnRequest(
             cdnRequest("https+example.test.vscode-resource.vscode-cdn.net", "/probe.txt"),
-            deadPort, token, emptyList(), emptyList(), { null },
+            deadPort, { token }, emptyList(), emptyList(), { null },
         )
 
         assertTrue(
@@ -213,7 +213,7 @@ class ConnectionTokenLoggingTest {
         // rather than a branch. The log is what distinguishes the two here.
         VSCodroidWebViewClient.interceptCdnRequest(
             cdnRequest("custom+authority.vscode-resource.vscode-cdn.net", "/some/asset.css"),
-            deadPort, token, emptyList(), emptyList(), { null },
+            deadPort, { token }, emptyList(), emptyList(), { null },
         )
 
         assertTrue(
@@ -238,7 +238,7 @@ class ConnectionTokenLoggingTest {
     fun `an unrewritable CDN URL is not reported with its query intact`() {
         VSCodroidWebViewClient.interceptCdnRequest(
             cdnRequest("abc123.vscode-cdn.net", "/onlyonesegment", query = "tkn=$token"),
-            41234, token, emptyList(), emptyList(), { null },
+            41234, { token }, emptyList(), emptyList(), { null },
         )
         assertNothingLeaked()
     }

@@ -53,6 +53,15 @@ TERMUX_SCRIPTS_DIR="$(dirname "$TERMUX_LIB_DIR")"
 TERMUX_REPO="${TERMUX_MIRROR:-https://mirror.mwt.me/termux/main}"
 PACKAGES_URL="$TERMUX_REPO/dists/stable/main/binary-aarch64/Packages"
 
+# Where a .deb is fetched from when the mirror cannot serve it. A mirror can
+# publish an index before the files it names: on 2026-10-09 mirror.mwt.me served
+# an index from 10:15 UTC naming openssh_10.6p1-1 for more than four hours while
+# its pool held only openssh_10.6p1, and a CI build that missed the asset cache
+# stopped on the 404. Termux's own host had the file. Only the bytes move: the
+# index and its digests still come from TERMUX_REPO, so this host cannot change
+# what termux_verify_deb accepts.
+TERMUX_FALLBACK_REPO="https://packages-cf.termux.dev/apt/termux-main"
+
 # Set by termux_resolve_packages, read by the lookups under it.
 TERMUX_RECORD_FILE=""
 
@@ -215,7 +224,10 @@ termux_download_packages() {
         if [ -f "$WORK_DIR/debs/$debname" ]; then
             echo "  $debname (cached)"
         else
-            curl -L --fail --show-error -o "$WORK_DIR/debs/$debname" "$TERMUX_REPO/$filename"
+            if ! curl -L --fail --show-error -o "$WORK_DIR/debs/$debname" "$TERMUX_REPO/$filename"; then
+                echo "  $debname: not served by $TERMUX_REPO, trying $TERMUX_FALLBACK_REPO"
+                curl -L --fail --show-error -o "$WORK_DIR/debs/$debname" "$TERMUX_FALLBACK_REPO/$filename"
+            fi
             echo "  $debname ($(du -sh "$WORK_DIR/debs/$debname" | cut -f1))"
         fi
         termux_verify_deb "$WORK_DIR/debs/$debname" "$(termux_pkg_sha256 "$pkg")" || return 1

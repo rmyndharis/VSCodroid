@@ -5,7 +5,9 @@ import android.content.Context
 import android.database.Cursor
 import android.net.Uri
 import android.os.FileObserver
+import android.os.SystemClock
 import android.provider.DocumentsContract
+import com.vscodroid.SourceScan
 import com.vscodroid.util.Logger
 import io.mockk.Runs
 import io.mockk.every
@@ -17,16 +19,27 @@ import io.mockk.unmockkAll
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.CsvSource
 import org.junit.jupiter.params.provider.EnumSource
+import org.junit.jupiter.params.provider.ValueSource
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.FileNotFoundException
 import java.io.IOException
+import java.io.InputStream
 import java.io.OutputStream
+import java.io.RandomAccessFile
+import java.nio.file.Files
+import java.security.MessageDigest
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 
 /**
  * A save while the folder is open, meeting an edit another app made to the same document
@@ -39,7 +52,8 @@ import java.io.OutputStream
  * moved, keeps the device copy beside the mirror file as `.device-<time>` before writing.
  *
  * The device here is one document, `notes.txt`, whose text, time and size the cases move
- * by hand. A write through `"wt"` lands like the platform provider's: it replaces the text
+ * by hand, and for a case about the open's reads a second, `other.txt`, that nothing
+ * changes. A write through `"wt"` lands like the platform provider's: it replaces the text
  * and advances the time before close() returns. [LateStamp] is the other kind of provider,
  * which reports a write's final time and size only after that.
  */
@@ -58,27 +72,68 @@ class SafLiveDeviceEditTest {
     private var deviceModified = OPENED_AT
     private var deviceSize = 2L
     private var deviceHasClock = true
+
+    /**
+     * False for a provider that reports no size: its column reads back as [unknownSize], 0
+     * where it is null, or the -1 some providers give for a size they do not know.
+     */
+    private var deviceHasSize = true
+    private var unknownSize = 0L
     private var writes = 0
 
     /** How many times the device document was opened for reading. */
     private var reads = 0
+
+    /** How many bytes were read from the device document, over all opens. */
+    private var bytesRead = 0L
+
+    /** False for a provider that will not open the document for reading, as offline. */
+    private var deviceReadable = true
+
+    /** What the engine's held-back saves are timed by, `SystemClock.elapsedRealtime()`. */
+    private var clock = 0L
     private val failed = mutableListOf<File>()
+
+    /** What the engine said it kept in the device folder when a delete would have taken it. */
+    private val kept = mutableListOf<File>()
+
+    /**
+     * For each of [kept], whether it was said to be kept because the device's version may have
+     * changed since the editor read it, rather than because the editor never had it.
+     */
+    private val keptAsChanged = mutableListOf<Boolean>()
 
     /** Whether the device holds `notes.txt` at all; the editor can delete and make it again. */
     private var deviceHasDocument = true
+
+    /** The id the device gives `notes.txt` now. */
+    private var docId = "doc:notes.txt"
+
+    /**
+     * Documents another app deleted, on a provider whose ids are not paths: a query finds no
+     * row, nothing opens them, and the document a create makes next gets an id of its own.
+     */
+    private val gone = mutableSetOf<Uri>()
 
     /** Set to make the provider fail the first query after the next write lands. */
     private var failStampAfterNextWrite = false
     private var failNextQuery = false
 
-    /** Set to make the next `"wt"` stream fail at its first byte, before anything lands. */
-    private var failNextWriteStream = false
+    /** Set to make the provider fail the next query for one document, the stamp query. */
+    private var failStampQuery = false
+
+    /** How many of the next `"wt"` streams fail at their first byte, before anything lands. */
+    private var failWriteStreams = 0
 
     /** How the provider reports a write; null for one whose stamp is final at close(). */
     private var lateStamp: LateStamp? = null
 
     /** What a [lateStamp] provider reports once it has finished the last write. */
     private var settled: Pair<Long, Long>? = null
+
+    /** A second document, `other.txt`, listed after `notes.txt` when set, at [otherModified]. */
+    private var otherText: String? = null
+    private var otherModified = OPENED_AT
 
     /**
      * Providers that finish what they report for a write after its stream has closed. Each
@@ -95,6 +150,9 @@ class SafLiveDeviceEditTest {
 
         /** MTP to an Android phone, which keeps the old time: only the size moves, later. */
         SIZE,
+
+        /** The time moves first and the length later, and the next save comes in between. */
+        TIME_BEFORE_SIZE,
     }
 
     @BeforeEach
@@ -106,6 +164,9 @@ class SafLiveDeviceEditTest {
         every { Logger.w(any(), any(), any()) } just Runs
         every { Logger.e(any(), any()) } just Runs
         every { Logger.e(any(), any(), any()) } just Runs
+
+        mockkStatic(SystemClock::class)
+        every { SystemClock.elapsedRealtime() } answers { clock }
 
         mockkStatic(DocumentsContract::class)
         every { DocumentsContract.getTreeDocumentId(any()) } returns "root"
@@ -127,25 +188,41 @@ class SafLiveDeviceEditTest {
             deviceText = ""
             deviceSize = 0
             deviceModified = CREATED_AT
-            uris.getOrPut("doc:notes.txt") { mockk(relaxed = true) }
+            if (uris[docId] in gone) docId += "+"
+            uris.getOrPut(docId) { mockk(relaxed = true) }
         }
 
         resolver = mockk(relaxed = true)
         every { resolver.query(any(), any(), any(), any(), any()) } answers {
+            if (firstArg<Uri>() in gone) return@answers mockk<Cursor>(relaxed = true)
             if (failNextQuery) {
                 failNextQuery = false
                 throw IllegalStateException("the provider did not answer")
             }
-            deviceCursor()
+            val document = firstArg<Uri>() in uris.values
+            if (document && failStampQuery) {
+                failStampQuery = false
+                throw IllegalStateException("the provider did not answer for the document")
+            }
+            deviceCursor(listing = !document)
         }
         // A real stream: a relaxed one answers 0 from `read`, and `copyTo` spins on it.
         every { resolver.openInputStream(any()) } answers {
             reads++
-            ByteArrayInputStream(deviceText.toByteArray())
+            if (firstArg<Uri>() in gone) throw FileNotFoundException("deleted by another app")
+            if (!deviceReadable) throw IOException("offline")
+            val text = if (firstArg<Uri>() === uris[OTHER_ID]) otherText!! else deviceText
+            object : ByteArrayInputStream(text.toByteArray()) {
+                override fun read(b: ByteArray, off: Int, len: Int) =
+                    super.read(b, off, len).also { if (it > 0) bytesRead += it }
+
+                override fun read() = super.read().also { if (it >= 0) bytesRead++ }
+            }
         }
         every { resolver.openOutputStream(any(), "wt") } answers {
-            if (failNextWriteStream) {
-                failNextWriteStream = false
+            if (firstArg<Uri>() in gone) throw FileNotFoundException("deleted by another app")
+            if (failWriteStreams > 0) {
+                failWriteStreams--
                 object : OutputStream() {
                     override fun write(b: Int) = throw IOException("cut short")
                 }
@@ -161,6 +238,10 @@ class SafLiveDeviceEditTest {
         every { context.filesDir } returns File(root, "files").apply { mkdirs() }
         engine = SafSyncEngine(context)
         engine.onWriteBackFailed = { failed += it }
+        engine.onKeptOnDevice = { file, _, changed ->
+            kept += file
+            keptAsChanged += changed
+        }
         treeUri = mockk(relaxed = true)
         mirror = File(root, "mirror-a").apply { mkdirs() }
     }
@@ -169,13 +250,17 @@ class SafLiveDeviceEditTest {
     fun tearDown() = unmockkAll()
 
     /**
-     * One row for `notes.txt`, answering both the enumeration and a single-document query.
-     * With no clock the time column is missing, as some providers leave it.
+     * One row for `notes.txt`, answering both the enumeration and a single-document query,
+     * and in a [listing] a second for [otherText] where it is set. With no clock the time
+     * column is missing, as some providers leave it.
      */
-    private fun deviceCursor(): Cursor {
+    private fun deviceCursor(listing: Boolean): Cursor {
         val cursor = mockk<Cursor>(relaxed = true)
         var row = -1
-        every { cursor.moveToNext() } answers { deviceHasDocument && ++row == 0 }
+        val other = listing && otherText != null
+        val rows = (if (deviceHasDocument) 1 else 0) + (if (other) 1 else 0)
+        val onOther = { other && row == rows - 1 }
+        every { cursor.moveToNext() } answers { ++row < rows }
         every { cursor.moveToFirst() } answers { deviceHasDocument }
         every { cursor.getColumnIndexOrThrow(any()) } answers {
             when (firstArg<String>()) {
@@ -193,11 +278,17 @@ class SafLiveDeviceEditTest {
             }
         }
         every { cursor.isNull(any()) } returns false
-        every { cursor.getString(0) } returns "doc:notes.txt"
-        every { cursor.getString(1) } returns "notes.txt"
+        every { cursor.getString(0) } answers { if (onOther()) OTHER_ID else docId }
+        every { cursor.getString(1) } answers { if (onOther()) "other.txt" else "notes.txt" }
         every { cursor.getString(2) } returns "text/plain"
-        every { cursor.getLong(3) } answers { deviceSize }
-        every { cursor.getLong(4) } answers { deviceModified }
+        every { cursor.getLong(3) } answers {
+            when {
+                onOther() -> otherText!!.length.toLong()
+                deviceHasSize -> deviceSize
+                else -> unknownSize
+            }
+        }
+        every { cursor.getLong(4) } answers { if (onOther()) otherModified else deviceModified }
         return cursor
     }
 
@@ -218,6 +309,7 @@ class SafLiveDeviceEditTest {
                 settled = deviceModified / 1_000 * 1_000 to size
             }
             LateStamp.SIZE -> settled = deviceModified to size
+            LateStamp.TIME_BEFORE_SIZE -> settled = deviceModified + 1_000 to deviceSize
         }
         if (failStampAfterNextWrite) {
             failStampAfterNextWrite = false
@@ -234,14 +326,23 @@ class SafLiveDeviceEditTest {
         settled = null
     }
 
-    private fun open(mirrorDir: File = mirror, tree: Uri = treeUri) =
-        runBlocking { engine.initialSync(tree, mirrorDir) { _, _ -> } }
+    private fun open(
+        mirrorDir: File = mirror,
+        tree: Uri = treeUri,
+        onProgress: (Int, Int) -> Unit = { _, _ -> },
+    ) = runBlocking { engine.initialSync(tree, mirrorDir, onProgress) }
 
     /** An editor save: the mirror file is written in place, and the watcher's job runs. */
     private fun save(text: String, mirrorDir: File = mirror, tree: Uri = treeUri) {
         val file = File(mirrorDir, "notes.txt").apply { writeText(text) }
         engine.handleMirrorEvent(FileObserver.MODIFY, file, mirrorDir, tree)
         engine.runWriteBackLoop { false }
+    }
+
+    /** One turn of the write-back loop of a watcher on [mirrorDir], then its drain. */
+    private fun retryWhileWatching(mirrorDir: File = mirror) {
+        var turns = 0
+        engine.runWriteBackLoop(WatchSession(mirrorDir)) { turns++ == 0 }
     }
 
     private fun editOnDevice(text: String, size: Long = text.length.toLong()) {
@@ -255,6 +356,64 @@ class SafLiveDeviceEditTest {
         mirrorDir.listFiles()!!
             .filter { it.name.startsWith("notes.txt" + SafSyncEngine.DEVICE_COPY_SUFFIX) }
             .associate { it.name to it.readText() }
+
+    /** A device document of [length] zero bytes, streamed without holding them. */
+    private fun zeros(length: Long) = object : InputStream() {
+        private var left = length
+
+        override fun read() = if (left > 0) 0.also { left-- } else -1
+
+        override fun read(b: ByteArray, off: Int, len: Int): Int {
+            if (left <= 0) return -1
+            val n = minOf(len.toLong(), left).toInt()
+            b.fill(0, off, off + n)
+            left -= n
+            return n
+        }
+    }
+
+    private val record: File get() = File(mirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX)
+
+    /**
+     * The record as a build before the digests wrote it, the one an update finds: the same
+     * lines without the digest after each, so the next open has a kept copy to read.
+     */
+    private fun recordWithoutDigests() {
+        record.writeText(record.readLines().joinToString("\n") { SafSyncEngine.splitRecordLine(it).first })
+    }
+
+    /** The digest the record's line for `notes.txt` carries, or null where it carries none. */
+    private fun recordedDigest(): ByteArray? =
+        SafSyncEngine.splitRecordLine(record.readLines().single { it.startsWith("notes.txt\t") }).second
+
+    /**
+     * Runs [onUpdate] with the length of every chunk the engine's SHA-256s are handed from
+     * now on, and [onDigest] as each of them finishes, inside the engine's own call: the one
+     * step a test can stand in, between the reads that feed a digest and what is done with it.
+     */
+    private fun duringDigests(onUpdate: (Int) -> Unit = {}, onDigest: () -> Unit = {}) {
+        mockkStatic(MessageDigest::class)
+        every { MessageDigest.getInstance("SHA-256") } answers {
+            val real = callOriginal()
+            object : MessageDigest("SHA-256") {
+                override fun engineUpdate(input: Byte) {
+                    onUpdate(1)
+                    real.update(input)
+                }
+
+                override fun engineUpdate(input: ByteArray, offset: Int, len: Int) {
+                    onUpdate(len)
+                    real.update(input, offset, len)
+                }
+
+                override fun engineReset() = real.reset()
+                override fun engineDigest(): ByteArray {
+                    onDigest()
+                    return real.digest()
+                }
+            }
+        }
+    }
 
     @Test
     fun `a device edit made while the folder is open is set aside before a save replaces it`() {
@@ -358,6 +517,330 @@ class SafLiveDeviceEditTest {
         assertEquals(emptyList<File>(), failed)
     }
 
+    /**
+     * A provider whose size column is null reports every length as 0, which is never the
+     * length this app digested, so a stamp it settles late has to be read at that length
+     * too, or each save after the first keeps a copy of the one before.
+     */
+    @Test
+    fun `saves to a provider with no size column that settles late leave no device copy`() {
+        deviceHasSize = false
+        lateStamp = LateStamp.WHOLE_SECONDS
+        open()
+
+        save("first save")
+        settle()
+        save("second save, longer")
+        settle()
+        save("third")
+
+        assertEquals(
+            emptyMap<String, String>(), deviceCopies(),
+            "this app's own earlier saves were kept as if another app had written them",
+        )
+        assertEquals(3, writes)
+    }
+
+    /**
+     * The stamp a moved document was matched to this app's bytes at is what the next save
+     * compares, whether or not a write followed the match. None follows where the mirror
+     * file is a link, which is never written out, and without the match being kept each
+     * later save read the document again to match the same bytes.
+     */
+    @Test
+    fun `a device copy matched to this app's bytes is not read again at the same stamp`() {
+        lateStamp = LateStamp.WHOLE_SECONDS
+        open()
+        save("first save")
+        settle()
+        val file = File(mirror, "notes.txt").apply { delete() }
+        Files.createSymbolicLink(
+            file.toPath(),
+            File(root, "elsewhere.txt").apply { writeText("outside the folder") }.toPath(),
+        )
+        engine.handleMirrorEvent(FileObserver.MODIFY, file, mirror, treeUri)
+        engine.runWriteBackLoop { false }
+        val readsAfterMatch = reads
+        file.delete()
+
+        save("second save")
+
+        assertEquals(readsAfterMatch, reads, "the device copy was read again at a stamp it was matched at")
+        assertEquals("second save", deviceText)
+        assertEquals(emptyMap<String, String>(), deviceCopies())
+    }
+
+    /**
+     * What the open records for a fetched copy is the copy as it landed. Read off the mirror
+     * file a moment later, it was whatever an editor saved into the file in that instant:
+     * the record then vouched for an edit the device never received, as if the mirror could
+     * be reclaimed, and the read at the next save stopped at the edit's shorter length, so
+     * it missed the copy the open had fetched and kept a duplicate of it. The editor's save
+     * is simulated in the digest the fetch takes right then, the one step in between.
+     */
+    @Test
+    fun `a fetched copy is recorded as it landed when an editor saves at once`() {
+        val file = File(mirror, "notes.txt")
+        var editorSaved = false
+        duringDigests(onDigest = {
+            if (!editorSaved && file.isFile) {
+                editorSaved = true
+                file.writeText("x")
+            }
+        })
+        open()
+        assertEquals(true, editorSaved, "the simulated save never ran")
+        assertEquals(
+            false, engine.holdsOnlyVouchedCopies(mirror),
+            "the record vouched for an edit the device never received",
+        )
+        // The same bytes at another time, as a FAT card reports once its cached inode goes.
+        deviceModified -= 337
+
+        save("typed in the editor")
+
+        assertEquals(
+            emptyMap<String, String>(), deviceCopies(),
+            "the copy the open fetched was kept as if another app had written it",
+        )
+        assertEquals("typed in the editor", deviceText)
+    }
+
+    /**
+     * A copy a reopen kept rather than fetched, under a stamp the provider moves afterwards
+     * with the bytes unchanged, as a FAT card behind the FUSE cache does once its cached
+     * inode is evicted. The document is the one the editor shows, so the first save must not
+     * keep a copy of it, and nothing but that reopen read it.
+     */
+    @Test
+    fun `a stamp moved after a reopen over a kept copy leaves no device copy`() {
+        open()
+        val readsBeforeReopen = reads
+        open()
+        assertEquals(readsBeforeReopen, reads, "the reopen fetched the document instead of keeping it")
+        deviceModified -= 337
+
+        save("typed in the editor")
+
+        assertEquals(
+            emptyMap<String, String>(), deviceCopies(),
+            "the copy the reopen kept was taken for another app's edit",
+        )
+        assertEquals("typed in the editor", deviceText)
+    }
+
+    /**
+     * What bounds the reads an open spends on the kept copies the record holds no digest for,
+     * as after an update from a build that recorded none: one larger than the budget is not
+     * read, so a stamp moved over it still keeps one spare copy of the unchanged document.
+     */
+    @Test
+    fun `a kept copy the record holds no digest for is not read past the open's budget`() {
+        open()
+        recordWithoutDigests()
+        engine.keptCopyDigestBytes = 1
+        open()
+        deviceModified -= 337
+
+        save("typed in the editor")
+
+        assertEquals(listOf("v1"), deviceCopies().values.toList(), "a kept copy past the budget was read")
+    }
+
+    /**
+     * The budget is the whole open's: a kept copy that would fit in it alone is not read once
+     * the copies read before it have spent it, or such an open read the whole folder. The
+     * newer copy goes first, because a provider moves a stamp after a write and the recent
+     * copies are the ones it moves.
+     */
+    @Test
+    fun `kept copies the record holds no digest for share one budget, newest first`() {
+        deviceText = "x".repeat(1_000)
+        deviceSize = 1_000
+        otherText = "y".repeat(1_200)
+        otherModified = OPENED_AT + 60_000
+        open()
+        recordWithoutDigests()
+        engine.keptCopyDigestBytes = 1_500
+        var hashed = 0L
+        duringDigests(onUpdate = { hashed += it })
+
+        open()
+
+        assertEquals(1_200L, hashed, "the open did not read the newer copy alone within its budget")
+    }
+
+    /**
+     * The budget is the figure the user guide and the changelog give for it, in the decimal
+     * megabytes every size a user reads is written in (`StorageManager.formatSize`). It was
+     * 64 MiB under a "64 MB", which no reader of either could tell.
+     */
+    @Test
+    fun `the kept-copy budget is the figure the guide and the changelog give`() {
+        for (path in listOf("../../docs/USER_GUIDE.md", "../../CHANGELOG.md")) {
+            val text = SourceScan.read(path).replace(Regex("""\s+"""), " ")
+            val megabytes = Regex("""(\d+) MB per opening""").find(text)?.groupValues?.get(1)?.toLong()
+            assertEquals(
+                SafSyncEngine.KEPT_COPY_DIGEST_BYTES, megabytes?.times(1_000_000),
+                "$path gives another figure, or none, for what an open reads of the kept copies",
+            )
+        }
+    }
+
+    /**
+     * The digest a fetch takes goes onto the copy's line in the record, and stays there
+     * while later opens keep the copy, so they take it rather than read the copy again. With
+     * no budget left to read anything, a stamp moved two opens later still leaves no spare
+     * copy. Every open used to read every kept copy again, which for a source tree is the
+     * whole folder.
+     */
+    @Test
+    fun `a digest the record holds serves every open that keeps its copy`() {
+        open()
+        engine.keptCopyDigestBytes = 0
+        open()
+        open()
+        deviceModified -= 337
+
+        save("typed in the editor")
+
+        assertEquals(
+            emptyMap<String, String>(), deviceCopies(),
+            "the reopen had no digest for the copy an earlier open fetched",
+        )
+        assertEquals("typed in the editor", deviceText)
+    }
+
+    /**
+     * After an update from a build that recorded no digests, the first open reads a kept copy
+     * within its budget and records what it read, so the next open does not read it again.
+     */
+    @Test
+    fun `a kept copy read by one open is not read by the next`() {
+        open()
+        recordWithoutDigests()
+        open()
+        engine.keptCopyDigestBytes = 0
+        open()
+        deviceModified -= 337
+
+        save("typed in the editor")
+
+        assertEquals(
+            emptyMap<String, String>(), deviceCopies(),
+            "the digest an open read was not there for the open after it",
+        )
+    }
+
+    /**
+     * A kept copy an editor shortens while the open reads it: what the read hashed is part of
+     * the copy the record line names, and as that copy's digest it would be wrong for as long
+     * as the line stands.
+     */
+    @Test
+    fun `a kept copy that shrinks while the open reads it leaves no digest on its line`() {
+        deviceText = "x".repeat(20_000)
+        deviceSize = 20_000
+        open()
+        recordWithoutDigests()
+        val file = File(mirror, "notes.txt")
+        var shortened = false
+        duringDigests(onUpdate = {
+            if (!shortened) {
+                shortened = true
+                RandomAccessFile(file, "rw").use { it.setLength(100) }
+            }
+        })
+
+        open()
+
+        assertTrue(shortened, "the open did not read the kept copy")
+        assertNull(recordedDigest(), "a digest of part of the copy was recorded as the copy's")
+    }
+
+    /**
+     * The same copy lengthened while the open reads it, as a log being written is. The read
+     * stops a buffer past the length the line names, which is what the open's budget was
+     * charged for it, rather than following the file for as long as it grows.
+     */
+    @Test
+    fun `a kept copy that grows while the open reads it is hashed no further than its length`() {
+        deviceText = "x".repeat(20_000)
+        deviceSize = 20_000
+        open()
+        recordWithoutDigests()
+        val file = File(mirror, "notes.txt")
+        var hashed = 0L
+        duringDigests(onUpdate = { length ->
+            if (hashed == 0L) file.appendText("y".repeat(100_000))
+            hashed += length
+        })
+
+        open()
+
+        assertTrue(hashed > 0, "the open did not read the kept copy")
+        assertTrue(hashed <= 20_000, "the open hashed $hashed bytes of a copy recorded at 20000")
+        assertNull(recordedDigest(), "a digest of more than the copy was recorded as the copy's")
+    }
+
+    /**
+     * A write that lands while the open is digesting a kept copy, the closing folder's drain
+     * finishing a save: the entry that write leaves is what the next save has to compare
+     * against. Replaced by the digest of the copy the open kept, under the stamp the open
+     * listed, the next save found the stamp the write moved and kept a spare copy of it.
+     */
+    @Test
+    fun `a write landing while the open digests a kept copy keeps the entry it left`() {
+        open()
+        recordWithoutDigests()
+        var landed = false
+        duringDigests(onDigest = {
+            if (!landed) {
+                landed = true
+                save("saved as the folder opened")
+            }
+        })
+        open()
+        assertTrue(landed, "the open did not read the kept copy")
+
+        save("typed in the editor")
+
+        assertEquals(
+            emptyMap<String, String>(), deviceCopies(),
+            "the open's digest of the kept copy replaced what the write left",
+        )
+        assertEquals("typed in the editor", deviceText)
+    }
+
+    /**
+     * A copy the reopen vouched for that another sync over the same mirror replaces before
+     * it is digested, the two syncs an activity recreated mid-open leaves. The newer device
+     * copy that sync fetched is not the kept one, and its digest taken for the kept copy's
+     * let the next save replace another app's edit without keeping it.
+     */
+    @Test
+    fun `a newer copy another sync renames in during a reopen is not taken for the kept one`() {
+        open()
+        var replaced = false
+        open { _, _ ->
+            if (replaced) return@open
+            replaced = true
+            editOnDevice("changed by another app")
+            File(mirror, "notes.txt").apply {
+                writeText(deviceText)
+                setLastModified(deviceModified)
+            }
+        }
+
+        save("typed in the editor")
+
+        assertEquals(
+            listOf("changed by another app"), deviceCopies().values.toList(),
+            "another app's edit was taken for the copy the reopen kept and replaced",
+        )
+        assertEquals("typed in the editor", deviceText)
+    }
+
     /** What the guard is for still holds on such a provider: another app's edit is kept. */
     @ParameterizedTest(name = "a device edit is kept: {0}")
     @EnumSource(LateStamp::class)
@@ -397,6 +880,475 @@ class SafLiveDeviceEditTest {
         assertEquals(listOf(File(mirror, "notes.txt").absolutePath), failed.map { it.absolutePath })
     }
 
+    /**
+     * A save held back because its device copy could not be read is tried again by itself,
+     * and lands once the copy can be read. It waited for the next save of that file or the
+     * next open of the folder, so on Nextcloud the save stayed in the app after the network
+     * came back for as long as the user did neither.
+     */
+    @Test
+    fun `a held-back save lands once its device copy can be read again`() {
+        lateStamp = LateStamp.WHOLE_SECONDS
+        open()
+        save("first save")
+        settle()
+        deviceReadable = false
+        save("second save")
+        assertEquals(1, writes, "a save went over a device copy nothing could read")
+        deviceReadable = true
+        clock += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+
+        retryWhileWatching()
+
+        assertEquals(2, writes, "the held-back save did not land once its device copy could be read")
+        assertEquals("second save", deviceText)
+        assertEquals(emptyMap<String, String>(), deviceCopies())
+    }
+
+    /** The try is the guard's own question, so another app's edit made meanwhile is kept. */
+    @Test
+    fun `a held-back save that lands over another app's edit keeps that edit`() {
+        lateStamp = LateStamp.WHOLE_SECONDS
+        open()
+        save("first save")
+        settle()
+        deviceReadable = false
+        save("second save")
+        editOnDevice("changed by another app")
+        deviceReadable = true
+        clock += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+
+        retryWhileWatching()
+
+        assertEquals(listOf("changed by another app"), deviceCopies().values.toList())
+        assertEquals("second save", deviceText)
+    }
+
+    /**
+     * A held-back save meeting a stamp query the provider does not answer, at a try or at the
+     * next save of the file. The guard had seen the device move past what it read, and the
+     * unanswered query let the save go over that version unread, another app's edit with no
+     * copy of it anywhere, for a try with nobody saving too. The bytes decide it as they
+     * decide any held-back save, so it waits on and lands once they can be read.
+     */
+    @ParameterizedTest(name = "clock: {0}, the next save rather than a try: {1}")
+    @CsvSource("true, false", "true, true", "false, false", "false, true")
+    fun `a held-back save goes over no unread device copy when its stamp goes unanswered`(
+        hasClock: Boolean,
+        bySave: Boolean,
+    ) {
+        deviceHasClock = hasClock
+        open()
+        save("first save")
+        editOnDevice("changed by another app")
+        deviceReadable = false
+        save("second save")
+        assertEquals(1, writes, "precondition: the second save was held back")
+        failStampQuery = true
+
+        if (bySave) {
+            save("third save")
+        } else {
+            clock += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+            retryWhileWatching()
+        }
+
+        assertEquals(false, failStampQuery, "precondition: the provider was asked for the stamp")
+        assertEquals(
+            "changed by another app", deviceText,
+            "a held-back save went over a device copy nothing had read",
+        )
+        assertEquals(1, writes)
+        deviceReadable = true
+        clock += SafSyncEngine.HELD_BACK_RETRY_MAX_MS
+        retryWhileWatching()
+        assertEquals(if (bySave) "third save" else "second save", deviceText)
+        assertEquals(listOf("changed by another app"), deviceCopies().values.toList())
+    }
+
+    /**
+     * The same hold, and the device reporting again the stamp this engine last read, over
+     * other bytes of the same length: a provider that keeps a document's old time, as MTP to
+     * an Android phone does. The guard had seen the stamp move, and its coming back let the
+     * try replace that edit unread.
+     */
+    @Test
+    fun `a held-back save is not sent over another app's edit when the old stamp comes back`() {
+        open()
+        save("first save")
+        val written = deviceModified to deviceSize
+        editOnDevice("changed by another app")
+        deviceReadable = false
+        save("second save")
+        deviceText = "first EDIT"
+        deviceModified = written.first
+        deviceSize = written.second
+        deviceReadable = true
+        clock += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+
+        retryWhileWatching()
+
+        assertEquals(
+            listOf("first EDIT"), deviceCopies().values.toList(),
+            "another app's edit was replaced with no copy of it anywhere",
+        )
+        assertEquals("second save", deviceText)
+    }
+
+    /**
+     * What a provider that stays unreadable costs: one try per held-back save per wait, the
+     * wait doubling from the first to the longest and staying there.
+     */
+    @Test
+    fun `a held-back save is tried only once its wait is over, and waits longer each time`() {
+        lateStamp = LateStamp.WHOLE_SECONDS
+        open()
+        save("first save")
+        settle()
+        deviceReadable = false
+        save("second save")
+
+        var wait = SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+        repeat(6) {
+            clock += wait - 1
+            val before = reads
+            retryWhileWatching()
+            assertEquals(before, reads, "tried before its wait of $wait ms was over")
+            clock += 1
+            retryWhileWatching()
+            assertEquals(before + 2, reads, "not hashed and fetched once its wait of $wait ms was over")
+            wait = minOf(wait * 2, SafSyncEngine.HELD_BACK_RETRY_MAX_MS)
+        }
+        assertEquals(1, writes)
+    }
+
+    /**
+     * Held-back saves that are due are tried one per idle turn of the loop, which polls its
+     * queue before it asks again. Tried all at once, a save made meanwhile waited behind
+     * every try that was due, each a stamp query and the reads that fail. Here a second
+     * file, made in the editor, goes to the same device document.
+     */
+    @Test
+    fun `held-back saves that are due are tried one per idle turn`() {
+        open()
+        val other = File(mirror, "other.txt").apply { writeText("other") }
+        engine.handleMirrorEvent(FileObserver.CREATE, other, mirror, treeUri)
+        engine.runWriteBackLoop { false }
+        deviceReadable = false
+        editOnDevice("changed by another app")
+        save("typed in the editor")
+        other.writeText("other, typed in the editor")
+        engine.handleMirrorEvent(FileObserver.MODIFY, other, mirror, treeUri)
+        engine.runWriteBackLoop { false }
+        assertEquals(1, writes, "a save went over a device copy nothing could read")
+        clock += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+        val before = reads
+
+        retryWhileWatching()
+        assertEquals(before + 2, reads, "more than one held-back save was tried in one turn")
+        retryWhileWatching()
+        assertEquals(before + 4, reads, "the other held-back save was not tried at the next turn")
+    }
+
+    /** Only the loop watching the save's own folder tries it, so a closed folder is not written. */
+    @Test
+    fun `a held-back save is not tried by a watcher on another folder`() {
+        lateStamp = LateStamp.WHOLE_SECONDS
+        open()
+        save("first save")
+        settle()
+        deviceReadable = false
+        save("second save")
+        deviceReadable = true
+        clock += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+
+        retryWhileWatching(File(root, "mirror-b").apply { mkdirs() })
+
+        assertEquals(1, writes, "a save was written into a folder no watcher is on")
+    }
+
+    /**
+     * A file deleted in the editor and made again is a new document, which its own create
+     * writes. The save held back for the deleted one has nothing left to send, and a try of
+     * it, which the watcher's loop makes whenever its queue is empty and so can make before
+     * the create's event arrives, went to the deleted document: here that is the same one,
+     * so it only writes again, while a provider whose ids are not paths fails the write and
+     * reports a save as lost.
+     */
+    @Test
+    fun `a held-back save of a file deleted and made again is not tried`() {
+        lateStamp = LateStamp.WHOLE_SECONDS
+        open()
+        save("first save")
+        settle()
+        deviceReadable = false
+        save("second save")
+        // Readable again for the delete, which a moved stamp over bytes it cannot read holds
+        // back, so the file made again is a new document.
+        deviceReadable = true
+        val file = File(mirror, "notes.txt").apply { delete() }
+        engine.handleMirrorEvent(FileObserver.DELETE, file, mirror, treeUri)
+        engine.runWriteBackLoop { false }
+        file.writeText("brand new")
+        val writesBefore = writes
+        clock += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+
+        retryWhileWatching()
+
+        assertEquals(writesBefore, writes, "the deleted file's held-back save was tried")
+        engine.handleMirrorEvent(FileObserver.CREATE, file, mirror, treeUri)
+        engine.runWriteBackLoop { false }
+        assertEquals("brand new", deviceText)
+    }
+
+    /**
+     * A reopen of the folder while its closing drain is inside a read the provider takes
+     * longer than the stop waits to refuse, as a server slow to fail does offline: the fetch
+     * that would set the device copy aside, the read of its bytes before it having failed at
+     * once. The reopen can neither read nor keep the device copy either, so it refuses the
+     * file's saves until an open can, and it places the copy at the device's listed stamp,
+     * over the entry the drain had found moved. The drain went on from there: the hold it
+     * recorded after the reopen had cleared the holds was tried, and a save queued behind the
+     * read ran, each finding that stamp unchanged and writing over a device copy nothing had
+     * read. The check before the write asked the provider for the document's stamp, and a
+     * query it did not answer read as no document, so either one still went over that copy.
+     * It walks the provider now, as a delete's check does, and a try, which carries no tree
+     * to walk, is refused.
+     */
+    @ParameterizedTest(name = "another save queued behind the read: {0}, the check unanswered: {1}")
+    @CsvSource("false, false", "true, false", "false, true", "true, true")
+    fun `a reopen during a slow failing read leaves no save to go over what it could not read`(
+        queuedBehind: Boolean,
+        checkUnanswered: Boolean,
+    ) {
+        open()
+        save("first save")
+        editOnDevice("changed by another app")
+        val file = File(mirror, "notes.txt").apply { writeText("second save") }
+        engine.handleMirrorEvent(FileObserver.MODIFY, file, mirror, treeUri)
+        val closing = engine.session
+        val inFetch = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val drain = Thread { engine.runWriteBackLoop(closing) { false } }
+        var drainReads = 0
+        every { resolver.openInputStream(any()) } answers {
+            reads++
+            // The drain's second read, the set-aside's fetch, is the one that outlasts the stop.
+            if (Thread.currentThread() === drain && ++drainReads == 2 && inFetch.count > 0) {
+                inFetch.countDown()
+                release.await(5, TimeUnit.SECONDS)
+            }
+            throw IOException("offline")
+        }
+        drain.start()
+        assertTrue(inFetch.await(5, TimeUnit.SECONDS), "the drain never reached the set-aside's fetch")
+        if (queuedBehind) {
+            file.writeText("third save")
+            engine.handleMirrorEvent(FileObserver.MODIFY, file, mirror, treeUri)
+        }
+        open { _, _ ->
+            // The query the drain makes next, once its fetch fails: the check of the queued save.
+            if (checkUnanswered && queuedBehind) failNextQuery = true
+            release.countDown()
+            drain.join(5_000)
+        }
+        clock += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+        if (checkUnanswered && !queuedBehind) failNextQuery = true
+
+        retryWhileWatching()
+
+        assertEquals(
+            "changed by another app", deviceText,
+            "a save went over a device copy the reopen could neither read nor keep",
+        )
+        assertEquals(1, writes)
+        assertEquals(false, engine.retryHeldBack(WatchSession(mirror)), "a refused save was left to be tried again")
+    }
+
+    /**
+     * A reopen of a folder that keeps no times, finding the two copies of a file different,
+     * leaves both as they are, so it settles nothing for a save held back before it. The
+     * reopen dropped that hold with the others, and the save waited, with no notice after
+     * the reopen, for the next save of the file. The hold now stands, and the open leaves
+     * no stamp for what it could not place, so the try reads the device copy and keeps
+     * another app's edit beside the save, where a try against the size the reopen listed
+     * matched it and wrote over that edit.
+     */
+    @Test
+    fun `a held-back save outlives a reopen that leaves both copies with no clock`() {
+        deviceHasClock = false
+        open()
+        save("first save")
+        editOnDevice("changed by another app")
+        deviceReadable = false
+        save("second save")
+        assertEquals(1, writes, "precondition: the second save was held back")
+        deviceReadable = true
+        open()
+        clock += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+
+        retryWhileWatching()
+
+        assertEquals("second save", deviceText, "the save held back before the reopen was not sent")
+        assertEquals(listOf("changed by another app"), deviceCopies().values.toList())
+    }
+
+    /**
+     * The hold that outlives such a reopen goes to the document that open listed. Another
+     * app that replaced the document while the folder was closed, as a sync client writing
+     * a new file over the old one does, left the id it was held for pointing at nothing,
+     * and a try sent there failed and reported the save as lost.
+     */
+    @Test
+    fun `a held-back save kept across a reopen goes to the document that open listed`() {
+        deviceHasClock = false
+        open()
+        save("first save")
+        editOnDevice("changed by another app")
+        deviceReadable = false
+        save("second save")
+        deviceReadable = true
+        gone += uris.getValue(docId)
+        docId += "+"
+        open()
+        val lost = failed.size
+        clock += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+
+        retryWhileWatching()
+
+        assertEquals(lost, failed.size, "the try was sent to the document another app replaced")
+        assertEquals("second save", deviceText)
+        assertEquals(listOf("changed by another app"), deviceCopies().values.toList())
+    }
+
+    /**
+     * A reopen that reads times settles a save held back before it, and one that no longer
+     * finds the document has nothing to settle it against: another app deleted it while the
+     * folder was closed, and what becomes of the file is for phase 2b of a later open to
+     * decide. A hold kept there was tried at the deleted document, which failed and reported
+     * the save as lost.
+     */
+    @Test
+    fun `a reopen that no longer finds a held-back save's document does not try it`() {
+        lateStamp = LateStamp.WHOLE_SECONDS
+        open()
+        save("first save")
+        settle()
+        deviceReadable = false
+        save("second save")
+        gone += uris.getValue(docId)
+        deviceHasDocument = false
+        open()
+        val lost = failed.size
+        clock += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+
+        assertEquals(false, engine.retryHeldBack(WatchSession(mirror)), "a hold the reopen did not keep was tried")
+        assertEquals(lost, failed.size)
+    }
+
+    /** A save whose file has left the mirror has nothing to send, and queuing it spun the loop. */
+    @Test
+    fun `a held-back save whose file is gone is dropped rather than tried`() {
+        lateStamp = LateStamp.WHOLE_SECONDS
+        open()
+        save("first save")
+        settle()
+        deviceReadable = false
+        save("second save")
+        File(mirror, "notes.txt").delete()
+        clock += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+
+        assertEquals(false, engine.retryHeldBack(WatchSession(mirror)), "a save with no file was tried")
+        File(mirror, "notes.txt").writeText("made again")
+        assertEquals(false, engine.retryHeldBack(WatchSession(mirror)), "a dropped save came back")
+    }
+
+    /**
+     * A save held back over a document another app then deletes, a delete on the server
+     * that Nextcloud syncs down among them, before the editor's file is replaced by a
+     * rename, as git checkout, git stash and mv do. The create writes the file into a new
+     * document, and that write is the save, whether it lands or is reported as failed. A
+     * hold left standing was tried against the deleted document: it reported the save as
+     * lost again, kept a journal line that refuses the mirror's reclaim, and dropped what
+     * the new document was read as, so the next save replaced another app's edit of it
+     * with no copy kept.
+     */
+    @ParameterizedTest(name = "the create lands: {0}")
+    @ValueSource(booleans = [true, false])
+    fun `a held-back save ends when its file is written into a new document`(createLands: Boolean) {
+        lateStamp = LateStamp.WHOLE_SECONDS
+        open()
+        save("first save")
+        settle()
+        deviceReadable = false
+        save("second save")
+        assertEquals(1, writes, "a save went over a device copy nothing could read")
+        gone += uris.getValue(docId)
+        deviceHasDocument = false
+        deviceReadable = true
+        val file = File(mirror, "notes.txt")
+        File(mirror, "notes.txt.tmp").apply { writeText("third") }.renameTo(file)
+        if (!createLands) failWriteStreams = 2
+        engine.handleMirrorEvent(FileObserver.MOVED_TO, file, mirror, treeUri)
+        engine.runWriteBackLoop { false }
+        val lost = failed.size
+        clock += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+
+        retryWhileWatching()
+
+        assertEquals(lost, failed.size, "the hold was tried against the deleted document")
+        if (createLands) {
+            assertEquals(emptySet<String>(), engine.uploadsInFlight(), "a delivered save is on record as not")
+        }
+        editOnDevice("changed by another app")
+        save("fourth")
+        assertEquals(
+            listOf("changed by another app"), deviceCopies().values.toList(),
+            "another app's edit of the new document was replaced with no copy kept",
+        )
+        assertEquals("fourth", deviceText)
+    }
+
+    /**
+     * The same create, arriving between the loop finding its queue empty and its try of the
+     * hold. The try was queued behind the create with a later time, so the debounce dropped
+     * the create, and the try failed against the document another app deleted: the file
+     * reached no document, and every later save went to the deleted one.
+     */
+    @Test
+    fun `a held-back save tried as a create of its file arrives does not drop the create`() {
+        lateStamp = LateStamp.WHOLE_SECONDS
+        open()
+        save("first save")
+        settle()
+        deviceReadable = false
+        save("second save")
+        gone += uris.getValue(docId)
+        deviceHasDocument = false
+        deviceReadable = true
+        val file = File(mirror, "notes.txt")
+        File(mirror, "notes.txt.tmp").apply { writeText("third") }.renameTo(file)
+        // The create's job waits in the queue of the watcher whose loop makes the try.
+        val watching = WatchSession(mirror)
+        engine.handleMirrorEvent(FileObserver.MOVED_TO, file, mirror, treeUri)
+        watching.queue.addAll(engine.session.queue)
+        engine.session.queue.clear()
+        // The try comes a moment after the create was stamped, as it does in the loop.
+        val createdAt = System.currentTimeMillis()
+        while (System.currentTimeMillis() == createdAt) Thread.onSpinWait()
+        clock += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+        val lost = failed.size
+
+        assertTrue(engine.retryHeldBack(watching), "the held-back save was not tried")
+        engine.runWriteBackLoop(watching) { false }
+
+        assertEquals("third", deviceText, "the create of the file was dropped for the try")
+        assertEquals(lost, failed.size, "the try was sent to the deleted document")
+        editOnDevice("changed by another app")
+        save("fourth")
+        assertEquals(listOf("changed by another app"), deviceCopies().values.toList())
+    }
+
     @Test
     fun `a device edit that cannot be set aside holds the save back`() {
         open()
@@ -414,10 +1366,10 @@ class SafLiveDeviceEditTest {
     }
 
     /**
-     * A length other than the one this app last wrote or fetched is another app's edit
-     * whatever its bytes hash to, so the guard does not read the document to find out. A
-     * document grown past the copy limit is held back at every save, and was read in full
-     * at each one.
+     * Past the copy limit, a length other than the one this app last wrote or fetched is not
+     * read to find out what it holds: no set-aside could keep the document, so the save is
+     * held back whatever its bytes hash to. A document grown that far is held back at every
+     * save, and was read in full at each one.
      */
     @Test
     fun `a device edit grown past the copy limit is not read at each save`() {
@@ -431,6 +1383,153 @@ class SafLiveDeviceEditTest {
         assertEquals(readsBefore, reads, "a device copy of another length was read to hash it")
         assertEquals(0, writes, "the save overwrote a device edit it could not keep")
         assertEquals(listOf(File(mirror, "notes.txt").absolutePath), failed.map { it.absolutePath })
+    }
+
+    /**
+     * A set-aside keeps the device copy in this app's own storage, so it is refused for a
+     * document reported past the copy limit, and at a stamp query unanswered over a copy whose
+     * stamp had moved, nothing reports a size at all: the refusal let such a document through
+     * whatever it held, and another app's edit grown far past the limit was fetched in full, the
+     * free-space floor asked only before the copy began. The fetch stops once it passes the
+     * limit, and the save is held back as for a document reported that large; one of exactly
+     * the limit is kept, as one reported at it is.
+     */
+    @ParameterizedTest(name = "the device copy holds {0} bytes")
+    @ValueSource(longs = [SafSyncEngine.MAX_FILE_SIZE, 3 * SafSyncEngine.MAX_FILE_SIZE])
+    fun `a set-aside after an unanswered stamp query stops at the copy limit`(length: Long) {
+        open()
+        save("first save")
+        editOnDevice("changed by another app")
+        deviceReadable = false
+        save("second save")
+        deviceReadable = true
+        failStampQuery = true
+        var streamed = 0L
+        every { resolver.openInputStream(any()) } answers {
+            reads++
+            val device = zeros(length)
+            object : InputStream() {
+                override fun read() = device.read().also { if (it >= 0) streamed++ }
+
+                override fun read(b: ByteArray, off: Int, len: Int) =
+                    device.read(b, off, len).also { if (it > 0) streamed += it }
+            }
+        }
+
+        save("typed in the editor")
+
+        assertEquals(false, failStampQuery, "precondition: the save asked the provider for the stamp")
+        val keepable = length <= SafSyncEngine.MAX_FILE_SIZE
+        assertTrue(
+            streamed < 2 * SafSyncEngine.MAX_FILE_SIZE,
+            "a device copy of $length bytes was streamed $streamed bytes into this app's storage",
+        )
+        assertEquals(
+            if (keepable) listOf(length) else emptyList(),
+            mirror.listFiles()!!.filter { it.name != "notes.txt" }.map { it.length() },
+            "the device copy was not kept as far as the copy limit allows",
+        )
+        assertEquals(
+            if (keepable) 2 else 1, writes,
+            if (keepable) "the save was held back over a device copy it could keep"
+            else "the save went ahead with nothing of the device's version kept",
+        )
+        assertEquals(listOf(File(mirror, "notes.txt").absolutePath), failed.map { it.absolutePath })
+    }
+
+    /**
+     * A provider with no size column, whose documents an open fetches whole whatever they hold,
+     * and another app's edit grown past the copy limit while the folder is open. A set-aside
+     * that stopped at the limit there refused the copy of a file the open itself copies in, so
+     * the save was held back for as long as the folder stayed open, each try streaming the
+     * limit's worth of the document again. It is kept whole, as the open keeps it, also where
+     * the provider gives -1 for the size it does not know, which was taken for a stamp query
+     * that went unanswered.
+     */
+    @ParameterizedTest(name = "an unknown size reads {0}")
+    @ValueSource(longs = [0, -1])
+    fun `a set-aside on a provider with no size column keeps a copy past the copy limit`(unknown: Long) {
+        deviceHasSize = false
+        unknownSize = unknown
+        open()
+        save("first save")
+        editOnDevice("changed by another app")
+        every { resolver.openInputStream(any()) } answers {
+            reads++
+            zeros(SafSyncEngine.MAX_FILE_SIZE + 1)
+        }
+
+        save("typed in the editor")
+
+        assertEquals(2, writes, "the save was held back over a device copy the open itself would fetch")
+        assertEquals(
+            listOf(SafSyncEngine.MAX_FILE_SIZE + 1),
+            mirror.listFiles()!!.filter { it.name != "notes.txt" }.map { it.length() },
+        )
+        assertEquals(emptyList<File>(), failed)
+    }
+
+    /**
+     * The reopen of a folder that reports times and no sizes, holding a file past the copy
+     * limit that the open fetched whole, after a save the watcher delivered whose write-back
+     * time the device put before the mirror's, as a coarse clock does. The open finds the mirror
+     * newer and the device moved since the record, and sets the device copy aside to tell the
+     * two apart: stopped at the limit there, the copy was refused, and the open said the file
+     * was not reaching the device and refused every save of it until the next open. A listing
+     * that gives -1 for the size it does not know is the same folder.
+     */
+    @ParameterizedTest(name = "an unknown size reads {0}")
+    @ValueSource(longs = [0, -1])
+    fun `a reopen of a folder with no size column refuses no save of a file past the copy limit`(unknown: Long) {
+        deviceHasSize = false
+        unknownSize = unknown
+        every { resolver.openInputStream(any()) } answers {
+            reads++
+            zeros(SafSyncEngine.MAX_FILE_SIZE + 2)
+        }
+        // Counted rather than kept, so the device goes on holding the mirror's bytes.
+        every { resolver.openOutputStream(any(), "wt") } answers {
+            object : OutputStream() {
+                override fun write(b: Int) = Unit
+
+                override fun write(b: ByteArray, off: Int, len: Int) = Unit
+
+                override fun close() {
+                    writes++
+                    deviceModified += 1_000
+                }
+            }
+        }
+        open()
+        File(mirror, "notes.txt").setLastModified(deviceModified + 3_000)
+        deviceModified += 2_000
+
+        open()
+
+        assertEquals(emptyList<File>(), failed, "the reopen said a file both sides hold alike was not sent")
+        assertEquals(listOf("notes.txt"), mirror.list()!!.sorted())
+        save("typed after the reopen")
+        assertEquals(emptyList<File>(), failed, "the save of a file both sides held alike was refused")
+        assertEquals(2, writes)
+    }
+
+    /**
+     * A moved document is hashed only as far as the bytes this app last wrote and a buffer
+     * more, since a longer one cannot be that write. Another app's edit that grew it is then
+     * read in full once, by the set-aside that keeps it, rather than twice.
+     */
+    @Test
+    fun `a device edit that grew the document is read no further than this app's own bytes`() {
+        open()
+        save("first save")
+        val grown = "x".repeat(100_000)
+        editOnDevice(grown)
+        bytesRead = 0
+
+        save("typed in the editor")
+
+        assertEquals(listOf(grown), deviceCopies().values.toList())
+        assertTrue(bytesRead < 2L * grown.length, "the grown document was read twice in full: $bytesRead bytes")
     }
 
     /** `mv` over the name arrives as MOVED_TO, which writes into the existing document. */
@@ -473,6 +1572,170 @@ class SafLiveDeviceEditTest {
     }
 
     /**
+     * A file deleted in the editor after another app changed its device document while the
+     * folder was open. A save in its place keeps that edit; the delete asked nothing, so the
+     * edit went with the file.
+     */
+    @Test
+    fun `a delete of a document another app changed since it was read is declined`() {
+        open()
+        editOnDevice("changed by another app")
+        val file = File(mirror, "notes.txt").apply { delete() }
+
+        engine.handleMirrorEvent(FileObserver.DELETE, file, mirror, treeUri)
+        engine.runWriteBackLoop { false }
+
+        assertTrue(deviceHasDocument, "the delete took another app's edit with the file")
+        assertEquals("changed by another app", deviceText)
+        assertEquals(listOf(file.absolutePath), kept.map { it.absolutePath }, "nothing said it was kept")
+        assertEquals(
+            listOf(true), keptAsChanged,
+            "the notice told the user the editor never had the file they had just deleted in it",
+        )
+    }
+
+    /**
+     * A delete of a file whose save is held back, meeting a stamp query the provider does not
+     * answer. The guard had seen the device move past what it read, and the unanswered query
+     * let the delete take that version unread. Where the loop's idle turn found the file gone
+     * before the delete's event arrived, it dropped the hold first, so the hold could not say
+     * so either.
+     */
+    @ParameterizedTest(name = "the idle turn dropped the hold first: {0}")
+    @ValueSource(booleans = [false, true])
+    fun `a delete of a file whose save is held back is declined when its stamp goes unanswered`(
+        holdDropped: Boolean,
+    ) {
+        open()
+        save("first save")
+        editOnDevice("changed by another app")
+        deviceReadable = false
+        save("second save")
+        val file = File(mirror, "notes.txt").apply { delete() }
+        if (holdDropped) {
+            clock += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+            retryWhileWatching()
+        }
+        engine.handleMirrorEvent(FileObserver.DELETE, file, mirror, treeUri)
+        failStampQuery = true
+
+        engine.runWriteBackLoop { false }
+
+        assertEquals(false, failStampQuery, "precondition: the delete asked the provider for the stamp")
+        assertTrue(deviceHasDocument, "the delete took another app's edit with the file")
+        assertEquals(listOf(file.absolutePath), kept.map { it.absolutePath }, "nothing said it was kept")
+        assertEquals(listOf(true), keptAsChanged)
+    }
+
+    /**
+     * A file made again in the editor after its delete was declined over another app's edit.
+     * Its save writes into the document the device kept, whose stamp the guard had seen move
+     * past what it read, and a stamp query the provider did not answer let the save replace
+     * the version the delete had kept, with no copy of it anywhere.
+     */
+    @ParameterizedTest(name = "arrives as a create: {0}")
+    @ValueSource(booleans = [true, false])
+    fun `a file made again after a declined delete keeps the device's version when its stamp goes unanswered`(
+        asCreate: Boolean,
+    ) {
+        open()
+        save("first save")
+        editOnDevice("changed by another app")
+        val file = File(mirror, "notes.txt").apply { delete() }
+        engine.handleMirrorEvent(FileObserver.DELETE, file, mirror, treeUri)
+        engine.runWriteBackLoop { false }
+        assertTrue(deviceHasDocument, "precondition: the delete was declined")
+        file.writeText("made again")
+        failStampQuery = true
+
+        engine.handleMirrorEvent(
+            if (asCreate) FileObserver.CREATE else FileObserver.MODIFY, file, mirror, treeUri,
+        )
+        engine.runWriteBackLoop { false }
+
+        assertEquals(false, failStampQuery, "precondition: the save asked the provider for the stamp")
+        assertEquals(
+            listOf("changed by another app"), deviceCopies().values.toList(),
+            "the version the delete kept was replaced with no copy of it anywhere",
+        )
+        assertEquals("made again", deviceText)
+    }
+
+    /**
+     * The bytes decide a delete as they decide a save, so this app's own write settling after
+     * its stream closed does not hold the delete of that file back.
+     */
+    @ParameterizedTest(name = "a delete after a settling write goes through: {0}")
+    @EnumSource(LateStamp::class)
+    fun `a delete after this app's own write settles goes through`(shape: LateStamp) {
+        lateStamp = shape
+        open()
+        save("first save")
+        settle()
+        val file = File(mirror, "notes.txt").apply { delete() }
+
+        engine.handleMirrorEvent(FileObserver.DELETE, file, mirror, treeUri)
+        engine.runWriteBackLoop { false }
+
+        assertEquals(false, deviceHasDocument, "a delete of this app's own settled write was held back")
+        assertEquals(emptyList<File>(), kept)
+    }
+
+    /**
+     * A delete the closing folder's drain sends after a reopen, its queue having outlived the
+     * stop behind a slow provider. The reopen could not read the document, which by then held
+     * another app's edit, and listed its stamp as what it saw, so only the guard for what an
+     * open could not read stands between the delete and that edit, and it was asked only when
+     * the delete was queued.
+     */
+    @Test
+    fun `a delete sent after a reopen that could not read the document is declined`() {
+        open()
+        val file = File(mirror, "notes.txt").apply { delete() }
+        engine.handleMirrorEvent(FileObserver.DELETE, file, mirror, treeUri)
+        editOnDevice("changed by another app")
+        deviceReadable = false
+        open()
+
+        engine.runWriteBackLoop { false }
+
+        assertTrue(deviceHasDocument, "the delete removed a device document the reopen could not read")
+        assertEquals("changed by another app", deviceText)
+        assertEquals(listOf(file.absolutePath), kept.map { it.absolutePath }, "nothing said it was kept")
+        assertEquals(
+            listOf(true), keptAsChanged,
+            "the notice told the user the editor never had the file they had just deleted in it",
+        )
+    }
+
+    /**
+     * A save the drain sends after the same reopen. The check before the write asked the
+     * provider for the document's stamp, and a query it did not answer read as no document,
+     * so the save went over the copy the reopen could not read, another app's edit with it.
+     */
+    @ParameterizedTest(name = "the check unanswered: {0}")
+    @ValueSource(booleans = [false, true])
+    fun `a save sent after a reopen that could not read the document is refused`(checkUnanswered: Boolean) {
+        open()
+        save("first save")
+        val file = File(mirror, "notes.txt").apply { writeText("second save") }
+        engine.handleMirrorEvent(FileObserver.MODIFY, file, mirror, treeUri)
+        editOnDevice("changed by another app")
+        deviceReadable = false
+        open()
+        failNextQuery = checkUnanswered
+
+        engine.runWriteBackLoop { false }
+
+        assertEquals(false, failNextQuery, "precondition: the check asked the provider")
+        assertEquals(
+            "changed by another app", deviceText,
+            "the save went over a device copy the reopen could not read",
+        )
+        assertEquals(1, writes)
+    }
+
+    /**
      * A write whose stamp cannot be read back leaves no entry, so the next save fails open.
      * Keeping the entry from before the write instead reads this app's own write as a device
      * edit at the next save, and keeps a copy of it.
@@ -502,7 +1765,7 @@ class SafLiveDeviceEditTest {
     fun `a write that lands on its second attempt leaves no device copy`() {
         lateStamp = LateStamp.ROW
         open()
-        failNextWriteStream = true
+        failWriteStreams = 1
         save("first save")
         settle()
 
@@ -538,6 +1801,152 @@ class SafLiveDeviceEditTest {
     }
 
     /**
+     * Opened again on a provider with no clock, a file whose device copy differs from the
+     * mirror's is left as it is on both sides, with no time to say which is newer. Two
+     * states look like that: another app changed a file this app saved in the session
+     * before, or a save the watcher never delivered, the app killed before its drain ran,
+     * sits over a device copy nobody touched. The open took the size it listed as what it
+     * last saw, so the next save went over another app's edit with no copy kept. The device
+     * copy is read at that save now: the copy the record vouched for, the second state, is
+     * replaced as it stands, and anything else is kept.
+     */
+    @ParameterizedTest(name = "another app changed the file: {0}")
+    @ValueSource(booleans = [true, false])
+    fun `a save after a reopen with no clock keeps another app's edit and nothing else`(anotherApp: Boolean) {
+        deviceHasClock = false
+        open()
+        if (anotherApp) {
+            save("first save")
+            editOnDevice("changed by another app")
+        } else {
+            File(mirror, "notes.txt").writeText("saved, never delivered")
+        }
+        open()
+
+        save("typed after the reopen")
+
+        assertEquals(
+            if (anotherApp) listOf("changed by another app") else emptyList(),
+            deviceCopies().values.toList(),
+            if (anotherApp) "the save replaced another app's edit with no copy of it anywhere"
+            else "the copy the record vouched for was kept as if another app had written it",
+        )
+        assertEquals("typed after the reopen", deviceText)
+    }
+
+    /** The same two states meeting a delete, which the bytes decide as they decide a save. */
+    @ParameterizedTest(name = "another app changed the file: {0}")
+    @ValueSource(booleans = [true, false])
+    fun `a delete after a reopen with no clock is declined only over another app's edit`(anotherApp: Boolean) {
+        deviceHasClock = false
+        open()
+        if (anotherApp) {
+            save("first save")
+            editOnDevice("changed by another app")
+        } else {
+            File(mirror, "notes.txt").writeText("saved, never delivered")
+        }
+        open()
+        val file = File(mirror, "notes.txt").apply { delete() }
+
+        engine.handleMirrorEvent(FileObserver.DELETE, file, mirror, treeUri)
+        engine.runWriteBackLoop { false }
+
+        assertEquals(
+            anotherApp, deviceHasDocument,
+            if (anotherApp) "the delete took another app's edit with the file"
+            else "the delete was declined over the copy the record vouched for",
+        )
+        assertEquals(if (anotherApp) listOf(file.absolutePath) else emptyList(), kept.map { it.absolutePath })
+        assertEquals(if (anotherApp) listOf(true) else emptyList(), keptAsChanged)
+    }
+
+    /**
+     * The same reopen, and a save whose stamp query the provider does not answer. The open
+     * left no stamp so that only the device's bytes could let a save through, and a stamp
+     * that never came let it through unread, a held-back save's try too, with nobody saving.
+     */
+    @ParameterizedTest(name = "another app changed the file: {0}")
+    @ValueSource(booleans = [true, false])
+    fun `a save after a reopen with no clock reads the device copy when its stamp goes unanswered`(
+        anotherApp: Boolean,
+    ) {
+        deviceHasClock = false
+        open()
+        if (anotherApp) {
+            save("first save")
+            editOnDevice("changed by another app")
+        } else {
+            File(mirror, "notes.txt").writeText("saved, never delivered")
+        }
+        open()
+        failNextQuery = true
+
+        save("typed after the reopen")
+
+        assertEquals(false, failNextQuery, "precondition: the save asked the provider for the stamp")
+        assertEquals(
+            if (anotherApp) listOf("changed by another app") else emptyList(),
+            deviceCopies().values.toList(),
+            if (anotherApp) "the save replaced another app's edit with no copy of it anywhere"
+            else "the copy the record vouched for was kept as if another app had written it",
+        )
+        assertEquals("typed after the reopen", deviceText)
+    }
+
+    /** A delete meeting the unanswered stamp, which the bytes decide as they decide a save. */
+    @ParameterizedTest(name = "another app changed the file: {0}")
+    @ValueSource(booleans = [true, false])
+    fun `a delete after a reopen with no clock reads the device copy when its stamp goes unanswered`(
+        anotherApp: Boolean,
+    ) {
+        deviceHasClock = false
+        open()
+        if (anotherApp) {
+            save("first save")
+            editOnDevice("changed by another app")
+        } else {
+            File(mirror, "notes.txt").writeText("saved, never delivered")
+        }
+        open()
+        val file = File(mirror, "notes.txt").apply { delete() }
+        failNextQuery = true
+
+        engine.handleMirrorEvent(FileObserver.DELETE, file, mirror, treeUri)
+        engine.runWriteBackLoop { false }
+
+        assertEquals(
+            anotherApp, deviceHasDocument,
+            if (anotherApp) "the delete took another app's edit with the file"
+            else "the delete was declined over the copy the record vouched for",
+        )
+        assertEquals(false, failNextQuery, "precondition: the delete asked the provider for the stamp")
+    }
+
+    /**
+     * The reopen on a provider that reports no size either, every length 0. A save the
+     * watcher delivered leaves the device holding the mirror's bytes, and no length can say
+     * so, so the open reads them; taken as a difference, the next save kept a copy of this
+     * app's own earlier save.
+     */
+    @Test
+    fun `a save after a reopen with neither column keeps no copy of a delivered save`() {
+        deviceHasClock = false
+        deviceHasSize = false
+        open()
+        save("first save")
+        open()
+
+        save("typed after the reopen")
+
+        assertEquals(
+            emptyMap<String, String>(), deviceCopies(),
+            "this app's own delivered save was kept as if another app had written it",
+        )
+        assertEquals("typed after the reopen", deviceText)
+    }
+
+    /**
      * A folder switch that fails partway restores the previous folder's watcher on the
      * same engine, so opening another folder must not drop the first one's memory.
      */
@@ -555,5 +1964,6 @@ class SafLiveDeviceEditTest {
     private companion object {
         const val OPENED_AT = 1_700_000_000_000L
         const val CREATED_AT = 1_800_000_000_000L
+        const val OTHER_ID = "doc:other.txt"
     }
 }

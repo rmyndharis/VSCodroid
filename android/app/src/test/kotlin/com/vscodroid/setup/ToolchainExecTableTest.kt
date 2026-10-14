@@ -16,6 +16,7 @@ import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -821,5 +822,148 @@ class ToolchainExecTableTest {
         regenerate()
 
         assertEquals(File(nativeLibDir, "libnode.so").absolutePath, Files.readSymbolicLink(node).toString())
+    }
+
+    // npm and npx. In bash both are functions, because npm's CLI is a `#!` script
+    // under filesDir, and a function does not exist for a program that looks the
+    // name up on PATH itself. Measured in the app's terminal: create-vite's
+    // `spawnSync("npm", ["install"])` failed with ENOENT, and `timeout 20 npm
+    // --version` with "exec npm: No such file or directory".
+
+    private val npmBin get() = File(filesDir, "usr/lib/node_modules/npm/bin")
+
+    private fun extractNpm() {
+        npmBin.mkdirs()
+        File(npmBin, "npm-cli.js").writeText("#!/usr/bin/env node\n")
+        File(npmBin, "npx-cli.js").writeText("#!/usr/bin/env node\n")
+    }
+
+    private fun launcher(command: String) = File(filesDir, "home/.vscodroid/$command.sh")
+
+    @Test
+    fun `npm and npx are commands a program can start by name`() {
+        stateFile.writeText("[]")
+        extractNpm()
+
+        regenerate()
+
+        for (command in listOf("npm", "npx")) {
+            assertTrue(
+                tableLines().contains("$command\t/system/bin/sh\t${launcher(command).absolutePath}"),
+                "no row starts $command, so a program spawning it gets ENOENT:\n" + execTable.readText(),
+            )
+            val link = File(filesDir, "usr/libexec/tcbin/$command").toPath()
+            assertTrue(Files.isSymbolicLink(link), "$command is not on PATH")
+            assertEquals(trampoline, Files.readSymbolicLink(link).toString())
+        }
+    }
+
+    /**
+     * What the launcher runs, read off a stand-in for Node that prints what it was
+     * given. It has to be the command the npm() function runs: the same script,
+     * `--prefer-offline` for npm and not for npx, VSCODROID_PLATFORM_FIX for that
+     * one process, and the platform-fix preload put back for a caller whose
+     * environment lacks it, which is what a spawn from the extension host has.
+     */
+    @Test
+    fun `the launcher runs what the npm function runs`() {
+        assumeTrue(File("/bin/sh").canExecute(), "no /bin/sh on this host to run the launcher")
+        stateFile.writeText("[]")
+        extractNpm()
+        File(nativeLibDir, "libnode.so").apply {
+            writeText(
+                "#!/bin/sh\nfor a in \"\$@\"; do echo \"arg=\$a\"; done\n" +
+                    "echo \"fix=\$VSCODROID_PLATFORM_FIX\"\necho \"options=\$NODE_OPTIONS\"\n"
+            )
+            setExecutable(true)
+        }
+
+        regenerate()
+
+        fun run(command: String, nodeOptions: String?, vararg args: String): List<String> {
+            val builder = ProcessBuilder(listOf("/bin/sh", launcher(command).path) + args)
+                .redirectErrorStream(true)
+            builder.environment().apply {
+                remove("VSCODROID_PLATFORM_FIX")
+                remove("NODE_OPTIONS")
+                if (nodeOptions != null) put("NODE_OPTIONS", nodeOptions)
+            }
+            val process = builder.start()
+            val out = process.inputStream.bufferedReader().readLines()
+            assertEquals(0, process.waitFor(), out.joinToString("\n"))
+            return out
+        }
+        val preload = "--require=${filesDir.absolutePath}/server/platform-fix.js"
+
+        assertEquals(
+            listOf(
+                "arg=${npmBin.absolutePath}/npm-cli.js", "arg=--prefer-offline",
+                "arg=install", "arg=a b", "fix=1", "options=$preload",
+            ),
+            run("npm", null, "install", "a b"),
+        )
+        assertEquals(
+            listOf("arg=${npmBin.absolutePath}/npx-cli.js", "arg=--version", "fix=1", "options=$preload"),
+            run("npx", null, "--version"),
+        )
+        // A terminal's environment already carries the preload, and keeps it once.
+        assertEquals("options=$preload", run("npm", preload).last())
+        assertEquals(
+            "options=$preload --max-old-space-size=512",
+            run("npm", "--max-old-space-size=512").last(),
+            "the caller's own option was lost, or the preload was not put in front of it",
+        )
+    }
+
+    /**
+     * Before setup has extracted npm, which is when the first launch pass of a
+     * fresh install runs, the name stays unknown: a row would be a command that
+     * always fails.
+     */
+    @Test
+    fun `no npm on disk, no npm command`() {
+        stateFile.writeText("[]")
+
+        regenerate()
+
+        assertTrue(tableLines().none { it.startsWith("npm\t") || it.startsWith("npx\t") }, execTable.readText())
+        assertFalse(
+            Files.exists(File(filesDir, "usr/libexec/tcbin/npm").toPath(), LinkOption.NOFOLLOW_LINKS),
+            "npm is on PATH with nothing behind it",
+        )
+    }
+
+    @Test
+    fun `a toolchain that ships npm keeps the name`() {
+        extractNpm()
+        elf("usr/opt/node/bin/npm")
+        stateFile.writeText(
+            """[{"name":"node","installRoot":"usr/opt/node",""" +
+                """"binaries":["usr/opt/node/bin/npm"]}]"""
+        )
+
+        regenerate()
+
+        assertEquals(
+            listOf("npm\t${filesDir.absolutePath}/usr/opt/node/bin/npm"),
+            tableLines().filter { it.startsWith("npm\t") },
+            "the app's npm displaced a toolchain's own",
+        )
+    }
+
+    /** A reinstall moves nativeLibraryDir, and the launcher names Node there. */
+    @Test
+    fun `the launcher follows Node to a new library directory`() {
+        stateFile.writeText("[]")
+        extractNpm()
+        regenerate()
+
+        nativeLibDir = File(filesDir, "nativeLib-reinstalled").apply { mkdirs() }
+        File(nativeLibDir, "libnode.so").writeText("elf")
+        regenerate()
+
+        val text = launcher("npm").readText()
+        assertTrue("'${nativeLibDir.absolutePath}/libnode.so'" in text, text)
+        assertFalse("${filesDir.absolutePath}/nativeLib/" in text, "the launcher still names the old directory")
     }
 }

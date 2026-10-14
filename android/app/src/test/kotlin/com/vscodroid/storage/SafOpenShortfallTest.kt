@@ -186,9 +186,10 @@ class SafOpenShortfallTest {
         engine.runWriteBackLoop { false }
     }
 
-    /** The lines of the `.synced` record after its header. */
+    /** The identities the `.synced` record holds after its header, without their digests. */
     private fun recordLines(): List<String> =
         File(mirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX).readLines().drop(1)
+            .map { SafSyncEngine.splitRecordLine(it).first }
 
     private fun belowTheFloor() {
         space = SafSyncEngine.OPEN_SPACE_FLOOR_BYTES - 1

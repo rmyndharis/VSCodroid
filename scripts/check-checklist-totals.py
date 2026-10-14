@@ -13,11 +13,12 @@ runs them and no build reads them; a wrong count is invisible until someone
 works through the list and finds it does not add up, which is exactly when the
 document is being trusted.
 
-Three rules, all mechanical:
+Four rules, all mechanical:
 
   * every section's stated count equals the rows actually present in it;
   * the total equals the sum, and equals the rows in the file;
-  * every row `docs/10-RELEASE_PLAN.md` cites is a row here, and it cites one.
+  * every row `docs/10-RELEASE_PLAN.md` cites is a row here, and it cites one;
+  * every row here belongs to a family this script lists.
 
 The second is not implied by the first. A total maintained separately can be
 right about a set of section counts that are themselves wrong, and was.
@@ -28,6 +29,13 @@ release plan sends a person through named rows with the minified build before
 every tag, so a cited row that is gone is a step nobody can follow, and a plan
 citing none has lost the step. Its refusals never fire on a clean tree, so
 every run first hands them the input they exist to refuse.
+
+The fourth exists for the third. A citation is an ID of one of the
+checklist's own families, because the plan's prose can also name IDs of other
+families in the same shape, such as PSF-2.0, EPL-2.0, ADR-001 and API-36. The
+families are listed here rather than read from the rows, so one whose section
+has gone is still recognised, and a row of a family the list lacks is refused,
+because every citation of it would otherwise go unread.
 
 Rows are recognised by their identifier: a leading `| XX-N |` cell, which is the
 shape every row in the document uses and no header or prose does.
@@ -47,21 +55,24 @@ ROW = re.compile(r"^\|\s*([A-Z]{2,3}-\d+)\s*\|")
 # `| Background/Foreground | 7 | | | |` and the bolded total line.
 SUMMARY_ROW = re.compile(r"^\|\s*([A-Za-z][A-Za-z &/]*?)\s*\|\s*(\d+)\s*\|")
 TOTAL_ROW = re.compile(r"^\|\s*\*\*Total\*\*\s*\|\s*\*\*(\d+)\*\*\s*\|")
-# A row ID wherever the plan writes one, whatever prefixes the checklist still
-# has. Taking the prefixes from the checklist made a citation whose whole
-# section had gone invisible: with no TC row left, TC-2 was not an ID at all,
-# and the plan could send a person to it with this check green. Families of
-# the same shape that name something else are let through by name, and the
-# tail of a longer ID such as FR-DEV-06 is not read as one.
+# The checklist's row ID families, one per section. Only IDs of these are read
+# as citations. Listed rather than read from the rows: a family read from them
+# vanished with its section, so with no TC row left TC-2 was not an ID at all,
+# and the plan could send a person to it with this check green. A family stays
+# listed after its section goes for that reason. Listing them is also what
+# keeps IDs of other families out: matching every ID of the shape would read
+# a licence such as PSF-2.0 as a checklist row that was "no longer left".
+FAMILIES = {"AV", "BG", "DL", "DM", "ED", "EX", "KB", "PF", "SC", "SF", "ST", "TC", "TT"}
+# An ID wherever the plan writes one. The tail of a longer ID such as FR-DEV-06
+# is not read as one.
 CITED = re.compile(r"(?<![A-Z]-)\b([A-Z]{2,3})-\d+\b")
-NOT_ROWS = {"SHA", "UTF", "GPL", "BSD"}
 
 
 def citation_problems(ids, plan_text):
     """The row IDs `plan_text` cites, and what is wrong with them given `ids`."""
     # IDs are read whole: a cited SF-16 must never pass as the row SF-1.
     cited = {m.group(0) for m in CITED.finditer(plan_text)
-             if m.group(1) not in NOT_ROWS}
+             if m.group(1) in FAMILIES}
     if not cited:
         return cited, [
             "  the release plan cites no checklist row, so its pre-tag device "
@@ -74,6 +85,11 @@ def citation_problems(ids, plan_text):
            else f", and no {rid.split('-')[0]} row is left at all")
         for rid in sorted(cited - ids)
     ]
+
+
+def unknown_families(ids):
+    """The families `ids` use that FAMILIES does not list, sorted."""
+    return sorted({i.split("-")[0] for i in ids} - FAMILIES)
 
 
 def main():
@@ -93,6 +109,12 @@ def main():
         sys.exit("FAIL self-check: the far end of a range SF-1-SF-3 was not read")
     if citation_problems({"SF-1"}, "SF-1, FR-DEV-06, GPL-2 and BSD-3")[1]:
         sys.exit("FAIL self-check: FR-DEV-06, GPL-2 or BSD-3 was read as a row ID")
+    if citation_problems({"SF-1"}, "SF-1 under PSF-2.0, EPL-2.0, ADR-001 and API-36")[1]:
+        sys.exit("FAIL self-check: PSF-2.0, EPL-2.0, ADR-001 or API-36 was read as a row ID")
+    if unknown_families({"SF-1", "NW-1", "NW-2"}) != ["NW"]:
+        sys.exit("FAIL self-check: a row of a family FAMILIES does not list was not named")
+    if unknown_families({"SF-1", "TC-2"}):
+        sys.exit("FAIL self-check: rows of listed families were refused")
 
     if not CHECKLIST.is_file():
         sys.exit(f"FAIL {CHECKLIST} is missing; this check would otherwise look at nothing")
@@ -163,7 +185,12 @@ def main():
         problems.append(f"  total says {total}, the document has {rows_in_file} rows")
 
     ids = {m.group(1) for m in map(ROW.match, lines) if m}
-    cited, cite_problems = citation_problems(ids, PLAN.read_text(encoding="utf-8"))
+    unknown = unknown_families(ids)
+    # The plan is not judged against an incomplete list: its citations of the
+    # missing family are invisible, and a plan citing only those would be
+    # told it cites nothing.
+    cited, cite_problems = (set(), []) if unknown else citation_problems(
+        ids, PLAN.read_text(encoding="utf-8"))
 
     if problems:
         print("FAIL the device-test checklist does not account for its own rows:")
@@ -179,7 +206,15 @@ def main():
             "  -> a person runs those rows on the minified build before every "
             "tag, so each has to still say what to run"
         )
-    if problems or cite_problems:
+    if unknown:
+        print("FAIL the checklist has rows of a family this check does not list: "
+              + ", ".join(unknown))
+        print(
+            "  -> add it to FAMILIES in scripts/check-checklist-totals.py: until "
+            "then the release plan's citations of it are not read, so one naming "
+            "a row that is gone would pass"
+        )
+    if problems or cite_problems or unknown:
         return 1
 
     print(

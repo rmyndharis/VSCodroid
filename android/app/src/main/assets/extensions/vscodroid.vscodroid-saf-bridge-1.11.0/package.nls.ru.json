@@ -11,6 +11,8 @@
   "command.clearCaches": "VSCodroid: Очистить кэши",
   "command.manageToolchains": "VSCodroid: Наборы инструментов",
   "command.toggleExtraKeyRow": "VSCodroid: Показать или скрыть ряд дополнительных клавиш",
+  "command.uiScale": "VSCodroid: Масштаб интерфейса",
   "command.about": "VSCodroid: О приложении",
+  "command.copyBugReport": "VSCodroid: Скопировать отчёт об ошибке",
   "viewsWelcome.explorer.deviceFolder": "Чтобы работать с папкой в памяти устройства, например с папкой внутри Documents или Download, откройте её с устройства, чтобы были видны и файлы, которые сохранили в ней другие приложения.\n[Открыть папку с устройства](command:vscodroid.openFolderFromDevice)"
 }

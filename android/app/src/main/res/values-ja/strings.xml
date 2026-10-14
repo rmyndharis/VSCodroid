@@ -250,6 +250,15 @@
          because that one says the thing holds files, which is false of a file, and
          apart from saf_write_back_failed because the app holds nothing here at all. -->
     <string name="saf_document_kept">%1$s はデバイスのフォルダーに残しました。エディターにはそのコピーがなかったためです。不要な場合は、デバイス側で削除してください。</string>
+
+    <!-- The same refusal for a file the editor did have and the user deleted, kept
+         because the device's version may have changed since the editor last read or
+         saved it, as another app's edit does. saf_document_kept would tell that user the
+         editor never had the file they just deleted in it. -->
+    <string name="saf_document_changed_kept">%1$s はデバイスのフォルダーに残しました。エディターが最後に読み込むか保存したあとに、他のアプリが変更した可能性があるためです。不要な場合は、デバイス側で削除してください。</string>
+    <!-- A directory deleted in the editor that holds such a file, and no file the editor
+         never had, which is what saf_directory_kept says. -->
+    <string name="saf_directory_changed_kept">%1$s はデバイスのフォルダーに残しました。中のファイルを、エディターが最後に読み込むか保存したあとに、他のアプリが変更した可能性があるためです。不要な場合は、デバイス側で削除してください。</string>
     <string name="saf_delete_refused">%1$s をデバイスのフォルダーから削除できませんでした。次にフォルダーを開いたときに再び表示されます。デバイスのファイル管理アプリで削除してください。</string>
 
     <!-- Removing the local copy of a device folder, from the storage screen. The
@@ -446,7 +455,9 @@
          It is a version number, not a quantity: nothing about the sentence
          changes when it does, and passing it as a number invites a translator to
          treat "105 and newer" as something to inflect. -->
-    <string name="webview_below_minimum">Android System WebView のバージョンは %1$s です。VSCodroid は %2$s 以降でテストされているため、エディターの一部が動作しない場合があります。Play Store から更新してください。</string>
+    <string name="webview_below_minimum_title">Android System WebView が古くなっています</string>
+    <string name="webview_below_minimum">この端末の Android System WebView のバージョンは %1$s です。VSCodroid には %2$s 以降が必要です。それより古いと、Markdown のプレビューやチャットなどの拡張機能のパネルが空白のままになります。Play Store から Android System WebView を更新してください。</string>
+    <string name="webview_update">更新</string>
 
     <!-- The extra key row, all of it spoken rather than drawn.
 

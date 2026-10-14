@@ -2,7 +2,7 @@
   "name": "vscodroid-saf-bridge",
   "displayName": "%displayName%",
   "description": "%description%",
-  "version": "1.10.0",
+  "version": "1.11.0",
   "publisher": "vscodroid",
   "engines": {
     "vscode": "^1.96.0"
@@ -57,8 +57,16 @@
         "title": "%command.toggleExtraKeyRow%"
       },
       {
+        "command": "vscodroid.uiScale",
+        "title": "%command.uiScale%"
+      },
+      {
         "command": "vscodroid.about",
         "title": "%command.about%"
+      },
+      {
+        "command": "vscodroid.copyBugReport",
+        "title": "%command.copyBugReport%"
       }
     ],
     "menus": {

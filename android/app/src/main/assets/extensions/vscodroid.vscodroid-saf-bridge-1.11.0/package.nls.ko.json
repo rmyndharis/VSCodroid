@@ -11,6 +11,8 @@
   "command.clearCaches": "VSCodroid: 캐시 지우기",
   "command.manageToolchains": "VSCodroid: 툴체인 관리",
   "command.toggleExtraKeyRow": "VSCodroid: 추가 키 행 표시 전환",
+  "command.uiScale": "VSCodroid: UI 배율",
   "command.about": "VSCodroid: 정보",
+  "command.copyBugReport": "VSCodroid: 버그 보고서 복사",
   "viewsWelcome.explorer.deviceFolder": "Documents나 Download 안의 폴더처럼 기기 저장소에 있는 폴더에서 작업하려면 기기에서 폴더를 여세요. 그래야 다른 앱이 저장한 파일도 표시됩니다.\n[기기에서 폴더 열기](command:vscodroid.openFolderFromDevice)"
 }

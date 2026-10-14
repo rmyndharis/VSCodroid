@@ -17,12 +17,15 @@ import org.junit.jupiter.api.Test
  * The interceptor acts on two kinds of `beforeinput`: a single-character
  * `insertText`, which it turns into a chord, and the edits that stand for a key,
  * which become Ctrl+Backspace, Ctrl+Delete and Ctrl+Enter. Both spend the latch
- * on the way out. Everything else a soft keyboard produces, a paste, an IME
- * composition update, an autocorrect replacement, a word delete, used to leave it
- * standing, and a modifier left standing is not a modifier that did nothing: the
- * next ordinary character is cancelled and dispatched as a chord in its place, so
- * typing `a` after a paste selects the document instead of inserting a letter and
- * the keystroke after that replaces the selection.
+ * on the way out. A composition update that adds one character in a text box
+ * comes back to the first as an `insertText`, which
+ * `scripts/test-modifier-release.js` runs. Everything else a soft keyboard
+ * produces, a paste, any other composition update, an autocorrect replacement, a
+ * word delete, used to leave it standing, and a modifier left standing is not a
+ * modifier that did nothing: the next ordinary character is cancelled and
+ * dispatched as a chord in its place, so typing `a` after a paste selects the
+ * document instead of inserting a letter and the keystroke after that replaces
+ * the selection.
  *
  * [KeyInjectorShiftTest] holds the same rule for a lone Shift, which was already
  * spent on every event. These hold the branch the other two modifiers reach.
@@ -43,11 +46,13 @@ import org.junit.jupiter.api.Test
  * `e.preventDefault();` to the branch turns `the page keeps the input this
  * listener has no chord for` red.
  *
- * Two inputs never produce a `beforeinput` for any branch to spend on, and the
- * last cases hold the hooks that spend the latch for them: a composition on the
- * EditContext edit path, which Chromium reports to the `EditContext` object and
- * not to the element, and typing inside a frame, which no listener in this
- * document can see. Dropping either hook turns its case red at the slice.
+ * Three inputs never produce a `beforeinput` for any branch to spend on, and the
+ * last cases hold the hooks that spend the latch for two of them: a composition
+ * on the EditContext edit path, which Chromium reports to the `EditContext`
+ * object and not to the element, and typing inside a frame, which no listener in
+ * this document can see. Dropping either hook turns its case red at the slice.
+ * The third, a letter committed outright on the EditContext path, has no hook
+ * and no case: `setupModifierInterceptor` says what was measured there.
  */
 class KeyInjectorLatchTest {
 
@@ -230,14 +235,16 @@ class KeyInjectorLatchTest {
      * The listener the script attaches to an `EditContext`, from its registration
      * to the close of its body.
      *
-     * Sliced at the event name because the body is one flag-clearing block among
-     * several: the three `beforeinput` branches above clear the same flags, so a
-     * whole-script search cannot tell a hook that spends the latch from one that
-     * only registers.
+     * Sliced at the registration on the EditContext because the body is one
+     * flag-clearing block among several: the three `beforeinput` branches above
+     * clear the same flags, so a whole-script search cannot tell a hook that
+     * spends the latch from one that only registers. The document has a
+     * `compositionstart` listener too, which follows a text box's composition
+     * and spends nothing.
      */
     private fun compositionHook(): String {
         val installed = installedListener()
-        val guard = "addEventListener('compositionstart'"
+        val guard = "ec.addEventListener('compositionstart'"
         val start = installed.indexOf(guard)
         assertTrue(
             start >= 0,
@@ -366,9 +373,10 @@ class KeyInjectorLatchTest {
      * `scripts/test-arrow-edge-guard.js`.
      *
      * NEGATIVE CONTROL: deleting the window listener, or registering it in the
-     * bubble phase, fails the slice; deciding there rather than in a one-shot
-     * listener on the box, adding Tab or Home to EDGE, or putting ArrowUp back
-     * into NAVIGATION_KEYS without guarding it, fails an assertion.
+     * bubble phase, fails the slice; deciding there rather than in a listener on
+     * the box, leaving that listener on the box once the key is over, adding Tab
+     * or Home to EDGE, or putting ArrowUp back into NAVIGATION_KEYS without
+     * guarding it, fails an assertion.
      */
     @Test
     fun `an arrow at the edge of a text box ends there instead of moving focus`() {
@@ -387,11 +395,16 @@ class KeyInjectorLatchTest {
         )
         assertTrue(
             guard.contains("window.addEventListener('keydown', function(e) {") &&
-                guard.contains("t.addEventListener('keydown', function(ev) {") &&
-                guard.contains("}, { once: true });"),
+                guard.contains("t.addEventListener('keydown', decide);"),
             "the guard does not decide on the box itself, after the box's own listeners, so " +
                 "a box or container that stops the key's propagation hides it while spatial " +
                 "navigation still moves focus. It reads: $guard",
+        )
+        assertTrue(
+            guard.contains("setTimeout(function() { t.removeEventListener('keydown', decide); }, 0);"),
+            "nothing removes the listener once the key is over, so a box that stops the key " +
+                "before the listener's turn, as the terminal does for every arrow, keeps one " +
+                "per key. It reads: $guard",
         )
         assertTrue(
             guard.contains("!e.defaultPrevented"),

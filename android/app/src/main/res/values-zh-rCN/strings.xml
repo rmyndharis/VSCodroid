@@ -250,6 +250,15 @@
          because that one says the thing holds files, which is false of a file, and
          apart from saf_write_back_failed because the app holds nothing here at all. -->
     <string name="saf_document_kept">%1$s 已保留在设备文件夹中：编辑器从未有过它的副本。如果不再需要，请在设备文件夹中删除它。</string>
+
+    <!-- The same refusal for a file the editor did have and the user deleted, kept
+         because the device's version may have changed since the editor last read or
+         saved it, as another app's edit does. saf_document_kept would tell that user the
+         editor never had the file they just deleted in it. -->
+    <string name="saf_document_changed_kept">%1$s 已保留在设备文件夹中：自编辑器上次读取或保存它以来，其他应用可能更改过它。如果不再需要，请在设备文件夹中删除它。</string>
+    <!-- A directory deleted in the editor that holds such a file, and no file the editor
+         never had, which is what saf_directory_kept says. -->
+    <string name="saf_directory_changed_kept">%1$s 已保留在设备文件夹中：自编辑器上次读取或保存其中的某个文件以来，其他应用可能更改过该文件。如果不再需要，请在设备文件夹中删除它。</string>
     <string name="saf_delete_refused">无法从设备文件夹中删除 %1$s，下次打开该文件夹时它会再次出现。请在设备的文件管理器中删除。</string>
 
     <!-- Removing the local copy of a device folder, from the storage screen. The
@@ -446,7 +455,9 @@
          It is a version number, not a quantity: nothing about the sentence
          changes when it does, and passing it as a number invites a translator to
          treat "105 and newer" as something to inflect. -->
-    <string name="webview_below_minimum">Android System WebView 的版本为 %1$s。VSCodroid 针对 %2$s 及更高版本进行测试，因此编辑器的部分功能可能无法正常工作。请从 Play Store 更新。</string>
+    <string name="webview_below_minimum_title">Android System WebView 版本过旧</string>
+    <string name="webview_below_minimum">此设备上的 Android System WebView 版本为 %1$s。VSCodroid 需要 %2$s 或更高版本，低于此版本时，Markdown 预览和聊天等扩展面板会保持空白。请从 Play Store 更新 Android System WebView。</string>
+    <string name="webview_update">更新</string>
 
     <!-- The extra key row, all of it spoken rather than drawn.
 

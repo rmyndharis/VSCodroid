@@ -25,7 +25,10 @@ model change, as the content and cursor listeners call it in 1.139.1.
 Upstream 1.140.0 defers both calls to prepareRender (microsoft/vscode
 #310901, reverted for 1.141 by #338393), so a second textupdate before
 the next frame would copy from a stale line. The patch still applies
-there and every fingerprint row still passes, so
+there, with both hunks 32 lines further down. Every fingerprint row
+should pass there too, but that is read from the source, which holds
+each row's pattern as often at 1.140.0 as at 1.139.1 once patched: no
+1.140.0 bundle was built to look. Neither would notice the deferral, so
 scripts/check-editcontext-sync.py fails the build and the drift check
 when either caller stops calling it directly.
 

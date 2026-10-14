@@ -1698,6 +1698,10 @@ class FirstRunSetup(
      * denied" no matter how it is chmod'ed. Instead, npm/npx are defined as bash
      * functions that invoke node with the cli entry point.
      *
+     * A caller that is not bash gets the same command from the launcher scripts
+     * `ToolchainManager.addNpmRows` writes for the exec table, so a change to what
+     * these functions run belongs there as well.
+     *
      * Safe to call on every launch: only appends if functions are missing.
      */
     fun createNpmWrappers() {
@@ -2130,11 +2134,12 @@ class FirstRunSetup(
      * WHAT THIS DOES NOT FIX, because the gap is narrower than "commands work
      * now" and the rest needs a different mechanism:
      *
-     *  - a direct execve of the bare name. `child_process.spawn("npm", ...)` with
-     *    no shell reaches no shell, so no function exists. Toolchain commands
-     *    are past this and the next one: each has a link in `usr/libexec/tcbin`,
-     *    ahead of `usr/bin` on PATH, onto the exec trampoline in
-     *    `nativeLibraryDir` ([ToolchainManager.regenerateDerivedFiles]).
+     *  - a direct execve of the bare name. `child_process.spawn("pip", ...)` with
+     *    no shell reaches no shell, so no function exists. npm, npx and the
+     *    toolchain commands are past this and the next one: each has a link in
+     *    `usr/libexec/tcbin`, ahead of `usr/bin` on PATH, onto the exec
+     *    trampoline in `nativeLibraryDir` ([ToolchainManager.regenerateDerivedFiles]).
+     *    pip and claude have no such link.
      *  - `sh -c`. Android's `sh` is mksh, which has never heard of BASH_ENV, and
      *    bash itself ignores the variable when it is invoked as `sh` or with
      *    `--posix` -- both measured. Node's `child_process.exec()` and make's
@@ -4646,7 +4651,7 @@ private val LEGACY_STARTUP_DIR_BLOCK = """
     fi
 """.trimIndent()
 
-private const val PROMPT_VERSION = "v2"
+private const val PROMPT_VERSION = "v3"
 private const val PROMPT_BEGIN = "# >>> vscodroid prompt"
 private const val PROMPT_END = "# <<< vscodroid prompt"
 private const val PROMPT_MARKER_CURRENT = "$PROMPT_BEGIN $PROMPT_VERSION >>>"
@@ -4677,6 +4682,12 @@ private val PROMPT_BLOCK = """
         # which is the one thing this abbreviation exists to hide.
         if [[ "${'$'}dir" == *saf-mirrors/* ]]; then
             dir="${'$'}{dir#*saf-mirrors/}"
+            # A folder opened by its name is the link by-name/<hash>/<name>, and a
+            # terminal there keeps that spelling: node-pty exports PWD as the
+            # directory it starts the shell in, and bash keeps an inherited PWD that
+            # names its directory. Dropping by-name/<hash>/ leaves <name>/..., which
+            # the case below reads as it reads <hash>/..., so both paths prompt alike.
+            dir="${'$'}{dir#by-name/*/}"
             case "${'$'}dir" in
                 */*) dir="[saf]/${'$'}{dir#*/}" ;;
                 *)   dir="[saf]" ;;

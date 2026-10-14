@@ -98,7 +98,7 @@ class CdnUrlInjectionTest {
 
     private fun intercept(server: Recorder, path: String, query: String? = null) =
         VSCodroidWebViewClient.interceptCdnRequest(
-            request(path, query), server.port, token, emptyList(), emptyList(), { null }
+            request(path, query), server.port, { token }, emptyList(), emptyList(), { null }
         )
 
     /**
@@ -192,13 +192,16 @@ class CdnUrlInjectionTest {
      * served into webview frames at the `*.vscode-cdn.net` origins the resource
      * gate trusts. `an ordinary asset is still rewritten and still carries the
      * token` is the control: with a token the same request is forwarded.
+     *
+     * The request waits for a token first, see `CdnReadinessWaitTest`, so the wait
+     * is cut short here; the server never becoming ready inside it is the case.
      */
     @Test
     fun `nothing is forwarded to the port while the server is not ready`() {
         Recorder().use { server ->
             val response = VSCodroidWebViewClient.interceptCdnRequest(
                 request("/stable/deadbeef/out/vs/workbench/contrib/webview/browser/pre/index.html", null),
-                server.port, null, emptyList(), emptyList(), { null }
+                server.port, { null }, emptyList(), emptyList(), { null }, tokenWaitMs = 200,
             )
 
             assertNull(
@@ -221,9 +224,10 @@ class CdnUrlInjectionTest {
  * `ConnectionTokenLoggingTest` has a sibling that deliberately records nothing,
  * because it reads the log. This one exists for the opposite reason: the request
  * line is the only place the URL this app built can be observed after
- * `HttpURLConnection` has had it.
+ * `HttpURLConnection` has had it. `CdnReadinessWaitTest` uses it for the same
+ * reason.
  */
-private class Recorder : AutoCloseable {
+internal class Recorder : AutoCloseable {
 
     private val socket = ServerSocket(0, 0, InetAddress.getByName("127.0.0.1"))
 

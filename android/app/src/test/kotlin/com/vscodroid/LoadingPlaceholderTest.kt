@@ -89,10 +89,13 @@ class LoadingPlaceholderTest {
     fun `the page still carries the colours that made it fail`() {
         // Without this the pair above can be satisfied by a placeholder with no
         // '#' left in it, which would be a different page rather than a fixed one:
-        // the dark background is the whole point of showing it at all.
-        assertTrue(source.contains("background:#1e1e1e")) {
-            "the loading page no longer sets the dark background it exists to show"
+        // the background is the whole point of showing it at all. The colour is
+        // the one the workbench last painted, the window's before it ever has.
+        val page = loadingPageHtml(0xFF1E1E1E.toInt(), "Starting server...")
+        assertTrue(page.contains("background:#1e1e1e")) {
+            "the loading page no longer sets the background it exists to show"
         }
+        assertFalse(dataUrlSafe(page).contains("#")) { "the loading page reaches loadData with a '#' in it" }
     }
 
     /**

@@ -10,8 +10,9 @@ import org.junit.jupiter.api.Test
  *
  * `unfetched` is the only thing standing between a later editor save and
  * `openOutputStream(uri, "wt")` on a device document this app has never read:
- * both write paths consult it through `writeWouldReplaceUnreadDocument`, and a
- * path missing from it means the save truncates whatever the device holds.
+ * each route a save takes to the device consults it through
+ * `writeWouldReplaceUnreadDocument`, and a path missing from it means the save
+ * truncates whatever the device holds.
  *
  * The set is therefore a contract, not a cache, and the contract is "the device
  * holds a document this sync did not read". Phase 2 has six branches that end
