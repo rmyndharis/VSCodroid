@@ -767,7 +767,9 @@ divides itself exactly between its children, so sixteen on a 360dp portrait row 
 the layout for a row 411dp wide and up, where page 1's 8.5 shares (the trackpad claims one
 and a half) come to 48.4dp. `KeyPages.forSmallestWidthDp` repacks the same items, in the same
 order, whenever a page's share would put a key under `MIN_TOUCH_TARGET_DP`: five pages at
-411dp, six at 360dp, seven at 320dp. The argument is `smallestScreenWidthDp`, so rotating
+411dp, six at 360dp, seven at 320dp, and the quick actions page below follows them as a page
+of its own at every width, so six, seven and eight in all. The argument is
+`smallestScreenWidthDp`, so rotating
 does not repack, but a drop into a narrow split-screen pane does, through
 `ExtraKeyRow.onConfigurationChanged`. The latched modifiers are carried into the new pages'
 adapter before it replaces the old one (`ExtraKeyRow.setupAdapter`): replacing it cancels a
@@ -782,11 +784,24 @@ what it did.
 | 3 | `[` `]` `<` `>` `=` `!` `#` `@` |
 | 4 | F1 to F8 |
 | 5 | F9 to F12, Home, End, PageUp, PageDown |
+| 6 | Quick actions: F1, Ctrl+P, Ctrl+`, Ctrl+B, Ctrl+J, Ctrl+S |
 
 On a 360dp phone page 1 ends at `{}` and `()` opens page 2; on a 320dp phone page 1 is Tab,
 Esc, Ctrl, Alt, Shift and the trackpad, with both bracket keys on page 2. The indicator under the
-row is where a user reads the real count, and it speaks the same thing: "Key page 1 of 5",
+row is where a user reads the real count, and it speaks the same thing: "Key page 1 of 6",
 with the latched modifier appended while one is held.
+
+Page 6 is not typed text. Each of its keys is a `KeyItem.Button` with `fixedModifiers`, and a
+tap sends its `value` as an announced DOM keystroke (`KeyInjector.announceKeystroke`, the route
+Tab and the function keys take) with exactly those modifiers: `pressModifiers` ignores whatever
+the row has latched, and `resetModifiersIfNeeded` clears the latches afterwards as for any key.
+The bindings are the 1.139.1 workbench's defaults: F1 (Show All Commands), Ctrl+P (Go to File),
+Ctrl+` (Toggle Terminal), Ctrl+B (Toggle Primary Side Bar), Ctrl+J (Toggle Panel) and Ctrl+S
+(Save). They go to whatever has focus, and the terminal passes the workbench only the commands
+on its skip list: F1, Ctrl+P, Ctrl+` and Ctrl+J are on it, Ctrl+B and Ctrl+S are not and reach
+the shell. Six keys, not eight: six claim six shares of the row and fit one page down to 288dp,
+where eight need 384dp and would pack as seven and one on a 360dp phone. The page is therefore
+packed on its own by `KeyPages.forSmallestWidthDp` and never poured into the run of key pages.
 
 Ctrl, Alt and Shift latch rather than repeat. The bracket and parenthesis keys insert only the
 opening character, because Monaco closes the pair and places the caret inside. Several keys carry

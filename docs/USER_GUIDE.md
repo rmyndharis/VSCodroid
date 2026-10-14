@@ -188,10 +188,11 @@ once.
 
 How many pages there are depends on how wide your phone is. The row divides its width
 evenly among the keys on a page, so on a narrower screen it carries fewer keys per
-page and spreads them over more: five pages on a 411dp phone and wider, six at
-360dp, seven at 320dp. The keys and their order never change, only where the page
-breaks fall. The tables below are the five-page layout; on a narrower phone read
-them as one list that is cut in more places.
+page and spreads them over more: six pages on a 411dp phone and wider, seven at
+360dp, eight at 320dp. The keys and their order never change, only where the page
+breaks fall, and the last page, the quick actions, is always one page of its own.
+The tables below are the six-page layout; on a narrower phone read pages 1 to 5
+as one list that is cut in more places.
 
 **Page 1, essential coding keys:**
 
@@ -218,9 +219,29 @@ you and leaves the cursor between the two.
 **Page 5, the rest of the function keys and navigation:** `F9` through `F12`,
 `Home`, `End`, `PgUp`, `PgDn`
 
-The last two pages are the only place a touch user can reach any of those keys: no
+Pages 4 and 5 are the only place a touch user can reach any of those keys: no
 other page carries a function key, and the trackpad sends arrows only. Any
 shortcut the editor or an extension binds to one is a tap away.
+
+**Page 6, quick actions:** one tap for the commands you would otherwise reach with
+Ctrl and a letter. Each key sends the shortcut itself, so it works with nothing
+latched, and a Ctrl, Alt or Shift lit on page 1 is cleared by the tap and does not
+change it. On a label, `^` is Ctrl.
+
+| Key | Sends | What it does |
+|-----|-------|--------------|
+| `F1` | F1 | Opens the Command Palette |
+| `^P` | Ctrl+P | Quick Open: go to a file by name |
+| `` ^` `` | Ctrl+`` ` `` | Opens and focuses the terminal, or hides the panel when it already has focus |
+| `^B` | Ctrl+B | Shows or hides the side bar |
+| `^J` | Ctrl+J | Shows or hides the bottom panel |
+| `^S` | Ctrl+S | Saves the file |
+
+These are the editor's own shortcuts, and the terminal decides for itself which
+ones it hands over. With the terminal focused, `F1`, `^P`, `` ^` `` and `^J` still
+reach the editor, but `^B` and `^S` go to the shell, as Ctrl and `B` or `S` from the
+soft keyboard do there, and a terminal takes Ctrl+S as a request to pause its
+output until Ctrl+Q. Tap into a file first to hide the side bar or save it.
 
 #### The trackpad
 
@@ -286,7 +307,7 @@ Ctrl+Backspace arrive as chords: Ctrl+Enter opens a line below without splitting
 the one you are on, rather than typing a plain newline.
 
 Under a screen reader, the dots below the row are one item that reads "Key page 1
-of 5", with any latched modifier named after it ("Key page 1 of 5, ctrl+shift
+of 6", with any latched modifier named after it ("Key page 1 of 6, ctrl+shift
 held"). It is spoken again each time you swipe to another page, which is the only
 announcement that the keys under your finger have changed.
 
