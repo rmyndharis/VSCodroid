@@ -64,6 +64,17 @@ API=33
 # rather than trusting the default.
 PAGE_SIZE_FLAGS=(-Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384)
 
+# Every addon here links libc++ statically (-static-libstdc++) into a process
+# that already holds a second copy: libnode.so's, through libc++_shared.so.
+# The loader binds an addon's weak and undefined symbols to the first
+# definition in the process, so without -Bsymbolic one object can be built by
+# the addon's code and destroyed by libnode's. @parcel/watcher's std::regex
+# was: free() aborted with "Pointer tag ... was truncated", the file watcher
+# died on every unsubscribe that carried a glob, and after five restarts file
+# watching stayed off until the server restarted. verify() fails the build if
+# any libc++ symbol is left to the loader.
+ADDON_LINK_FLAGS=(-static-libstdc++ -Wl,-Bsymbolic)
+
 echo "=== Building native addons for Android ARM64 (Bionic) ==="
 
 # --- Toolchain -------------------------------------------------------------
@@ -344,7 +355,7 @@ compile() {
     mkdir -p "$(dirname "$out")"
     "$CXX" \
         -shared -fPIC -std=c++17 -O2 \
-        -static-libstdc++ \
+        "${ADDON_LINK_FLAGS[@]}" \
         "${PAGE_SIZE_FLAGS[@]}" \
         -DNAPI_VERSION=9 \
         -I"$NODE_INCLUDE" \
@@ -355,8 +366,9 @@ compile() {
     "$STRIP" "$out"
 }
 
-# verify <out.node>: a glibc dependency or a 4 KB segment must fail the build,
-# not surface later as a dlopen error on a user's device.
+# verify <out.node>: a glibc dependency, a 4 KB segment or a libc++ symbol left
+# to the loader must fail the build, not surface later as a dlopen error or an
+# abort on a user's device.
 verify() {
     local out=$1 name=$2
 
@@ -364,6 +376,19 @@ verify() {
     # readelf: an addon and the runtime that loads it have to agree about what
     # "loads on Android" means, and two copies of that judgement drift.
     python3 "$SCRIPT_DIR/verify-android-elf.py" "$out" || return 1
+
+    # A relocation that names a libc++ symbol is one the loader will bind to
+    # whichever copy it finds first (see ADDON_LINK_FLAGS). The output is read
+    # in full before counting: grep -q would close the pipe early and, under
+    # pipefail, report a match as the pipeline's failure.
+    local relocs loose
+    relocs=$("$READELF" -rW "$out") || return 1
+    loose=$(printf '%s\n' "$relocs" | grep -c '__ndk1' || true)
+    if [ "$loose" -ne 0 ]; then
+        echo "  ERROR: $name leaves $loose libc++ symbols to the dynamic loader;" \
+            "it must link with ADDON_LINK_FLAGS" >&2
+        return 1
+    fi
     printf '  ok   %-24s %8s bytes\n' "$name" "$(wc -c < "$out" | tr -d ' ')"
 }
 
@@ -463,7 +488,7 @@ mkdir -p "$(dirname "$SQLITE_OUT")"
 # the addons above, so -fexceptions and no NAPI_DISABLE_CPP_EXCEPTIONS.
 "$CXX" \
     -shared -fPIC -std=c++17 -O2 -fexceptions \
-    -static-libstdc++ \
+    "${ADDON_LINK_FLAGS[@]}" \
     "${PAGE_SIZE_FLAGS[@]}" \
     -DNAPI_VERSION=8 -DNODE_API_SWALLOW_UNTHROWABLE_EXCEPTIONS \
     "${SQLITE_DEFINES[@]}" \
@@ -568,7 +593,7 @@ mkdir -p "$(dirname "$ZEROMQ_OUT")"
 # only the objects the binding references come in.
 "$CXX" \
     -shared -fPIC -std=c++17 -O2 -fexceptions \
-    -static-libstdc++ \
+    "${ADDON_LINK_FLAGS[@]}" \
     "${PAGE_SIZE_FLAGS[@]}" \
     -DNAPI_CPP_EXCEPTIONS -DZMQ_STATIC \
     -DNODE_GYP_MODULE_NAME=zeromq -DBUILDING_NODE_EXTENSION \

@@ -96,6 +96,7 @@ the server cannot run without, and zeromq for the Jupyter extension, against Bio
 # zeromq          -> assets/usr/lib/node-addons/zeromq/build/Release/zeromq.node (libzmq static)
 #
 # Linked with -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384
+# and with -static-libstdc++ -Wl,-Bsymbolic (ADDON_LINK_FLAGS)
 # OUTPUT_ROOT defaults to android/app/src/main/assets/vscode-reh
 ```
 
@@ -104,6 +105,13 @@ denies `execve` under the app's data directory but not `dlopen`, so an addon is 
 `filesDir` even though a binary there cannot be executed. Each of those three is checked against
 the `package.json` the server was built with, since an addon compiled for a different Node ABI
 loads and then fails at the first call.
+
+Every addon carries its own libc++, and the process it loads into already holds another in
+`libnode.so` and `libc++_shared.so`. `-Bsymbolic` keeps the dynamic loader from binding the
+addon's libc++ symbols to that copy, and `verify()` in the script fails the build if any
+relocation still names a `std::__ndk1` symbol. Without it `@parcel/watcher`'s `std::regex` objects
+were destroyed by `libnode.so`'s code and `free()` aborted the file watcher process on every
+unsubscribe that carried a glob, as the default `files.watcherExclude` patterns do.
 
 `zeromq` is for the Jupyter extension users install from Open VSX, not for the server. That
 extension carries zeromq 6.0.0-beta.16 with glibc and musl prebuilds only, so without an Android
