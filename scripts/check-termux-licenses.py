@@ -151,8 +151,8 @@ RENAMED = {
 # complete one. A script listed here that stops carrying the function fails the
 # run instead, which is the point. Moving that map is a decision, and this line
 # is where it gets made.
-SONAME_SCRIPTS = ("download-java.sh", "download-python.sh", "download-ruby.sh",
-                  "download-termux-tools.sh")
+SONAME_SCRIPTS = ("download-cpp.sh", "download-java.sh", "download-python.sh",
+                  "download-ruby.sh", "download-termux-tools.sh")
 
 # The body of a `get_sonames()` shell function, and one arm of the case inside
 # it. Read out of the download scripts rather than copied here, so the two

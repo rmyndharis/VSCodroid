@@ -100,5 +100,5 @@ echo
 echo "========================================="
 echo "  Build complete"
 echo "  Deploy: ./scripts/deploy.sh"
-echo "  Optional toolchains: ./scripts/download-{ruby,java}.sh"
+echo "  Optional toolchains: ./scripts/download-{ruby,java,cpp}.sh"
 echo "========================================="

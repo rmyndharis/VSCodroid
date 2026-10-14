@@ -24,8 +24,8 @@ class ToolchainRegistryTest {
     inner class CatalogTest {
 
         @Test
-        fun `has exactly 2 toolchains`() {
-            assertEquals(2, ToolchainRegistry.available.size)
+        fun `has exactly 3 toolchains`() {
+            assertEquals(3, ToolchainRegistry.available.size)
         }
 
         @Test
@@ -121,7 +121,8 @@ class ToolchainRegistryTest {
             assumeTrue(
                 measured > 0,
                 "no toolchain pack has been built in this checkout, so nothing was measured; " +
-                    "run scripts/download-java.sh and scripts/download-ruby.sh to reach this",
+                    "run scripts/download-java.sh, scripts/download-ruby.sh and " +
+                    "scripts/download-cpp.sh to reach this",
             )
         }
 
@@ -228,6 +229,46 @@ class ToolchainRegistryTest {
             assertNotNull(java)
             assertEquals("toolchain_java", java!!.packName)
         }
+
+        @Test
+        fun `contains C and C++ toolchain`() {
+            val cpp = ToolchainRegistry.available.find { it.shortLabel == "C/C++" }
+            assertNotNull(cpp)
+            assertEquals("toolchain_cpp", cpp!!.packName)
+            assertEquals("C/C++", cpp.displayName)
+            assertEquals(
+                "https://github.com/rmyndharis/VSCodroid/releases/latest/download/toolchain_cpp.zip",
+                cpp.downloadUrl,
+            )
+        }
+
+        /**
+         * The card is the one place the user is told what this toolchain needs.
+         *
+         * Its programs start only through the exec interceptor a terminal
+         * preloads, so a terminal with `LD_PRELOAD` set to null runs none of
+         * them. That is a limit a user meets as "Permission denied" from a
+         * compiler that is installed and on PATH, which reads as a broken
+         * install, so the sentence on the card is what stands between the two.
+         * Every locale carries it, with the variable name left as it is.
+         */
+        @Test
+        fun `the C and C++ card says it needs the exec interceptor`() {
+            val res = File("src/main/res")
+            assertTrue(res.isDirectory, "app/src/main/res was not where tests run")
+            val files = res.listFiles { f -> f.isDirectory && f.name.startsWith("values") }
+                .orEmpty().map { File(it, "strings.xml") }.filter { it.isFile }
+            assertTrue(files.size >= 14, "expected the default and thirteen locales, found ${files.size}")
+            for (file in files) {
+                val line = file.readLines().firstOrNull { "name=\"toolchain_cpp_description\"" in it }
+                assertNotNull(line, "${file.parentFile.name} has no toolchain_cpp_description")
+                assertTrue(
+                    "LD_PRELOAD" in line!! && "null" in line && "exec" in line,
+                    "${file.parentFile.name}: the card does not say the toolchain needs the " +
+                        "preloaded exec and fails with LD_PRELOAD set to null: $line",
+                )
+            }
+        }
     }
 
     // ── find() ───────────────────────────────────────────────────────────
@@ -236,7 +277,7 @@ class ToolchainRegistryTest {
     inner class FindTest {
 
         @ParameterizedTest(name = "find by full pack name: {0}")
-        @ValueSource(strings = ["toolchain_ruby", "toolchain_java"])
+        @ValueSource(strings = ["toolchain_ruby", "toolchain_java", "toolchain_cpp"])
         fun `finds by full pack name`(packName: String) {
             val result = ToolchainRegistry.find(packName)
             assertNotNull(result, "Should find toolchain by pack name: $packName")
@@ -244,7 +285,7 @@ class ToolchainRegistryTest {
         }
 
         @ParameterizedTest(name = "find by short name: {0} → toolchain_{0}")
-        @CsvSource("ruby,toolchain_ruby", "java,toolchain_java")
+        @CsvSource("ruby,toolchain_ruby", "java,toolchain_java", "cpp,toolchain_cpp")
         fun `finds by short name`(shortName: String, expectedPack: String) {
             val result = ToolchainRegistry.find(shortName)
             assertNotNull(result, "Should find toolchain by short name: $shortName")

@@ -257,6 +257,24 @@ TOOLCHAIN_LIBRARIES = {
     "libandroid-shmem.so": ("libandroid-shmem", "BSD-3-Clause"),
     "libandroid-spawn.so": ("libandroid-spawn", "BSD-2-Clause"),
     "libffi.so": ("libffi", "MIT"),
+    # The C/C++ pack. LLVM is one component whichever package carries the file:
+    # libllvm ships libLLVM.so and clang ships libclang-cpp.so, from one source
+    # tree under one LICENSE.TXT, which is the only notice either carries. Termux
+    # declares "Apache-2.0, NCSA" for it; the exception to Apache-2.0 is the
+    # project's own and is recorded, so check-termux-licenses.py reports the one
+    # difference and fails on nothing.
+    "libLLVM.so": ("LLVM", "Apache-2.0 WITH LLVM-exception, NCSA"),
+    "libclang-cpp.so": ("LLVM", "Apache-2.0 WITH LLVM-exception, NCSA"),
+    "libxml2.so.16": ("libxml2", "MIT"),
+    # Three one-line linker scripts (`INPUT(-lc)`) from ndk-sysroot, so that
+    # -lpthread, -lrt and -lutil resolve. They are listed because the sweep in
+    # unlisted_toolchain_libs reads any .so name, not because they hold code.
+    # The package declares NCSA; the kernel interface headers it also ships are
+    # GPL-2.0 WITH Linux-syscall-note, which is a source offer for the files
+    # themselves and is recorded in LEGAL_NOTICES.md rather than on these three.
+    "libpthread.so": ("ndk-sysroot", "NCSA"),
+    "librt.so": ("ndk-sysroot", "NCSA"),
+    "libutil.so": ("ndk-sysroot", "NCSA"),
 }
 
 # Where each component's own notice reaches the device, as a path under
@@ -339,6 +357,11 @@ NOTICE_DIRS = {
     "libandroid-execinfo": "usr/share/doc/libandroid-execinfo",
     "libandroid-shmem": "usr/share/doc/libandroid-shmem",
     "libandroid-spawn": "usr/share/doc/libandroid-spawn",
+    # libllvm's package carries the project's LICENSE.TXT; clang, lld, llvm and
+    # libcompiler-rt carry no doc directory of their own.
+    "LLVM": "usr/share/doc/libllvm",
+    "libxml2": "usr/share/doc/libxml2",
+    "ndk-sysroot": "usr/share/doc/ndk-sysroot",
 }
 
 # The smallest thing that can be a notice, in bytes.

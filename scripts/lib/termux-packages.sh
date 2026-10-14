@@ -11,8 +11,8 @@
 #     termux_extract_packages "${REQUIRED_PACKAGES[@]}"
 #     termux_copy_notices "$ASSETS_DIR/usr" "${REQUIRED_PACKAGES[@]}"
 #
-# Four scripts source this today: download-java.sh, download-python.sh,
-# download-ruby.sh and download-termux-tools.sh. There were five, and the fifth,
+# Five scripts source this today: download-cpp.sh, download-java.sh,
+# download-python.sh, download-ruby.sh and download-termux-tools.sh. A sixth,
 # download-go.sh, is why the count is worth stating: it went away with the Go
 # toolchain and the library did not notice, which is the point of the library.
 # Every one of them fetched the index, called

@@ -11,6 +11,7 @@ set -euo pipefail
 #   Run the download scripts first to populate the asset packs:
 #     ./scripts/download-ruby.sh
 #     ./scripts/download-java.sh
+#     ./scripts/download-cpp.sh
 #
 # Usage:
 #   ./scripts/package-toolchains.sh              # Package all toolchains
@@ -19,7 +20,8 @@ set -euo pipefail
 #
 # Output:
 #   toolchain-zips/toolchain_ruby.zip  (~10 MB)
-#   toolchain-zips/toolchain_java.zip  (~55 MB)
+#   toolchain-zips/toolchain_java.zip  (~56 MB)
+#   toolchain-zips/toolchain_cpp.zip   (~74 MB)
 #
 # The ZIPs are intended to be attached to GitHub Releases so that sideloaded
 # APK users (not from Play Store) can download toolchains manually. The app's

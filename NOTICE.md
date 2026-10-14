@@ -110,13 +110,13 @@ verbatim; `docs/LEGAL_NOTICES.md` records which text covers which component.
 | libandroid-glob | BSD-3-Clause | Kerberos 5, tmux |
 | libandroid-posix-semaphore | MIT | Python |
 | libandroid-support | Apache-2.0, MIT | Bash, Kerberos 5, OpenSSH, Python, readline, tmux |
-| libc++ | NCSA | ICU, Node.js |
+| libc++ | NCSA | ICU, Node.js, and the on-demand C/C++ toolchain |
 | libcrypt | BSD-2-Clause | bundled tool in its own right |
 | libcurl | MIT | Git |
 | libedit | BSD-3-Clause | bundled tool in its own right |
 | libevent | BSD-3-Clause | tmux |
-| libffi | MIT | Python |
-| libiconv | LGPL-2.1, GPL-3.0 | Bash, Git |
+| libffi | MIT | Python, and the on-demand C/C++ toolchain |
+| libiconv | LGPL-2.1, GPL-3.0 | Bash, Git, and the on-demand C/C++ toolchain through libxml2 |
 | libresolv-wrapper | BSD-3-Clause | Kerberos 5 |
 | libssh2 | BSD-3-Clause | libcurl |
 | musl libc | MIT | bundled tool in its own right |
@@ -136,8 +136,8 @@ verbatim; `docs/LEGAL_NOTICES.md` records which text covers which component.
 | tmux | ISC | bundled tool in its own right |
 | utf8proc | MIT | tmux |
 | xz / liblzma | LGPL-2.1, GPL-2.0, GPL-3.0 | Python |
-| zlib | Zlib | Git, Node.js, OpenSSH, Python, SQLite, libcurl, libssh2, and the on-demand Java and Ruby toolchains |
-| Zstandard | GPL-2.0 | Python |
+| zlib | Zlib | Git, Node.js, OpenSSH, Python, SQLite, libcurl, libssh2, and the on-demand Java, Ruby and C/C++ toolchains |
+| Zstandard | GPL-2.0 | Python, and the on-demand C/C++ toolchain |
 
 ## Toolchain Libraries
 
@@ -154,10 +154,23 @@ and the base APK for the table above.
 | [libandroid-execinfo](https://github.com/termux/libandroid-execinfo) | BSD-2-Clause | Ruby |
 | [libandroid-shmem](https://github.com/termux/libandroid-shmem) | BSD-3-Clause | Java |
 | [libandroid-spawn](https://github.com/termux/libandroid-spawn) | BSD-2-Clause | Java |
+| [LLVM](https://llvm.org) | Apache-2.0 WITH LLVM-exception, NCSA | C/C++ |
+| [libxml2](https://gitlab.gnome.org/GNOME/libxml2) | MIT | C/C++ |
+| [ndk-sysroot](https://github.com/termux/termux-packages/tree/master/packages/ndk-sysroot) | NCSA, with BSD, Apache-2.0, MIT and GPL-2.0 WITH Linux-syscall-note in the headers | C/C++ |
 
 GMP is copyleft; its source offer is in `docs/LEGAL_NOTICES.md` beside the rest,
 and the LGPL-3.0 text it requires ships in the base app, which is the only
 licences screen a device installing the Ruby pack has.
+
+LLVM is libLLVM.so and libclang-cpp.so, and the clang driver, lld, the llvm-*
+tools, the compiler-rt builtins archive and the libc++ headers come from the
+same source tree. ndk-sysroot is the bionic and kernel headers, the libc++
+headers and the crt objects, and its three `.so` files are one-line linker
+scripts. The kernel's interface headers are GPL-2.0 WITH Linux-syscall-note and
+are installed as plain files, so their source offer is the files themselves and
+sits in `docs/LEGAL_NOTICES.md` under **GPL Source Code Availability**. The
+C/C++ pack also carries Python's C headers (PSF-2.0), whose licence text is the
+base app's `usr/share/doc/python/LICENSE`.
 
 ## On-Demand Toolchains
 
@@ -165,8 +178,9 @@ licences screen a device installing the Ruby pack has.
 |----------|---------|-----|
 | Ruby | BSD 2-Clause | https://www.ruby-lang.org |
 | OpenJDK | GPL v2 + Classpath | https://openjdk.org |
+| LLVM (clang, lld) | Apache 2.0 with LLVM Exceptions | https://llvm.org |
 
-OpenJDK's own licence and third-party notice files ship inside the Java pack at `usr/lib/jvm/java-17-openjdk/legal`; Ruby's per-gem licence files likewise ship inside the Ruby pack.
+OpenJDK's own licence and third-party notice files ship inside the Java pack at `usr/lib/jvm/java-17-openjdk/legal`; Ruby's per-gem licence files likewise ship inside the Ruby pack. LLVM's `LICENSE.TXT` ships inside the C/C++ pack at `usr/share/doc/libllvm`.
 
 ## Mirrored Python Wheels
 

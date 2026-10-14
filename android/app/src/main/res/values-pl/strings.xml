@@ -361,6 +361,7 @@
          strings on purpose; "Ruby" and "Java 17" are the products' own names. -->
     <string name="toolchain_ruby_description">Ruby z irb, gem, bundler</string>
     <string name="toolchain_java_description">OpenJDK 17 (javac, jar, jshell)</string>
+    <string name="toolchain_cpp_description">C i C++ (clang, lld). Wymaga przechwytywania exec w terminalu: nie działa, gdy LD_PRELOAD jest ustawione na null.</string>
 
     <!-- The checkmark on a selected toolchain card. It is an ImageView with no
          text, so this is the whole of what a screen reader has to announce it. -->

@@ -82,8 +82,9 @@ jobs:
   build-release:
     name: Build Release
     runs-on: ubuntu-latest
-    # Two Gradle release builds plus ~360 MB of toolchain downloads. Raised
-    # before the first tag rather than after one times out at 90%.
+    # Two Gradle release builds plus ~450 MB of toolchain downloads, ~90 MB of
+    # them the C/C++ toolchain's. Raised before the first tag rather than after
+    # one times out at 90%.
     timeout-minutes: 90
     env:
       # The addons, the glibc shim, the exec interceptor, the trampoline and
@@ -666,6 +667,7 @@ jobs:
         run: |
           bash scripts/download-ruby.sh
           bash scripts/download-java.sh
+          bash scripts/download-cpp.sh
 
       # The unit suite ran on every pull request and on no tag, which put the
       # published build on the wrong side of it. Before the signing keystore is

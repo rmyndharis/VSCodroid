@@ -653,7 +653,7 @@ VSCodroid is built using the Android SDK and NDK provided by Google.
 
 ## Google Play Asset Delivery
 
-On Play Store installs, on-demand toolchain packs (Ruby, Java) are delivered via Google Play Asset Delivery, a feature of Google Play. On installs that did not come from the Play Store, the same packs are downloaded as ZIPs from this project's GitHub Releases (https://github.com/rmyndharis/VSCodroid/releases), which the terms below do not govern.
+On Play Store installs, on-demand toolchain packs (Ruby, Java, C/C++) are delivered via Google Play Asset Delivery, a feature of Google Play. On installs that did not come from the Play Store, the same packs are downloaded as ZIPs from this project's GitHub Releases (https://github.com/rmyndharis/VSCodroid/releases), which the terms below do not govern.
 
 - **Terms**: https://play.google.com/about/developer-distribution-agreement.html
 
@@ -673,6 +673,7 @@ VSCodroid bundles binaries licensed under the GNU General Public License (GPL). 
 - **Zstandard** (GPL-2.0 as packaged by Termux; dual-licensed BSD-3-Clause upstream): Source available at https://github.com/termux/termux-packages (package: `zstd`), linked by Python's `zstd` module
 - **GMP** (LGPL-3.0): Source available at https://github.com/termux/termux-packages (package: `libgmp`). Shipped inside the Ruby toolchain pack, not the base app, so it reaches only devices where Ruby was installed
 - **OpenJDK 17** (GPL-2.0 with the Classpath Exception): Source available at https://github.com/termux/termux-packages (package: `openjdk-17`), built from https://github.com/openjdk/jdk17u. Shipped inside the Java toolchain pack, not the base app, so it reaches only devices where Java was installed. The Classpath Exception grants an additional permission and removes none of the obligations above.
+- **Linux kernel interface headers** (GPL-2.0 WITH Linux-syscall-note): the sanitized copies of the kernel's UAPI headers that the C/C++ toolchain pack installs as `ndk-sysroot`'s `usr/include/linux`, `asm-generic`, `drm`, `sound` and the other kernel header directories. They are plain header files and nothing is compiled from them into the pack, so the source is the files themselves. Android generates them from the kernel with the tool at https://android.googlesource.com/platform/bionic/+/refs/heads/main/libc/kernel/, and Termux repackages them (https://github.com/termux/termux-packages, package: `ndk-sysroot`). The Linux-syscall-note exception states that programs which use the kernel through its system call interface are not derived works of it, which is the only use these headers are installed for. Shipped inside the C/C++ toolchain pack, not the base app.
 - **zeromq.js** (MIT; the libzmq linked into it is LGPL-3.0-or-later with libzmq's static linking exception): Source available at https://github.com/zeromq/libzmq/archive/20de92ac0a2b2b9a1869782a429df68f93c3625e.tar.gz and https://registry.npmjs.org/zeromq/-/zeromq-6.0.0-beta.16.tgz; the build options and compile command are `scripts/build-native-addons.sh` in this repository, which pins both by sha256. Shipped in the base app.
 - **termux-exec** (Apache-2.0 and MIT; the termux-core `Canonicalize.c` linked into it is GPL-2.0-only with the Classpath Exception, and two other files are BSD-3-Clause): Source available at https://github.com/termux/termux-exec-package/archive/refs/tags/v2.5.0.tar.gz and https://github.com/termux/termux-core-package/archive/63bf9286ad86603f9a58de73e4c740926c88f5e3.tar.gz, with `scripts/termux-exec.patch` in this repository applied to the first; `scripts/build-termux-exec.sh` pins both by sha256 and holds the compile and link commands. Shipped in the base app. The Classpath Exception grants an additional permission and removes none of the obligations above.
 
@@ -701,7 +702,7 @@ The offer above is one obligation; a copy of the licence itself is the other. GP
 
 | Licence | Text | Components it covers |
 |---|---|---|
-| GPL-2.0 | `licenses/COPYING.GPLv2` | Git, `git-remote-curl`, Zstandard, xz / liblzma, Java (OpenJDK), termux-exec (its `Canonicalize.c`) |
+| GPL-2.0 | `licenses/COPYING.GPLv2` | Git, `git-remote-curl`, Zstandard, xz / liblzma, Java (OpenJDK), termux-exec (its `Canonicalize.c`), the Linux kernel interface headers (C/C++ toolchain pack) |
 | GPL-3.0 | `licenses/COPYING.GPLv3` | Bash, GNU Make, readline, gdbm, libiconv, xz / liblzma |
 | LGPL-2.1 | `licenses/COPYING.LGPLv2.1` | libiconv, xz / liblzma |
 | LGPL-3.0 | `licenses/COPYING.LGPLv3` | GMP (Ruby toolchain pack), libzmq (inside zeromq.js) |
@@ -737,16 +738,45 @@ nothing and report success.
 | libandroid-execinfo | BSD-2-Clause | Ruby | https://github.com/termux/libandroid-execinfo |
 | libandroid-shmem | BSD-3-Clause | Java | https://github.com/termux/libandroid-shmem |
 | libandroid-spawn | BSD-2-Clause | Java | https://github.com/termux/libandroid-spawn |
+| LLVM | Apache-2.0 WITH LLVM-exception, NCSA | C/C++ | https://github.com/termux/termux-packages (package: `libllvm`), built from https://github.com/llvm/llvm-project |
+| libxml2 | MIT | C/C++ | https://github.com/termux/termux-packages (package: `libxml2`), built from https://gitlab.gnome.org/GNOME/libxml2 |
+| ndk-sysroot | NCSA as declared by Termux; see below | C/C++ | https://github.com/termux/termux-packages (package: `ndk-sysroot`) |
 
-GMP is the only copyleft entry here. Its written source offer sits with the
+GMP is the only copyleft library here. Its written source offer sits with the
 others under **GPL Source Code Availability** above, and the LGPL-3.0 text it
 requires is bundled in the base app under **GPL and LGPL License Texts**.
 
-Every one of these six ships its own upstream notice inside the pack, under
+LLVM is `libLLVM.so` and `libclang-cpp.so`. The clang driver, lld, the `llvm-*`
+tools and the compiler-rt builtins archive are built from the same source tree,
+so one `LICENSE.TXT` answers for all of them; it ships as
+`usr/share/doc/libllvm/LICENSE.TXT`. Its terms are Apache-2.0 with the LLVM
+exceptions, and Termux additionally declares NCSA for the files that have not
+been relicensed. The libc++ headers under `usr/include/c++/v1` are the same
+project's and say so in the comment that opens each header.
+
+ndk-sysroot is a mixture, and the licence Termux declares for the package, NCSA,
+is the one its `copyright` file carries and the one that is bundled:
+
+- the bionic C library headers are BSD-2-Clause, BSD-3-Clause, ISC-style,
+  Apache-2.0 or MIT as each file's own header says, and a few are public domain;
+- the libc++ headers are Apache-2.0 WITH LLVM-exception, as above;
+- the kernel interface headers are GPL-2.0 WITH Linux-syscall-note, and are
+  offered under **GPL Source Code Availability**;
+- `libpthread.so`, `librt.so` and `libutil.so` are one-line linker scripts
+  (`INPUT(-lc)`) that make `-lpthread`, `-lrt` and `-lutil` resolve to the
+  system libc, and the crt objects and `libunwind.a` beside them come from the
+  same package.
+
+The pack also installs Python's C headers under `usr/include/python3.14` so pip
+can build an extension. They are PSF-2.0 and the licence text is the one the
+base app already carries at `usr/share/doc/python/LICENSE`.
+
+Every one of these nine ships its own upstream notice inside the pack, under
 `usr/share/doc/<termux package>`, on the same terms as the base module's tree.
-`scripts/download-ruby.sh` and `scripts/download-java.sh` refuse a pack holding a
-symbolic link anywhere in it: neither delivery path can carry one, and a dangling
-link where a licence should be is worse than an absent file.
+`scripts/download-ruby.sh`, `scripts/download-java.sh` and
+`scripts/download-cpp.sh` refuse a pack holding a symbolic link anywhere in it:
+neither delivery path can carry one, and a dangling link where a licence should
+be is worse than an absent file.
 
 ---
 
@@ -767,6 +797,13 @@ The following toolchains are available as optional downloads and have their own 
 - **License**: GNU General Public License v2.0 with Classpath Exception (GPL-2.0 WITH Classpath-exception-2.0)
 - **Copyright**: Copyright (c) Oracle and/or its affiliates
 - **Full license**: `licenses/COPYING.GPLv2`, which ships in the app at **About > Licenses > License Texts**; the Classpath Exception that modifies it is stated at https://openjdk.org/legal/gplv2+ce.html
+
+### C/C++ (LLVM)
+
+- **Project**: https://llvm.org (clang, lld, compiler-rt and libc++, packaged by Termux)
+- **License**: Apache License v2.0 with LLVM Exceptions (Apache-2.0 WITH LLVM-exception); Termux also declares NCSA for the files not yet relicensed
+- **Copyright**: Copyright (c) LLVM Project contributors
+- **Full license**: `LICENSE.TXT`, which ships inside the pack at `usr/share/doc/libllvm/LICENSE.TXT`, and https://llvm.org/LICENSE.txt
 
 ---
 
