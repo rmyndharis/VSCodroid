@@ -1235,15 +1235,15 @@ itself:
 In a terminal, in a shell task, and in whatever a process task's command starts,
 an absolute path, a forked helper and a script run by its own path all work.
 
+`npm` and `npx` are reached the same two ways: a bash function in a shell, and a
+program on `PATH` for everything else. So `sh -c 'npm -v'`, `timeout 60 npm install`
+and a tool that runs `npm install` itself all find them, as the terminal does.
+
 The [C/C++ toolchain](#c-and-c) is the one exception, and it is the other way round. It gets
 no bash function and no program on `PATH`, because starting a compiler through the loader by
 hand makes clang believe it is the loader and look for its headers in the wrong place. It is
 found on `PATH` like any program and started by the terminal's own exec, so it works in a
 terminal and in a `"type": "shell"` task and in nothing that starts a process without one.
-
-`npm` and `npx` are reached the same two ways: a bash function in a shell, and a
-program on `PATH` for everything else. So `sh -c 'npm -v'`, `timeout 60 npm install`
-and a tool that runs `npm install` itself all find them, as the terminal does.
 
 ### Android Phantom Process Limit
 
