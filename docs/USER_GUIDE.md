@@ -237,11 +237,12 @@ change it. On a label, `^` is Ctrl.
 | `^J` | Ctrl+J | Shows or hides the bottom panel |
 | `^S` | Ctrl+S | Saves the file |
 
-These are the editor's own shortcuts, and the terminal decides for itself which
-ones it hands over. With the terminal focused, `F1`, `^P`, `` ^` `` and `^J` still
-reach the editor, but `^B` and `^S` go to the shell, as Ctrl and `B` or `S` from the
-soft keyboard do there, and a terminal takes Ctrl+S as a request to pause its
-output until Ctrl+Q. Tap into a file first to hide the side bar or save it.
+These keys go to the editor itself and not to whichever box has the focus, so they
+work with the terminal focused too: `^B` hides the side bar and `^S` saves the open
+file from the terminal as from the editor, and neither is typed into the shell. Ctrl
+latched on page 1 and then `B` or `S` on the soft keyboard is a different thing: it
+goes to the box that has the focus, so in a terminal it reaches the shell, which
+takes Ctrl+S as a request to pause its output until Ctrl+Q.
 
 #### The trackpad
 

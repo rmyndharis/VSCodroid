@@ -22,10 +22,11 @@ import java.io.File
  * What a key does on a device is not reachable from here, and this says so
  * rather than imply it: `ExtraKeyRow` and `ExtraKeyButton` are views whose
  * initialisers reach resources. What is pinned is the data (which keys, which
- * shortcut each stands for), what [KeyInjector] is handed for each and the
- * script it builds, the decision about which modifiers a press carries, how the
- * page packs on a narrow phone, and, by reading the source as the other cases
- * in this package do, that the row and the adapter use those.
+ * shortcut each stands for), what the row hands [KeyInjector] for each and the
+ * script it builds, with the modifiers a press carries and the element it is
+ * dispatched at, how the page packs on a narrow phone, and, by reading the
+ * source as the other cases in this package do, that the row and the adapter
+ * use those.
  *
  * The bindings were read from the 1.139.1 workbench's registrations: F1 is the
  * secondary binding of Show All Commands (Ctrl+Shift+P is its primary), Ctrl+P
@@ -188,16 +189,22 @@ class QuickActionsPageTest {
             unmockkAll()
         }
 
-        /** The press the row makes for [button] with [latched] on the row. */
+        /** The script the row sends for [button] with [latched] on the row. */
         private fun press(button: KeyItem.Button, latched: KeyModifiers = KeyModifiers()): String {
-            val sent = pressModifiers(button.fixedModifiers, latched)
-            KeyInjector(
-                webView,
-                keyEventsFor = { error("a shortcut was asked of the layout, so it would be typed") },
-                navigationEventsFor = { _, _, _ -> error("a shortcut was pressed as a real key") },
-            ).injectKey(button.value, ctrlKey = sent.ctrl, altKey = sent.alt, shiftKey = sent.shift)
+            sendKeyPress(
+                KeyInjector(
+                    webView,
+                    keyEventsFor = { error("a key was asked of the layout, so it would be typed") },
+                    navigationEventsFor = { _, _, _ -> error("a key was pressed as a real key") },
+                ),
+                button.value, button.fixedModifiers, latched,
+            )
             return script.captured
         }
+
+        /** Where [js] dispatches its keystroke, as the script writes it. */
+        private fun dispatchedAt(js: String): String =
+            Regex("""var target = (.*);""").find(js)!!.groupValues[1]
 
         private fun field(script: String, name: String): String =
             script.lineSequence().map { it.trim() }
@@ -244,6 +251,62 @@ class QuickActionsPageTest {
                 assertEquals("false", field(js, "altKey"), "${want.label}: a latched Alt reached the chord")
                 assertEquals("false", field(js, "shiftKey"), "${want.label}: a latched Shift reached the chord")
             }
+        }
+
+        @Test
+        fun `a shortcut key is dispatched at the body and never at the focused element`() {
+            // With every modifier latched as well, which must not change where it lands.
+            val latched = listOf(KeyModifiers(), KeyModifiers(ctrl = true, alt = true, shift = true))
+            for (button in shortcuts(quickPage())) {
+                for (held in latched) {
+                    val js = press(button, held)
+                    assertEquals(
+                        "document.body", dispatchedAt(js),
+                        "'${button.label}' is dispatched at the focused element, where the terminal " +
+                            "takes Ctrl+B and Ctrl+S for the shell. It reads:\n$js",
+                    )
+                    assertFalse(
+                        js.contains("document.activeElement"),
+                        "'${button.label}' still names the focused element. It reads:\n$js",
+                    )
+                }
+            }
+        }
+
+        @Test
+        fun `an ordinary key under a latched modifier is dispatched at the focused element, not the body`() {
+            // Every key of pages 1 to 5 that is announced and not typed or pressed:
+            // with Ctrl latched, a character is a chord, and Tab, Escape and the
+            // function keys always were. The navigation keys are real presses.
+            val keys = KeyPages.defaults.dropLast(1).flatMap { it.items }
+                .filterIsInstance<KeyItem.Button>()
+                .filter { !it.isToggle && it.value !in NAVIGATION_KEYS }
+            check(keys.size > 25) { "the row came back with ${keys.size} keys; this would prove little" }
+            for (button in keys) {
+                val js = press(button, latched = KeyModifiers(ctrl = true))
+                assertEquals(
+                    "document.activeElement || document.body", dispatchedAt(js),
+                    "'${button.label}' with Ctrl latched no longer lands at the focused element, " +
+                        "so a chord from page 1 does not reach the box it is typed in. It reads:\n$js",
+                )
+            }
+        }
+
+        @Test
+        fun `the soft keyboard's latched chord keeps the focused element as its target`() {
+            // The page script that turns a letter typed with Ctrl latched into its
+            // chord is a second route to the page and is not the row's to change.
+            KeyInjector(webView).setupModifierInterceptor()
+            val js = script.captured
+            assertTrue(
+                js.contains("var target = document.activeElement || document.body;"),
+                "the interceptor no longer dispatches its chord at the focused element",
+            )
+            assertFalse(
+                js.contains("var target = document.body;"),
+                "the interceptor dispatches a chord at the body, where the terminal's textarea never " +
+                    "hears the keys typed into it",
+            )
         }
 
         @Test
@@ -320,16 +383,27 @@ class QuickActionsPageTest {
         )
 
         @Test
-        fun `a key press sends the modifiers the decision gives and then clears the latches`() {
+        fun `a key press is delivered through sendKeyPress and then clears the latches`() {
             val handle = SourceScan.body(source("ExtraKeyRow.kt"), "private fun handleKeyAction(")
-            val fixed = handle.indexOf("pressModifiers(button.fixedModifiers")
-            val inject = handle.indexOf("injectKey(key, ctrlKey = sent.ctrl, altKey = sent.alt, shiftKey = sent.shift)")
-            val reset = handle.indexOf("resetModifiersIfNeeded()", inject)
+            val send = handle.indexOf(
+                "sendKeyPress(keyInjector, key, button.fixedModifiers, KeyModifiers(ctrlActive, altActive, shiftActive))",
+            )
+            val reset = handle.indexOf("resetModifiersIfNeeded()", send)
             assertTrue(
-                fixed in 0 until inject && reset > inject,
-                "the press no longer takes its modifiers from pressModifiers, or no longer clears " +
-                    "the latches after it, so a shortcut can pick up a latch or leave one lit. " +
-                    "It reads:\n$handle",
+                send >= 0 && reset > send,
+                "the press no longer goes through sendKeyPress with the button's own modifiers, or " +
+                    "no longer clears the latches after it, so a shortcut can pick up a latch or " +
+                    "leave one lit. It reads:\n$handle",
+            )
+        }
+
+        @Test
+        fun `sendKeyPress takes a shortcut to the workbench and no other key`() {
+            val send = SourceScan.body(source("ExtraKeyRow.kt"), "internal fun sendKeyPress(")
+            assertTrue(
+                send.contains("pressModifiers(fixed, latched)") && send.contains("toWorkbench = fixed != null"),
+                "sendKeyPress no longer ties the workbench target to a key having fixed modifiers. " +
+                    "It reads:\n$send",
             )
         }
 

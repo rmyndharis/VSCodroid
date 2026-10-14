@@ -797,9 +797,14 @@ Tab and the function keys take) with exactly those modifiers: `pressModifiers` i
 the row has latched, and `resetModifiersIfNeeded` clears the latches afterwards as for any key.
 The bindings are the 1.139.1 workbench's defaults: F1 (Show All Commands), Ctrl+P (Go to File),
 Ctrl+` (Toggle Terminal), Ctrl+B (Toggle Primary Side Bar), Ctrl+J (Toggle Panel) and Ctrl+S
-(Save). They go to whatever has focus, and the terminal passes the workbench only the commands
-on its skip list: F1, Ctrl+P, Ctrl+` and Ctrl+J are on it, Ctrl+B and Ctrl+S are not and reach
-the shell. Six keys, not eight: six claim six shares of the row and fit one page down to 288dp,
+(Save). They are announced at the page's body (`toWorkbench`, set by `sendKeyPress` for a key
+with `fixedModifiers`) and not at the focused element, because the terminal passes the
+workbench only the commands on its skip list and turns every other key into shell input: F1,
+Ctrl+P, Ctrl+` and Ctrl+J are on it, Ctrl+B and Ctrl+S are not. The workbench's listener on the
+window resolves a key at the body in its root context, so all six run with a terminal focused,
+and a Ctrl latched on page 1 and a letter still go to the focused element. That is read from the
+1.139.1 workbench's terminal key handler and keybinding service and has not been run on a
+device. Six keys, not eight: six claim six shares of the row and fit one page down to 288dp,
 where eight need 384dp and would pack as seven and one on a 360dp phone. The page is therefore
 packed on its own by `KeyPages.forSmallestWidthDp` and never poured into the run of key pages.
 

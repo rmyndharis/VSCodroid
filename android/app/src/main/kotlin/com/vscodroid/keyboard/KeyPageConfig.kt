@@ -53,8 +53,9 @@ sealed class KeyItem {
      * [fixedModifiers] makes the key a shortcut for a workbench command instead
      * of something typed. A tap sends [value] with exactly these modifiers, and
      * the latches the row holds are neither added to them nor kept past the
-     * press (see [pressModifiers]). A one-letter [value] on such a key is the
-     * key of a chord, so it is not a character the row types.
+     * press (see [pressModifiers]). It is dispatched at the page's body and not
+     * at the focused element (see [sendKeyPress]). A one-letter [value] on such
+     * a key is the key of a chord, so it is not a character the row types.
      */
     data class Button(
         val label: String,
@@ -128,12 +129,16 @@ object KeyPages {
      * any phone, so this page is never split. Eight need 384dp: on a 360dp
      * phone they would pack as seven and one, a lone key on a page of its own.
      *
-     * The terminal hands the workbench only the commands on its skip list and
-     * sends every other key to the shell. F1, Ctrl+P, Ctrl+` and Ctrl+J are on
-     * the list; Ctrl+B and Ctrl+S are not, so with a terminal focused they
-     * arrive as `^B` and `^S`, and a terminal reads the second as XOFF, which
-     * stops its output until `^Q`. A latched Ctrl and a letter do the same
-     * there. What these keys change is that it takes one tap.
+     * They are dispatched at the page's body and not at the focused element,
+     * for the terminal's sake. It hands the workbench only the commands on its
+     * skip list and sends every other key to the shell: F1, Ctrl+P, Ctrl+` and
+     * Ctrl+J are on the list, Ctrl+B and Ctrl+S are not, and a terminal reads
+     * the second as XOFF. At the body no widget sees the key, and the
+     * workbench's listener on the window resolves it in its root context, so
+     * all six run with the terminal focused. A Ctrl latched on page 1 and a
+     * letter from the soft keyboard go to the focused element, and reach the
+     * shell there. Read from the 1.139.1 workbench's key handling and not yet
+     * run on a device.
      */
     private val quickActions = KeyPage(listOf(
         KeyItem.Button("F1", "F1", R.string.key_desc_quick_commands,

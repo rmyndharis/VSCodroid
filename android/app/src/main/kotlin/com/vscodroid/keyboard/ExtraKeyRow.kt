@@ -688,9 +688,7 @@ class ExtraKeyRow @JvmOverloads constructor(
                 Logger.d(tag, "Shift toggled: $shiftActive")
             }
             else -> {
-                // A shortcut key sends its own modifiers; any other key, the latched ones.
-                val sent = pressModifiers(button.fixedModifiers, KeyModifiers(ctrlActive, altActive, shiftActive))
-                keyInjector?.injectKey(key, ctrlKey = sent.ctrl, altKey = sent.alt, shiftKey = sent.shift)
+                sendKeyPress(keyInjector, key, button.fixedModifiers, KeyModifiers(ctrlActive, altActive, shiftActive))
                 resetModifiersIfNeeded()
             }
         }
@@ -884,6 +882,24 @@ internal fun latchedModifierLabel(ctrl: Boolean, alt: Boolean, shift: Boolean): 
  */
 internal fun pressModifiers(fixed: KeyModifiers?, latched: KeyModifiers): KeyModifiers =
     fixed ?: latched
+
+/**
+ * One press of a row key, delivered: [key] with the modifiers [pressModifiers]
+ * gives it, and a key with [fixed] modifiers, a shortcut, at the workbench
+ * rather than at the focused element (see [KeyInjector.injectKey]).
+ *
+ * Every other key keeps the route it had: the latched modifiers, and the focused
+ * element as the target, which is where a chord from page 1 has to land.
+ *
+ * Split out of [ExtraKeyRow] for the reason [pressModifiers] is, so that where a
+ * key lands can be run on the JVM.
+ */
+internal fun sendKeyPress(injector: KeyInjector?, key: String, fixed: KeyModifiers?, latched: KeyModifiers) {
+    val sent = pressModifiers(fixed, latched)
+    injector?.injectKey(
+        key, ctrlKey = sent.ctrl, altKey = sent.alt, shiftKey = sent.shift, toWorkbench = fixed != null,
+    )
+}
 
 /**
  * The one modifier query allowed to be in the air, and whose answer it is.
