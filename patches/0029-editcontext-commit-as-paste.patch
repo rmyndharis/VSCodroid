@@ -8,9 +8,11 @@ the indentation the text already carries. So pasted code came out indented
 again at every line, and a few thousand characters held the page for seconds.
 
 On Android a plain commit (no text replaced and no caret moved by the input
-method) of more than 64 characters, or of any text that holds a line break, is
-now passed to viewController.paste, which inserts it in one edit and leaves it
-as it is. A commit of one character, an Enter, and a composition are untouched.
+method) of more than 64 characters, or of any text with a line break before its
+end, is now passed to viewController.paste, which inserts it in one edit and
+leaves it as it is. A commit of one character, an Enter, and a composition are
+untouched, and so is a word committed together with the Enter that follows it:
+that is typing, and Enter has to indent.
 
 Measured on an API 33 emulator with Gboard 12.4, tapping the clipboard
 suggestion above its keys with the text in a file that was already open. 4720
@@ -20,10 +22,10 @@ as one paste. Five lines of nested braces indented by four spaces came out at
 which Ctrl+V and a long-press Paste use, was never the slow path.
 
 diff --git a/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts b/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
-index 7f8af73..9d03897 100644
+index 7f8af73..726acbc 100644
 --- a/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
 +++ b/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
-@@ -587,12 +587,23 @@ export class NativeEditContext extends AbstractEditContext {
+@@ -587,12 +587,25 @@ export class NativeEditContext extends AbstractEditContext {
  		this._applyingInputMethodEdit = true;
  		if (typeInput.replacePrevCharCnt || typeInput.replaceNextCharCnt || typeInput.positionDelta) {
  			viewController.compositionType(typeInput.text, typeInput.replacePrevCharCnt, typeInput.replaceNextCharCnt, typeInput.positionDelta);
@@ -39,9 +41,11 @@ index 7f8af73..9d03897 100644
 +	// text over as one commit, and typed it was applied a character at a time: a model edit and a
 +	// layout of the line for every one, which held the page for seconds for a few thousand
 +	// characters, and every line break was indented again on top of the indentation the text
-+	// carried. A commit that long, or that holds a line break, is a paste and is inserted as one.
++	// carried. A commit that long, or with a line break before its end, is a paste and is inserted
++	// as one. A line break only at the end is left typed: a keyboard that commits a word together
++	// with the Enter that follows it is typing, and Enter has to indent.
 +	private _isPastedByInputMethod(text: string): boolean {
-+		return isAndroid && text.length > 1 && (text.length > 64 || text.includes('\n'));
++		return isAndroid && text.length > 1 && (text.length > 64 || text.lastIndexOf('\n', text.length - 2) !== -1);
 +	}
 +
  	private _getNewEditContextState(): { text: string; selectionStartOffset: number; selectionEndOffset: number; editContextPrimarySelection: Selection } | undefined {

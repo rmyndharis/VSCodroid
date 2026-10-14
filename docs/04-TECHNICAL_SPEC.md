@@ -1165,11 +1165,12 @@ text in one piece, and `NativeEditContext` typed it: `viewController.type` runs 
 through the typing handlers, so 4720 characters of code held the page for 1.1 s on an API 33
 emulator with Gboard 12.4, and every line break was indented again on top of the indentation the
 text already carried (five lines of nested braces, four spaces apiece, came out at 8, 16 and 20).
-On Android patch 0029 hands a plain commit of more than 64 characters, or of any text that holds
-a line break, to `viewController.paste`, which inserts it in one edit and leaves it as it is: the
-same paste took 3 ms and the braces arrived unchanged. One character, an Enter and a
-composition are untouched. A DOM paste event, which Ctrl+V and the long-press Paste use, never
-took this path.
+On Android patch 0029 hands a plain commit of more than 64 characters, or of any text with a
+line break before its end, to `viewController.paste`, which inserts it in one edit and leaves it
+as it is: the same paste took 3 ms and the braces arrived unchanged. One character, an Enter, a
+composition and a word committed together with the Enter after it are untouched, since that is
+typing and Enter has to indent. A DOM paste event, which Ctrl+V and the long-press Paste use,
+never took this path.
 
 ### 5.3 Visibility Control
 
