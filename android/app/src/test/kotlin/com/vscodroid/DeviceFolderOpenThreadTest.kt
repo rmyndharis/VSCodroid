@@ -236,36 +236,44 @@ class DeviceFolderOpenThreadTest {
     }
 
     /**
-     * Where the cold start takes the connection token: once, inside the hop it
-     * already makes, handed to `navigateToFolder`, which uses it rather than
-     * asking again.
+     * Where the cold start takes the connection token: after its hop, by the
+     * default of `navigateToFolder`'s parameter, and never before the suspension.
      *
-     * This was the fifth main-thread read while `ProcessManager.connectionToken`
-     * read the token file on its first call, because the first caller of every
-     * run was this navigation. The readiness probe reads the file now, on
-     * `Dispatchers.IO`, and the getter is a field read, which `ProcessManagerTest`
-     * pins at its source. So a failure here is a change of shape, not a disk read
-     * on the main thread: if the move is deliberate, this case follows it.
+     * The hop reads the persisted grants and may create a directory, so it can
+     * outlast a server restart, which replaces the token. A value read ahead of
+     * it was the previous server's by the navigation, which landed over the page
+     * the new server's own announcement had loaded; the server answered it with
+     * "Forbidden." and nothing announces readiness again. Read when it navigates
+     * it is a field read, `ProcessManagerTest` pins that at its source, and null
+     * while the server is not ready, which loads a page the next announcement
+     * replaces.
      */
     @Test
-    fun `the cold start takes the connection token once, inside its hop`() {
+    fun `the cold start reads the connection token after its hop`() {
         val load = code(body("loadVSCode"))
         val hop = load.indexOfFirst { it.contains("withContext(") && it.contains("Dispatchers.IO") }
-        val read = load.indexOfFirst { it.contains("getConnectionToken()") }
 
         assertTrue(hop >= 0) { "loadVSCode no longer hops; this case is measuring nothing" }
-        assertTrue(read >= 0) {
-            "loadVSCode no longer takes the connection token itself, so the cold start " +
-                "navigates with whatever navigateToFolder's default reads after the hop"
+        assertEquals(
+            emptyList<String>(),
+            load.filter { it.contains("getConnectionToken()") }.map { it.trim() },
+            "loadVSCode takes the connection token itself, ahead of or inside its hop, " +
+                "where a restart during the hop leaves it the previous server's",
+        )
+
+        // The navigation after the hop hands nothing in, so the parameter's default
+        // answers at the time it navigates.
+        val navigations = load.withIndex().filter { (index, line) ->
+            index > hop && line.contains("navigateToFolder(")
         }
-        assertTrue(read > hop) {
-            "loadVSCode takes the connection token before its hop rather than inside it, " +
-                "beside the folder it resolves there"
+        assertTrue(navigations.isNotEmpty()) { "loadVSCode no longer navigates after its hop" }
+        for ((_, line) in navigations) {
+            assertFalse(line.contains("resolved.first") || line.split(",").size > 2) {
+                "the navigation after the hop hands navigateToFolder a token: $line"
+            }
         }
 
-        // And the site it is handed to does not ask again. Its parameter default is
-        // where a caller that hands in nothing gets one, so a read in the body
-        // either replaces the value handed in or repeats that default.
+        // And the site that answers for it asks exactly once, in its default.
         val navigate = code(body("navigateToFolder"))
         assertEquals(
             emptyList<String>(),
@@ -273,6 +281,13 @@ class DeviceFolderOpenThreadTest {
             "navigateToFolder asks for the token in its body as well, which either " +
                 "replaces the value its caller hands in or repeats its own default",
         )
+        val declaration = source.substring(
+            source.indexOf("private fun navigateToFolder("),
+        ).substringBefore(") {")
+        assertTrue(declaration.contains("token: String? = nodeService?.getConnectionToken()")) {
+            "navigateToFolder no longer reads the token in its parameter default, so a " +
+                "caller that hands in nothing navigates without one"
+        }
     }
 
     @Test

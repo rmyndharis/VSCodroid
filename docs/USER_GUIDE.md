@@ -155,7 +155,7 @@ To edit settings as JSON, use the Command Palette: `Preferences: Open User Setti
 
 ### Text Size
 
-**VSCodroid: UI Scale**, in the Command Palette, sets the size of the whole interface: the side bar, tabs, menus, status bar, panels and editor together. It offers 100%, 110%, 125% and 150%, but only the sizes that keep the page at least 320 CSS pixels wide, so most phones go up to 110% or 125% and tablets to 150%. The size is kept when the window reloads and when the app restarts. A size that does not take effect on your device is put back to 100%, and the command says so when you pick it.
+**VSCodroid: UI Scale**, in the Command Palette, sets the size of the whole interface: the side bar, tabs, menus, status bar, panels and editor together. It offers 100%, 110%, 125% and 150%, but only the sizes that keep the page at least 320 CSS pixels wide, so most phones go up to 110% or 125% and tablets to 150%. The room is checked against the screen when you choose a size and when the page loads, not when the window is resized, so entering split-screen at a large size can leave the page narrower than that until you choose a smaller one. The side bar closing by itself on a small screen goes by the screen's size and does not follow this size; set `vscodroid.layout.autoHideSideBar` to `on` to have it close at any size. The size is kept when the window reloads and when the app restarts. A size that does not take effect on your device is put back to 100%, and the command says so when you pick it.
 
 To change the text in one place only, use the `editor.fontSize` and `terminal.integrated.fontSize` settings, which are remembered. **Increase Editor Font Size** in the Command Palette also works, but it is not bound to a key and it resets when the window reloads.
 
@@ -179,10 +179,12 @@ the remote indicator at the left end of the status bar and choose
 stays hidden, across restarts, until you run the command again.
 
 The row also steps away by itself once you type a character on a hardware keyboard,
-and comes back when a finger leaves the screen: a tap on the editor, the end of a
-scroll, or running the command above to show it. A mouse click or a touchpad does
-not bring it back, and nothing typed on the soft keyboard or on the row takes it
-away. If the hardware keyboard is disconnected the row comes back at once.
+and comes back when a finger leaves the screen: a tap on the editor or the end of a
+scroll. Running the command above does not bring it back at once: the first run
+hides the row until you run it again, and the second shows it. A mouse click or a
+touchpad does not bring it back, and nothing typed on the soft keyboard or on the
+row takes it away. If the hardware keyboard is disconnected the row comes back at
+once.
 
 How many pages there are depends on how wide your phone is. The row divides its width
 evenly among the keys on a page, so on a narrower screen it carries fewer keys per

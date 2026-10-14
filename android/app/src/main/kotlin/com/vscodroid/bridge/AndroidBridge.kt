@@ -508,9 +508,9 @@ object AuthTabWindow {
  * surface is bounded by whoever holds it, which is the workbench itself.
  *
  * One caveat worth knowing before an extension trusts it: `getThemeMode` reports the
- * DEVICE's night mode, not the editor's theme. This app is always dark and ships no
- * `values-night`, so on a device in light mode it answers "light" for an editor that
- * is not.
+ * DEVICE's night mode, not the editor's theme. The editor starts on a dark theme
+ * whatever the device is set to and follows the theme the user picks, so on a device
+ * in light mode it answers "light" for an editor that is not.
  */
 class AndroidBridge(
     private val context: Context,

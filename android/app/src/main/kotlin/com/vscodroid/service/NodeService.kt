@@ -1143,8 +1143,9 @@ class NodeService : Service() {
      *
      * The service deliberately does not stop itself here. Stopping is not what
      * makes the state visible, and staying alive is what lets the next
-     * `onStartCommand` recover in place, with the port and the connection token
-     * that the workbench's IndexedDB is already bound to.
+     * `onStartCommand` recover in place, with the port the workbench's IndexedDB
+     * is already bound to. The connection token is not kept: the next spawn
+     * replaces it.
      */
     private fun enterTerminalState() {
         Logger.e(tag, "Max restarts exceeded ($MAX_RESTARTS)")
@@ -1188,8 +1189,8 @@ class NodeService : Service() {
      *
      * The service deliberately does not stop itself. Stopping is not what makes
      * the state visible, and staying alive is what lets the next `onStartCommand`
-     * recover in place, with the port and the connection token that the
-     * workbench's IndexedDB is already bound to.
+     * recover in place, with the port the workbench's IndexedDB is already bound
+     * to. The connection token is not kept: the next spawn replaces it.
      *
      * Deliberately does **not** cancel the launch coroutine. [enterTerminalState]
      * does that first, and it is reached from a job that is not the launch job, so

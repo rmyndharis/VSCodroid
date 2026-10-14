@@ -284,6 +284,10 @@ jobs:
         run: |
           sdkmanager "ndk;${NDK_VERSION}" --channel=0
           echo "ANDROID_NDK_HOME=$ANDROID_HOME/ndk/${NDK_VERSION}" >> "$GITHUB_ENV"
+          # The Android plugin ignores ANDROID_NDK_HOME and picks its own default
+          # NDK, which this image may not have: it then packaged every library
+          # unstripped and extracted no symbols. See ndkVersion in app/build.gradle.kts.
+          echo "VSCODROID_NDK_VERSION=${NDK_VERSION}" >> "$GITHUB_ENV"
 
       - name: Set up Node.js
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
@@ -877,9 +881,12 @@ jobs:
           rm -f "$OUT"
           unzip -o -q "$BUNDLE" "$META/*" -d pulled/ || test $? -eq 11
           mkdir -p symbols/arm64-v8a
-          if [ -d "pulled/$META/arm64-v8a" ]; then
-            cp pulled/"$META"/arm64-v8a/*.sym symbols/arm64-v8a/ 2>/dev/null || true
-          fi
+          # At least one symbol table has to come from the bundle: several of the
+          # bundled libraries still carry one, and an empty pull means the Android
+          # plugin could not find the NDK it strips with, which until now left
+          # the zip with the shim alone and the build green.
+          ls pulled/"$META"/arm64-v8a/*.sym >/dev/null
+          cp pulled/"$META"/arm64-v8a/*.sym symbols/arm64-v8a/
           cp android/app/src/main/assets/usr/lib/libglibc-shim.so \
              symbols/arm64-v8a/libglibc-shim.so.sym
           ( cd symbols && zip -qr "$GITHUB_WORKSPACE/$OUT" arm64-v8a )

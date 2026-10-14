@@ -3028,14 +3028,18 @@ class MainActivity : AppCompatActivity() {
             // path, on the thread drawing the screen, in the moment before the
             // workbench is put up.
             //
-            // The connection token rides along, because this is the branch every
+            // The connection token is not taken here. This is the branch every
             // cold start takes: `onServerReady` calls this with no folder and the
             // WebView is still holding the `data:` placeholder, so `known` is
-            // null. It is a field read: `ProcessManager` reads the token file in
-            // its readiness probe, on Dispatchers.IO, before `onServerReady` can
-            // call this, so no navigation reads the disk for it.
+            // null. The hop can outlast a server restart, which replaces the
+            // token, and a value read before the suspension is the previous
+            // server's by the navigation: it landed over the page the new
+            // server's own announcement had loaded, was answered "Forbidden.",
+            // and nothing announces readiness again. [navigateToFolder] reads it
+            // when it navigates, which is a field read: `ProcessManager` reads
+            // the token file in its readiness probe, on Dispatchers.IO, before
+            // `onServerReady` can call this, so no navigation reads the disk.
             val resolved = withContext(Dispatchers.IO) {
-                val connectionToken = nodeService?.getConnectionToken()
                 // The close is asked about before the remembered folder, and both
                 // are behind the URL: a folder still on screen outranks either.
                 // Without the first test the record still named the folder the
@@ -3048,16 +3052,15 @@ class MainActivity : AppCompatActivity() {
                 // `MainThreadWatch` is what notices when it is not. The preferences
                 // file itself is already loaded by now: `setupExtraKeyRow` reads it
                 // in `onCreate`.
-                val folder = if (workspaceWasClosed()) null else rememberedWorkspaceFolder()
+                if (workspaceWasClosed()) null else rememberedWorkspaceFolder()
                     ?: FirstRunSetup(this@MainActivity).ensureProjectsDir()
-                connectionToken to folder
             }
             // Asked again rather than carried across the hop. The URL outranks
             // the remembered folder before the suspension and has to go on
             // outranking it after: a renderer crash recovering into the folder it
             // was showing arrives through this same method, and a remembered
             // folder resolved before it would otherwise land last and win.
-            navigateToFolder(port, folderFromUrl(webView?.url) ?: resolved.second, resolved.first)
+            navigateToFolder(port, folderFromUrl(webView?.url) ?: resolved)
         }
     }
 

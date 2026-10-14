@@ -1230,6 +1230,29 @@ async function stoppingTakesTheEditorServerWithIt() {
         renamed.changeHead(lightModern);
     }
 
+    // A settings file that is not JSON, such as one cut off inside a string or a
+    // comment, costs a pass over its text and no theme. The patterns that read it
+    // used to fail at an opener they could not close and were tried again at every
+    // later quote and comment opener, which is quadratic: 120 KB of comment
+    // openers held the page for 1.4 s on a desktop, before anything painted.
+    // NEGATIVE CONTROL: with the closing quote and the end of the text left
+    // required, the three cases take seconds each.
+    for (const [what, text] of [
+        ['comment openers', '/* '.repeat(100000)],
+        ['an unterminated string of escapes', '"' + '\\"'.repeat(60000)],
+        ['a string left open, then comment openers', '{ "a": "' + 'x'.repeat(1000) + '\n' + '/*'.repeat(100000)],
+    ]) {
+        const started = Date.now();
+        const page = load({ items: {}, splash: darkModern, last: 'dark', dark: true, search: '?folder=/p/cut',
+            files: { '/p/cut/.vscode/settings.json': text } });
+        const took = Date.now() - started;
+        assert.ok(took < 2000, `a settings file of ${what}, ${text.length} characters, held the page for ${took} ms`);
+        assert.strictEqual(page.settings.initialWorkspaceSettings, text,
+            `a settings file of ${what} is not handed to the workbench as it was read`);
+        assert.strictEqual(page.painted, '#1f1f1f',
+            `a settings file of ${what} that cannot be read changed the colour the page starts on`);
+    }
+
     // A workspace is a window of its own, recorded under its own file, whose
     // theme is the one its settings name.
     {
