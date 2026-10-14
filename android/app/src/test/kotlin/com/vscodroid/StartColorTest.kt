@@ -171,10 +171,22 @@ class StartColorTest {
             "keepStartColor no longer gives a light colour alone the white starting window, so the next start " +
                 "under a light theme begins dark, or under a dark one white"
         }
+        // From values-v31: the attribute is API 31, and a values entry would hand it to a
+        // platform that has none. The base declaration stays empty and is asserted below,
+        // so the white background is not silently back in the file Android 11 parses.
         val style = Regex("""<style\s+name="Theme\.VSCodroid\.LightStart".*?</style>""", RegexOption.DOT_MATCHES_ALL)
-            .find(File("src/main/res/values/themes.xml").readText())?.value
+            .find(File("src/main/res/values-v31/themes.xml").readText())?.value
         assertTrue(style != null && "<item name=\"android:windowSplashScreenBackground\">@android:color/white</item>" in style) {
-            "Theme.VSCodroid.LightStart no longer gives the starting window a white background"
+            "Theme.VSCodroid.LightStart no longer gives the starting window a white background on API 31 and later"
+        }
+        val base = File("src/main/res/values/themes.xml").readText()
+        assertTrue(Regex("""<style\s+name="Theme\.VSCodroid\.LightStart"\s*/>""").containsMatchIn(base)) {
+            "values/themes.xml no longer declares an empty Theme.VSCodroid.LightStart, so the resource has " +
+                "no default below API 31, or the API 31 attribute is back in a file Android 11 reads"
+        }
+        assertTrue("windowSplashScreen" !in base.replace(Regex("<!--.*?-->", RegexOption.DOT_MATCHES_ALL), "")) {
+            "values/themes.xml names a windowSplashScreen attribute outside a comment; those are API 31 and " +
+                "belong in values-v31"
         }
     }
 

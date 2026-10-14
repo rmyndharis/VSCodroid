@@ -34,7 +34,9 @@ SHIM_OUT="$OUT_DIR/libseccomp-shim.so"
 LAUNCH_OUT="$OUT_DIR/libclaude-launch.so"
 
 TARGET=aarch64-linux-android
-API=33
+# The app's minSdk. Everything here is compiled against that level, so the
+# compiler refuses a call the oldest supported device does not have.
+API=30
 
 echo "=== Claude Code seccomp shim ==="
 
@@ -77,7 +79,11 @@ BUILD_ID_FLAG=(-Wl,--build-id=sha1)
 # and the CLI dies with SIGSEGV before it has run a line -- a worse failure than
 # the SIGSYS this shim exists to prevent, and one that looks nothing like it.
 # Measured: the same source built for API 24 carries RELA plus RELACOUNT 1 and
-# works; built for API 33 it carries ANDROID_RELR and segfaults every time.
+# works; built for API 33 it carries ANDROID_RELR and segfaults every time. Not
+# every NDK does it: r27.2, the one CI pins, emits RELA at API 30 and 33 alike
+# (measured 2026-10-14), while a libexec-trampoline.so built at 33 by another NDK
+# carries ANDROID_RELR. The flag and the check below are what make the answer
+# independent of which NDK builds.
 "$CC" -shared -fPIC -O2 -Wall -Wextra -Werror \
     -nostdlib \
     -Wl,-soname,libseccomp-shim.so \

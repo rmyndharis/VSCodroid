@@ -70,7 +70,7 @@ class ThemeEdgeToEdgeTest {
             "android:statusBarColor" to "@android:color/transparent",
             "android:navigationBarColor" to "@android:color/transparent",
             // `always`, which is what Api30 wrote and what API 35+ forces. Not
-            // `shortEdges`: Api28 wrote that and minSdk 33 never reached it.
+            // `shortEdges`: Api28 wrote that and minSdk 30 never reached it.
             "android:windowLayoutInDisplayCutoutMode" to "always",
             // Only the navigation default is `true`; the status one is already
             // `false`. Both are pinned so the pair stays visible as one decision, and

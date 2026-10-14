@@ -224,7 +224,7 @@ class ExtraKeyButton @JvmOverloads constructor(
         // AppCompatTextView, which carries @RestrictTo and is meant only for
         // calls from inside AppCompat itself. Same work underneath: the wrapper
         // passes its four arguments straight through to the platform method on
-        // API 27 and above, and minSdk here is 33, so the compatibility branch
+        // API 27 and above, and minSdk here is 30, so the compatibility branch
         // below that is never taken.
         TextViewCompat.setAutoSizeTextTypeUniformWithConfiguration(
             this, 8, 13, 1, TypedValue.COMPLEX_UNIT_SP

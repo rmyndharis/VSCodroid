@@ -2715,7 +2715,7 @@ class SafSyncEngine(private val context: Context) {
                     val a = ByteArray(COPY_BUFFER_SIZE)
                     val b = ByteArray(COPY_BUFFER_SIZE)
                     while (true) {
-                        val read = device.readNBytes(a, 0, a.size)
+                        val read = readFully(device, a, a.size)
                         // The document ended while the two still agreed, so it is
                         // a prefix. Strict needs one more byte in the mirror, and
                         // it is asked of the stream rather than of
@@ -2725,7 +2725,7 @@ class SafSyncEngine(private val context: Context) {
                         if (read == 0) return@use mirror.read() != -1
                         // The mirror ran out first, so the document holds more
                         // than any prefix of it: something else put it there.
-                        if (mirror.readNBytes(b, 0, read) != read) return@use false
+                        if (readFully(mirror, b, read) != read) return@use false
                         if (!java.util.Arrays.equals(a, 0, read, b, 0, read)) return@use false
                     }
                     @Suppress("UNREACHABLE_CODE") false
@@ -2781,8 +2781,8 @@ class SafSyncEngine(private val context: Context) {
                     val a = ByteArray(COPY_BUFFER_SIZE)
                     val b = ByteArray(COPY_BUFFER_SIZE)
                     while (true) {
-                        val read = device.readNBytes(a, 0, a.size)
-                        val same = mirror.readNBytes(b, 0, b.size)
+                        val read = readFully(device, a, a.size)
+                        val same = readFully(mirror, b, b.size)
                         if (read != same) return@use false
                         if (read == 0) return@use true
                         // Only the bytes this chunk filled. Comparing the whole buffer
@@ -5554,8 +5554,8 @@ class SafSyncEngine(private val context: Context) {
                         val one = ByteArray(COPY_BUFFER_SIZE)
                         val two = ByteArray(COPY_BUFFER_SIZE)
                         while (true) {
-                            val read = left.readNBytes(one, 0, one.size)
-                            if (read != right.readNBytes(two, 0, two.size)) return false
+                            val read = readFully(left, one, one.size)
+                            if (read != readFully(right, two, two.size)) return false
                             if (read == 0) return true
                             // Only the bytes this chunk filled, for the reason
                             // [deviceMatchesMirror] gives: the previous, longer chunk's
@@ -5586,6 +5586,25 @@ class SafSyncEngine(private val context: Context) {
                 read = input.read(buffer)
             }
             return digest.digest() to total
+        }
+
+        /**
+         * Fills [buffer] from [input] until [length] bytes are in it or the stream ends, and
+         * answers how many that was: zero for an end that came first, where `read` says -1.
+         *
+         * `InputStream.readNBytes(byte[], int, int)` with the same contract, which is API 33.
+         * The loop is the one the JDK's own default runs, so a short read is waited out and
+         * not taken for the end of the document, which is what the three comparisons above
+         * depend on.
+         */
+        private fun readFully(input: InputStream, buffer: ByteArray, length: Int): Int {
+            var filled = 0
+            while (filled < length) {
+                val count = input.read(buffer, filled, length - filled)
+                if (count < 0) break
+                filled += count
+            }
+            return filled
         }
 
         /**

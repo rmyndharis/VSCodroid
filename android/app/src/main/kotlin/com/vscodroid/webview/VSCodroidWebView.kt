@@ -4,6 +4,7 @@ import android.annotation.SuppressLint
 import android.app.Activity
 import android.content.Context
 import android.content.res.Resources
+import android.os.Build
 import android.view.MotionEvent
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebSettings
@@ -283,6 +284,12 @@ internal fun Activity.keepStartColor(color: Int) {
     // only the theme it is drawn from can be chosen, and the system keeps the
     // choice for every launch after. White for a light editor, the theme's own
     // #1E1E1E otherwise.
+    //
+    // The SplashScreen API is Android 12's. Before it the window is drawn from
+    // the manifest's theme and nothing can name another, so on 11 a light editor
+    // starts on the dark window; every screen this app draws itself still takes
+    // the colour kept above.
+    if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return
     splashScreen.setSplashScreenTheme(
         if (isLightColor(color)) R.style.Theme_VSCodroid_LightStart else Resources.ID_NULL
     )

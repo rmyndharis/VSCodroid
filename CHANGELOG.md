@@ -19,6 +19,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - **VSCodroid: UI Scale** sets the size of the whole interface, up to 150% where the screen has room, and keeps it across restarts.
 - The terminal runs programs stored in the app's own storage, such as compiled programs, `#!` scripts, Git hooks, `git submodule`, npm's `.bin` commands and the commands pip installs into a virtual environment. Setting `LD_PRELOAD` to `null` under `terminal.integrated.env.linux` in the Settings editor's Remote tab turns this off.
 - The key row has a last page of quick actions: Command Palette, Quick Open, the terminal, the side bar, the bottom panel and Save, one tap each.
+- Android 11 and 12 devices can install and use the app, which needed Android 13 or newer before.
 
 ### Changed
 

@@ -183,8 +183,9 @@ NDK_BIN="$NDK_DIR/toolchains/llvm/prebuilt/$HOST_TAG/bin"
 
 (
     cd "$SPAWN_SRC"
-    "$NDK_BIN/aarch64-linux-android33-clang++" -O2 -fPIC -I. -c posix_spawn.cpp -o posix_spawn.o
-    "$NDK_BIN/aarch64-linux-android33-clang++" -shared posix_spawn.o -o libandroid-spawn.so \
+    # 30 is the app's minSdk: the library is compiled against that level.
+    "$NDK_BIN/aarch64-linux-android30-clang++" -O2 -fPIC -I. -c posix_spawn.cpp -o posix_spawn.o
+    "$NDK_BIN/aarch64-linux-android30-clang++" -shared posix_spawn.o -o libandroid-spawn.so \
         -Wl,-z,max-page-size=16384 -Wl,-z,common-page-size=16384
     "$NDK_BIN/llvm-strip" --strip-unneeded libandroid-spawn.so
 )

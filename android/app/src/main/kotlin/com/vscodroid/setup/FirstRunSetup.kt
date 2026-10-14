@@ -3989,7 +3989,7 @@ claude() {
     private fun getCurrentVersionCode(): Int {
         return try {
             // longVersionCode unconditionally: it arrived in API 28 and minSdk
-            // here is 33, so the deprecated field the old branch fell back to was
+            // here is 30, so the deprecated field the old branch fell back to was
             // unreachable.
             context.packageManager.getPackageInfo(context.packageName, 0)
                 .longVersionCode.toInt()
@@ -5436,7 +5436,7 @@ internal fun writeAtomically(
  *
  * `android.system.Os` has no `sync(2)`. Its only three entry points of that
  * family are `fsync`, `fdatasync` and `msync`, checked against `android.jar` at
- * compileSdk 37 and against the android-33 sources at minSdk, so a
+ * compileSdk 37, whose api-versions.xml lists no `sync` at any level, so a
  * whole-filesystem barrier has to come from toybox, which has provided
  * `/system/bin/sync` since Android 6. The in-process alternative is an `fsync`
  * inside [writeAtomically], which is the same barrier spread over roughly 23,000
@@ -5507,7 +5507,7 @@ private const val SYNC_TIMEOUT_SECONDS = 30L
  * nothing to gain from it.
  *
  * `java.util.Base64` rather than `android.util.Base64` so the encoding is the
- * same object in a unit test as it is on the device. minSdk is 33, well past
+ * same object in a unit test as it is on the device. minSdk is 30, well past
  * the 26 that added it.
  */
 private fun pemOf(cert: Certificate): String =

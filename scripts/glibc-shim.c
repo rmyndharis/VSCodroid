@@ -459,13 +459,13 @@ int posix_spawn_file_actions_addchdir(posix_spawn_file_actions_t *acts,
  * copy_file_range, which Bionic gained at API 34.
  *
  * This one is not a symbol Bionic lacks, it is a symbol Bionic lacks *below the
- * minimum this app supports*. minSdk is 33, and the NDK's stub libc for 21, 33,
- * 34 and 35 puts the dividing line exactly there: absent at 33, present at 34.
- * An addon in the shipped tree imports it, so on an Android 13 device the
- * forwarder resolved to NULL and aborted the process the first time a file was
- * copied -- while every emulator running 34 or later resolves it and shows
- * nothing wrong. That asymmetry is why this needs the NDK's per-API answer and
- * not a device test.
+ * minimum this app supports*. minSdk is 30, and the NDK's stub libc for 30, 33,
+ * 34 and 35 puts the dividing line at 34: absent at 30 and at 33, present at 34.
+ * An addon in the shipped tree imports it, so on an Android 13 device, and on
+ * every older one the app supports, the forwarder resolved to NULL and aborted
+ * the process the first time a file was copied -- while every emulator running
+ * 34 or later resolves it and shows nothing wrong. That asymmetry is why this
+ * needs the NDK's per-API answer and not a device test.
  *
  * The real one is preferred wherever it exists; it is a kernel-side copy and
  * this is not. Resolution goes straight to Bionic's libc rather than through

@@ -136,7 +136,7 @@ android {
 
     defaultConfig {
         applicationId = "com.vscodroid"
-        minSdk = 33
+        minSdk = 30
         // Held at 36 on purpose, and lint's OldTargetApi is answered rather than
         // ignored. Targeting 37 blocks local network access by default, so a dev
         // server running here stops being reachable from another device on the
@@ -709,17 +709,22 @@ tasks.withType<Test> {
     // reader red. Renaming a resource is NOT a control for this: it changes the
     // id, so `processDebugResources` fails first and never reaches the test.
     //
-    //   res/layout    PickerAccessibilityWiringTest, TextContrastTest
-    //   res/values    PickerAccessibilityWiringTest, ThemeEdgeToEdgeTest,
-    //                 TextContrastTest
+    //   res/layout       PickerAccessibilityWiringTest, TextContrastTest
+    //   res/values       PickerAccessibilityWiringTest, ThemeEdgeToEdgeTest,
+    //                    TextContrastTest, StartColorTest
+    //   res/values-v31   StartColorTest
+    //   res/xml          BackupRulesParityTest
     //
-    // layout/ and values/ only. Nothing reads drawable/, mipmap-*/ or xml/, and
-    // the mipmaps are images whose hashes would be paid for on every run and
-    // never asked about. Widen this the moment a suite reads one of them:
+    // layout/, values/, values-v31/ and xml/ only. Nothing reads drawable/ or
+    // mipmap-*/, and the mipmaps are images whose hashes would be paid for on
+    // every run and never asked about. Widen this the moment a suite reads one
+    // of them:
     //   grep -rn 'File("src/main/res' android/app/src/test/kotlin
     inputs.files(
         fileTree("src/main/res/layout"),
         fileTree("src/main/res/values"),
+        fileTree("src/main/res/values-v31"),
+        fileTree("src/main/res/xml"),
     )
         .withPropertyName("readableResources")
         .withPathSensitivity(PathSensitivity.RELATIVE)

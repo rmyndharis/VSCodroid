@@ -14,7 +14,7 @@ VSCodroid has unique testing challenges: it's a hybrid app (Kotlin + WebView + N
 - Test the integration boundaries (Kotlin ↔ WebView ↔ Node.js); that's where bugs hide
 - Automate what can run on CI; manual test what requires real devices
 - Prioritize real device testing over emulator (ARM64 binaries don't run on x86 emulators)
-- Test on the lowest-spec supported device (4GB RAM, Android 13)
+- Test on the lowest-spec supported device (4GB RAM, Android 11)
 
 ---
 
@@ -231,7 +231,7 @@ Manual test scenarios that verify the full user experience:
 
 | Dimension | Test Targets |
 |-----------|-------------|
-| **Android versions** | 13 (API 33), 14 (API 34), 15 (API 35), 16 (API 36) |
+| **Android versions** | 11 (API 30, the minimum), 13 (API 33), 14 (API 34), 15 (API 35), 16 (API 36) |
 | **Devices** | Pixel 7/8 (reference), Samsung Galaxy S23/S24, Xiaomi (budget), Samsung Tab S9 (tablet) |
 | **RAM** | 4 GB (minimum), 8 GB (typical), 12+ GB (high-end) |
 | **Screen sizes** | Phone 6" (1080p), Phone 6.7" (1440p), Tablet 11" (2560p) |
@@ -271,7 +271,8 @@ See [Security Design § Testing Checklist](./06-SECURITY.md#7-security-testing-c
 `data_extraction_rules.xml` is written as an **allowlist with no exclusions**: it names
 `home/.vscodroid/data/Machine` and nothing else, so everything unnamed is already out. That makes
 the exclusion rows below a check on the shape of the rule as much as on the payload, and the row
-that matters most is **Rule shape**.
+that matters most is **Rule shape**. Android 11 applies `backup_rules.xml`, which holds the same
+single include, so the payload rows are asked on an Android 11 device too.
 
 | Test | Criteria | Method |
 |------|----------|--------|
@@ -281,7 +282,7 @@ that matters most is **Rule shape**.
 | Sensitive exclusion: connection token | `home/.vscodroid/data/token` is absent. It sits one directory from the included path, which is the near miss the allowlist exists to survive | Inspect backup payload, verify absent |
 | Workspace exclusion | `filesDir/projects` (the workspace on a new install), the `external` domain (which holds `Android/data/<pkg>/files/projects` on an install that kept it) and `filesDir/saf-mirrors` are all absent | Inspect backup payload, verify absent |
 | Preferences exclusion | The `sharedpref` domain is absent. Restoring `setup_version` onto a device with an empty `filesDir` would make the app skip extraction and start a server that is not there | Inspect backup payload, verify absent |
-| Rule shape | `backup_rules.xml` still matches the `<cloud-backup>` section of `data_extraction_rules.xml`. No supported device reads the first file, but it is the floor if `minSdk` ever drops to 30 | Diff the two files |
+| Rule shape | `backup_rules.xml` still matches the `<cloud-backup>` section of `data_extraction_rules.xml`. Android 11 reads the first file and every later release the second, so a difference is a different backup on each | `BackupRulesParityTest`; or diff the two files |
 | Post-update backup compatibility | Backup/restore still works after app update | Backup on version N, restore on N+1 |
 
 **Run**: Before M4 exit and before each production release.
@@ -329,7 +330,7 @@ flowchart TD
 |--------|---------|
 | Pixel 8 (8GB RAM, Android 16) | Primary development/testing device |
 | Samsung Galaxy S23 (8GB RAM, Android 15) | Second manufacturer compatibility |
-| Budget phone (4GB RAM, Android 13) | Minimum spec testing |
+| Budget phone (4GB RAM, Android 11) | Minimum spec testing |
 | Samsung Galaxy Tab S9 (8GB RAM) | Tablet/large screen testing |
 
 ---

@@ -29,10 +29,11 @@
 
 | ID | Scenario | Steps | Expected Result | Pass/Fail | Notes |
 |----|----------|-------|-----------------|-----------|-------|
-| AV-1 | Android 13 (API 33) | Full install + test | All features work (minimum supported) | | |
+| AV-1 | Android 13 (API 33) | Full install + test | All features work | | |
 | AV-2 | Android 14 (API 34) | Full install + test | All features work, .so extraction OK | | |
 | AV-3 | Android 15 (API 35) | Full install + test | All features work | | |
 | AV-4 | Android 16 (API 36) | Full install + test | All features work, 16KB pages OK | | |
+| AV-5 | Android 11 (API 30) | Update Android System WebView to the floor first (the stock one on an API 30 image is 91, and the editor page stays blank on it), then full install + test | All features work (minimum supported); no notification prompt is shown; a light editor theme starts on the dark window | | |
 
 ## 3. Keyboard Input
 
@@ -303,7 +304,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | Category | Total | Pass | Fail | Skip |
 |----------|-------|------|------|------|
 | Device Matrix | 4 | | | |
-| Android Versions | 4 | | | |
+| Android Versions | 5 | | | |
 | Keyboard Input | 47 | | | |
 | Screen & Orientation | 12 | | | |
 | Editor Operations | 15 | | | |
@@ -315,7 +316,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | Terminal & Tools | 18 | | | |
 | SAF & Files | 24 | | | |
 | Display Language | 6 | | | |
-| **Total** | **168** | | | |
+| **Total** | **169** | | | |
 
 **Overall Result**: [ ] PASS / [ ] FAIL
 

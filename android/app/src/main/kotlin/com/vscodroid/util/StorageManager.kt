@@ -393,7 +393,7 @@ object StorageManager {
      * The divisor is decimal, and this is the one place that decides it for the
      * whole app: every size a user reads on a native screen comes through here.
      * `android.text.format.Formatter.formatFileSize` has been SI since API 26 and
-     * this module's `minSdk` is 33, so Settings > Storage, the Files app and the
+     * this module's `minSdk` is 30, so Settings > Storage, the Files app and the
      * Play listing are decimal on every device this ships to, and those are the
      * figures a user checks ours against. `FirstRunSetup.storageToFreeMb` already
      * answers in the same unit, for the same reason: it asks the user to free an

@@ -56,7 +56,9 @@ NODE_VERSION="${NODE_VERSION:-24.18.0}"
 NODE_HEADERS_SHA256="6c7d41d83c3481d2301115b8ce4a44b7d4fbfa52859b1aac14f445d460137887"
 
 TARGET=aarch64-linux-android
-API=33
+# The app's minSdk, so the compiler refuses a libc call the oldest supported
+# device does not have.
+API=30
 
 # Android 16 requires 16 KB-aligned segments. NDK r28+ defaults to this and r27
 # does not, so passing it explicitly is what makes the result independent of

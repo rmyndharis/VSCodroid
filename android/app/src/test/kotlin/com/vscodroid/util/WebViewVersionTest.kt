@@ -63,12 +63,12 @@ class WebViewVersionTest {
 
     /**
      * The version a device was measured on with every webview blank, and the
-     * one `minSdk` 33 shipped with, which the floor used to be and let through.
+     * one Android 13 shipped with, which the floor used to be and let through.
      */
     @Test
     fun `a WebView without anchor positioning is reported`() {
         assertTrue(WebViewVersion.isBelowMinimum("113.0.5672.136"), "the measured API 34 image")
-        assertTrue(WebViewVersion.isBelowMinimum("105.0.5195.79"), "what minSdk 33 shipped with")
+        assertTrue(WebViewVersion.isBelowMinimum("105.0.5195.79"), "what Android 13 shipped with")
     }
 
     @Test
