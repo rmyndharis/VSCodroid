@@ -695,13 +695,19 @@ class SafSyncEngine(private val context: Context) {
                     if (localPath.lastModified() == doc.lastModified) {
                         recordIdentity(recorded, doc.relativePath, localPath)
                     } else if (doc.lastModified == 0L &&
-                        deviceMatchesMirror(doc.uri, localPath, doc.size)
+                        deviceMatchesUnchangedMirror(doc.uri, localPath, doc.size)
                     ) {
                         // No clock, the mirror no longer matches the record, and yet the
                         // device document holds exactly these bytes. That is the ordinary
                         // end of a local edit: the watcher carried it to the device
                         // already, so the two agree in content while the record still
                         // describes what was there before.
+                        //
+                        // Only for a file nothing wrote while it was read. One that was
+                        // written is not what the read compared, and recorded it would be
+                        // the copy the record vouches for: the next open replaced it with
+                        // the device's older bytes, with nothing set aside, and the edit
+                        // was gone. It takes the branch for a copy that differs.
                         //
                         // Nothing here writes anything. It records what is already true
                         // on both sides, which is what the record means and what
@@ -2804,9 +2810,9 @@ class SafSyncEngine(private val context: Context) {
      * a while, and the watcher is stopped for the whole open: an editor's autosave, a
      * terminal or a build can write the file meanwhile, behind the point the read has
      * reached. The comparison then answers for bytes that are gone, and a caller that
-     * settles on it stamps the file with the device's older time and records it as held by
-     * the device. The next open reads that as a save already delivered, and the edit is
-     * never sent.
+     * settles on it records the file as held by the device and, where the device reports
+     * a time, stamps it with that older time. The next open reads that as a save already
+     * delivered, and the edit is never sent.
      *
      * The file's time and length are taken before the comparison, ahead of its own length
      * check, and again after it. A file that moved is not the one the comparison answered

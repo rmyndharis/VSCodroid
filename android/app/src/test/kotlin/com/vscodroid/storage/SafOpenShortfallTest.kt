@@ -616,6 +616,85 @@ class SafOpenShortfallTest {
     }
 
     /**
+     * The third place a read settles a file, and the one with no floor in it: on a provider
+     * that reports no times, a mirror file that no longer matches the record while the
+     * device copy holds its bytes is recorded as held by the device. That is the end of
+     * an edit the watcher delivered, and it is what lets device changes reach the file
+     * again.
+     *
+     * A write that lands after the read has passed it was recorded the same way, as the
+     * copy the record vouches for. With no time to compare, the next open then replaced
+     * it with the device's older bytes, and nothing was set aside: the edit existed
+     * nowhere. Held, the file is left as the editor wrote it, and the next open leaves
+     * both sides as they are.
+     */
+    @ParameterizedTest(name = "a file written while it is read in the no clock arm: {0}")
+    @ValueSource(strings = ["v1 SAVED!", "v1 saved and then typed"])
+    fun `a file written while its device copy is read is not recorded in the no clock arm`(
+        rewrite: String,
+    ) {
+        hasClock = false
+        deviceHolding(doc("notes.md", "v1"))
+        open()
+        File(mirror, "notes.md").apply {
+            writeText("v1, saved")
+            setLastModified(SAVED_AT)
+        }
+        // The watcher delivered that save, so the two sides agree in content.
+        deviceHolding(doc("notes.md", "v1, saved"))
+        writtenAfterTheRead = { File(mirror, "notes.md").writeText(rewrite) }
+
+        open()
+
+        val file = File(mirror, "notes.md")
+        assertEquals(rewrite, file.readText(), "the edit written during the read was replaced")
+        assertFalse(
+            engine.identityLine("notes.md", file) in recordLines(),
+            "an edit the device never received was recorded as held by it: ${recordLines()}",
+        )
+        assertFalse(engine.holdsOnlyVouchedCopies(mirror), "an edit that exists only here was called disposable")
+
+        open()
+
+        assertEquals(
+            rewrite, file.readText(),
+            "the next open replaced the edit with the device's older copy",
+        )
+        assertEquals(listOf("notes.md"), mirror.list()!!.toList(), "something was set aside or made")
+        assertTrue(written.isEmpty(), "a file with no times was written over the device's copy: $written")
+    }
+
+    /**
+     * The control: with nothing written during the read the file is recorded, and a change
+     * made on the device since reaches it at the next open, which is what the arm is for.
+     */
+    @Test
+    fun `a file nothing wrote while its device copy was read is recorded in the no clock arm`() {
+        hasClock = false
+        deviceHolding(doc("notes.md", "v1"))
+        open()
+        File(mirror, "notes.md").apply {
+            writeText("v1, saved")
+            setLastModified(SAVED_AT)
+        }
+        deviceHolding(doc("notes.md", "v1, saved"))
+
+        open()
+
+        val file = File(mirror, "notes.md")
+        assertTrue(
+            engine.identityLine("notes.md", file) in recordLines(),
+            "a file whose device copy holds its bytes was not recorded: ${recordLines()}",
+        )
+        assertTrue(engine.holdsOnlyVouchedCopies(mirror), "a settled file was left unvouched")
+        deviceHolding(doc("notes.md", "v2, edited on a PC"))
+
+        open()
+
+        assertEquals("v2, edited on a PC", file.readText(), "a device change did not reach a tracked file")
+    }
+
+    /**
      * [name] still holds [text], carries a time of its own rather than the device's, and no
      * line of the record vouches for it, which is what keeps the next open from reading it
      * as delivered. Its save is refused beside it, as any file this open could not settle.
