@@ -120,6 +120,7 @@
 | ED-12 | Where a preview's own links go | On a debug build with `adb logcat -s VSCodroid.WebViewClient` running, run `Simple Browser: Show` and enter `https://example.com`, then tap the link on that page | The linked page renders in the preview tab; the device browser does not open. Record whether logcat shows anything from the client for that navigation, because that is what this row exists to settle: the platform documents `shouldOverrideUrlLoading` as one that *may* be called for subframes, and whether it is here decides whether the subframe rules are live behaviour or defence in depth. The refusal line is `Logger.d`, so a release build prints nothing either way | | |
 | ED-13 | Running a file under the debugger | Put `debugger;` in a `.js` file in the projects folder, open it, run **Debug: Select and Start Debugging** and pick **Node.js: Run Current File** | Execution stops on that line with the gutter arrow and the debug toolbar, and the terminal shows `Debugger attached.` A session that starts, shows the toolbar and never stops is the failure this row exists for: it looks like it is working | | |
 | ED-14 | Attaching to a process you started | Run `node --inspect server.js` in a terminal, then start **Attach to Node.js** | The editor attaches and `Debugger attached.` appears in that terminal | | |
+| ED-15 | Files changed outside the editor appear | With a folder open and the Explorer showing, run `touch outside-1.txt` in the terminal, then run **Developer: Reload Window** and `touch outside-2.txt` | Each file shows in the Explorer within a few seconds without a refresh. The file watcher process must stay alive: `Pointer tag ... was truncated` or `gave up attempting to restart watcher` in `server.log` fails the row | | |
 
 ## 6. Extensions
 
@@ -297,7 +298,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | Android Versions | 4 | | | |
 | Keyboard Input | 46 | | | |
 | Screen & Orientation | 12 | | | |
-| Editor Operations | 14 | | | |
+| Editor Operations | 15 | | | |
 | Extensions | 7 | | | |
 | Background/Foreground | 9 | | | |
 | Low Memory & Stress | 5 | | | |
@@ -306,7 +307,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | Terminal & Tools | 13 | | | |
 | SAF & Files | 24 | | | |
 | Display Language | 6 | | | |
-| **Total** | **161** | | | |
+| **Total** | **162** | | | |
 
 **Overall Result**: [ ] PASS / [ ] FAIL
 
