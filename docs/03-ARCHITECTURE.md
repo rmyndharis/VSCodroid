@@ -286,7 +286,7 @@ owning extension is what frees a slot.
 - WebView on Android is Chromium-based, supports all VS Code needs
 - Minimum WebView 125+: the workbench positions every webview (Markdown preview, extension panels, notebook outputs) with CSS anchor positioning, which Chromium has from 125. Android 13 shipped with 105 and the API 30 emulator image carries 91, so a WebView that never updated is below it
 
-**Trade-off**: Dependent on user's WebView version. Mitigation: a runtime version check (`MainActivity.checkWebViewVersion`) warns below the floor; the editor still opens, but its webviews stay blank.
+**Trade-off**: Dependent on user's WebView version. Mitigation: a runtime version check (`MainActivity.checkWebViewVersion`) warns below the floor. Just below it the editor still opens, but its webviews stay blank; far below it, such as the 91 an API 30 image ships with, the workbench bundle does not parse and the page stays blank behind the dialog.
 
 ---
 

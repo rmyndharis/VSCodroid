@@ -6503,10 +6503,13 @@ class MainActivity : AppCompatActivity() {
      * not, and emulators, custom ROMs or devices without the Play Store carrying
      * the WebView their image was built with. A device that takes WebView
      * updates from the Play Store is far above the floor and sees nothing, on
-     * Android 11 as on 13. Below it the
-     * workbench loads and the failure is quiet rather than a clean refusal:
-     * every webview, the Markdown preview and extension panels among them,
-     * stays blank (see [WebViewVersion.MINIMUM_CHROME_MAJOR]).
+     * Android 11 as on 13. Just below it the workbench loads and the failure is
+     * quiet rather than a clean refusal: every webview, the Markdown preview
+     * and extension panels among them, stays blank (see
+     * [WebViewVersion.MINIMUM_CHROME_MAJOR]). Far below it nothing renders: the
+     * factory WebView of an API 30 image, 91, cannot parse the workbench bundle
+     * and shows a blank page behind the dialog (an `Uncaught SyntaxError` in
+     * `workbench.js`, measured 2026-10-14).
      * `onReceivedError` announces a TLS handshake failure and otherwise only
      * logs, so nothing else would reach the user.
      *

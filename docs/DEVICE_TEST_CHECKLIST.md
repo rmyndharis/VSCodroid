@@ -33,7 +33,7 @@
 | AV-2 | Android 14 (API 34) | Full install + test | All features work, .so extraction OK | | |
 | AV-3 | Android 15 (API 35) | Full install + test | All features work | | |
 | AV-4 | Android 16 (API 36) | Full install + test | All features work, 16KB pages OK | | |
-| AV-5 | Android 11 (API 30) | Full install + test, with the Android System WebView updated to the floor first (the stock one on the emulator image is far below it) | All features work (minimum supported); no notification prompt is shown; a light editor theme starts on the dark window | | |
+| AV-5 | Android 11 (API 30) | Update Android System WebView to the floor first (the stock one on an API 30 image is 91, and the editor page stays blank on it), then full install + test | All features work (minimum supported); no notification prompt is shown; a light editor theme starts on the dark window | | |
 
 ## 3. Keyboard Input
 
