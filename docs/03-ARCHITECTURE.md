@@ -258,7 +258,7 @@ owning extension is what frees a slot.
 
 **Status**: Accepted (platform requirement)
 
-**Context**: Android 10+ enforces W^X (write-xor-execute). Cannot download and execute arbitrary binaries.
+**Context**: Android 10+ enforces W^X (write-xor-execute): a file under the app's storage cannot be exec'd. The app's own binaries therefore ship where the package manager extracts them with the execute bit. A program the user builds or installs is a different case, handled at run time by starting the system dynamic linker on it, and is covered by the terminal's exec interceptor rather than by this decision.
 
 **Decision**: Bundle all executables as .so files in jniLibs/arm64-v8a/ directory.
 
@@ -268,7 +268,7 @@ owning extension is what frees a slot.
 - Termux, UserLAnd, and other apps use this approach
 - Requires: Gradle `packagingOptions { jniLibs { useLegacyPackaging = true } }`
 
-**Consequence**: All core binaries (Node.js, Python, Git, bash, tmux, make, ripgrep, ssh) bundled as .so files in the base APK. The two on-demand toolchains, Ruby and Java 17, are delivered as asset packs via Play Store; the user picks them in the first-run toolchain picker (`SplashActivity.showToolchainPicker()`, offered by `continueAfterSetup()` on every launch that gets past setup, until its Continue or Skip button records `toolchain_picker_shown`) and Play Store downloads them automatically. Toolchains are never inside the APK on any channel: `ToolchainManager.install()` picks a delivery path at runtime, and both paths converge on `installFromDirectory()`, which copies the payload into `filesDir/usr`, chmods the binaries its manifest names, and creates its symlinks, so installed toolchains survive app updates.
+**Consequence**: All core binaries (Node.js, Python, Git, bash, tmux, make, ripgrep, ssh) bundled as .so files in the base APK. The two on-demand toolchains, Ruby and Java 17, are delivered as asset packs via Play Store; the user picks them in the first-run toolchain picker (`SplashActivity.showToolchainPicker()`, offered by `continueAfterSetup()` on every launch that gets past setup, until its Continue or Skip button records `toolchain_picker_shown`) and Play Store downloads them automatically. Toolchains are never inside the APK on any channel: `ToolchainManager.install()` picks a delivery path at runtime, and both paths converge on `installFromDirectory()`, which copies the payload into `filesDir/usr`, chmods the binaries its manifest names, and creates its symlinks, so installed toolchains survive app updates. This decision covers what the app installs. It does not restrict what a user runs: the terminal's exec interceptor starts user programs through `/system/bin/linker64`, which is what `termux-exec` does in the Termux build on Google Play.
 
 ---
 
@@ -326,7 +326,7 @@ owning extension is what frees a slot.
 - Play Store handles download/install automatically (no manual steps for user)
 - Play Store optimizes delivery per device (only arm64 assets delivered)
 - No custom CDN infrastructure needed for toolchain hosting
-- All binaries delivered via Play Store, simplifying policy compliance
+- Every binary the app installs is delivered by Play on a Play install, which keeps the app clear of the policy sentence on downloading executable code
 - Additional languages can be added later by two routes, and there is still no Settings entry:
   the launcher shortcut `SplashActivity.publishToolchainShortcut()` pushes (long-press the icon,
   **Manage toolchains**), and the command palette entry **VSCodroid: Manage Toolchains**, which

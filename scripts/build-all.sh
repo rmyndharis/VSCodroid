@@ -8,8 +8,8 @@
 #     libraries libnode.so links against;
 #   * build-native-addons.sh runs after download-node.sh so its version pairing
 #     has a runtime to pair against;
-#   * build-glibc-shim.sh runs last, because download-termux-tools.sh wipes
-#     assets/usr/lib and the stubs live there.
+#   * build-glibc-shim.sh and build-termux-exec.sh run last, because
+#     download-termux-tools.sh wipes assets/usr/lib and both write there.
 #
 # scripts/check-build-steps.py fails CI when this list and the workflow's stop
 # agreeing.
@@ -59,12 +59,15 @@ step 8/11 "Downloading extensions..."
 step 9/11 "Downloading the musl loader..."
 "$SCRIPT_DIR/download-musl-loader.sh"
 
-step 10/11 "Building native addons and the compatibility shim..."
+step 10/11 "Building native addons, the compatibility shim and the exec interceptor..."
 "$SCRIPT_DIR/download-node.sh"
 "$SCRIPT_DIR/build-native-addons.sh"
 "$SCRIPT_DIR/build-glibc-shim.sh" \
     --scan "$ASSETS/vscode-reh" \
     --scan "$ASSETS/extensions"
+# The exec interceptor the terminals preload. Same constraint as the shim: it
+# lands in assets/usr/lib, so it has to come after the wipe.
+"$SCRIPT_DIR/build-termux-exec.sh"
 # Depends on nothing downloaded, so its position here is a convenience. It writes
 # into jniLibs rather than assets/usr/lib, which download-termux-tools.sh wipes,
 # so it is not subject to the ordering constraint the shim above is.
