@@ -146,8 +146,10 @@ class SafSyncEngine(private val context: Context) {
      * a 60 MB archive becomes whatever was just typed.
      *
      * Absolute paths, like the upload journal's entries and for the same reason:
-     * one engine serves every folder in turn. Files only: a directory is never
-     * recorded, so a question about one is answered by prefix, in [handleMirrorEvent].
+     * one engine serves every folder in turn. A file by its own path, and a directory by
+     * its own path only where this sync read nothing of it (its name is skipped, or its
+     * enumeration failed); a question about any other directory is answered by prefix, in
+     * [handleMirrorEvent]. Both follow a directory rename ([renameDeviceMemoryUnder]).
      */
     private val unfetched = ConcurrentHashMap.newKeySet<String>()
 
@@ -196,7 +198,9 @@ class SafSyncEngine(private val context: Context) {
      * for goes onto that copy's line, which adds no line. Scoped per mirror in
      * [initialSync] like [unfetched], and for the same reason: a switch that fails partway
      * restores the previous folder's watcher on this engine, and its entries must survive
-     * that.
+     * that. Follows a directory rename, as [unfetched] does ([renameDeviceMemoryUnder]): the
+     * device holds the same documents under the new name, and an entry left at the old one
+     * leaves every file below the directory unguarded until the next open.
      */
     private val deviceSeen = ConcurrentHashMap<String, DeviceState>()
 
@@ -228,7 +232,11 @@ class SafSyncEngine(private val context: Context) {
      * written into a folder that is closed. A hold ends at [keepsDeviceEdit]'s next answer
      * for its file, at any write of the file, which sends what the hold was waiting to send
      * (a create writes a document it has just made without asking [keepsDeviceEdit]), at a
-     * refusal of it, or once the file is deleted or gone from the mirror.
+     * refusal of it, or once the file is deleted or gone from the mirror. It does not follow
+     * a directory rename and ends there ([renameDeviceMemoryUnder]): the hold names the
+     * document by the URI it had, and a provider whose ids are paths gives that URI to
+     * whatever is made at the old path next, so a try at the new name could write the
+     * renamed file into another document.
      *
      * The waits are read off the monotonic clock, never wall time, for the reason
      * `SafStorageManager.onWriteBackFailed` gives about its throttle: a wall clock corrected
@@ -1463,10 +1471,9 @@ class SafSyncEngine(private val context: Context) {
      * conditional write to close; a stamp the provider will not report, which lets the save
      * go ahead unguarded, except over a device copy this engine knows it has not read, one an
      * open could not place or one whose stamp it has seen move past what it read, and after
-     * a write drops the entry so the next save fails open;
-     * entries not following a directory rename; a stamp a provider moves after the folder
-     * was opened, over a copy the open kept rather than fetched (its times agreed, or a read
-     * found the bytes equal) that no open has digested yet and this one's
+     * a write drops the entry so the next save fails open; a stamp a provider moves after the
+     * folder was opened, over a copy the open kept rather than fetched (its times agreed, or
+     * a read found the bytes equal) that no open has digested yet and this one's
      * [KEPT_COPY_DIGEST_BYTES] did not reach, and not written by this app since, which keeps
      * one spare copy of the unchanged document; a document reported past [MAX_FILE_SIZE] at
      * a length other than the digested one, which is held back unread, even where it holds
@@ -3369,30 +3376,67 @@ class SafSyncEngine(private val context: Context) {
     }
 
     /**
-     * Moves the unread-document memory under [from] to [to], for the same rename, and the
-     * files whose delete was declined ([keptOnDevice]) with it.
+     * Makes what this engine remembers of the device follow a directory renamed in the
+     * editor from [from] to [to], for the same rename: the unread documents
+     * ([unfetched]), the files whose delete was declined ([keptOnDevice]) and what the
+     * device last reported for each document ([deviceSeen]) move to the new name, and the
+     * saves held back below it ([heldBack]) end.
      *
-     * The provider move that a claimed rename becomes carries the documents this sync
-     * never read to the new name, and the guards that keep them safe look them up by
-     * mirror path: [handleMirrorEvent]'s directory guard by prefix, and the file guard
-     * by the exact name. Left at the old path, both stopped answering the moment the
-     * rename landed, so `mv docs archive` followed by `rm -r archive` sent
-     * `deleteDocument` for a directory the set knew held an unread archive.
+     * The provider move that a claimed rename becomes carries the documents to the new
+     * name, and the guards that keep them safe look them up by mirror path:
+     * [handleMirrorEvent]'s directory guard by prefix, the file guards by the exact name,
+     * and [keepsDeviceEdit] and [keepsDeviceDocument] through [deviceSeen]. Left at the old
+     * path, each stopped answering the moment the rename landed: `mv docs archive` followed
+     * by `rm -r archive` sent `deleteDocument` for a directory the set knew held an unread
+     * archive, and a file below it that another app then changed was saved over or deleted
+     * with no copy kept, because a path with no [deviceSeen] entry fails open.
      *
-     * Not under [uploadJournalLock]: the set is its own concurrent structure, nothing
-     * reads it and the journal together, and the entries are replaced one by one, so a
-     * reader on the observer thread sees each path at the old name or the new one and
-     * never at neither.
+     * A path moves when it is the directory itself, which an enumeration that failed
+     * recorded by its own path, or lies below it. Never a sibling whose name only starts
+     * the same: `docs` is not `docs2`.
+     *
+     * A held-back save ends rather than moves. It names its document by the URI it had,
+     * and on a provider whose ids are paths that URI is dead once the directory is
+     * renamed, or names whatever is made at the old path next, which a try would then
+     * write the renamed file into. Left at the old path it was dropped at the next try,
+     * when nothing was there, or tried against the document of a file made there again.
+     * Ended here, the file waits for its next save or, with a clock, the next open, as
+     * [keepsDeviceEdit] says, and that save is guarded by the entry that moved.
+     *
+     * The notice throttle ([refusalsAnnounced]) stays where it is: a file refused under its
+     * new name is announced once more, the duplicate that field's own note prefers to a
+     * silence about a save that is not reaching the device.
+     *
+     * Not under [uploadJournalLock]: these are their own concurrent structures, nothing
+     * reads them and the journal together, and each entry is put at the new name before it
+     * leaves the old one, so a reader on the observer thread sees a path at the old name
+     * or the new one and never at neither. A write already streaming below the directory
+     * lands its [deviceSeen] entry at the path it opened with, which is the old name; the
+     * new name keeps the one it had, and the next save there finds the document moved past
+     * it and keeps a spare copy of this app's own write, which loses nothing.
      */
-    private fun renameUnfetchedUnder(from: File, to: File) {
-        val old = from.absolutePath + File.separator
-        val new = to.absolutePath + File.separator
+    private fun renameDeviceMemoryUnder(from: File, to: File) {
+        val old = from.absolutePath
+        val new = to.absolutePath
+        fun movedTo(path: String): String? = when {
+            path == old -> new
+            path.startsWith(old + File.separator) -> new + path.removePrefix(old)
+            else -> null
+        }
         for (memory in listOf(unfetched, keptOnDevice)) {
-            for (path in memory.filter { it.startsWith(old) }) {
-                memory.add(new + path.removePrefix(old))
+            for (path in memory.filter { movedTo(it) != null }) {
+                val moved = movedTo(path) ?: continue
+                memory.add(moved)
                 memory.remove(path)
             }
         }
+        for (path in deviceSeen.keys.filter { movedTo(it) != null }) {
+            val moved = movedTo(path) ?: continue
+            val seen = deviceSeen[path] ?: continue
+            deviceSeen[moved] = seen
+            deviceSeen.remove(path, seen)
+        }
+        heldBack.keys.removeAll { movedTo(it) != null }
     }
 
     /**
@@ -4483,7 +4527,7 @@ class SafSyncEngine(private val context: Context) {
         // standing for a write that landed.
         if (renamedFrom != null) {
             renameUploadsUnder(File(rootDir, renamedFrom), localFile)
-            renameUnfetchedUnder(File(rootDir, renamedFrom), localFile)
+            renameDeviceMemoryUnder(File(rootDir, renamedFrom), localFile)
         }
         // Resolved after the claim rather than when the directory vanished, so that the
         // provider is only asked on the events that turn out to be renames. Null means
