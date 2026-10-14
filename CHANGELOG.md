@@ -59,6 +59,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Deleting a file in a device folder no longer removes changes another app made to it while the folder was open, where the folder reports a different time or size for the file than the editor last read or wrote and the content differs; the file stays in the device folder and a notice says so.
 - In a device folder that reports no file times, a change another app made to a file before the folder was opened, which the editor did not show, is kept as `<name>.device-0` beside the file before the next save replaces it, and is no longer removed by deleting the file.
 - Deleting a folder you renamed in a device folder no longer removes documents inside it that the editor never had, as when the provider could not list the folder when it was opened.
+- In a device folder that reports no file times, a file you edit while the folder is being opened is no longer replaced by the device's older version at the next opening.
+- Open Recent keeps a folder's name when the provider does not answer for it at one opening; the list showed the folder's document id until an opening that was answered.
 - In a device folder that reports neither file times nor sizes, a file you edited starts receiving device changes again once both sides hold the same content, as it already did where sizes are reported.
 - Opening a large device folder no longer fills the phone's storage: copying stops while about 150 MB is still free, and the files left out stay unchanged in the device folder.
 - A device folder shows its own name in the Explorer and the title bar instead of a code such as `8e440ff38c8e`. One opened in an earlier version offers to reopen under its name, with its open files.
