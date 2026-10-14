@@ -406,6 +406,37 @@ class NamedMirrorPathTest {
         assertTrue(manager.wasShownByName(dir))
     }
 
+    /**
+     * The list keeps the tree's last segment as the label of a folder no provider named,
+     * and that is a document id, an opaque one on most providers. A link made from it is
+     * a second path for the copy, which the page can be moved onto from the path its
+     * editors and terminals are under, so a page on the hash makes none for such a folder
+     * and waits for an open that is answered.
+     */
+    @Test
+    fun `a page on the hash of a folder no provider named gets no named path`() {
+        val dir = copy()
+        val unnamed = folder(dir, displayName = "9f3a1c").copy(named = false)
+
+        manager.noteOpened(dir.absolutePath, unnamed)
+
+        assertFalse(File(mirrors, "by-name").exists(), "a link was made from a fallback label")
+        assertFalse(manager.wasShownByName(dir))
+    }
+
+    /** The same for a page already on a named path: it is noted, and nothing else changes. */
+    @Test
+    fun `a page on a named path of a folder no provider named is still noted`() {
+        val dir = copy()
+        manager.namedPathFor(dir, "recipes")
+        val unnamed = folder(dir, displayName = "9f3a1c").copy(named = false)
+
+        manager.noteOpened(named(), unnamed)
+
+        assertTrue(manager.wasShownByName(dir))
+        assertEquals(listOf("recipes"), File(mirrors, "by-name/$hash").list()?.toList())
+    }
+
     // -- The launch pass --
 
     @Test
