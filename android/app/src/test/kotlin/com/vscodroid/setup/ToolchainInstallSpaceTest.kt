@@ -50,17 +50,17 @@ class ToolchainInstallSpaceTest {
      * The archive and the staging tree it expands into are both on disk for the
      * whole of the extraction; only the copy after it overwrites the tree the
      * credit stands for, and it frees those bytes file by file as it goes. Java
-     * 17 as it ships today: 55.4 MB downloaded, 156 MB unpacked, on a device that
+     * 17 as it ships today: 56.5 MB downloaded, 160 MB recorded, on a device that
      * already holds the whole tree. Taking the credit off a single doubled figure
-     * reserved 206 MB for an extraction that needs 211.4 MB, so the gate passed,
+     * reserved 210 MB for an extraction that needs 216.5 MB, so the gate passed,
      * the download was spent, and the unpack ran out of disk a few megabytes from
      * the end -- the exact outcome the gate exists to buy the user out of.
      */
     @Test
     fun `a fully credited reinstall still reserves for the archive and the unpack`() {
         assertEquals(
-            55_400_000L + 156_000_000L + SPACE_BUFFER,
-            toolchainInstallBytes(156_000_000L, 55_400_000L, 156_000_000L),
+            56_500_000L + 160_000_000L + SPACE_BUFFER,
+            toolchainInstallBytes(160_000_000L, 56_500_000L, 160_000_000L),
         )
     }
 
@@ -138,8 +138,8 @@ class ToolchainInstallSpaceTest {
     @Test
     fun `a tree larger than the pack records is credited only what the pack writes back`() {
         assertEquals(
-            156_000_000L,
-            existingTreeCredit(rootUnder("usr"), filesDir, 156_000_000L) { 900_000_000L },
+            160_000_000L,
+            existingTreeCredit(rootUnder("usr"), filesDir, 160_000_000L) { 900_000_000L },
             "a swollen directory credited bytes the overwrite never returns",
         )
     }
@@ -148,13 +148,13 @@ class ToolchainInstallSpaceTest {
     fun `a smaller tree is credited what is measured`() {
         assertEquals(
             8_000_007L,
-            existingTreeCredit(rootUnder("usr"), filesDir, 156_000_000L) { 8_000_007L },
+            existingTreeCredit(rootUnder("usr"), filesDir, 160_000_000L) { 8_000_007L },
         )
     }
 
     @Test
     fun `no install root means no credit`() {
-        assertEquals(0L, existingTreeCredit(null, filesDir, 156_000_000L) { 900_000_000L })
+        assertEquals(0L, existingTreeCredit(null, filesDir, 160_000_000L) { 900_000_000L })
     }
 
     /**
@@ -170,7 +170,7 @@ class ToolchainInstallSpaceTest {
         var measured = false
         assertEquals(
             0L,
-            existingTreeCredit(escaped, filesDir, 156_000_000L) { measured = true; 900_000_000L },
+            existingTreeCredit(escaped, filesDir, 160_000_000L) { measured = true; 900_000_000L },
         )
         assertFalse(measured, "the escaped root was walked, which is the cost this refuses")
     }
@@ -179,7 +179,7 @@ class ToolchainInstallSpaceTest {
     fun `the base itself is inside the base`() {
         assertEquals(
             8_000_007L,
-            existingTreeCredit(filesDir, filesDir, 156_000_000L) { 8_000_007L },
+            existingTreeCredit(filesDir, filesDir, 160_000_000L) { 8_000_007L },
             "a manifest naming the base directly is not an escape",
         )
     }
@@ -209,7 +209,7 @@ class ToolchainInstallSpaceTest {
      */
     @Test
     fun `the credited gate never falls below the buffer`() {
-        val unpacked = 156_000_000L
+        val unpacked = 160_000_000L
         for (measured in listOf(0L, 1L, unpacked - 1, unpacked, unpacked + 1, 900_000_000L)) {
             val credit = existingTreeCredit(rootUnder("usr"), filesDir, unpacked) { measured }
             assertTrue(

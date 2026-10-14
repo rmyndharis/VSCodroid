@@ -318,6 +318,15 @@ class PackReleaseOutcomeTest {
     private val orphanBytes = 8_000_007L
 
     /**
+     * What the Play pre-flight asks of a device for the Java 17 delivery with
+     * nothing on disk to credit: the registry's recorded size and the buffer.
+     * Read from the registry so that raising the recorded size does not move
+     * the cases that sit just either side of it.
+     */
+    private fun javaDemand() =
+        packInstallBytes(ToolchainRegistry.find("toolchain_java")!!.estimatedSize)
+
+    /**
      * The orphan is placed on disk rather than made by a failing install, and the
      * difference is the whole point of the case.
      *
@@ -344,9 +353,10 @@ class PackReleaseOutcomeTest {
             "the orphan is not the size this case's arithmetic assumes",
         )
 
-        // Strictly between the credited demand (206,000,000 - 8,000,007) and the
-        // uncredited one (206,000,000).
-        room(200_000_000L)
+        // Strictly between the credited demand (the registry's figure for Java 17
+        // plus the buffer, less 8,000,007) and the uncredited one, wherever the
+        // registry puts that figure.
+        room(javaDemand() - 2_000_000L)
         val secondOut = Collections.synchronizedList(mutableListOf<Int>())
         val second = CountDownLatch(1)
         managerReporting(second, secondOut).reconcileDeliveredPacks()
@@ -365,7 +375,7 @@ class PackReleaseOutcomeTest {
         deliver("toolchain_java", "java")
         fattenDelivery("toolchain_java", "java")
 
-        room(200_000_000L)
+        room(javaDemand() - 2_000_000L)
         val out = Collections.synchronizedList(mutableListOf<Int>())
         val settledHere = CountDownLatch(1)
         managerReporting(settledHere, out).reconcileDeliveredPacks()

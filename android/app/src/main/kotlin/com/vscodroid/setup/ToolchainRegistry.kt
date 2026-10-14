@@ -115,7 +115,11 @@ object ToolchainRegistry {
             // dereferences 208 symlinks, and the constant every gate reads did
             // not move with it. Two comments in ToolchainManager were updated to
             // say "about 155 MB" while this stayed at 146.
-            estimatedSize = 156_000_000,
+            //
+            // 156,000,000 left 515,840 bytes over the 155,484,160 measured, which
+            // a Termux point release of openjdk-17 can spend, and then
+            // package-toolchains.sh refuses the tag. 160,000,000 leaves 4.5 MB.
+            estimatedSize = 160_000_000,
             downloadSize = 56_500_000,
             downloadUrl = "https://github.com/rmyndharis/VSCodroid/releases/latest/download/toolchain_java.zip",
         ),

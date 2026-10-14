@@ -3,7 +3,7 @@
      adds. setContentView replaces the content view, so the flag on the splash
      layout is already gone by the time this one is shown, and this is the longer
      unattended wait of the two: Java 17 is a transfer the download path sizes at
-     56 MB, expanding to the 156 MB ToolchainRegistry declares, then copied into
+     56 MB, expanding to the 160 MB ToolchainRegistry declares, then copied into
      filesDir.
 
      What the timeout costs is not the drawing. It stops the activity, and a
