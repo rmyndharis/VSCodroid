@@ -3,13 +3,16 @@ package com.vscodroid.storage
 import android.content.ContentResolver
 import android.content.Context
 import android.content.UriPermission
+import android.database.Cursor
 import android.net.Uri
+import android.provider.DocumentsContract
 import com.vscodroid.util.Logger
 import io.mockk.Runs
 import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
 import io.mockk.mockkObject
+import io.mockk.mockkStatic
 import io.mockk.unmockkAll
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -133,6 +136,74 @@ class NamedMirrorPathTest {
         assertEquals("😀".repeat(63), emoji, "a four-byte character was split")
     }
 
+    // -- Telling a name the provider answered from the one it did not --
+
+    /** A tree URI, whose last path segment is the document id the fallback is made of. */
+    private fun treeUri(lastPathSegment: String? = "primary:Documents/notes"): Uri =
+        mockk<Uri>(relaxed = true).also { every { it.lastPathSegment } returns lastPathSegment }
+
+    /** The provider's answer to the name query, which is [cursor], or a failure. */
+    private fun answersNameQuery(cursor: Cursor?, failing: Boolean = false) {
+        mockkStatic(DocumentsContract::class)
+        every { DocumentsContract.getTreeDocumentId(any()) } returns "root"
+        every { DocumentsContract.buildDocumentUriUsingTree(any(), any()) } returns mockk(relaxed = true)
+        if (failing) {
+            every { resolver.query(any(), any(), any(), any(), any()) } throws
+                IllegalStateException("the provider did not answer")
+        } else {
+            every { resolver.query(any(), any(), any(), any(), any()) } returns cursor
+        }
+    }
+
+    private fun row(name: String?): Cursor = mockk<Cursor>(relaxed = true) {
+        every { moveToFirst() } returns true
+        every { getString(0) } returns name
+    }
+
+    @Test
+    fun `a name the provider answers is the answer and the shown name`() {
+        answersNameQuery(row("recipes"))
+
+        assertEquals("recipes", manager.queryDisplayName(treeUri()))
+        assertEquals("recipes", manager.getDisplayName(treeUri()))
+    }
+
+    /**
+     * What the shown name has always been where the provider says nothing, and the reason
+     * the query is separate: the fallback below reads as a name and is a document id.
+     */
+    @Test
+    fun `a provider that gives no name answers none and the shown name falls back`() {
+        val cases = mapOf(
+            "no row" to mockk<Cursor>(relaxed = true) { every { moveToFirst() } returns false },
+            "a row with no name" to row(null),
+        )
+        for ((why, cursor) in cases) {
+            answersNameQuery(cursor)
+
+            assertNull(manager.queryDisplayName(treeUri()), "$why was taken as a name")
+            assertEquals("primary:Documents/notes", manager.getDisplayName(treeUri()), why)
+        }
+    }
+
+    @Test
+    fun `a query that returns no cursor or fails answers no name`() {
+        answersNameQuery(null)
+        assertNull(manager.queryDisplayName(treeUri()))
+        assertEquals("primary:Documents/notes", manager.getDisplayName(treeUri()))
+
+        answersNameQuery(null, failing = true)
+        assertNull(manager.queryDisplayName(treeUri()))
+        assertEquals("primary:Documents/notes", manager.getDisplayName(treeUri()))
+    }
+
+    @Test
+    fun `with no answer and no segment the shown name is Unknown`() {
+        answersNameQuery(null, failing = true)
+
+        assertEquals("Unknown", manager.getDisplayName(treeUri(lastPathSegment = null)))
+    }
+
     // -- Reading a named path back --
 
     @Test
@@ -237,6 +308,81 @@ class NamedMirrorPathTest {
     fun `a name that cannot be a path gives no named path`() {
         assertNull(manager.namedPathFor(copy(), ".."))
         assertFalse(File(mirrors, "by-name").exists(), "a directory was made for nothing")
+    }
+
+    // -- The link a copy already has --
+
+    /**
+     * A name the provider did not answer makes no link, so what an open takes is the one
+     * the copy has. Asked of the disk and answered without making anything.
+     */
+    @Test
+    fun `the one link a copy has is its existing named path`() {
+        val dir = copy()
+        val link = manager.namedPathFor(dir, "recipes")
+
+        assertEquals(link, manager.existingNamedPath(dir))
+        assertEquals(listOf("recipes"), File(mirrors, "by-name/$hash").list()?.toList())
+    }
+
+    @Test
+    fun `a copy with no link has no existing named path and none is made`() {
+        val dir = copy()
+
+        assertNull(manager.existingNamedPath(dir))
+        assertFalse(File(mirrors, "by-name").exists(), "asking made a directory")
+    }
+
+    /**
+     * A folder renamed on the device keeps both links, and which one the page is on is
+     * not something this can tell, so neither is taken.
+     */
+    @Test
+    fun `a copy with two links has no single existing named path`() {
+        val dir = copy()
+        manager.namedPathFor(dir, "old")
+        manager.namedPathFor(dir, "new")
+
+        assertNull(manager.existingNamedPath(dir))
+        assertEquals(setOf("old", "new"), File(mirrors, "by-name/$hash").list()?.toSet())
+    }
+
+    @Test
+    fun `nothing but this app's own link to the copy is taken`() {
+        val dir = copy()
+        val names = File(mirrors, "by-name/$hash").apply { mkdirs() }
+
+        File(names, "recipes").mkdirs()
+        assertNull(manager.existingNamedPath(dir), "a directory was taken for a link")
+        File(names, "recipes").delete()
+
+        File(names, "notes.txt").writeText("left here by hand")
+        assertNull(manager.existingNamedPath(dir), "a file was taken for a link")
+        File(names, "notes.txt").delete()
+
+        val elsewhere = File(filesDir, "home").apply { mkdirs() }
+        Files.createSymbolicLink(File(names, "recipes").toPath(), elsewhere.toPath())
+        assertNull(manager.existingNamedPath(dir), "a link to somewhere else was taken")
+        File(names, "recipes").delete()
+
+        manager.namedPathFor(dir, "recipes")
+        File(names, "notes.txt").writeText("left beside it")
+        assertNull(manager.existingNamedPath(dir), "one link beside another entry was taken")
+    }
+
+    /**
+     * `saf-mirrors` is exported to every terminal, so the directory holding the links can
+     * be a link out of the app, to a directory whose own link would read as the copy's.
+     */
+    @Test
+    fun `a names directory that is a link is not read through`() {
+        val dir = copy()
+        val elsewhere = File(filesDir, "home/projects").apply { mkdirs() }
+        Files.createSymbolicLink(File(elsewhere, "recipes").toPath(), Paths.get("..", "..", hash))
+        File(mirrors, "by-name").mkdirs()
+        Files.createSymbolicLink(File(mirrors, "by-name/$hash").toPath(), elsewhere.toPath())
+
+        assertNull(manager.existingNamedPath(dir))
     }
 
     // -- The record of a page opened by name --

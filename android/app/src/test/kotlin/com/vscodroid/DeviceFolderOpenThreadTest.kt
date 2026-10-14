@@ -12,11 +12,12 @@ import java.io.File
  *
  * `persistPermission` is two cross-process round trips of its own (it resolves the
  * display name and reads every persisted grant to prune the recent list) and
- * `getDisplayName` is a third; `folderForOpenedPath` is a fourth. All four used to
- * run before the progress dialog existed, from the picker result, from the bridge
- * and from `onPageFinished`, which are all the main thread. Against a local
- * provider that is milliseconds; against one backed by a network share or a phone
- * on MTP it is an unresponsive editor and, past five seconds, an ANR.
+ * `queryDisplayName` is a third (`getDisplayName` is the same query with a fallback);
+ * `folderForOpenedPath` is a fourth. All four used to run before the progress dialog
+ * existed, from the picker result, from the bridge and from `onPageFinished`, which are
+ * all the main thread. Against a local provider that is milliseconds; against one
+ * backed by a network share or a phone on MTP it is an unresponsive editor and, past
+ * five seconds, an ANR.
  *
  * Read off the source, for the reason `SafFolderLogCallSiteTest` gives: there is
  * no seam. These functions show an `AlertDialog` and launch on `lifecycleScope`,
@@ -135,7 +136,8 @@ class DeviceFolderOpenThreadTest {
     fun `nothing is asked of the provider before the dialog is on screen`() {
         val shown = opened.indexOfFirst { it.contains("dialog.show()") }
         val asked = opened.withIndex().filter { (_, line) ->
-            line.contains("persistPermission") || line.contains("getDisplayName")
+            line.contains("persistPermission") || line.contains("getDisplayName") ||
+                line.contains("queryDisplayName")
         }
 
         assertTrue(shown >= 0) { "the sync dialog is no longer shown; this case is measuring nothing" }
@@ -155,12 +157,14 @@ class DeviceFolderOpenThreadTest {
         // encloses a call from one that merely precedes it, which is the same
         // ceiling ActivityTeardownTest states for the watcher calls.
         val calls = opened.withIndex().filter { (_, line) ->
-            line.contains("safManager.persistPermission(") || line.contains("safManager.getDisplayName(")
+            line.contains("safManager.persistPermission(") ||
+                line.contains("safManager.getDisplayName(") ||
+                line.contains("safManager.queryDisplayName(")
         }
 
         assertEquals(
             2, calls.size,
-            "expected persistPermission and getDisplayName. If a call site was added " +
+            "expected persistPermission and queryDisplayName. If a call site was added " +
                 "or removed, update this count and check the new one is off the main " +
                 "thread. Found: " + calls.map { it.value.trim() },
         )
