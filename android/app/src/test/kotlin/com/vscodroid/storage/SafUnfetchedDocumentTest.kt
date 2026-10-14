@@ -697,6 +697,35 @@ class SafUnfetchedDocumentTest {
     }
 
     /**
+     * The files whose delete was declined, below a renamed directory and below a sibling
+     * whose name starts the same: `rm -r` of either is kept on the device after the
+     * rename, which fails for the sibling if the match is by text rather than by path.
+     */
+    @Test
+    fun `a renamed directory keeps its declined deletes and not a sibling's by name alone`() {
+        val kept = mutableListOf<String>()
+        engine.onKeptOnDevice = { file, _, _ -> kept.add(file.name) }
+        deviceTree(docsBesideDocs2)
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        changedByAnotherApp("doc:notes.md")
+        changedByAnotherApp("doc:other.md")
+        File(mirror, "docs/notes.md").delete()
+        deliver(FileObserver.DELETE, "docs/notes.md")
+        File(mirror, "docs2/other.md").delete()
+        deliver(FileObserver.DELETE, "docs2/other.md")
+        assertEquals(listOf("notes.md", "other.md"), kept, "setup: the deletes went through")
+        renameDirectory("docs", "archive")
+        deviceTree(archiveBesideDocs2)
+        kept.clear()
+
+        deleteDirectory("archive")
+        deleteDirectory("docs2")
+
+        verify(exactly = 0) { DocumentsContract.deleteDocument(any(), any()) }
+        assertEquals(listOf("archive", "docs2"), kept)
+    }
+
+    /**
      * A directory the open could not enumerate is recorded by its own path, since nothing
      * below it was read to be recorded. The memory followed only what lay below the
      * renamed path, so the directory's own entry stayed at the old name and `rm -r` of the
