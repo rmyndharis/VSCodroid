@@ -311,3 +311,10 @@
 # alone, the keyboard going down as the list takes focus, no longer closes the
 # Code Action list; without the compare it closed at every layout change again.
 0028 code action list at a height change|out/vs/code/browser/workbench/workbench.js x3|this._editorLayoutWidth
+# 0029's row: the private method that decides a commit is a paste, defined once
+# and called once from _onType, so `_isPastedByInputMethod` twice. Methods keep
+# their names in this bundle as _onType and _getNewEditContextState do, and the
+# name is 0 times in the shipped 1.139.1 workbench.js. Without it a keyboard's
+# paste is typed a character at a time again: indented at every line break and,
+# for a few thousand characters, a freeze of seconds.
+0029 input method commit as paste|out/vs/code/browser/workbench/workbench.js x2|_isPastedByInputMethod
