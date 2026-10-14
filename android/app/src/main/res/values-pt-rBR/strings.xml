@@ -532,6 +532,18 @@
     <string name="key_desc_page_up">Página acima</string>
     <string name="key_desc_page_down">Página abaixo</string>
 
+    <!-- The quick actions page, the last page of the key row. Each key sends one
+         of the workbench's shortcuts and is named for the command it runs, in the
+         words the editor itself uses for it, so a reader hears what the Command
+         Palette would show. The label drawn on the key is the shortcut, ^P for
+         Ctrl+P, and is not translated, like every other label on the row. -->
+    <string name="key_desc_quick_commands">Paleta de Comandos</string>
+    <string name="key_desc_quick_open">Acessar o Arquivo</string>
+    <string name="key_desc_quick_terminal">Ativar/Desativar Terminal</string>
+    <string name="key_desc_quick_side_bar">Alternar a Barra Lateral Primária</string>
+    <string name="key_desc_quick_panel">Ativar/Desativar Painel</string>
+    <string name="key_desc_quick_save">Salvar</string>
+
     <!-- The four characters that exist only as long-press alternates. Every
          other alternate is a key on some page and reuses that key's name, so
          the popup and the row say the same thing about the same character.

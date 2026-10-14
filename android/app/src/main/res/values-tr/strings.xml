@@ -528,6 +528,18 @@
     <string name="key_desc_page_up">Sayfa yukarı</string>
     <string name="key_desc_page_down">Sayfa aşağı</string>
 
+    <!-- The quick actions page, the last page of the key row. Each key sends one
+         of the workbench's shortcuts and is named for the command it runs, in the
+         words the editor itself uses for it, so a reader hears what the Command
+         Palette would show. The label drawn on the key is the shortcut, ^P for
+         Ctrl+P, and is not translated, like every other label on the row. -->
+    <string name="key_desc_quick_commands">Komut Paleti</string>
+    <string name="key_desc_quick_open">Dosyaya Git</string>
+    <string name="key_desc_quick_terminal">Terminali Aç/Kapat</string>
+    <string name="key_desc_quick_side_bar">Birincil Kenar Çubuğunu Aç/Kapat</string>
+    <string name="key_desc_quick_panel">Paneli Aç/Kapat</string>
+    <string name="key_desc_quick_save">Kaydet</string>
+
     <!-- The four characters that exist only as long-press alternates. Every
          other alternate is a key on some page and reuses that key's name, so
          the popup and the row say the same thing about the same character.

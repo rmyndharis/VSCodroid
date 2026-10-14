@@ -524,6 +524,18 @@
     <string name="key_desc_page_up">Page Up キー</string>
     <string name="key_desc_page_down">Page Down キー</string>
 
+    <!-- The quick actions page, the last page of the key row. Each key sends one
+         of the workbench's shortcuts and is named for the command it runs, in the
+         words the editor itself uses for it, so a reader hears what the Command
+         Palette would show. The label drawn on the key is the shortcut, ^P for
+         Ctrl+P, and is not translated, like every other label on the row. -->
+    <string name="key_desc_quick_commands">コマンド パレット</string>
+    <string name="key_desc_quick_open">ファイルに移動する</string>
+    <string name="key_desc_quick_terminal">ターミナルの切り替え</string>
+    <string name="key_desc_quick_side_bar">プライマリ サイド バーを切り替える</string>
+    <string name="key_desc_quick_panel">パネルの切り替え</string>
+    <string name="key_desc_quick_save">保存</string>
+
     <!-- The four characters that exist only as long-press alternates. Every
          other alternate is a key on some page and reuses that key's name, so
          the popup and the row say the same thing about the same character.

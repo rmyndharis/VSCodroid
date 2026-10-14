@@ -129,6 +129,20 @@ function fill(js, fills) {
 }
 
 const ANNOUNCE = scriptOf('private fun announceKeystroke(');
+
+/**
+ * The two elements `announceKeystroke` lands a key at, read from the line that
+ * chooses between them, so that the script is run with what Kotlin picks and
+ * not with a copy written here: a shortcut key at the body, any other key at
+ * the focused element.
+ */
+const DISPATCH = (() => {
+    const line = SOURCE.find((l) => l.includes('val dispatchAt = '));
+    const m = line && /if \(toWorkbench\) "([^"]+)" else "([^"]+)"/.exec(line);
+    assert.ok(m, 'announceKeystroke no longer picks its target by toWorkbench, so this check has ' +
+        'nothing to run. If the choice moved, point this at its new home rather than deleting it.');
+    return { workbench: m[1], focused: m[2] };
+})();
 const INTERCEPTOR = fill(scriptOf('fun setupModifierInterceptor()'), { '$keyLookup': '{}' });
 
 /**
@@ -263,9 +277,14 @@ function newPage({ emitter = true } = {}) {
     return page;
 }
 
-/** One announced press, as `announceKeystroke` builds it for `key` with these modifiers. */
+/**
+ * One announced press, as `announceKeystroke` builds it for `key` with these
+ * modifiers. `mods.workbench` is a shortcut key, which lands at the body rather
+ * than at the focused element.
+ */
 function announce(page, key, code, keyCode, mods = {}) {
     vm.runInContext(fill(ANNOUNCE, {
+        '$dispatchAt': mods.workbench ? DISPATCH.workbench : DISPATCH.focused,
         '${jsKey}': JSON.stringify(key),
         '${jsCode}': JSON.stringify(code),
         '${keyDef.keyCode}': String(keyCode),
@@ -432,6 +451,35 @@ const settled = (name, page) => {
     announce(page, 'Tab', 'Tab', 9);
     cases.push(['a plain Tab is a keydown and a keyup and nothing else', sequence(page).join(', '),
         'keydown Tab, keyup Tab']);
+}
+
+// A shortcut key, the quick actions page's, lands at the body and not at the
+// focused element, so a widget's own handler, the terminal's among them, never
+// sees it. Its modifiers come up where it went, and the workbench is left
+// holding nothing. The same chord from a latched Ctrl keeps the focused element.
+cases.push(['the target a shortcut key lands at, as announceKeystroke chooses it', DISPATCH.workbench, 'document.body']);
+cases.push(['the target every other key lands at, as announceKeystroke chooses it', DISPATCH.focused,
+    'document.activeElement || document.body']);
+{
+    const page = newPage();
+    announce(page, 'b', 'KeyB', 66, { ctrl: true, workbench: true });
+    cases.push(['a shortcut Ctrl+B is sent at the body, not at the focused editor',
+        page.log.map((e) => e.at).join(','), 'body,body,body']);
+    cases.push(['a shortcut Ctrl+B comes up as b, then Control', sequence(page).join(', '),
+        'keydown b ctrl, keyup b ctrl, keyup Control']);
+    settled('a shortcut Ctrl+B', page);
+}
+{
+    const page = newPage();
+    announce(page, 'F1', 'F1', 112, { workbench: true });
+    cases.push(['a shortcut F1 is a keydown and a keyup at the body and nothing else',
+        page.log.map((e) => `${e.type}@${e.at}`).join(', '), 'keydown@body, keyup@body']);
+}
+{
+    const page = newPage();
+    announce(page, 'b', 'KeyB', 66, { ctrl: true });
+    cases.push(['a latched Ctrl+B is still sent at the focused editor',
+        page.log.map((e) => e.at).join(','), 'editor,editor,editor']);
 }
 
 // A chord that moves focus, as F1 opening the Command Palette does: the

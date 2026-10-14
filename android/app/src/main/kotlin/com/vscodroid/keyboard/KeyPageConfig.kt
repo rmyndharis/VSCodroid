@@ -21,6 +21,18 @@ data class AlternateKey(
     @StringRes val contentDescriptionRes: Int,
 )
 
+/**
+ * The modifiers a key sends as its own, for the keys that do not take the row's.
+ *
+ * Ctrl, Alt and Shift are the three the row can latch and [KeyInjector] can
+ * send, so these are exactly those.
+ */
+data class KeyModifiers(
+    val ctrl: Boolean = false,
+    val alt: Boolean = false,
+    val shift: Boolean = false,
+)
+
 sealed class KeyItem {
     /**
      * One key on the row: what it types, what is drawn on it, and what is said.
@@ -37,13 +49,21 @@ sealed class KeyItem {
      * without one compiled and shipped, and a reader hearing "{}" was told
      * nothing at all; requiring it makes that a compile error instead of
      * something a test has to catch afterwards.
+     *
+     * [fixedModifiers] makes the key a shortcut for a workbench command instead
+     * of something typed. A tap sends [value] with exactly these modifiers, and
+     * the latches the row holds are neither added to them nor kept past the
+     * press (see [pressModifiers]). It is dispatched at the page's body and not
+     * at the focused element (see [sendKeyPress]). A one-letter [value] on such
+     * a key is the key of a chord, so it is not a character the row types.
      */
     data class Button(
         val label: String,
         val value: String,
         @StringRes val contentDescriptionRes: Int,
         val isToggle: Boolean = false,
-        val alternates: List<AlternateKey> = emptyList()
+        val alternates: List<AlternateKey> = emptyList(),
+        val fixedModifiers: KeyModifiers? = null,
     ) : KeyItem()
 
     // No description here, deliberately. It used to carry one and nothing ever
@@ -89,6 +109,52 @@ private fun KeyItem.weightTenths(): Int = when (this) {
 }
 
 object KeyPages {
+    /**
+     * Page 6: shortcuts for the workbench commands a phone reaches most.
+     *
+     * Each key sends one of the editor's default bindings with the modifiers
+     * that binding holds and none of the row's latches, so a command that took
+     * Ctrl on page 1 and a letter on the soft keyboard is one tap. The
+     * bindings, as the 1.139.1 workbench registers them and none of them behind
+     * a `when` clause: F1 (Show All Commands, which Ctrl+Shift+P also runs),
+     * Ctrl+P (Go to File), Ctrl+` (Toggle Terminal), Ctrl+B (Toggle Primary
+     * Side Bar), Ctrl+J (Toggle Panel) and Ctrl+S (Save).
+     *
+     * The label is the shortcut, `^P` for Ctrl+P as a terminal's menus write
+     * it, so it is a key legend like every other label here and is not
+     * translated. What a screen reader speaks is the command.
+     *
+     * Six keys and not eight, and the width decides it. Six claim six shares of
+     * the row, which clears the 48dp touch target down to 288dp, narrower than
+     * any phone, so this page is never split. Eight need 384dp: on a 360dp
+     * phone they would pack as seven and one, a lone key on a page of its own.
+     *
+     * They are dispatched at the page's body and not at the focused element,
+     * for the terminal's sake. It hands the workbench only the commands on its
+     * skip list and sends every other key to the shell: F1, Ctrl+P, Ctrl+` and
+     * Ctrl+J are on the list, Ctrl+B and Ctrl+S are not, and a terminal reads
+     * the second as XOFF. At the body no widget sees the key, and the
+     * workbench's listener on the window resolves it in its root context, so
+     * all six run with the terminal focused. A Ctrl latched on page 1 and a
+     * letter from the soft keyboard go to the focused element, and reach the
+     * shell there. Read from the 1.139.1 workbench's key handling and not yet
+     * run on a device.
+     */
+    private val quickActions = KeyPage(listOf(
+        KeyItem.Button("F1", "F1", R.string.key_desc_quick_commands,
+            fixedModifiers = KeyModifiers()),
+        KeyItem.Button("^P", "p", R.string.key_desc_quick_open,
+            fixedModifiers = KeyModifiers(ctrl = true)),
+        KeyItem.Button("^`", "`", R.string.key_desc_quick_terminal,
+            fixedModifiers = KeyModifiers(ctrl = true)),
+        KeyItem.Button("^B", "b", R.string.key_desc_quick_side_bar,
+            fixedModifiers = KeyModifiers(ctrl = true)),
+        KeyItem.Button("^J", "j", R.string.key_desc_quick_panel,
+            fixedModifiers = KeyModifiers(ctrl = true)),
+        KeyItem.Button("^S", "s", R.string.key_desc_quick_save,
+            fixedModifiers = KeyModifiers(ctrl = true)),
+    ))
+
     val defaults: List<KeyPage> = listOf(
         // Page 1: Essential coding keys
         KeyPage(listOf(
@@ -182,6 +248,9 @@ object KeyPages {
             KeyItem.Button("PgUp", "PageUp", R.string.key_desc_page_up),
             KeyItem.Button("PgDn", "PageDown", R.string.key_desc_page_down),
         )),
+        // Page 6: quick actions, kept last so that the five pages before it
+        // are where they always were.
+        quickActions,
     )
 
     /**
@@ -220,15 +289,22 @@ object KeyPages {
      * maintained page sets is two places for a key to go missing from, and the
      * one nobody develops on is the one it goes missing from. Order is preserved,
      * so a key stays in the same neighbourhood it was in.
+     *
+     * The one exception to "the same neighbourhood" is the quick actions page,
+     * which is packed on its own and put after the rest. Poured into the same
+     * run it would be cut where the function keys end, and on a 360dp phone
+     * Command Palette and Go to File would sit on a page with F12 and PgDn:
+     * a page of shortcuts that is no longer a page. Packed alone, six keys fit
+     * one page at every width from 288dp, which is every phone.
      */
     fun forSmallestWidthDp(smallestWidthDp: Int): List<KeyPage> {
         // A width that cannot belong to a device is no information, not an
         // instruction to put one key on a page: `Configuration` reports
         // SMALLEST_SCREEN_WIDTH_DP_UNDEFINED, which is 0, for a value it has not
-        // resolved, and 0 divided by anything would repack these five pages into
-        // forty. 320dp is Android's own floor for a phone, so that is what an
+        // resolved, and 0 divided by anything would repack the row into one key
+        // a page. 320dp is Android's own floor for a phone, so that is what an
         // unresolved width is read as. `<= 0` and not `== 0` because a negative
-        // is just as much not a width, and would pack the same forty pages.
+        // is just as much not a width, and would pack the same page per key.
         //
         // A sentinel test and NOT `coerceAtLeast(320)`, which is the shape this
         // guard first took. 320 is a floor on a phone's screen, and what arrives
@@ -244,23 +320,29 @@ object KeyPages {
         if (defaults.all { page -> page.items.sumOf { it.weightTenths() } <= maxTenths }) {
             return defaults
         }
-        val repacked = mutableListOf<KeyPage>()
+        val flowing = defaults.filter { it !== quickActions }.flatMap { it.items }
+        return pack(flowing, maxTenths) + pack(quickActions.items, maxTenths)
+    }
+
+    /** [items] in order, on as few pages as keep each under [maxTenths]. */
+    private fun pack(items: List<KeyItem>, maxTenths: Int): List<KeyPage> {
+        val packed = mutableListOf<KeyPage>()
         var current = mutableListOf<KeyItem>()
         var tenths = 0
-        for (item in defaults.flatMap { it.items }) {
+        for (item in items) {
             val share = item.weightTenths()
             // `current.isNotEmpty()` so an item wider than a whole row still gets
             // a page rather than an endless empty one. No device is that narrow;
             // the loop must terminate anyway.
             if (current.isNotEmpty() && tenths + share > maxTenths) {
-                repacked.add(KeyPage(current))
+                packed.add(KeyPage(current))
                 current = mutableListOf()
                 tenths = 0
             }
             current.add(item)
             tenths += share
         }
-        if (current.isNotEmpty()) repacked.add(KeyPage(current))
-        return repacked
+        if (current.isNotEmpty()) packed.add(KeyPage(current))
+        return packed
     }
 }

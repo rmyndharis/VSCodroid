@@ -35,6 +35,7 @@ class TextEntryInstrumentedTest {
         val modifiers = setOf("Ctrl", "Alt", "Shift")
         return KeyPages.defaults.flatMap { it.items }
             .filterIsInstance<KeyItem.Button>()
+            .filter { it.fixedModifiers == null }
             .flatMap { button -> listOf(button.value) + button.alternates.map { it.value } }
             .filterNot { it in modifiers }
             .filter { isTextEntry(it, ctrlKey = false, altKey = false, metaKey = false) }

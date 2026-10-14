@@ -32,14 +32,30 @@ class KeyInjector(
      * [NAVIGATION_KEYS] says why the trackpad's Up and Down, Tab and Escape
      * stay there. Either way the modifiers a press carried come up after it,
      * on the same route ([modifierReleases] says why).
+     *
+     * [toWorkbench] is for a key that is a shortcut for a workbench command, not
+     * a key for whatever has focus. It is always announced, never typed or
+     * pressed, and at the page's body instead of the focused element. The
+     * workbench resolves a binding in the context of the element the event
+     * lands on, and the terminal hands it only the commands on its skip list,
+     * turning every other key, Ctrl+B and Ctrl+S among them, into input for the
+     * shell. At the body no widget has a handler to take the key, and the
+     * listener the workbench keeps on the window resolves it in its root
+     * context wherever focus is. Read from the 1.139.1 workbench's terminal key
+     * handler and keybinding service; not measured on a device.
      */
     fun injectKey(
         key: String,
         ctrlKey: Boolean = false,
         altKey: Boolean = false,
         shiftKey: Boolean = false,
-        metaKey: Boolean = false
+        metaKey: Boolean = false,
+        toWorkbench: Boolean = false
     ) {
+        if (toWorkbench) {
+            announceKeystroke(key, ctrlKey, altKey, shiftKey, metaKey, toWorkbench = true)
+            return
+        }
         // A latched Shift changes WHICH character is typed, not whether it is
         // typed. The row offers no other route to `?`, `+`, `}` and the rest,
         // so resolving it here is what makes those reachable at all.
@@ -106,7 +122,8 @@ class KeyInjector(
         ctrlKey: Boolean,
         altKey: Boolean,
         shiftKey: Boolean,
-        metaKey: Boolean
+        metaKey: Boolean,
+        toWorkbench: Boolean = false
     ) {
         val keyDef = KeyMapping.getKeyDefOrLetter(key)
         // Quoted by [KeyMapping.jsQuote], which is the table's own escaper and
@@ -126,11 +143,14 @@ class KeyInjector(
         val jsCode = KeyMapping.jsQuote(keyDef.code)
         // Force shiftKey=true for characters that require Shift on a physical keyboard
         val effectiveShift = shiftKey || keyDef.requiresShift
+        // Where the keystroke lands. See injectKey for the one case that is not
+        // the focused element.
+        val dispatchAt = if (toWorkbench) "document.body" else "document.activeElement || document.body"
 
         val js = """
             (function() {
                 $RELEASE_MODIFIERS_JS
-                var target = document.activeElement || document.body;
+                var target = $dispatchAt;
                 var eventInit = {
                     key: ${jsKey},
                     code: ${jsCode},

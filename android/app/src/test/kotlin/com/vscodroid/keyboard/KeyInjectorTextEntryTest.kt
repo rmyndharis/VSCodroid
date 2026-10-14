@@ -338,9 +338,13 @@ class KeyInjectorTextEntryTest {
         // Driven from the row itself, so a key added to KeyPages later is
         // covered without anyone remembering this file. The three modifiers
         // never reach the injector: ExtraKeyRow.handleKeyAction consumes them.
+        // The shortcut keys on the quick actions page are left out: each is sent
+        // with modifiers of its own and so is never typed, whatever its value is.
+        // QuickActionsPageTest holds how they are sent.
         val modifiers = setOf("Ctrl", "Alt", "Shift")
         val values = KeyPages.defaults.flatMap { it.items }
             .filterIsInstance<KeyItem.Button>()
+            .filter { it.fixedModifiers == null }
             .flatMap { button -> listOf(button.value) + button.alternates.map { it.value } }
             .filterNot { it in modifiers }
         check(values.size > 30) { "the key row came back nearly empty; this test would prove nothing" }
