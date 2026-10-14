@@ -19,6 +19,7 @@ import io.mockk.verify
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -793,6 +794,39 @@ class SafUnfetchedDocumentTest {
         assertEquals(
             1, tried,
             "a save held back below the renamed directory was tried, at the old name or the new",
+        )
+    }
+
+    /**
+     * What the user guide says of a held save whose directory is renamed: the trying ends,
+     * and the file's next save keeps the other app's version beside it, which the entry
+     * that moved with the rename still asks about. The floor is lifted by then, so the
+     * other app's version can be copied.
+     */
+    @Test
+    fun `the next save of a file whose held save ended with a rename keeps the other app's version`() {
+        var clock = 0L
+        mockkStatic(SystemClock::class)
+        every { SystemClock.elapsedRealtime() } answers { clock }
+        deviceTree(docsBesideDocs2)
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        engine.usableSpaceOf = { SafSyncEngine.OPEN_SPACE_FLOOR_BYTES - 1 }
+        changedByAnotherApp("doc:notes.md")
+        File(mirror, "docs/notes.md").writeText("typed in the editor")
+        deliver(FileObserver.MODIFY, "docs/notes.md")
+        renameDirectory("docs", "archive")
+        deviceTree(archiveBesideDocs2)
+        changedByAnotherApp("doc:notes.md")
+        engine.usableSpaceOf = { Long.MAX_VALUE }
+        clock += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+        assertFalse(engine.retryHeldBack(WatchSession(mirror)), "setup: a held save was tried")
+
+        File(mirror, "archive/notes.md").writeText("typed again in the editor")
+        deliver(FileObserver.MODIFY, "archive/notes.md")
+
+        assertEquals(
+            listOf("changed by another app"), deviceCopiesIn("archive"),
+            "the save after the rename went over another app's version with no copy kept",
         )
     }
 
