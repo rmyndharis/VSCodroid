@@ -46,6 +46,13 @@ class ExtraKeyButton @JvmOverloads constructor(
     var onLongPressAction: ((ExtraKeyButton, List<AlternateKey>) -> Unit)? = null
 
     /**
+     * The modifiers this key sends whatever the row has latched, or null for a
+     * key that carries the latches. [ExtraKeyRow] reads it when the key is
+     * pressed; see [KeyItem.Button.fixedModifiers].
+     */
+    var fixedModifiers: KeyModifiers? = null
+
+    /**
      * The latch a hold on this modifier switched away from, while that touch
      * lasts; null otherwise. A touch that ends in a cancel, as one the pager
      * takes does, puts it back, unless [anotherFingerOnRow], or unless the row

@@ -536,6 +536,18 @@
     <string name="key_desc_page_up">Strona w górę</string>
     <string name="key_desc_page_down">Strona w dół</string>
 
+    <!-- The quick actions page, the last page of the key row. Each key sends one
+         of the workbench's shortcuts and is named for the command it runs, in the
+         words the editor itself uses for it, so a reader hears what the Command
+         Palette would show. The label drawn on the key is the shortcut, ^P for
+         Ctrl+P, and is not translated, like every other label on the row. -->
+    <string name="key_desc_quick_commands">Paleta poleceń</string>
+    <string name="key_desc_quick_open">Przejdź do pliku</string>
+    <string name="key_desc_quick_terminal">Przełącz terminal</string>
+    <string name="key_desc_quick_side_bar">Przełącz podstawowy pasek boczny</string>
+    <string name="key_desc_quick_panel">Przełącz panel</string>
+    <string name="key_desc_quick_save">Zapisz</string>
+
     <!-- The four characters that exist only as long-press alternates. Every
          other alternate is a key on some page and reuses that key's name, so
          the popup and the row say the same thing about the same character.

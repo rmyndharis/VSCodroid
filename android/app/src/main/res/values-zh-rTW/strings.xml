@@ -524,6 +524,18 @@
     <string name="key_desc_page_up">Page Up 鍵</string>
     <string name="key_desc_page_down">Page Down 鍵</string>
 
+    <!-- The quick actions page, the last page of the key row. Each key sends one
+         of the workbench's shortcuts and is named for the command it runs, in the
+         words the editor itself uses for it, so a reader hears what the Command
+         Palette would show. The label drawn on the key is the shortcut, ^P for
+         Ctrl+P, and is not translated, like every other label on the row. -->
+    <string name="key_desc_quick_commands">命令選擇區</string>
+    <string name="key_desc_quick_open">前往檔案</string>
+    <string name="key_desc_quick_terminal">切換終端機</string>
+    <string name="key_desc_quick_side_bar">切換主要提要欄位</string>
+    <string name="key_desc_quick_panel">切換面板</string>
+    <string name="key_desc_quick_save">儲存</string>
+
     <!-- The four characters that exist only as long-press alternates. Every
          other alternate is a key on some page and reuses that key's name, so
          the popup and the row say the same thing about the same character.
