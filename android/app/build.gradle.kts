@@ -114,6 +114,16 @@ android {
     // app is decided by targetSdk below, and that is deliberately not moved here.
     compileSdk = 37
 
+    // The NDK the Android plugin strips and extracts debug symbols with. The plugin
+    // no longer reads ANDROID_NDK_HOME, so with nothing set it takes its own default,
+    // and a runner image that stopped carrying that one made the release build
+    // package every library unstripped and the symbols zip lose four of its five
+    // libraries, with a green build. release.yml sets this to the NDK it installs;
+    // every other build leaves it to the plugin, which needs no NDK to package.
+    providers.environmentVariable("VSCODROID_NDK_VERSION").orNull
+        ?.takeIf { it.isNotBlank() }
+        ?.let { ndkVersion = it }
+
     signingConfigs {
         create("release") {
             storeFile = file(signingProp("storeFile", "VSCODROID_KEYSTORE_FILE",
