@@ -34,7 +34,9 @@ SHIM_OUT="$OUT_DIR/libseccomp-shim.so"
 LAUNCH_OUT="$OUT_DIR/libclaude-launch.so"
 
 TARGET=aarch64-linux-android
-API=33
+# The app's minSdk. Everything here is compiled against that level, so the
+# compiler refuses a call the oldest supported device does not have.
+API=30
 
 echo "=== Claude Code seccomp shim ==="
 

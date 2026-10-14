@@ -35,7 +35,10 @@ OUT_DIR="${OUT_DIR:-$ROOT_DIR/android/app/src/main/assets/usr/lib}"
 WORK_DIR="${WORK_DIR:-$ROOT_DIR/.build/glibc-shim}"
 
 TARGET=aarch64-linux-android
-API=33
+# The app's minSdk. The stubs the link and the forwarder check resolve against
+# are this level's, which is what makes a name Bionic gained later a build
+# failure here rather than a dlopen failure on the oldest supported device.
+API=30
 
 # The names a glibc-linked binary carries in DT_NEEDED. Every stub finds its
 # targets through the shim's resolver, whichever Bionic library holds them, so

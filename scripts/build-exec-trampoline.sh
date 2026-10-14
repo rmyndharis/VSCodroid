@@ -31,7 +31,9 @@ OUT_DIR="${OUT_DIR:-$ROOT_DIR/android/app/src/main/jniLibs/arm64-v8a}"
 OUT="$OUT_DIR/libexec-trampoline.so"
 
 TARGET=aarch64-linux-android
-API=33
+# The app's minSdk, so the compiler refuses a libc call the oldest supported
+# device does not have.
+API=30
 
 echo "=== toolchain execution trampoline ==="
 
