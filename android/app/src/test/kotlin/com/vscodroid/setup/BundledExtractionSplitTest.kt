@@ -160,13 +160,60 @@ class BundledExtractionSplitTest {
         )
     }
 
+    /**
+     * The user's own gallery install is the copy that runs whatever its version:
+     * the manifest keeps its entry and lists no second one, nothing sweeps a
+     * gallery name, and the orphan sweep removes an unpacked bundled copy beside
+     * a listed one. Unpacking next to an older install wrote the copy and
+     * deleted it again on every update.
+     */
     @Test
-    fun `an older gallery install still gets the bundled copy`() {
+    fun `an older gallery install stops the bundled copy being unpacked too`() {
+        for (theirs in listOf("ms-python.python-2026.1.0-universal", "ms-python.python-2026.1.0-alpine-arm64")) {
+            assertTrue(
+                bundledDirsToExtract(present = listOf(theirs), bundled = listOf(fetchedPython)).isEmpty(),
+                "$theirs is the user's copy; the bundled one would be unpacked and then swept",
+            )
+        }
+    }
+
+    @Test
+    fun `a gallery install spelled in another case stops the bundled copy`() {
+        // The gallery lowercases publisher and name; the bundled directory keeps
+        // the publisher's own spelling, which the orphan sweep also compares
+        // without case.
+        assertTrue(
+            bundledDirsToExtract(
+                present = listOf("pkief.material-icon-theme-5.1.0-universal"),
+                bundled = listOf("PKief.material-icon-theme-5.2.0"),
+            ).isEmpty(),
+        )
+    }
+
+    @Test
+    fun `an abandoned gallery directory does not stop the bundled copy`() {
         val theirs = "ms-python.python-2026.1.0-universal"
 
         assertEquals(
             listOf(fetchedPython),
-            bundledDirsToExtract(present = listOf(theirs), bundled = listOf(fetchedPython)),
+            bundledDirsToExtract(
+                present = listOf(theirs),
+                bundled = listOf(fetchedPython),
+                abandoned = setOf(theirs),
+            ),
+        )
+    }
+
+    @Test
+    fun `an older bundled copy without a platform suffix still gets the new bundled one`() {
+        // Not the user's gallery install: a leftover of ours, which the superseded
+        // sweep removes, so the new version has to be unpacked to take its place.
+        assertEquals(
+            listOf(fetchedPython),
+            bundledDirsToExtract(
+                present = listOf("ms-python.python-2026.1.0"),
+                bundled = listOf(fetchedPython),
+            ),
         )
     }
 
