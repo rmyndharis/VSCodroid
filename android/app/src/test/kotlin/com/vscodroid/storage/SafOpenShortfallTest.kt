@@ -18,6 +18,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -79,6 +80,18 @@ class SafOpenShortfallTest {
 
     /** How many times a device document was opened for reading. */
     private var reads = 0
+
+    /**
+     * Run once, when the device document being read is closed: an editor, a terminal or a
+     * build writing the mirror file while the open is still reading it, which nothing can
+     * prevent, since the open stops the watcher and nothing else.
+     *
+     * The close is after the engine has read the mirror file to its end and has its answer,
+     * so the write lands behind the point the read reached, which is the one it cannot see.
+     * Written from the device's own stream, at its first read, it would be read as it
+     * landed and the comparison would answer false by itself.
+     */
+    private var writtenAfterTheRead: (() -> Unit)? = null
 
     @BeforeEach
     fun setUp() {
@@ -161,8 +174,16 @@ class SafOpenShortfallTest {
         every { resolver.openInputStream(any()) } answers {
             reads++
             val doc = docs.first { it.name == nameOf(firstArg()) }
-            if (doc.readable) ByteArrayInputStream(doc.text.toByteArray())
-            else throw IOException("the provider refused the read")
+            if (doc.readable) {
+                object : ByteArrayInputStream(doc.text.toByteArray()) {
+                    override fun close() {
+                        super.close()
+                        writtenAfterTheRead?.also { writtenAfterTheRead = null }?.invoke()
+                    }
+                }
+            } else {
+                throw IOException("the provider refused the read")
+            }
         }
         every { resolver.openOutputStream(any(), "wt") } answers {
             val name = nameOf(firstArg())
@@ -498,6 +519,128 @@ class SafOpenShortfallTest {
 
         assertTrue(written.isEmpty(), "the device's edit was written over with no copy kept: $written")
         assertEquals(listOf("notes.md"), lost, "a file held back with its edit was not announced")
+    }
+
+    /**
+     * What the settles above leave a file that was written while they read it. Both read
+     * the device copy to its end and, when it holds the mirror's bytes, stamp the file with
+     * the device's time and record it as one the device holds. An editor's autosave, a
+     * terminal or a build can write the file meanwhile, behind the point the read has
+     * reached, and the open stops the watcher, so nothing carries that write to the
+     * device either. Settled on the answer the read gave about bytes that were gone, the
+     * edit was stamped with the device's older time and recorded: the next open read it
+     * as a save already delivered and never sent it.
+     *
+     * Held, a file written during the read keeps its edit and its own time, the record
+     * does not vouch for it, its saves are refused like any file the open could not
+     * settle, and the next open with room sends it.
+     *
+     * Rewritten to the same length and to a longer one, because the engine compares the
+     * file's time and length before and after the read, and a same-length rewrite is the
+     * case a length alone would not show.
+     */
+    @ParameterizedTest(name = "a file written while it is read in the strictly newer arm: {0}")
+    @ValueSource(strings = ["v1 SAVED!", "v1 saved and then typed"])
+    fun `a file written while its device copy is read is not settled in the strictly newer arm`(
+        rewrite: String,
+    ) {
+        deviceHolding(doc("notes.md", "v1"))
+        open()
+        File(mirror, "notes.md").apply {
+            writeText("v1, saved")
+            setLastModified(SAVED_AT)
+        }
+        deviceHolding(doc("notes.md", "v1, saved", SAVED_AT - 1_000))
+        belowTheFloor()
+        writtenAfterTheRead = { File(mirror, "notes.md").writeText(rewrite) }
+
+        open()
+
+        assertEditKept("notes.md", rewrite, deviceTime = SAVED_AT - 1_000)
+        assertEquals(listOf("notes.md"), lost, "an edit that stayed inside the app was not announced")
+        assertDeliveredAtTheNextOpenWithRoom("notes.md", "$rewrite and typed again")
+    }
+
+    /** The same, in the arm a fetch the floor held back takes when the device copy is the newer. */
+    @ParameterizedTest(name = "a file written while it is read in the failed fetch arm: {0}")
+    @ValueSource(strings = ["v1 SAVED!", "v1 saved and then typed"])
+    fun `a file written while its device copy is read is not settled in the failed fetch arm`(
+        rewrite: String,
+    ) {
+        deviceHolding(doc("notes.md", "v1"))
+        open()
+        File(mirror, "notes.md").apply {
+            writeText("v1, saved")
+            setLastModified(SAVED_AT)
+        }
+        deviceHolding(doc("notes.md", "v1, saved", SAVED_AT + 1_000))
+        belowTheFloor()
+        writtenAfterTheRead = { File(mirror, "notes.md").writeText(rewrite) }
+
+        open()
+
+        assertEditKept("notes.md", rewrite, deviceTime = SAVED_AT + 1_000)
+        assertEquals(listOf(1 to true), notices, "a document that was not copied was not announced")
+        assertDeliveredAtTheNextOpenWithRoom("notes.md", "$rewrite and typed again")
+    }
+
+    /**
+     * The control for the two above, and the reason they cannot be satisfied by refusing to
+     * settle anything: with nothing written during the read, the file is stamped with the
+     * device's time and recorded, as it was before.
+     */
+    @ParameterizedTest(name = "a file nothing wrote while it was read is settled: device time {0} ms from the save")
+    @ValueSource(longs = [1_000, -1_000])
+    fun `a file nothing wrote while its device copy was read is stamped and recorded`(
+        stampedAfterSave: Long,
+    ) {
+        deviceHolding(doc("notes.md", "v1"))
+        open()
+        File(mirror, "notes.md").apply {
+            writeText("v1, saved")
+            setLastModified(SAVED_AT)
+        }
+        deviceHolding(doc("notes.md", "v1, saved", SAVED_AT + stampedAfterSave))
+        belowTheFloor()
+
+        open()
+
+        val file = File(mirror, "notes.md")
+        assertEquals(SAVED_AT + stampedAfterSave, file.lastModified(), "the settled file kept its own time")
+        assertTrue(
+            engine.identityLine("notes.md", file) in recordLines(),
+            "a file whose device copy holds its bytes was not recorded: ${recordLines()}",
+        )
+        assertTrue(engine.holdsOnlyVouchedCopies(mirror), "a settled file was left unvouched")
+        assertTrue(lost.isEmpty() && notices.isEmpty(), "a settled file was announced: $lost $notices")
+    }
+
+    /**
+     * [name] still holds [text], carries a time of its own rather than the device's, and no
+     * line of the record vouches for it, which is what keeps the next open from reading it
+     * as delivered. Its save is refused beside it, as any file this open could not settle.
+     */
+    private fun assertEditKept(name: String, text: String, deviceTime: Long) {
+        val file = File(mirror, name)
+        assertEquals(text, file.readText(), "the edit written during the read was replaced")
+        assertNotEquals(deviceTime, file.lastModified(), "the edit was stamped with the device's older time")
+        assertFalse(
+            engine.identityLine(name, file) in recordLines(),
+            "an edit the device never received was recorded as held by it: ${recordLines()}",
+        )
+        assertFalse(engine.holdsOnlyVouchedCopies(mirror), "an edit that exists only here was called disposable")
+        save(name, "$text and typed again")
+        assertTrue(written.isEmpty(), "a save went over a device copy this open never settled: $written")
+        assertEquals(listOf(name), lost, "the refused save was not announced")
+    }
+
+    /** The edit this open could not settle goes to the device once there is room to read it. */
+    private fun assertDeliveredAtTheNextOpenWithRoom(name: String, text: String) {
+        space = Long.MAX_VALUE
+
+        open()
+
+        assertEquals(text, written[name], "the edit was never sent: it was read as already delivered")
     }
 
     /**

@@ -794,7 +794,7 @@ class SafSyncEngine(private val context: Context) {
                             if (deviceChanged) setAsideDeviceCopy(doc, localPath) else null
                         if (deviceCopy == DeviceCopyOutcome.UNAVAILABLE &&
                             usableSpaceOf(mirrorDir) < OPEN_SPACE_FLOOR_BYTES &&
-                            deviceMatchesMirror(doc.uri, localPath, doc.size)
+                            deviceMatchesUnchangedMirror(doc.uri, localPath, doc.size)
                         ) {
                             // The floor held back the fetch the set-aside needed, and a
                             // read says there was nothing to set aside or write back: the
@@ -804,6 +804,12 @@ class SafSyncEngine(private val context: Context) {
                             // before the save. Settled like phase 2's own held-back fetch
                             // below, stamped with the device's time and recorded, so it is
                             // neither announced nor refused its saves for the session.
+                            //
+                            // Only for a file nothing wrote while it was read. One that
+                            // was written is not what the read compared, and stamping it
+                            // with the device's older time would record an edit the
+                            // device never received as delivered; it takes the deferral
+                            // below, as a read that found other bytes does.
                             localPath.setLastModified(doc.lastModified)
                             recordIdentity(recorded, doc.relativePath, localPath)
                         } else if (deviceCopy == DeviceCopyOutcome.UNAVAILABLE) {
@@ -958,7 +964,7 @@ class SafSyncEngine(private val context: Context) {
                     digests[line] = fetched
                 } else if (localPath.isFile &&
                     usableSpaceOf(mirrorDir) < OPEN_SPACE_FLOOR_BYTES &&
-                    deviceMatchesMirror(doc.uri, localPath, doc.size)
+                    deviceMatchesUnchangedMirror(doc.uri, localPath, doc.size)
                 ) {
                     // Held back by the floor, and nothing was missed by it: the device
                     // document holds the mirror's bytes, which a read settles without
@@ -974,6 +980,10 @@ class SafSyncEngine(private val context: Context) {
                     //
                     // Stamped with the device's time, as the copy would have been, so the
                     // next open finds it current rather than fetching it again.
+                    //
+                    // Only for a file nothing wrote while it was read, as in the arm above;
+                    // one that was written falls to the failed copy below, which keeps it
+                    // as the editor wrote it.
                     if (doc.lastModified > 0) localPath.setLastModified(doc.lastModified)
                     keptLocal++
                     recordIdentity(recorded, doc.relativePath, localPath)
@@ -2777,6 +2787,44 @@ class SafSyncEngine(private val context: Context) {
             )
             false
         }
+    }
+
+    /**
+     * [deviceMatchesMirror], answered true only for a mirror file nothing wrote while the
+     * two were being read.
+     *
+     * Both streams are read to their ends, which on a large file or a slow provider takes
+     * a while, and the watcher is stopped for the whole open: an editor's autosave, a
+     * terminal or a build can write the file meanwhile, behind the point the read has
+     * reached. The comparison then answers for bytes that are gone, and a caller that
+     * settles on it stamps the file with the device's older time and records it as held by
+     * the device. The next open reads that as a save already delivered, and the edit is
+     * never sent.
+     *
+     * The file's time and length are taken before the comparison, ahead of its own length
+     * check, and again after it. A file that moved is not the one the comparison answered
+     * for, and false is what every caller already makes of "the device copy is not known
+     * to hold these bytes": the file stays as the editor wrote it and takes the deferral
+     * or the failed copy it would have taken had the bytes differed.
+     *
+     * Ceilings, both inherent in checking a file's identity rather than holding it: a
+     * rewrite of the same length inside one tick of the file system's clock shows no
+     * change, and a write between the second reading and the caller's stamp is not seen.
+     */
+    private fun deviceMatchesUnchangedMirror(
+        safDocUri: Uri,
+        localFile: File,
+        deviceSize: Long,
+    ): Boolean {
+        val modified = localFile.lastModified()
+        val length = localFile.length()
+        if (!deviceMatchesMirror(safDocUri, localFile, deviceSize)) return false
+        if (localFile.lastModified() == modified && localFile.length() == length) return true
+        Logger.i(
+            tag,
+            "Not settling ${localFile.name}: it was written while its device copy was read",
+        )
+        return false
     }
 
     /**
