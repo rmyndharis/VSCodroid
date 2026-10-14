@@ -132,4 +132,26 @@ class PackagingGateArmingTest {
                 "are correct."
         )
     }
+
+    /**
+     * The C/C++ sweep is the same shape and has the same requirement: its subject
+     * is one pack, so it is armed by that pack's payload and by no other's. A
+     * checkout that has downloaded Ruby and not C/C++ has nothing of this gate's
+     * subject to read, and arming it by the family would sweep a pack holding
+     * only its manifest.
+     */
+    @Test
+    fun `the C and C++ shell sweep keeps the predicate its own subject needs`() {
+        val predicate = armingPredicate("verifyCppPackShellPaths")
+        assertTrue(
+            predicate != null,
+            "verifyCppPackShellPaths is armed by nothing, so a checkout that has never run " +
+                "download-cpp.sh sweeps a pack holding only its manifest and reports it clean"
+        )
+        assertTrue(
+            predicateBody(predicate!!).contains("toolchain_cpp"),
+            "verifyCppPackShellPaths checks the C/C++ pack and nothing else: armed by " +
+                "$predicate(), which does not name it, it answers for another pack's payload"
+        )
+    }
 }

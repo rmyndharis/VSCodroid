@@ -120,10 +120,11 @@ file in it is answered for. Three are:
     which is the only step that ever fills it, and again by the
     verifyRubyPackShellPaths Gradle task, because what a bundle packages is the
     directory in the checkout rather than the download that last wrote it.
-  * the C/C++ asset pack, swept by download-cpp.sh, which is the only step that
-    fills it. Every file in it is answered for: paths.h is rewritten, and no
-    binary in it names the path (checked on libLLVM, libclang-cpp, the driver,
-    lld and the llvm tools).
+  * the C/C++ asset pack, swept by download-cpp.sh once it has placed the pack
+    and again by the verifyCppPackShellPaths Gradle task, for the reason the
+    Ruby pack is. Every file in it is answered for: paths.h is rewritten, and
+    no binary in it names the path (checked on libLLVM, libclang-cpp, the
+    driver, lld and the llvm tools).
 
 The Python stdlib is deliberately not one of them. Three files under it name the
 path in a `#!` line rather than as a default they hand to execve, none of them
