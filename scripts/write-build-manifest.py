@@ -179,6 +179,12 @@ def collect() -> list[str]:
     ]
 
     tarballs = sorted((ROOT / "server").glob("*.tar.gz")) if (ROOT / "server").is_dir() else []
+    # The tarball the pin names, not every one the cache still holds: a restored
+    # download cache carries the earlier pins' as well, and the manifest then
+    # listed three servers where the build used one. All of them stay when none
+    # is named by the pin, so a differently named tree is still recorded.
+    pinned = f"vscode-reh-web-linux-arm64-{read_text('VSCODE_VERSION')}.tar.gz"
+    tarballs = [t for t in tarballs if t.name == pinned] or tarballs
     for t in tarballs:
         lines.append(f"vscode-server\t{sha256(t)}\t{t.name}")
     if not tarballs:
