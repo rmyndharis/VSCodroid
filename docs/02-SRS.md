@@ -52,7 +52,7 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 ### 2.4 Constraints
 
 - ARM64 Android only (API 33+)
-- All binaries must be bundled as .so in APK (Android W^X enforcement)
+- Every binary the app installs must arrive in the APK as .so or in a Play asset pack (Android W^X enforcement). Programs a user builds or installs under the app's storage cannot be exec'd directly and run through the system dynamic linker instead
 - Open VSX only: Microsoft Marketplace ToS prohibits third-party access
 - Android phantom process limit (32 system-wide) constrains child process count
 - See [Section 5: System Constraints](#5-system-constraints) for detailed list
@@ -67,6 +67,7 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 | The diffs in `patches/` keep applying across VS Code updates | Rebase effort increases significantly |
 | 4GB RAM devices can run VS Code server + WebView | May need to raise minimum requirement |
 | Google Play Store allows .so-bundled binaries | Need alternative distribution (GitHub, F-Droid) |
+| Google Play accepts a terminal that runs user-built programs through the system linker, as the Termux build on Play does | Confine the exec interceptor to sideloaded installs, or remove it, and keep GitHub as the distribution for that capability |
 
 ---
 
@@ -267,7 +268,7 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 | NFR-SEC-02 | No telemetry sent to external services | Microsoft telemetry stripped | P0 |
 | NFR-SEC-03 | Server listens on localhost only | No external network exposure | P0 |
 | NFR-SEC-04 | App-private storage for workspace | Android sandbox enforced | P0 |
-| NFR-SEC-05 | All binaries delivered via Play Store (Play install) | Core as .so in base APK; toolchains as on-demand asset packs via Language Picker. A non-Play install fetches the same toolchain ZIPs over HTTPS from GitHub Releases, against a published sha256 manifest | P0 |
+| NFR-SEC-05 | Every binary the app installs is delivered by Play on a Play install; the app never downloads executable code for itself | Core as .so in base APK; toolchains as on-demand asset packs via Language Picker. A non-Play install fetches the same toolchain ZIPs over HTTPS from GitHub Releases, against a published sha256 manifest | P0 |
 | NFR-SEC-06 | Extension sandbox | Extensions run in Extension Host only | P1 |
 
 ### 4.6 Usability (NFR-USE)
@@ -306,7 +307,7 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 
 | Constraint | Details |
 |-----------|---------|
-| W^X enforcement (API 29+) | Cannot write then execute files. Must use .so bundling trick |
+| W^X enforcement (API 29+) | A file under the app's storage cannot be exec'd. The app's own binaries ship as .so; a user's program is started through `/system/bin/linker64`, which the exec interceptor in the terminal does on the user's behalf |
 | Phantom process limit (API 31+) | Max 32 system-wide. Must minimize child processes |
 | Foreground Service restrictions (API 34+) | Must declare specialUse type with justification |
 | 16KB page alignment (API 36) | All native binaries must be compiled with 16KB page support |

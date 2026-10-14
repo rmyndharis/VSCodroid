@@ -339,12 +339,13 @@ class ToolchainEnvFileTest {
     /**
      * `jshell` is the one wrapper that adds arguments, and they are what make it
      * start at all: its default engine launches a second JVM by absolute path,
-     * which cannot be exec'd from filesDir, so the wrapper selects the local
-     * engine unless the caller chose one. jshell refuses `--execution` given
-     * twice and accepts abbreviations of it, so the guard is asserted in all
-     * three spellings. The `$HOME` with a space in it holds the quoting. `java`
-     * is the control: the special case must not leak into the ordinary wrapper
-     * beside it.
+     * which cannot be exec'd from filesDir without the exec interceptor, and
+     * the wrapper is also sourced where none is preloaded, so it selects the
+     * local engine unless the caller chose one. jshell refuses `--execution`
+     * given twice and accepts abbreviations of it, so the guard is asserted in
+     * all three spellings. The `$HOME` with a space in it holds the quoting.
+     * `java` is the control: the special case must not leak into the ordinary
+     * wrapper beside it.
      */
     @Test
     fun `jshell runs its snippets in its own JVM`() {
