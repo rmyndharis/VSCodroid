@@ -14,6 +14,7 @@ import android.content.ComponentCallbacks2.TRIM_MEMORY_RUNNING_LOW
 import android.content.pm.PackageManager
 import android.content.res.Configuration
 import android.graphics.Typeface
+import android.os.Build
 import android.os.Bundle
 import android.net.Uri
 import android.os.Handler
@@ -2471,6 +2472,12 @@ class MainActivity : AppCompatActivity() {
     }
 
     private fun requestNotificationPermission() {
+        // The permission exists from API 33. Below that notifications are on
+        // unless the user turned them off in Settings, so there is no dialog to
+        // ask and none to wait for. The service posts its foreground card with
+        // `startForeground` when it starts, and nothing needs re-posting after an
+        // answer: the launcher above never fires there.
+        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.TIRAMISU) return
         if (ContextCompat.checkSelfPermission(this, Manifest.permission.POST_NOTIFICATIONS)
             != PackageManager.PERMISSION_GRANTED
         ) {
@@ -3147,8 +3154,8 @@ class MainActivity : AppCompatActivity() {
         // is how a destroyed Activity and its view tree survived a task swipe.
         //
         // A teardown is available and was not chosen. `setServiceWorkerClient`
-        // takes a @Nullable client at minSdk 33, measured against the platform
-        // stub, so clearing it in onDestroy is a real option. What it costs is an
+        // takes a @Nullable client, measured against the platform stub, so
+        // clearing it in onDestroy is a real option. What it costs is an
         // answer to when an outgoing Activity runs relative to an incoming one,
         // because clearing at the wrong moment wipes the live client and
         // `bridgeInitialized` then holds off a re-registration until a renderer
@@ -6397,8 +6404,13 @@ class MainActivity : AppCompatActivity() {
         // There the preview confirms what was copied, which is the whole
         // affordance, and the text is a line the user selected rather than a log
         // they never read.
-        clip.description.extras = android.os.PersistableBundle().apply {
-            putBoolean(android.content.ClipDescription.EXTRA_IS_SENSITIVE, true)
+        //
+        // The key is API 33, and so is the preview it silences: before that there
+        // is nothing drawn, and an extra no release reads is not worth carrying.
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            clip.description.extras = android.os.PersistableBundle().apply {
+                putBoolean(android.content.ClipDescription.EXTRA_IS_SENSITIVE, true)
+            }
         }
         clipboard.setPrimaryClip(clip)
         Toast.makeText(this@MainActivity, getString(R.string.crash_report_copied), Toast.LENGTH_SHORT).show()
@@ -6479,13 +6491,16 @@ class MainActivity : AppCompatActivity() {
      * Warns when the installed WebView is older than the version this project
      * is tested against.
      *
-     * `minSdk` 33 shipped with Chrome 105, below the floor, so what this catches
-     * is a WebView that has not been updated since, the cases a user cannot
-     * diagnose: a System WebView disabled or downgraded by hand or by an OEM
-     * image, a device where WebView updates are blocked so the component ages
-     * while the OS does not, and emulators or custom ROMs carrying the WebView
-     * their image was built with. A device that takes WebView updates from the
-     * Play Store is far above the floor and sees nothing. Below it the
+     * Every release this supports shipped with a WebView below the floor
+     * (Android 13's was Chrome 105), and an image keeps the WebView it was built
+     * with until the component updates itself. So what this catches is a WebView
+     * that has not been updated since, the cases a user cannot diagnose: a
+     * System WebView disabled or downgraded by hand or by an OEM image, a device
+     * where WebView updates are blocked so the component ages while the OS does
+     * not, and emulators, custom ROMs or devices without the Play Store carrying
+     * the WebView their image was built with. A device that takes WebView
+     * updates from the Play Store is far above the floor and sees nothing, on
+     * Android 11 as on 13. Below it the
      * workbench loads and the failure is quiet rather than a clean refusal:
      * every webview, the Markdown preview and extension panels among them,
      * stays blank (see [WebViewVersion.MINIMUM_CHROME_MAJOR]).

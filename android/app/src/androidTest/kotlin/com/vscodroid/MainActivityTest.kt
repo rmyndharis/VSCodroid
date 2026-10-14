@@ -1,5 +1,6 @@
 package com.vscodroid
 
+import android.os.Build
 import android.view.View
 import android.webkit.WebView
 import androidx.test.core.app.ActivityScenario
@@ -21,6 +22,8 @@ import org.junit.Assert.assertTrue
 import org.junit.Before
 import org.junit.Rule
 import org.junit.Test
+import org.junit.rules.RuleChain
+import org.junit.rules.TestRule
 import org.junit.runner.RunWith
 
 /**
@@ -38,11 +41,19 @@ class MainActivityTest {
      * root without focus with RootViewWithoutFocusException after ten seconds,
      * so the two About cases below, which look inside the dialog's own window,
      * went red on a device nobody had tapped Allow on. Granted here rather than
-     * by an operator; the permission exists from API 33, which is minSdk.
+     * by an operator.
+     *
+     * Only from API 33, where the permission exists: MainActivity asks for it on
+     * no earlier release, so there is no prompt to answer, and granting one the
+     * platform has never heard of fails the rule before the first case runs.
      */
     @get:Rule
-    val notifications: GrantPermissionRule =
-        GrantPermissionRule.grant(android.Manifest.permission.POST_NOTIFICATIONS)
+    val notifications: TestRule =
+        if (Build.VERSION.SDK_INT >= Build.VERSION_CODES.TIRAMISU) {
+            GrantPermissionRule.grant(android.Manifest.permission.POST_NOTIFICATIONS)
+        } else {
+            RuleChain.emptyRuleChain()
+        }
 
     private val context get() = InstrumentationRegistry.getInstrumentation().targetContext
 

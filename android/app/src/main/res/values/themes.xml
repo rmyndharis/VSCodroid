@@ -24,16 +24,17 @@
              Attributes rather than Window.setStatusBarColor/setNavigationBarColor,
              which is the whole point: Play flags those two calls in the bundle, and
              the attribute form is not bytecode. API 35+ ignores both and paints the
-             bars from the window background regardless, so this decides API 33 and
-             34 only. Without it those two draw the Material3 default, which is blue
+             bars from the window background regardless, so this decides API 30 to
+             34 only. Without it those draw the Material3 default, which is blue
              against this app's dark editor: measured on an API 33 emulator. -->
         <item name="android:statusBarColor">@android:color/transparent</item>
         <item name="android:navigationBarColor">@android:color/transparent</item>
 
         <!-- Declarative, and it replaces what androidx's enableEdgeToEdge() set
              from code. API 35+ forces `always` whatever is asked for, so this
-             only decides API 33 and 34; naming the value the platform settles
-             on keeps the two the same. See util/ViewInsets.drawBehindSystemBars. -->
+             only decides API 30 to 34 (30 is the first release that has `always`);
+             naming the value the platform settles on keeps them the same. See
+             util/ViewInsets.drawBehindSystemBars. -->
         <item name="android:windowLayoutInDisplayCutoutMode">always</item>
 
         <!-- The bars stay transparent rather than having the platform paint a scrim
@@ -53,32 +54,19 @@
              reasonably wonder which bar was left out and why.
 
              Attributes rather than the setters for the same reason as the colours:
-             Play scans bytecode and an attribute is not a call. Both exist in the
-             android-33 SDK's attrs.xml, verified, and minSdk is 33, so no
-             version-qualified copy is needed. -->
+             Play scans bytecode and an attribute is not a call. Both are API 29
+             attributes, read from the platform's api-versions.xml, and minSdk is
+             30, so no version-qualified copy is needed. -->
         <item name="android:enforceStatusBarContrast">false</item>
         <item name="android:enforceNavigationBarContrast">false</item>
     </style>
 
-    <!-- The starting window the system draws on a launch while the editor's theme
-         is light, before any of this app runs. keepStartColor (VSCodroidWebView.kt)
-         names it through SplashScreen.setSplashScreenTheme, which the system keeps
-         for later launches; nothing else applies it. The bar icons on it follow its
-         colour by themselves.
-         Theme.VSCodroid, the manifest's theme, stays dark. A launch draws it
-         whenever this one is not named: under a dark editor colour, on a fresh
-         install, whose editor starts on the dark default, and on the first start
-         after updating from a build that never named this, whatever the editor's
-         theme. A resource cannot know the editor's theme, and one following the
-         device's night mode would turn those starts white for a dark editor on a
-         device in light mode.
-         ⚠️ Keep the name. The system stores it as a name and looks it up on every
-         launch, and one that no longer resolves falls back to the manifest's dark
-         theme without an error. keepStartColor names the theme again only when the
-         editor's colour changes, so after a rename an install stays dark until it
-         does. -->
-    <style name="Theme.VSCodroid.LightStart">
-        <item name="android:windowSplashScreenBackground">@android:color/white</item>
-    </style>
+    <!-- The theme keepStartColor names for a light editor. Empty here on purpose:
+         the starting window is a theme API from Android 12 and its white
+         background is declared in values-v31, so Android 11 never parses an
+         attribute it does not have. Nothing names this style below API 31. The
+         declaration stays so the resource has a default, which is what a
+         reference from code needs. -->
+    <style name="Theme.VSCodroid.LightStart" />
 
 </resources>
