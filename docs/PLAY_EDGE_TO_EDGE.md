@@ -70,7 +70,7 @@ attribute is not a method call.
 
 Their scope is not uniform, and an earlier version of this section flattened it.
 API 35+ ignores the two bar COLOURS and paints from the window background, and it
-forces the cutout mode, so those three decide API 33 and 34 and nothing else. It
+forces the cutout mode, so those three decide API 30 to 34 and nothing else. It
 does **not** ignore `enforceNavigationBarContrast`, which still decides whether a
 scrim is drawn behind a 3-button navigation bar on a current image.
 

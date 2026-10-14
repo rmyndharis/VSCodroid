@@ -284,7 +284,7 @@ owning extension is what frees a slot.
 - System WebView updates automatically via Play Store
 - No additional binary size (Chromium adds 100MB+)
 - WebView on Android is Chromium-based, supports all VS Code needs
-- Minimum WebView 125+: the workbench positions every webview (Markdown preview, extension panels, notebook outputs) with CSS anchor positioning, which Chromium has from 125. Android 13 shipped with 105, so a WebView that never updated is below it
+- Minimum WebView 125+: the workbench positions every webview (Markdown preview, extension panels, notebook outputs) with CSS anchor positioning, which Chromium has from 125. Android 13 shipped with 105 and the API 30 emulator image carries 91, so a WebView that never updated is below it
 
 **Trade-off**: Dependent on user's WebView version. Mitigation: a runtime version check (`MainActivity.checkWebViewVersion`) warns below the floor; the editor still opens, but its webviews stay blank.
 
@@ -296,7 +296,7 @@ owning extension is what frees a slot.
 
 **Context**: Node.js server must keep running when app is backgrounded. Android aggressively kills background processes.
 
-**Decision**: Use Foreground Service with `specialUse` type (Android 14+ requirement).
+**Decision**: Use Foreground Service with `specialUse` type (Android 14+ requirement). The manifest declares the type for every release; `ServiceCompat.startForeground` (androidx.core 1.19.0, read from its bytecode) masks the type with `0xFF` below Android 14, so there the platform is told none.
 
 **Rationale**:
 - Foreground Service prevents process killing
@@ -587,7 +587,7 @@ colour probe's own WebView records nothing.
 |-------|-----------|---------|
 | Android app | Kotlin, compiled to JVM target 17 | The version AGP 9.3.1 brings (`agp` in `android/gradle/libs.versions.toml`) |
 | Build system | Gradle (Kotlin DSL), pinned by the wrapper and its `distributionSha256Sum` | 9.7.1 (`android/gradle/wrapper/gradle-wrapper.properties`) |
-| UI framework | Android View + WebView | API 33-36 |
+| UI framework | Android View + WebView | API 30-36 |
 | Node.js | Node.js from Termux's `nodejs-lts` package, installed as `libnode.so` by `scripts/download-node.sh` | 24.18.0; the pinned VS Code tag's `remote/.npmrc` `target` names 24.20.0, the same major and so the same `NODE_MODULE_VERSION` |
 | VS Code | Code - OSS, built from MIT source with the diffs in `patches/` | 1.139.1 (pinned in the `VSCODE_VERSION` file at the repo root) |
 | Extension Host | VS Code Extension Host as a worker_thread (patch `0004`); the Pty Host likewise (patch `0003`) | Same as VS Code |

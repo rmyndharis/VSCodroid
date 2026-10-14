@@ -1213,7 +1213,8 @@ VSCodroid's own screens follow the same list: the setup progress, the toolchain
 picker, and the notifications and dialogs the app puts on screen are translated
 into those thirteen languages too. On Android 13 and later they can be set
 separately from the phone, under Settings, Apps, VSCodroid, Language, and the
-editor follows that choice as well.
+editor follows that choice as well. Android 11 and 12 have no such setting, so
+there the app and the editor follow the phone's language.
 
 VSCodroid's own commands, settings and the Get Started walkthrough are
 translated into the same thirteen languages. An extension you install from Open

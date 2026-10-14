@@ -22,7 +22,7 @@
 flowchart TD
   S1["Stage 1: Assemble binaries<br/>Node, Python, git, bash, tmux, make, ssh from Termux packages<br/>node-pty and @parcel/watcher cross-compiled with the NDK"] --> S2["Stage 2: Build Code - OSS<br/>MIT microsoft/vscode source + patches/ + branding/<br/>output: vscode-reh-web-linux-arm64 (server and web client in one tree)"]
   S2 --> S3["Stage 3: Android APK/AAB<br/>Gradle assembleRelease<br/>Kotlin + WebView + assets + jniLibs<br/>output: app-release.aab"]
-  ENV["Environment: arm64 Linux runner for stage 2 (the gulp build needs the target arch)<br/>Android NDK r27 for the native addons: aarch64-linux-android28<br/>App minSdk: API 33"] -. applies to .-> S1
+  ENV["Environment: arm64 Linux runner for stage 2 (the gulp build needs the target arch)<br/>Android NDK r27 for the native addons and shims: aarch64-linux-android30<br/>App minSdk: API 30"] -. applies to .-> S1
   ENV -. applies to .-> S2
   ENV -. applies to .-> S3
 ```
@@ -254,7 +254,7 @@ android {
 
     defaultConfig {
         applicationId = "com.vscodroid"
-        minSdk = 33
+        minSdk = 30
         targetSdk = 36
         versionCode = 16            // moves every release; read build.gradle.kts, never this block
         versionName = "1.5.0"      // both are persisted by markSetupComplete() and either one
@@ -1549,11 +1549,12 @@ Mapping to VS Code version:
 
 Two files, because the platform reads two. `android:fullBackupContent` is consulted
 up to Android 11 (API 30) and `android:dataExtractionRules` from Android 12 (API 31)
-onwards. `minSdk` is 33, so **every supported device reads
-`data_extraction_rules.xml` and ignores `backup_rules.xml`**. The older file is kept
-deliberately rather than deleted: it is the floor that stops a future `minSdk`
-reduction from silently turning on unrestricted full backup. Keep the two in step:
-the header comment in each file carries the full reasoning.
+onwards. `minSdk` is 30, so **both are live**: an Android 11 device reads
+`backup_rules.xml` and ignores `data_extraction_rules.xml`, and every later release
+does the reverse. Without `android:fullBackupContent` an Android 11 device would take
+unrestricted full backup, the SSH key and the connection token included. Keep the two
+in step, which `BackupRulesParityTest` holds: the header comment in each file carries
+the full reasoning.
 
 **Live rules** (`res/xml/data_extraction_rules.xml`):
 
@@ -1569,7 +1570,7 @@ the header comment in each file carries the full reasoning.
 </data-extraction-rules>
 ```
 
-`backup_rules.xml` holds the same single `<include>` in `<full-backup-content>` form.
+`backup_rules.xml` holds the same single `<include>` in `<full-backup-content>` form, and is the rule an Android 11 device applies.
 
 **Rationale**: this is an **allowlist with no exclusions**, and the absence of
 `<exclude>` is the design rather than an omission. Under `<include>` semantics
