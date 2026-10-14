@@ -822,6 +822,21 @@ class VSCodroidWebViewClient(
      * the process, and this client is rebuilt with every WebView.
      */
     private val secretStorageKey: () -> ByteArray = { throw IllegalStateException("no secret storage key") },
+    /**
+     * Told when a navigation the page started in its main frame is not going to
+     * happen here: it was handed to another app, or refused.
+     *
+     * The page has been told to leave by then. `beforeunload` runs in the page
+     * ahead of [shouldOverrideUrlLoading], so a document that covered itself for
+     * the leave (`MainActivity.injectLeaveCurtain`) is still the document, with
+     * the cover up and no navigation coming to replace it. Nothing else knows
+     * that: the page sees no event for a navigation that does not commit, and
+     * only its own five second timer would take the cover down.
+     *
+     * Defaulted, for the reason [onHandoffFailed] is: the tests that build this
+     * class have no page to tell.
+     */
+    private val onNavigationDeclined: () -> Unit = { },
 ) : WebViewClient() {
     // MissingOnRenderProcessGone: overridden below, and what it does there is the
     // reason the class exists in one piece. The check misses the override on a
@@ -830,6 +845,18 @@ class VSCodroidWebViewClient(
     private val tag = "WebViewClient"
 
     override fun shouldOverrideUrlLoading(view: WebView, request: WebResourceRequest): Boolean {
+        val declined = declinesLoading(view, request)
+        // Once, here, and not at each `return true` below: they are a refusal
+        // apiece and a hand-off, and every one of them leaves the page where it was.
+        if (declined && request.isForMainFrame) onNavigationDeclined()
+        return declined
+    }
+
+    /**
+     * True when this client has taken the navigation, which is what the platform
+     * reads `shouldOverrideUrlLoading` as answering: the WebView does not load it.
+     */
+    private fun declinesLoading(view: WebView, request: WebResourceRequest): Boolean {
         val url = request.url
         // The one URL here that is a control on our own page rather than an
         // address to hand away. Both conditions are load-bearing. The main-frame

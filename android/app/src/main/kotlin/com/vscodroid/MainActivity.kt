@@ -3113,6 +3113,10 @@ class MainActivity : AppCompatActivity() {
             openFolder = { openWorkspaceRoot },
             connectionToken = { nodeService?.getConnectionToken() },
             onCrash = { recreateWebView() },
+            // The page covers itself the moment it is told to leave, and a
+            // navigation this client hands to another app or refuses never comes
+            // to replace it: the cover has to be taken down from here.
+            onNavigationDeclined = { liftLeaveCurtain() },
             // A hand-off that no app accepted used to be indistinguishable from a
             // dead link: the WebView does not navigate either, so the tap did
             // nothing and said nothing. ActivityNotFoundException is separated
@@ -5144,10 +5148,19 @@ class MainActivity : AppCompatActivity() {
      * listener has had its turn, and lowers the curtain for a cancelled event, so
      * the page the user is asked about is the intact one: measured, with the
      * dialog's "Stay on this page" the page is intact and no element is left on the
-     * root. A second timer lowers it anyway after five seconds, so a
-     * navigation that never commits, which leaves the workbench shut down but the
-     * page alive, does not leave a window nobody can see through; and `pageshow`
-     * lowers it for a page restored from the back-forward cache.
+     * root. `beforeunload` also fires for a navigation that then never replaces
+     * the page: a link to `mailto:` or another scheme goes to another app, and the
+     * client refuses a path on this origin that is not the workbench. The workbench
+     * itself is untouched by those (its opener wraps the assignment in
+     * `withExpectedShutdown`, which turns its own listener off), so only the curtain
+     * is left, and [liftLeaveCurtain] takes it down when the client declines the
+     * navigation. Measured on an API 33 emulator before it did: a link to a scheme
+     * no app answers left the screen blank but for the toast for five seconds, and
+     * a `mailto:` link in a Markdown preview kept the curtain over an intact
+     * workbench. The timer stays for anything the client never hears of, so a
+     * navigation that does not commit does not leave a window nobody can see
+     * through, and `pageshow` lowers it for a page restored from the back-forward
+     * cache.
      *
      * No colour known, no curtain: the root has none until the page script that
      * `assets/server.js` adds runs, and a guess would be a dark flash under a light
@@ -5193,8 +5206,23 @@ class MainActivity : AppCompatActivity() {
                     failsafe = setTimeout(lower, 5000);
                 }, true);
                 window.addEventListener('pageshow', lower);
+                // The app took the navigation that fired beforeunload for itself, to
+                // another app or to a refusal, so nothing is coming to replace this page.
+                window.addEventListener('vscodroid-navigation-declined', lower);
             })();
             """.trimIndent(),
+            null
+        )
+    }
+
+    /**
+     * Tells the page that a navigation it was about to leave for was declined here,
+     * so the curtain [injectLeaveCurtain] raised for it comes down at once and not
+     * after its failsafe. A page with no curtain ignores it.
+     */
+    private fun liftLeaveCurtain() {
+        webView?.evaluateJavascript(
+            "window.dispatchEvent(new Event('vscodroid-navigation-declined'));",
             null
         )
     }

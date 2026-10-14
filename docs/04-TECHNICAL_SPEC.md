@@ -676,10 +676,21 @@ blank until the new page came. `injectLeaveCurtain` raises a full-window element
 background colour, the root's, from its own `beforeunload` listener, so the frame after the
 shutdown is the curtain whichever listener runs first; on the shipped build it runs ahead of the
 workbench's, 44 ms before `modern-ui` comes off. A leave the workbench vetoes (`vetoBeforeUnload`
-cancels the event with `preventDefault` and `returnValue`) lowers it in the next task, a timer
-lowers it after five seconds for a navigation that never commits, and `pageshow` lowers it for a
-page restored from the back-forward cache. A page with no background colour of its own gets no
-curtain, since a guessed dark one is a flash under a light theme.
+cancels the event with `preventDefault` and `returnValue`) lowers it in the next task, and
+`pageshow` lowers it for a page restored from the back-forward cache. A page with no background
+colour of its own gets no curtain, since a guessed dark one is a flash under a light theme.
+
+`beforeunload` also fires for a navigation that then never replaces the page. A link to `mailto:` or
+another scheme goes to another app, and a path on the editor's own origin that is not the workbench
+is refused. The workbench itself is untouched by those, since its opener assigns `location.href`
+inside `withExpectedShutdown` with the shutdown handling disabled, so only the curtain is left, and
+over a screen that answers nothing for as long as it stands. `VSCodroidWebViewClient` says so
+through `onNavigationDeclined` whenever `shouldOverrideUrlLoading` takes a main-frame navigation
+(handed away, or refused), `MainActivity.liftLeaveCurtain` dispatches `vscodroid-navigation-declined`
+into the page, and the script lowers on it: on API 33 the curtain stood for 11 ms over a `mailto:`
+link tapped in a Markdown preview with the workbench intact, and 58 ms over a scheme no app answers,
+where it had stood for the whole five seconds, the toast over a blank screen. A timer still lowers
+it after five seconds for anything the client never hears of.
 
 Cut every 50 ms from a recording of Developer: Reload Window, the intact page was followed at once
 by the plain colour on API 33, on API 36 with no hardware keyboard and on API 37, with no frame of

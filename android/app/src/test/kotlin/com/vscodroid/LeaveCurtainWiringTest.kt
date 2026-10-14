@@ -89,6 +89,42 @@ class LeaveCurtainWiringTest {
     }
 
     @Test
+    fun `a navigation the client declines is told to the page under the name the script listens for`() {
+        val source = mainActivity()
+        val event = "vscodroid-navigation-declined"
+        val script = SourceScan.body(source, "private fun injectLeaveCurtain(")
+        assertTrue(
+            script.contains("addEventListener('$event', lower)"),
+            "the curtain script no longer lowers on `$event`, so a link handed to another app " +
+                "or a refused load leaves the page blank for the whole five seconds.",
+        )
+        val lift = SourceScan.body(source, "private fun liftLeaveCurtain(")
+        assertTrue(
+            lift.contains("new Event('$event')") && lift.contains("evaluateJavascript"),
+            "liftLeaveCurtain does not dispatch `$event` into the page.",
+        )
+        assertTrue(
+            source.contains("onNavigationDeclined = { liftLeaveCurtain() }"),
+            "the client's declined-navigation callback is not wired to liftLeaveCurtain().",
+        )
+    }
+
+    @Test
+    fun `the shipped workbench still turns its own shutdown off for the links it hands away`() {
+        // The reason only the curtain is left over a page whose link went to another app:
+        // the opener assigns `location.href` inside `withExpectedShutdown` with the
+        // shutdown handling disabled, so the workbench's beforeunload listener stands down.
+        val bundle = shippedWorkbench()
+        assertTrue(
+            Regex("""withExpectedShutdown\(\{disableShutdownHandling:!0\},\(\)=>[\w$]+\.location\.href=""")
+                .containsMatchIn(bundle),
+            "the opener no longer assigns location.href inside withExpectedShutdown with " +
+                "disableShutdownHandling. A link to another app would then dismantle the " +
+                "workbench as a reload does, and lowering the curtain would show that.",
+        )
+    }
+
+    @Test
     fun `the shipped workbench still shuts down inside beforeunload and vetoes by cancelling it`() {
         val bundle = shippedWorkbench()
         assertTrue(

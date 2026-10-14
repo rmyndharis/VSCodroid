@@ -14,8 +14,10 @@
  * A leave the workbench vetoes has to end up with no curtain, whichever of the
  * two listeners runs first and whichever way it cancels, because the page the
  * user is then asked about is the one they have to be able to see. And nothing
- * may be left standing: a navigation that never commits, a page restored from
- * the back-forward cache, a second leave after a first that was vetoed.
+ * may be left standing: a navigation that never commits, one the app hands to
+ * another app or refuses (the page is told, `vscodroid-navigation-declined`), a
+ * page restored from the back-forward cache, a second leave after a first that
+ * was vetoed or declined.
  *
  * This extracts the real script, runs it under `vm` against a stub window, and
  * drives the listeners it installs with fake events and a fake clock.
@@ -30,8 +32,11 @@
  * the one that counts listeners; not lowering the old curtain before raising a
  * new one fails the replacement case; leaving the timer running when the
  * curtain is lowered fails the stale timer case; dropping the guard fails the
- * one that runs the script twice; and a fixed dark colour for a page that has
- * none fails the two colourless cases.
+ * one that runs the script twice; a fixed dark colour for a page that has none
+ * fails the two colourless cases; dropping the `vscodroid-navigation-declined`
+ * listener fails the case that declines and the one that counts listeners; and
+ * lowering the curtain on it without clearing the timer fails the case that
+ * declines.
  *
  * Extraction is deliberately strict. If the raw string moves or changes shape
  * this fails saying so, rather than quietly checking an empty string.
@@ -167,6 +172,12 @@ function page({ rootColor = '#1e1e1e', bodyColor = '', body = true, install = 1 
         pageshow() {
             listeners.filter((l) => l.type === 'pageshow').forEach((l) => l.fn({ persisted: true }));
         },
+        /** What `MainActivity.liftLeaveCurtain` dispatches when the app turns the navigation down. */
+        declined() {
+            listeners
+                .filter((l) => l.type === 'vscodroid-navigation-declined')
+                .forEach((l) => l.fn({ type: 'vscodroid-navigation-declined' }));
+        },
     };
 }
 
@@ -231,6 +242,40 @@ add('a navigation that never commits gets the page back after five seconds', () 
     assert.strictEqual(p.timerCount(), 0, 'a timer is left running');
 });
 
+add('a navigation the app declines takes the curtain down at once', () => {
+    const p = page();
+    p.leave();
+    assert.strictEqual(p.onRoot.length, 1, 'no curtain was raised for the leave');
+    // The app answers a task or more later, after the veto check has run.
+    p.advance(0);
+    p.declined();
+    assert.strictEqual(p.onRoot.length, 0, 'the curtain stayed over a page nothing is replacing');
+    assert.strictEqual(p.timerCount(), 0, 'its five second timer is still running');
+});
+
+add('a declined navigation with no curtain up is harmless', () => {
+    const p = page();
+    p.declined();
+    assert.strictEqual(p.onRoot.length, 0);
+    assert.strictEqual(p.timerCount(), 0);
+    p.leave();
+    assert.strictEqual(p.onRoot.length, 1, 'a declined navigation before it left the next leave uncovered');
+});
+
+add('a leave after a declined one is covered again for its own five seconds', () => {
+    const p = page();
+    p.leave();
+    p.advance(1000);
+    p.declined();
+    p.advance(1000);
+    p.leave();
+    assert.strictEqual(p.onRoot.length, 1, 'the second leave was not covered');
+    p.advance(4999);
+    assert.strictEqual(p.onRoot.length, 1, 'the declined leave\'s timer took the second curtain down');
+    p.advance(1);
+    assert.strictEqual(p.onRoot.length, 0);
+});
+
 add('a page restored from the back-forward cache is not left covered', () => {
     const p = page();
     p.leave();
@@ -288,7 +333,7 @@ add('a document with no body and no root colour is left alone', () => {
 add('running the script twice installs one listener of each kind', () => {
     const p = page({ install: 2 });
     const kinds = p.listeners.map((l) => l.type).sort();
-    assert.deepStrictEqual(kinds, ['beforeunload', 'pageshow']);
+    assert.deepStrictEqual(kinds, ['beforeunload', 'pageshow', 'vscodroid-navigation-declined']);
     p.leave();
     assert.strictEqual(p.onRoot.length, 1);
 });
