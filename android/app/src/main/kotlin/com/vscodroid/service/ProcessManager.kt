@@ -1942,6 +1942,8 @@ class ProcessManager(private val context: Context) {
             try {
                 BufferedReader(InputStreamReader(process.inputStream)).use { reader ->
                     reader.lineSequence().forEach { line ->
+                        // Not a message: see [isSettingsProbeMiss].
+                        if (isSettingsProbeMiss(line)) return@forEach
                         Logger.d(tag, "[node] $line")
                         serverLog.append(line)
                         // For the current process only. A restart replaces
@@ -2564,3 +2566,19 @@ internal fun heapKillsAfter(exitCode: Int, overrideRaisedCeiling: Boolean, curre
 
 /** `128 + SIGKILL`, as `assets/server.js` reports a signalled child. */
 internal const val HEAP_OVERRIDE_FATAL_EXIT = 137
+
+/**
+ * The line the editor server prints for each load of a folder that has no
+ * `.vscode/settings.json`: `File not found: <absolute path>`.
+ *
+ * The page reads that file before it paints, to start on the folder's theme, and a
+ * missing one is the usual case and answers 404, which the server's resource
+ * handler logs as an error line. It says nothing, and it is the one line of the
+ * server's output that names the folder the user opened, every load, so it
+ * filled the tail a bug report quotes with a path that report did not need. Only
+ * this probe's file is dropped: a `File not found` for anything else is still the
+ * server telling us something.
+ */
+internal fun isSettingsProbeMiss(line: String): Boolean =
+    line.startsWith("File not found: ") && line.endsWith("/.vscode/settings.json")
+

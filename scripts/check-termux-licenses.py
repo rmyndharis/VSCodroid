@@ -394,9 +394,9 @@ def main():
         print(f"   no entry  {', '.join(unmapped)}: the build places files for these "
               "and no licence is recorded for any of them")
     # The other direction of the same question. A map entry no package accounts
-    # for is either not a Termux library at all, which is the answer for the two
-    # here today, or a row whose package was renamed out from under it. Printed
-    # rather than failed, because this script cannot tell those apart.
+    # for is either not a Termux library at all, which is the answer for the
+    # three here today, or a row whose package was renamed out from under it.
+    # Printed rather than failed, because this script cannot tell those apart.
     orphans = sorted(name for name, (component, _) in records
                      if name not in claimed and component != "VSCodroid")
     if orphans:
