@@ -8,10 +8,15 @@ bulb made the window grow under the list, the editor's layout changed, and
 the list closed, its onHide giving the editor focus back.
 
 On Android a change of the editor's height alone now leaves the list open.
-The editor grows downward when the keyboard goes down, so the light bulb and
-the list beside it stay where they were. A change of width, as a turn of the
-phone makes, still closes it, and elsewhere every layout change does, as
-before.
+With one editor group and the default scrolling the editor grows downward when
+the keyboard goes down, so the light bulb and the list beside it stay where
+they were. Below a split editor, or at the end of a file with
+editor.scrollBeyondLastLine off, the content can move under the list, which
+then stays where the bulb was: still on screen, its rows run, and a tap outside
+closes it. The same relaxation holds for the other lists the action widget
+service shows, the paste widget and the terminal quick fix. A change of width,
+as a turn of the phone makes, still closes it, and elsewhere every layout
+change does, as before.
 
 Measured with a tap on the light bulb and the keyboard up, in a .js file
 with an unused const. Without the patch, on an API 33 emulator with Gboard

@@ -4587,13 +4587,15 @@ class MainActivity : AppCompatActivity() {
      * listener below provides that.
      *
      * Only menus. Other context views, the action widget behind the chat
-     * pickers and Quick Fix and the select dropdowns among them, are laid out
-     * again on a resize rather than hidden, and they close when they lose
-     * focus: refused focus, they could never lose it, and a tap outside left
-     * them open. And only while the soft keyboard is up, which is the only
-     * state in which moving focus changes the window: with it down, or with a
-     * hardware keyboard in its place, a menu takes focus as it always did and
-     * Enter and the arrow keys reach it rather than the file behind it.
+     * pickers and the select dropdowns among them, are laid out again on a
+     * resize rather than hidden, and they close when they lose focus: refused
+     * focus, they could never lose it, and a tap outside left them open. The
+     * Quick Fix list is the exception that is not a context view's doing: its
+     * controller hides it at every layout change, which patch 0028 relaxes to
+     * a change of width. And only while the soft keyboard is up, which is the
+     * only state in which moving focus changes the window: with it down, or
+     * with a hardware keyboard in its place, a menu takes focus as it always
+     * did and Enter and the arrow keys reach it rather than the file behind it.
      * [ExtraKeyRow] reports the keyboard's state to the page.
      *
      * What focus was doing for the menu is keyboard handling, and one key
