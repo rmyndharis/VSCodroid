@@ -59,7 +59,12 @@ says which directories it covers:
     Latent rather than live, since building a native gem also wants a C compiler
     and none is bundled, but it is the compiler that should be the thing missing.
 
-Four spellings. Two questions decide the rewrite: whether the file's length is
+One more is not a default of a bundled program at all. The NDK sysroot's
+`paths.h`, which the C/C++ pack installs, defines `_PATH_BSHELL` as Termux's
+path, so a program compiled on the device that names it carries a shell its own
+app cannot reach. It is rewritten in the pack, before the sweep.
+
+Five spellings. Two questions decide the rewrite: whether the file's length is
 fixed, and whether the padded bytes are data or source.
 
   * a C constant ends at its first NUL. The replacement carries that NUL, so the
@@ -106,7 +111,7 @@ must not report as clean. It only ever reads.
 
 Which directories go under it is a decision, not a default. A sweep that fails a
 correct build is worse than no sweep, so a directory qualifies only once every
-file in it is answered for. Two are:
+file in it is answered for. Three are:
 
   * jniLibs, swept by the verifyBundledShellPaths Gradle task at packaging time,
     which is the moment a binary restored from a cache no download step re-ran
@@ -115,6 +120,10 @@ file in it is answered for. Two are:
     which is the only step that ever fills it, and again by the
     verifyRubyPackShellPaths Gradle task, because what a bundle packages is the
     directory in the checkout rather than the download that last wrote it.
+  * the C/C++ asset pack, swept by download-cpp.sh, which is the only step that
+    fills it. Every file in it is answered for: paths.h is rewritten, and no
+    binary in it names the path (checked on libLLVM, libclang-cpp, the driver,
+    lld and the llvm tools).
 
 The Python stdlib is deliberately not one of them. Three files under it name the
 path in a `#!` line rather than as a default they hand to execve, none of them
@@ -208,6 +217,14 @@ FORMS = (
     Form("Python source",
          b"unix_shell = ('" + TERMUX_SH + b"')",
          b"unix_shell = ('" + ANDROID_SH + b"')",
+         b""),
+    # The NDK sysroot's paths.h. Termux points every _PATH_* macro at its own
+    # prefix; this is the one that names a shell. The whole definition is matched
+    # so the hit is pinned to the macro, and the replacement is shorter, which a
+    # text file allows.
+    Form("C header definition",
+         b'#define _PATH_BSHELL "' + TERMUX_SH + b'"',
+         b'#define _PATH_BSHELL "' + ANDROID_SH + b'"',
          b""),
     # Ruby's mkmf.rb, inside the heredoc that becomes the generated Makefile.
     # Matched with its `SHELL =` so the hit is pinned to the assignment rather
