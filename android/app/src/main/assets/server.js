@@ -680,10 +680,14 @@ if (!fs.existsSync(rehEntryPoint)) {
                 '\t\t\t\t\t\t\tvar text = request.status === 200 ? request.responseText : request.status === 404 ? null : undefined;',
                 "\t\t\t\t\t\t\tif (text !== undefined) { settings.initialWorkspaceSettings = text; named = ''; }",
                 '\t\t\t\t\t\t\tif (text) {',
+                // Neither pattern can fail once it has met its opener: a string or a
+                // comment left open takes the rest of the text, so a file cut off in the
+                // middle is one pass. Required to close, they were tried again at every
+                // later quote and comment opener, which is quadratic in such a file.
                 "\t\t\t\t\t\t\t\tvar keep = function (match, string) { return string || ''; };",
                 '\t\t\t\t\t\t\t\tvar json = text.replace(/^\\uFEFF/, \'\')',
-                '\t\t\t\t\t\t\t\t\t.replace(/("(?:[^"\\\\]|\\\\.)*")|\\/\\/[^\\n]*|\\/\\*[\\s\\S]*?\\*\\//g, keep)',
-                '\t\t\t\t\t\t\t\t\t.replace(/("(?:[^"\\\\]|\\\\.)*")|,(?=\\s*[}\\]])/g, keep);',
+                '\t\t\t\t\t\t\t\t\t.replace(/("(?:[^"\\\\]|\\\\[\\s\\S])*"?)|\\/\\/[^\\n]*|\\/\\*[\\s\\S]*?(?:\\*\\/|$)/g, keep)',
+                '\t\t\t\t\t\t\t\t\t.replace(/("(?:[^"\\\\]|\\\\[\\s\\S])*"?)|,(?=\\s*[}\\]])/g, keep);',
                 '\t\t\t\t\t\t\t\tvar parsed = /\\S/.test(json) ? JSON.parse(json) : {};',
                 "\t\t\t\t\t\t\t\tvar value = ((query.get('folder') ? parsed : parsed.settings) || {})['workbench.colorTheme'];",
                 "\t\t\t\t\t\t\t\tnamed = typeof value === 'string' ? value : '';",

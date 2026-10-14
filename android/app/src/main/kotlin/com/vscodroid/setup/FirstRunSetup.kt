@@ -4937,8 +4937,9 @@ internal fun failedUnpackMustBeRemoved(
  * re-copy would silently revert it.
  *
  * A fetched extension is also skipped when the same or a NEWER version of that
- * identifier is already installed under another directory, which is a user's
- * own gallery install of something this build bundles. The gallery names that
+ * identifier is already installed under another directory, or when ANY version
+ * of it sits under a directory the gallery named, which is a user's own gallery
+ * install of something this build bundles. The gallery names that
  * directory `<id>-<version>-<targetPlatform>`, which [splitExtensionDir]
  * reads. Nothing else would ever have removed it: [supersededExtensionDirs]
  * refuses to touch a directory that is currently bundled or that the gallery
@@ -4981,6 +4982,19 @@ internal fun bundledDirsToExtract(
     // An abandoned directory is wreckage, not an install: it must not count as
     // a copy of its own version that makes unpacking it redundant.
     val installed = present.filterNot { it in abandoned }.mapNotNull(::splitExtensionDir)
+    // The identifiers the user holds from the gallery, whatever the version, and
+    // without case as [orphanedBundledCopies] compares them. A directory the
+    // gallery named is the user's copy and the one that runs:
+    // [bundledIdsToRelist] keeps its entry and adds none beside it, nothing
+    // sweeps a gallery name ([supersededExtensionDirs]), and
+    // [orphanedBundledCopies] removes an unpacked bundled copy that sits beside
+    // a listed one. Unpacking next to an OLDER gallery install therefore wrote
+    // 29 MiB for Python and deleted it again on every update.
+    val galleryIds = present
+        .filter { it !in abandoned && TARGET_PLATFORM_SUFFIX.containsMatchIn(it) }
+        .mapNotNull(::splitExtensionDir)
+        .map { it.first.lowercase() }
+        .toSet()
     return bundled.filter { dir ->
         if (dir.startsWith(OWN_EXTENSION_PREFIX)) return@filter true
         if (dir in present && dir !in abandoned) return@filter false
@@ -4988,6 +5002,7 @@ internal fun bundledDirsToExtract(
         // Lowercased to meet the record, which manifestEntryFor builds from
         // the lowercased package.json halves; a real bundled publisher is PKief.
         if (id.lowercase() in uninstalled) return@filter false
+        if (id.lowercase() in galleryIds) return@filter false
         installed.none { (otherId, otherVersion) ->
             otherId == id && (otherVersion == version || isOlderVersion(version, otherVersion))
         }

@@ -719,8 +719,9 @@ fun generateBugReport(authToken: String): String
 //   reason by name (ANR, LOW_MEMORY, CRASH_NATIVE, ...), status,
 //   importance, pss and rss, and the system's description
 // - The last 20 renderer deaths, from renderer.log under
-//   Environment.getLogsDir, which both onRenderProcessGone overrides write
-//   through CrashReporter.recordRendererDeath: time, crashed or killed by
+//   Environment.getLogsDir, which the two onRenderProcessGone overrides for the
+//   editor's WebView write through CrashReporter.recordRendererDeath, and the
+//   colour probe's own WebView does not: time, crashed or killed by
 //   the system, and the renderer priority at exit
 // - How many crash logs exist, plus the text of the three most recent
 // - The last 200 lines of the Node server's output, read from `server.log`

@@ -86,8 +86,9 @@ object CrashReporter {
     /**
      * Notes for [generateBugReport] that the editor's renderer process died.
      *
-     * Called from both `onRenderProcessGone` overrides, before the WebView is
-     * rebuilt. A death the app recovers from shows the user the loading page for
+     * Called from the two `onRenderProcessGone` overrides for the editor's
+     * WebView, before it is rebuilt; the colour probe's own WebView does not
+     * call it. A death the app recovers from shows the user the loading page for
      * a few seconds and then the editor again, and until now it reached logcat
      * and nothing else, so no report could show it. The system's exit records
      * cover this app's own processes; whether they also cover the WebView's
