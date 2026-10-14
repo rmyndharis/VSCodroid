@@ -1162,14 +1162,14 @@ back, and a turn to landscape closed it (API 33 and 36).
 
 A keyboard that pastes from its own clipboard, as the suggestion strip of Gboard does, commits the
 text in one piece, and `NativeEditContext` typed it: `viewController.type` runs every character
-through the typing handlers, so a few thousand characters of code held the page for 0.6 to 6.4 s
-on an API 33 emulator, and every line break was indented again on top of the indentation the text
-already carried (five lines of nested braces, four spaces apiece, came out at 8, 16 and 20). On
-Android patch 0029 hands a plain commit of more than 64 characters, or of any text that holds a
-line break, to `viewController.paste`, which inserts it in one edit and leaves it as it is: the
-same 4000 characters held the page for 0.1 to 1.3 s and the braces arrived unchanged. One
-character, an Enter and a composition are untouched. Measured with `Input.insertText`, which is
-how a `commitText` reaches the editor, and not yet with the suggestion strip itself.
+through the typing handlers, so 4720 characters of code held the page for 1.1 s on an API 33
+emulator with Gboard 12.4, and every line break was indented again on top of the indentation the
+text already carried (five lines of nested braces, four spaces apiece, came out at 8, 16 and 20).
+On Android patch 0029 hands a plain commit of more than 64 characters, or of any text that holds
+a line break, to `viewController.paste`, which inserts it in one edit and leaves it as it is: the
+same paste took 3 ms and the braces arrived unchanged. One character, an Enter and a
+composition are untouched. A DOM paste event, which Ctrl+V and the long-press Paste use, never
+took this path.
 
 ### 5.3 Visibility Control
 
