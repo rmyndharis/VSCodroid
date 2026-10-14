@@ -511,7 +511,8 @@ name scripts in `extensions/git/dist`, and each of those names is a link onto
 directory, so the interceptor lets that exec through as it is rather than starting it through the
 linker (P2 in `scripts/termux-exec.patch`), and a credential prompt from `git` in a terminal
 reaches the workbench's sign-in and input boxes with or without the preload. Read from the code,
-not measured with the preload.
+not measured with the preload. The C/C++ toolchain (section 7.5) is the one pack that cannot work
+without it.
 
 ---
 
@@ -1428,7 +1429,7 @@ is intact, not that it is the right tarball.
 ### 7.1 Toolchain Configuration
 
 Toolchains are declared in Kotlin, in `ToolchainRegistry.available`, and both the first-run picker
-and the manage screen are built from that list. Two are shipped, Ruby and Java 17:
+and the manage screen are built from that list. Three are shipped, Ruby, Java 17 and C/C++:
 
 ```kotlin
 ToolchainInfo(
@@ -1442,13 +1443,18 @@ ToolchainInfo(
 )
 ```
 
-The second entry is `toolchain_java`, OpenJDK 17 with `javac`, `jar` and `jshell`.
+The second entry is `toolchain_java`, OpenJDK 17 with `javac`, `jar` and `jshell`. The third is
+`toolchain_cpp`, clang and lld with a minimal sysroot (section 7.5).
 
-The shipped set is interpreters and a JVM, and that is a constraint rather than a preference. A
-toolchain whose compiler forks its own assembler and linker cannot work here at all: Android refuses
-`execve` on anything under the app's data directory, so those forks are refused however the driver
-command is reached, and a toolchain that installs, runs, and cannot compile is worse than one that
-is absent.
+The first two are an interpreter and a JVM, and for a long time that was a constraint rather than a
+preference. A toolchain whose compiler forks its own assembler and linker cannot work from a start
+the app makes by hand: Android refuses `execve` on anything under the app's data directory, so those
+forks are refused however the driver command is reached, and a toolchain that installs, runs, and
+cannot compile is worse than one that is absent; one was withdrawn for exactly that. C/C++ is
+possible only because of the terminal's exec interceptor (section 2.3), which rewrites every `exec`
+the shell and its children make, the compiler's own fork of `ld.lld` included, into
+`linker64 <file>`. It is therefore declared `"preloadOnly": true` and it works in a terminal and in
+what a terminal starts, and nowhere else.
 
 ### 7.2 Asset Pack Extraction Flow
 
@@ -1473,9 +1479,10 @@ Because the payload lands in `filesDir`, an installed toolchain survives an app 
 // settings.gradle.kts
 include(":toolchain_ruby")
 include(":toolchain_java")
+include(":toolchain_cpp")
 
 // app/build.gradle.kts
-assetPacks += listOf(":toolchain_ruby", ":toolchain_java")
+assetPacks += listOf(":toolchain_ruby", ":toolchain_java", ":toolchain_cpp")
 ```
 
 Each asset pack module:
@@ -1513,7 +1520,7 @@ which only its Continue and Skip buttons write; a kill or an interrupted first r
 offered again on the next launch. It offers exactly what `ToolchainRegistry.available` lists:
 
 ```kotlin
-val toolchains = ToolchainRegistry.available   // toolchain_ruby, toolchain_java
+val toolchains = ToolchainRegistry.available   // toolchain_ruby, toolchain_java, toolchain_cpp
 
 fun onUserConfirmed(selected: List<ToolchainInfo>) {
     // Queue them; downloads run one at a time, driven by COMPLETED/FAILED
@@ -1537,6 +1544,57 @@ fun onUserConfirmed(selected: List<ToolchainInfo>) {
 `ToolchainManager` entry points.
 
 ---
+
+### 7.5 The C/C++ Pack
+
+`scripts/download-cpp.sh` builds `toolchain_cpp` from the Termux packages `clang`, `libllvm`, `lld`,
+`llvm`, `libcompiler-rt`, `ndk-sysroot`, `libxml2` and `python`, each checked against the signed
+index like the other packs. The list is the closure minus what the base APK already carries
+(`libc++_shared.so`, libz, libzstd, libffi, libiconv, liblzma), because an asset path both the base
+module and a pack ship is a conflict bundletool refuses. What lands in `filesDir/usr`:
+
+| Path | What | Size |
+|---|---|---|
+| `bin/clang-<major>`, `bin/lld` | the driver and the linker | 6 MB |
+| `bin/llvm-ar`, `-ranlib`, `-nm`, `-objdump`, `-objcopy`, `-strip`, `-readelf`, `-size` | the binary tools | 3 MB |
+| `lib/libLLVM.so`, `lib/libclang-cpp.so` | the compiler, shared by every tool above | 197 MB |
+| `lib/libxml2.so.16`, `lib/libpthread.so`, `lib/librt.so`, `lib/libutil.so` | libLLVM's one missing dependency, and three linker scripts | 1 MB |
+| `lib/crt*.o`, `lib/libunwind.a`, `lib/libatomic.a`, two more archives | what a default link names | 0.1 MB |
+| `lib/clang/<major>/include`, `.../lib/linux/libclang_rt.builtins-aarch64-android.a` | clang's own headers and the one runtime archive | 16 MB |
+| `include/` | bionic, kernel and libc++ (`include/c++/v1`) headers | 28 MB |
+| `include/python3.<minor>` | Python's headers, for `pip install` of a C extension | 2.7 MB |
+
+The listing is the Termux layout and has to stay one: clang finds its sysroot at `bin/../..`, its
+resource directory at `bin/../lib/clang` and `ld.lld` beside itself, from where it was started. That
+path is what the interceptor puts in `TERMUX_EXEC__PROC_SELF_EXE`, which libLLVM reads instead of
+`/proc/self/exe`; started by hand through `linker64`, as the bash functions and the trampoline rows
+do, the process believes it is the loader and finds none of it. Hence `"preloadOnly": true`, which
+`regenerateEnvFileLocked` and `regenerateExecTableLocked` honour by writing no function and no
+row for the toolchain's binaries, while `binaries`, `pathDirs` and `env` apply as for any other.
+
+The command names are `symlinks` in the manifest (`clang`, `clang++`, `cc`, `c++`, `gcc`, `g++`,
+`aarch64-linux-android-clang` and `-clang++` onto the driver; `ld` and `ld.lld` onto lld; `ar`,
+`ranlib`, `nm`, `strip`, `objdump`, `objcopy`, `readelf` and `size` onto the `llvm-*` files), made
+in `usr/bin` at install time and removed with the toolchain, because neither an asset pack nor the
+release ZIP can carry a link. A symlink keeps the name it was reached by, which is what tells the
+driver C from C++ (`c++`, `clang++` and `g++` run it as `g++`) and lld `ld` from `ld.lld`.
+
+`ownedPaths` is the manifest key for what a toolchain puts into directories it shares with the base
+install and does not own outright, because clang finds them there and nowhere else: one entry per
+top-level header in `usr/include`, the `usr/lib/clang` directory, the crt objects and archives, and
+the notices. Uninstall deletes exactly those, link-aware, and so does the reclaim of an install the
+system stopped part-way (`removeToolchainFiles`); a header the user added to `usr/include` beside
+them stays. An entry is refused unless it is under `usr/` and at least three components deep
+(`isOwnedPathName`). The build script ends by checking that every file in the pack is named by
+`binaries`, `libs` or `ownedPaths`, so an uninstall cannot leave one behind.
+
+Not in the pack, and not a defect: `clangd` and the other clang tools, `libclang.so`, cmake, ninja,
+the sanitizer runtimes, OpenMP and the profile library. `make` is the base app's.
+
+**What it needs.** The terminal's interceptor, and only that. With `LD_PRELOAD` set to null, from an
+extension that starts a process itself, or as a `"type": "process"` task's own command, a compiler
+is a file under `filesDir` the kernel will not execute and nothing here makes it one. The card says
+so, and so does the user guide.
 
 ## 8. Package Manager
 

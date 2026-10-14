@@ -793,8 +793,8 @@ fun listSshKeys(authToken: String): String
 
 #### Toolchain Control
 
-`ToolchainRegistry.available` is the source for what these can name. It lists Ruby and
-Java 17, and nothing else.
+`ToolchainRegistry.available` is the source for what these can name. It lists Ruby,
+Java 17 and C/C++, and nothing else.
 
 ```kotlin
 @JavascriptInterface
@@ -806,7 +806,7 @@ fun getAvailableToolchains(authToken: String): String
 
 @JavascriptInterface
 fun getInstalledToolchains(authToken: String): String
-// JSON array of installed SHORT names, e.g. ["ruby","java"]. "[]" if refused.
+// JSON array of installed SHORT names, e.g. ["ruby","java","cpp"]. "[]" if refused.
 
 @JavascriptInterface
 fun installToolchain(name: String, authToken: String)   // note: token LAST
@@ -1205,9 +1205,9 @@ interface ToolchainManager {
 }
 
 interface Toolchain {
-  id: string; // "ruby", "java" -- those two. Rust and C/C++ have no module, no
-              // asset pack and no ToolchainRegistry entry; they were planned and
-              // deferred, and naming them here read as a shipped option
+  id: string; // "ruby", "java", "cpp" -- those three. Rust has no module, no
+              // asset pack and no ToolchainRegistry entry; it was planned and
+              // deferred, and naming it here read as a shipped option
   name: string; // "Java 17"
   version: string; // "17"
   sizeMb: number; // 146

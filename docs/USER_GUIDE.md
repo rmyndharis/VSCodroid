@@ -26,7 +26,7 @@ A practical guide to using VSCodroid -- the full VS Code IDE running natively on
 
 1. **Install**. Download from the [Play Store](#) or [GitHub Releases](https://github.com/rmyndharis/VSCodroid/releases). The core download is roughly 270 MB, and you need about 738 MB free for the extraction that follows.
 2. **Binary extraction** -- On first launch, VSCodroid extracts bundled tools (Node.js, Python, Git, Bash, and others) to internal storage. About 603 MB lands on disk, unpacked one file at a time behind a progress bar, so allow minutes rather than seconds on a slower device. The ~738 MB above is that payload plus the working room setup insists on before it will start. It happens on the first launch and again after every app update, because the extraction is keyed on the app version rather than on what is already unpacked. An update needs far less free space than a fresh install (the app credits what it already holds, so roughly 230 MB rather than 738 MB), but it does re-copy the files and it does take minutes. A first run that is interrupted and retried on the same version is the one case that does not start over: files already the right size are left alone.
-3. **Language Picker** -- A prompt asks "What do you code in?" with options for Ruby and Java. It comes back at each launch until you answer it with Continue or Skip, and your answer is not final: touch and hold the app icon and pick **Manage toolchains** to add or remove them later. Whatever you select downloads there on the setup screen, one at a time; a download that fails is skipped and the rest continue. Skip goes straight to the editor.
+3. **Language Picker** -- A prompt asks "What do you code in?" with options for Ruby, Java and C/C++. It comes back at each launch until you answer it with Continue or Skip, and your answer is not final: touch and hold the app icon and pick **Manage toolchains** to add or remove them later. Whatever you select downloads there on the setup screen, one at a time; a download that fails is skipped and the rest continue. Skip goes straight to the editor.
 4. **Ready** -- The VS Code editor loads with terminal, file explorer, and all bundled tools available immediately.
 
 ### Default File Locations
@@ -758,7 +758,7 @@ python3 app.py
 
 ### Package Compatibility
 
-Some npm packages require C/C++ compilation and will not install because there is no compiler on the device. Use these alternatives:
+Some npm packages require C/C++ compilation and will not install unless the [C/C++ toolchain](#c-and-c) is installed, and a native npm build has not been tried against them even then. Use these alternatives:
 
 | Package | Alternative | Notes |
 |---------|------------|-------|
@@ -824,7 +824,7 @@ process.
   run on the machine you are sitting at, and that companion cannot run here.
   Debug the server side, and view the page in the preview tab or the device
   browser.
-- **Everything else.** Ruby and Java are toolchains, not debuggers, and neither
+- **Everything else.** Ruby, Java and C/C++ are toolchains, not debuggers, and none
   ships an adapter. A debug extension written in JavaScript and published on
   Open VSX may work; one that ships a program compiled for desktop Linux will
   not (see [Extensions That Bundle a Compiled
@@ -841,7 +841,12 @@ Beyond the bundled tools (Node.js, Python, Git, Bash), VSCodroid offers addition
 | Language | Download Size | Installed Size | Includes |
 |----------|--------------|----------------|----------|
 | Ruby 4.0 | 10.5 MB | 39 MB | ruby, gem, irb, bundler, rake |
-| Java 17 (OpenJDK) | 56.5 MB | 156 MB | java, javac, jar, jshell |
+| Java 17 (OpenJDK) | 56.5 MB | 160 MB | java, javac, jar, jshell |
+| C/C++ (clang 21) | 74 MB | 260 MB | cc, c++, gcc, g++, clang, clang++, ld, ar, ranlib, nm, strip, objdump, objcopy, readelf, size, and the C and C++ headers |
+
+The C/C++ toolchain is the largest. Installing a toolchain holds the unpacked copy and the
+installed copy at once, so the install asks for roughly twice the installed size free while
+it runs, which for this one is about 570 MB.
 
 ### Installing During First Run
 
@@ -889,6 +894,60 @@ commands installed so far; by its full path under `$GEM_HOME/bin` it runs in a
 terminal the moment `gem install` finishes (see
 [What Runs in the Terminal](#what-runs-in-the-terminal)). A program an extension
 starts on its own cannot reach it either way; run `ruby -S rubocop` there.
+
+### C and C++
+
+The **C/C++** toolchain installs clang and lld with the headers they need. In a terminal:
+
+```bash
+cat > hello.c <<'EOF'
+#include <stdio.h>
+int main(void) { puts("hello from C"); return 0; }
+EOF
+cc hello.c -o hello && ./hello
+
+cat > hello.cpp <<'EOF'
+#include <iostream>
+int main() { std::cout << "hello from C++\n"; }
+EOF
+c++ hello.cpp -o hello_cpp && ./hello_cpp
+```
+
+`cc`, `gcc` and `clang` compile C; `c++`, `g++` and `clang++` compile C++. All six are clang
+under different names, and `gcc` and `g++` are not GNU's compilers. `make`, which is already
+bundled, finds `cc` and `g++` by its own defaults, so a plain `Makefile` works. `ld` is lld, and
+`ar`, `ranlib`, `nm`, `strip`, `objdump`, `objcopy`, `readelf` and `size` are LLVM's.
+
+**It needs the terminal's exec interceptor.** The compiler starts its linker, and then you start
+the program it built, and both are files in the app's own storage that Android will not run
+directly. The terminal starts them for you through the system's program loader, as described in
+[What Runs in the Terminal](#what-runs-in-the-terminal), and this toolchain has no other way to
+start. So it does not work:
+
+- in a terminal where `LD_PRELOAD` has been set to `null`, the switch that section describes,
+  where `cc` answers `Permission denied`;
+- when an extension starts a compiler itself, which does not go through a terminal;
+- as the command of a `"type": "process"` task, which is started directly. Use a
+  `"type": "shell"` task instead.
+
+A program you compile runs from a terminal the same way, and a C++ program finds its runtime
+library (`libc++_shared.so`) in the app's own library directory.
+
+**pip.** A package that has no ready-made build and carries a C extension is compiled on the
+device when pip installs it, with the build tools pip fetches for it, so the first one needs a
+network. Python's build settings name `aarch64-linux-android-clang`, which this toolchain
+provides under that name, and it puts Python's headers where they are looked for, in
+`usr/include/python3.14`. A large package can take a long time on a phone, and some packages
+need libraries that are not here.
+
+**What is not included:** `clangd`, `clang-format` and the other clang tools; `libclang`; CMake
+and Ninja; OpenMP (`-fopenmp`); the sanitizers (`-fsanitize=`); a debugger; and `<spawn.h>`, so a
+program that calls `posix_spawn` does not compile. Programs are built for the phone, as arm64
+Android programs, and for nothing else.
+
+`make -j4` starts four compilers at once, each a process Android counts against its phantom
+process limit (see [Android Phantom Process Limit](#android-phantom-process-limit)); `make -j2` is
+the sensible ceiling on a phone.
 
 ### Removing Toolchains
 
@@ -990,7 +1049,7 @@ In the file tree:
 
 ### Native npm Packages
 
-Packages that require C/C++ compilation (node-gyp) fail on VSCodroid because there is no C compiler on the device. This affects packages like `better-sqlite3`, `bcrypt`, `sharp`, `canvas`, and `node-sass`. Pure JavaScript or WASM alternatives exist for most of them (see the [Web Development](#package-compatibility) section).
+Packages that require C/C++ compilation (node-gyp) fail on VSCodroid unless the [C/C++ toolchain](#c-and-c) is installed, because there is no C compiler on the device otherwise. This affects packages like `better-sqlite3`, `bcrypt`, `sharp`, `canvas`, and `node-sass`. With the toolchain installed the compiler is there, but node-gyp also fetches Node's headers over the network and none of these builds has been tried here, so the alternatives remain the reliable route. Pure JavaScript or WASM alternatives exist for most of them (see the [Web Development](#package-compatibility) section).
 
 ### Python Packages Written in C
 
@@ -1000,7 +1059,8 @@ compiled part is different, for two reasons, in the order pip hits them.
 There is often no wheel to download. This interpreter reports its platform as
 `android-24-arm64_v8a`, which is what it is, and PyPI carries no Android wheels
 for most compiled packages. Pip then falls back to building from source, and
-there is no C compiler on the device, so that fails too. The error you see names
+without the [C/C++ toolchain](#c-and-c) there is no C compiler on the device, so that fails
+too. With it installed, pip compiles the extension on the device. The error you see names
 the missing build tool rather than either of these, which is why it reads as
 something you could install your way out of.
 
@@ -1175,6 +1235,12 @@ itself:
 In a terminal, in a shell task, and in whatever a process task's command starts,
 an absolute path, a forked helper and a script run by its own path all work.
 
+The [C/C++ toolchain](#c-and-c) is the one exception, and it is the other way round. It gets
+no bash function and no program on `PATH`, because starting a compiler through the loader by
+hand makes clang believe it is the loader and look for its headers in the wrong place. It is
+found on `PATH` like any program and started by the terminal's own exec, so it works in a
+terminal and in a `"type": "shell"` task and in nothing that starts a process without one.
+
 `npm` and `npx` are reached the same two ways: a bash function in a shell, and a
 program on `PATH` for everything else. So `sh -c 'npm -v'`, `timeout 60 npm install`
 and a tool that runs `npm install` itself all find them, as the terminal does.
@@ -1327,7 +1393,7 @@ VS Code's web client runs as a single window. You cannot open multiple VS Code w
 
 ### Storage
 
-Core installation extracts approximately 603 MB to internal storage. With both toolchains installed, expect around 800 MB. Setup needs about 738 MB free before it starts, which is more than it ends up occupying because extraction needs room to work. If it refuses, it asks for the shortfall it measured rather than the whole figure, so a device part of the way through is asked only for what is missing. Beyond it, keep a few hundred MB free for node_modules, build artifacts and caches.
+Core installation extracts approximately 603 MB to internal storage. With Ruby and Java installed, expect around 800 MB, and about 1,060 MB with C/C++ as well. Setup needs about 738 MB free before it starts, which is more than it ends up occupying because extraction needs room to work. If it refuses, it asks for the shortfall it measured rather than the whole figure, so a device part of the way through is asked only for what is missing. Beyond it, keep a few hundred MB free for node_modules, build artifacts and caches.
 
 ---
 

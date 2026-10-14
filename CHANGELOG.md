@@ -20,6 +20,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The terminal runs programs stored in the app's own storage, such as compiled programs, `#!` scripts, Git hooks, `git submodule`, npm's `.bin` commands and the commands pip installs into a virtual environment. Setting `LD_PRELOAD` to `null` under `terminal.integrated.env.linux` in the Settings editor's Remote tab turns this off.
 - The key row has a last page of quick actions: Command Palette, Quick Open, the terminal, the side bar, the bottom panel and Save, one tap each.
 - Android 11 and 12 devices can install and use the app, which needed Android 13 or newer before.
+- A C/C++ toolchain, installed from the toolchains screen like Ruby and Java, gives the terminal `cc`, `c++`, `gcc`, `g++`, `clang`, `clang++`, `ld` and the LLVM binary tools, and lets pip build a package's C extension. It is 74 MB to download and needs the terminal's exec interceptor, so it does not work with `LD_PRELOAD` set to `null`.
 
 ### Changed
 
@@ -32,6 +33,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A terminal focused from a tap outside it, such as its tab in the panel, opens with the soft keyboard down until it is tapped, as a file opened from the Explorer does; one opened with Enter after typing in the Command Palette keeps it up, and the keyboard is up once a file opened that way from Quick Open, or created with Enter in the Explorer's New File box, has loaded.
 - The extra key row steps away once you type a character on a hardware keyboard, so a soft keyboard kept up beside one no longer costs the editor the row's height, and comes back when a finger lifts after touching the app's own screen, such as a tap in the editor.
 - The process monitor expects three background processes at idle instead of five and warns above six instead of eight, because the chat agent host no longer starts.
+- The Java 17 toolchain is recorded as 160 MB installed, up from 156, to leave room for the next JDK build, so its install asks for 8 MB more free space.
 
 ### Removed
 

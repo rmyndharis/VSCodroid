@@ -73,8 +73,8 @@ flowchart TD
 **External Systems:**
 - **Open VSX**: Extension search, download, update (HTTPS)
 - **GitHub/GitLab**: Remote git operations (HTTPS/SSH)
-- **Play Asset Delivery**: Ruby and Java 17 packs, for installs whose `installingPackageName` is `com.android.vending` or Play's legacy `com.google.android.feedback` (`ToolchainManager.PLAY_INSTALLERS`)
-- **GitHub Releases**: the same two toolchains as ZIPs under `releases/latest`, for every other install source
+- **Play Asset Delivery**: Ruby, Java 17 and C/C++ packs, for installs whose `installingPackageName` is `com.android.vending` or Play's legacy `com.google.android.feedback` (`ToolchainManager.PLAY_INSTALLERS`)
+- **GitHub Releases**: the same toolchains as ZIPs under `releases/latest`, for every other install source
 
 Termux's package repository is a build-time source, not a runtime one: `scripts/download-node.sh`,
 `download-python.sh` and `download-termux-tools.sh` fetch the runtime and the tools from it while the
@@ -268,7 +268,7 @@ owning extension is what frees a slot.
 - Termux, UserLAnd, and other apps use this approach
 - Requires: Gradle `packagingOptions { jniLibs { useLegacyPackaging = true } }`
 
-**Consequence**: All core binaries (Node.js, Python, Git, bash, tmux, make, ripgrep, ssh) bundled as .so files in the base APK. The two on-demand toolchains, Ruby and Java 17, are delivered as asset packs via Play Store; the user picks them in the first-run toolchain picker (`SplashActivity.showToolchainPicker()`, offered by `continueAfterSetup()` on every launch that gets past setup, until its Continue or Skip button records `toolchain_picker_shown`) and Play Store downloads them automatically. Toolchains are never inside the APK on any channel: `ToolchainManager.install()` picks a delivery path at runtime, and both paths converge on `installFromDirectory()`, which copies the payload into `filesDir/usr`, chmods the binaries its manifest names, and creates its symlinks, so installed toolchains survive app updates. This decision covers what the app installs. It does not restrict what a user runs: the terminal's exec interceptor starts user programs through `/system/bin/linker64`, which is what `termux-exec` does in the Termux build on Google Play.
+**Consequence**: All core binaries (Node.js, Python, Git, bash, tmux, make, ripgrep, ssh) bundled as .so files in the base APK. The three on-demand toolchains, Ruby, Java 17 and C/C++, are delivered as asset packs via Play Store; the user picks them in the first-run toolchain picker (`SplashActivity.showToolchainPicker()`, offered by `continueAfterSetup()` on every launch that gets past setup, until its Continue or Skip button records `toolchain_picker_shown`) and Play Store downloads them automatically. Toolchains are never inside the APK on any channel: `ToolchainManager.install()` picks a delivery path at runtime, and both paths converge on `installFromDirectory()`, which copies the payload into `filesDir/usr`, chmods the binaries its manifest names, and creates its symlinks, so installed toolchains survive app updates. This decision covers what the app installs. It does not restrict what a user runs: the terminal's exec interceptor starts user programs through `/system/bin/linker64`, which is what `termux-exec` does in the Termux build on Google Play. The C/C++ toolchain is the one pack that depends on it: a compiler forks its linker, so its programs start only through that interceptor and fail where it is off (`"LD_PRELOAD": null`) or absent (an extension that starts a process itself).
 
 ---
 
@@ -312,7 +312,7 @@ owning extension is what frees a slot.
 
 **Status**: Accepted
 
-**Context**: VSCodroid offers language toolchains beyond the bundled core: Ruby and Java 17. Putting them in the base APK would make it very large, and most users want at most one of them. Options: (a) On-demand download from CDN, (b) Play Store install-time asset packs, (c) Play Store on-demand asset packs.
+**Context**: VSCodroid offers language toolchains beyond the bundled core: Ruby, Java 17 and C/C++. Putting them in the base APK would make it very large, and most users want at most one of them. Options: (a) On-demand download from CDN, (b) Play Store install-time asset packs, (c) Play Store on-demand asset packs.
 
 **Decision**: Use Play Store on-demand asset packs for toolchain delivery, with a toolchain picker UI during first-run.
 
@@ -322,7 +322,7 @@ owning extension is what frees a slot.
   `scripts/check-bundle-size.py`; the last measurement was around 270 MiB compressed, and it
   moves with every VS Code bump, so re-measure from the AAB rather than quoting a figure
 - User selects needed languages during first-run, so only what they ask for is downloaded
-- `android/toolchain_ruby/build.gradle.kts` and `android/toolchain_java/build.gradle.kts` each declare `dynamicDelivery { deliveryType.set("on-demand") }`, and `ToolchainRegistry.available` is the single list the picker and the manage screen read
+- `android/toolchain_ruby/build.gradle.kts`, `android/toolchain_java/build.gradle.kts` and `android/toolchain_cpp/build.gradle.kts` each declare `dynamicDelivery { deliveryType.set("on-demand") }`, and `ToolchainRegistry.available` is the single list the picker and the manage screen read
 - Play Store handles download/install automatically (no manual steps for user)
 - Play Store optimizes delivery per device (only arm64 assets delivered)
 - No custom CDN infrastructure needed for toolchain hosting
@@ -592,7 +592,7 @@ colour probe's own WebView records nothing.
 | VS Code | Code - OSS, built from MIT source with the diffs in `patches/` | 1.139.1 (pinned in the `VSCODE_VERSION` file at the repo root) |
 | Extension Host | VS Code Extension Host as a worker_thread (patch `0004`); the Pty Host likewise (patch `0003`) | Same as VS Code |
 | Terminal | node-pty spawning bash on a real PTY (tmux bundled as a standalone tool) | Latest |
-| Toolchain delivery | Play Asset Delivery packs, or `releases/latest` ZIPs for non-Play installs | Ruby, Java 17 |
+| Toolchain delivery | Play Asset Delivery packs, or `releases/latest` ZIPs for non-Play installs | Ruby, Java 17, C/C++ |
 | SCM | Git from Termux, as `libgit.so` and `libgit-remote-curl.so` plus `usr/lib/git-core` | Whatever the Termux index names at build time |
 | Python | Python 3 from Termux, fetched by `scripts/download-python.sh` | Whatever the Termux index names at build time; read it from `assets/usr/lib/libpython*.so` |
 | C++ stdlib | `libc++_shared.so` from Termux's `libc++` package, in `assets/usr/lib` | Whatever `scripts/download-termux-tools.sh` resolves |

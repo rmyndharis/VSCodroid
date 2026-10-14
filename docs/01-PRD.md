@@ -11,10 +11,10 @@
 > Building from source is not a preference: the pre-built server on Microsoft's update CDN carries
 > licence terms that do not permit modifying and redistributing it, so
 > `scripts/verify-server-tree.py` fails any tree whose `LICENSE.txt` is not the MIT one. And the
-> on-demand toolchains are **Ruby and Java 17, those two**
+> on-demand toolchains are **Ruby, Java 17 and C/C++, those three**
 > (`android/app/src/main/kotlin/com/vscodroid/setup/ToolchainRegistry.kt`,
-> `android/settings.gradle.kts`): Rust and C/C++ have no Gradle module, no asset pack and no
-> registry entry. Where this document and the code disagree, the code wins. `CONTRIBUTING.md` is
+> `android/settings.gradle.kts`): Rust has no Gradle module, no asset pack and no registry
+> entry. Where this document and the code disagree, the code wins. `CONTRIBUTING.md` is
 > the prose kept current alongside it.
 
 ---
@@ -134,7 +134,7 @@ Developers increasingly work across multiple devices, yet Android (the world's m
 
 | Feature | Description | Milestone |
 |---------|-------------|-----------|
-| On-demand Toolchains | Ruby and Java 17, chosen in the Language Picker: Play Asset Delivery on Play installs, ZIPs from GitHub Releases otherwise | M3 |
+| On-demand Toolchains | Ruby, Java 17 and C/C++, chosen in the Language Picker: Play Asset Delivery on Play installs, ZIPs from GitHub Releases otherwise | M3 |
 | Language Picker | First-run UI for selecting which toolchains to install | M3 |
 | Package Manager | `vscodroid pkg install <package>`, not built; on the post-release roadmap | Post-release |
 | Pre-bundled Extensions | Themes, icon packs, language basics offline | M3 |
@@ -157,7 +157,7 @@ Developers increasingly work across multiple devices, yet Android (the world's m
 flowchart TD
   A["Install from Play Store"] --> B["Open App"]
   B --> C["Splash Screen: Setting up VSCodroid<br/>Extract binaries<br/>Initialize workspace directory"]
-  C --> D["Language Picker<br/>What do you code in? [Ruby] [Java 17] [Skip]<br/>Selected toolchains download on demand"]
+  C --> D["Language Picker<br/>What do you code in? [Ruby] [Java 17] [C/C++] [Skip]<br/>Selected toolchains download on demand"]
   D --> E["Welcome Tab<br/>Quick actions: Open Folder, Clone Repo, New File<br/>Tools ready: node, python, git + selected toolchains"]
   E --> F["Start Coding"]
 ```

@@ -1923,7 +1923,7 @@ flowchart TD
 ```
 
 > [!NOTE]
-> **Package Manager** (`vscodroid pkg`) was originally scoped for M5 but has been deferred to the **Post-Release Roadmap**. Similarly, **Rust** and **C/C++ (Clang)** toolchains are deferred to Post-Release; M5 focuses on Go, Ruby, and Java only. Toolchain compatibility verification and APK size audit have been moved to M6 (Release) where they logically belong as verification/release activities.
+> **Package Manager** (`vscodroid pkg`) was originally scoped for M5 but has been deferred to the **Post-Release Roadmap**. Similarly, **Rust** and **C/C++ (Clang)** toolchains were deferred to Post-Release; M5 focused on Go, Ruby, and Java only. C/C++ has since shipped as a third pack, `toolchain_cpp` (see section 7.5 of the technical specification); Rust has not. Toolchain compatibility verification and APK size audit have been moved to M6 (Release) where they logically belong as verification/release activities.
 
 ---
 
@@ -2039,7 +2039,7 @@ android/settings.gradle.kts         (register asset pack modules)
 ```
 
 > [!NOTE]
-> M5 focuses on **Go, Ruby, and Java** only. Additional toolchains (Rust ~100 MB, C/C++ Clang ~84 MB) are deferred to the **Post-Release Roadmap** and will use the same Play Asset Delivery pipeline.
+> M5 focuses on **Go, Ruby, and Java** only. Additional toolchains (Rust ~100 MB, C/C++ Clang ~84 MB) are deferred to the **Post-Release Roadmap** and will use the same Play Asset Delivery pipeline. C/C++ was built that way afterwards as `toolchain_cpp`, about 254 MB unpacked and a 74 MB ZIP, with its own `scripts/download-cpp.sh`.
 
 **Implementation steps**:
 

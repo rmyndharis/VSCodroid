@@ -6277,7 +6277,7 @@ private fun rootBraceIndex(content: String): Int {
  * The release tag is baked into the links on that page rather than into this
  * URL, so a new wheelhouse release is published by regenerating the page, not
  * by shipping a new APK. That release is a prerelease, and must stay one:
- * `ToolchainRegistry` resolves `releases/latest` for the Ruby and Java ZIPs,
+ * `ToolchainRegistry` resolves `releases/latest` for the toolchain ZIPs,
  * and GitHub moves `latest` onto the newest non-prerelease whenever the release
  * holding it is withdrawn, whatever `make_latest` said when it was created.
  */
