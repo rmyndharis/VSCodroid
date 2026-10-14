@@ -21,6 +21,13 @@ set -euo pipefail
 # bin/../lib/clang), so bin, include and lib stay under one prefix. Do not move
 # anything into a directory of its own.
 #
+# The command names are manifest links to the driver, and not wrapper scripts
+# that pass --driver-mode. The exec the terminal preloads hands the loader the
+# path it was asked to run, a link left unresolved, and the loader makes that
+# path the program's argv[0]; clang chooses C or C++ from that name, so `c++`
+# arrives as `c++`. A wrapper would also cost a shell per compile, and every
+# process counts against Android's phantom process limit on this platform.
+#
 # Compatible with bash 3.2+ (macOS default).
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
