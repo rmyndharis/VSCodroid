@@ -29,8 +29,8 @@ class KeyPageAdapter(
      * while the row had three pages: `offscreenPageLimit = 1` left at most one
      * detached, and RecyclerView handed a single detached page back from its
      * two-entry view cache still bound, so nothing was ever repainted from the
-     * stale copy. Five pages no longer fit that argument. Sitting on page 1
-     * leaves three detached, one more than the view cache holds, so a page
+     * stale copy. Six pages no longer fit that argument. Sitting on page 1
+     * leaves four detached, two more than the view cache holds, so a page
      * really does go to the pool and come back through [onBindViewHolder].
      * That is harmless only because this map is now the single answer and the
      * bind repaints from it; splitting it in two again would show up as a Ctrl
@@ -68,6 +68,7 @@ class KeyPageAdapter(
                         isToggle = item.isToggle
                         contentDescription = context.getString(item.contentDescriptionRes)
                         alternates = item.alternates
+                        fixedModifiers = item.fixedModifiers
                         applyRoundedBackground(context.getColor(R.color.colorExtraKeyBg))
                         setTextColor(context.getColor(R.color.colorExtraKeyText))
 

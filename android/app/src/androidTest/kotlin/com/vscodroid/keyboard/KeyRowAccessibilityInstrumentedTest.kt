@@ -491,7 +491,7 @@ class KeyRowAccessibilityInstrumentedTest {
             val band = indicator(row)
             assertNotNull("the row publishes no page indicator at all", band)
             // Read off the row's own configuration, which is what it paged
-            // itself for: a wide device gets five pages and a narrow one more.
+            // itself for: a wide device gets six pages and a narrow one more.
             val pageCount = KeyPages
                 .forSmallestWidthDp(row.resources.configuration.smallestScreenWidthDp).size
 

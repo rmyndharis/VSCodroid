@@ -163,9 +163,14 @@ class KeyPageConfigTest {
             // as KeyF with keyCode 70 and VS Code resolves it as the letter F.
             // The three modifiers never reach the injector;
             // ExtraKeyRow.handleKeyAction consumes them itself.
+            //
+            // The shortcut keys are held to it in QuickActionsPageTest instead:
+            // their values are the keys of chords, and a letter is correctly
+            // derived by getKeyDefOrLetter without a row of its own.
             val modifiers = setOf("Ctrl", "Alt", "Shift")
             val sent = KeyPages.defaults.flatMap { it.items }
                 .filterIsInstance<KeyItem.Button>()
+                .filter { it.fixedModifiers == null }
                 .flatMap { button -> listOf(button.value) + button.alternates.map { it.value } }
                 .filterNot { it in modifiers }
             for (value in sent) {

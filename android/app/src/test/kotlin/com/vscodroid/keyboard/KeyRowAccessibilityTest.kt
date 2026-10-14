@@ -195,8 +195,12 @@ class KeyRowAccessibilityTest {
     @Nested
     inner class AlternateLabels {
 
+        // The keys that type. A shortcut key shares a value with one of them, the
+        // backtick on the quick actions page and on page 2, and is named for its
+        // command, not its character, so the pairing below is not about it.
         private val buttons = KeyPages.defaults.flatMap { it.items }
             .filterIsInstance<KeyItem.Button>()
+            .filter { it.fixedModifiers == null }
 
         private val alternates = buttons.flatMap { it.alternates }
 

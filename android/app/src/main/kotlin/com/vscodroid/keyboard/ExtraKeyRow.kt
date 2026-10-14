@@ -688,7 +688,9 @@ class ExtraKeyRow @JvmOverloads constructor(
                 Logger.d(tag, "Shift toggled: $shiftActive")
             }
             else -> {
-                keyInjector?.injectKey(key, ctrlKey = ctrlActive, altKey = altActive, shiftKey = shiftActive)
+                // A shortcut key sends its own modifiers; any other key, the latched ones.
+                val sent = pressModifiers(button.fixedModifiers, KeyModifiers(ctrlActive, altActive, shiftActive))
+                keyInjector?.injectKey(key, ctrlKey = sent.ctrl, altKey = sent.alt, shiftKey = sent.shift)
                 resetModifiersIfNeeded()
             }
         }
@@ -864,6 +866,24 @@ internal fun latchedModifierLabel(ctrl: Boolean, alt: Boolean, shift: Boolean): 
     }
     return if (held.isEmpty()) null else held.joinToString("+")
 }
+
+/**
+ * The modifiers one press of a row key carries: its own when it has [fixed]
+ * ones, the row's [latched] ones otherwise.
+ *
+ * A shortcut key does not take the latches, not even to add to its own. They
+ * are on page 1, a swipe away from the page the shortcuts are on, and a latch
+ * left lit there would turn a shortcut into a chord nothing is bound to: Alt
+ * over Ctrl+S, or Shift over Ctrl+P, which is Ctrl+Shift+P and opens the Command
+ * Palette instead of Go to File. The press clears the latches afterwards, as any
+ * key's does.
+ *
+ * Split out of [ExtraKeyRow] for the reason [latchedModifierLabel] is: the row is
+ * a `View` whose initialiser reaches resources, so this is the half a JVM test
+ * can run.
+ */
+internal fun pressModifiers(fixed: KeyModifiers?, latched: KeyModifiers): KeyModifiers =
+    fixed ?: latched
 
 /**
  * The one modifier query allowed to be in the air, and whose answer it is.
