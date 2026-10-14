@@ -805,8 +805,54 @@ class ToolchainManager(private val context: Context) {
             return
         }
 
+        removeToolchainFiles(name, manifestObj, state)
+
+        // Remove from state
+        state.remove(idx)
+        // Asked, exactly as [installFromDirectoryHoldingPack] asks it, and for the
+        // sibling reason: the record is what everything else reads, so a removal
+        // whose record write failed is not a removal that happened. The files are
+        // gone either way -- they were deleted above -- but reporting
+        // NOT_INSTALLED on top of a record that still names the toolchain tells
+        // the user it is gone while the next launch draws it as installed and
+        // `getAllToolchainEnv` goes on exporting JAVA_HOME for a directory that no
+        // longer exists. Nothing reconciles that later: the repair pass only
+        // checks execute bits.
+        //
+        // FAILED rather than silence, because it is the only channel that reaches
+        // the user with a reason, and the Retry it puts on the card reinstalls the
+        // toolchain, which is the repair for a record that outlived its files.
+        // STORAGE for the reason the install sibling picks it: [writeAtomically]
+        // writes a temporary file and renames it, and what stops that is space or
+        // an I/O fault, both of which "free some space and try again" survives.
+        if (!writeState(state)) {
+            fail("toolchain_$name", ToolchainFailure.STORAGE)
+            return
+        }
+        regenerateDerivedFilesLocked()
+
+        Logger.i(tag, "Uninstalled toolchain: $name")
+        report("toolchain_$name", AssetPackStatus.NOT_INSTALLED, 0)
+    }
+
+    /**
+     * Deletes from disk what [manifest] says the toolchain [name] put there:
+     * its links in `usr/bin`, its binaries, its install root, the paths it owns
+     * inside shared trees, its library links and the libraries it copied.
+     *
+     * Shared by the uninstall and by [reclaimPartialCopy], which is the point of
+     * it being one function: an install the system stopped part-way through has
+     * written exactly the files its manifest names, and the question of which of
+     * them are safe to take is the one the uninstall already answers. That is
+     * the base install's libraries and the other installed toolchains', which
+     * [state] supplies.
+     *
+     * Touches no record. The caller decides whether the toolchain is still
+     * installed and writes `toolchains.json` itself.
+     */
+    private fun removeToolchainFiles(name: String, manifest: JSONObject, state: JSONArray) {
         // Delete symlinks from usr/bin/ (use Os.lstat to catch dangling symlinks)
-        val symlinks = manifestObj.optJSONObject("symlinks")
+        val symlinks = manifest.optJSONObject("symlinks")
         if (symlinks != null) {
             val binDir = File(context.filesDir, "usr/bin")
             for (key in symlinks.keys()) {
@@ -821,7 +867,7 @@ class ToolchainManager(private val context: Context) {
 
         // Delete individual binary files (for toolchains like Ruby that place
         // binaries directly in usr/bin/ rather than an isolated directory)
-        val binaries = manifestObj.optJSONArray("binaries")
+        val binaries = manifest.optJSONArray("binaries")
         if (binaries != null) {
             for (i in 0 until binaries.length()) {
                 val binFile = File(context.filesDir, binaries.getString(i))
@@ -833,7 +879,7 @@ class ToolchainManager(private val context: Context) {
         }
 
         // Delete the toolchain's isolated install root (NOT shared dirs like usr/bin/)
-        val installRoot = manifestObj.optString("installRoot", "")
+        val installRoot = manifest.optString("installRoot", "")
         if (installRoot.isNotEmpty()) {
             val dir = File(context.filesDir, installRoot)
             if (dir.exists()) {
@@ -845,8 +891,22 @@ class ToolchainManager(private val context: Context) {
             }
         }
 
+        // Delete what the toolchain put into trees it shares with the base install
+        // and does not own outright. The C/C++ pack is the case: its headers sit in
+        // usr/include and its resource directory in usr/lib/clang, because clang
+        // finds both relative to where it runs, so neither can be an install root.
+        // Each entry is one file, link or directory, named by the pack's build
+        // script, and nothing beside it is touched: a header the user installed
+        // into usr/include next to them survives.
+        for (path in ownedPaths(manifest)) {
+            // For a file, a link and a directory alike, and link-aware for the
+            // reason the install root's delete is.
+            StorageManager.deleteRecursive(path)
+            Logger.d(tag, "Removed owned path: ${path.relativeTo(context.filesDir).path}")
+        }
+
         // Delete library symlinks (versioned sonames)
-        val libSymlinks = manifestObj.optJSONObject("libSymlinks")
+        val libSymlinks = manifest.optJSONObject("libSymlinks")
         if (libSymlinks != null) {
             for (linkName in libSymlinks.keys()) {
                 val linkFile = File(context.filesDir, "usr/lib/$linkName")
@@ -875,7 +935,7 @@ class ToolchainManager(private val context: Context) {
         // same library today, so this is a floor rather than a repair -- and the
         // manifests are regenerated from upstream packages, so what they name is
         // not this repository's choice to keep disjoint.
-        val libs = manifestObj.optJSONArray("libs")
+        val libs = manifest.optJSONArray("libs")
         if (libs != null) {
             val baseShipped = try {
                 context.assets.list("usr/lib")?.toSet()?.plus(otherToolchainLibs(state, name))
@@ -885,41 +945,14 @@ class ToolchainManager(private val context: Context) {
             }
             val names = (0 until libs.length()).map { libs.getString(it) }
             val keep = names.toSet() - toolchainLibsSafeToRemove(names, baseShipped).toSet()
-            for (name in keep) {
-                Logger.i(tag, "Keeping $name: the base install ships it too")
+            for (libName in keep) {
+                Logger.i(tag, "Keeping $libName: the base install ships it too")
             }
-            for (name in toolchainLibsSafeToRemove(names, baseShipped)) {
-                val lib = File(context.filesDir, "usr/lib/$name")
+            for (libName in toolchainLibsSafeToRemove(names, baseShipped)) {
+                val lib = File(context.filesDir, "usr/lib/$libName")
                 if (lib.exists()) lib.delete()
             }
         }
-
-        // Remove from state
-        state.remove(idx)
-        // Asked, exactly as [installFromDirectoryHoldingPack] asks it, and for the
-        // sibling reason: the record is what everything else reads, so a removal
-        // whose record write failed is not a removal that happened. The files are
-        // gone either way -- they were deleted above -- but reporting
-        // NOT_INSTALLED on top of a record that still names the toolchain tells
-        // the user it is gone while the next launch draws it as installed and
-        // `getAllToolchainEnv` goes on exporting JAVA_HOME for a directory that no
-        // longer exists. Nothing reconciles that later: the repair pass only
-        // checks execute bits.
-        //
-        // FAILED rather than silence, because it is the only channel that reaches
-        // the user with a reason, and the Retry it puts on the card reinstalls the
-        // toolchain, which is the repair for a record that outlived its files.
-        // STORAGE for the reason the install sibling picks it: [writeAtomically]
-        // writes a temporary file and renames it, and what stops that is space or
-        // an I/O fault, both of which "free some space and try again" survives.
-        if (!writeState(state)) {
-            fail("toolchain_$name", ToolchainFailure.STORAGE)
-            return
-        }
-        regenerateDerivedFilesLocked()
-
-        Logger.i(tag, "Uninstalled toolchain: $name")
-        report("toolchain_$name", AssetPackStatus.NOT_INSTALLED, 0)
     }
 
     // -- Asset pack state handling --
@@ -1587,10 +1620,9 @@ class ToolchainManager(private val context: Context) {
                 // Safe over a reinstall: writeState false means the file still holds
                 // the previous record, so [reclaimPartialCopy] re-reads it, still
                 // sees the toolchain named, and keeps the working copy's files. The
-                // `usr/bin` and `usr/lib` residue stays, for the reason that function
-                // documents: sorting it belongs to the uninstall's library
-                // bookkeeping, which needs the manifest this failure means we could
-                // not write.
+                // links, binaries and libraries go the way an uninstall takes them,
+                // from the manifest in hand, which is what the record that could
+                // not be written would have been consulted for.
                 reclaimPartialCopy(name, manifest)
                 // Settled, exactly as on the copy failure above.
                 installMarker(packName).delete()
@@ -1654,8 +1686,8 @@ class ToolchainManager(private val context: Context) {
     }
 
     /**
-     * Deletes the tree an install that did not finish had already written, when
-     * nothing else lays claim to it.
+     * Deletes the files an install that did not finish had already written, when
+     * nothing else lays claim to them.
      *
      * The install record is written last, so both ways an install can end after
      * the copy has started -- the copy throwing, and the record write failing --
@@ -1665,12 +1697,15 @@ class ToolchainManager(private val context: Context) {
      * has no record to work from, and the repair pass only visits records that
      * exist. Clearing app data was the only way back.
      *
-     * The install root only. The same copy also writes into `usr/bin` and
-     * `usr/lib`, which are shared with the base install and with other
-     * toolchains, and deciding what may go from there is the bookkeeping
-     * [uninstallLocked] does from a manifest this failure means we do not have.
-     * The install root is the toolchain's own directory and is the bulk of it,
-     * and deleting it is what makes room for the retry that a full disk needs.
+     * What goes is what [removeToolchainFiles] removes for an uninstall, taken
+     * from the manifest the caller still holds: the install root, the paths the
+     * toolchain owns, its binaries and links, and its libraries under the same
+     * guard, which keeps any library the base install or another toolchain also
+     * ships. This used to stop at the install root, on the reasoning that the
+     * rest sits in `usr/bin` and `usr/lib` beside other people's files. For a
+     * toolchain whose bulk is there that left the bulk: the C/C++ pack keeps
+     * 197 MB of its 254 MB in two libraries in `usr/lib`, and a copy that ran
+     * out of room is exactly where those bytes are needed for the retry.
      *
      * Left alone when the record already names this toolchain: those files are a
      * working copy's, and deleting them would cost a user a toolchain that runs.
@@ -1697,18 +1732,20 @@ class ToolchainManager(private val context: Context) {
      */
     private fun reclaimPartialCopy(name: String, manifest: JSONObject) {
         val installRoot = manifest.optString("installRoot", "")
-        if (installRoot.isEmpty()) return
         if (name in getInstalledToolchains()) {
-            Logger.w(tag, "Keeping $installRoot: the record still names $name")
+            Logger.w(tag, "Keeping the files of $name: the record still names it")
             clearExecRepairMark(name)
             return
         }
-        val dir = File(context.filesDir, installRoot)
-        if (!dir.exists()) return
-        // Link-aware for the reason uninstallLocked gives. It reports bytes rather
-        // than success, so what is left on disk is the answer.
-        StorageManager.deleteRecursive(dir)
-        if (!dir.exists()) {
+        // Read after the record check, which is what makes it safe to delete from
+        // a manifest at all: nothing installed claims these files.
+        removeToolchainFiles(name, manifest, readState())
+        // Said once, and about the install root when there is one, which is the
+        // line this has always printed; the files beside it have no root to name.
+        val root = if (installRoot.isEmpty()) null else File(context.filesDir, installRoot)
+        if (root == null) {
+            Logger.i(tag, "Reclaimed the partial $name files")
+        } else if (!root.exists()) {
             Logger.i(tag, "Reclaimed the partial $name tree under $installRoot")
         } else {
             Logger.w(tag, "Could not fully reclaim the partial $name tree under $installRoot")
@@ -2764,6 +2801,7 @@ class ToolchainManager(private val context: Context) {
             val tc = installed.optJSONObject(i) ?: continue
             val name = tc.optString("name", "unknown")
             val env = tc.optJSONObject("env") ?: continue
+            val preloadOnly = isPreloadOnly(tc)
 
             sb.appendLine("# $name toolchain")
             for (key in env.keys()) {
@@ -2788,9 +2826,17 @@ class ToolchainManager(private val context: Context) {
             // Ruby source -- and those are handled by scriptWrappers below,
             // which routes them through their interpreter. That interpreter is
             // itself one of these functions, so the two layers compose.
+            //
+            // A toolchain that is [isPreloadOnly] gets no function at all. A
+            // comment in the file says so instead, so that a missing `clang`
+            // function is explained where someone looks for it.
             val scriptNames = tc.optJSONObject("scriptWrappers")
                 ?.optJSONObject("scripts")?.keys()?.asSequence()?.toSet().orEmpty()
-            val binaries = tc.optJSONArray("binaries")
+            val binaries = if (preloadOnly) null else tc.optJSONArray("binaries")
+            if (preloadOnly) {
+                sb.appendLine("# $name programs start through the terminal's preloaded exec, so no wrappers")
+                sb.appendLine()
+            }
             if (binaries != null) {
                 val lines = mutableListOf<String>()
                 for (i in 0 until binaries.length()) {
@@ -2882,7 +2928,7 @@ class ToolchainManager(private val context: Context) {
             // Script wrappers: bash functions for scripts that can't execute directly
             // on Android: SELinux denies execute_no_trans under filesDir, so a shebang
             // never runs. Invokes scripts via their interpreter instead.
-            val scriptWrappers = tc.optJSONObject("scriptWrappers")
+            val scriptWrappers = if (preloadOnly) null else tc.optJSONObject("scriptWrappers")
             if (scriptWrappers != null) {
                 val interpreter = scriptWrappers.optString("interpreter", "")
                 val scripts = scriptWrappers.optJSONObject("scripts")
@@ -3079,8 +3125,14 @@ class ToolchainManager(private val context: Context) {
 
             // Every ELF the manifest names, keyed by its command name, so the
             // script rows below can resolve their interpreter to a real path.
+            //
+            // Not for a toolchain that is [isPreloadOnly]. A row starts a program
+            // as `linker64 <file>` through the trampoline, which is the start
+            // such a toolchain's programs must not have, and a link in tcbin is
+            // what would put that row ahead of the real command on PATH.
+            val preloadOnly = isPreloadOnly(tc)
             val elfPaths = mutableMapOf<String, String>()
-            val binaries = tc.optJSONArray("binaries")
+            val binaries = if (preloadOnly) null else tc.optJSONArray("binaries")
             if (binaries != null) {
                 for (j in 0 until binaries.length()) {
                     val relPath = binaries.getString(j)
@@ -3093,7 +3145,7 @@ class ToolchainManager(private val context: Context) {
                 }
             }
 
-            val scriptWrappers = tc.optJSONObject("scriptWrappers")
+            val scriptWrappers = if (preloadOnly) null else tc.optJSONObject("scriptWrappers")
             val interpreter = scriptWrappers?.optString("interpreter", "").orEmpty()
             val scripts = scriptWrappers?.optJSONObject("scripts")
             if (interpreter.isNotEmpty() && scripts != null) {
@@ -3541,6 +3593,55 @@ class ToolchainManager(private val context: Context) {
     }
 
     /**
+     * Whether this toolchain's programs start only through the exec interceptor
+     * a terminal preloads (`"preloadOnly": true` in its manifest).
+     *
+     * Both ways this class has of starting a program by hand, a bash function
+     * and a row in the exec table, hand the file to `/system/bin/linker64`
+     * directly. The loader then reports itself as the program's own path, and
+     * a program that locates its resource directory, its libraries or its
+     * sysroot from that path finds the loader's directory instead. clang is the
+     * one that does: it and libLLVM read the path the interceptor puts in
+     * `TERMUX_EXEC__PROC_SELF_EXE`, which a start by hand does not set. Such a
+     * toolchain is found through PATH and started by the exec of whatever runs
+     * the command, which in a terminal is the preloaded one.
+     *
+     * The cost is stated rather than hidden: without the preload (`LD_PRELOAD`
+     * set to null, an extension that starts a process itself, a
+     * `"type": "process"` task) the command is a file under `filesDir` that
+     * the kernel will not execute, and nothing here makes it one.
+     *
+     * What still applies to it: the execute bit, `pathDirs`, `env` rows and
+     * removal. Only the two ways of starting a program are skipped.
+     */
+    private fun isPreloadOnly(manifest: JSONObject): Boolean =
+        manifest.optBoolean("preloadOnly", false)
+
+    /**
+     * The paths a manifest's `ownedPaths` names that [isOwnedPathName] accepts,
+     * as files under `filesDir`.
+     *
+     * A name that is refused is logged and skipped, and nothing else about the
+     * list changes. The manifest is a signed pack's, but it is also persisted
+     * into `toolchains.json` and read back at every uninstall, and this is the
+     * one key whose whole job is to delete what it names: the install root has
+     * no such check, and its worst case is one toolchain's own directory.
+     */
+    private fun ownedPaths(manifest: JSONObject): List<File> {
+        val names = manifest.optJSONArray("ownedPaths") ?: return emptyList()
+        val out = mutableListOf<File>()
+        for (i in 0 until names.length()) {
+            val relative = names.optString(i, "")
+            if (isOwnedPathName(relative)) {
+                out.add(File(context.filesDir, relative))
+            } else {
+                Logger.w(tag, "Ignoring an owned path that is not one: ${redactToken(relative)}")
+            }
+        }
+        return out
+    }
+
+    /**
      * A manifest value with its placeholders resolved to this install's paths.
      *
      * Shared by the server environment and the exec table, which are two
@@ -3749,12 +3850,13 @@ class ToolchainManager(private val context: Context) {
      * reclaimed at all: `find` answers null for one, and [RETIRED_TOOLCHAINS]
      * carries sizes and no paths.
      *
-     * The decision itself stays [reclaimPartialCopy]'s. It already refuses an
-     * empty install root, keeps the tree when the record still names the
-     * toolchain (an install that finished and only lost its marker delete, or a
-     * reinstall over a working copy), and never touches the shared `usr/bin` and
-     * `usr/lib`. Reusing it is what keeps this pass and the two in-process
-     * failure paths from disagreeing about what a partial install is.
+     * The decision itself stays [reclaimPartialCopy]'s. It keeps the files when
+     * the record still names the toolchain (an install that finished and only
+     * lost its marker delete, or a reinstall over a working copy), and otherwise
+     * takes what the manifest names under the guards an uninstall applies to a
+     * library the base install or another toolchain also ships. Reusing it is
+     * what keeps this pass and the two in-process failure paths from
+     * disagreeing about what a partial install is.
      *
      * The `installsInFlight` claim is taken first, and it is not bookkeeping:
      * `SplashActivity` fires this pass on one manager's executor while
@@ -4679,6 +4781,26 @@ internal fun sha256Of(file: File): String {
         }
     }
     return digest.digest().joinToString("") { "%02x".format(it) }
+}
+
+/**
+ * Whether [relative] may name a path a toolchain owns, in a manifest's
+ * `ownedPaths`: under `usr/`, at least three components deep, with no `.` or
+ * `..` component and no empty one.
+ *
+ * Three deep is the line that matters. `usr/bin`, `usr/lib` and `usr/include`
+ * are what a toolchain shares with the base install, so an entry naming one of
+ * them is a manifest asking for the whole directory, and `usr` is everything
+ * the app installed. What a toolchain may own is something inside them:
+ * `usr/include/stdio.h`, `usr/lib/clang`, `usr/share/doc/libllvm`.
+ *
+ * At file scope and pure, so the refusals can be asserted without a filesystem.
+ */
+internal fun isOwnedPathName(relative: String): Boolean {
+    if (!relative.startsWith("usr/")) return false
+    val parts = relative.split('/')
+    if (parts.size < 3) return false
+    return parts.none { it.isEmpty() || it == "." || it == ".." }
 }
 
 /**

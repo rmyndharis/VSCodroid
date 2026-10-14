@@ -966,4 +966,100 @@ class ToolchainExecTableTest {
         assertTrue("'${nativeLibDir.absolutePath}/libnode.so'" in text, text)
         assertFalse("${filesDir.absolutePath}/nativeLib/" in text, "the launcher still names the old directory")
     }
+
+    // -- a toolchain that starts only through the preloaded exec --------------
+
+    /**
+     * `"preloadOnly": true` keeps a toolchain out of the table altogether.
+     *
+     * A row starts a program as `linker64 <file>` through the trampoline, and
+     * the loader then reports itself as the program's own path. clang locates
+     * its resource directory and its sysroot from that path, so started that
+     * way it looks in the loader's directory and finds neither. The compiler is
+     * found through PATH instead and started by the exec of whatever runs it,
+     * which a terminal preloads.
+     *
+     * The control is the same record without the flag: it gets its row, so the
+     * assertion below is about the flag and not about a toolchain that was
+     * never going to have one.
+     */
+    @Test
+    fun `a preloadOnly toolchain gets no command row and no trampoline link`() {
+        elf("usr/bin/clang-21")
+        stateFile.writeText(
+            """[{"name":"cpp","preloadOnly":true,"binaries":["usr/bin/clang-21"],""" +
+                """"env":{},"pathDirs":["usr/bin"]}]"""
+        )
+
+        regenerate()
+
+        assertEquals(
+            emptyList<String>(), toolchainLines(),
+            "a toolchain that must not be started through the loader by hand got a " +
+                "row:\n" + execTable.readText(),
+        )
+        assertFalse(
+            Files.exists(
+                File(filesDir, "usr/libexec/tcbin/clang-21").toPath(), LinkOption.NOFOLLOW_LINKS,
+            ),
+            "a link in tcbin would put the loader-by-hand start ahead of the real command",
+        )
+    }
+
+    @Test
+    fun `the same record without the flag gets its row`() {
+        elf("usr/bin/clang-21")
+        stateFile.writeText(
+            """[{"name":"cpp","binaries":["usr/bin/clang-21"],"env":{}}]"""
+        )
+
+        regenerate()
+
+        assertEquals(
+            listOf("clang-21\t${filesDir.absolutePath}/usr/bin/clang-21"), toolchainLines(),
+            "the control: without the flag the binary is a row like any other",
+        )
+    }
+
+    /**
+     * What the flag does not take away: the variables a manifest exports still
+     * reach a start through the trampoline, because a preloadOnly toolchain's
+     * own environment is read by the same programs as any other's, and they
+     * are not the programs the flag is about.
+     */
+    @Test
+    fun `a preloadOnly toolchain still exports its environment`() {
+        elf("usr/bin/clang-21")
+        stateFile.writeText(
+            """[{"name":"cpp","preloadOnly":true,"binaries":["usr/bin/clang-21"],""" +
+                """"env":{"CPP_HOME":"${'$'}FILESDIR/usr"}}]"""
+        )
+
+        regenerate()
+
+        assertEquals(
+            listOf("\tCPP_HOME\t${filesDir.absolutePath}/usr"), toolchainLines(),
+            "the flag took the environment along with the rows:\n" + execTable.readText(),
+        )
+    }
+
+    /**
+     * Scripts too. A script row is an interpreter row with a script after it,
+     * and the interpreter is started by hand through the loader exactly as a
+     * binary row's program is.
+     */
+    @Test
+    fun `a preloadOnly toolchain gets no script row either`() {
+        elf("usr/bin/interp")
+        script("usr/bin/tool")
+        stateFile.writeText(
+            """[{"name":"x","preloadOnly":true,"binaries":["usr/bin/interp","usr/bin/tool"],""" +
+                """"env":{},"scriptWrappers":{"interpreter":"interp",""" +
+                """"scripts":{"tool":"usr/bin/tool"}}}]"""
+        )
+
+        regenerate()
+
+        assertEquals(emptyList<String>(), toolchainLines(), execTable.readText())
+    }
 }

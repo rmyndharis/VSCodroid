@@ -538,4 +538,96 @@ class ToolchainEnvFileTest {
             "the env file was rewritten over an unreadable state"
         )
     }
+
+    // -- a toolchain that starts only through the preloaded exec --------------
+
+    private fun installPreloadOnly(vararg binaries: String) {
+        val list = binaries.joinToString(",") { "\"$it\"" }
+        stateFile.writeText(
+            """[{"name":"cpp","preloadOnly":true,"binaries":[$list],""" +
+                """"env":{},"pathDirs":["usr/bin"]}]"""
+        )
+    }
+
+    /**
+     * A function hands the file to `/system/bin/linker64` by hand, and the
+     * loader then reports itself as the program's own path. clang finds its
+     * resource directory and sysroot from that path, so a `clang()` wrapper
+     * would make the compiler look in the loader's directory. The flag keeps the
+     * wrapper out; the program is found through PATH and started by the exec of
+     * the shell, which a terminal preloads.
+     */
+    @Test
+    fun `a preloadOnly toolchain gets no loader wrapper`() {
+        elf("usr/bin/clang-21")
+        installPreloadOnly("usr/bin/clang-21")
+
+        regenerate()
+
+        assertEquals(
+            emptyList<String>(),
+            envLines().filter { it.startsWith("clang-21()") },
+            "a toolchain that must not start through the loader by hand was wrapped:\n" +
+                envFile.readText(),
+        )
+    }
+
+    /**
+     * The control for the case above, and the half of the claim that matters
+     * more: what the flag does NOT remove. The directory still reaches PATH, so
+     * the compiler is found at all, and the file says why it has no functions.
+     */
+    @Test
+    fun `a preloadOnly toolchain keeps its PATH entry and says why it has no wrappers`() {
+        elf("usr/bin/clang-21")
+        installPreloadOnly("usr/bin/clang-21")
+
+        regenerate()
+
+        val lines = envLines()
+        assertTrue(
+            lines.contains("""export PATH="${'$'}PATH:${'$'}PREFIX/../usr/bin""""),
+            "the flag took the PATH entry too:\n" + envFile.readText(),
+        )
+        assertTrue(
+            lines.any { it.startsWith("# cpp programs start through the terminal's preloaded exec") },
+            "nothing in the file explains the missing functions:\n" + envFile.readText(),
+        )
+    }
+
+    @Test
+    fun `the same record without the flag is wrapped`() {
+        elf("usr/bin/clang-21")
+        stateFile.writeText(
+            """[{"name":"cpp","binaries":["usr/bin/clang-21"],"env":{}}]"""
+        )
+
+        regenerate()
+
+        assertTrue(
+            envLines().contains(
+                """clang-21() { /system/bin/linker64 "${'$'}PREFIX/../usr/bin/clang-21" "${'$'}@"; }"""
+            ),
+            "the control: without the flag the binary gets its wrapper:\n" + envFile.readText(),
+        )
+    }
+
+    @Test
+    fun `a preloadOnly toolchain gets no script wrapper either`() {
+        elf("usr/bin/interp")
+        script("usr/bin/tool")
+        stateFile.writeText(
+            """[{"name":"x","preloadOnly":true,"binaries":["usr/bin/interp","usr/bin/tool"],""" +
+                """"env":{},"scriptWrappers":{"interpreter":"interp",""" +
+                """"scripts":{"tool":"usr/bin/tool"}}}]"""
+        )
+
+        regenerate()
+
+        assertEquals(
+            emptyList<String>(),
+            envLines().filter { it.startsWith("tool()") || it.startsWith("interp()") },
+            envFile.readText(),
+        )
+    }
 }
