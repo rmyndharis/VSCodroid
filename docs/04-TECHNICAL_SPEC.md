@@ -1557,6 +1557,7 @@ module and a pack ship is a conflict bundletool refuses. What lands in `filesDir
 |---|---|---|
 | `bin/clang-<major>`, `bin/lld` | the driver and the linker | 6 MB |
 | `bin/llvm-ar`, `-ranlib`, `-nm`, `-objdump`, `-objcopy`, `-strip`, `-readelf`, `-size` | the binary tools | 3 MB |
+| `bin/aarch64-linux-android-clang`, `-clang++` | two scripts that start `clang` and `clang++`, see below | under 1 KB |
 | `lib/libLLVM.so`, `lib/libclang-cpp.so` | the compiler, shared by every tool above | 197 MB |
 | `lib/libxml2.so.16`, `lib/libpthread.so`, `lib/librt.so`, `lib/libutil.so` | libLLVM's one missing dependency, and three linker scripts | 1 MB |
 | `lib/crt*.o`, `lib/libunwind.a`, `lib/libatomic.a`, two more archives | what a default link names | 0.1 MB |
@@ -1572,12 +1573,23 @@ do, the process believes it is the loader and finds none of it. Hence `"preloadO
 `regenerateEnvFileLocked` and `regenerateExecTableLocked` honour by writing no function and no
 row for the toolchain's binaries, while `binaries`, `pathDirs` and `env` apply as for any other.
 
-The command names are `symlinks` in the manifest (`clang`, `clang++`, `cc`, `c++`, `gcc`, `g++`,
-`aarch64-linux-android-clang` and `-clang++` onto the driver; `ld` and `ld.lld` onto lld; `ar`,
-`ranlib`, `nm`, `strip`, `objdump`, `objcopy`, `readelf` and `size` onto the `llvm-*` files), made
-in `usr/bin` at install time and removed with the toolchain, because neither an asset pack nor the
-release ZIP can carry a link. A symlink keeps the name it was reached by, which is what tells the
-driver C from C++ (`c++`, `clang++` and `g++` run it as `g++`) and lld `ld` from `ld.lld`.
+The command names are `symlinks` in the manifest (`clang`, `clang++`, `cc`, `c++`, `gcc` and `g++`
+onto the driver; `ld` and `ld.lld` onto lld; `ar`, `ranlib`, `nm`, `strip`, `objdump`, `objcopy`,
+`readelf` and `size` onto the `llvm-*` files), made in `usr/bin` at install time and removed with the
+toolchain, because neither an asset pack nor the release ZIP can carry a link. A symlink keeps the
+name it was reached by, which is what tells the driver C from C++ (`c++`, `clang++` and `g++` run it
+as `g++`) and lld `ld` from `ld.lld`.
+
+`aarch64-linux-android-clang` and `aarch64-linux-android-clang++` are the exception, and are files.
+clang also takes its target from the prefix of the name it runs under, and this prefix names no API
+level, so under a link either name compiled with an unversioned triple and bionic's headers stopped
+with `Unversioned target triples are not supported!`; a configuration file beside the link did not
+change that (measured on an API 33 emulator). Each is a two-line `#!/system/bin/sh` script that
+`exec`s the plain `clang` or `clang++` from its own directory, which has the driver's default target,
+`aarch64-unknown-linux-android24`. They are in `binaries`, so the install gives them the execute bit
+and an uninstall removes them, and they are not in `symlinks`, where the install would replace the
+file with a link. Python's sysconfig names the first as its `CC`, which is what `pip` runs for a C
+extension. The interceptor starts them like any `#!` script, so they need it as the rest do.
 
 `ownedPaths` is the manifest key for what a toolchain puts into directories it shares with the base
 install and does not own outright, because clang finds them there and nowhere else: one entry per

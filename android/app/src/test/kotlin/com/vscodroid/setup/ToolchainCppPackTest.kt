@@ -57,6 +57,25 @@ class ToolchainCppPackTest {
     private val packAssets = File("../$packName/src/main/assets")
     private val manifestFile = File(packAssets, "$packName.json")
 
+    /** The command names that are links to a binary, which is all of them but two. */
+    private val linkNames = setOf(
+        "clang", "clang++", "cc", "c++", "gcc", "g++", "ld", "ld.lld",
+        "ar", "ranlib", "nm", "strip", "objdump", "objcopy", "readelf", "size",
+    )
+
+    /**
+     * The two names that carry a target, each with the plain name it starts. clang
+     * takes its target from the prefix of the name it runs under, and this prefix
+     * names no API level, so a link under either name compiles with an unversioned
+     * triple and the headers stop. Python's sysconfig names the first as its CC.
+     */
+    private val targetPrefixed = mapOf(
+        "aarch64-linux-android-clang" to "clang",
+        "aarch64-linux-android-clang++" to "clang++",
+    )
+
+    private fun scriptFor(plain: String) = "#!/system/bin/sh\nexec \"\${0%/*}/$plain\" \"\$@\"\n"
+
     @BeforeEach
     fun setUp() {
         mockkObject(Logger)
@@ -163,10 +182,22 @@ class ToolchainCppPackTest {
         for (name in links.keys()) {
             assertTrue(links.getString(name) in binaries, "$name points at a file the pack does not ship")
         }
+
+        // Every other command name is still the link it was, and the two that
+        // carry a target are files: in binaries, so they get the execute bit and
+        // go with the toolchain, and not in symlinks, where the install would
+        // delete the file and put a link in its place.
+        assertEquals(linkNames, links.keys().asSequence().toSet(), "the command-name links changed")
+        for ((name, plain) in targetPrefixed) {
+            assertTrue("usr/bin/$name" in binaries, "$name is not in binaries, so it gets no execute bit")
+            val file = File(packAssets, "usr/bin/$name")
+            assertFalse(Files.isSymbolicLink(file.toPath()), "$name is a link in the pack")
+            assertEquals(scriptFor(plain), file.readText(), "$name is not the script that starts $plain")
+        }
     }
 
     @Test
-    fun `installing it makes every command name resolve to a binary and starts nothing by hand`() {
+    fun `installing it makes every command name resolve to a program and starts nothing by hand`() {
         requirePack()
         install()
 
@@ -186,6 +217,15 @@ class ToolchainCppPackTest {
         val binaries = strings(m.getJSONArray("binaries"))
         for (rel in binaries) {
             assertTrue(File(filesDir, rel).isFile, "$rel is named by the manifest and was not copied")
+        }
+        // The two target-prefixed names are files that start the plain driver
+        // names, and they have to be able to run: only the manifest gives them
+        // the execute bit, because the copy carries none.
+        for ((name, plain) in targetPrefixed) {
+            val script = File(filesDir, "usr/bin/$name")
+            assertFalse(Files.isSymbolicLink(script.toPath()), "$name is a link, which compiles with an unversioned triple")
+            assertTrue(script.canExecute(), "$name has no execute bit after the install")
+            assertEquals(scriptFor(plain), script.readText(), "$name is not the script that starts $plain")
         }
 
         // The point of the flag, read off the two files a terminal and a task

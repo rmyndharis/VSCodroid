@@ -28,6 +28,15 @@ set -euo pipefail
 # arrives as `c++`. A wrapper would also cost a shell per compile, and every
 # process counts against Android's phantom process limit on this platform.
 #
+# Two names are the exception, aarch64-linux-android-clang and -clang++. clang
+# also takes its target from the prefix of the name it is started under, and
+# this prefix names no API level, so a link under either name compiled with an
+# unversioned triple and bionic's headers stopped at "Unversioned target triples
+# are not supported!". A configuration file beside the link did not change that.
+# They are two-line scripts that start the plain name beside them, which carries
+# the driver's default target. Python's sysconfig names the first as its CC, so
+# without it pip builds no C extension.
+#
 # Compatible with bash 3.2+ (macOS default).
 
 SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
@@ -179,6 +188,19 @@ for tool in "${LLVM_TOOLS[@]}"; do
     echo "  bin/$tool"
 done
 
+# The two target-prefixed names, as scripts rather than links (see the header).
+# The sibling is found from the script's own path, which is where PATH found it,
+# and exec keeps a compile to the one process.
+for name in clang clang++; do
+    wrapper="$PACK_ASSETS/usr/bin/aarch64-linux-android-$name"
+    cat > "$wrapper" <<EOF
+#!/system/bin/sh
+exec "\${0%/*}/$name" "\$@"
+EOF
+    chmod 0755 "$wrapper"
+    echo "  bin/aarch64-linux-android-$name (script)"
+done
+
 # Shared libraries, by soname.
 echo ""
 echo "Placing shared libraries..."
@@ -260,14 +282,15 @@ echo "Writing toolchain_cpp.json..."
 # the program is what makes that safe: a file the manifest does not account for
 # is a file an uninstall would leave on every device, so the build stops.
 #
-#   binaries    every file in usr/bin (chmod +x at install, deleted at uninstall)
+#   binaries    every file in usr/bin (chmod +x at install, deleted at uninstall),
+#               the two target-prefixed scripts among them
 #   libs        the loose .so files in usr/lib, which the attribution gate reads
 #   ownedPaths  what the pack puts into directories it shares with the base
 #               install: usr/include/*, usr/lib/clang, the crt objects and
 #               archives, usr/share/doc/*. Entry by entry rather than whole
 #               directories, so a header a user installed beside them survives.
-#   symlinks    the command names, made in usr/bin at install time because a
-#               pack cannot carry a link
+#   symlinks    the command names that are links to a binary, made in usr/bin
+#               at install time because a pack cannot carry a link
 #
 # preloadOnly: no bash function and no trampoline row is made for these
 # binaries. Both of those start a program as `/system/bin/linker64 <file>`
@@ -299,8 +322,8 @@ for sub in ("usr/include", "usr/share/doc"):
 
 driver = "usr/bin/clang-" + major
 symlinks = {}
-for name in ("clang", "clang++", "cc", "c++", "gcc", "g++",
-             "aarch64-linux-android-clang", "aarch64-linux-android-clang++"):
+# Not aarch64-linux-android-clang and -clang++: those are scripts in usr/bin.
+for name in ("clang", "clang++", "cc", "c++", "gcc", "g++"):
     symlinks[name] = driver
 for name in ("ld", "ld.lld"):
     symlinks[name] = "usr/bin/lld"
@@ -350,7 +373,7 @@ manifest = {
 with open(os.path.join(pack, "toolchain_cpp.json"), "w") as f:
     json.dump(manifest, f, indent=4)
     f.write("\n")
-print("  toolchain_cpp.json written: %d binaries, %d libs, %d owned paths, %d command names"
+print("  toolchain_cpp.json written: %d binaries, %d libs, %d owned paths, %d command-name links"
       % (len(binaries), len(libs), len(owned), len(symlinks)))
 PYEOF
 
