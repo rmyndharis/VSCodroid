@@ -19,6 +19,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -31,6 +32,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import kotlin.concurrent.thread
 import java.io.ByteArrayInputStream
 import java.io.File
+import java.io.IOException
 
 /**
  * What an interrupted upload leaves behind, and what the next sync does with it.
@@ -384,26 +386,18 @@ class SafUploadInterruptionTest {
         assertFalse(journal.isFile, "the record outlived the last writer")
     }
 
-    /**
-     * The record a dead process left is consumed without touching a live writer's claim.
-     *
-     * `initialSync` clears the record for a path it is about to write itself, and that is
-     * a different operation from a writer releasing its own claim. Spelling it as one
-     * would decrement a live writer to zero and drop the line while that writer was still
-     * streaming, which is the defect the count exists to prevent, reached by another door.
-     * Reopening the same folder is what puts a live writer and a stale record on one path,
-     * because the mirror is named by a hash of the folder rather than by the session.
-     */
+    /** A reopen cannot consume the journal or replace a mirror during a live write. */
     @Test
-    fun `consuming a stale record leaves a live writer's claim alone`() {
+    fun `a busy reopen leaves a live writer's claim alone`() {
         deviceHolding("notes.txt")
         val file = File(mirror, "notes.txt").apply { writeText("the whole edit") }
+        val device = ByteArrayOutputStream()
         val released = AtomicBoolean(false)
         val firstWriteStarted = CountDownLatch(1)
-        // Only the drain's write blocks. The sync writes the same file itself right
-        // after consuming the record, and blocking that one would hang the test on the
-        // very call it is here to observe.
         var opens = 0
+        every { resolver.openInputStream(any()) } answers {
+            ByteArrayInputStream(device.toByteArray())
+        }
         every { resolver.openOutputStream(any(), any()) } answers {
             if (opens++ == 0) {
                 object : OutputStream() {
@@ -413,6 +407,7 @@ class SafUploadInterruptionTest {
                         while (!released.get()) {
                             try { Thread.sleep(10) } catch (_: InterruptedException) { }
                         }
+                        device.write(b, off, len)
                     }
                 }
             } else {
@@ -422,20 +417,37 @@ class SafUploadInterruptionTest {
 
         engine.handleMirrorEvent(FileObserver.MODIFY, file, mirror, treeUri)
         val drain = thread(isDaemon = true) { engine.runWriteBackLoop { false } }
-        assertTrue(
-            firstWriteStarted.await(5, TimeUnit.SECONDS),
-            "setup failed: the write never reached the provider",
-        )
+        try {
+            assertTrue(
+                firstWriteStarted.await(5, TimeUnit.SECONDS),
+                "setup failed: the write never reached the provider",
+            )
 
-        // What initialSync does when it finds that path in the journal it read at start.
+            val started = System.nanoTime()
+            assertThrows(IOException::class.java) {
+                runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+            }
+            assertTrue(
+                (System.nanoTime() - started) / 1_000_000 < 1_000,
+                "the busy reopen waited for the provider",
+            )
+            assertEquals(
+                listOf(file.absolutePath), engine.uploadsInFlight().toList(),
+                "the sync consumed a record belonging to a writer that is still streaming",
+            )
+            assertEquals(1, opens, "the reopen started another upload")
+            assertEquals("the whole edit", file.readText())
+        } finally {
+            released.set(true)
+            drain.join(5_000)
+        }
+
+        assertFalse(drain.isAlive, "the writer did not finish")
+        assertFalse(journal.isFile, "the finished writer did not release its claim")
+        assertEquals("the whole edit", device.toString(Charsets.UTF_8.name()))
+
         runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
-
-        assertEquals(
-            listOf(file.absolutePath), engine.uploadsInFlight().toList(),
-            "the sync consumed a record belonging to a writer that is still streaming",
-        )
-
-        released.set(true)
-        drain.join(5_000)
+        assertEquals("the whole edit", file.readText())
+        assertEquals("the whole edit", device.toString(Charsets.UTF_8.name()))
     }
 }

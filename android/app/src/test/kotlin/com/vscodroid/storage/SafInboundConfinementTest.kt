@@ -21,9 +21,15 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
+import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.ValueSource
 import java.io.ByteArrayInputStream
 import java.io.File
+import java.io.IOException
 import java.nio.file.Files
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * Where a device document is allowed to land.
@@ -40,8 +46,8 @@ import java.nio.file.Files
  * put every document under `docs/` wherever it pointed, this app's own private storage
  * included.
  *
- * A file-level link is not the case that matters and is already safe: the copy writes
- * beside its destination and renames, and a rename replaces the link rather than writing
+ * A file-level link is not the case that matters and is already safe: the copy stages
+ * its bytes and renames, and a rename replaces the link rather than writing
  * through it. The case below is the directory one, which is why the fixture answers per
  * parent rather than handing one cursor to every query.
  */
@@ -145,6 +151,107 @@ class SafInboundConfinementTest {
         SafSyncEngine(context).initialSync(named("tree"), mirror) { _, _ -> }
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = [false, true])
+    fun `abandoned inbound copies are reclaimed even when no file can be fetched`(belowFloor: Boolean) {
+        val staging = File(filesDir, "saf-inbound").apply { mkdirs() }
+        val abandoned = File(staging, "interrupted.vscodroid-partial").apply {
+            writeText("UNFINISHED DEVICE COPY")
+        }
+        val local = File(mirror, "notes.txt.vscodroid-partial").apply { writeText("LOCAL WORK") }
+        deviceTree(mapOf("root" to if (belowFloor) listOf(Child("notes.txt", contents = "DEVICE")) else emptyList()))
+        val engine = SafSyncEngine(context)
+        if (belowFloor) engine.usableSpaceOf = { 0L }
+
+        runBlocking { engine.initialSync(named("tree"), mirror) { _, _ -> } }
+
+        assertFalse(abandoned.exists(), "reopening left an abandoned inbound copy on disk")
+        assertEquals("LOCAL WORK", local.readText())
+        assertFalse(File(mirror, "notes.txt").exists())
+    }
+
+    @Test
+    fun `another engine reopening a folder cannot reclaim an active inbound copy`() {
+        val contents = "DEVICE CONTENT ".repeat(1_000)
+        deviceTree(mapOf("root" to listOf(Child("notes.txt", contents = contents))))
+        val copying = CountDownLatch(1)
+        val finish = CountDownLatch(1)
+        every { resolver.openInputStream(any()) } answers {
+            object : ByteArrayInputStream(contents.toByteArray()) {
+                private var reads = 0
+                override fun read(bytes: ByteArray, offset: Int, length: Int): Int {
+                    if (++reads == 2) {
+                        copying.countDown()
+                        check(finish.await(10, TimeUnit.SECONDS)) { "the inbound copy was not released" }
+                    }
+                    return super.read(bytes, offset, length)
+                }
+            }
+        }
+        val failure = AtomicReference<Throwable?>()
+        val worker = Thread {
+            try {
+                sync()
+            } catch (error: Throwable) {
+                failure.set(error)
+            }
+        }
+        worker.start()
+        val staging = File(filesDir, "saf-inbound")
+        try {
+            assertTrue(copying.await(5, TimeUnit.SECONDS), "the inbound copy never reached its second read")
+            val active = staging.listFiles()?.singleOrNull()
+            assertTrue(active != null && active.length() > 0, "the copy did not use private staging")
+            deviceTree(mapOf("root" to emptyList()))
+            val otherMirror = File(filesDir, "other-mirror").apply { mkdirs() }
+
+            runBlocking { SafSyncEngine(context).initialSync(named("other-tree"), otherMirror) { _, _ -> } }
+
+            assertTrue(active!!.isFile, "the second engine removed an active inbound copy")
+        } finally {
+            finish.countDown()
+            worker.join(5_000)
+        }
+        assertFalse(worker.isAlive, "the inbound copy did not finish")
+        failure.get()?.let { throw AssertionError("the inbound copy failed", it) }
+        assertEquals(contents, File(mirror, "notes.txt").readText())
+        assertEquals(emptyList<String>(), staging.list()?.toList())
+    }
+
+    @Test
+    fun `a failed inbound copy releases its staging file`() {
+        deviceTree(mapOf("root" to listOf(Child("notes.txt", contents = "DEVICE"))))
+        every { resolver.openInputStream(any()) } answers {
+            object : ByteArrayInputStream("UNFINISHED".toByteArray()) {
+                private var reads = 0
+                override fun read(bytes: ByteArray, offset: Int, length: Int): Int {
+                    if (++reads == 2) throw IOException("the provider disconnected")
+                    return super.read(bytes, offset, length)
+                }
+            }
+        }
+
+        sync()
+
+        assertFalse(File(mirror, "notes.txt").exists())
+        assertEquals(emptyList<String>(), File(filesDir, "saf-inbound").list()?.toList())
+    }
+
+    @Test
+    fun `a linked staging directory cannot redirect reclamation or inbound copies`() {
+        val protected = File(elsewhere, "private.txt").apply { writeText("PRIVATE CONTENT") }
+        val staging = File(filesDir, "saf-inbound")
+        Files.createSymbolicLink(staging.toPath(), elsewhere.toPath())
+        deviceTree(mapOf("root" to listOf(Child("notes.txt", contents = "DEVICE"))))
+
+        sync()
+
+        assertEquals("PRIVATE CONTENT", protected.readText())
+        assertEquals(listOf("private.txt"), elsewhere.list()?.toList())
+        assertTrue(Files.isSymbolicLink(staging.toPath()))
+        assertFalse(File(mirror, "notes.txt").exists())
+    }
+
     @Test
     fun `an existing scratch symlink cannot overwrite its target`() {
         val target = File(elsewhere, "settings.json").apply { writeText("PRIVATE SETTINGS") }
@@ -195,6 +302,39 @@ class SafInboundConfinementTest {
             "a device document was written through a link and landed outside the folder " +
                 "the user granted, where nothing in this engine may look for it again",
         )
+    }
+
+    @Test
+    fun `a directory replaced by a link during a fetch cannot redirect the completed copy`() {
+        val target = File(elsewhere, "secrets.txt").apply { writeText("PRIVATE CONTENT") }
+        val directory = File(mirror, "docs").apply { mkdirs() }
+        val moved = File(mirror, "original-docs")
+        deviceTree(
+            mapOf(
+                "root" to listOf(Child("docs", isDirectory = true)),
+                "doc:docs" to listOf(Child("secrets.txt", contents = "DEVICE CONTENT")),
+            )
+        )
+        var replaced = false
+        every { resolver.openInputStream(any()) } answers {
+            object : ByteArrayInputStream("DEVICE CONTENT".toByteArray()) {
+                override fun read(bytes: ByteArray, offset: Int, length: Int): Int {
+                    if (!replaced) {
+                        Files.move(directory.toPath(), moved.toPath())
+                        Files.createSymbolicLink(directory.toPath(), elsewhere.toPath())
+                        replaced = true
+                    }
+                    return super.read(bytes, offset, length)
+                }
+            }
+        }
+
+        sync()
+
+        assertTrue(replaced, "the destination directory never changed during the fetch")
+        assertEquals("PRIVATE CONTENT", target.readText(), "the copy escaped through the changed parent")
+        assertTrue(Files.isSymbolicLink(directory.toPath()))
+        assertEquals(emptyList<String>(), File(filesDir, "saf-inbound").list()?.toList())
     }
 
     /**

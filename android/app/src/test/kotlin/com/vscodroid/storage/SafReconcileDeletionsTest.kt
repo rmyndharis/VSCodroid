@@ -42,6 +42,9 @@ class SafReconcileDeletionsTest {
     @TempDir
     lateinit var mirror: File
 
+    @TempDir
+    lateinit var filesDir: File
+
     private lateinit var resolver: ContentResolver
     private lateinit var context: Context
     private val uris = mutableMapOf<String, Uri>()
@@ -92,6 +95,7 @@ class SafReconcileDeletionsTest {
         resolver = mockk(relaxed = true)
         context = mockk(relaxed = true)
         every { context.contentResolver } returns resolver
+        every { context.filesDir } returns filesDir
     }
 
     @AfterEach
@@ -670,7 +674,7 @@ class SafReconcileDeletionsTest {
 
     @Test
     fun `a copy that failed does not vouch for what was already there`() {
-        // copyDocumentToLocal writes beside its destination and renames, deliberately
+        // copyDocumentToLocal stages its bytes and renames, deliberately
         // leaving the destination untouched when it fails. So after a failed copy the
         // path still holds whatever was there -- which can be an edit of the user's that
         // no sync ever wrote. Reading identity back from disk then records that edit as

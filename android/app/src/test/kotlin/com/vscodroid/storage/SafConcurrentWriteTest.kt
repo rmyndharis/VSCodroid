@@ -17,6 +17,8 @@ import io.mockk.unmockkAll
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -24,6 +26,7 @@ import org.junit.jupiter.api.io.TempDir
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.IOException
 import java.io.OutputStream
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -303,18 +306,20 @@ class SafConcurrentWriteTest {
         blockFirstFetch = true
 
         val first = Thread { syncNow() }.apply { start() }
-        assertTrue(
-            firstFetchInside.await(5, TimeUnit.SECONDS),
-            "the first sync never reached its stream, so nothing was contended",
-        )
+        try {
+            assertTrue(
+                firstFetchInside.await(5, TimeUnit.SECONDS),
+                "the first sync never reached its stream, so nothing was contended",
+            )
 
-        // The replacement activity opens the same folder while the first sync is still
-        // inside the provider.
-        syncNow()
+            // The replacement Activity must retry once the admitted sync finishes.
+            assertThrows(IOException::class.java) { syncNow() }
+        } finally {
+            releaseFirstFetch.countDown()
+            first.join(5_000)
+        }
 
-        releaseFirstFetch.countDown()
-        first.join(5_000)
-
+        assertFalse(first.isAlive, "the first sync did not finish")
         assertEquals(
             1, fetched.get(),
             "two syncs read the same document into one mirror file at once",
@@ -323,6 +328,11 @@ class SafConcurrentWriteTest {
             "what the device holds", File(mirror, "notes.md").readText(),
             "the mirror file is not what either sync fetched",
         )
+
+        assertTrue(File(mirror, "notes.md").delete())
+        syncNow()
+        assertEquals(2, fetched.get(), "the finished sync did not release the mirror")
+        assertEquals("what the device holds", File(mirror, "notes.md").readText())
     }
 
     /**
@@ -331,26 +341,33 @@ class SafConcurrentWriteTest {
      * built with `setCancelable(false)`.
      */
     @Test
-    fun `the second sync returns rather than waiting`() {
+    fun `the second sync reports busy rather than waiting`() {
         deviceHolding("notes.md")
         deviceDocumentReadingAs("what the device holds")
         blockFirstFetch = true
 
         val first = Thread { syncNow() }.apply { start() }
-        assertTrue(firstFetchInside.await(5, TimeUnit.SECONDS), "nothing was contended")
+        try {
+            assertTrue(firstFetchInside.await(5, TimeUnit.SECONDS), "nothing was contended")
 
-        val started = System.nanoTime()
+            val started = System.nanoTime()
+            assertThrows(IOException::class.java) { syncNow() }
+            val waitedMs = (System.nanoTime() - started) / 1_000_000
+
+            assertTrue(
+                waitedMs < 1_000,
+                "the second sync waited ${waitedMs}ms for the first, which is the stall this " +
+                    "design exists to avoid",
+            )
+        } finally {
+            releaseFirstFetch.countDown()
+            first.join(5_000)
+        }
+
+        assertFalse(first.isAlive, "the first sync did not finish")
+        assertEquals("what the device holds", File(mirror, "notes.md").readText())
         syncNow()
-        val waitedMs = (System.nanoTime() - started) / 1_000_000
-
-        releaseFirstFetch.countDown()
-        first.join(5_000)
-
-        assertTrue(
-            waitedMs < 1_000,
-            "the second sync waited ${waitedMs}ms for the first, which is the stall this " +
-                "design exists to avoid",
-        )
+        assertEquals("what the device holds", File(mirror, "notes.md").readText())
     }
 
     /**

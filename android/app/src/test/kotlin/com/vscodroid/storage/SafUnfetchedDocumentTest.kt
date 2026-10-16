@@ -28,6 +28,12 @@ import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
+import java.util.concurrent.atomic.AtomicInteger
+import java.util.concurrent.atomic.AtomicLong
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * What happens to a device document the sync could not read, when a local file
@@ -222,6 +228,252 @@ class SafUnfetchedDocumentTest {
     private fun deleteDirectory(relativePath: String) {
         File(mirror, relativePath).deleteRecursively()
         deliver(FileObserver.DELETE or isDirFlag, relativePath)
+    }
+
+    @Test
+    fun `a save checking an old device stamp cannot cross a reopen that could not read the document`() {
+        reopenDuringOutboundStampCheck(FileObserver.MODIFY)
+    }
+
+    @Test
+    fun `a delete checking an old device stamp cannot cross a reopen that could not read the document`() {
+        reopenDuringOutboundStampCheck(FileObserver.DELETE)
+    }
+
+    @Test
+    fun `a create reusing a document cannot cross a reopen that could not read it`() {
+        reopenDuringOutboundStampCheck(FileObserver.CREATE)
+    }
+
+    @Test
+    fun `a replacement engine reopening the mirror invalidates an older engine save`() {
+        reopenDuringOutboundStampCheck(FileObserver.MODIFY, replacementEngine = true)
+    }
+
+    @Test
+    fun `a replacement engine reopening the mirror invalidates an older engine delete`() {
+        reopenDuringOutboundStampCheck(FileObserver.DELETE, replacementEngine = true)
+    }
+
+    @Test
+    fun `opening another mirror leaves a valid save able to finish`() {
+        reopenDuringOutboundStampCheck(FileObserver.MODIFY, anotherMirror = true)
+    }
+
+    @Test
+    fun `opening another mirror leaves a valid delete able to finish`() {
+        reopenDuringOutboundStampCheck(FileObserver.DELETE, anotherMirror = true)
+    }
+
+    private fun reopenDuringOutboundStampCheck(
+        event: Int,
+        replacementEngine: Boolean = false,
+        anotherMirror: Boolean = false,
+    ) {
+        val contents = AtomicReference("device contents")
+        val modified = AtomicLong(1_700_000_000_000)
+        val readable = AtomicBoolean(true)
+        val exists = AtomicBoolean(true)
+        val writes = AtomicInteger()
+        val deletes = AtomicInteger()
+        val failedReads = AtomicInteger()
+        val checkingStamp = CountDownLatch(1)
+        val releaseStamp = CountDownLatch(1)
+        val pauseNextStamp = AtomicBoolean(true)
+        val failure = AtomicReference<Throwable?>()
+        var outbound: Thread? = null
+        deviceTree(mapOf("root" to listOf(Entry("notes.md"))))
+        every { resolver.query(any(), any(), any(), any(), any()) } answers {
+            val document = firstArg<Uri>() === uris["doc:notes.md"]
+            val stamp = modified.get()
+            val size = contents.get().toByteArray().size.toLong()
+            if (document) {
+                // A provider cursor is a snapshot, even if its binder call returns later.
+                if (Thread.currentThread() === outbound && pauseNextStamp.compareAndSet(true, false)) {
+                    checkingStamp.countDown()
+                    check(releaseStamp.await(10, TimeUnit.SECONDS)) { "the stamp query was not released" }
+                }
+                mockk<Cursor>(relaxed = true) {
+                    every { moveToFirst() } returns true
+                    every { getColumnIndex(DocumentsContract.Document.COLUMN_LAST_MODIFIED) } returns 0
+                    every { getColumnIndex(DocumentsContract.Document.COLUMN_SIZE) } returns 1
+                    every { isNull(any<Int>()) } returns false
+                    every { getLong(0) } returns stamp
+                    every { getLong(1) } returns size
+                }
+            } else {
+                cursorOver(if (exists.get()) listOf(Entry("notes.md", size)) else emptyList()).also {
+                    every { it.getLong(4) } returns stamp
+                }
+            }
+        }
+        every { resolver.openInputStream(any()) } answers {
+            if (!readable.get()) {
+                failedReads.incrementAndGet()
+                throw IOException("the provider refused the read")
+            }
+            ByteArrayInputStream(contents.get().toByteArray())
+        }
+        every { resolver.openOutputStream(any(), "wt") } answers {
+            writes.incrementAndGet()
+            contents.set("")
+            object : ByteArrayOutputStream() {
+                override fun close() {
+                    contents.set(toString("UTF-8"))
+                    super.close()
+                }
+            }
+        }
+        every { DocumentsContract.deleteDocument(any(), any()) } answers {
+            deletes.incrementAndGet()
+            exists.set(false)
+            true
+        }
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        val local = File(mirror, "notes.md")
+        assertEquals("device contents", local.readText())
+        if (event == FileObserver.DELETE) assertTrue(local.delete())
+        else local.writeText("saved in the editor")
+        engine.handleMirrorEvent(event, local, mirror, treeUri)
+        val drain = Thread {
+            try {
+                engine.runWriteBackLoop { false }
+            } catch (error: Throwable) {
+                failure.set(error)
+            }
+        }
+        outbound = drain
+        drain.start()
+        try {
+            assertTrue(checkingStamp.await(5, TimeUnit.SECONDS), "the outbound job never checked its device stamp")
+            if (!anotherMirror) {
+                contents.set("changed by another app")
+                modified.set(System.currentTimeMillis() + 60_000)
+                readable.set(false)
+            }
+            val openingEngine = if (replacementEngine) SafSyncEngine(context) else engine
+            val openingMirror = if (anotherMirror) File(filesDir, "other-mirror").apply { mkdirs() } else mirror
+
+            runBlocking { openingEngine.initialSync(treeUri, openingMirror) { _, _ -> } }
+
+            if (anotherMirror) assertEquals("device contents", File(openingMirror, "notes.md").readText())
+            else assertTrue(failedReads.get() > 0, "the reopen did not try to read the changed document")
+        } finally {
+            releaseStamp.countDown()
+            drain.join(5_000)
+        }
+        assertFalse(drain.isAlive, "the outbound job did not finish after its provider call returned")
+        failure.get()?.let { throw AssertionError("the outbound job failed", it) }
+        if (anotherMirror) {
+            assertEquals(event != FileObserver.DELETE, exists.get(), "opening another mirror cancelled the valid delete")
+            assertEquals(if (event == FileObserver.DELETE) "device contents" else "saved in the editor", contents.get())
+            assertEquals(if (event == FileObserver.DELETE) 0 else 1, writes.get())
+            assertEquals(if (event == FileObserver.DELETE) 1 else 0, deletes.get())
+            return
+        }
+        assertTrue(exists.get(), "the queued delete removed a document the reopen could not read")
+        assertEquals("changed by another app", contents.get(), "the queued save replaced unread device bytes")
+        assertEquals(0, writes.get(), "the stale save opened the device document with truncation")
+        assertEquals(0, deletes.get(), "the stale delete reached the provider")
+        if (event == FileObserver.CREATE) {
+            verify(exactly = 0) { DocumentsContract.createDocument(any(), any(), any(), any()) }
+        }
+    }
+
+    @Test
+    fun `a reopen refuses promptly while a provider write is admitted and succeeds after it finishes`() {
+        reopenDuringOutboundMutation(FileObserver.MODIFY)
+    }
+
+    @Test
+    fun `a reopen refuses promptly while a provider delete is admitted and succeeds after it finishes`() {
+        reopenDuringOutboundMutation(FileObserver.DELETE)
+    }
+
+    private fun reopenDuringOutboundMutation(event: Int) {
+        val contents = AtomicReference("device contents")
+        val exists = AtomicBoolean(true)
+        val writes = AtomicInteger()
+        val deletes = AtomicInteger()
+        val insideMutation = CountDownLatch(1)
+        val releaseMutation = CountDownLatch(1)
+        val reopenFinished = CountDownLatch(1)
+        val drainFailure = AtomicReference<Throwable?>()
+        val reopenFailure = AtomicReference<Throwable?>()
+        deviceTree(mapOf("root" to listOf(Entry("notes.md"))))
+        every { resolver.query(any(), any(), any(), any(), any()) } answers {
+            cursorOver(if (exists.get()) listOf(Entry("notes.md", contents.get().toByteArray().size.toLong())) else emptyList())
+        }
+        every { resolver.openInputStream(any()) } answers { ByteArrayInputStream(contents.get().toByteArray()) }
+        every { resolver.openOutputStream(any(), "wt") } answers {
+            insideMutation.countDown()
+            check(releaseMutation.await(10, TimeUnit.SECONDS)) { "the provider write was not released" }
+            writes.incrementAndGet()
+            contents.set("")
+            object : ByteArrayOutputStream() {
+                override fun close() {
+                    contents.set(toString("UTF-8"))
+                    super.close()
+                }
+            }
+        }
+        every { DocumentsContract.deleteDocument(any(), any()) } answers {
+            insideMutation.countDown()
+            check(releaseMutation.await(10, TimeUnit.SECONDS)) { "the provider delete was not released" }
+            deletes.incrementAndGet()
+            exists.set(false)
+            true
+        }
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        val local = File(mirror, "notes.md")
+        assertEquals("device contents", local.readText())
+        if (event == FileObserver.DELETE) assertTrue(local.delete())
+        else local.writeText("saved in the editor")
+        engine.handleMirrorEvent(event, local, mirror, treeUri)
+        val drain = Thread {
+            try {
+                engine.runWriteBackLoop { false }
+            } catch (error: Throwable) {
+                drainFailure.set(error)
+            }
+        }
+        val reopening = Thread {
+            try {
+                runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+            } catch (error: Throwable) {
+                reopenFailure.set(error)
+            } finally {
+                reopenFinished.countDown()
+            }
+        }
+        drain.start()
+        try {
+            assertTrue(insideMutation.await(5, TimeUnit.SECONDS), "the outbound job never entered its provider mutation")
+            reopening.start()
+
+            assertTrue(reopenFinished.await(5, TimeUnit.SECONDS), "the reopen waited for the blocked provider mutation")
+
+            assertTrue(reopenFailure.get() is IOException, "the busy reopen did not report an IOException: ${reopenFailure.get()}")
+            assertEquals(1L, releaseMutation.count, "the provider mutation was released before the reopen returned")
+            assertTrue(exists.get())
+            assertEquals("device contents", contents.get())
+        } finally {
+            releaseMutation.countDown()
+            drain.join(5_000)
+            reopening.join(5_000)
+        }
+        assertFalse(drain.isAlive, "the provider mutation did not finish after being released")
+        assertFalse(reopening.isAlive, "the reopen did not return")
+        drainFailure.get()?.let { throw AssertionError("the outbound job failed", it) }
+        assertEquals(event != FileObserver.DELETE, exists.get())
+        assertEquals(if (event == FileObserver.DELETE) "device contents" else "saved in the editor", contents.get())
+        assertEquals(if (event == FileObserver.DELETE) 0 else 1, writes.get())
+        assertEquals(if (event == FileObserver.DELETE) 1 else 0, deletes.get())
+
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+
+        assertEquals(event != FileObserver.DELETE, exists.get(), "the completed mutation was not retained after reopening")
+        assertEquals(if (event == FileObserver.DELETE) "device contents" else "saved in the editor", contents.get())
     }
 
     /**

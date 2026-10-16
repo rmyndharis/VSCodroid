@@ -102,12 +102,10 @@ class SafCreateIdempotencyTest {
     /** Runs the real create for a local file of [contents] named [name]. */
     private fun create(name: String, contents: String) {
         val localFile = File(workspace, name).apply { writeText(contents) }
-        SafSyncEngine::class.java
-            .getDeclaredMethod(
-                "createInSaf", File::class.java, Uri::class.java, Uri::class.java
-            )
+        SafSyncEngine::class.java.declaredMethods
+            .single { it.name == "createInSaf" }
             .apply { isAccessible = true }
-            .invoke(engine, localFile, parentUri, treeUri)
+            .invoke(engine, localFile, parentUri, treeUri, null)
     }
 
     @Test

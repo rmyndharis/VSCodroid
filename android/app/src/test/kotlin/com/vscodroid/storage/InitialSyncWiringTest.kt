@@ -39,6 +39,9 @@ class InitialSyncWiringTest {
     @TempDir
     lateinit var mirror: File
 
+    @TempDir
+    lateinit var filesDir: File
+
     /**
      * The sync now records what it copied, in a file beside the mirror rather than inside
      * it, so it lands outside the directory `@TempDir` cleans up, and each test method
@@ -139,15 +142,14 @@ class InitialSyncWiringTest {
         resolver = mockk(relaxed = true)
         context = mockk(relaxed = true)
         every { context.contentResolver } returns resolver
+        every { context.filesDir } returns filesDir
     }
 
     /**
      * The upload journal, which is a plain list of absolute paths in `filesDir`.
      *
      * Seeded rather than produced, because producing one means killing the
-     * process mid-write. `context.filesDir` is stubbed per case rather than in
-     * `setUp` so the cases that do not care keep the relaxed mock they have
-     * always had.
+     * process mid-write. Cases inspecting the journal supply its directory.
      */
     private fun journalHolding(path: String, into: File) {
         every { context.filesDir } returns into

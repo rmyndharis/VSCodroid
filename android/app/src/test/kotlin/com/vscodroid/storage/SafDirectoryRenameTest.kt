@@ -10,11 +10,19 @@ import io.mockk.every
 import io.mockk.mockk
 import io.mockk.mockkStatic
 import io.mockk.verify
+import kotlinx.coroutines.runBlocking
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import java.io.File
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * What a renamed directory does to the copy on the device.
@@ -194,6 +202,197 @@ class SafDirectoryRenameTest {
         // the second copy left standing under the old name.
         verify(exactly = 0) { DocumentsContract.deleteDocument(any(), any()) }
         verify(exactly = 0) { DocumentsContract.createDocument(any(), any(), any(), any()) }
+    }
+
+    @Test
+    fun `a rename during another file's write keeps unread device bytes`(@TempDir filesDir: File) {
+        val context = mockk<Context>(relaxed = true)
+        every { context.contentResolver } returns resolver
+        every { context.filesDir } returns filesDir
+        engine = SafSyncEngine(context)
+        val directoryName = AtomicReference("docs")
+        val unreadContents = AtomicReference<String?>("UNREAD DEVICE CONTENT")
+        val noteContents = AtomicReference("device note")
+        val writing = CountDownLatch(1)
+        val finishWrite = CountDownLatch(1)
+        val failure = AtomicReference<Throwable?>()
+        val uris = mutableMapOf<String, Uri>()
+        fun uri(name: String): Uri = uris.getOrPut(name) {
+            mockk<Uri>(relaxed = true).also { every { it.toString() } returns name }
+        }
+        val notesUri = uri("doc:notes")
+        val docsUri = uri("doc:docs")
+        every { DocumentsContract.buildChildDocumentsUriUsingTree(any(), any()) } answers {
+            uri("children:${secondArg<String>()}")
+        }
+        every { DocumentsContract.buildDocumentUriUsingTree(any(), any()) } answers {
+            uri("doc:${secondArg<String>()}")
+        }
+        every { DocumentsContract.getDocumentId(any()) } answers {
+            firstArg<Uri>().toString().removePrefix("doc:")
+        }
+        every { resolver.query(any(), any(), any(), any(), any()) } answers {
+            val rows = when (firstArg<Uri>().toString()) {
+                "children:root" -> listOf("notes") + if (unreadContents.get() != null) listOf("docs") else emptyList()
+                "children:docs" -> if (unreadContents.get() != null) listOf("big") else emptyList()
+                "doc:notes" -> listOf("notes")
+                else -> emptyList()
+            }
+            var row = -1
+            mockk<Cursor>(relaxed = true) {
+                every { moveToNext() } answers { ++row < rows.size }
+                every { moveToFirst() } answers { row = 0; rows.isNotEmpty() }
+                every { getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID) } returns 0
+                every { getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME) } returns 1
+                every { getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_MIME_TYPE) } returns 2
+                every { getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_SIZE) } returns 3
+                every { getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_LAST_MODIFIED) } returns 4
+                every { getColumnIndex(DocumentsContract.Document.COLUMN_SIZE) } returns 3
+                every { getColumnIndex(DocumentsContract.Document.COLUMN_LAST_MODIFIED) } returns 4
+                every { isNull(any<Int>()) } returns false
+                every { getString(0) } answers { rows[row] }
+                every { getString(1) } answers {
+                    when (rows[row]) {
+                        "docs" -> directoryName.get()
+                        "big" -> "big.zip"
+                        else -> "notes.md"
+                    }
+                }
+                every { getString(2) } answers {
+                    if (rows[row] == "docs") DocumentsContract.Document.MIME_TYPE_DIR else "application/octet-stream"
+                }
+                every { getLong(3) } answers {
+                    if (rows[row] == "big") SafSyncEngine.MAX_FILE_SIZE + 1 else noteContents.get().length.toLong()
+                }
+                every { getLong(4) } returns 1_700_000_000_000L
+            }
+        }
+        every { resolver.openInputStream(any()) } answers {
+            check(firstArg<Uri>() === notesUri)
+            ByteArrayInputStream(noteContents.get().toByteArray())
+        }
+        every { resolver.openOutputStream(any(), "wt") } answers {
+            check(firstArg<Uri>() === notesUri)
+            writing.countDown()
+            check(finishWrite.await(10, TimeUnit.SECONDS)) { "the provider write was not released" }
+            object : ByteArrayOutputStream() {
+                override fun close() {
+                    noteContents.set(toString("UTF-8"))
+                    super.close()
+                }
+            }
+        }
+        every { DocumentsContract.renameDocument(any(), docsUri, "archive") } answers {
+            directoryName.set("archive")
+            docsUri
+        }
+        every { DocumentsContract.deleteDocument(any(), docsUri) } answers {
+            unreadContents.set(null)
+            true
+        }
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        assertEquals("device note", File(mirror, "notes.md").readText())
+        assertFalse(File(mirror, "docs/big.zip").exists())
+        File(mirror, "notes.md").writeText("saved note")
+        observe(FileObserver.MODIFY, "notes.md")
+        val writer = Thread {
+            try {
+                drain()
+            } catch (error: Throwable) {
+                failure.set(error)
+            }
+        }
+        writer.start()
+        try {
+            assertTrue(writing.await(5, TimeUnit.SECONDS), "the write did not enter the provider")
+            assertTrue(File(mirror, "docs").delete())
+            observe(FileObserver.MOVED_FROM or isDirFlag, "docs")
+            observe(FileObserver.MOVED_TO or isDirFlag, "archive")
+            // The event cannot register native FileObservers in a JVM test.
+            assertTrue(File(mirror, "archive").mkdir())
+        } finally {
+            finishWrite.countDown()
+            writer.join(5_000)
+        }
+        assertFalse(writer.isAlive, "the write did not finish")
+        failure.get()?.let { throw AssertionError("the write-back failed", it) }
+        assertEquals("saved note", noteContents.get())
+        assertEquals("archive", directoryName.get(), "the device directory was not renamed")
+
+        assertTrue(File(mirror, "archive").delete())
+        deliver(FileObserver.DELETE or isDirFlag, "archive")
+
+        assertEquals(
+            "UNREAD DEVICE CONTENT", unreadContents.get(),
+            "deleting the renamed directory destroyed unread device bytes",
+        )
+        verify(exactly = 0) { DocumentsContract.deleteDocument(any(), any()) }
+    }
+
+    @Test
+    fun `a delete callback from an older watch session cannot adopt a reopened mirror`(@TempDir filesDir: File) {
+        val context = mockk<Context>(relaxed = true)
+        every { context.contentResolver } returns resolver
+        every { context.filesDir } returns filesDir
+        engine = SafSyncEngine(context)
+        val deviceContents = AtomicReference<String?>("old device bytes")
+        deviceTree { parent ->
+            if (parent == "root" && deviceContents.get() != null) listOf("notes.txt") else emptyList()
+        }
+        every { resolver.openInputStream(any()) } answers {
+            ByteArrayInputStream(checkNotNull(deviceContents.get()).toByteArray())
+        }
+        every { DocumentsContract.deleteDocument(any(), any()) } answers {
+            deviceContents.set(null)
+            true
+        }
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        observe(FileObserver.MODIFY, "notes.txt")
+        val oldSession = WatchSession(mirror, engine.session.queue.remove().generation)
+        val localFile = File(mirror, "notes.txt")
+        assertTrue(localFile.delete())
+
+        deviceContents.set("new device bytes")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        assertEquals("new device bytes", localFile.readText())
+
+        // The old observer was paused after its liveness check, before dispatching.
+        engine.handleMirrorEvent(
+            FileObserver.DELETE, localFile, mirror, treeUri, sourceSession = oldSession,
+        )
+        engine.runWriteBackLoop(oldSession) { false }
+        drain()
+
+        assertEquals("new device bytes", deviceContents.get(), "an old callback deleted the reopened device document")
+        verify(exactly = 0) { DocumentsContract.deleteDocument(any(), any()) }
+    }
+
+    @Test
+    fun `a save callback from an older watch session reports the undelivered save`() {
+        val localFile = File(mirror, "notes.txt").apply { writeText("saved in the editor") }
+        val reported = mutableListOf<File>()
+        engine.onWriteBackFailed = { reported.add(it) }
+
+        engine.handleMirrorEvent(
+            FileObserver.MODIFY, localFile, mirror, treeUri, sourceSession = WatchSession(),
+        )
+
+        assertEquals(listOf(localFile), reported)
+        assertEquals("saved in the editor", localFile.readText())
+    }
+
+    @Test
+    fun `an ignored temporary callback from an older watch session reports no lost save`() {
+        val localFile = File(mirror, "notes.txt.tmp").apply { writeText("temporary bytes") }
+        val reported = mutableListOf<File>()
+        engine.onWriteBackFailed = { reported.add(it) }
+
+        engine.handleMirrorEvent(
+            FileObserver.MODIFY, localFile, mirror, treeUri, sourceSession = WatchSession(),
+        )
+
+        assertTrue(reported.isEmpty(), "a temporary file was reported as a lost save")
+        assertEquals("temporary bytes", localFile.readText())
     }
 
     /**
