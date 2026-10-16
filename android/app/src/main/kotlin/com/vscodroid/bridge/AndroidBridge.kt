@@ -1358,17 +1358,7 @@ class AndroidBridge(
             val keyFile = File(sshDir, "id_ed25519")
             val pubFile = File("${keyFile.absolutePath}.pub")
 
-            // Don't overwrite an existing PAIR. Both halves, because half a pair
-            // is a state this method can reach on its own and used to be a dead
-            // end: ssh-keygen writes the private key before the public one, so
-            // the destroyForcibly below, an OOM kill, or the phantom-process
-            // limit can land between the two. The guard tested only the private
-            // key and then read the public one unconditionally, so every later
-            // call took this branch, threw FileNotFoundException, and answered
-            // with the absolute path of a file that was not there. The SSH
-            // feature was then over for that install: nothing in the UI
-            // regenerates, and the only way back was deleting the stranded key
-            // from a terminal.
+            // Existing private keys must never be replaced, even if their public file is missing.
             if (keyFile.exists() && pubFile.isFile) {
                 val pubKey = pubFile.readText().trim()
                 result.put("success", true)
@@ -1376,14 +1366,15 @@ class AndroidBridge(
                 result.put("existed", true)
                 return result.toString()
             }
-            // A private key with no public half is that interrupted write and
-            // nothing else: ssh-keygen never produces one, and the pair is
-            // generated here only. It cannot be used without its public half and
-            // it is what blocks a fresh generation, so it goes.
             if (keyFile.exists()) {
-                Logger.w(tag, "Removing a half-written SSH key pair before generating a new one")
-                keyFile.delete()
-                pubFile.delete()
+                result.put("success", false)
+                result.put(
+                    "error",
+                    "An SSH private key already exists without its public file. " +
+                        "Recover it in the terminal with: " +
+                        "ssh-keygen -y -f ~/.ssh/id_ed25519 > ~/.ssh/id_ed25519.pub"
+                )
+                return result.toString()
             }
 
             val keyComment = if (comment.isBlank()) "vscodroid@android" else comment
@@ -1435,11 +1426,7 @@ class AndroidBridge(
             if (!process.waitFor(KEYGEN_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)) {
                 process.destroyForcibly()
                 Logger.e(tag, "ssh-keygen did not finish within ${KEYGEN_TIMEOUT_SECONDS}s; killed")
-                // Whatever it had written goes with it. The kill can land between
-                // the private key and the public one, and a private key left
-                // behind is what the guard above has to clear before this method
-                // can ever succeed again; clearing it here means the next attempt
-                // starts from nothing rather than from a state it has to repair.
+                // Remove files created by this failed generation; existing private keys returned above.
                 keyFile.delete()
                 pubFile.delete()
                 result.put("success", false)
@@ -1454,10 +1441,7 @@ class AndroidBridge(
             drain.join(DRAIN_JOIN_MILLIS)
             val exitCode = process.exitValue()
 
-            // Both halves again, for the reason the guard at the top states: an
-            // exit code of zero over a pair that is not whole would read the
-            // public key that is not there and answer with its path, which is the
-            // dead end this method used to leave behind.
+            // A successful generation must leave both key files before the public key can be returned.
             if (exitCode == 0 && keyFile.exists() && pubFile.isFile) {
                 // Set correct permissions (600 for private key, 644 for public)
                 try {
@@ -1471,11 +1455,7 @@ class AndroidBridge(
                 result.put("success", true)
                 result.put("publicKey", pubKey)
             } else {
-                // Anything it managed to write goes, so the next attempt starts
-                // from nothing. Deleting a whole pair here would be wrong, but
-                // there is no whole pair in this branch: the guard above returned
-                // for one that already existed, so whatever is on disk was written
-                // by the run that just failed.
+                // Remove only files from this generation; existing private keys returned above.
                 keyFile.delete()
                 pubFile.delete()
                 result.put("success", false)

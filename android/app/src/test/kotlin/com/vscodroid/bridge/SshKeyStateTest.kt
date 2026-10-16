@@ -23,18 +23,9 @@ import java.io.File
 /**
  * What `~/.ssh` may be left in, and what is handed back about what is there.
  *
- * Two properties over the same directory.
- *
- * **A pair is whole or it is not there.** `ssh-keygen` writes the private key
- * before the public one, so an interruption between the two is a state this
- * method can produce on its own: the four-second timeout and its
- * `destroyForcibly`, an OOM kill, or the phantom-process limit. The guard tested
- * only the private key and then read the public one unconditionally, so every
- * later call took the "already exists" branch, threw `FileNotFoundException`, and
- * answered `{"success":false,"error":"<absolute path> (No such file or directory)"}`.
- * That is not a bad message, it is the end of the feature for that install:
- * nothing in the app regenerates, and the only way out was deleting the stranded
- * key from a terminal.
+ * Existing private keys must survive generation requests, including when their
+ * public file is missing. A private key can be imported or retained independently
+ * of its public file; its contents must never be discarded to create a new pair.
  *
  * **A public key line's comment is not reported.** Its third field is
  * conventionally `user@host` or an email address, which for any key the user
@@ -67,6 +58,17 @@ class SshKeyStateTest {
         /** A public key line in the shape OpenSSH writes, comment and all. */
         const val COMMENT = "alice@example.com"
         const val PUBLIC_LINE = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI0000000000 $COMMENT"
+
+        // Disposable test key; no external key generator is needed to run these tests.
+        val PRIVATE_KEY_FIXTURE = """
+            -----BEGIN OPENSSH PRIVATE KEY-----
+            b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
+            QyNTUxOQAAACBE+XagBHucV0ZB/1j6RqStC2pKEPJn8T261HcrvkeOsAAAAJCTz4fSk8+H
+            0gAAAAtzc2gtZWQyNTUxOQAAACBE+XagBHucV0ZB/1j6RqStC2pKEPJn8T261HcrvkeOsA
+            AAAEBfLok2TJcrpVBuG2ENPZe9pYMQB61KJjLVA+IgPP/mikT5dqAEe5xXRkH/WPpGpK0L
+            akoQ8mfxPbrUdyu+R46wAAAADHRlc3QtZml4dHVyZQE=
+            -----END OPENSSH PRIVATE KEY-----
+        """.trimIndent() + "\n"
     }
 
     @BeforeEach
@@ -118,26 +120,24 @@ class SshKeyStateTest {
     }
 
     @Test
-    fun `a private key with no public half is not a dead end`() {
-        // Exactly what a killed ssh-keygen leaves: the first of the two files.
-        privateKey.writeText("PRIVATE KEY")
+    fun `a private key without a public file is preserved with repair guidance`() {
+        for (contents in listOf(PRIVATE_KEY_FIXTURE, "PRIVATE KEY\n")) {
+            privateKey.writeText(contents)
+            val original = privateKey.readBytes()
 
-        val answer = JSONObject(bridge.generateSshKey(security.getSessionToken(), ""))
+            val answer = JSONObject(bridge.generateSshKey(security.getSessionToken(), ""))
 
-        // The spawn cannot succeed here, so what is asserted is which failure it
-        // is. The old one was the read of a public key that is not there, and it
-        // repeated for ever because nothing cleared what caused it.
-        assertFalse(answer.getBoolean("success"))
-        assertFalse(
-            answer.getString("error").contains("id_ed25519.pub"),
-            "the failure is still the unconditional read of a public key that is not " +
-                "there, so every later call fails the same way: " + answer,
-        )
-        assertFalse(
-            privateKey.exists(),
-            "the half-written key is still in place, so the next call finds it, takes " +
-                "the same branch and fails identically. Nothing in the app removes it.",
-        )
+            assertFalse(answer.getBoolean("success"))
+            assertTrue(privateKey.isFile, "generation deleted the existing private key")
+            assertTrue(
+                original.contentEquals(privateKey.readBytes()),
+                "generation changed the existing private key",
+            )
+            assertFalse(publicKey.exists(), "generation must not create a replacement pair")
+            val error = answer.getString("error")
+            assertTrue(error.contains("ssh-keygen -y"), "the error must explain how to recover the public key")
+            assertTrue(error.contains("~/.ssh/id_ed25519.pub"), "the error must identify the public file to repair")
+        }
     }
 
     @Test
