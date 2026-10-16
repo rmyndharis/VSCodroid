@@ -1,6 +1,7 @@
 package com.vscodroid.setup
 
 import android.content.Context
+import com.google.android.play.core.assetpacks.AssetPackManager
 import com.google.android.play.core.assetpacks.AssetPackManagerFactory
 import com.vscodroid.util.Logger
 import io.mockk.Runs
@@ -47,7 +48,9 @@ class ToolchainDownloadTest {
         every { Logger.e(any(), any(), any()) } just Runs
 
         mockkStatic(AssetPackManagerFactory::class)
-        every { AssetPackManagerFactory.getInstance(any()) } returns mockk(relaxed = true)
+        val packManager = mockk<AssetPackManager>(relaxed = true)
+        every { packManager.removePack(any()) } answers { completedPackRemoval() }
+        every { AssetPackManagerFactory.getInstance(any()) } returns packManager
 
         context = mockk(relaxed = true)
         every { context.filesDir } returns filesDir

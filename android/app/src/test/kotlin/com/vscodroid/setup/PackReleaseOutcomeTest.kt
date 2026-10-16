@@ -4,6 +4,7 @@ import android.content.Context
 import android.content.pm.InstallSourceInfo
 import android.content.pm.PackageManager
 import android.os.StatFs
+import com.google.android.gms.tasks.OnCompleteListener
 import com.google.android.gms.tasks.OnFailureListener
 import com.google.android.gms.tasks.OnSuccessListener
 import com.google.android.gms.tasks.Task
@@ -31,6 +32,8 @@ import org.junit.jupiter.api.io.TempDir
 import java.io.File
 import java.util.Collections
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.Executor
+import java.util.concurrent.ExecutorService
 import java.util.concurrent.TimeUnit
 
 /**
@@ -70,6 +73,8 @@ class PackReleaseOutcomeTest {
 
     private val onSuccess = slot<OnSuccessListener<in Void>>()
     private val onFailure = slot<OnFailureListener>()
+    private val completions = Collections.synchronizedList(mutableListOf<() -> Unit>())
+    private val managers = mutableListOf<ToolchainManager>()
 
     @BeforeEach
     fun setUp() {
@@ -82,6 +87,12 @@ class PackReleaseOutcomeTest {
         removal = mockk()
         every { removal.addOnSuccessListener(capture(onSuccess)) } returns removal
         every { removal.addOnFailureListener(capture(onFailure)) } returns removal
+        every { removal.addOnCompleteListener(any<Executor>(), any<OnCompleteListener<Void>>()) } answers {
+            val executor = firstArg<Executor>()
+            val listener = secondArg<OnCompleteListener<Void>>()
+            completions.add { executor.execute { listener.onComplete(removal) } }
+            removal
+        }
 
         packManager = mockk(relaxed = true)
         every { packManager.removePack(any()) } returns removal
@@ -109,7 +120,17 @@ class PackReleaseOutcomeTest {
     }
 
     @AfterEach
-    fun tearDown() = unmockkAll()
+    fun tearDown() {
+        managers.forEach { manager ->
+            val executor = ToolchainManager::class.java.getDeclaredField("ioExecutor")
+                .apply { isAccessible = true }.get(manager) as ExecutorService
+            executor.submit {}.get(10, TimeUnit.SECONDS)
+        }
+        completions.toList().forEach { it() }
+        unmockkAll()
+    }
+
+    private fun manager() = ToolchainManager(context).also { managers.add(it) }
 
     /** Records [names] as installed, which is what `getInstalledToolchains` reads. */
     private fun recordInstalled(vararg names: String) {
@@ -146,7 +167,7 @@ class PackReleaseOutcomeTest {
     private val settled = CountDownLatch(1)
 
     /** A manager whose reports this test can wait on. */
-    private fun watchedManager() = ToolchainManager(context).apply {
+    private fun watchedManager() = manager().apply {
         onStateChange = { _, status, _, _ ->
             outcomes.add(status)
             if (status == AssetPackStatus.COMPLETED || status == AssetPackStatus.FAILED) {
@@ -180,7 +201,7 @@ class PackReleaseOutcomeTest {
         recordInstalled("java")
         playHolds("toolchain_java")
 
-        ToolchainManager(context).reconcileDeliveredPacks()
+        manager().reconcileDeliveredPacks()
 
         // Timed rather than immediate: reconcile runs on the manager's io executor.
         verify(timeout = 10_000, exactly = 1) { packManager.removePack("toolchain_java") }
@@ -200,7 +221,7 @@ class PackReleaseOutcomeTest {
         // Nothing calls playHolds, so Play is holding no delivery at all.
         recordInstalled("java", "ruby")
 
-        ToolchainManager(context).reconcileDeliveredPacks()
+        manager().reconcileDeliveredPacks()
 
         // Ordered after a call that reconcile makes unconditionally on the same
         // executor, so this asserts on a pass that has finished rather than on one
@@ -286,14 +307,14 @@ class PackReleaseOutcomeTest {
         recordInstalled("java")
         playHolds("toolchain_java")
 
-        ToolchainManager(context).reconcileDeliveredPacks()
+        manager().reconcileDeliveredPacks()
 
         verify(timeout = 10_000, exactly = 1) { packManager.removePack("toolchain_java") }
     }
 
     /** A manager reporting into [sink], settling [latch] on a terminal status. */
     private fun managerReporting(latch: CountDownLatch, sink: MutableList<Int>) =
-        ToolchainManager(context).apply {
+        manager().apply {
             onStateChange = { _, status, _, _ ->
                 sink.add(status)
                 if (status == AssetPackStatus.COMPLETED || status == AssetPackStatus.FAILED) {
@@ -400,7 +421,7 @@ class PackReleaseOutcomeTest {
         recordInstalled("java")
         playHolds("toolchain_java")
 
-        ToolchainManager(context).reconcileDeliveredPacks()
+        manager().reconcileDeliveredPacks()
 
         // Waited on here rather than on `removePack`, which is the call the other
         // cases wait on and the wrong one for this: the chain runs on the io thread,

@@ -274,6 +274,8 @@ class ToolchainDigestInstallTest {
             zip.putNextEntry(ZipEntry("toolchain_test.json"))
             zip.write("""{"name":"test","installRoot":"usr/opt/test"}""".toByteArray())
             zip.closeEntry()
+            zip.putNextEntry(ZipEntry("usr/opt/test/"))
+            zip.closeEntry()
             if (payloadBytes > 0) {
                 // Random bytes from a fixed seed, so the entry deflates to
                 // roughly its own size: a compressible filler would leave the
@@ -321,6 +323,7 @@ class ToolchainDigestInstallTest {
         every { Logger.e(any(), any(), any()) } just Runs
 
         packManager = mockk(relaxed = true)
+        every { packManager.removePack(any()) } answers { completedPackRemoval() }
         mockkStatic(AssetPackManagerFactory::class)
         every { AssetPackManagerFactory.getInstance(any()) } returns packManager
 

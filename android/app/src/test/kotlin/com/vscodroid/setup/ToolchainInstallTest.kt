@@ -371,11 +371,42 @@ class ToolchainInstallTest {
     }
 
     @Test
+    fun `a Ruby manifest without its payload cannot complete installation`() {
+        val pack = File(filesDir, "pack-ruby").apply { mkdirs() }
+        File(pack, "toolchain_ruby.json").writeText(
+            """{"name":"ruby","installRoot":"usr/lib/ruby","binaries":["usr/bin/ruby"]}"""
+        )
+        val m = manager()
+
+        installFromDirectory(m, "toolchain_ruby", pack)
+
+        assertEquals(listOf(AssetPackStatus.FAILED), statuses())
+        assertEquals(listOf(ToolchainFailure.CORRUPT), reasons.toList())
+        assertFalse("ruby" in m.getInstalledToolchains())
+    }
+
+    @Test
+    fun `a payload missing its required binary cannot complete installation`() {
+        val pack = File(filesDir, "pack-ruby").apply { mkdirs() }
+        File(pack, "toolchain_ruby.json").writeText(
+            """{"name":"ruby","installRoot":"usr/lib/ruby","binaries":["usr/bin/ruby"]}"""
+        )
+        File(pack, "usr/lib/ruby").mkdirs()
+        File(pack, "usr/lib/ruby/version.rb").writeText("payload")
+        val m = manager()
+
+        installFromDirectory(m, "toolchain_ruby", pack)
+
+        assertEquals(listOf(AssetPackStatus.FAILED), statuses())
+        assertEquals(listOf(ToolchainFailure.CORRUPT), reasons.toList())
+        assertFalse("ruby" in m.getInstalledToolchains())
+    }
+
+    @Test
     fun `a valid manifest is recorded and reported COMPLETED`() {
         // The positive control for the three refusals above: without it they would
         // all still pass if installFromDirectory reported FAILED unconditionally.
-        val pack = File(filesDir, "pack-java").apply { mkdirs() }
-        File(pack, "toolchain_java.json").writeText("""{"name":"java","installRoot":"usr/opt/java"}""")
+        val pack = packThatCopiesCleanly()
 
         installFromDirectory(manager(), "toolchain_java", pack)
 
@@ -507,8 +538,7 @@ class ToolchainInstallTest {
      */
     @Test
     fun `an install whose record cannot be written reports FAILED rather than COMPLETED`() {
-        val pack = File(filesDir, "pack-java").apply { mkdirs() }
-        File(pack, "toolchain_java.json").writeText("""{"name":"java","installRoot":"usr/opt/java"}""")
+        val pack = packThatCopiesCleanly()
         blockTheRecordWrite()
 
         installFromDirectory(manager(), "toolchain_java", pack)

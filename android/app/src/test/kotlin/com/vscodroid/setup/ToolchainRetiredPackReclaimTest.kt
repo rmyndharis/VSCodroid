@@ -3,7 +3,6 @@ package com.vscodroid.setup
 import android.content.Context
 import android.content.pm.InstallSourceInfo
 import android.content.pm.PackageManager
-import com.google.android.gms.tasks.Task
 import com.google.android.play.core.assetpacks.AssetPackLocation
 import com.google.android.play.core.assetpacks.AssetPackManager
 import com.google.android.play.core.assetpacks.AssetPackManagerFactory
@@ -58,12 +57,8 @@ class ToolchainRetiredPackReclaimTest {
         every { Logger.w(any(), any(), any()) } just Runs
         every { Logger.e(any(), any(), any()) } just Runs
 
-        val removal = mockk<Task<Void>>()
-        every { removal.addOnSuccessListener(any()) } returns removal
-        every { removal.addOnFailureListener(any()) } returns removal
-
         packManager = mockk(relaxed = true)
-        every { packManager.removePack(any()) } returns removal
+        every { packManager.removePack(any()) } answers { completedPackRemoval() }
         // Stated rather than left to the relaxed mock, which answers a location
         // for every pack ever asked about.
         every { packManager.getPackLocation(any()) } returns null

@@ -70,6 +70,7 @@ class ToolchainQueuedCancelTest {
         // Play Core is reached through field initialisation, so it runs before
         // any method can be called on the manager.
         packManager = mockk(relaxed = true)
+        every { packManager.removePack(any()) } answers { completedPackRemoval() }
         mockkStatic(AssetPackManagerFactory::class)
         every { AssetPackManagerFactory.getInstance(any()) } returns packManager
 

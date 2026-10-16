@@ -27,6 +27,7 @@ import java.net.HttpURLConnection
 import java.net.URL
 import java.security.MessageDigest
 import java.util.concurrent.ConcurrentHashMap
+import java.util.concurrent.Executor
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
@@ -378,6 +379,9 @@ class ToolchainManager(private val context: Context) {
          * `usr/` is outside this entirely, and nothing does today.
          */
         private val installsInFlight = ConcurrentHashMap.newKeySet<String>()
+        private val packOperationLock = Any()
+        private val packRemovalsInFlight = mutableSetOf<String>()
+        private val pendingPackReleases = mutableMapOf<String, () -> Unit>()
 
         /**
          * The token for each pack with a download outstanding, so [cancel] can
@@ -653,29 +657,8 @@ class ToolchainManager(private val context: Context) {
         // and "not delivered" the same state, which is the only reading of Play's
         // records that reconcile can make.
         //
-        // Queued on [ioExecutor] rather than run here, because Play's removePack is
-        // a real recursive delete of the delivered directory, and the COMPLETED
-        // branch copies out of that same directory on this executor. The card goes
-        // on offering CANCEL throughout that copy, since handleStateUpdate does not
-        // report COMPLETED and the last status the UI holds is TRANSFERRING, so a
-        // tap in those seconds deleted the source under the reader and left a part
-        // written `usr/` tree behind. A single-thread executor puts the removal
-        // behind the copy instead.
-        //
-        // Bounded to this instance, and that is the whole of it: `ioExecutor` is an
-        // instance field, and every construction site makes its own manager, so the
-        // ordering holds only between a cancel and a copy running on the SAME manager.
-        // All three callers that can reach a live download do hold one: ToolchainActivity
-        // and the first-run queue in SplashActivity each keep a manager for the download
-        // and the cancel alike, and `AndroidBridge` builds exactly one, lazily, that
-        // `installToolchain` and `cancelToolchainInstall` both go through.
-        //
-        // What stays unordered is a cancel through one manager against a copy running on
-        // another's executor, an extension cancelling what the first-run queue started
-        // being the reachable case. [installsInFlight] is process-wide and
-        // [installFromDirectory] holds a claim on it for the length of the copy, but
-        // [releasePack] does not consult it, so nothing puts the removal behind a copy
-        // that a different manager began.
+        // Deletion stays off the caller's thread. releasePack also coordinates
+        // with copies started by other managers and with Play's pending delete.
         ioExecutor.execute { releasePack(info.packName) }
         Logger.i(tag, "Cancelled download of ${info.packName}")
     }
@@ -758,7 +741,7 @@ class ToolchainManager(private val context: Context) {
     private fun uninstallSync(nameOrPack: String) {
         val name = toolchainShortName(nameOrPack)
         val packName = "toolchain_$name"
-        if (!installsInFlight.add(packName)) {
+        if (!claimPack(packName)) {
             Logger.i(tag, "An install of $packName is running; not removing it underneath")
             report(packName, AssetPackStatus.UNKNOWN, 0)
             return
@@ -766,7 +749,7 @@ class ToolchainManager(private val context: Context) {
         try {
             synchronized(stateLock) { uninstallLocked(name) }
         } finally {
-            installsInFlight.remove(packName)
+            releasePackClaim(packName)
         }
     }
 
@@ -1247,6 +1230,18 @@ class ToolchainManager(private val context: Context) {
         installDeliveredPack(info.packName, File(assetsPath))
     }
 
+    private fun claimPack(packName: String): Boolean = synchronized(packOperationLock) {
+        packName !in packRemovalsInFlight && installsInFlight.add(packName)
+    }
+
+    private fun releasePackClaim(packName: String) {
+        val pendingRelease = synchronized(packOperationLock) {
+            installsInFlight.remove(packName)
+            pendingPackReleases.remove(packName)
+        }
+        pendingRelease?.invoke()
+    }
+
     /**
      * Hands Play's copy of [packName] back.
      *
@@ -1261,6 +1256,15 @@ class ToolchainManager(private val context: Context) {
      * replace the failure the caller is on its way to report.
      */
     private fun releasePack(packName: String) {
+        synchronized(packOperationLock) {
+            if (packName in packRemovalsInFlight) return
+            if (packName in installsInFlight) {
+                pendingPackReleases[packName] = { releasePack(packName) }
+                return
+            }
+            // Keep new readers out until Play finishes the asynchronous delete.
+            packRemovalsInFlight.add(packName)
+        }
         try {
             // `removePack` posts the delete and returns; the Task is how Play says
             // whether it happened. Logging success on the return alone said "freed"
@@ -1281,7 +1285,11 @@ class ToolchainManager(private val context: Context) {
                         e,
                     )
                 }
+                .addOnCompleteListener(Executor { it.run() }) {
+                    synchronized(packOperationLock) { packRemovalsInFlight.remove(packName) }
+                }
         } catch (e: Exception) {
+            synchronized(packOperationLock) { packRemovalsInFlight.remove(packName) }
             Logger.w(tag, "Could not remove asset pack $packName: ${e.message}")
         }
     }
@@ -1316,7 +1324,7 @@ class ToolchainManager(private val context: Context) {
      *   correctly: its staging directory belongs to one download.
      */
     private fun installFromDirectory(packName: String, assetsDir: File): Boolean {
-        if (!installsInFlight.add(packName)) {
+        if (!claimPack(packName)) {
             Logger.i(tag, "Another install already holds $packName; leaving it to that one")
             // Neither COMPLETED nor FAILED, because both would be untrue in a way
             // something acts on. COMPLETED is the word this class uses for "the
@@ -1352,7 +1360,7 @@ class ToolchainManager(private val context: Context) {
             // on only the path its author had in mind is never released at all,
             // which would refuse every later install of that pack for the life
             // of the process.
-            installsInFlight.remove(packName)
+            releasePackClaim(packName)
             // The claim only, and the marker deliberately not beside it. The two
             // lifetimes look identical and are not: a claim lives in this process
             // and keeps two installs of one pack apart, while a marker is the
@@ -1455,6 +1463,23 @@ class ToolchainManager(private val context: Context) {
             fail(packName, ToolchainFailure.CORRUPT)
             return true
         }
+        val usrSrc = File(assetsDir, "usr")
+        if (!usrSrc.isDirectory) {
+            Logger.e(tag, "No usr/ payload in asset pack $packName")
+            fail(packName, ToolchainFailure.CORRUPT)
+            return true
+        }
+        val binaries = manifest.optJSONArray("binaries")
+        if (binaries != null) {
+            for (i in 0 until binaries.length()) {
+                val path = binaries.getString(i)
+                if (!File(assetsDir, path).isFile) {
+                    Logger.e(tag, "Missing required binary $path in asset pack $packName")
+                    fail(packName, ToolchainFailure.CORRUPT)
+                    return true
+                }
+            }
+        }
         // Written before a single byte is copied, because that ordering is the
         // whole of it: this is the only durable record of where the copy is about
         // to write, and the record that normally names it is written last. Moved
@@ -1479,35 +1504,32 @@ class ToolchainManager(private val context: Context) {
         Logger.i(tag, "Installing toolchain: $name (from $packName)")
 
         // Copy all files from usr/ to filesDir/usr/
-        val usrSrc = File(assetsDir, "usr")
-        if (usrSrc.exists()) {
-            try {
-                copyDirectoryRecursively(usrSrc, File(context.filesDir, "usr"))
-            } catch (e: IOException) {
-                // Caught here, where the two delivery paths meet, because
-                // neither of them could name this event afterwards. Left to
-                // unwind, the exception reached `catch (e: IOException)` in
-                // downloadViaHttp and was reported as NETWORK -- "Download
-                // failed. Check your connection and try again." for a disk that
-                // filled up after the download succeeded -- and on the Play path
-                // it reached `catch (e: Exception)` and was reported as INTERNAL,
-                // which asks the user to read a log. STORAGE is the remedy that
-                // fits both causes this can have: ENOSPC partway through the
-                // write, and a directory that cannot be listed, which
-                // `copyDirectoryTree` refuses rather than treating as empty.
-                Logger.e(tag, "Could not copy $packName into usr/", e)
-                reclaimPartialCopy(name, manifest)
-                // The line above has just settled the tree this marker was
-                // written for, either by taking it back or by leaving it to the
-                // record that still names it, so there is nothing left for a
-                // later launch to find through it.
-                installMarker(packName).delete()
-                fail(packName, ToolchainFailure.STORAGE)
-                // Play's copy is KEPT, exactly as for the record write below:
-                // freeing space and relaunching finishes this install from the
-                // delivery, with no download.
-                return false
-            }
+        try {
+            copyDirectoryRecursively(usrSrc, File(context.filesDir, "usr"))
+        } catch (e: IOException) {
+            // Caught here, where the two delivery paths meet, because
+            // neither of them could name this event afterwards. Left to
+            // unwind, the exception reached `catch (e: IOException)` in
+            // downloadViaHttp and was reported as NETWORK -- "Download
+            // failed. Check your connection and try again." for a disk that
+            // filled up after the download succeeded -- and on the Play path
+            // it reached `catch (e: Exception)` and was reported as INTERNAL,
+            // which asks the user to read a log. STORAGE is the remedy that
+            // fits both causes this can have: ENOSPC partway through the
+            // write, and a directory that cannot be listed, which
+            // `copyDirectoryTree` refuses rather than treating as empty.
+            Logger.e(tag, "Could not copy $packName into usr/", e)
+            reclaimPartialCopy(name, manifest)
+            // The line above has just settled the tree this marker was
+            // written for, either by taking it back or by leaving it to the
+            // record that still names it, so there is nothing left for a
+            // later launch to find through it.
+            installMarker(packName).delete()
+            fail(packName, ToolchainFailure.STORAGE)
+            // Play's copy is KEPT, exactly as for the record write below:
+            // freeing space and relaunching finishes this install from the
+            // delivery, with no download.
+            return false
         }
 
         // chmod +x on the binaries the manifest names. Whether every one of them
@@ -3878,7 +3900,7 @@ class ToolchainManager(private val context: Context) {
             // claim that makes a delete safe.
             if (!marker.name.endsWith(".json")) continue
             val packName = marker.name.removeSuffix(".json")
-            if (!installsInFlight.add(packName)) continue
+            if (!claimPack(packName)) continue
             try {
                 val manifest = runCatching { JSONObject(marker.readText()) }.getOrNull()
                 val name = manifest?.optString("name", "").orEmpty()
@@ -3894,7 +3916,7 @@ class ToolchainManager(private val context: Context) {
                 // A claim never given back declines every later install of that
                 // pack for the life of the process, which is why this is a finally
                 // and not a line at the end of the body.
-                installsInFlight.remove(packName)
+                releasePackClaim(packName)
             }
         }
     }
