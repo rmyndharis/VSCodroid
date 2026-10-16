@@ -993,7 +993,7 @@ class NodeService : Service() {
      */
     private fun setupProcessCallbacks() {
         processManager.onServerCrashed = { exitCode ->
-            serviceScope.launch { handleServerCrash(exitCode) }
+            dispatchServerCrash(serviceScope, processManager, exitCode, ::handleServerCrash)
         }
     }
 
@@ -1001,7 +1001,7 @@ class NodeService : Service() {
      * Decides what a crashed server gets: another attempt after a growing pause,
      * or the terminal state.
      */
-    private suspend fun handleServerCrash(exitCode: Int) {
+    private suspend fun handleServerCrash(exitCode: Int, epoch: Int) {
         // A report that arrives after the service has stopped describes a process
         // the user asked to be rid of. The watchdog suppresses the expected exit
         // itself, but a crash already on its way to this scope when Stop was
@@ -1029,7 +1029,9 @@ class NodeService : Service() {
             endFailureEpisode()
         }
         Logger.w(tag, "Server crashed (exit=$exitCode), restart #${restartCount + 1}")
-        chargeHeapOverride(exitCode)
+        chargeHeapOverride(exitCode, epoch)
+        // Preference I/O can outlive a stop and a replacement start.
+        if (processManager.serverEpoch != epoch) return
         // The decision and the waiting both live in [retryOrGiveUp], shared with
         // the start path. Recomputing `crashAction` there costs nothing, and it
         // is what lets the refill above count: the `action` read at the top of
@@ -1073,7 +1075,7 @@ class NodeService : Service() {
     // lint says nothing if it becomes apply(), which turns the latch off
     // silently.
     // `the count is committed rather than deferred` is the guard.
-    private suspend fun chargeHeapOverride(exitCode: Int) {
+    private suspend fun chargeHeapOverride(exitCode: Int, epoch: Int) {
         if (!processManager.heapOverrideInEffect()) return
         // Both touches of the preference file hop to IO; the decision between them
         // and the message after them do not. `getSharedPreferences` blocks the
@@ -1116,6 +1118,8 @@ class NodeService : Service() {
             prefs.edit(commit = true) { putInt(PREF_HEAP_KILLS, charged) }
             charged
         } ?: return
+        // Keep the death recorded without publishing its warning into a replacement run.
+        if (processManager.serverEpoch != epoch) return
         Logger.w(tag, "Server killed with a user heap ceiling in effect ($after of $HEAP_OVERRIDE_KILL_BUDGET)")
         if (heapOverrideSuspended(after)) {
             reportStartupNotice(getString(R.string.heap_override_suspended))
@@ -1710,6 +1714,18 @@ internal fun crashAction(
     !serviceRunning -> CrashAction.IGNORE
     !hasRestartBudget(restartCount, maxRestarts) -> CrashAction.GIVE_UP
     else -> CrashAction.RESTART
+}
+
+internal fun dispatchServerCrash(
+    scope: CoroutineScope,
+    manager: ProcessManager,
+    exitCode: Int,
+    handle: suspend (Int, Int) -> Unit,
+) {
+    val epoch = manager.serverEpoch
+    scope.launch {
+        if (manager.serverEpoch == epoch) handle(exitCode, epoch)
+    }
 }
 
 /**

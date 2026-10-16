@@ -24,6 +24,9 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import kotlinx.coroutines.runBlocking
+import kotlinx.coroutines.CoroutineDispatcher
+import kotlinx.coroutines.CoroutineScope
+import kotlinx.coroutines.cancel
 import java.io.File
 import java.net.InetAddress
 import java.net.ServerSocket
@@ -36,6 +39,7 @@ import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 import java.util.concurrent.TimeUnit
 import kotlin.concurrent.thread
+import kotlin.coroutines.CoroutineContext
 
 /**
  * Tests for [ProcessManager]'s start guard and port allocation.
@@ -111,6 +115,97 @@ class ProcessManagerTest {
 
         assertTrue(startAndAwaitWatchdog(), "a dead server must be restartable")
         assertNotEquals(dead, manager.serverProcessField, "the dead reference must be replaced")
+    }
+
+    @Test
+    fun `a previous watchdog cannot withdraw a replacement server`() {
+        val fixture = File(tempDir, "server-fixture.sh").apply {
+            writeText("#!/bin/sh\nexec /bin/sleep 20\n")
+            check(setExecutable(true))
+        }
+        every { Environment.getNodePath(any()) } returns fixture.path
+        val waiting = CountDownLatch(1)
+        val exited = CountDownLatch(1)
+        val reported = AtomicReference<Int?>(null)
+        val previous = mockk<Process>(relaxed = true) {
+            every { isAlive } returns false
+            every { waitFor() } answers {
+                waiting.countDown()
+                check(exited.await(5, TimeUnit.SECONDS))
+                137
+            }
+            every { waitFor(any(), any()) } returns true
+            every { exitValue() } returns 137
+        }
+        manager.serverProcessField = previous
+        manager.onServerCrashed = { reported.set(it) }
+        ProcessManager::class.java.getDeclaredMethod("startWatchdog").apply {
+            isAccessible = true
+        }.invoke(manager)
+        val previousWatch = field("watchdogThread").get(manager) as Thread
+        try {
+            assertTrue(waiting.await(5, TimeUnit.SECONDS), "the previous watchdog never waited")
+            synchronized(field("readinessLock").get(manager)!!) {
+                exited.countDown()
+                val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+                while (previousWatch.state != Thread.State.BLOCKED && System.nanoTime() < deadline) {
+                    Thread.yield()
+                }
+                assertEquals(Thread.State.BLOCKED, previousWatch.state)
+                manager.stopServer()
+                assertTrue(manager.startServer(), "the replacement server must start")
+                manager.readyField = true
+                assertTrue(manager.isRunning(), "the replacement must still be running")
+            }
+            previousWatch.join(5_000)
+            assertFalse(previousWatch.isAlive, "the previous watchdog did not finish")
+            assertNull(reported.get(), "the previous exit was reported against the replacement")
+            assertTrue(manager.isReady(), "the previous watchdog withdrew replacement readiness")
+        } finally {
+            exited.countDown()
+            manager.stopServer()
+            previousWatch.interrupt()
+            previousWatch.join(5_000)
+        }
+    }
+
+    @Test
+    fun `a queued crash is discarded after the server is stopped`() {
+        val pending = ArrayDeque<Runnable>()
+        val scope = CoroutineScope(object : CoroutineDispatcher() {
+            override fun dispatch(context: CoroutineContext, block: Runnable) {
+                pending.addLast(block)
+            }
+        })
+        val handled = mutableListOf<Int>()
+        try {
+            dispatchServerCrash(scope, manager, 137) { exitCode, _ -> handled += exitCode }
+            assertEquals(1, pending.size, "the crash must still be waiting for the service dispatcher")
+            manager.stopServer()
+            pending.removeFirst().run()
+            assertTrue(handled.isEmpty(), "an old crash reached the handler after a stop")
+        } finally {
+            scope.cancel()
+        }
+    }
+
+    @Test
+    fun `a queued crash for the current server reaches the handler`() {
+        val pending = ArrayDeque<Runnable>()
+        val scope = CoroutineScope(object : CoroutineDispatcher() {
+            override fun dispatch(context: CoroutineContext, block: Runnable) {
+                pending.addLast(block)
+            }
+        })
+        val handled = mutableListOf<Int>()
+        try {
+            dispatchServerCrash(scope, manager, 137) { exitCode, _ -> handled += exitCode }
+            assertEquals(1, pending.size)
+            pending.removeFirst().run()
+            assertEquals(listOf(137), handled, "the current server's crash must still be handled")
+        } finally {
+            scope.cancel()
+        }
     }
 
     @Test
@@ -3074,6 +3169,45 @@ class AdoptionTest {
         )
         assertFalse(manager.isReady(), "a server that stopped answering is not serving")
         assertFalse(manager.isAdopted(), "and it is no longer ours to serve")
+    }
+
+    @Test
+    fun `a previous adoption watch cannot withdraw a replacement server`() {
+        val holder = serving(200)
+        manager.killRecordedProcess = { }
+        recordEditorServer(pid = 4242, port = holder.port)
+        assertTrue(manager.startServer())
+        assertTrue(manager.probeReadiness())
+        val previousWatch = field("watchdogThread").get(manager) as Thread
+        val missed = CountDownLatch(ADOPTED_WATCH_MISSES)
+        holder.beforeAnswer = { missed.countDown() }
+        holder.status = 403
+        val reported = AtomicReference<Int?>(null)
+        manager.onServerCrashed = { reported.set(it) }
+        try {
+            synchronized(field("readinessLock").get(manager)!!) {
+                assertTrue(missed.await(15, TimeUnit.SECONDS), "the adoption watch never probed")
+                val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+                while (previousWatch.state != Thread.State.BLOCKED && System.nanoTime() < deadline) {
+                    Thread.yield()
+                }
+                assertEquals(Thread.State.BLOCKED, previousWatch.state)
+                manager.stopServer()
+                holder.status = 200
+                recordEditorServer(pid = 4243, port = holder.port)
+                assertTrue(manager.startServer(), "the replacement server must be adopted")
+                assertTrue(manager.probeReadiness())
+            }
+            previousWatch.join(5_000)
+            assertFalse(previousWatch.isAlive, "the previous adoption watch did not finish")
+            assertNull(reported.get(), "the previous watch reported the replacement as lost")
+            assertTrue(manager.isReady(), "the previous watch withdrew replacement readiness")
+            assertTrue(manager.isAdopted(), "the previous watch abandoned the replacement")
+        } finally {
+            manager.stopServer()
+            previousWatch.interrupt()
+            previousWatch.join(5_000)
+        }
     }
 
     @Test
