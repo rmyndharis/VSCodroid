@@ -7,6 +7,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Device-folder sync preserves local edits when a conflicting device copy cannot be kept and protects documents in directories the provider could not list.
+- Reopening a device folder rejects stale saves, deletes and watcher callbacks from the previous sync.
+- Reopening a device folder reclaims abandoned temporary downloads while retaining active copies and existing workspace files.
+- Opening a device folder during an active save or delete reports that the folder is busy instead of waiting for the provider.
+- A device-folder import refuses to install a copy if a parent directory is redirected by a symbolic link during the read.
+- Generating SSH keys preserves an existing private key whose public file is missing and explains how to recover the public key.
+- Toolchain installation rejects packs with a missing payload directory or required binary instead of marking them installed.
+- Cancelling a toolchain install no longer deletes a pack during a copy, and installation is refused while pack removal is pending.
+- Late callbacks from an old editor server no longer clear its replacement's readiness, restart it or display obsolete heap warnings.
+- Building from source retries interrupted bundled-extension extraction instead of accepting a partial extension directory as verified.
+
 ## [1.5.0] - 2026-10-14
 
 ### Added
