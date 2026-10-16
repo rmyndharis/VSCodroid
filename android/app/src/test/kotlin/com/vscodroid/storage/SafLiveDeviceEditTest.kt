@@ -40,6 +40,7 @@ import java.nio.file.Files
 import java.security.MessageDigest
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * A save while the folder is open, meeting an edit another app made to the same document
@@ -413,6 +414,104 @@ class SafLiveDeviceEditTest {
                 }
             }
         }
+    }
+
+    @ParameterizedTest(name = "queued event: {0}")
+    @ValueSource(ints = [FileObserver.MODIFY, FileObserver.DELETE])
+    fun `a queued change stays protected while a reopen is still listing`(event: Int) {
+        open()
+        val file = File(mirror, "notes.txt")
+        if (event == FileObserver.DELETE) file.delete() else file.writeText("QUEUED LOCAL EDIT")
+        engine.handleMirrorEvent(event, file, mirror, treeUri)
+        editOnDevice("UNREAD DEVICE EDIT")
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val firstListing = AtomicBoolean(true)
+        var failure: Throwable? = null
+        lateinit var opening: Thread
+        every { resolver.query(any(), any(), any(), any(), any()) } answers {
+            if (firstArg<Uri>() !in uris.values && firstListing.compareAndSet(true, false)) {
+                entered.countDown()
+                check(release.await(5, TimeUnit.SECONDS))
+                throw IllegalStateException("the folder listing failed")
+            }
+            deviceCursor(listing = firstArg<Uri>() !in uris.values)
+        }
+        opening = Thread {
+            try { open() } catch (e: Throwable) { failure = e }
+        }
+        opening.start()
+        try {
+            assertTrue(entered.await(5, TimeUnit.SECONDS))
+            engine.runWriteBackLoop { false }
+            assertTrue(deviceHasDocument, "a queued delete removed an unread device document")
+            assertEquals("UNREAD DEVICE EDIT", deviceText, "a queued save replaced an unread device edit")
+        } finally {
+            release.countDown()
+            opening.join(5_000)
+        }
+        assertEquals(false, opening.isAlive)
+        assertNull(failure)
+    }
+
+    @Test
+    fun `a save after a failed root listing cannot overwrite an unread device edit`() {
+        open()
+        editOnDevice("UNREAD DEVICE EDIT")
+        failNextQuery = true
+        open()
+
+        save("NEW LOCAL EDIT")
+
+        assertEquals("UNREAD DEVICE EDIT", deviceText)
+        assertEquals(0, writes)
+        assertEquals(listOf("notes.txt"), failed.map { it.name })
+    }
+
+    @Test
+    fun `a queued save remains blocked after a failed root listing`() {
+        open()
+        val file = File(mirror, "notes.txt").apply { writeText("QUEUED LOCAL EDIT") }
+        engine.handleMirrorEvent(FileObserver.MODIFY, file, mirror, treeUri)
+        editOnDevice("UNREAD DEVICE EDIT")
+        failNextQuery = true
+        open()
+
+        engine.runWriteBackLoop { false }
+
+        assertEquals("UNREAD DEVICE EDIT", deviceText)
+        assertEquals(0, writes)
+    }
+
+    @Test
+    fun `a queued delete remains blocked after a failed root listing`() {
+        open()
+        val file = File(mirror, "notes.txt").apply { delete() }
+        engine.handleMirrorEvent(FileObserver.DELETE, file, mirror, treeUri)
+        editOnDevice("UNREAD DEVICE EDIT")
+        failNextQuery = true
+        open()
+
+        engine.runWriteBackLoop { false }
+
+        assertTrue(deviceHasDocument)
+        assertEquals("UNREAD DEVICE EDIT", deviceText)
+        assertEquals(listOf("notes.txt"), kept.map { it.name })
+    }
+
+    @Test
+    fun `a successful reopen releases protection from a failed root listing`() {
+        open()
+        editOnDevice("DEVICE EDIT")
+        failNextQuery = true
+        open()
+        open()
+
+        save("SAVE AFTER READING")
+
+        assertEquals("SAVE AFTER READING", deviceText)
+        assertEquals(1, writes)
+        assertTrue(failed.isEmpty())
     }
 
     @Test

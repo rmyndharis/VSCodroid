@@ -25,6 +25,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.IOException
 
@@ -230,6 +231,48 @@ class SafUnfetchedDocumentTest {
      * the archive with it. The file guard tests the directory's own path, which no
      * skip ever records, so nothing stood in the way.
      */
+    @Test
+    fun `a null root listing protects a stale mirror file after the provider recovers`() {
+        deviceHolding("notes.txt", 15)
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        every { resolver.query(any(), any(), any(), any(), any()) } returns null
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        deviceHolding("notes.txt", 18)
+        var device = "UNREAD DEVICE EDIT"
+        every { resolver.openOutputStream(any(), "wt") } answers {
+            object : ByteArrayOutputStream() {
+                override fun close() { device = toString("UTF-8") }
+            }
+        }
+        File(mirror, "notes.txt").writeText("NEW LOCAL EDIT")
+
+        deliver(FileObserver.MODIFY, "notes.txt")
+
+        assertEquals("UNREAD DEVICE EDIT", device)
+    }
+
+    @Test
+    fun `a failed child listing protects saves below that directory`() {
+        val tree = mapOf(
+            "root" to listOf(Entry("docs", isDirectory = true)),
+            "doc:docs" to listOf(Entry("notes.md")),
+        )
+        deviceTree(tree, unenumerable = setOf("doc:docs"))
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        deviceTree(tree)
+        var device = "UNREAD DEVICE EDIT"
+        every { resolver.openOutputStream(any(), "wt") } answers {
+            object : ByteArrayOutputStream() {
+                override fun close() { device = toString("UTF-8") }
+            }
+        }
+        File(mirror, "docs/notes.md").writeText("NEW LOCAL EDIT")
+
+        deliver(FileObserver.MODIFY, "docs/notes.md")
+
+        assertEquals("UNREAD DEVICE EDIT", device)
+    }
+
     @Test
     fun `a directory holding a document the sync never read is kept on the device`() {
         val kept = mutableListOf<String>()

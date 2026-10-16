@@ -146,6 +146,34 @@ class SafInboundConfinementTest {
     }
 
     @Test
+    fun `an existing scratch symlink cannot overwrite its target`() {
+        val target = File(elsewhere, "settings.json").apply { writeText("PRIVATE SETTINGS") }
+        val scratch = File(mirror, "notes.txt.vscodroid-partial")
+        Files.createSymbolicLink(scratch.toPath(), target.toPath())
+        deviceTree(mapOf("root" to listOf(Child("notes.txt", contents = "DEVICE CONTENT"))))
+
+        sync()
+
+        assertEquals("PRIVATE SETTINGS", target.readText())
+        assertEquals("DEVICE CONTENT", File(mirror, "notes.txt").readText())
+        assertTrue(Files.isSymbolicLink(scratch.toPath()))
+    }
+
+    @Test
+    fun `an existing scratch file is not consumed by an import`() {
+        val scratch = File(mirror, "notes.txt.vscodroid-partial").apply {
+            writeText("UNRELATED LOCAL CONTENT")
+        }
+        deviceTree(mapOf("root" to listOf(Child("notes.txt", contents = "DEVICE CONTENT"))))
+
+        sync()
+
+        assertEquals("UNRELATED LOCAL CONTENT", scratch.readText())
+        assertEquals("DEVICE CONTENT", File(mirror, "notes.txt").readText())
+        assertEquals(setOf("notes.txt", scratch.name), mirror.list()!!.toSet())
+    }
+
+    @Test
     fun `a document under a linked directory is not written outside the mirror`() {
         val target = File(elsewhere, "target").apply { mkdirs() }
         Files.createSymbolicLink(File(mirror, "docs").toPath(), target.toPath())

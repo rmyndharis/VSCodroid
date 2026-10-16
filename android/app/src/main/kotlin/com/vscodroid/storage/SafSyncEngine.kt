@@ -14,6 +14,9 @@ import java.io.File
 import java.io.FileOutputStream
 import java.io.InputStream
 import java.io.OutputStream
+import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.StandardOpenOption
 import java.security.DigestInputStream
 import java.security.MessageDigest
 import java.util.Base64
@@ -221,7 +224,7 @@ class SafSyncEngine(private val context: Context) {
      * sent. One that skips the file for its size puts back no hold, since it refuses the
      * file's saves until an open finds the document smaller, and nor does one that cannot
      * list the folder, or the directory holding the file, which leaves the file no stamp
-     * either, so its next save goes ahead unguarded. A hold the closing folder's drain
+     * either; saves stay blocked until a later open reads it. A hold the closing folder's drain
      * records after the open has cleared the folder's holds, its read having outlasted the
      * stop, is refused like a save of the file where the open could not read the device
      * copy; see [processWriteBack]. In memory only, on an engine that lives as long as the
@@ -344,6 +347,8 @@ class SafSyncEngine(private val context: Context) {
         Logger.i(tag, "Starting initial sync of ${mirrorDir.name}")
         val startTime = System.currentTimeMillis()
 
+        // A closing watcher may still drain while provider reads are in flight.
+        unfetched.add(mirrorDir.absolutePath)
         // Clear cache for fresh sync
         resetCache(safUri)
         // Scoped rather than cleared: this engine serves one folder at a time, and
@@ -366,10 +371,8 @@ class SafSyncEngine(private val context: Context) {
         val skippedDirs = mutableListOf<String>()
         val enumerationComplete = walkTree(safUri, rootDocId, "", documents, skippedDirs)
         // Device content this sync deliberately did not read, which is what
-        // `unfetched` means. Recorded by the directory's own mirror path: the DELETE
-        // guard matches a directory by prefix, so an unlink of any parent sees it,
-        // and no file can ever equal a directory path, so the exact-path test the
-        // write guard uses is untouched. Scrubbed with the rest of the mirror's
+        // `unfetched` means. An unread directory guards its descendants as well
+        // as deletion of itself or an ancestor. Scrubbed with the rest of the mirror's
         // prefix at the top of this function, so a folder that stops holding one
         // stops being held back by it.
         for (relative in skippedDirs) {
@@ -1089,6 +1092,7 @@ class SafSyncEngine(private val context: Context) {
             }
             onDocumentsNotCopied(failedCopies, outOfRoom || belowFloor)
         }
+        if ("" !in skippedDirs) unfetched.remove(mirrorDir.absolutePath)
     }
 
     /**
@@ -1200,9 +1204,8 @@ class SafSyncEngine(private val context: Context) {
      *   absent, unreadable or in a format this build does not know arrives as null, and
      *   then its silence about a file says nothing at all: every mirror file would look
      *   diverged, including the ordinary stale copy a previous sync wrote. So no record
-     *   means the pre-existing behaviour, which is to replace. A record that parsed and
-     *   vouches for nothing is declined for the same reason and separately, because it
-     *   is the shape a sync that kept every file it saw leaves behind.
+     *   means the pre-existing behaviour, which is to replace. A valid empty record
+     *   still requires preservation: it can follow a failed preservation attempt.
      *
      * - **The fetched bytes differ from the mirror copy.** Without this the guard would
      *   fire on every file the user edited in the last session: a save the watcher DID
@@ -1226,9 +1229,7 @@ class SafSyncEngine(private val context: Context) {
      *
      * The copy is renamed rather than duplicated, so the space cost is nothing and what
      * the sync then finds at the original name is absent, which is where the fetched copy
-     * is about to land. A rename the filesystem refuses answers false and the caller
-     * replaces the mirror exactly as it did before: worse than preserving, better than
-     * refusing to open the folder.
+     * is about to land. A failed preservation aborts the incoming replacement.
      *
      * Deliberately not routed through [announceLost]. The set-aside copy is a candidate
      * for [uploadMirrorOnlyDocuments] in this same sync, so it usually reaches the device
@@ -1246,22 +1247,16 @@ class SafSyncEngine(private val context: Context) {
     ): Boolean {
         if (!localPath.isFile) return false
         val recorded = previouslyRecorded() ?: return false
-        if (recorded.isEmpty()) return false
         if (identityLine(doc.relativePath, localPath) in recorded) return false
         if (sameBytes(localPath, fetched)) return false
 
-        val preserved = File(
-            localPath.parentFile,
-            "${localPath.name}$LOCAL_COPY_SUFFIX${localPath.lastModified()}",
-        )
-        if (!localPath.renameTo(preserved)) {
-            Logger.w(
-                tag,
-                "Could not set the mirror copy of ${doc.relativePath} aside; the device " +
-                    "copy is about to replace it",
-            )
-            return false
+        var time = localPath.lastModified()
+        var preserved = File(localPath.parentFile, "${localPath.name}$LOCAL_COPY_SUFFIX$time")
+        while (Files.exists(preserved.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+            time++
+            preserved = File(localPath.parentFile, "${localPath.name}$LOCAL_COPY_SUFFIX$time")
         }
+        Files.move(localPath.toPath(), preserved.toPath())
         Logger.i(
             tag,
             "Set the mirror copy of ${doc.relativePath} aside as ${preserved.name}: it " +
@@ -1490,8 +1485,8 @@ class SafSyncEngine(private val context: Context) {
      * the tries after it where this engine makes that open, and for the next save of the
      * file where the next activity's engine does), unless that open skips the document for
      * its size, which refuses the file's saves until an open finds it smaller, or cannot
-     * list the folder or the directory holding the file, which ends the hold and the stamp,
-     * so the next save goes ahead unguarded; a held-back save whose directory is renamed,
+     * list the folder or the directory holding the file, which blocks saves until a later
+     * open can read it; a held-back save whose directory is renamed,
      * which is dropped and waits for the next save of the file or, with a clock, the next
      * open; and on a provider with no clock, or where the stamp query went unanswered, a copy
      * is named for the time 0, and every copy after the first carries its counter as a time,
@@ -1590,9 +1585,7 @@ class SafSyncEngine(private val context: Context) {
      * back into the editor.
      *
      * Ceilings: [keepsDeviceEdit]'s own, each spare copy of an unchanged document there
-     * being a declined delete of it here, and an open that cannot list the folder or the
-     * directory holding the file, which leaves it no stamp and arms nothing, so its delete
-     * goes ahead as its save does; a directory is declined for a file in it whose delete was
+     * being a declined delete of it here; a directory is declined for a file in it whose delete was
      * declined ([keptOnDevice]), and otherwise not asked file by file, so a file under it
      * that raised no delete of its own goes with it: one past [MAX_WATCHED_DIRECTORIES], or
      * one another app added while the folder was open, which the mirror never held; and a
@@ -2541,8 +2534,12 @@ class SafSyncEngine(private val context: Context) {
                         skipped.add(relativePath)
                     }
                 }
-            } ?: return false  // the provider refused to answer at all
+            } ?: run {
+                skipped.add(parentRelPath)
+                return false
+            }
         } catch (e: Exception) {
+            skipped.add(parentRelPath)
             // The path inside the folder, not the document id, which the platform
             // provider spells as the user's own directory; and the exception's class,
             // because a provider quotes the document URI in its message.
@@ -2604,7 +2601,7 @@ class SafSyncEngine(private val context: Context) {
         // short (by an exception, or by the process being killed mid-stream) would
         // leave a short file carrying a fresh timestamp. That is indistinguishable
         // from an unsaved local edit, and the sync decision has to tell them apart.
-        val partial = File(dest.parentFile, "${dest.name}$PARTIAL_SUFFIX")
+        var partial: File? = null
         try {
             val source = context.contentResolver.openInputStream(docUri)
             if (source == null) {
@@ -2616,10 +2613,16 @@ class SafSyncEngine(private val context: Context) {
             }
             val copied = (if (digest != null) DigestInputStream(source, digest) else source)
                 .use { input ->
-                    FileOutputStream(partial).use { output -> copyAtMost(input, output, limit) }
+                    // Workspace entries must never choose or redirect the scratch file.
+                    val scratch = File.createTempFile(".vscodroid-", PARTIAL_SUFFIX, dest.parentFile)
+                        .also { partial = it }
+                    Files.newOutputStream(
+                        scratch.toPath(), StandardOpenOption.WRITE, LinkOption.NOFOLLOW_LINKS,
+                    ).use { output -> copyAtMost(input, output, limit) }
                 }
+            val fetched = partial ?: return null
             if (copied == null) {
-                partial.delete()
+                fetched.delete()
                 Logger.i(
                     tag,
                     "Not copying ${dest.name}: the document holds more than this app's own " +
@@ -2629,24 +2632,24 @@ class SafSyncEngine(private val context: Context) {
             }
             // Stamp with the source's own time so later syncs compare two timestamps
             // from the same clock rather than a provider's against the filesystem's.
-            if (sourceModified > 0) partial.setLastModified(sourceModified)
+            if (sourceModified > 0) fetched.setLastModified(sourceModified)
             // Read back from the scratch file, which nothing else writes, so the time is
             // the one the filesystem kept.
-            val landed = LandedCopy(partial.lastModified(), copied)
+            val landed = LandedCopy(fetched.lastModified(), copied)
             // The one moment anything can act on the copy this is about to replace, and
             // the only one where replacing it is already certain: the stream finished, so
             // the caller is not being asked to judge a copy that may yet fail and leave
             // the destination exactly as it was. The fetched bytes are on disk here, so
             // the comparison the caller needs costs no second read of the document.
-            if (dest.exists()) onReplacing(partial)
-            if (!partial.renameTo(dest)) {
-                partial.delete()
-                Logger.w(tag, "Could not move ${partial.name} into place")
+            if (dest.exists()) onReplacing(fetched)
+            if (!fetched.renameTo(dest)) {
+                fetched.delete()
+                Logger.w(tag, "Could not move ${fetched.name} into place")
                 return null
             }
             return landed
         } catch (e: Exception) {
-            partial.delete()
+            partial?.delete()
             // The class rather than the message, and it takes both halves to be
             // redaction at all: the document id names the user's directory, and a
             // provider stream's own exception quotes the URI in its message, so
@@ -4046,7 +4049,7 @@ class SafSyncEngine(private val context: Context) {
                     // only: the drain of an engine whose activity was recreated never learns
                     // what the new engine's open could not read, the two-engine case
                     // [refusalsAnnounced] describes.
-                    if (job.localPath in unfetched &&
+                    if (holdsUnread(job.localPath, isDirectory = false) &&
                         writeWouldReplaceUnreadDocument(
                             job.localPath,
                             job.safTreeUri?.let { providerHolds(it, job.relativePath) } != false,
@@ -4356,7 +4359,7 @@ class SafSyncEngine(private val context: Context) {
         // the common path. [createOneInSaf] needs no such guard, because there the
         // provider's answer is already in hand.
         if (type != SyncType.DELETE &&
-            localFile.absolutePath in unfetched &&
+            holdsUnread(localFile.absolutePath, isDirectory) &&
             writeWouldReplaceUnreadDocument(
                 localFile.absolutePath,
                 providerHoldsDocument(safTreeUri, relativePath),
@@ -4426,10 +4429,8 @@ class SafSyncEngine(private val context: Context) {
         // Matched by prefix and by its own path for a directory, since a directory
         // holds what is under it and [unfetched] carries a file for each document this
         // sync did not read plus the directory itself where it read none of them, and
-        // by exact path for a file, since its own
-        // path is the only one that names it. The separator is appended so `docs` does
-        // not answer for `docs2`, and any depth below counts; on the file side
-        // exactness is what stops an unread `notes.md.bak` from keeping `notes.md`.
+        // by its own path or an unread ancestor for a file. The separator keeps
+        // `docs` from matching `docs2` and `notes.md.bak` from matching `notes.md`.
         //
         // Below the MOVED_FROM hold rather than above it, deliberately. A directory
         // with unread children is renamed by the same event pair as any other, and
@@ -4607,13 +4608,14 @@ class SafSyncEngine(private val context: Context) {
      *
      * A directory is matched by its own path as well as by prefix. It is recorded by its
      * own mirror path when this sync did not read what is under it, either because the name
-     * is skipped or because enumerating it failed, and the prefix test alone cannot match
+     * is skipped or because enumerating it failed. Files under unread directories are held
+     * too. The prefix test for descendants alone cannot match
      * that entry: `below` carries a trailing separator the entry does not have. Deleting the
      * directory itself is exactly the case those entries exist to refuse. Both guards ask
      * [holdsKept] of a directory too.
      */
     private fun holdsUnread(path: String, isDirectory: Boolean): Boolean {
-        if (path in unfetched) return true
+        if (writeWouldReplaceUnreadDocument(path, true, unfetched)) return true
         if (!isDirectory) return false
         val below = path + File.separator
         return unfetched.any { it.startsWith(below) }
@@ -5268,7 +5270,9 @@ class SafSyncEngine(private val context: Context) {
             localPath: String,
             deviceHoldsDocument: Boolean,
             unfetched: Set<String>,
-        ): Boolean = deviceHoldsDocument && localPath in unfetched
+        ): Boolean = deviceHoldsDocument && unfetched.any {
+            localPath == it || localPath.startsWith(it + File.separator)
+        }
 
         /**
          * Whether the mirror copy may be replaced with the one from the device folder.

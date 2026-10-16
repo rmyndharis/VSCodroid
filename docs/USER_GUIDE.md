@@ -110,10 +110,10 @@ VSCodroid is VS Code. If you have used VS Code on desktop, everything works the 
   read it. Such a file is kept in the device folder, and so is a folder holding
   it that you delete from the terminal; a notice says so, and the file comes
   back into the editor the next time you open the folder.
-- An open that cannot list the folder holding a file leaves VSCodroid nothing
-  to check that file against until an open can: a save held back before that
-  open is no longer tried, and your next save or delete of the file replaces or
-  removes the device folder's version without keeping a copy.
+- If opening a folder cannot list it or one of its subdirectories, saves and
+  deletes of existing device documents under that directory are held back.
+  Your edits stay inside VSCodroid until you reopen the folder successfully
+  and save again; the unread device version is kept.
 - The Explorer and the title bar show a device folder under its own name. A
   folder opened in an earlier version is shown under a twelve-character code
   such as `8e440ff38c8e`, the name of its copy, and offers to reopen under its
