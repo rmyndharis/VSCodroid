@@ -343,6 +343,8 @@ for EXT_SPEC in "${EXTENSIONS[@]}"; do
 
     # Extract extension/ contents from VSIX (it's a ZIP)
     echo "  Extracting..."
+    # A failed extraction must not leave an old stamp authenticating a partial tree.
+    rm -f "$STAMP"
     rm -rf "$DEST_DIR"
     mkdir -p "$DEST_DIR"
 
