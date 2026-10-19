@@ -177,6 +177,65 @@ class BundledExtractionSplitTest {
         }
     }
 
+    /**
+     * Profiles share one extensions directory, so a gallery install a named profile
+     * made is on disk without being a copy the default profile can run. Only what the
+     * default profile lists counts, when its manifest says.
+     */
+    @Test
+    fun `a gallery install the default profile does not list does not stop the bundled copy`() {
+        val theirs = "ms-python.python-2026.5.0-universal"
+
+        assertEquals(
+            listOf(fetchedPython),
+            bundledDirsToExtract(
+                present = listOf(theirs),
+                bundled = listOf(fetchedPython),
+                listed = emptySet(),
+            ),
+        )
+        assertTrue(
+            bundledDirsToExtract(
+                present = listOf(theirs),
+                bundled = listOf(fetchedPython),
+                listed = setOf(theirs),
+            ).isEmpty(),
+            "the default profile's own copy is the one that runs",
+        )
+    }
+
+    @Test
+    fun `a newer plain install the default profile does not list does not stop the bundled copy`() {
+        val theirs = "ms-python.python-2026.9.0"
+
+        assertEquals(
+            listOf(fetchedPython),
+            bundledDirsToExtract(
+                present = listOf(theirs),
+                bundled = listOf(fetchedPython),
+                listed = setOf("something.else-1.0.0"),
+            ),
+        )
+        assertTrue(
+            bundledDirsToExtract(
+                present = listOf(theirs),
+                bundled = listOf(fetchedPython),
+                listed = setOf(theirs),
+            ).isEmpty(),
+        )
+    }
+
+    @Test
+    fun `a listing that cannot be read counts every directory on disk`() {
+        assertTrue(
+            bundledDirsToExtract(
+                present = listOf("ms-python.python-2026.5.0-universal"),
+                bundled = listOf(fetchedPython),
+                listed = null,
+            ).isEmpty(),
+        )
+    }
+
     @Test
     fun `a gallery install spelled in another case stops the bundled copy`() {
         // The gallery lowercases publisher and name; the bundled directory keeps

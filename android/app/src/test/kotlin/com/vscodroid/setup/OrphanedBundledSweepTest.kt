@@ -262,4 +262,52 @@ class OrphanedBundledSweepTest {
         assertEquals(listOf(pinnedDir), listedDirs())
         assertTrue(JSONArray(manifest.readText()).getJSONObject(0).getJSONObject("metadata").getBoolean("pinned"))
     }
+
+    @Test
+    fun `a version bump installs the new bundled copy beside a copy only another profile uses`() {
+        val oldDir = "ms-python.python-2026.3.0"
+        val profileGallery = "ms-python.python-2026.2.0-universal"
+        installedDir(oldDir, "2026.3.0")
+        installedDir(profileGallery, "2026.2.0")
+        manifest.writeText("[${entry(oldDir, "2026.3.0")}]")
+        File(profiles, "5f3a").apply { mkdirs() }
+            .resolve("extensions.json").writeText("[${entry(profileGallery, "2026.2.0")}]")
+
+        extractBundledExtensions()
+
+        assertTrue(
+            File(extensionsDir, "$bundledDir/package.json").isFile,
+            "the default profile was left without the updated copy",
+        )
+        assertFalse(File(extensionsDir, oldDir).exists(), "the superseded copy is still on disk")
+        assertTrue(File(extensionsDir, "$profileGallery/package.json").isFile, "the named profile's copy was touched")
+        assertEquals(listOf(bundledDir), listedDirs())
+    }
+
+    @Test
+    fun `a version bump installs the new bundled copy beside a gallery copy nothing lists`() {
+        val oldDir = "ms-python.python-2026.3.0"
+        installedDir(oldDir, "2026.3.0")
+        installedDir(galleryDir, "2026.5.0")
+        manifest.writeText("[${entry(oldDir, "2026.3.0")}]")
+
+        extractBundledExtensions()
+
+        assertTrue(File(extensionsDir, "$bundledDir/package.json").isFile)
+        assertFalse(File(extensionsDir, oldDir).exists())
+        assertTrue(File(extensionsDir, "$galleryDir/package.json").isFile, "an unlisted copy that is not ours was touched")
+        assertEquals(listOf(bundledDir), listedDirs())
+    }
+
+    @Test
+    fun `a version bump leaves the default profile on its own newer gallery copy`() {
+        installedDir("ms-python.python-2026.3.0", "2026.3.0")
+        installedDir(galleryDir, "2026.5.0")
+        manifest.writeText("[${entry(galleryDir, "2026.5.0")}]")
+
+        extractBundledExtensions()
+
+        assertFalse(File(extensionsDir, bundledDir).exists(), "unpacked beside the user's own copy")
+        assertEquals(listOf(galleryDir), listedDirs())
+    }
 }

@@ -1110,7 +1110,8 @@ The version is part of each directory name, and that is load-bearing, though not
 because of extraction. `bundledDirsToExtract` re-unpacks every `vscodroid.*` directory
 on each setup run, so edited code does reach an existing install; a fetched one is
 unpacked only when its directory is absent or was left half-finished, and not when the
-user removed it or already holds a newer copy. The server, however, caches its scan of
+user removed it or the default profile already lists a gallery install or a newer copy of
+it. The server, however, caches its scan of
 user extensions against the modification time of `extensions.json`, so a changed
 `package.json` (its `contributes`, for example) stays invisible until the directory
 name changes and `reconcileExtensionsManifest` rewrites that file. Bump the version in

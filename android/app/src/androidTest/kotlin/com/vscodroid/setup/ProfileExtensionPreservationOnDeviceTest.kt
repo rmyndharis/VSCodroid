@@ -93,8 +93,8 @@ class ProfileExtensionPreservationOnDeviceTest {
         }
     }
 
-    private fun entry(directory: String, version: String): JSONObject = JSONObject()
-        .put("identifier", JSONObject().put("id", extensionId))
+    private fun entry(directory: String, version: String, id: String = extensionId): JSONObject = JSONObject()
+        .put("identifier", JSONObject().put("id", id))
         .put("version", version)
         .put("relativeLocation", directory)
         .put("location", JSONObject().put("\$mid", 1).put("scheme", "file")
@@ -211,5 +211,39 @@ class ProfileExtensionPreservationOnDeviceTest {
         assertFalse("the released profile reference still protects the old copy", File(extensionsDir, oldDir).exists())
         assertEquals("[]", profileManifest.readText())
         assertDefaultAdvanced()
+    }
+
+    @Test
+    fun defaultProfileAdvancesBesideAGalleryCopyOnlyAnotherProfileLists() {
+        // A fetched extension, so that the decision not to unpack a copy the user already
+        // has applies to it: the process monitor above is ours and is always unpacked.
+        val fetchedDir = appContext.assets.list("extensions").orEmpty()
+            .single { it.startsWith("dbaeumer.vscode-eslint-") }
+        val fetchedPackage = appContext.assets.open("extensions/$fetchedDir/package.json").use { it.readBytes() }
+        val pkg = JSONObject(String(fetchedPackage, Charsets.UTF_8))
+        val id = "${pkg.getString("publisher")}.${pkg.getString("name")}".lowercase()
+        val olderDefault = "$id-0.0.0"
+        val gallery = "$id-0.0.1-universal"
+        for ((dir, version) in listOf(olderDefault to "0.0.0", gallery to "0.0.1")) {
+            copyAssetTree("extensions/$fetchedDir", File(extensionsDir, dir))
+            File(extensionsDir, "$dir/package.json")
+                .writeBytes(JSONObject(String(fetchedPackage, Charsets.UTF_8)).put("version", version).toString().toByteArray())
+        }
+        defaultManifest.writeText(
+            JSONArray().put(entry(oldDir, oldVersion)).put(entry(olderDefault, "0.0.0", id)).toString(),
+        )
+        assertTrue(profileManifest.parentFile!!.mkdirs())
+        profileManifest.writeText(JSONArray().put(entry(gallery, "0.0.1", id)).toString())
+
+        extractBundledExtensions()
+
+        assertArrayEquals(fetchedPackage, File(extensionsDir, "$fetchedDir/package.json").readBytes())
+        assertFalse("the superseded copy was left behind", File(extensionsDir, olderDefault).exists())
+        assertTrue("the named profile's own copy was deleted", File(extensionsDir, gallery).isDirectory)
+        val entries = JSONArray(defaultManifest.readText())
+        val listed = (0 until entries.length()).map { entries.getJSONObject(it) }
+            .filter { it.getJSONObject("identifier").getString("id") == id }
+            .map { it.getString("relativeLocation") }
+        assertEquals("the default profile must keep the extension at its new version", listOf(fetchedDir), listed)
     }
 }

@@ -3329,7 +3329,15 @@ claude() {
         val uninstalled = listedExtensionIds(manifestFile)
             ?.let { listed -> previouslyBundledIds() - listed }
             ?: emptySet()
-        val toExtract = bundledDirsToExtract(installed, bundled.toList(), abandoned, uninstalled)
+        // And which directories the default profile lists, the only copies it can run.
+        // Profiles share this directory, so what else is on disk is not necessarily
+        // theirs; see [bundledDirsToExtract]. Unknown when an entry names no
+        // directory, as [otherProfilesExtensionDirs] reads one.
+        val listedByDefault = manifestEntryDirs(manifestFile)
+            ?.takeIf { entries -> entries.none { it.second.isEmpty() } }
+            ?.mapTo(HashSet()) { it.second }
+        val toExtract =
+            bundledDirsToExtract(installed, bundled.toList(), abandoned, uninstalled, listedByDefault)
         // One counter across the whole loop, so the bar reflects the step rather
         // than restarting per extension. Its total is what the APK bundles, so a
         // run re-unpacking only some of the directories stops the bar short of
@@ -5099,25 +5107,37 @@ internal fun failedUnpackMustBeRemoved(
  * same. Ours are never in it, since they are re-unpacked unconditionally and
  * a removed one of ours is not a case this app has ever handled.
  *
+ * Those two checks count the directories the default profile LISTS, passed as
+ * [listed], and not everything on disk. Profiles share one extensions directory,
+ * so a gallery install a named profile made, or a directory nothing lists, is on
+ * disk without being a copy the default profile can run. Counting it left the
+ * default profile without the new bundled copy, the superseded sweep then removed
+ * the old one, and with its entry the extension was gone from the profile and
+ * recorded as removed. Null means the manifest could not say, and every
+ * directory counts as it did before the parameter existed.
+ *
  * Pure, and takes listings rather than a directory, so the decision is
  * testable without a Context or a tree. `(present, bundled)` in that order, the
  * same as [supersededExtensionDirs] and [retiredOwnExtensionDirs]: all three
  * take two `List<String>` and a swap between them compiles in silence, so the
- * only protection is that there is nothing to remember. [abandoned] and
- * [uninstalled] are `Set`s rather than further lists of the same type, so they
- * cannot join that swap, and both are defaulted because a caller with nothing
- * to say about wreckage or removals gets the behaviour that was here before
- * they existed.
+ * only protection is that there is nothing to remember. [abandoned],
+ * [uninstalled] and [listed] are `Set`s rather than further lists of the same
+ * type, so they cannot join that swap, and all are defaulted because a caller
+ * with nothing to say about wreckage, removals or listings gets the behaviour
+ * that was here before they existed.
  */
 internal fun bundledDirsToExtract(
     present: List<String>,
     bundled: List<String>,
     abandoned: Set<String> = emptySet(),
     uninstalled: Set<String> = emptySet(),
+    listed: Set<String>? = null,
 ): List<String> {
     // An abandoned directory is wreckage, not an install: it must not count as
-    // a copy of its own version that makes unpacking it redundant.
-    val installed = present.filterNot { it in abandoned }.mapNotNull(::splitExtensionDir)
+    // a copy of its own version that makes unpacking it redundant. Nor does one
+    // the default profile does not list, when that is known.
+    val counted = present.filter { it !in abandoned && (listed == null || it in listed) }
+    val installed = counted.mapNotNull(::splitExtensionDir)
     // The identifiers the user holds from the gallery, whatever the version, and
     // without case as [orphanedBundledCopies] compares them. A directory the
     // gallery named is the user's copy and the one that runs:
@@ -5126,8 +5146,8 @@ internal fun bundledDirsToExtract(
     // [orphanedBundledCopies] removes an unpacked bundled copy that sits beside
     // a listed one. Unpacking next to an OLDER gallery install therefore wrote
     // 29 MiB for Python and deleted it again on every update.
-    val galleryIds = present
-        .filter { it !in abandoned && TARGET_PLATFORM_SUFFIX.containsMatchIn(it) }
+    val galleryIds = counted
+        .filter { TARGET_PLATFORM_SUFFIX.containsMatchIn(it) }
         .mapNotNull(::splitExtensionDir)
         .map { it.first.lowercase() }
         .toSet()
