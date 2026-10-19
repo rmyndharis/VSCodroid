@@ -4280,10 +4280,15 @@ class SafSyncEngine(private val context: Context) {
         val access = (job.mirrorRoot ?: session.root)?.let {
             outboundAccess(it, job.generation ?: session.generation)
         }
-        // Small debounce: skip if more recent job for same path exists. Scoped to the
-        // session the job came off, so it cannot see, or be blinded by, the jobs of a
-        // folder that is closing or one that has just opened.
-        if (session.queue.any { it.localPath == job.localPath && it.timestamp > job.timestamp }) {
+        // Small debounce: skip a job that a more recent one for the same path makes
+        // pointless, see [supersededByLaterJob]. Scoped to the session the job came off,
+        // so it cannot see, or be blinded by, the jobs of a folder that is closing or one
+        // that has just opened.
+        if (session.queue.any {
+                it.localPath == job.localPath && it.timestamp > job.timestamp &&
+                    supersededByLaterJob(job, it)
+            }
+        ) {
             return
         }
 
@@ -5488,6 +5493,30 @@ class SafSyncEngine(private val context: Context) {
             .filter { now - it.atMillis <= RENAME_PAIR_WINDOW_MS }
             .singleOrNull()
             ?.relativePath
+
+        /**
+         * Whether [later], queued after [job] for the same path, makes running [job]
+         * pointless.
+         *
+         * A save is made from the mirror as it is when it runs, so any later job for the
+         * path redoes it and the earlier one can go. A rename goes only for a later rename
+         * onto the same name: nothing else puts the move on the device, but two cannot
+         * both land, and the second would be asked to rename into a name the device holds
+         * by then, which providers answer with an invented one. A delete goes for a later
+         * write of the same kind and for no other. A file removed and written again is
+         * overwritten in place, and the save queued behind a checkout's unlink holds the
+         * document the delete would have removed, so the delete has to be the one that is
+         * dropped. A file replaced by a folder, or a folder by a file, is not the document
+         * the later write would find, and dropping the delete left the device with the
+         * old kind.
+         */
+        internal fun supersededByLaterJob(job: SyncJob, later: SyncJob): Boolean = when (job.type) {
+            SyncType.CREATE, SyncType.MODIFY -> true
+            SyncType.RENAME -> later.type == SyncType.RENAME
+            SyncType.DELETE -> later.type == SyncType.DELETE ||
+                ((later.type == SyncType.CREATE || later.type == SyncType.MODIFY) &&
+                    later.isDirectory == job.isDirectory)
+        }
 
         /** The directory part of a mirror-relative path; empty for a top-level entry. */
         internal fun parentPathOf(relativePath: String): String =

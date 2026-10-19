@@ -14,13 +14,17 @@ import io.mockk.mockk
 import io.mockk.mockkObject
 import io.mockk.mockkStatic
 import io.mockk.unmockkAll
+import io.mockk.verify
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.io.FileNotFoundException
 import java.io.OutputStream
 import java.nio.file.Files
 
@@ -117,7 +121,12 @@ class SafQueuedWriteBackTest {
         every { DocumentsContract.renameDocument(any(), any(), any()) } answers {
             val from = pathOf(secondArg<Uri>())
             val parent = parentOf(from)
-            val to = if (parent.isEmpty()) thirdArg<String>() else "$parent/${thirdArg<String>()}"
+            val wanted = if (parent.isEmpty()) thirdArg<String>() else "$parent/${thirdArg<String>()}"
+            // A name the folder already holds is answered with an invented one, as providers
+            // that do not refuse it do.
+            var to = wanted
+            var n = 1
+            while (to in device) to = "$wanted (${n++})"
             moveSubtree(from, to)
             docUri(docId(to))
         }
@@ -156,6 +165,9 @@ class SafQueuedWriteBackTest {
         }
         every { resolver.openOutputStream(any(), any()) } answers {
             val path = pathOf(firstArg<Uri>())
+            // A directory cannot be written and a deleted document is gone, which is how
+            // a provider answers a write through a URI that went stale.
+            if (device[path] == null) throw FileNotFoundException(path)
             writes += path
             object : ByteArrayOutputStream() {
                 override fun close() {
@@ -333,5 +345,131 @@ class SafQueuedWriteBackTest {
 
         assertEquals(emptySet<String>(), device.keys)
         assertEquals(listOf("ghost/a.txt"), lost)
+    }
+
+    @Test
+    fun `a folder rename still runs when the renamed folder is deleted before the drain`() {
+        onDevice("dirA")
+        onDevice("dirA/x.txt", "x")
+
+        // mv dirA dirB && rm -r dirB, inside one poll.
+        observe(FileObserver.MOVED_FROM or isDirFlag, "dirA")
+        observe(FileObserver.MOVED_TO or isDirFlag, "dirB")
+        Thread.sleep(3)
+        observe(FileObserver.DELETE, "dirB/x.txt")
+        observe(FileObserver.DELETE or isDirFlag, "dirB")
+
+        drain()
+
+        verify(exactly = 1) { DocumentsContract.renameDocument(any(), any(), "dirB") }
+        assertEquals(setOf("dirB", "dirB/x.txt"), device.keys)
+        // The device cannot be asked to delete what the event could not name, and the
+        // user is told that, rather than the old folder quietly staying under its old name.
+        assertEquals(setOf("dirB/x.txt", "dirB"), refused.toSet())
+    }
+
+    @Test
+    fun `a folder replaced by a file before the drain is deleted and the file created`() {
+        onDevice("foo")
+
+        // rmdir foo && echo hi > foo
+        observe(FileObserver.DELETE or isDirFlag, "foo")
+        Thread.sleep(3)
+        inMirror("foo", "hi")
+        observe(FileObserver.CREATE, "foo")
+
+        drain()
+
+        assertEquals(setOf("foo"), device.keys)
+        assertEquals("hi", text("foo"))
+        assertEquals(emptyList<String>(), lost + refused)
+    }
+
+    @Test
+    fun `a file replaced by a folder before the drain is deleted and the folder created`() {
+        onDevice("foo", "hi")
+
+        // rm foo && mkdir foo. The directory event arrives while the directory is not yet on
+        // disk, as a JVM test can only deliver one, and appears before the drain.
+        observe(FileObserver.DELETE, "foo")
+        Thread.sleep(3)
+        observe(FileObserver.CREATE or isDirFlag, "foo")
+        File(mirror, "foo").mkdirs()
+
+        drain()
+
+        assertEquals(setOf("foo"), device.keys)
+        assertEquals(null, device["foo"], "foo should be a folder on the device")
+        assertEquals(emptyList<String>(), lost + refused)
+    }
+
+    @Test
+    fun `a file removed and written again before the drain keeps its document`() {
+        onDevice("f", "old")
+
+        // What a checkout does: unlink, create, write. The save at the end holds the
+        // document the device had when the event arrived, so a delete that ran first would
+        // leave it writing through a URI that no longer names anything.
+        observe(FileObserver.DELETE, "f")
+        Thread.sleep(3)
+        inMirror("f", "new")
+        observe(FileObserver.CREATE, "f")
+        Thread.sleep(3)
+        observe(FileObserver.MODIFY, "f")
+
+        drain()
+
+        verify(exactly = 0) { DocumentsContract.deleteDocument(any(), any()) }
+        assertEquals("new", text("f"))
+        assertEquals(listOf("f"), writes)
+        assertEquals(emptyList<String>(), lost + refused)
+    }
+
+    @Test
+    fun `a later job drops an earlier save, a rename only for a rename onto its name, and a delete only for a write of its kind`() {
+        fun job(type: SyncType, isDirectory: Boolean = false) =
+            SyncJob(type, "/m/p", null, null, null, 0L, isDirectory = isDirectory)
+
+        for (later in SyncType.values()) {
+            assertTrue(SafSyncEngine.supersededByLaterJob(job(SyncType.CREATE), job(later)), "create before $later")
+            assertTrue(SafSyncEngine.supersededByLaterJob(job(SyncType.MODIFY), job(later)), "modify before $later")
+            assertEquals(
+                later == SyncType.RENAME,
+                SafSyncEngine.supersededByLaterJob(job(SyncType.RENAME, true), job(later, true)),
+                "rename before $later",
+            )
+        }
+
+        assertTrue(SafSyncEngine.supersededByLaterJob(job(SyncType.DELETE), job(SyncType.DELETE)))
+        assertTrue(SafSyncEngine.supersededByLaterJob(job(SyncType.DELETE), job(SyncType.CREATE)))
+        assertTrue(SafSyncEngine.supersededByLaterJob(job(SyncType.DELETE), job(SyncType.MODIFY)))
+        assertTrue(SafSyncEngine.supersededByLaterJob(job(SyncType.DELETE, true), job(SyncType.CREATE, true)))
+        assertFalse(SafSyncEngine.supersededByLaterJob(job(SyncType.DELETE), job(SyncType.CREATE, true)))
+        assertFalse(SafSyncEngine.supersededByLaterJob(job(SyncType.DELETE, true), job(SyncType.CREATE)))
+        assertFalse(SafSyncEngine.supersededByLaterJob(job(SyncType.DELETE), job(SyncType.MODIFY, true)))
+        assertFalse(SafSyncEngine.supersededByLaterJob(job(SyncType.DELETE, true), job(SyncType.RENAME, true)))
+    }
+
+    @Test
+    fun `two renames onto one name leave the later one in place and invent nothing`() {
+        onDevice("a")
+        onDevice("a/fa.txt", "fa")
+        onDevice("c")
+        onDevice("c/fc.txt", "fc")
+
+        // mv a b && rm -r b && mv c b, inside one poll. The device holds no b at either
+        // pairing, so both renames are offered for the same name, and only one can land.
+        observe(FileObserver.MOVED_FROM or isDirFlag, "a")
+        observe(FileObserver.MOVED_TO or isDirFlag, "b")
+        Thread.sleep(3)
+        observe(FileObserver.DELETE or isDirFlag, "b")
+        Thread.sleep(3)
+        observe(FileObserver.MOVED_FROM or isDirFlag, "c")
+        observe(FileObserver.MOVED_TO or isDirFlag, "b")
+
+        drain()
+
+        assertEquals(setOf("a", "a/fa.txt", "b", "b/fc.txt"), device.keys)
+        assertEquals(emptyList<String>(), lost + refused)
     }
 }

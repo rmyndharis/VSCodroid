@@ -21,6 +21,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Device-folder saves and new files made just after a folder rename reach the renamed folder, and one whose folder the device lacks is reported.
 - Device-folder sync preserves local edits when a conflicting device copy cannot be kept and protects documents in directories the provider could not list.
 - Reopening a device folder rejects stale saves, deletes and watcher callbacks from the previous sync.
+- Device-folder sync no longer skips a folder rename when the renamed folder is deleted before the sync runs.
+- Replacing a file with a folder, or a folder with a file, in a device folder now takes effect on the device.
 - Reopening a device folder reclaims abandoned temporary downloads while retaining active copies and existing workspace files.
 - Opening a device folder during an active save or delete reports that the folder is busy instead of waiting for the provider.
 - A device-folder import refuses to install a copy if a parent directory is redirected by a symbolic link during the read.
