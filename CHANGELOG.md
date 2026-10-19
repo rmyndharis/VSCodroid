@@ -11,6 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Stopping the editor also ends its surviving server when the bootstrap has already exited.
 - Sign-in returns retain their original request identity until the editor page changes.
+- Ctrl or Alt latched on the key row applies to the next key typed in the editor when focus moves there after the latch.
 - Python package build failures explain the optional C/C++ toolchain and Android dependency requirements.
 - App updates preserve older bundled extension versions still used by named profiles while updating the default profile.
 - Device-folder cleanup retains unrecorded workspace files, including names ending in `.vscodroid-partial`.

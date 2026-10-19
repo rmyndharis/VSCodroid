@@ -380,7 +380,7 @@ const cases = [
 {
     const LATCH_INTERCEPTOR = extractInterceptor('{"/":["Slash",191,0]}');
 
-    function latchPage() {
+    function latchPage({ startOnTerminal = false } = {}) {
         const log = [];
         const timers = [];
         const listen = (node) => Object.assign(node, {
@@ -464,7 +464,9 @@ const cases = [
             log.push(`chord ${e.key}${e.ctrlKey ? ' ctrl' : ''}${e.altKey ? ' alt' : ''}${e.shiftKey ? ' shift' : ''} ${e.code} ${e.keyCode}`);
             if (page.chordTakesFocus && e.ctrlKey) { host.blur(); document.activeElement = quickOpen; }
         });
-        document.activeElement = host;
+        // The terminal's textarea: focusable, with no EditContext, so nothing is lent to it.
+        const terminal = { tagName: 'TEXTAREA', classList: { contains: () => false } };
+        document.activeElement = startOnTerminal ? terminal : host;
         window.__vscodroid = {};
         const event = function (type, init) { return { type, ...init }; };
         vm.runInContext(LATCH_INTERCEPTOR, vm.createContext({
@@ -475,7 +477,7 @@ const cases = [
             setTimeout: (fn) => { timers.push(fn); },
         }));
         page = {
-            log, host, own,
+            log, host, own, terminal,
             flush() { for (const fn of timers.splice(0)) fn(); },
             // What ExtraKeyRow pushes, all three flags at once.
             latch(mods = {}) {
@@ -513,8 +515,8 @@ const cases = [
         return page;
     }
 
-    const latchCase = (name, act, want) => {
-        const page = latchPage();
+    const latchCase = (name, act, want, options) => {
+        const page = latchPage(options);
         const got = act(page);
         cases.push([name, JSON.stringify(got), JSON.stringify(want)]);
     };
@@ -570,6 +572,25 @@ const cases = [
     latchCase('with nothing latched that Backspace reaches the editor as it came',
         (p) => { p.key('Backspace', 8); return state(p); },
         { log: ['chord Backspace  8'], editContext: 'editor', ctrl: false, alt: false });
+    // A latch set while focus is somewhere else, and focus moving into the editor
+    // afterwards. The swap is made for the host that has focus when the latch is
+    // set, so a host that takes focus later had nothing lent: a composing keyboard
+    // typed the letter and spent the latch with no chord.
+    latchCase('Ctrl latched elsewhere, then focus moves to the editor: the next letter is the chord',
+        (p) => { p.latch({ ctrl: true }); p.host.focus(); p.flush(); p.compose('p'); return state(p); },
+        { log: ['focus host', 'chord p ctrl KeyP 80', 'blur host', 'focus host'], editContext: 'editor', ctrl: false, alt: false },
+        { startOnTerminal: true });
+    // The restart that ends a composing word is itself a focus change into the
+    // host. Taken for a focus move it schedules another swap, whose give-back
+    // restarts again, and so on for as long as the latch is held.
+    //
+    // NEGATIVE CONTROL, measured: against main at 9e58d711 the first case fails,
+    // the letter typed into the editor and the latch spent with no chord, and the
+    // second passes. A focus listener that schedules the swap without the early
+    // return in takeNextCharacter fails the second with five restarts in the log.
+    latchCase('Ctrl latched over a word still composing restarts input once, however long it idles',
+        (p) => { p.compose('al'); p.latch({ ctrl: true }); p.flush(); p.flush(); p.flush(); p.flush(); return { log: p.log, editContext: p.host.editContext.name }; },
+        { log: ['editor typed al', 'blur host', 'focus host'], editContext: 'empty' });
 }
 
 let failed = 0;
