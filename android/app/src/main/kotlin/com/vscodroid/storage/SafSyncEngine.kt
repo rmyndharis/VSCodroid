@@ -4354,6 +4354,16 @@ class SafSyncEngine(private val context: Context) {
                 // positively answers "gone": a provider that cannot answer is still
                 // treated as holding, so a transient failure keeps the warning it used
                 // to give.
+                //
+                // A rename queued ahead of this job is the other way a document that was
+                // missing when the event arrived is there by now: after `mv a b && rm -r b`
+                // in one poll the rename runs first, and the children of `b` exist on the
+                // device under that name. That is reported too, and not looked up again by
+                // path and deleted. A deletion cannot be undone, and a lookup at the drain
+                // finds whatever sits at the path by then, which is no longer the document
+                // the event named. The Explorer's own folder delete already leaves the
+                // device copy for the same reason, and deleting the folder again after the
+                // next open resolves it at once.
                 val refused = when {
                     job.safDocUri == null ->
                         job.safTreeUri != null &&
@@ -4529,12 +4539,11 @@ class SafSyncEngine(private val context: Context) {
      * document it makes, so a path already remembered was carried and has nothing left
      * to do. A renamed folder's children are not remembered, [forgetCachedSubtree]
      * dropped them and the rename does not refill them, so they go through. A folder
-     * made inside a renamed folder in the same poll is not remembered either, so its
-     * files can be sent twice, with the same bytes. A folder that is still not on the
-     * device leaves the file in the mirror only, and the user is told. Only while the
-     * cache still speaks for the job's tree: a drain can outlive its folder, and then
-     * the file may well have been carried by its folder's create, so no notice is
-     * given for it. A link is never uploaded, so one queued here has nothing to report.
+     * that is still not on the device leaves the file in the mirror only, and the user
+     * is told, while the cache still speaks for the job's tree: a drain can outlive its
+     * folder, and then the file may well have been carried by its folder's create, so no
+     * notice is given for it. A link is never uploaded, so one queued here has nothing
+     * to report.
      */
     private fun createInQueuedParent(job: SyncJob, localFile: File, access: OutboundAccess?) {
         val treeUri = job.safTreeUri ?: return
