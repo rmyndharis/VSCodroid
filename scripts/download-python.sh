@@ -294,6 +294,19 @@ for pkg in "${LIB_PACKAGES[@]}"; do
         fi
 
         if [ -n "$src" ] && ( [ -f "$src" ] || [ -L "$src" ] ); then
+            # The file's real SONAME must agree with the name we ship it under;
+            # see read_soname in scripts/lib/termux-packages.sh for the rename
+            # trap this closes. The unversioned fallback above is where it
+            # bites: a library that moved a major is copied under the old name.
+            # A library with no DT_SONAME at all is left to the ELF verification.
+            actual_soname="$(read_soname "$src")"
+            if [ -n "$actual_soname" ] && [ "$actual_soname" != "$soname" ]; then
+                echo "  ERROR: $pkg ships $(basename "$src") with SONAME $actual_soname," >&2
+                echo "         but this script expects $soname. The library moved a" >&2
+                echo "         major - update get_sonames() and rebuild everything" >&2
+                echo "         that links against it." >&2
+                exit 1
+            fi
             cp -L "$src" "$ASSETS_DIR/usr/lib/$soname"
             echo "  $soname ($(du -sh "$ASSETS_DIR/usr/lib/$soname" | cut -f1))"
         else

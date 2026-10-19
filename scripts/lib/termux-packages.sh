@@ -362,3 +362,46 @@ termux_extract_packages() {
         echo "  $pkg extracted"
     done
 }
+
+# Reads DT_SONAME out of an ELF shared object. Used to catch the rename trap
+# in the download scripts that place a library under the name a binary expects:
+# the expected-soname list in get_sonames() is a snapshot, and when the
+# repo bumps a library's major (ICU 78 -> 79) the fallback used to grab the
+# unversioned symlink and cp -L would RENAME the new lib to the stale expected
+# name - shipping libicui18n.so.78 whose real SONAME says .79, beside fresh
+# binaries whose DT_NEEDED says .79. Death at dlopen on device, and the
+# missing-file gate never fired because a file was never missing.
+read_soname() {
+    python3 - "$1" <<'PY'
+import struct, sys
+data = open(sys.argv[1], "rb").read()
+if data[:4] != b"\x7fELF" or data[4] != 2:
+    sys.exit(0)
+e_shoff, = struct.unpack_from("<Q", data, 40)
+e_shentsize, e_shnum = struct.unpack_from("<HH", data, 58)
+dynstr_off = dyn_off = dyn_size = None
+sections = []
+for i in range(e_shnum):
+    off = e_shoff + i * e_shentsize
+    sh_type, = struct.unpack_from("<I", data, off + 4)
+    sh_offset, sh_size = struct.unpack_from("<QQ", data, off + 24)
+    sections.append((sh_type, sh_offset, sh_size, off))
+    if sh_type == 6:  # SHT_DYNAMIC
+        dyn_off, dyn_size = sh_offset, sh_size
+        sh_link, = struct.unpack_from("<I", data, off + 40)
+        link_hdr = e_shoff + sh_link * e_shentsize
+        dynstr_off, = struct.unpack_from("<Q", data, link_hdr + 24)
+if dyn_off is None:
+    sys.exit(0)
+i = dyn_off
+while i < dyn_off + dyn_size:
+    d_tag, d_val = struct.unpack_from("<qQ", data, i)
+    if d_tag == 14:  # DT_SONAME
+        end = data.index(b"\x00", dynstr_off + d_val)
+        print(data[dynstr_off + d_val:end].decode())
+        break
+    if d_tag == 0:
+        break
+    i += 16
+PY
+}
