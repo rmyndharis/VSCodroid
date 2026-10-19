@@ -847,6 +847,10 @@ class KeyInjector(
                     if (composingContexts.has(host.editContext)) {
                         host.blur();
                         host.focus();
+                        // An empty commit ends a composition with no compositionend,
+                        // and the blur has nothing left to end then, so the mark
+                        // would stand and restart input at every later latch.
+                        composingContexts.delete(host.editContext);
                     }
                     var empty = new EditContext();
                     // Kept from the composition hook above, which a blur and

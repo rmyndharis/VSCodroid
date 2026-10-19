@@ -591,6 +591,19 @@ const cases = [
     latchCase('Ctrl latched over a word still composing restarts input once, however long it idles',
         (p) => { p.compose('al'); p.latch({ ctrl: true }); p.flush(); p.flush(); p.flush(); p.flush(); return { log: p.log, editContext: p.host.editContext.name }; },
         { log: ['editor typed al', 'blur host', 'focus host'], editContext: 'empty' });
+    // Chromium ends a composition on an empty commit and sends no compositionend,
+    // so the mark kept for it stands, the blur has nothing left to end, and every
+    // later latch restarted input again until a word happened to end normally.
+    latchCase('a composition that ended without an event is restarted for once, not at every latch',
+        (p) => {
+            p.compose('al');
+            p.host.editContext.composing = false;
+            p.latch({ ctrl: true });
+            p.latch({});
+            p.latch({ ctrl: true });
+            return { log: p.log, editContext: p.host.editContext.name };
+        },
+        { log: ['editor typed al', 'blur host', 'focus host', 'blur host', 'focus host'], editContext: 'empty' });
 }
 
 let failed = 0;
