@@ -641,14 +641,20 @@ tasks.withType<Test> {
         .withPropertyName("translatedStrings")
         .withPathSensitivity(PathSensitivity.RELATIVE)
 
-    // One script, not the directory: MenuSeparatorFloorTest reads the block
+    // Two scripts, not the directory: MenuSeparatorFloorTest reads the block
     // build-vscode-oss.sh appends to workbench.css, because the touch-target
     // floors that block writes reach a menu separator and the exemption that
-    // keeps a 1px divider from being drawn as a 44px band lives there. Nothing
-    // else under scripts/ is opened by a test, and most of it is Python the
-    // Python gates already cover.
+    // keeps a 1px divider from being drawn as a 44px band lives there, and
+    // FirstRunEditorDefaultsTest reads the REQUIRED list of verify-server-tree.py,
+    // because the reason it gives for hiding the secondary side bar is that the
+    // tree is required to carry the chat provider. Nothing else under scripts/
+    // is opened by a test besides build-nls-bundles.py above, and most of it is
+    // Python the Python gates already cover.
     inputs.file(rootProject.projectDir.parentFile.resolve("scripts/build-vscode-oss.sh"))
         .withPropertyName("codeOssBuildScript")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.file(rootProject.projectDir.parentFile.resolve("scripts/verify-server-tree.py"))
+        .withPropertyName("serverTreeGate")
         .withPathSensitivity(PathSensitivity.RELATIVE)
     // The licence texts NoticesTest pins byte for byte. That pin exists for the
     // edit nobody means to make: a reflow, a re-wrap, an editor stripping the
@@ -671,10 +677,14 @@ tasks.withType<Test> {
     // is also exactly the edit the task answered UP-TO-DATE over. Not measured
     // the way the rows above were, but the shape is identical, and an input this
     // task did not have can only cost a re-run, never a wrong answer.
+    //
+    // CHANGELOG.md is the same: SafLiveDeviceEditTest holds the kept-copy budget
+    // it states to the engine's constant.
     inputs.files(
         rootProject.projectDir.parentFile.resolve("README.md"),
         rootProject.projectDir.parentFile.resolve("NOTICE.md"),
         rootProject.projectDir.parentFile.resolve("MILESTONES.md"),
+        rootProject.projectDir.parentFile.resolve("CHANGELOG.md"),
         fileTree(rootProject.projectDir.parentFile.resolve("docs")) { include("*.md") },
     )
         .withPropertyName("statedRequirements")

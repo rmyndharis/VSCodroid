@@ -84,24 +84,31 @@ class PackagingDeclarationTest {
      * `branding/product.json` were each read by a suite for exactly that reason
      * and declared nowhere.
      *
-     * Read as text, matching the relative `File(...)` literal the readers use to
-     * climb out of the module, and spelled here only as an escaped pattern so
-     * this file is not its own match. BOTH depths, because both are used and
-     * only one was matched: two levels reaches the repository root, one reaches
-     * `android/`, and `ToolchainRegistryTest` opens `../settings.gradle.kts`
-     * that way. What is captured is the remainder after the climb, so the two
-     * shapes are compared by the same first segment. There is no other seam: the
-     * declaration is build configuration, and the JVM cannot ask Gradle what it
-     * thinks its inputs are. Sources under
-     * `android/app/src/main/kotlin` are exempt, and only those: they compile into
-     * the classpath this task already depends on, so an edit re-runs the suite
-     * with nothing declared.
+     * Read as text, matching any string literal that climbs out of the module and
+     * names something that exists, however the suite then opens it: a `File(...)`,
+     * a constant, a list of paths handed to a reader. The pattern is spelled here
+     * only as an escaped string so this file is not its own match. BOTH depths,
+     * because both are used: two levels reaches the repository root, one reaches
+     * `android/`, and `ToolchainRegistryTest` opens `../settings.gradle.kts` that
+     * way. What is captured is the remainder after the climb, so the two shapes
+     * are compared the same way. A literal that names nothing on disk, or
+     * something outside the repository, is test data, such as the traversal
+     * strings the path-confinement suites feed to the code under test (one of
+     * them is `/etc/passwd` when the checkout sits directly under `/`), and is
+     * not a read. There is no other seam: the declaration is build
+     * configuration, and the JVM cannot ask Gradle what it thinks its inputs are.
+     * Sources under `android/app/src/main/kotlin` are exempt, and only those: they
+     * compile into the classpath this task already depends on, so an edit re-runs
+     * the suite with nothing declared.
      *
-     * Compared by first path segment, which is what the declarations are written
-     * in (`docs`, `patches`, `licenses`, and three named files). A reader that
-     * reaches a NEW corner of an already-declared directory therefore passes,
-     * `docs/site/` is inside the `docs` segment and outside the `*.md` filter, so
-     * widen the check the day a suite reads one.
+     * A path is declared when the block spells it out as a string, or spells out a
+     * directory above it. Matching the first segment alone, as this once did,
+     * counted any read under `scripts/` as declared because two named scripts
+     * happen to sit beside the word, and `verify-server-tree.py` and
+     * `CHANGELOG.md` were each read by a suite and declared nowhere. A directory
+     * counts as a whole even where its declaration filters it (`docs` is
+     * declared for `*.md`), so a reader that reaches a NEW corner of a declared
+     * directory passes: widen the check the day a suite reads one.
      *
      * An interpolated literal is dropped rather than resolved. The only one is
      * the pack payload `../$packName/src/main/assets/usr`, which a download
@@ -114,7 +121,9 @@ class PackagingDeclarationTest {
      * checked by hand.
      *
      * NEGATIVE CONTROL: delete the `MILESTONES.md` line from the
-     * `statedRequirements` declaration and this goes red naming it.
+     * `statedRequirements` declaration, or the `verify-server-tree.py` or
+     * `CHANGELOG.md` declaration, and this goes red naming it. Against the
+     * first-segment comparison the last two passed.
      */
     @Test
     fun `every repository file a test opens is an input of the test task`() {
@@ -135,24 +144,32 @@ class PackagingDeclarationTest {
                 "incremental run"
         )
 
+        val repoRoot = File("../..").canonicalFile.toPath()
         val read = File("src/test/kotlin").walkTopDown()
             .filter { it.isFile && it.extension == "kt" }
-            .flatMap { Regex("""File\("(?:\.\./)+([^"]+)""").findAll(it.readText()) }
-            .map { it.groupValues[1] }
-            // An interpolated path, and the bare `../..` NoticesTest keeps as a
-            // base directory: neither names a file this can ask about.
-            .filterNot { it.contains('$') || it.startsWith("..") }
+            .flatMap { Regex("\"((?:\\.\\./)+)([^\"$]+)\"").findAll(it.readText()) }
+            .map { File(it.groupValues[1] + it.groupValues[2]) to it.groupValues[2] }
+            .filter { (file, _) -> file.exists() && file.canonicalFile.toPath().startsWith(repoRoot) }
+            .map { (_, remainder) -> remainder }
+            // The bare `../..` NoticesTest keeps as a base directory names no file this
+            // can ask about.
+            .filterNot { it.startsWith("..") }
             .toSortedSet()
         assertTrue(
             read.isNotEmpty(),
-            "no test opens a repository file by that literal any more, so this compared " +
-                "nothing. Find the shape the readers use now and point this at it."
+            "no test opens a repository file by a literal that climbs out of the module " +
+                "any more, so this compared nothing. Find the shape the readers use now " +
+                "and point this at it."
         )
 
         val undeclared = read
             .filterNot { it.startsWith("android/app/src/main/kotlin/") }
-            .map { it.substringBefore('/') }
-            .filterNot { inputs.contains(it) }
+            // The path or a directory above it, as a whole string in the block: a name
+            // that only sits inside a longer path declares nothing beside it.
+            .filterNot { path ->
+                generateSequence(path) { it.substringBeforeLast('/', "").ifEmpty { null } }
+                    .any { inputs.contains("\"$it\"") }
+            }
             .toSortedSet()
         assertEquals(
             emptySet<String>(),
