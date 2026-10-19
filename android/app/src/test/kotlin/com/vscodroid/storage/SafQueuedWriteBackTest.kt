@@ -303,6 +303,29 @@ class SafQueuedWriteBackTest {
     }
 
     @Test
+    fun `a folder made inside a folder renamed a moment before is uploaded once with its files`() {
+        onDevice("old_dir")
+
+        // mv old_dir lib && mkdir lib/sub && echo x > lib/sub/f, inside one poll. lib/ is not
+        // on the device when the events resolve, so the create of sub and the file's own job
+        // both queue with no parent. The create of sub runs after the rename and uploads the
+        // file with it, which leaves the file's job nothing to do.
+        observe(FileObserver.MOVED_FROM or isDirFlag, "old_dir")
+        observe(FileObserver.MOVED_TO or isDirFlag, "lib")
+        observe(FileObserver.CREATE or isDirFlag, "lib/sub")
+        inMirror("lib/sub/f", "x")
+        observe(FileObserver.CREATE, "lib/sub/f")
+        observe(FileObserver.MODIFY, "lib/sub/f")
+
+        drain()
+
+        assertEquals(setOf("lib", "lib/sub", "lib/sub/f"), device.keys)
+        assertEquals(mapOf("lib/sub/f" to 1), writes.groupingBy { it }.eachCount())
+        assertEquals("x", text("lib/sub/f"))
+        assertEquals(emptyList<String>(), lost)
+    }
+
+    @Test
     fun `a drain that outlives its folder reports nothing it cannot place`() {
         // The folder was switched while this one was still draining. The cache then speaks
         // for another tree, so whether the file was carried by its own folder's create
