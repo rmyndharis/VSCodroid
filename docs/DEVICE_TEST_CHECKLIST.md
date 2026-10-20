@@ -103,6 +103,7 @@
 | SC-9 | A setting you change is the one that applies | Settings, User tab, set `editor.minimap.enabled` true, reopen a file, then restart the app | The minimap appears and is still there after the restart. It is the app's own defaults that must not win here | | |
 | SC-11 | UI scale | Command Palette, **VSCodroid: UI Scale**, note the sizes offered and pick the largest. Tap a file in the Explorer, place the caret in a word, type, open a context menu, the Command Palette, a hover and a terminal, rotate, then reload the window and restart the app. Finish with 100% | The offer stops where the page would be under 320 CSS px wide (125% on a 411 dp phone). The whole interface is larger and fills the screen with nothing cut off at the right; taps, the caret, menus, the keyboard and the key row land where they should; the terminal is legible; the size survives the rotation, the reload and the restart, with no flash at 100% on load; 100% restores the original layout | | |
 | SC-12 | A reload does not show the workbench half dismantled | With a folder open and a terminal running, run **Developer: Reload Window**, and again open another folder from **File > Open Recent**. Record the screen and step the recording through, or watch it from the command to the new page. Then make an edit and reload at once, so that the editor asks to leave, and tap **Stay on this page** | In both reloads the editor is followed by its plain background until the new page paints. A frame with upper-case panel titles, an empty terminal and the editor's own status items (Spaces, UTF-8, LF) is the failure: it stayed for about half a second on an API 33 emulator. When the editor asks to leave, the dialog is drawn over the intact editor, and after Stay nothing covers it | | |
+| SC-13 | Settings fits a phone | On a phone in portrait (about 411 dp wide), tap the Manage gear and choose **Settings**; scroll the list and tap a dropdown. Then set **VSCodroid: UI Scale** to 125% and open Settings again, and turn the phone to landscape. On a tablet, open Settings in landscape. Repeat on a phone 360 dp wide if one is at hand. Record the device width in dp and read the Settings window's right edge with remote debugging if a debug build is at hand | In portrait the Settings window and its list end inside the screen: no description, dropdown (arrow included) or number box is cut at the right edge, and the list can be scrolled. The same at 125%, and in landscape. On a tablet the table of contents beside the list is shown as before. Before the fix the list was 500 px wide on a 411 px page, 131 px past the edge, and the window began 41 px in and ended 30 px past it | | |
 
 ## 5. Editor Operations
 
@@ -311,7 +312,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | Device Matrix | 4 | | | |
 | Android Versions | 5 | | | |
 | Keyboard Input | 47 | | | |
-| Screen & Orientation | 12 | | | |
+| Screen & Orientation | 13 | | | |
 | Editor Operations | 15 | | | |
 | Extensions | 7 | | | |
 | Background/Foreground | 9 | | | |
@@ -321,7 +322,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | Terminal & Tools | 18 | | | |
 | SAF & Files | 24 | | | |
 | Display Language | 6 | | | |
-| **Total** | **174** | | | |
+| **Total** | **175** | | | |
 
 **Overall Result**: [ ] PASS / [ ] FAIL
 

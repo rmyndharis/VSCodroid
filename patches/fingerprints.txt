@@ -326,3 +326,7 @@
 # 1.139.1 workbench.js, so a match means the patch arrived. It cannot tell a patch
 # that kept the query and dropped the floor; the manifest hash covers an edited patch.
 0030 activitybar touch item size|out/vs/code/browser/workbench/workbench.js|(pointer: coarse)
+
+# 0032's pattern is the name of the constant it adds. Member names survive the bundler
+# (0029 relies on the same), and the literal is 0 times in the shipped 1.139.1 workbench.js.
+0032 settings list and modal shrink to a phone|out/vs/code/browser/workbench/workbench.js x3|LIST_MIN_WIDTH
