@@ -221,6 +221,9 @@ jobs:
       - name: Check extension extraction recovers after an interrupted copy
         run: python3 scripts/test-download-extensions.py
 
+      - name: Check the Copilot compile stage repeats once when the SDK entry is missing
+        run: python3 scripts/test-copilot-compile-guard.py
+
       # The picker is built from ToolchainRegistry.available; nothing else that
       # names a toolchain is. Withdrawing one left seven documents and the
       # in-app walkthrough still offering it, so the app promised a language it

@@ -538,11 +538,30 @@ step "Copilot extension (compile-copilot-extension-build)"
 # VSIX", which is exactly what this build is. Their desktop series places it
 # after the non-native extensions compile and before packaging
 # (gulpfile.vscode.ts:745), and so does this.
+#
+# The extension's esbuild step runs its postinstall again after bundling, which
+# deletes node_modules/@github/copilot/sdk and copies it back, and
+# packageCopilotExtensionStream starts globbing that tree to copy it into
+# .build in the same call that starts the esbuild step. A glob that reaches sdk
+# during the copy gets a partial directory without an error (reproduced with
+# vinyl-fs 3, the glob gulp 4 uses). One push build ended with an empty one: its
+# postinstall took 11 s where a build that passed took 2.
+#
+# So the directory proves nothing. index.js is what patch 0010 keeps and
+# verify-server-tree.py requires, so a missing one earns one more compile. That
+# narrows the race and does not close it: a copy that stopped after index.js
+# still passes.
 t0=$SECONDS
+sdk="$SRC/.build/extensions/copilot/node_modules/@github/copilot/sdk"
 npm run gulp compile-copilot-extension-build
+if [ ! -f "$sdk/index.js" ]; then
+    echo "  .build/extensions/copilot has no @github/copilot/sdk/index.js," >&2
+    echo "  compiling once more" >&2
+    npm run gulp compile-copilot-extension-build
+fi
 elapsed $(( SECONDS - t0 ))
-[ -d "$SRC/.build/extensions/copilot/node_modules/@github/copilot/sdk" ] || {
-    echo "  ERROR: .build/extensions/copilot has no @github/copilot/sdk" >&2
+[ -f "$sdk/index.js" ] || {
+    echo "  ERROR: .build/extensions/copilot has no @github/copilot/sdk/index.js" >&2
     echo "  Packaging would fail three stages later with a message about the" >&2
     echo "  output tree instead of about this." >&2
     exit 1
