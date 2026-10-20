@@ -47,18 +47,21 @@ VSCodroid is VS Code. If you have used VS Code on desktop, everything works the 
 
 ### Opening Files and Folders
 
-- Use **File > Open Folder** or the Explorer sidebar for projects inside the app.
+- **File > Open Folder**, Ctrl+K Ctrl+O and the Explorer's Open Folder button ask
+  whether the folder is **On the device** or **In the app's storage**. Choose the
+  second for projects inside the app: it opens a dialog that takes a path.
   Typing a path such as `/storage/emulated/0/...` or `/sdcard/...` into that
   dialog reaches Documents, Downloads or an SD card, but VSCodroid holds no
   storage permission, so Android shows it the folders there and hides every file
   another app saved in them. Such a folder opens with its subfolders and none of
   those files; the editor then says so in a dialog, once per folder each time its
   server starts rather than on every reload, and offers the route below.
-- For a folder anywhere else on the device, run **VSCodroid: Open Folder from
-  Device**: tap the remote indicator at the left end of the status bar, tap the
-  button in the empty Explorer, or use the Command Palette. It opens Android's
-  folder picker; pick the folder and allow access, and the files other apps
-  saved in it show as well, apart from what the copy below leaves out. Android
+- For a folder anywhere else on the device, choose **On the device** in that
+  question, or run **VSCodroid: Open Folder from Device**: tap the remote
+  indicator at the left end of the status bar, tap the button in the empty
+  Explorer, or use the Command Palette. It opens Android's folder picker; pick
+  the folder and allow access, and the files other apps saved in it show as
+  well, apart from what the copy below leaves out. Android
   grants access one folder at a time, and not to the top of the storage or of an
   SD card, nor to the Download or Android folder itself, so pick a folder inside
   those. Nothing in `Android/data`, `Android/obb` or `Android/sandbox` can be
