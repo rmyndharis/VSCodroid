@@ -5434,6 +5434,9 @@ class MainActivity : AppCompatActivity() {
                     // build, which is a server rebuild and a rebase on every bump.
                     // Until someone wants that, an honest 22px row beats a 36px one
                     // that eats its neighbour.
+                    // The 44 on the next line is also TOUCH_ACTION_HEIGHT in patch 0030,
+                    // which sizes the overflow from it. ActivityBarItemSizeTest fails when
+                    // the two differ; change both together.
                     '  .activitybar .action-item { min-height: 44px !important; min-width: 44px !important; }',
                     '  .activitybar .action-label { min-height: 44px !important; }',
                     // Horizontal padding only. The status bar is a fixed 22px part

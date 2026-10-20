@@ -1,0 +1,69 @@
+Size the activity bar overflow from the height an item is drawn at.
+
+VSCodroid raises .activitybar .action-item to 44px for a finger pointer (the touch
+stylesheet MainActivity injects). The overflow is sized from compositeSize, which up to
+1.133 was the constant 52, above that floor, so the bar always had room. In 1.139.1 it
+is the height the workbench draws an item at itself: 28px for the compact bar. By that
+count every view fits, so on a phone in landscape no "..." menu appears while the drawn
+bar is taller than its room, and the Accounts and Manage buttons are pushed below it,
+out of reach.
+
+An item is now sized at the floor whenever the pointer is coarse, the media query the
+stylesheet uses, so the two cannot disagree. The number lives in TOUCH_ACTION_HEIGHT,
+and ActivityBarItemSizeTest compares it with the stylesheet's.
+
+0008 measures the room the bar has; this measures what an item takes of it.
+
+diff --git a/src/vs/workbench/browser/parts/activitybar/activitybarPart.ts b/src/vs/workbench/browser/parts/activitybar/activitybarPart.ts
+index e8edbe1..9c7d9ac 100644
+--- a/src/vs/workbench/browser/parts/activitybar/activitybarPart.ts
++++ b/src/vs/workbench/browser/parts/activitybar/activitybarPart.ts
+@@ -70,6 +70,13 @@ export class ActivitybarPart extends Part {
+ 	static readonly ICON_SIZE = 24;
+ 	static readonly COMPACT_ICON_SIZE = 16;
+ 
++	/**
++	 * The height VSCodroid draws an item at for a finger pointer: the touch stylesheet in
++	 * MainActivity floors .activitybar .action-item at this, above the 28px a compact item
++	 * gets here. ActivityBarItemSizeTest keeps the two numbers equal.
++	 */
++	static readonly TOUCH_ACTION_HEIGHT = 44;
++
+ 	/**
+ 	 * Base gutter reserved around the activity bar under the floating panels
+ 	 * experiment. Must match the margins applied in `floatingPanels.css`.
+@@ -138,6 +145,16 @@ export class ActivitybarPart extends Part {
+ 		return this.layoutService.isModernUICompact() ? ActivitybarPart.FLOATING_COMPACT_ACTION_GAP : ActivitybarPart.FLOATING_ACTION_GAP;
+ 	}
+ 
++	/**
++	 * The height an item is really drawn at. Sizing the overflow from actionHeight alone is
++	 * wrong on a finger pointer, where the floor above makes a compact item taller than the
++	 * 28px assumed here: the bar then admits icons it has no room for and the Accounts and
++	 * Manage buttons are pushed out of view.
++	 */
++	private get drawnActionHeight(): number {
++		return mainWindow.matchMedia('(pointer: coarse)').matches ? Math.max(this.actionHeight, ActivitybarPart.TOUCH_ACTION_HEIGHT) : this.actionHeight;
++	}
++
+ 	/**
+ 	 * The vertical space a single item occupies in the bar (its height plus the gap that
+ 	 * separates it from the next one). This drives the overflow computation, so it has to
+@@ -145,7 +162,7 @@ export class ActivitybarPart extends Part {
+ 	 * prematurely.
+ 	 */
+ 	private get compositeSize(): number {
+-		return this.actionHeight + this.actionGap;
++		return this.drawnActionHeight + this.actionGap;
+ 	}
+ 
+ 	private get floatingHorizontalGutter(): number {
+@@ -289,7 +306,7 @@ export class ActivitybarPart extends Part {
+ 				activeBackgroundColor: undefined, inactiveBackgroundColor: undefined, activeBorderBottomColor: undefined,
+ 			}),
+ 			overflowActionSize: compositeSize,
+-		}, Parts.ACTIVITYBAR_PART, this.paneCompositePart, { actionHeight: this.actionHeight, actionGap: this.actionGap });
++		}, Parts.ACTIVITYBAR_PART, this.paneCompositePart, { actionHeight: this.drawnActionHeight, actionGap: this.actionGap });
+ 	}
+ 
+ 	protected override createContentArea(parent: HTMLElement): HTMLElement {
