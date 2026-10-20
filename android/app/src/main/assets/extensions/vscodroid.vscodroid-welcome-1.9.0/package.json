@@ -2,7 +2,7 @@
   "name": "vscodroid-welcome",
   "displayName": "%displayName%",
   "description": "%description%",
-  "version": "1.8.1",
+  "version": "1.9.0",
   "publisher": "vscodroid",
   "engines": {
     "vscode": "^1.96.0"
@@ -68,6 +68,28 @@
             },
             "completionEvents": [
               "onSettingChanged:workbench.colorTheme"
+            ]
+          },
+          {
+            "id": "folder",
+            "title": "%walkthrough.folder.title%",
+            "description": "%walkthrough.folder.description%",
+            "media": {
+              "svg": "media/folder.svg"
+            },
+            "completionEvents": [
+              "onCommand:vscodroid.openFolderFromDevice"
+            ]
+          },
+          {
+            "id": "run",
+            "title": "%walkthrough.run.title%",
+            "description": "%walkthrough.run.description%",
+            "media": {
+              "svg": "media/run.svg"
+            },
+            "completionEvents": [
+              "onStepSelected"
             ]
           },
           {

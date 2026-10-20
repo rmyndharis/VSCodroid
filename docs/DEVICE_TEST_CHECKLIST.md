@@ -302,7 +302,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | DL-2 | App screens follow it too | Same run, watch setup and the toolchain picker | Progress steps, the picker and its buttons are in that language | | |
 | DL-3 | An unsupported language | Set the phone to one with no bundle, for example Vietnamese | Interface is English throughout, nothing half translated and no error | | |
 | DL-4 | Per-app language | Android 13+, Settings, Apps, VSCodroid, Language, pick one | Both the app screens and the editor come back in it | | |
-| DL-5 | The walkthrough and the VSCodroid commands | Same run, open Get Started, then the Command Palette and type `VSCodroid` | Walkthrough heading, subtitle and all four step titles in that language with the buttons still present; the VSCodroid commands show translated labels with the English original beside each, and typing the English name still finds them | | |
+| DL-5 | The walkthrough and the VSCodroid commands | Same run, open Get Started, then the Command Palette and type `VSCodroid` | Walkthrough heading, subtitle and all six step titles in that language with the buttons still present; the VSCodroid commands show translated labels with the English original beside each, and typing the English name still finds them | | |
 | DL-6 | First launch after an upgrade | Install the previous release, set the app to that language, then `adb install -r` the new build without clearing data and relaunch through SplashActivity | Translated on the FIRST launch. English on the first and translated on the second means the extension scan cache was not invalidated | | |
 
 ## Summary
