@@ -551,6 +551,10 @@ step "Copilot extension (compile-copilot-extension-build)"
 # verify-server-tree.py requires, so a missing one earns one more compile. That
 # narrows the race and does not close it: a copy that stopped after index.js
 # still passes.
+#
+# The built server has also come out without sdk/definitions and
+# sdk/builtin-skills, which the same postinstall writes next to index.js. The
+# source tree is complete once the compile has exited, so both are copied from it.
 t0=$SECONDS
 sdk="$SRC/.build/extensions/copilot/node_modules/@github/copilot/sdk"
 npm run gulp compile-copilot-extension-build
@@ -566,6 +570,15 @@ elapsed $(( SECONDS - t0 ))
     echo "  output tree instead of about this." >&2
     exit 1
 }
+sdk_src="$SRC/extensions/copilot/node_modules/@github/copilot/sdk"
+for name in definitions builtin-skills; do
+    [ -d "$sdk_src/$name" ] || {
+        echo "  ERROR: the compile left no $sdk_src/$name" >&2
+        exit 1
+    }
+    rm -rf "$sdk/$name"
+    cp -R "$sdk_src/$name" "$sdk/$name"
+done
 
 step "Package (vscode-reh-web-linux-$ARCH-min-ci)"
 # Packaging only -- native extensions, the node download, the copy into place.

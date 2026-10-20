@@ -36,6 +36,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Building from source retries interrupted bundled-extension extraction instead of accepting a partial extension directory as verified.
 - Building from source stops when a Python dependency library's SONAME differs from the name the build ships it under.
 - Building the server from source compiles the Copilot extension once more when the first run leaves its SDK entry missing, instead of failing at packaging.
+- The server built from source includes the Copilot SDK's definitions and builtin-skills directories, which it lacked.
 
 ## [1.5.0] - 2026-10-14
 
