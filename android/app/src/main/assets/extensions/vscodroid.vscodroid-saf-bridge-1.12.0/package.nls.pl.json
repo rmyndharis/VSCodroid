@@ -14,5 +14,6 @@
   "command.uiScale": "VSCodroid: Skala interfejsu",
   "command.about": "VSCodroid: Informacje",
   "command.copyBugReport": "VSCodroid: Skopiuj raport o błędzie",
+  "command.runFile": "VSCodroid: Uruchom plik",
   "viewsWelcome.explorer.deviceFolder": "Aby pracować z folderem w pamięci urządzenia, na przykład z folderem w Documents lub Download, otwórz go z urządzenia, aby były widoczne także pliki zapisane w nim przez inne aplikacje.\n[Otwórz folder z urządzenia](command:vscodroid.openFolderFromDevice)"
 }

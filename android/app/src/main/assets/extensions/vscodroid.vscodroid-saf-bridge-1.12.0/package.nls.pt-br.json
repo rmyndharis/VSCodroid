@@ -14,5 +14,6 @@
   "command.uiScale": "VSCodroid: Escala da interface",
   "command.about": "VSCodroid: Sobre",
   "command.copyBugReport": "VSCodroid: Copiar o relatório de erro",
+  "command.runFile": "VSCodroid: Executar arquivo",
   "viewsWelcome.explorer.deviceFolder": "Para trabalhar em uma pasta do armazenamento do dispositivo, como uma pasta dentro de Documents ou Download, abra-a pelo dispositivo para que também apareçam os arquivos que outros apps salvaram nela.\n[Abrir uma pasta do dispositivo](command:vscodroid.openFolderFromDevice)"
 }

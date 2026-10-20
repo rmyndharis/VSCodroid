@@ -2,7 +2,7 @@
   "name": "vscodroid-saf-bridge",
   "displayName": "%displayName%",
   "description": "%description%",
-  "version": "1.11.0",
+  "version": "1.12.0",
   "publisher": "vscodroid",
   "engines": {
     "vscode": "^1.96.0"
@@ -67,9 +67,27 @@
       {
         "command": "vscodroid.copyBugReport",
         "title": "%command.copyBugReport%"
+      },
+      {
+        "command": "vscodroid.runFile",
+        "title": "%command.runFile%",
+        "icon": "$(play)"
       }
     ],
     "menus": {
+      "editor/title/run": [
+        {
+          "command": "vscodroid.runFile",
+          "group": "navigation@0",
+          "when": "resourceLangId =~ /^(javascript|typescript|ruby|java|c|cpp|shellscript)$/ && resourceExtname =~ /^\\.(js|mjs|cjs|ts|mts|cts|rb|java|c|cc|cpp|cxx|c\\+\\+|sh|bash)$/ && !isInDiffEditor && shellExecutionSupported"
+        }
+      ],
+      "commandPalette": [
+        {
+          "command": "vscodroid.runFile",
+          "when": "resourceLangId =~ /^(javascript|typescript|ruby|java|c|cpp|shellscript)$/ && resourceExtname =~ /^\\.(js|mjs|cjs|ts|mts|cts|rb|java|c|cc|cpp|cxx|c\\+\\+|sh|bash)$/ && !isInDiffEditor && shellExecutionSupported"
+        }
+      ],
       "statusBar/remoteIndicator": [
         {
           "command": "vscodroid.openFolderFromDevice",

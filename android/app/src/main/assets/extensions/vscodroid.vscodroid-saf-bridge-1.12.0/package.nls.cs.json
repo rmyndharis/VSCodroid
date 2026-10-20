@@ -14,5 +14,6 @@
   "command.uiScale": "VSCodroid: Měřítko rozhraní",
   "command.about": "VSCodroid: O aplikaci",
   "command.copyBugReport": "VSCodroid: Zkopírovat hlášení o chybě",
+  "command.runFile": "VSCodroid: Spustit soubor",
   "viewsWelcome.explorer.deviceFolder": "Chcete-li pracovat se složkou v úložišti zařízení, například se složkou v Documents nebo Download, otevřete ji ze zařízení, aby se zobrazily i soubory, které do ní uložily jiné aplikace.\n[Otevřít složku ze zařízení](command:vscodroid.openFolderFromDevice)"
 }

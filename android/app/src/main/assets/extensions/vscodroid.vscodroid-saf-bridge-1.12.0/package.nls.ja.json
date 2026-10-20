@@ -14,5 +14,6 @@
   "command.uiScale": "VSCodroid: UI の拡大率",
   "command.about": "VSCodroid: バージョン情報",
   "command.copyBugReport": "VSCodroid: バグレポートをコピー",
+  "command.runFile": "VSCodroid: ファイルを実行",
   "viewsWelcome.explorer.deviceFolder": "Documents や Download の中のフォルダーなど、デバイスのストレージにあるフォルダーで作業するには、デバイスから開いてください。他のアプリが保存したファイルも表示されます。\n[デバイスのフォルダーを開く](command:vscodroid.openFolderFromDevice)"
 }

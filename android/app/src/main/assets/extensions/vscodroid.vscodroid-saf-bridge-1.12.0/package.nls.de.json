@@ -14,5 +14,6 @@
   "command.uiScale": "VSCodroid: Skalierung der Oberfläche",
   "command.about": "VSCodroid: Info",
   "command.copyBugReport": "VSCodroid: Fehlerbericht kopieren",
+  "command.runFile": "VSCodroid: Datei ausführen",
   "viewsWelcome.explorer.deviceFolder": "Um mit einem Ordner im Gerätespeicher zu arbeiten, etwa einem Ordner in Documents oder Download, öffnen Sie ihn vom Gerät, damit auch die Dateien angezeigt werden, die andere Apps darin gespeichert haben.\n[Ordner vom Gerät öffnen](command:vscodroid.openFolderFromDevice)"
 }

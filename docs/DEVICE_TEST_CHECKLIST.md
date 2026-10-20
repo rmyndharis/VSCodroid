@@ -123,6 +123,7 @@
 | ED-13 | Running a file under the debugger | Put `debugger;` in a `.js` file in the projects folder, open it, run **Debug: Select and Start Debugging** and pick **Node.js: Run Current File** | Execution stops on that line with the gutter arrow and the debug toolbar, and the terminal shows `Debugger attached.` A session that starts, shows the toolbar and never stops is the failure this row exists for: it looks like it is working | | |
 | ED-14 | Attaching to a process you started | Run `node --inspect server.js` in a terminal, then start **Attach to Node.js** | The editor attaches and `Debugger attached.` appears in that terminal | | |
 | ED-15 | Files changed outside the editor appear | With a folder open and the Explorer showing, run `touch outside-1.txt` in the terminal, then run **Developer: Reload Window** and `touch outside-2.txt` | Each file shows in the Explorer within a few seconds without a refresh. The file watcher process must stay alive: `Pointer tag ... was truncated` or `gave up attempting to restart watcher` in `server.log` fails the row | | |
+| ED-16 | Running a file from the title bar | In a folder, open a `.js`, a `.ts` and a `.sh` file in turn and tap the play button in the editor's title bar; edit the `.js` file without saving and tap it again; tap it twice in a row on a script that prints and then sleeps. Then, with the Ruby, Java and C/C++ toolchains not installed, open a `.rb`, a `.java` and a `.c` file and tap the button, choosing **Manage Toolchains** once. Install Ruby and tap the button on the `.rb` file again. Last, open a `.py` file and a `.h` file | Each of the first three runs in a terminal named **VSCodroid Run** and prints its output, and the keyboard stays down. The unsaved edit is saved and run. The second tap on the sleeping script replaces the first terminal rather than adding one. Each of the Ruby, Java and C/C++ files says its toolchain is not installed and offers **Manage Toolchains**, which opens the toolchains screen. After the install the `.rb` file runs. The `.py` file shows the Python extension's own play button and no second one, and the `.h` file shows none | | |
 
 ## 6. Extensions
 
@@ -312,7 +313,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | Android Versions | 5 | | | |
 | Keyboard Input | 47 | | | |
 | Screen & Orientation | 12 | | | |
-| Editor Operations | 15 | | | |
+| Editor Operations | 16 | | | |
 | Extensions | 7 | | | |
 | Background/Foreground | 9 | | | |
 | Low Memory & Stress | 5 | | | |
@@ -321,7 +322,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | Terminal & Tools | 18 | | | |
 | SAF & Files | 24 | | | |
 | Display Language | 6 | | | |
-| **Total** | **174** | | | |
+| **Total** | **175** | | | |
 
 **Overall Result**: [ ] PASS / [ ] FAIL
 

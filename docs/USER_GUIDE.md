@@ -382,6 +382,15 @@ The Extra Key Row is especially useful in the terminal:
 
 ### Running Code
 
+A file open in the editor runs from the play button in the editor's title bar.
+Python files get it from the Python extension. JavaScript, TypeScript, Ruby,
+Java, C, C++ and `.sh` or `.bash` files get **VSCodroid: Run File**, which saves
+the file and runs it in a terminal named *VSCodroid Run*; the next run replaces
+that terminal. Header files and the other shells' scripts do not get it. Ruby, Java and C/C++ need their toolchain from the toolchains screen
+first, and the button offers it when it is missing. A C or C++ file is built
+into a temporary file and run, so a program of several files or one that needs
+build options still belongs in the terminal.
+
 ```bash
 # Run a JavaScript file
 node app.js
