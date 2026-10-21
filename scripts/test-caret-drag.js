@@ -69,10 +69,11 @@ function rect(left, top, width, height) {
 /**
  * One page: a window that records its listeners, a document with one focused
  * editor, and queues standing in for animation frames. The caret is 2 x 19 at
- * (200, 100); the editor's scroller spans x 100..400 and y 50..450. The text
+ * (200, 100) unless asked otherwise; the editor's scroller spans x 100..400 and y 50..450. The text
  * sits where `page.textAt` says, which a test moves to say that the editor scrolled.
  */
-function newPage({ focused = true, carets = 1, selected = false, sash = false } = {}) {
+function newPage({ focused = true, carets = 1, selected = false, sash = false, caretLeft = 200, caretTop = 100,
+    box = { left: 100, top: 50, width: 300, height: 400 } } = {}) {
     const listeners = [];
     const frames = new Map();
     let nextFrame = 1;
@@ -89,10 +90,10 @@ function newPage({ focused = true, carets = 1, selected = false, sash = false } 
     };
     const scroller = {
         name: 'scroller',
-        getBoundingClientRect: () => rect(100, 50, 300, 400),
+        getBoundingClientRect: () => rect(box.left, box.top, box.width, box.height),
     };
     const caretRects = Array.from({ length: carets }, () => ({
-        getBoundingClientRect: () => rect(200, 100, 2, 19),
+        getBoundingClientRect: () => rect(caretLeft, caretTop, 2, 19),
     }));
     const editor = {
         name: 'editor',
@@ -568,6 +569,87 @@ check('scrolling goes on while the text keeps moving', () => {
     }
     assert.strictEqual(page.frames.size, 1, 'the loop stopped while the text was still moving');
     assert.ok(page.wheels.length >= 40);
+});
+
+check('a finger that goes down in the lower band runs along it without scrolling, and scrolls once it pushes on', () => {
+    // The caret is on the last visible line: its centre, 429.5, is inside the band that starts at 418.
+    const page = newPage({ caretTop: 420 });
+    page.start(200, 430);
+    page.move(215, 430);
+    page.move(240, 430);
+    page.flush();
+    page.flush();
+    assert.strictEqual(page.wheels.length, 0, 'the text scrolled under a finger that only moved along the line');
+    assert.ok(page.taps.length >= 1, 'the caret did not move along the line');
+    page.move(240, 450);
+    page.flush();
+    assert.ok(page.wheels.length >= 1 && page.wheels[0].deltaY < 0, 'pushing toward the edge did not scroll');
+});
+
+check('the same at the upper band', () => {
+    // Caret centre 69.5, inside the band that ends at 82.
+    const page = newPage({ caretTop: 60 });
+    page.start(200, 70);
+    page.move(215, 70);
+    page.move(240, 70);
+    page.flush();
+    page.flush();
+    assert.strictEqual(page.wheels.length, 0, 'the text scrolled under a finger that only moved along the line');
+    page.move(240, 50);
+    page.flush();
+    assert.ok(page.wheels.length >= 1 && page.wheels[0].deltaY > 0, 'pushing toward the edge did not scroll');
+});
+
+check('a finger that leaves the band and comes back scrolls, whatever the distance it moved', () => {
+    const page = newPage({ caretTop: 420 });
+    page.start(200, 430);
+    page.move(215, 430);
+    page.move(215, 400);          // out of the band, 30 up
+    page.flush();
+    page.move(215, 430);          // back in, 0 further down than it began
+    page.flush();
+    assert.ok(page.wheels.length >= 1 && page.wheels[0].deltaY < 0, 'entering the band again did not scroll');
+});
+
+check('a finger that goes down in a side band runs along it, and scrolls sideways once it pushes on', () => {
+    const page = newPage({ caretLeft: 382 });     // the band starts at 368
+    page.start(384, 110);
+    page.move(375, 110);
+    page.flush();       // still inside the band
+    assert.strictEqual(page.wheels.length, 0, 'the text scrolled sideways under a finger that had not pushed on');
+    page.move(340, 110);
+    page.flush();
+    page.flush();
+    assert.strictEqual(page.wheels.length, 0, 'the text scrolled sideways under a finger moving away from the edge');
+    page.move(402, 110);
+    page.flush();
+    assert.ok(page.wheels.length >= 1 && page.wheels[0].deltaX < 0, 'pushing toward the side edge did not scroll');
+});
+
+check('an editor with no room for the bands does not scroll at its edges', () => {
+    // 79px high, as a phone in landscape leaves with the keyboard up: the bands would cover every line.
+    const page = newPage({ box: { left: 100, top: 50, width: 300, height: 79 } });
+    page.start(200, 110);
+    page.move(230, 110);
+    page.move(230, 135);
+    page.move(230, 52);
+    page.move(230, 128);
+    page.flush();
+    page.flush();
+    assert.strictEqual(page.wheels.length, 0, 'a short editor scrolled');
+    assert.ok(page.taps.length >= 1, 'the caret did not move either');
+    assert.strictEqual(page.frames.size, 0);
+});
+
+check('the bands appear once the editor is tall enough for them', () => {
+    for (const [height, scrolls] of [[103, false], [104, true]]) {
+        const page = newPage({ box: { left: 100, top: 50, width: 300, height }, caretTop: 90 });
+        page.start(200, 100);
+        page.move(230, 100);
+        page.move(230, 148);
+        page.flush();
+        assert.strictEqual(page.wheels.length > 0, scrolls, `an editor ${height}px high should ${scrolls ? '' : 'not '}scroll`);
+    }
 });
 
 check('a finger carried outside the editor aims at its nearest edge', () => {

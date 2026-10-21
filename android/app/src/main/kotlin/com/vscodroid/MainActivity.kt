@@ -5303,7 +5303,11 @@ class MainActivity : AppCompatActivity() {
      * moved. Within `EDGE` of the editor's edge a wheel event scrolls it, faster the
      * nearer the edge and by the time a frame took, so a 120 Hz screen is not twice as
      * quick. The scrolling rests when the text stops moving and starts again when the
-     * finger does. The wheel event goes to the editor's root, where the editor listens,
+     * finger does. A finger that goes down inside a band, on the last line say, may run
+     * along it: it scrolls toward that edge only once it has been out of the band or has
+     * moved `ARM` toward the edge. An editor smaller than `MIN_EDGE_SIZE`, the four
+     * lines a phone in landscape leaves with the keyboard up, does not scroll at all,
+     * because the bands would cover every line. The wheel event goes to the editor's root, where the editor listens,
      * and does not bubble: an editor with nothing to scroll that does not keep a wheel
      * for itself, such as the commit message box or a notebook cell, would pass it up to
      * the list around it. That event is not trusted and the editor scrolls the opposite
@@ -5344,6 +5348,12 @@ class MainActivity : AppCompatActivity() {
                 var EDGE = 32;
                 var EDGE_SPEED = 12;
                 var INSET = 8;
+                // An editor smaller than this has no room for the bands: they would cover every
+                // line, and a finger on any of them would scroll the text away.
+                var MIN_EDGE_SIZE = 104;
+                // A finger that goes down inside a band may run along it. It scrolls toward that
+                // edge once it has been out of the band, or has moved this far toward the edge.
+                var ARM = 16;
                 // Scrolling frames in a row with the text where it was, after which the
                 // scrolling rests until the finger moves: there is nothing more to scroll.
                 var STILL_FRAMES = 4;
@@ -5398,10 +5408,20 @@ class MainActivity : AppCompatActivity() {
                     drag.lines.dispatchEvent(ev);
                 }
 
-                function edgeStep(pos, low, high) {
-                    if (pos < low + EDGE) return -EDGE_SPEED * Math.min(1, (low + EDGE - pos) / EDGE);
-                    if (pos > high - EDGE) return EDGE_SPEED * Math.min(1, (pos - (high - EDGE)) / EDGE);
+                function edgeStep(pos, low, high, armedLow, armedHigh) {
+                    if (armedLow && pos < low + EDGE) return -EDGE_SPEED * Math.min(1, (low + EDGE - pos) / EDGE);
+                    if (armedHigh && pos > high - EDGE) return EDGE_SPEED * Math.min(1, (pos - (high - EDGE)) / EDGE);
                     return 0;
+                }
+
+                // Which edges the finger may scroll toward, see ARM.
+                function armEdges(at) {
+                    var armed = drag.armed;
+                    var box = at.box;
+                    if (at.y >= box.top + EDGE || drag.y0 - drag.y >= ARM) armed.top = true;
+                    if (at.y <= box.bottom - EDGE || drag.y - drag.y0 >= ARM) armed.bottom = true;
+                    if (at.x >= box.left + EDGE || drag.x0 - drag.x >= ARM) armed.left = true;
+                    if (at.x <= box.right - EDGE || drag.x - drag.x0 >= ARM) armed.right = true;
                 }
 
                 // The finger, kept inside the editor, and the editor's box.
@@ -5430,8 +5450,12 @@ class MainActivity : AppCompatActivity() {
                     if (!drag || !drag.claimed) return;
                     drag.frame = 0;
                     var at = where();
-                    var sx = edgeStep(at.x, at.box.left, at.box.right);
-                    var sy = edgeStep(at.y, at.box.top, at.box.bottom);
+                    armEdges(at);
+                    var armed = drag.armed;
+                    var sx = at.box.width < MIN_EDGE_SIZE ? 0 :
+                        edgeStep(at.x, at.box.left, at.box.right, armed.left, armed.right);
+                    var sy = at.box.height < MIN_EDGE_SIZE ? 0 :
+                        edgeStep(at.y, at.box.top, at.box.bottom, armed.top, armed.bottom);
                     var scrolling = sx !== 0 || sy !== 0;
                     if (scrolling) {
                         var text = drag.lines.getBoundingClientRect();
@@ -5519,7 +5543,8 @@ class MainActivity : AppCompatActivity() {
                         x0: t.clientX, y0: t.clientY,
                         offX: t.clientX - r.left, offY: t.clientY - (r.top + r.height / 2),
                         claimed: false, frame: 0, x: t.clientX, y: t.clientY, lastX: -1, lastY: -1,
-                        at: 0, still: 0, textLeft: undefined, textTop: undefined
+                        at: 0, still: 0, textLeft: undefined, textTop: undefined,
+                        armed: { top: false, bottom: false, left: false, right: false }
                     };
                 }, { capture: true, passive: true });
 
