@@ -1,0 +1,93 @@
+Offer the system folder picker from File > Open Folder on Android.
+
+Open Folder in the web workbench is the quick input that asks for a path. On a phone that
+dialog starts in the app's own storage and lists what the app itself can read. A folder in
+shared storage (Documents, Download, an SD card) is empty there, because Android hides what
+other apps saved from a path and only the system picker grants access to it. The picker is
+the saf-bridge command vscodroid.openFolderFromDevice, but only the command palette, the
+remote indicator menu and the empty Explorer reached it. The File menu, Ctrl+K Ctrl+O, the
+palette's own Open Folder and the Explorer's Open Folder button all end in pickFolderAndOpen,
+and each of them showed the typed dialog.
+
+pickFolderAndOpen now asks which one is meant when the page runs on Android and the command
+is registered. "On the device" runs the picker, "In the app's storage" continues to the typed
+dialog exactly as before, and dismissing the question does nothing. Open in a new window keeps
+the typed dialog, because the picker opens its folder in the current window. Add Folder to
+Workspace, Save As and Open File do not go through this function and are untouched.
+
+The command is registered once the bundled extension has activated, which is a few seconds
+after a page loads. Until then, and when the extension is missing, the typed dialog shows
+alone, as it did before. That check is load-bearing: executeCommand on an id that nothing
+registered waits up to 30 seconds for an activation event before it rejects. A question that
+cannot be shown, or a command that fails, falls back to the typed dialog and logs a warning.
+
+diff --git a/src/vs/workbench/services/dialogs/browser/fileDialogService.ts b/src/vs/workbench/services/dialogs/browser/fileDialogService.ts
+index 4a519ac..6d7ede5 100644
+--- a/src/vs/workbench/services/dialogs/browser/fileDialogService.ts
++++ b/src/vs/workbench/services/dialogs/browser/fileDialogService.ts
+@@ -21,6 +21,11 @@ import { Iterable } from '../../../../base/common/iterator.js';
+ import { WebFileSystemAccess } from '../../../../platform/files/browser/webFileSystemAccess.js';
+ import { EmbeddedCodeEditorWidget } from '../../../../editor/browser/widget/codeEditor/embeddedCodeEditorWidget.js';
+ import { getErrorMessage } from '../../../../base/common/errors.js';
++import { isAndroid } from '../../../../base/common/platform.js';
++import { CommandsRegistry } from '../../../../platform/commands/common/commands.js';
++
++// Contributed by the bundled saf-bridge extension, which owns the Android folder picker.
++const OPEN_FOLDER_FROM_DEVICE = 'vscodroid.openFolderFromDevice';
+ 
+ export class FileDialogService extends AbstractFileDialogService implements IFileDialogService {
+ 
+@@ -83,6 +88,10 @@ export class FileDialogService extends AbstractFileDialogService implements IFil
+ 	}
+ 
+ 	async pickFolderAndOpen(options: IPickAndOpenOptions): Promise<void> {
++		if (isAndroid && !options.forceNewWindow && await this.openFolderFromDevice()) {
++			return;
++		}
++
+ 		const schema = this.getFileSystemSchema(options);
+ 
+ 		if (!options.defaultUri) {
+@@ -96,6 +105,42 @@ export class FileDialogService extends AbstractFileDialogService implements IFil
+ 		throw new Error(localize('pickFolderAndOpen', "Can't open folders, try adding a folder to the workspace instead."));
+ 	}
+ 
++	/**
++	 * The dialog below types a path into the app's own storage, where a folder in the phone's
++	 * shared storage (Documents, Download, an SD card) shows no files: Android hides what other
++	 * apps saved there from a path, and only the system picker grants access. So ask which one
++	 * is meant. Resolves true once the picker took over or the question was dismissed.
++	 */
++	private async openFolderFromDevice(): Promise<boolean> {
++		if (!CommandsRegistry.getCommand(OPEN_FOLDER_FROM_DEVICE)) {
++			return false; // an unregistered id would make executeCommand wait for activation
++		}
++
++		try {
++			const { result } = await this.dialogService.prompt<boolean | undefined>({
++				type: Severity.Info,
++				message: localize('openFolderWhere', "Where is the folder?"),
++				detail: localize('openFolderWhereDetail', "A folder in Documents, Download or on an SD card needs the system picker to show all of its files."),
++				buttons: [
++					{ label: localize('openFolderOnDevice', "On the device"), run: () => true },
++					{ label: localize('openFolderInApp', "In the app's storage"), run: () => false }
++				],
++				cancelButton: { run: () => undefined }
++			});
++
++			if (result) {
++				await this.commandService.executeCommand(OPEN_FOLDER_FROM_DEVICE);
++			}
++
++			return result !== false;
++		} catch (error) {
++			// A question that cannot be shown, or a picker that cannot be started, must not take
++			// the path dialog away: it is the way into the app's own storage.
++			this.logService.warn('[FileDialogService] Open Folder from Device failed, using the path dialog', error);
++			return false;
++		}
++	}
++
+ 	async pickWorkspaceAndOpen(options: IPickAndOpenOptions): Promise<void> {
+ 		options.availableFileSystems = this.getWorkspaceAvailableFileSystems(options);
+ 		const schema = this.getFileSystemSchema(options);
