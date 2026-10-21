@@ -516,6 +516,23 @@ check('a read-only editor on the textarea path, whose marker is not kept current
 check('the keyboard put away by the user is held down again, so a scroll leaves it down',
     typing({ composing: false }), (p) => { keyboardGone(p); drag(p, p.lines); inputmode(p); },
     ['host inputmode=none', 'inputmode none']);
+/**
+ * A touch that moves a few pixels and is lifted soon, as a caret drag of a character does.
+ * `dragged` is the mark injectCaretDrag leaves on the touch it takes.
+ */
+function nudge(p, target, { dragged }) {
+    const at = { bubbles: true, pointerId: 1, clientY: 20 };
+    dispatch(p, target, { ...at, type: 'pointerdown', clientX: 20, timeStamp: 1000 });
+    if (dragged) p.window.__vscodroidCaretDragged = true;
+    dispatch(p, target, { ...at, type: 'pointerup', clientX: 29, timeStamp: 1100 });
+}
+
+check('a short caret drag, which travels no further than a tap, leaves a keyboard held down',
+    typing({ composing: false }), (p) => { keyboardGone(p); log = []; nudge(p, p.lines, { dragged: true }); inputmode(p); },
+    ['inputmode none']);
+check('the same short touch, not taken as a caret drag, is a tap and lets the keyboard up',
+    typing({ composing: false }), (p) => { keyboardGone(p); log = []; nudge(p, p.lines, { dragged: false }); },
+    ['host -inputmode', 'blur host', 'focus host']);
 check('after the keyboard was put away, a tap on text lets it up again',
     typing({ composing: false }), (p) => { keyboardGone(p); log = []; touch(p, p.lines, 100); },
     ['host -inputmode', 'blur host', 'focus host']);

@@ -123,6 +123,7 @@
 | ED-13 | Running a file under the debugger | Put `debugger;` in a `.js` file in the projects folder, open it, run **Debug: Select and Start Debugging** and pick **Node.js: Run Current File** | Execution stops on that line with the gutter arrow and the debug toolbar, and the terminal shows `Debugger attached.` A session that starts, shows the toolbar and never stops is the failure this row exists for: it looks like it is working | | |
 | ED-14 | Attaching to a process you started | Run `node --inspect server.js` in a terminal, then start **Attach to Node.js** | The editor attaches and `Debugger attached.` appears in that terminal | | |
 | ED-15 | Files changed outside the editor appear | With a folder open and the Explorer showing, run `touch outside-1.txt` in the terminal, then run **Developer: Reload Window** and `touch outside-2.txt` | Each file shows in the Explorer within a few seconds without a refresh. The file watcher process must stay alive: `Pointer tag ... was truncated` or `gave up attempting to restart watcher` in `server.log` fails the row | | |
+| ED-17 | A finger drags the caret | On a phone, open a file with long, wrapped lines and tap in the text so the keyboard is up. Put a finger on the caret and drag sideways, then without lifting up and down across lines; then put a finger just under the caret and do the same. Drag to the bottom edge of the editor and hold, then to the top. Repeat with the keyboard put away, and with it put away nudge the caret a character at a time with short quick drags. Then: start a drag upward from the caret; select a word and drag from the caret; press and hold on the caret for a second; tap beside the caret | The caret follows the finger to within a character, at the distance the finger started from it, with no keyboard rising or falling, including for the quick nudges; the text scrolls at an edge and the caret stays under the finger; lifting leaves the caret where the finger was. A drag begun upward scrolls and moves nothing; with a word selected nothing changes; the long press opens the menu; the tap places the caret. Note whether the grab reach and the edge speed feel right | | |
 
 ## 6. Extensions
 
@@ -312,7 +313,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | Android Versions | 5 | | | |
 | Keyboard Input | 47 | | | |
 | Screen & Orientation | 12 | | | |
-| Editor Operations | 15 | | | |
+| Editor Operations | 16 | | | |
 | Extensions | 7 | | | |
 | Background/Foreground | 9 | | | |
 | Low Memory & Stress | 5 | | | |
@@ -321,7 +322,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | Terminal & Tools | 18 | | | |
 | SAF & Files | 24 | | | |
 | Display Language | 6 | | | |
-| **Total** | **174** | | | |
+| **Total** | **175** | | | |
 
 **Overall Result**: [ ] PASS / [ ] FAIL
 

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- A finger can drag the caret: touch it or just under it and drag sideways, and it follows, with the text scrolling at the editor's edge. A drag that starts up or down, or with text selected, scrolls as before.
+
 ### Fixed
 
 - The Accounts and Manage buttons stay reachable in the activity bar on a phone in landscape: views that do not fit move into the overflow menu.

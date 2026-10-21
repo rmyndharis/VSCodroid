@@ -1014,6 +1014,11 @@ on screen says so. These are the ones that work.
 In a file:
 
 - Tap to place the caret. **Double-tap** to select the word under your finger.
+- **Drag the caret**: put a finger on it or just under it and drag sideways. The
+  caret follows, at the distance your finger started from it, and at the top or
+  bottom edge of the editor the text scrolls. A drag that starts upward or
+  downward still scrolls, and with text selected or several cursors a drag does
+  nothing to them.
 - The soft keyboard comes up for a tap on the text, a line number or the space
   under the last line, and stays down while you swipe to scroll. Put it away
   with Back or the hide key in the navigation bar and it stays down until you
