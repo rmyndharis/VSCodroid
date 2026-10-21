@@ -9,11 +9,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
+- A play button in the editor's title bar runs the open JavaScript, TypeScript, Ruby, Java, C, C++, `.sh` or `.bash` file in a terminal, as Python files already had.
+- Running a Ruby, Java, C or C++ file whose toolchain is not installed offers the toolchains screen.
 - A finger can drag the caret: touch it or just under it and drag sideways, and it follows, with the text scrolling at the editor's edge. A drag that starts up or down, or with text selected, scrolls as before.
+
+### Changed
+
+- The Get Started walkthrough has two more steps, after the theme: opening a folder from the phone's storage and running a file.
+- On Android, File > Open Folder, Ctrl+K Ctrl+O and the Explorer's Open Folder button ask whether the folder is on the device (Android's picker) or in the app's storage (the path dialog).
 
 ### Fixed
 
+- The Get Started walkthrough names C/C++ among the toolchains that install on demand.
+- The Settings editor fits a phone-width screen: its list is no longer 26% wider than the screen at 411 px, and the window it opens in no longer ends past the right edge.
 - The Accounts and Manage buttons stay reachable in the activity bar on a phone in landscape: views that do not fit move into the overflow menu.
+- On a phone in landscape with the keyboard up, the title bar and the status bar are put away so the editor shows four lines of code instead of one; they return with the keyboard.
 - Stopping the editor also ends its surviving server when the bootstrap has already exited.
 - Sign-in returns retain their original request identity until the editor page changes.
 - Ctrl or Alt latched on the key row applies to the next key typed in the editor when focus moves there after the latch.

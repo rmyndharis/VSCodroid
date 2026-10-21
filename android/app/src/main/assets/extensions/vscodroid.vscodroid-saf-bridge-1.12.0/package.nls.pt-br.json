@@ -1,0 +1,19 @@
+{
+  "displayName": "VSCodroid Ponte para o Android",
+  "description": "Comandos que alcançam o Android: pastas do dispositivo, navegador, chaves SSH, armazenamento, sobre",
+  "command.openFolderFromDevice": "VSCodroid: Abrir uma pasta do dispositivo",
+  "command.openRecentFolder": "VSCodroid: Abrir uma pasta recente",
+  "command.openInBrowser": "VSCodroid: Abrir no navegador",
+  "command.generateSshKey": "VSCodroid: Gerar uma chave SSH",
+  "command.copySshPublicKey": "VSCodroid: Copiar a chave pública SSH",
+  "command.showStorageUsage": "VSCodroid: Mostrar o uso de armazenamento",
+  "command.manageDeviceFolders": "VSCodroid: Gerenciar o armazenamento das pastas do dispositivo",
+  "command.clearCaches": "VSCodroid: Limpar os caches",
+  "command.manageToolchains": "VSCodroid: Gerenciar toolchains",
+  "command.toggleExtraKeyRow": "VSCodroid: Mostrar ou ocultar a linha de teclas extras",
+  "command.uiScale": "VSCodroid: Escala da interface",
+  "command.about": "VSCodroid: Sobre",
+  "command.copyBugReport": "VSCodroid: Copiar o relatório de erro",
+  "command.runFile": "VSCodroid: Executar arquivo",
+  "viewsWelcome.explorer.deviceFolder": "Para trabalhar em uma pasta do armazenamento do dispositivo, como uma pasta dentro de Documents ou Download, abra-a pelo dispositivo para que também apareçam os arquivos que outros apps salvaram nela.\n[Abrir uma pasta do dispositivo](command:vscodroid.openFolderFromDevice)"
+}
