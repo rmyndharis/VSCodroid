@@ -5286,7 +5286,9 @@ class MainActivity : AppCompatActivity() {
      * the pointer events carry on (measured: a drag held at the lower edge lost its
      * touchend about one run in two). So the drag is also followed and ended from the
      * pointer events, and a touchend that still arrives afterwards is kept from the
-     * editor as well.
+     * editor as well. Those pointer moves are kept from it too, because it reads them as
+     * a mouse over its text and opens the hover of the word the finger rests on, a box
+     * that covers the code being dragged over.
      *
      * The keyboard guard reads a touch that ends within a few pixels of where it began,
      * and soon, as a tap, and raises a keyboard it was holding down. A drag of a
@@ -5579,8 +5581,10 @@ class MainActivity : AppCompatActivity() {
                 }, { capture: true, passive: false });
 
                 window.addEventListener('pointermove', function(e) {
-                    if (!drag || !drag.claimed || e.pointerId !== drag.pointer) return;
-                    follow(e.clientX, e.clientY);
+                    if (!drag || e.pointerId !== drag.pointer) return;
+                    // Not the editor's: it would show the hover of the word under the finger.
+                    e.stopPropagation();
+                    if (drag.claimed) follow(e.clientX, e.clientY);
                 }, true);
 
                 function pointerEnded(e) {

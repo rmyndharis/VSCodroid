@@ -162,8 +162,10 @@ function newPage({ focused = true, carets = 1, selected = false, sash = false, c
             event.type = type;
             event.defaultPrevented = false;
             event.stopped = false;
+            event.propagationStopped = false;
             event.preventDefault = function() { this.defaultPrevented = true; };
             event.stopImmediatePropagation = function() { this.stopped = true; };
+            event.stopPropagation = function() { this.propagationStopped = true; };
             for (const l of listeners.filter((x) => x.type === type)) {
                 l.fn(event);
                 if (event.stopped) break;
@@ -323,6 +325,34 @@ check('a stylus or anything that is not a finger is left alone', () => {
     const finger = newPage();
     finger.start(200, 110, { pointerType: 'touch' });
     assert.ok(finger.move(230, 110).defaultPrevented);
+});
+
+check('the pointer moves of a touch near the caret are kept from the editor, which would open a hover under the finger', () => {
+    // The editor reads a pointer's moves as a mouse over its text and shows the hover of the
+    // word under it, and a taken drag keeps the pointer moving, so every word passed would.
+    const page = newPage();
+    page.start(200, 110);
+    // The platform sends the pointer move before the touch move that decides anything.
+    assert.ok(page.pointer('pointermove', 215, 110).propagationStopped,
+        'the move that starts the drag reached the editor');
+    page.move(215, 110);
+    assert.ok(page.pointer('pointermove', 230, 110).propagationStopped,
+        'a move of the taken drag reached the editor');
+    assert.ok(!page.pointer('pointermove', 300, 300, 8).propagationStopped,
+        'the moves of another pointer were held');
+    page.end(230, 110);
+    assert.ok(!page.pointer('pointermove', 240, 110).propagationStopped,
+        'a move after the lift was still held');
+});
+
+check('a touch that turns out to be a scroll, or starts far from the caret, keeps its pointer moves for the editor', () => {
+    const scroll = newPage();
+    scroll.start(200, 110);
+    scroll.move(201, 140);
+    assert.ok(!scroll.pointer('pointermove', 202, 160).propagationStopped);
+    const far = newPage();
+    far.start(350, 300);
+    assert.ok(!far.pointer('pointermove', 360, 300).propagationStopped);
 });
 
 check('a selection, several carets or a second finger leave the touch alone', () => {
