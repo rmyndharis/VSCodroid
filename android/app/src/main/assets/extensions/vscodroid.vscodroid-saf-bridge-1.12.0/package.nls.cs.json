@@ -1,0 +1,19 @@
+{
+  "displayName": "VSCodroid Most do Androidu",
+  "description": "Příkazy, které sahají do Androidu: složky v zařízení, prohlížeč, klíče SSH, úložiště, o aplikaci",
+  "command.openFolderFromDevice": "VSCodroid: Otevřít složku ze zařízení",
+  "command.openRecentFolder": "VSCodroid: Otevřít nedávnou složku",
+  "command.openInBrowser": "VSCodroid: Otevřít v prohlížeči",
+  "command.generateSshKey": "VSCodroid: Vytvořit klíč SSH",
+  "command.copySshPublicKey": "VSCodroid: Zkopírovat veřejný klíč SSH",
+  "command.showStorageUsage": "VSCodroid: Zobrazit využití úložiště",
+  "command.manageDeviceFolders": "VSCodroid: Spravovat úložiště složek v zařízení",
+  "command.clearCaches": "VSCodroid: Vymazat mezipaměti",
+  "command.manageToolchains": "VSCodroid: Spravovat sady nástrojů",
+  "command.toggleExtraKeyRow": "VSCodroid: Zobrazit nebo skrýt řádek doplňkových kláves",
+  "command.uiScale": "VSCodroid: Měřítko rozhraní",
+  "command.about": "VSCodroid: O aplikaci",
+  "command.copyBugReport": "VSCodroid: Zkopírovat hlášení o chybě",
+  "command.runFile": "VSCodroid: Spustit soubor",
+  "viewsWelcome.explorer.deviceFolder": "Chcete-li pracovat se složkou v úložišti zařízení, například se složkou v Documents nebo Download, otevřete ji ze zařízení, aby se zobrazily i soubory, které do ní uložily jiné aplikace.\n[Otevřít složku ze zařízení](command:vscodroid.openFolderFromDevice)"
+}
