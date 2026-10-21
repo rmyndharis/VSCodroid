@@ -1,0 +1,20 @@
+<svg width="280" height="200" viewBox="0 0 280 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- An editor with the play button, and the terminal it fills -->
+  <rect x="20" y="15" width="240" height="170" rx="8" fill="var(--vscode-editor-background, #1e1e1e)" stroke="var(--vscode-editorWidget-border)" stroke-width="1.5"/>
+
+  <!-- Tab strip with the play button on the right -->
+  <rect x="20" y="15" width="240" height="26" rx="8" fill="var(--vscode-editorGroupHeader-tabsBackground, #252526)"/>
+  <rect x="20" y="33" width="240" height="8" fill="var(--vscode-editorGroupHeader-tabsBackground, #252526)"/>
+  <text x="34" y="32" font-family="monospace" font-size="10" fill="var(--vscode-foreground, #cccccc)">app.js</text>
+  <circle cx="234" cy="28" r="11" fill="none" stroke="var(--vscode-button-background, #0e639c)" stroke-width="2"/>
+  <path d="M230 22l10 6-10 6z" fill="var(--vscode-foreground, #cccccc)"/>
+
+  <!-- Code -->
+  <text x="30" y="62" font-family="monospace" font-size="10" fill="#569cd6">console<tspan fill="var(--vscode-foreground, #cccccc)">.log(</tspan><tspan fill="#ce9178">"hi"</tspan><tspan fill="var(--vscode-foreground, #cccccc)">)</tspan></text>
+
+  <!-- Terminal -->
+  <rect x="20" y="110" width="240" height="75" rx="0" fill="var(--vscode-terminal-background, #1e1e1e)" stroke="var(--vscode-editorWidget-border)" stroke-width="1.5"/>
+  <text x="30" y="130" font-family="monospace" font-size="10" fill="#6a9955">~$</text>
+  <text x="50" y="130" font-family="monospace" font-size="10" fill="var(--vscode-terminal-foreground, #cccccc)">node app.js</text>
+  <text x="30" y="146" font-family="monospace" font-size="10" fill="#569cd6">hi</text>
+</svg>

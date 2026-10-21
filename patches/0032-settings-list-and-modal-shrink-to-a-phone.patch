@@ -1,0 +1,68 @@
+Let the settings list and the modal editor shrink to a phone-width window.
+
+On a 411px viewport the Settings editor, which opens as a modal, overflowed twice.
+
+SettingsEditor2 keeps its list pane at 500px or wider, both as the editor's minimum width and
+as the minimum of the split view that holds the list. On a phone the list was therefore 131px
+(26%) wider than the screen and its right part, the controls and the end of every description,
+sat off it.
+
+ModalEditorPart lays the modal out at 80% of the window, centres it from that width, and then
+resizableElement.layout raises the width to MODAL_MIN_WIDTH (400px). The left edge stayed where
+the narrower width had put it, so the modal began at 41px and ended 30px past the right edge.
+
+On Android the list may now shrink to 280px. NARROW_TOTAL_WIDTH, which decides when the table
+of contents is dropped, still goes by 500px, so a tablet or a desktop-sized window lays out as
+before. The modal's minimum width is capped at the window's, and the modal is centred from the
+width it really gets.
+
+diff --git a/src/vs/workbench/browser/parts/editor/modalEditorPart.ts b/src/vs/workbench/browser/parts/editor/modalEditorPart.ts
+index ca467f2..b20ee5c 100644
+--- a/src/vs/workbench/browser/parts/editor/modalEditorPart.ts
++++ b/src/vs/workbench/browser/parts/editor/modalEditorPart.ts
+@@ -705,6 +705,13 @@ export class ModalEditorPart {
+ 
+ 			height = Math.min(height, availableHeight); // Ensure the modal never exceeds available height (below the title bar)
+ 
++			// The minimum width must not exceed the window, and the modal is centred from the
++			// width it ends up with: resizableElement.layout raises a narrower request to its
++			// minSize, which on a phone pushed the modal past the right edge.
++			const minWidth = Math.min(effectiveMinWidth, containerDimension.width);
++			resizableElement.minSize = new Dimension(minWidth, MODAL_MIN_HEIGHT);
++			width = Math.min(Math.max(width, minWidth), containerDimension.width);
++
+ 			// On first layout, clamp sidebar width if it would leave the editor too narrow
+ 			if (isFirstLayout) {
+ 				isFirstLayout = false;
+diff --git a/src/vs/workbench/contrib/preferences/browser/settingsEditor2.ts b/src/vs/workbench/contrib/preferences/browser/settingsEditor2.ts
+index 9f9907c..8ba482d 100644
+--- a/src/vs/workbench/contrib/preferences/browser/settingsEditor2.ts
++++ b/src/vs/workbench/contrib/preferences/browser/settingsEditor2.ts
+@@ -127,6 +127,9 @@ export class SettingsEditor2 extends EditorPane {
+ 	private static TOC_MIN_WIDTH: number = 100;
+ 	private static TOC_RESET_WIDTH: number = 200;
+ 	private static EDITOR_MIN_WIDTH: number = 500;
++	// What the settings list may shrink to. 500px is wider than a phone, where it ran a quarter of
++	// the list off the screen. NARROW_TOTAL_WIDTH still goes by EDITOR_MIN_WIDTH.
++	private static LIST_MIN_WIDTH: number = platform.isAndroid ? 280 : this.EDITOR_MIN_WIDTH;
+ 	// Below NARROW_TOTAL_WIDTH, we only render the editor rather than the ToC.
+ 	private static NARROW_TOTAL_WIDTH: number = this.TOC_RESET_WIDTH + this.EDITOR_MIN_WIDTH;
+ 
+@@ -449,7 +452,7 @@ export class SettingsEditor2 extends EditorPane {
+ 		}
+ 	}
+ 
+-	override get minimumWidth(): number { return SettingsEditor2.EDITOR_MIN_WIDTH; }
++	override get minimumWidth(): number { return SettingsEditor2.LIST_MIN_WIDTH; }
+ 	override get maximumWidth(): number { return Number.POSITIVE_INFINITY; }
+ 	override get minimumHeight() { return 180; }
+ 
+@@ -1091,7 +1094,7 @@ export class SettingsEditor2 extends EditorPane {
+ 		this.splitView.addView({
+ 			onDidChange: Event.None,
+ 			element: this.settingsTreeContainer,
+-			minimumSize: SettingsEditor2.EDITOR_MIN_WIDTH,
++			minimumSize: SettingsEditor2.LIST_MIN_WIDTH,
+ 			maximumSize: Number.POSITIVE_INFINITY,
+ 			layout: (width, _, height) => {
+ 				this.settingsTreeContainer.style.width = `${width}px`;

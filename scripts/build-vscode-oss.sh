@@ -779,6 +779,14 @@ cat >> "$WORKBENCH_CSS" << 'CSSEOF'
    the divider stays as it was, which is the old behaviour rather than a broken
    one. */
 .monaco-menu .monaco-action-bar.vertical .action-item:has(> .action-label.separator) { min-height: 0 !important; }
+/* The settings editor sets a dropdown, and the box that holds it, to 320px whatever the
+   window is, and a row starts 48px in. On a phone narrower than 367px the right edge and
+   the arrow ran off the screen: 8px at 360px, 38px at 329px (UI Scale 125% on 411). Capping
+   both at the room the row has put the arrow at 313px at 360px, measured on an API 36
+   emulator. The box needs the cap as well as the select, because the select is only as wide
+   as its box allows. */
+.settings-editor .setting-item-control.select-container,
+.settings-editor .setting-item-control select { max-width: 100%; }
 CSSEOF
 grep -q "VSCodroid: Mobile-friendly" "$WORKBENCH_CSS" || { echo "  ERROR: append did not land" >&2; exit 1; }
 echo "  appended mobile menu overrides to workbench.css"

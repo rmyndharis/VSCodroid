@@ -47,18 +47,21 @@ VSCodroid is VS Code. If you have used VS Code on desktop, everything works the 
 
 ### Opening Files and Folders
 
-- Use **File > Open Folder** or the Explorer sidebar for projects inside the app.
+- **File > Open Folder**, Ctrl+K Ctrl+O and the Explorer's Open Folder button ask
+  whether the folder is **On the device** or **In the app's storage**. Choose the
+  second for projects inside the app: it opens a dialog that takes a path.
   Typing a path such as `/storage/emulated/0/...` or `/sdcard/...` into that
   dialog reaches Documents, Downloads or an SD card, but VSCodroid holds no
   storage permission, so Android shows it the folders there and hides every file
   another app saved in them. Such a folder opens with its subfolders and none of
   those files; the editor then says so in a dialog, once per folder each time its
   server starts rather than on every reload, and offers the route below.
-- For a folder anywhere else on the device, run **VSCodroid: Open Folder from
-  Device**: tap the remote indicator at the left end of the status bar, tap the
-  button in the empty Explorer, or use the Command Palette. It opens Android's
-  folder picker; pick the folder and allow access, and the files other apps
-  saved in it show as well, apart from what the copy below leaves out. Android
+- For a folder anywhere else on the device, choose **On the device** in that
+  question, or run **VSCodroid: Open Folder from Device**: tap the remote
+  indicator at the left end of the status bar, tap the button in the empty
+  Explorer, or use the Command Palette. It opens Android's folder picker; pick
+  the folder and allow access, and the files other apps saved in it show as
+  well, apart from what the copy below leaves out. Android
   grants access one folder at a time, and not to the top of the storage or of an
   SD card, nor to the Download or Android folder itself, so pick a folder inside
   those. Nothing in `Android/data`, `Android/obb` or `Android/sandbox` can be
@@ -383,6 +386,15 @@ The Extra Key Row is especially useful in the terminal:
 - Each terminal is an independent bash session with its own working directory.
 
 ### Running Code
+
+A file open in the editor runs from the play button in the editor's title bar.
+Python files get it from the Python extension. JavaScript, TypeScript, Ruby,
+Java, C, C++ and `.sh` or `.bash` files get **VSCodroid: Run File**, which saves
+the file and runs it in a terminal named *VSCodroid Run*; the next run replaces
+that terminal. Header files and the other shells' scripts do not get it. Ruby, Java and C/C++ need their toolchain from the toolchains screen
+first, and the button offers it when it is missing. A C or C++ file is built
+into a temporary file and run, so a program of several files or one that needs
+build options still belongs in the terminal.
 
 ```bash
 # Run a JavaScript file

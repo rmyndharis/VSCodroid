@@ -327,6 +327,15 @@
 # that kept the query and dropped the floor; the manifest hash covers an edited patch.
 0030 activitybar touch item size|out/vs/code/browser/workbench/workbench.js|(pointer: coarse)
 
+# 0031's pattern is the command id it adds. The literal is 0 times in the shipped
+# 1.139.1 workbench.js, so a match means the patch arrived. It cannot tell a patch
+# that kept the id and dropped the prompt; the manifest hash covers an edited patch.
+0031 open folder offers the system picker|out/vs/code/browser/workbench/workbench.js|vscodroid.openFolderFromDevice
+
+# 0032's pattern is the name of the constant it adds. Member names survive the bundler
+# (0029 relies on the same), and the literal is 0 times in the shipped 1.139.1 workbench.js.
+0032 settings list and modal shrink to a phone|out/vs/code/browser/workbench/workbench.js x3|LIST_MIN_WIDTH
+
 # 0033's pattern is the name of the flag it adds. Member names survive the bundler (0029 and
 # 0032 rely on the same), and the literal is 0 times in the shipped 1.139.1 workbench.js.
 0033 short window hides title and status bar|out/vs/code/browser/workbench/workbench.js x3|shortWindow

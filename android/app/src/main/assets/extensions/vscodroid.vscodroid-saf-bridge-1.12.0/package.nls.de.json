@@ -1,0 +1,19 @@
+{
+  "displayName": "VSCodroid Android-Brücke",
+  "description": "Befehle, die Android erreichen: Geräteordner, Browser, SSH-Schlüssel, Speicher, Info",
+  "command.openFolderFromDevice": "VSCodroid: Ordner vom Gerät öffnen",
+  "command.openRecentFolder": "VSCodroid: Zuletzt verwendeten Ordner öffnen",
+  "command.openInBrowser": "VSCodroid: Im Browser öffnen",
+  "command.generateSshKey": "VSCodroid: SSH-Schlüssel erzeugen",
+  "command.copySshPublicKey": "VSCodroid: Öffentlichen SSH-Schlüssel kopieren",
+  "command.showStorageUsage": "VSCodroid: Speicherbelegung anzeigen",
+  "command.manageDeviceFolders": "VSCodroid: Speicher der Geräteordner verwalten",
+  "command.clearCaches": "VSCodroid: Zwischenspeicher leeren",
+  "command.manageToolchains": "VSCodroid: Toolchains verwalten",
+  "command.toggleExtraKeyRow": "VSCodroid: Zusatztastenleiste ein- oder ausblenden",
+  "command.uiScale": "VSCodroid: Skalierung der Oberfläche",
+  "command.about": "VSCodroid: Info",
+  "command.copyBugReport": "VSCodroid: Fehlerbericht kopieren",
+  "command.runFile": "VSCodroid: Datei ausführen",
+  "viewsWelcome.explorer.deviceFolder": "Um mit einem Ordner im Gerätespeicher zu arbeiten, etwa einem Ordner in Documents oder Download, öffnen Sie ihn vom Gerät, damit auch die Dateien angezeigt werden, die andere Apps darin gespeichert haben.\n[Ordner vom Gerät öffnen](command:vscodroid.openFolderFromDevice)"
+}
