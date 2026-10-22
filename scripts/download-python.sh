@@ -219,7 +219,9 @@ if [ ! -d "$PIP_SRC" ]; then
     exit 1
 fi
 mkdir -p "$PIP_DST"
-cp -r "$PIP_SRC/pip" "$PIP_DST/"
+# -P keeps a link a link on every host: BSD cp follows one by default and stops on a
+# target that is missing, GNU cp copies it as it is. Step 6c deals with the link.
+cp -RP "$PIP_SRC/pip" "$PIP_DST/"
 cp -r "$PIP_SRC"/pip-*.dist-info "$PIP_DST/"
 find "$PIP_DST" -type d -name "__pycache__" -exec rm -rf {} + 2>/dev/null || true
 if [ ! -f "$PIP_DST/pip/__main__.py" ]; then
@@ -271,6 +273,33 @@ if [ ! -f "$WHEEL_DST/$EXPECTED_WHEEL" ]; then
     exit 1
 fi
 echo "  $EXPECTED_WHEEL ($(du -sh "$WHEEL_DST/$EXPECTED_WHEEL" | cut -f1))"
+
+# --- Step 6c: Make pip's CA bundle a file ---
+#
+# python-pip 26.2.2-2 ships pip/_vendor/certifi/cacert.pem as a link to
+# /data/data/com.termux/files/usr/etc/tls/cert.pem, which exists on no machine
+# but a Termux install. Gradle refuses to walk a link it cannot follow, so the
+# APK build died on the first look at assets/, and on a phone it would have taken
+# away the bundle pip falls back to when REQUESTS_CA_BUNDLE is not set (see
+# Environment.buildProcessEnvironment). The wheel placed above carries the same
+# file as a file.
+CACERT="$PIP_DST/pip/_vendor/certifi/cacert.pem"
+if [ -L "$CACERT" ]; then
+    rm "$CACERT"
+    unzip -p "$WHEEL_DST/$EXPECTED_WHEEL" pip/_vendor/certifi/cacert.pem > "$CACERT"
+fi
+if [ -L "$CACERT" ] || [ ! -s "$CACERT" ]; then
+    echo "  ERROR: pip has no usable CA bundle at $CACERT" >&2
+    exit 1
+fi
+# Any other link in the pip placed above would dangle in the APK the same way.
+dangling="$(find -L "$PIP_DST" -type l 2>/dev/null || true)"
+if [ -n "$dangling" ]; then
+    echo "  ERROR: links in pip that point nowhere:" >&2
+    echo "$dangling" >&2
+    exit 1
+fi
+echo "  pip CA bundle: $(du -sh "$CACERT" | cut -f1)"
 
 # --- Step 7: Place shared libraries in assets/usr/lib/ ---
 echo ""
