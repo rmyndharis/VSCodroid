@@ -13,8 +13,9 @@ set -euo pipefail
 # repository's patches and branding applied before the build.
 #
 # The expensive part (cloning VS Code and running gulp) happens once per VS
-# Code version in that workflow, not on every app build. What is left here is a
-# download and a check.
+# Code version in that workflow, so a release or a local build only downloads and
+# checks the result. build.yml builds its own tree through codeoss-build.yml and
+# hands it here as VSCODE_OSS_URL, to be checked the same way.
 #
 # Sources, in the order tried:
 #   VSCODE_OSS_URL        a direct URL, for a private mirror or a local test
@@ -376,8 +377,8 @@ echo "=== Branding ==="
 # branding/product.json is applied by build-vscode-oss.sh before gulp runs, so a
 # tree built before a change to it carries the old values under the same
 # filename, version, commit and patch fingerprints, and every other gate here
-# passes. The cache keys in build.yml and release.yml include branding/**, which
-# only makes this fetch run again: it downloads the same stale release.
+# passes. The cache key in release.yml includes branding/**, which only makes
+# this fetch run again: it downloads the same stale release.
 #
 # Measured when this was added: server-1.133.0, published 2026-09-05, still had
 # linkProtectionTrustedDomains without https://github.com, which the overlay

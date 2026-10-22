@@ -9,6 +9,13 @@ on:
       runner:
         type: string
         default: ubuntu-24.04-arm
+      # A publish passes true. The tarball cache is keyed on the build's inputs,
+      # not on a build having run, so a tree that passed once is restored for
+      # every later run until an input changes. That is what CI wants, and it is
+      # wrong for a release whose notes say which run built the tarball.
+      fresh:
+        type: boolean
+        default: false
     outputs:
       version:
         value: ${{ jobs.build.outputs.version }}
@@ -106,8 +113,12 @@ jobs:
         with:
           node-version: ${{ steps.pin.outputs.node }}
 
+      # Skipped outright on a fresh build: nothing is restored, and the post step
+      # that would save the new tarball does not run either. cache-hit is then
+      # empty, which the three conditions below read as a miss.
       - name: Cache the server tarball
         id: cache
+        if: ${{ !inputs.fresh }}
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/codeoss/vscode-reh-web-linux-arm64-${{ steps.pin.outputs.version }}.tar.gz

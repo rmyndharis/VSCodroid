@@ -224,6 +224,13 @@ jobs:
       - name: Check the Copilot compile stage leaves a complete SDK directory
         run: python3 scripts/test-copilot-compile-guard.py
 
+      # The release preflight reads this repository's real server tag, which differs
+      # whenever a server input changed since the last publish, so lint does not run
+      # it. This builds throwaway repositories from a copy of the real cache key and
+      # changes one input at a time.
+      - name: Check the release refuses a server built from other inputs
+        run: python3 scripts/test-check-server-published.py
+
       # The picker is built from ToolchainRegistry.available; nothing else that
       # names a toolchain is. Withdrawing one left seven documents and the
       # in-app walkthrough still offering it, so the app promised a language it

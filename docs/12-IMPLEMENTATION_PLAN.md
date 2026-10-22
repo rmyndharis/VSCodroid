@@ -8,8 +8,8 @@
 > the build works.**
 > The server is built from the MIT Code - OSS source by `.github/workflows/build-vscode-oss.yml`,
 > which runs `scripts/build-vscode-oss.sh`: it applies the numbered unified diffs in `patches/`
-> with `git apply`, and app builds fetch the built server with `scripts/fetch-vscode-oss.sh`.
-> There is no pre-built server download and no `scripts/download-vscode-server.sh`, so where the
+> with `git apply`, and release and local builds fetch the built server with
+> `scripts/fetch-vscode-oss.sh`. There is no pre-built server download and no `scripts/download-vscode-server.sh`, so where the
 > plan below names either, read the code instead: `scripts/build-vscode-oss.sh`, `patches/`, and
 > the Kotlin under `android/app/src/main/kotlin/com/vscodroid/`. `CONTRIBUTING.md` is the prose
 > kept current alongside it.

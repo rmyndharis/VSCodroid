@@ -96,8 +96,8 @@ M6 (Release)   → Play Store release
 
    > The build compiles Code - OSS from the MIT `microsoft/vscode` source:
    > `scripts/build-vscode-oss.sh` applies the numbered unified diffs in
-   > `patches/` with `git apply`, and app builds fetch the built server with
-   > `scripts/fetch-vscode-oss.sh`. There is no `patches/code-server/` in the
+   > `patches/` with `git apply`, and release and local builds fetch the built server
+   > with `scripts/fetch-vscode-oss.sh`. There is no `patches/code-server/` in the
    > tree and no pre-built server download. The reason is licensing rather than
    > preference: the pre-built server on Microsoft's update CDN ships under
    > pre-release terms that do not permit modifying and redistributing it inside

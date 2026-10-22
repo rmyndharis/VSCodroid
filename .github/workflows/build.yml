@@ -109,14 +109,12 @@ jobs:
       # Cache the generated assets directory (extracted, patched VS Code server + tools).
       # Every input to the server build is in the key even though no step here
       # reads any of them: patches/, branding/, build-vscode-oss.sh and the
-      # scripts it runs over the tree shape the server tarball, which is
-      # republished under the same server-<version> name when they change. On an
-      # assets cache hit the fetch step - and its digest check against the
-      # release - never runs, so this key is the only thing standing between a
-      # republished server and a stale cached tree going into the APK. A miss only
-      # makes the fetch run again; fetch-vscode-oss.sh is what refuses a tarball
-      # older than patches/ or branding/. A server republished with no change to
-      # any of these inputs is not refetched until one of them changes.
+      # scripts it runs over the tree shape the server tree, which the codeoss
+      # job builds for this revision. On an assets cache hit the download and
+      # fetch steps never run, so this key is the only thing standing between a
+      # change to one of those inputs and a stale cached tree going into the APK.
+      # A miss takes the tree from the codeoss job, and fetch-vscode-oss.sh is
+      # what refuses one older than patches/ or branding/.
       #
       # Which makes "every" a rule rather than a description: a script that edits
       # the packaged tree belongs here the day it is written. patch-js-debug-env.py

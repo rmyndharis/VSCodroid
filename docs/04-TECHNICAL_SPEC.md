@@ -6,9 +6,9 @@
 
 > **The code is the only authority.** The server is built from the MIT Code - OSS source by
 > `.github/workflows/build-vscode-oss.yml`, which applies the unified diffs in `patches/` and the
-> branding in `branding/` before the gulp build; app builds fetch the published result with
-> `scripts/fetch-vscode-oss.sh`. Where this document summarises a mechanism, the mechanism itself
-> lives in `scripts/build-vscode-oss.sh`, `patches/`, and the Kotlin under
+> branding in `branding/` before the gulp build; release and local builds fetch the published
+> result with `scripts/fetch-vscode-oss.sh`. Where this document summarises a mechanism, the
+> mechanism itself lives in `scripts/build-vscode-oss.sh`, `patches/`, and the Kotlin under
 > `android/app/src/main/kotlin/com/vscodroid/`. `CONTRIBUTING.md` is the prose kept current
 > alongside it.
 

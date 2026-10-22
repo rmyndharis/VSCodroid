@@ -48,7 +48,7 @@ flowchart TD
 flowchart TD
   REPO["GitHub Repository"] --> B1["Pull request to main, and every push to main<br/>build.yml: debug APK, unit tests, instrumented suite compiled<br/>lint.yml: Android lint and the repository self-checks"]
   REPO --> B2["A pull request touching one of seven build-configuration paths, or a push to main touching those or the app sources<br/>r8.yml: R8, the resource shrinker and lintVitalRelease"]
-  REPO --> B3["Tag v*<br/>release.yml: signed AAB and APK, toolchain ZIPs, GitHub Release"]
+  REPO --> B3["Tag v*<br/>release.yml: published server checked against this commit, then signed AAB and APK, toolchain ZIPs, GitHub Release"]
   REPO --> B4["Push to main touching docs/site, the user guide or the privacy policy<br/>pages.yml: publishes the usage site"]
   REPO --> B5["r8.yml: Monday 03:00 UTC, pushes to main, pull requests, or by hand<br/>patch-drift.yml: Monday 04:00 UTC, or by hand"]
   REPO --> B6["Dispatched by hand on a VS Code bump, arm64 runner<br/>build-vscode-oss.yml: builds the server once per version"]
@@ -119,11 +119,18 @@ though no step in this workflow reads them. They change the server tree, which t
 builds for each revision, and the key is what makes the `build` job take that tree again. On a miss
 `fetch-vscode-oss.sh` still refuses a tree older than `patches/` (`check-patch-fingerprints.py`) or
 `branding/product.json` (its Branding stage). What this workflow tests is its own tree, not the
-`server-<version>` release that `release.yml` and local builds fetch: a change to `patches/` or
-`branding/` that was not republished passes here and is refused at the tag, while a change to
-`build-vscode-oss.sh` alone is not compared with the release at all. The step that builds the native addons also
-runs only on an `assets-` miss, and `build-native-addons.sh` is in the key, so a change to it is
-what makes the cache miss.
+`server-<version>` release that `release.yml` and local builds fetch, so a change to any input of
+the server build passes here whether or not the release was rebuilt. `release.yml` asks that
+question before it builds anything (`check-server-published.py`): it compares the files hashed into
+the key of the `codeoss` job's tarball cache with the commit the `server-<version>` tag points at,
+which each publish moves to the commit it built, and fails on a difference. The step that builds the
+native addons also runs only on an `assets-` miss, and `build-native-addons.sh` is in the key, so a
+change to it is what makes the cache miss.
+
+The `codeoss` job (`codeoss-build.yml`) keeps one more cache, of the finished server tarball, keyed
+on the same server inputs. A publish through `build-vscode-oss.yml` passes `fresh: true` and never
+reads it, so the release notes' claim that a run built the tarball holds. Pull requests and pushes
+keep using it.
 
 Gradle's own dependency and build caches are handled by `gradle/actions/setup-gradle`.
 
@@ -428,6 +435,12 @@ with no section naming the version a user installed.
    without an error, and no debug build and no CI job shows it.
    - Timing: dispatch only after step 3 has landed. An APK still carrying the
      previous versionCode upgrades without re-running setup, and tests nothing
+   - Server: the run below starts by comparing every input of the server build
+     with the commit the `server-<version>` tag points at, and fails with the
+     files that differ when main has moved one since the last publish
+     (`check-server-published.py`). Dispatch "Build Code - OSS server" on main,
+     wait for it, then dispatch the run again. A change to the Kotlin alone does
+     not need that
    - Build: `gh workflow run release.yml --ref main`. Once that run is green,
      `gh run download <run-id> -n release-artifacts -D /tmp/vscodroid-rc`
    - APK: /tmp/vscodroid-rc/android/app/build/outputs/apk/release/app-release.apk,

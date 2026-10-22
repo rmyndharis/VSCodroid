@@ -7,7 +7,8 @@
 > **This is the product as scoped on 2026-02-10; the code is what ships.** Two points are worth
 > naming so they are not carried away wrong. The server is vanilla Code - OSS, built from the MIT
 > `microsoft/vscode` source by `scripts/build-vscode-oss.sh` with the unified diffs in `patches/`
-> applied before the build, and app builds fetch the result with `scripts/fetch-vscode-oss.sh`.
+> applied before the build, and release and local builds fetch the result with
+> `scripts/fetch-vscode-oss.sh`.
 > Building from source is not a preference: the pre-built server on Microsoft's update CDN carries
 > licence terms that do not permit modifying and redistributing it, so
 > `scripts/verify-server-tree.py` fails any tree whose `LICENSE.txt` is not the MIT one. And the

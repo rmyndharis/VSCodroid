@@ -8,10 +8,10 @@
 > **The code is the only authority; this document describes it.**
 > The ADRs in §4 record the decisions the build actually implements. The server that ships is
 > vanilla Code - OSS, built from the MIT `microsoft/vscode` source by `scripts/build-vscode-oss.sh`
-> with the unified diffs in `patches/` applied before the build; app builds fetch the result with
-> `scripts/fetch-vscode-oss.sh`. Where this document and the code disagree, the code wins: read
-> those scripts and the sources under `android/app/src/main/kotlin/com/vscodroid/`, and verify
-> against them.
+> with the unified diffs in `patches/` applied before the build; release and local builds fetch the
+> result with `scripts/fetch-vscode-oss.sh`. Where this document and the code disagree, the code
+> wins: read those scripts and the sources under `android/app/src/main/kotlin/com/vscodroid/`, and
+> verify against them.
 
 ---
 
@@ -166,7 +166,7 @@ owning extension is what frees a slot.
 
 **Context**: We need VS Code running as a web server on Android. The MIT `microsoft/vscode` source carries that web-serving layer itself, as the `vscode-reh-web-linux-<arch>` build target. The pre-built server on Microsoft's update CDN is a different artifact under Microsoft's own licence terms, which do not permit modifying it and redistributing it inside an APK.
 
-**Decision**: Build Code - OSS from the MIT source. `scripts/build-vscode-oss.sh` clones `github.com/microsoft/vscode` and checks out the commit in `VSCODE_COMMIT`, not the tag in `VSCODE_VERSION`: a tag can be moved, and a clone by tag would follow it without a word. `VSCODE_VERSION` records which tag that commit belonged to when it was pinned. The script then applies the numbered unified diffs in `patches/` with `git apply` and the product config in `branding/`, then runs `npm run gulp core-ci`, `npm run gulp compile-copilot-extension-build`, and the `vscode-reh-web-linux-<arch>-min-ci` packaging task. The tarball is published once per VS Code version as a `server-<version>` release, and every app build fetches it with `scripts/fetch-vscode-oss.sh`.
+**Decision**: Build Code - OSS from the MIT source. `scripts/build-vscode-oss.sh` clones `github.com/microsoft/vscode` and checks out the commit in `VSCODE_COMMIT`, not the tag in `VSCODE_VERSION`: a tag can be moved, and a clone by tag would follow it without a word. `VSCODE_VERSION` records which tag that commit belonged to when it was pinned. The script then applies the numbered unified diffs in `patches/` with `git apply` and the product config in `branding/`, then runs `npm run gulp core-ci`, `npm run gulp compile-copilot-extension-build`, and the `vscode-reh-web-linux-<arch>-min-ci` packaging task. The tarball is published once per VS Code version as a `server-<version>` release, and release builds and local builds fetch it with `scripts/fetch-vscode-oss.sh`. The debug build in CI does not: it builds its own tree for the revision through `.github/workflows/codeoss-build.yml`, and `release.yml` refuses a published tree whose build inputs differ from the commit being released (`scripts/check-server-published.py`).
 
 **Rationale**:
 - The MIT source is the artifact we are free to modify and redistribute inside an APK

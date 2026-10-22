@@ -427,16 +427,16 @@ def _main() -> int:
                   if name in line and "python3" in line}
 
     # Every script the server build runs over its output has to be in the cache
-    # key that decides whether the server is fetched again.
+    # key that decides whether the cached asset tree is taken again.
     #
     # The `assets-` key deliberately hashes files no step in the job reads: on an
-    # exact hit the fetch and its digest check are skipped, so the key is the only
-    # thing that can notice a tarball republished under an unchanged
-    # `server-<version>` tag. A script that shapes that tarball and is missing
-    # from the key means a build that edits only that script keeps the old tree
-    # and passes every gate: the patch manifest still matches, because it hashes
-    # `patches/*.patch` and nothing else, and a tree check that counts what the
-    # script writes is satisfied by the copy already there.
+    # exact hit the server is neither downloaded nor fetched, so the key is the
+    # only thing that can notice a change to a script that shapes it. A script
+    # that shapes the tree and is missing from the key means a build that edits
+    # only that script keeps the old tree and passes every gate: the patch
+    # manifest still matches, because it hashes `patches/*.patch` and nothing
+    # else, and a tree check that counts what the script writes is satisfied by
+    # the copy already there.
     build_sh = ROOT / "scripts" / "build-vscode-oss.sh"
     workflow = ROOT / ".github" / "workflows" / "build.yml"
     if build_sh.is_file() and workflow.is_file():
@@ -451,8 +451,8 @@ def _main() -> int:
             report("scripts that shape the server tarball but are not in the assets cache key",
                    missing_from_key,
                    ".github/workflows/build.yml, the assets- hashFiles list",
-                   "On a cache hit the tarball is never re-fetched, so the key is the only"
-                   " thing that can notice a server republished under the same tag.")
+                   "On a cache hit the cached tree is used as it is, so the key is the only"
+                   " thing that can notice a change to a script that shapes it.")
             failed = True
         elif shapers:
             print(f"  ok     all {len(shapers)} scripts that shape the server tree are in "

@@ -2,8 +2,10 @@ name: Build Code - OSS server
 
 # Manual, and run once per VS Code version rather than once per app release: it
 # clones the VS Code source and runs a full gulp build, which takes around
-# twelve minutes. The tarball it publishes is what build.yml and release.yml then fetch,
-# so the expensive build happens when the version moves, not on every tag.
+# twelve minutes. The tarball it publishes is what release.yml and local builds
+# fetch, so the expensive build happens when the version moves, not on every
+# tag. build.yml builds its own tree through the same codeoss-build.yml and
+# publishes nothing.
 on:
   workflow_dispatch:
     inputs:
@@ -40,6 +42,11 @@ jobs:
     with:
       vscode_version: ${{ inputs.vscode_version }}
       runner: ${{ inputs.runner }}
+      # The notes below name this run as the one that built the tree, so this run
+      # has to build it. Run 39550459306 restored a cached tarball instead and
+      # published it under that claim; the cache would have served the same bytes
+      # to every dispatch until an input changed.
+      fresh: true
 
   publish:
     name: Publish the server tarball
@@ -70,7 +77,7 @@ jobs:
           name: vscode-reh-web-linux-arm64-${{ needs.build.outputs.version }}
           path: ${{ runner.temp }}/codeoss
 
-      # The artifact above expires; this does not. build.yml and release.yml both
+      # The artifact above expires; this does not. release.yml and local builds
       # fetch from here, so the tree a release ships is the one the build job
       # built rather than whatever a maintainer happened to have on disk.
       #

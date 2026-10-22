@@ -14,9 +14,9 @@ bare name and once as the real step. `yaml.safe_load` passed on all six
 workflows, the pull request build was green, and nothing could have caught it,
 because that workflow is `workflow_dispatch` only and runs perhaps once per VS
 Code bump. The failure would have arrived a month later, on the one job whose
-output every app build depends on.
+output every release build depends on.
 
-Four assertions:
+Six assertions:
 
   * at least one workflow, carrying at least one step, was actually read. A
     checker that finds nothing reports nothing, and CI reads the exit code
@@ -30,7 +30,12 @@ Four assertions:
     workflows publish the release assets, including the digest manifest that
     non-Play toolchain installs verify against;
   * a workflow that can be started by hand AND by something else must not hand
-    the hand-started run a write-scoped token. See below.
+    the hand-started run a write-scoped token. See below;
+  * the steps in REQUIRED_STEPS are still there. They only check something, so
+    a workflow that has lost one parses, loads and runs green, and none of the
+    rules above can see an absence;
+  * a publish never reads the tarball cache: build-vscode-oss.yml hands the
+    shared build `fresh: true`, and that build skips its cache when given it.
 
 Both extensions are read. GitHub Actions runs `.yml` and `.yaml` alike, and a
 checker that knows only one of them would go on printing a healthy count while
@@ -83,8 +88,30 @@ Gating on `github.event_name`, not on `github.ref`: a workflow_dispatch can be
 aimed at a tag ref, so a ref test alone is true for a dispatched run and would
 let one publish. A ref test beside the event test is fine and release.yml
 carries one; a ref test instead of it is the mistake this rule refuses.
+
+## Why the fifth and sixth
+
+Deleting "Verify the server tarball" from codeoss-build.yml left this checker and
+check-build-steps.py both passing: every remaining step still has one of `uses`
+or `run`, and no script went unnamed. What the step ran over the finished
+tarball, the pin, branding, tree and patch checks, was then gone, and for a
+tarball restored from the cache it was the only place they ran. The same holds
+for a gate in release.yml, and for the step that moves the `server-<version>`
+tag to the commit it built, which check-server-published.py reads.
+REQUIRED_STEPS names them. It is a list of strings on purpose: renaming a step
+means renaming it there, and the failure says so, which is cheaper than a gate
+that disappears without anyone noticing.
+
+The tarball cache is keyed on the build's inputs, not on a build having run. A
+dispatch of build-vscode-oss.yml therefore restored a tarball an earlier run
+built and published it under notes that name the dispatched run, with the
+install and build steps skipped and every job green. The caller now asks for a
+fresh build and the build skips its cache when asked. Neither half is enough
+alone, and a deleted `fresh: true` line changes nothing else, so both are held
+here.
 """
 
+import copy
 import pathlib
 import re
 import sys
@@ -119,6 +146,37 @@ LOCAL_WORKFLOW = re.compile(r"^\./\.github/workflows/[^/]+\.ya?ml$")
 # The one shape of gate the fourth rule accepts: the event named, by equality.
 ALLOWLIST_GATE = re.compile(r"github\.event_name\s*==\s*'[a-z_]+'")
 
+# Steps that only check something, on the path that publishes the server and the
+# app, matched by name in any job. Delete one and the workflow still loads and
+# runs green. Renaming one means renaming it here too.
+REQUIRED_STEPS = {
+    "codeoss-build.yml": (
+        "Verify the server tarball",
+    ),
+    "build-vscode-oss.yml": (
+        "Point the tag at the commit that was built",
+    ),
+    "release.yml": (
+        "Check the tag matches the app version",
+        "Check the published server was built from the same inputs",
+        "Check the documented build steps match the workflows",
+        "Check every workflow step is runnable and pinned",
+        "Check the Gradle distribution is pinned to a digest",
+        "Fetch Code - OSS server",
+        "Verify assets",
+        "Run unit tests",
+        "Run lint",
+        "Compile the instrumented tests",
+        "Decode keystore",
+        "Check every shipped library is attributed",
+        "Check every shipped toolchain library is attributed",
+        "Refuse an asset the base module and a pack both ship",
+        "Check the shipped permissions against the privacy policy",
+        "Require every artifact, and report its size",
+        "Generate checksums",
+    ),
+}
+
 
 def top_level_or(expr: str) -> bool:
     """Whether `||` appears in `expr` outside every pair of parentheses.
@@ -143,6 +201,41 @@ def steps_of(doc):
     for job_name, job in (doc.get("jobs") or {}).items():
         for i, step in enumerate(job.get("steps") or []):
             yield job_name, i, step
+
+
+def missing_steps(doc, names):
+    """The names in `names` that no step of `doc` carries."""
+    present = {step.get("name") for _, _, step in steps_of(doc)}
+    return [name for name in names if name not in present]
+
+
+def without_step(doc, name):
+    """A copy of `doc` with every step called `name` deleted, as an edit that drops a gate would."""
+    cut = copy.deepcopy(doc)
+    for job in (cut.get("jobs") or {}).values():
+        if "steps" in job:
+            job["steps"] = [s for s in job["steps"] if s.get("name") != name]
+    return cut
+
+
+def publish_builds_fresh(docs):
+    """Complaints when a publish could be served from the tarball cache.
+
+    Two halves, neither enough alone: build-vscode-oss.yml has to ask for a fresh
+    build, and the shared build has to skip its cache when asked. `docs` maps
+    workflow file names to parsed documents.
+    """
+    bad = []
+    steps = steps_of(docs.get("codeoss-build.yml") or {})
+    cache = next((step for _, _, step in steps if step.get("id") == "cache"), {})
+    if "inputs.fresh" not in str(cache.get("if", "")):
+        bad.append("codeoss-build.yml: the step with id `cache` is not skipped when "
+                   "`inputs.fresh` is set, so a fresh build could still restore a cached tarball")
+    jobs = (docs.get("build-vscode-oss.yml") or {}).get("jobs") or {}
+    if ((jobs.get("build") or {}).get("with") or {}).get("fresh") is not True:
+        bad.append("build-vscode-oss.yml: job build does not pass `fresh: true`, so a publish "
+                   "could republish a cached tarball under notes that name this run")
+    return bad
 
 
 def valid_job_reference(ref):
@@ -301,6 +394,45 @@ def self_test() -> int:
             return 1
     print(f"  ok     self-test: {len(refused)} denylist gates refused, "
           f"{len(admitted)} allowlist gates admitted")
+
+    # The real workflows, with one step deleted at a time. Everything that is left
+    # still loads, so only the table can notice, and a name that no longer matches
+    # anything would be a row that never fires.
+    docs = {name: yaml.safe_load((WORKFLOWS / name).read_text())
+            for name in {*REQUIRED_STEPS, "codeoss-build.yml", "build-vscode-oss.yml"}}
+    cut = 0
+    for name, wanted in REQUIRED_STEPS.items():
+        if missing_steps(docs[name], wanted):
+            print(f"  FAIL   self-test: {name} lacks steps REQUIRED_STEPS lists")
+            return 1
+        for step in wanted:
+            if missing_steps(without_step(docs[name], step), wanted) != [step]:
+                print(f"  FAIL   self-test: deleting {step!r} from {name} was not noticed")
+                return 1
+            cut += 1
+    print(f"  ok     self-test: deleting any of {cut} required steps is refused")
+
+    def drop_cache_condition(doc):
+        for _, _, step in steps_of(doc):
+            if step.get("id") == "cache":
+                step.pop("if", None)
+
+    if publish_builds_fresh(docs):
+        print("  FAIL   self-test: the publish workflows were refused as they stand")
+        return 1
+    for label, name, edit in (
+        ("a call without fresh", "build-vscode-oss.yml",
+         lambda doc: doc["jobs"]["build"]["with"].pop("fresh")),
+        ("fresh: false", "build-vscode-oss.yml",
+         lambda doc: doc["jobs"]["build"]["with"].update(fresh=False)),
+        ("a cache step that ignores it", "codeoss-build.yml", drop_cache_condition),
+    ):
+        edited = copy.deepcopy(docs)
+        edit(edited[name])
+        if not publish_builds_fresh(edited):
+            print(f"  FAIL   self-test: {label} was admitted as a publish that builds fresh")
+            return 1
+    print("  ok     self-test: a publish that could read the cache is refused three ways")
     return 0
 
 
@@ -309,15 +441,22 @@ def main() -> int:
     checked_files = 0
     checked_steps = 0
     gated_writers = 0
+    docs = {}
 
     paths = sorted(p for p in WORKFLOWS.iterdir()
                    if p.suffix in (".yml", ".yaml") and p.is_file())
     for path in paths:
         checked_files += 1
-        doc = yaml.safe_load(path.read_text())
+        doc = docs[path.name] = yaml.safe_load(path.read_text())
         bad, writers = ungated_writers(path, doc)
         failures.extend(bad)
         gated_writers += writers - len(bad)
+        for name in missing_steps(doc, REQUIRED_STEPS.get(path.name, ())):
+            failures.append(
+                f"{path.name}: the step {name!r} is gone. It only checks something, so "
+                f"nothing else fails without it. If it was renamed, rename it in "
+                f"REQUIRED_STEPS in this script; if it was removed on purpose, remove it there"
+            )
         for job_name, job in (doc.get("jobs") or {}).items():
             if "uses" not in job:
                 continue
@@ -350,6 +489,12 @@ def main() -> int:
                     f"pinned to a 40-character commit SHA"
                 )
 
+    # A table row for a workflow that is not there fires on nothing, so a renamed
+    # file would take its rows with it in silence.
+    failures.extend(f"{name} is not under {WORKFLOWS}, but REQUIRED_STEPS lists steps in it"
+                    for name in REQUIRED_STEPS if name not in docs)
+    failures.extend(publish_builds_fresh(docs))
+
     # Asserted, not merely printed. Printing the count was the first attempt at
     # this and it does not work: CI reads the exit code, so an empty
     # .github/workflows still went green with "all 0 steps in 0 workflows".
@@ -374,6 +519,9 @@ def main() -> int:
     # rule wants. It is not the empty-glob case the assertion above covers.
     print(f"  ok     {gated_writers} write-scoped job(s) in a workflow that can "
           f"also be started by hand, each gated on github.event_name")
+    print(f"  ok     all {sum(map(len, REQUIRED_STEPS.values()))} required steps are in "
+          f"{', '.join(REQUIRED_STEPS)}")
+    print("  ok     build-vscode-oss.yml asks for a fresh build and codeoss-build.yml skips its cache for it")
     return 0
 
 

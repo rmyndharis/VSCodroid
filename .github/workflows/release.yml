@@ -99,8 +99,9 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # Tags and history are needed to compare this release against the
-          # previous one. The default shallow fetch has neither, and the
-          # comparison would quietly pass by finding nothing.
+          # previous one, and to find the server-<version> tag the server check
+          # below compares against. The default shallow fetch has neither, and
+          # the comparison would quietly pass by finding nothing.
           fetch-depth: 0
           # This job runs Gradle plugins, npm postinstalls and several download
           # scripts, and it holds the signing secrets. It never pushes: the one
@@ -271,6 +272,19 @@ jobs:
                  "Point it at compare/$TAG...HEAD so the next section starts from this release."
             exit 1
           fi
+
+      # This workflow builds no server. It ships the server-<version> asset that
+      # build-vscode-oss.yml published, and the fetch step below compares only the
+      # pin, patches/ and branding/product.json with it: an edit to
+      # build-vscode-oss.sh or patch-js-debug-env.py passes, and the tag ships the
+      # tree the earlier script built. A patch edit is refused there, but only
+      # once the tag exists. This asks first, before anything is built, whether a
+      # file that decides the tree differs from the commit the server tag points
+      # at, which each publish moves to the commit it built.
+      #
+      # No `if:`, so a dispatched dry run answers the way the tag would.
+      - name: Check the published server was built from the same inputs
+        run: python3 scripts/check-server-published.py
 
       - name: Set up JDK 17
         uses: actions/setup-java@b843ebf9b913146b38da2eaa7aeddf76074ae1ad # v6.1.0

@@ -296,8 +296,10 @@ single include, so the payload rows are asked on an Android 11 device too.
 
 ```mermaid
 flowchart TD
-  PR["Pull request, and every push to main"] --> BUILD["build.yml: Build job (ubuntu-latest)"]
-  BUILD --> B1["Fetch the Code - OSS server release built from MIT source"]
+  PR["Pull request, and every push to main"] --> CODEOSS["build.yml: codeoss job (arm64 runner)"]
+  CODEOSS --> C1["codeoss-build.yml: build the Code - OSS server for this revision from MIT source, or restore it from the cache when no input changed"]
+  CODEOSS --> BUILD["build.yml: Build job (ubuntu-latest)"]
+  BUILD --> B1["Check the server tree that job built (fetch-vscode-oss.sh) and unpack it"]
   BUILD --> B2["Fetch Node from Termux nodejs-lts, plus Termux tools, npm, Python, extensions, musl loader"]
   BUILD --> B3["Build native addons (pty.node, watcher.node, vscode-sqlite3.node, zeromq.node) and the glibc shim"]
   BUILD --> B4["assembleDebug"]
@@ -312,7 +314,7 @@ flowchart TD
   LINT --> L3["python3 scripts/check-*.py repository gates"]
   LINT --> L4["git apply --stat on every patch, and device-test.sh --self-check"]
 
-  MAN["build-vscode-oss.yml (manual, arm64 runner)"] --> M1["Build Code - OSS from MIT source, apply patches/ and branding/, publish the server release"]
+  MAN["build-vscode-oss.yml (manual, arm64 runner)"] --> M1["Build Code - OSS from MIT source, never from the cache, apply patches/ and branding/, publish the server release"]
 ```
 
 ### 4.2 Local Development
