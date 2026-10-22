@@ -25,6 +25,7 @@ import java.security.MessageDigest
 import java.util.Base64
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.thread
 
@@ -212,11 +213,17 @@ class SafSyncEngine(private val context: Context) {
     private val deviceSeen = ConcurrentHashMap<String, DeviceState>()
     private val mirrorGenerations = ConcurrentHashMap<String, Any>()
 
+    /**
+     * How long a write to the device waits for another write to the same mirror to finish
+     * before it gives up and is announced as kept inside the app.
+     */
+    internal var outboundTurnWaitMs: Long = OUTBOUND_TURN_WAIT_MS
+
     private fun outboundAccess(root: File, generation: Any? = null): OutboundAccess {
         val access = mirrorAccess.computeIfAbsent(root.absolutePath) { MirrorAccess() }
         val observed = generation
             ?: mirrorGenerations.computeIfAbsent(root.absolutePath) { access.generation }
-        return OutboundAccess(access, observed)
+        return OutboundAccess(access, observed, outboundTurnWaitMs)
     }
 
     private fun <T> withCurrent(access: OutboundAccess?, action: () -> T): T? =
@@ -353,9 +360,9 @@ class SafSyncEngine(private val context: Context) {
      * @param safUri The tree URI granted by the SAF folder picker.
      * @param mirrorDir The local directory to mirror into.
      * @param onProgress Callback with (filesDone, totalFiles).
-     * @throws IOException when another sync of this mirror, or a save, delete or rename
-     *   still being sent to the provider, holds it: the mirror is left as it was, and the
-     *   caller says the folder is busy.
+     * @throws FolderBusyException when another sync of this mirror, or a save, delete or
+     *   rename still being sent to the provider, holds it: the mirror is left as it was, and
+     *   the caller says the folder is busy.
      */
     suspend fun initialSync(
         safUri: Uri,
@@ -369,7 +376,7 @@ class SafSyncEngine(private val context: Context) {
                     unfetched.add(mirrorDir.absolutePath)
                 }
             }
-            throw IOException("The folder is still syncing; try opening it again")
+            throw FolderBusyException()
         }
         try {
             synchronized(access.stateLock) {
@@ -5374,6 +5381,9 @@ class SafSyncEngine(private val context: Context) {
          */
         internal const val PARTIAL_SUFFIX = ".vscodroid-partial"
 
+        /** The default for [outboundTurnWaitMs]. */
+        internal const val OUTBOUND_TURN_WAIT_MS = 120_000L
+
         /**
          * What [setAsideDivergedMirror] puts in front of the mirror copy's own
          * modification time when it moves one out of a newer device copy's way.
@@ -6281,6 +6291,17 @@ class SafSyncEngine(private val context: Context) {
 
 // -- Data Classes --
 
+/**
+ * Thrown by [SafSyncEngine.initialSync] when the mirror is taken: another sync of it, or a
+ * save, delete or rename still being sent to the provider.
+ *
+ * Its own type because of when it is raised: before anything of the mirror was touched. A
+ * caller can therefore put the folder's watcher back even when the folder that was
+ * refused is the one being watched, which a sync that failed part-way through writing
+ * must never allow.
+ */
+class FolderBusyException : IOException("The folder is still syncing; try opening it again")
+
 internal data class DocumentInfo(
     val uri: Uri,
     val docId: String,
@@ -6445,7 +6466,10 @@ internal data class VanishedDirectory(
  */
 private class UploadClaim(var path: String)
 
-/** Reset and provider mutations share admission, without waiting for a provider. */
+/**
+ * Reset and provider mutations share admission. A reset never waits for a provider; a write
+ * waits for another write, for a bounded time, and for nothing else.
+ */
 private class MirrorAccess {
     val lock = ReentrantLock()
     val stateLock = Any()
@@ -6453,21 +6477,67 @@ private class MirrorAccess {
     @Volatile var generation: Any = Any()
 }
 
-private class OutboundAccess(private val mirror: MirrorAccess, val generation: Any) {
+private class OutboundAccess(
+    private val mirror: MirrorAccess,
+    val generation: Any,
+    private val turnWaitMs: Long,
+) {
+    private fun current() = synchronized(mirror.stateLock) {
+        !mirror.syncing && mirror.generation === generation
+    }
+
+    /**
+     * Runs [action] with the mirror to itself, or answers null when it must not run.
+     *
+     * Null means stale, and it is said at once for a write admitted under an older
+     * generation and for a mirror being reset: neither has anything left to tell the
+     * device, and the generation is read before the lock so such a write never contends
+     * with the current one. Another current write holding the mirror is a turn to wait
+     * for, not staleness: a folder switch leaves the closing drain finishing its queue
+     * while the restored watcher's drain starts, and both are entitled to write. The wait
+     * is polled, so a reset that begins meanwhile ends it, and bounded by [turnWaitMs], so
+     * a provider call that never returns costs the waiting save its place and a notice
+     * rather than a thread for good.
+     *
+     * An interrupt, which is how a stop wakes a worker, does not cut the wait short: the
+     * job has been taken off its queue and a thrown wait would lose it. It is set aside
+     * for the action, which must not meet it (a stream copy fails on a thread carrying
+     * one), and handed back after.
+     */
     fun <T> run(action: () -> T): T? {
-        if (!mirror.lock.tryLock()) return null
-        return try {
-            val current = synchronized(mirror.stateLock) {
-                !mirror.syncing && mirror.generation === generation
+        if (!current()) return null
+        var interrupted = false
+        try {
+            var held = mirror.lock.tryLock()
+            val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(turnWaitMs)
+            while (!held) {
+                val left = deadline - System.nanoTime()
+                if (left <= 0 || !current()) return null
+                held = try {
+                    mirror.lock.tryLock(minOf(left, TURN_POLL_NANOS), TimeUnit.NANOSECONDS)
+                } catch (_: InterruptedException) {
+                    interrupted = true
+                    false
+                }
             }
-            if (current) action() else null
+            try {
+                if (Thread.interrupted()) interrupted = true
+                return if (current()) action() else null
+            } finally {
+                mirror.lock.unlock()
+            }
         } finally {
-            mirror.lock.unlock()
+            if (interrupted) Thread.currentThread().interrupt()
         }
     }
 
     fun <T> update(action: () -> T): T? = synchronized(mirror.stateLock) {
         if (!mirror.syncing && mirror.generation === generation) action() else null
+    }
+
+    private companion object {
+        /** How often a waiting write looks again at whether a reset has overtaken it. */
+        val TURN_POLL_NANOS = TimeUnit.MILLISECONDS.toNanos(200)
     }
 }
 

@@ -83,14 +83,14 @@ class SyncDialogTeardownTest {
             "openSafFolder no longer handles anything, so this case is measuring nothing"
         }
         val handlers = opened.count { it.contains("} catch (") }
-        assertEquals(3, handlers) {
-            "expected the cancellation, permission and catch-all handlers. If one was " +
-                "added or removed, check the new one dismisses the dialog only while " +
-                "there is still a window under it."
+        assertEquals(4, handlers) {
+            "expected the cancellation, permission, busy-folder and catch-all handlers. " +
+                "If one was added or removed, check the new one dismisses the dialog only " +
+                "while there is still a window under it."
         }
 
         val dismissals = opened.drop(firstCatch).filter { it.contains("dialog.dismiss()") }
-        assertEquals(3, dismissals.size) {
+        assertEquals(4, dismissals.size) {
             "expected one dismissal in each handler; found " +
                 dismissals.joinToString("\n") { "  ${it.trim()}" }
         }

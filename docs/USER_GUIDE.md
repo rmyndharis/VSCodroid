@@ -111,7 +111,10 @@ VSCodroid is VS Code. If you have used VS Code on desktop, everything works the 
   device, and make a file of the same name, the device's keeps the name and
   yours is kept beside it as `<name>.local-<time>`, in the editor and in the
   device folder, the next time you open the folder. Until then a notice says the
-  file exists only inside VSCodroid.
+  file exists only inside VSCodroid. If you open a folder again while a large
+  save to it is still being written, the open does not wait for it: it says
+  the folder is busy, saving carries on, and your later saves are sent after
+  that one.
 - A file of a device folder that you delete in the editor is deleted in the
   device folder too, unless the device folder's version is one VSCodroid has not
   read: another app may have changed it since you opened the folder or last

@@ -73,6 +73,7 @@ import com.vscodroid.service.NodeService
 import com.vscodroid.service.StartupNotice
 import com.vscodroid.setup.FirstRunSetup
 import com.vscodroid.setup.ToolchainManager
+import com.vscodroid.storage.FolderBusyException
 import com.vscodroid.storage.SafFolderInfo
 import com.vscodroid.storage.SafStorageManager
 import com.vscodroid.util.Logger
@@ -1578,6 +1579,21 @@ class MainActivity : AppCompatActivity() {
                     getString(R.string.saf_sync_denied),
                     restoreWatcherAfterFailure(previouslyWatched, uri)
                 )
+            } catch (e: FolderBusyException) {
+                // Guarded for the reason the handler above it is.
+                if (!isFinishing && !isDestroyed) dialog.dismiss()
+                // Refused before the mirror was touched, by a save, delete or rename
+                // still on its way to the provider, or by another sync of the folder.
+                // Nothing is half-written, so the watcher goes back even for the folder
+                // that was refused: leaving it stopped kept write-back off for a folder
+                // the user was still editing, and every page load then tried to adopt it
+                // again and was refused again. The saves that follow wait behind the
+                // write in flight; see [SafSyncEngine.outboundTurnWaitMs].
+                Logger.w(tag, "The device folder is busy; leaving it as it was")
+                reportSyncFailure(
+                    getString(R.string.saf_sync_failed, e.message),
+                    restoreWatcherAfterFailure(previouslyWatched, uri, mirrorUntouched = true)
+                )
             } catch (e: Exception) {
                 // Guarded for the reason the handler above it is.
                 if (!isFinishing && !isDestroyed) dialog.dismiss()
@@ -1619,11 +1635,17 @@ class MainActivity : AppCompatActivity() {
      * the whole mirror and registers one kernel watch per directory, and this
      * runs from a failure handler with a dialog still on screen.
      *
+     * @param mirrorUntouched the sync was refused before it wrote anything, so the
+     *   previous folder's watcher goes back whichever folder failed.
      * @return whether write-back is running for the folder the user is looking at.
      */
-    private suspend fun restoreWatcherAfterFailure(previous: Pair<File, Uri>?, failed: Uri): Boolean {
+    private suspend fun restoreWatcherAfterFailure(
+        previous: Pair<File, Uri>?,
+        failed: Uri,
+        mirrorUntouched: Boolean = false,
+    ): Boolean {
         val (mirrorDir, uri) = previous ?: return false
-        if (!shouldRestorePreviousWatcher(uri.toString(), failed.toString())) return false
+        if (!shouldRestorePreviousWatcher(uri.toString(), failed.toString(), mirrorUntouched)) return false
         withContext(Dispatchers.IO) { safManager.startFileWatcher(mirrorDir, uri) }
         beginWatching(mirrorDir, uri)
         Logger.i(tag, "Restored the previous folder's watcher after a failed switch")
@@ -7916,12 +7938,20 @@ internal fun deviceFolderTarget(
  * leaving it unwatched means the user keeps editing it with write-back silently
  * off.
  *
+ * [mirrorUntouched] is the third case, and it lifts the first rule: a sync refused as busy
+ * stopped before it wrote anything, so even the folder being reopened is as the watcher
+ * left it and the half-written mirror the rule guards against does not exist.
+ *
  * Comparing the tree URIs as text because that is what a JVM test can supply:
  * `android.net.Uri` is abstract with a private constructor, so it can be neither
  * built nor mocked outside a device.
  */
-internal fun shouldRestorePreviousWatcher(previousUri: String?, failedUri: String): Boolean =
-    previousUri != null && previousUri != failedUri
+internal fun shouldRestorePreviousWatcher(
+    previousUri: String?,
+    failedUri: String,
+    mirrorUntouched: Boolean = false,
+): Boolean =
+    previousUri != null && (mirrorUntouched || previousUri != failedUri)
 
 /**
  * Whether an adoption that waited its turn behind another open should be skipped.

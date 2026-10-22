@@ -1585,6 +1585,23 @@ class RestoreWatcherTest {
         // startFileWatcher for a mirror that does not exist.
         assertFalse(shouldRestorePreviousWatcher(previousUri = null, failedUri = opened))
     }
+
+    @Test
+    fun `a reopen refused before the mirror was touched keeps the watched folder watched`() {
+        // Refused as busy, which is raised ahead of every write: the mirror is as it
+        // was, so there is no half to push, and leaving the folder unwatched would
+        // keep write-back off for a folder the user is still editing.
+        assertTrue(
+            shouldRestorePreviousWatcher(previousUri = opened, failedUri = opened, mirrorUntouched = true)
+        )
+    }
+
+    @Test
+    fun `an untouched mirror restores nothing when nothing was watched`() {
+        assertFalse(
+            shouldRestorePreviousWatcher(previousUri = null, failedUri = opened, mirrorUntouched = true)
+        )
+    }
 }
 
 /**
@@ -1663,9 +1680,29 @@ class SyncCancellationTest {
         val restores = lines.count { it.contains("restoreWatcherAfterFailure(previouslyWatched") }
 
         assertEquals(
-            2, restores,
-            "expected both failure handlers, permission denied and everything else, " +
-                "to decide what stays watched; found $restores",
+            3, restores,
+            "expected all three failure handlers, permission denied, folder busy and " +
+                "everything else, to decide what stays watched; found $restores",
+        )
+    }
+
+    @Test
+    fun `only the busy handler restores the folder that was refused`() {
+        // A refused-as-busy sync stopped before it wrote anything, so even the folder being
+        // reopened is as the watcher left it. Every other failure may have left the mirror
+        // half written, and for those the folder that failed stays unwatched: the flag that
+        // lifts that rule must not spread to them.
+        val lines = codeLines()
+        val busy = lines.indexOfFirst { it.contains("catch (e: FolderBusyException)") }
+        val general = lines.indexOfFirst { it.contains("catch (e: Exception)") && lines.indexOf(it) > busy }
+        assertTrue(busy >= 0, "the busy-folder handler is gone, so a refused reopen leaves write-back off")
+        val flagged = lines.withIndex().filter { (_, l) ->
+            l.contains("restoreWatcherAfterFailure(previouslyWatched") && l.contains("mirrorUntouched = true")
+        }.map { it.index }
+        assertEquals(1, flagged.size, "mirrorUntouched is passed by $flagged")
+        assertTrue(
+            flagged.single() in busy until general,
+            "mirrorUntouched = true belongs to the busy handler alone",
         )
     }
 }

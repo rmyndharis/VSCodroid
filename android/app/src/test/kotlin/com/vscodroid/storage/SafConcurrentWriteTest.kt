@@ -51,11 +51,13 @@ import java.util.concurrent.atomic.AtomicInteger
  * with it. Those cases are here too, driven through `initialSync` rather than
  * through the write-back.
  *
- * The exclusion is deliberately non-blocking. A lock the loser waits on would trade
- * this corruption for an unbounded stall: a `ContentResolver` stream to a network
- * or MTP provider has no timeout, and `initialSync` runs behind a dialog built with
- * `setCancelable(false)`. What these pin is both halves of that: no overlap, and no
- * waiting.
+ * The exclusion never makes a reset wait, and makes a write wait for another write only
+ * for a bounded time. A lock the loser waited on without limit would trade this
+ * corruption for an unbounded stall: a `ContentResolver` stream to a network or MTP
+ * provider has no timeout, and `initialSync` runs behind a dialog built with
+ * `setCancelable(false)`. A sync therefore refuses at once, and a write takes its turn up
+ * to a ceiling and is then announced as kept inside the app. What these pin is no
+ * overlap, no waiting past the ceiling, and no save dropped for having had to wait.
  */
 class SafConcurrentWriteTest {
 
@@ -232,23 +234,31 @@ class SafConcurrentWriteTest {
             "the first writer never reached its stream, so nothing was contended",
         )
 
-        // The second writer meets a document that is being streamed into right now.
-        deliver("notes.md")
+        // The second writer meets a document that is being streamed into right now, and
+        // takes its turn once the first lets go.
+        val second = Thread { deliver("notes.md") }.apply { start() }
+        second.join(300)
+        assertTrue(second.isAlive, "the second writer did not wait for the first")
 
         releaseFirstWriter.countDown()
         first.join(5_000)
+        second.join(5_000)
 
         assertEquals(1, peak.get(), "two writers held the same document open at once")
+        assertEquals(
+            2, everOpened.get(),
+            "the second save was dropped for meeting the first instead of waiting its turn",
+        )
     }
 
     /**
-     * And the second writer does not wait for the first. This is the half that keeps
-     * the fix from being a trade: a writer that blocked here would stall `initialSync`
-     * for as long as a network provider takes, behind a dialog that cannot be
-     * cancelled.
+     * And the second writer does not wait for ever. This is the half that keeps the fix
+     * from being a trade: a writer that blocked without limit would stall behind a
+     * provider that never answers, and a ceiling is what turns that into a notice.
      */
     @Test
-    fun `the second writer returns rather than waiting`() {
+    fun `the second writer waits no longer than its ceiling`() {
+        engine.outboundTurnWaitMs = 300
         deviceHolding("notes.md")
         File(mirror, "notes.md").writeText("edited in the editor")
         blockFirstWriter = true
@@ -264,10 +274,10 @@ class SafConcurrentWriteTest {
         first.join(5_000)
 
         assertTrue(
-            waitedMs < 1_000,
-            "the second writer waited ${waitedMs}ms for the first, which is the stall " +
-                "this design exists to avoid",
+            waitedMs in 250..3_000,
+            "the second writer waited ${waitedMs}ms against a ceiling of 300ms",
         )
+        assertEquals(1, everOpened.get(), "a writer past its ceiling still reached the document")
     }
 
     /**

@@ -43,6 +43,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Replacing a file with a folder, or a folder with a file, in a device folder takes effect on the device when the original is deleted from the terminal.
 - Reopening a device folder reclaims abandoned temporary downloads while retaining active copies and existing workspace files.
 - Opening a device folder during an active save or delete reports that the folder is busy instead of waiting for the provider.
+- A device folder that is busy when it is opened again leaves the folder already open saving.
+- Device-folder saves, deletes and renames that arrive while another write to the folder is still going wait their turn instead of being dropped.
 - A file and a folder that share a name between the device and the editor are both kept: the device's keeps the name, and the other is set aside as `.local-<time>` and sent across, instead of failing at every open.
 - An older version's half-copied `.vscodroid-partial` files are removed when a device folder is reopened, if they match the start of the device document.
 - A device folder listing that the provider has not finished loading no longer removes files from the editor or creates them again on the device.

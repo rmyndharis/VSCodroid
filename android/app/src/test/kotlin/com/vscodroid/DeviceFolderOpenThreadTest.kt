@@ -133,6 +133,22 @@ class DeviceFolderOpenThreadTest {
     }
 
     @Test
+    fun `a reopen refused as busy puts the watcher back for the same folder`() {
+        val busy = opened.indexOfFirst { it.contains("catch (e: FolderBusyException)") }
+        val generic = opened.indexOfFirst { it.contains("catch (e: Exception)") }
+        assertTrue(busy >= 0) {
+            "openSafFolder has no handler of its own for a folder that is busy, so the " +
+                "watcher it stopped stays stopped for the folder the user is editing"
+        }
+        assertTrue(busy < generic) { "the generic handler comes first and swallows the busy one" }
+        val handler = opened.subList(busy, generic).joinToString(" ")
+        assertTrue(handler.contains("restoreWatcherAfterFailure(") && handler.contains("mirrorUntouched = true")) {
+            "the busy handler must put the previous watcher back whichever folder it was, " +
+                "because nothing of the mirror was touched"
+        }
+    }
+
+    @Test
     fun `nothing is asked of the provider before the dialog is on screen`() {
         val shown = opened.indexOfFirst { it.contains("dialog.show()") }
         val asked = opened.withIndex().filter { (_, line) ->
