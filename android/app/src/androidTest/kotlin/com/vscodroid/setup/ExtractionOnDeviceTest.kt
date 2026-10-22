@@ -246,7 +246,11 @@ class ExtractionOnDeviceTest {
             assertTrue(
                 "could not take the filesystem low enough to fail a copy; " +
                     "${sandbox.usableSpace} bytes still free",
-                sandbox.usableSpace < 4L * 1024 * 1024,
+                // At most, not under: the loop stops once the space is no longer above 4 MiB,
+                // and on a data partition whose free space is a multiple of the chunk it lands
+                // on exactly 4 MiB. That is as full as this case needs, since the copies it
+                // has to fail are tens of MB.
+                sandbox.usableSpace <= 4L * 1024 * 1024,
             )
 
             try {
