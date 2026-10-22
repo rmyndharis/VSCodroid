@@ -52,6 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Generating SSH keys preserves an existing private key whose public file is missing and explains how to recover the public key.
 - Toolchain installation rejects packs with a missing payload directory or required binary instead of marking them installed.
 - Cancelling a toolchain install no longer deletes a pack during a copy, and installation is refused while pack removal is pending.
+- Removing a toolchain works while Play is still clearing its download.
 - Late callbacks from an old editor server no longer clear its replacement's readiness, restart it or display obsolete heap warnings.
 - Building from source retries interrupted bundled-extension extraction instead of accepting a partial extension directory as verified.
 - Building from source stops when a Python dependency library's SONAME differs from the name the build ships it under.

@@ -25,6 +25,7 @@ import io.mockk.unmockkAll
 import io.mockk.verify
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
@@ -310,6 +311,99 @@ class PackReleaseOutcomeTest {
         manager().reconcileDeliveredPacks()
 
         verify(timeout = 10_000, exactly = 1) { packManager.removePack("toolchain_java") }
+    }
+
+    /** Waits until everything already queued on [manager]'s io thread has run. */
+    private fun drained(manager: ToolchainManager) {
+        val executor = ToolchainManager::class.java.getDeclaredField("ioExecutor")
+            .apply { isAccessible = true }.get(manager) as ExecutorService
+        executor.submit {}.get(10, TimeUnit.SECONDS)
+    }
+
+    /**
+     * Removing a toolchain touches `usr/` and the install record, and Play's copy of the
+     * pack lives under `assetpacks`, so the two do not meet. The in-flight delete of that
+     * copy is what keeps a new install out of it; it was also refusing a removal, silently
+     * (the card got an UNKNOWN and nothing else) until Play's task completed.
+     */
+    @Test
+    fun `a toolchain can be removed while Play still deletes its pack copy`() {
+        recordInstalled("java")
+        playHolds("toolchain_java")
+        manager().reconcileDeliveredPacks()
+        // The delete is posted and Play has not said it is done.
+        verify(timeout = 10_000) {
+            removal.addOnCompleteListener(any<Executor>(), any<OnCompleteListener<Void>>())
+        }
+
+        val reported = Collections.synchronizedList(mutableListOf<Int>())
+        val answered = CountDownLatch(1)
+        manager().apply {
+            onStateChange = { _, status, _, _ ->
+                reported.add(status)
+                answered.countDown()
+            }
+        }.uninstall("java")
+
+        assertTrue(answered.await(10, TimeUnit.SECONDS), "the removal never reported an outcome")
+        assertEquals(
+            listOf(AssetPackStatus.NOT_INSTALLED), reported,
+            "the removal was refused while Play deleted its pack copy",
+        )
+        assertFalse(
+            File(filesDir, "home/.vscodroid/toolchains.json").readText().contains("\"java\""),
+            "the record still names the toolchain",
+        )
+    }
+
+    /**
+     * The control: the same removal while an install really holds the pack is still
+     * declined, with the answer the card needs to put its button back.
+     */
+    @Test
+    fun `a toolchain is still not removed underneath an install of it`() {
+        recordInstalled("java")
+        val installsInFlight = ToolchainManager::class.java.getDeclaredField("installsInFlight")
+            .apply { isAccessible = true }.get(null) as MutableSet<String>
+        installsInFlight.add("toolchain_java")
+        try {
+            val reported = Collections.synchronizedList(mutableListOf<Int>())
+            val answered = CountDownLatch(1)
+            manager().apply {
+                onStateChange = { _, status, _, _ ->
+                    reported.add(status)
+                    answered.countDown()
+                }
+            }.uninstall("java")
+
+            assertTrue(answered.await(10, TimeUnit.SECONDS), "the declined removal said nothing")
+            assertEquals(listOf(AssetPackStatus.UNKNOWN), reported)
+            assertTrue(File(filesDir, "home/.vscodroid/toolchains.json").readText().contains("\"java\""))
+        } finally {
+            installsInFlight.remove("toolchain_java")
+        }
+    }
+
+    /**
+     * A `removePack` that throws must not leave the pack marked as being deleted. The
+     * mark keeps new readers out of the directory until Play finishes, so one left behind
+     * refused every later release of that pack, and every install from it, for the life
+     * of the process.
+     */
+    @Test
+    fun `a delete that throws does not keep the pack from being released again`() {
+        recordInstalled("java")
+        playHolds("toolchain_java")
+        every { packManager.removePack(any()) } throws IllegalStateException("Play is not ready") andThen removal
+
+        val first = manager()
+        first.reconcileDeliveredPacks()
+        verify(timeout = 10_000, exactly = 1) { packManager.removePack("toolchain_java") }
+        drained(first)
+
+        manager().reconcileDeliveredPacks()
+
+        verify(timeout = 10_000, exactly = 2) { packManager.removePack("toolchain_java") }
     }
 
     /** A manager reporting into [sink], settling [latch] on a terminal status. */

@@ -741,7 +741,7 @@ class ToolchainManager(private val context: Context) {
     private fun uninstallSync(nameOrPack: String) {
         val name = toolchainShortName(nameOrPack)
         val packName = "toolchain_$name"
-        if (!claimPack(packName)) {
+        if (!claimPack(packName, readsDeliveredPack = false)) {
             Logger.i(tag, "An install of $packName is running; not removing it underneath")
             report(packName, AssetPackStatus.UNKNOWN, 0)
             return
@@ -1230,9 +1230,21 @@ class ToolchainManager(private val context: Context) {
         installDeliveredPack(info.packName, File(assetsPath))
     }
 
-    private fun claimPack(packName: String): Boolean = synchronized(packOperationLock) {
-        packName !in packRemovalsInFlight && installsInFlight.add(packName)
-    }
+    /**
+     * Takes the claim on [packName], or answers false when it cannot be had.
+     *
+     * [readsDeliveredPack] is whether the work reads Play's copy of the pack, which is what
+     * a delete in flight forbids: an install copies out of that directory and has to wait
+     * for Play to finish removing it. A removal and the reclaim of an interrupted install
+     * touch only `usr/` and the install record, so a delete of Play's copy is none of their
+     * business, and refusing them for it cost the user a Remove that did nothing for as
+     * long as Play took.
+     */
+    private fun claimPack(packName: String, readsDeliveredPack: Boolean = true): Boolean =
+        synchronized(packOperationLock) {
+            (!readsDeliveredPack || packName !in packRemovalsInFlight) &&
+                installsInFlight.add(packName)
+        }
 
     private fun releasePackClaim(packName: String) {
         val pendingRelease = synchronized(packOperationLock) {
@@ -3902,7 +3914,7 @@ class ToolchainManager(private val context: Context) {
             // claim that makes a delete safe.
             if (!marker.name.endsWith(".json")) continue
             val packName = marker.name.removeSuffix(".json")
-            if (!claimPack(packName)) continue
+            if (!claimPack(packName, readsDeliveredPack = false)) continue
             try {
                 val manifest = runCatching { JSONObject(marker.readText()) }.getOrNull()
                 val name = manifest?.optString("name", "").orEmpty()
