@@ -45,6 +45,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Opening a device folder during an active save or delete reports that the folder is busy instead of waiting for the provider.
 - A file and a folder that share a name between the device and the editor are both kept: the device's keeps the name, and the other is set aside as `.local-<time>` and sent across, instead of failing at every open.
 - An older version's half-copied `.vscodroid-partial` files are removed when a device folder is reopened, if they match the start of the device document.
+- A device folder listing that the provider has not finished loading no longer removes files from the editor or creates them again on the device.
 - A device-folder import refuses to install a copy if a parent directory is redirected by a symbolic link during the read.
 - Generating SSH keys preserves an existing private key whose public file is missing and explains how to recover the public key.
 - Toolchain installation rejects packs with a missing payload directory or required binary instead of marking them installed.

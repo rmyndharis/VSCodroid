@@ -4,6 +4,7 @@ import android.content.ContentResolver
 import android.content.Context
 import android.database.Cursor
 import android.net.Uri
+import android.os.Bundle
 import android.provider.DocumentsContract
 import com.vscodroid.util.Logger
 import io.mockk.Runs
@@ -109,10 +110,14 @@ abstract class SafInitialSyncTestBase {
     protected fun named(text: String): Uri =
         mockk<Uri>(relaxed = true).also { every { it.toString() } returns text }
 
-    protected fun deviceTree(tree: Map<String, List<Child>?>) {
+    /**
+     * [loading] names the parents whose listing the provider flags as still loading, which
+     * is how a provider backed by a network says the rows so far are not all of them.
+     */
+    protected fun deviceTree(tree: Map<String, List<Child>?>, loading: Set<String> = emptySet()) {
         every { resolver.query(any(), any(), any(), any(), any()) } answers {
             val parent = firstArg<Uri>().toString().removePrefix("children:")
-            tree[parent]?.let { cursorOver(it) }
+            tree[parent]?.let { cursorOver(it, parent in loading) }
         }
         every { resolver.openInputStream(any()) } answers {
             val docId = firstArg<Uri>().toString().removePrefix("doc-uri:")
@@ -122,9 +127,17 @@ abstract class SafInitialSyncTestBase {
         }
     }
 
-    private fun cursorOver(children: List<Child>): Cursor {
+    private fun cursorOver(children: List<Child>, loading: Boolean): Cursor {
         var row = -1
         return mockk<Cursor>(relaxed = true) {
+            every { extras } returns if (loading) {
+                mockk<Bundle>(relaxed = true) {
+                    every { getBoolean(DocumentsContract.EXTRA_LOADING) } returns true
+                    every { containsKey(DocumentsContract.EXTRA_ERROR) } returns false
+                }
+            } else {
+                null
+            }
             every { moveToNext() } answers { ++row < children.size }
             every { getColumnIndexOrThrow(any()) } answers {
                 when (firstArg<String>()) {

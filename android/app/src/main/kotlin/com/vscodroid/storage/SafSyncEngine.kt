@@ -2711,6 +2711,22 @@ class SafSyncEngine(private val context: Context) {
                 // Not every provider fills this one, so a missing column is not fatal.
                 val modifiedIndex = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_LAST_MODIFIED)
 
+                // A provider backed by a network answers with the rows it has and says more
+                // are coming, or says it failed. The rows are real, and they are not all of
+                // them: read as the whole folder, what they leave out looked deleted on the
+                // device and its mirror copy was removed, or looked missing and was created
+                // again. Treated as the listing that failed is treated, which is the
+                // machinery for exactly this: the folder is recorded as unread, so what is
+                // under it stays guarded, and nothing is deleted or put across on its word.
+                if (cursor.extras?.let {
+                        it.getBoolean(DocumentsContract.EXTRA_LOADING) ||
+                            it.containsKey(DocumentsContract.EXTRA_ERROR)
+                    } == true
+                ) {
+                    complete = false
+                    skipped.add(parentRelPath)
+                }
+
                 while (cursor.moveToNext()) {
                     val docId = cursor.getString(idIndex)
                     val name = cursor.getString(nameIndex)
