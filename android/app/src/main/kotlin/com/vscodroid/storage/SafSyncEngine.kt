@@ -3484,8 +3484,7 @@ class SafSyncEngine(private val context: Context) {
      * belongs to other apps, it is not space this app can count on, and free space is
      * what the floor exists to leave behind.
      */
-    @SuppressLint("UsableSpace")
-    internal var usableSpaceOf: (File) -> Long = { it.usableSpace }
+    internal var usableSpaceOf: (File) -> Long = defaultUsableSpaceOf
 
     /**
      * Declines to write [localFile] out, because the device holds a document under that
@@ -5327,6 +5326,18 @@ class SafSyncEngine(private val context: Context) {
     }
 
     companion object {
+        /**
+         * What [usableSpaceOf] starts as in every engine: the room the filesystem reports.
+         *
+         * A variable so the unit suite can stand it down for the whole JVM. The floor in
+         * [copyDocumentToLocal] refuses every fetch below [OPEN_SPACE_FLOOR_BYTES], and a test
+         * that leaves this alone is asking the machine it runs on: with the temp volume that
+         * low, the document is never copied and the save or delete for it is refused as
+         * unread, which no test about those rules expects to be decided by a disk.
+         */
+        @SuppressLint("UsableSpace")
+        internal var defaultUsableSpaceOf: (File) -> Long = { it.usableSpace }
+
         private const val COPY_BUFFER_SIZE = 8192
         private const val WRITEBACK_POLL_MS = 200L
 
