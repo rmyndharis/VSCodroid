@@ -247,6 +247,38 @@ if (process.getuid && process.getuid() !== 0) {
     fs.rmSync(dir, { recursive: true, force: true });
 }
 
+// 5b. The Python extension is let use the proposed APIs its manifest declares, and nothing
+//     else is. The workbench strips a declared proposal from every extension the server does
+//     not name, and ms-python.python then fails to activate at its first read of one. The
+//     server names an extension by `--enable-proposed-api <id>`; the same flag with no id
+//     turns the check off for every extension on the phone, so what matters here is the
+//     shape the bootstrap emits: the flag once, followed by exactly that id.
+{
+    const dir = fixture(UPSTREAM, {
+        serverMain: "require('fs').writeFileSync(require('path').join(__dirname, 'argv.json'), " +
+            'JSON.stringify(process.argv.slice(2)));\n',
+    });
+    const run = boot(dir);
+    const argvFile = path.join(dir, 'vscode-reh', 'out', 'argv.json');
+    assert.ok(fs.existsSync(argvFile), `the editor server was never launched:\n${run.output}`);
+    const argv = JSON.parse(fs.readFileSync(argvFile, 'utf8'));
+    const at = argv.indexOf('--enable-proposed-api');
+    assert.ok(at >= 0, `the Python extension is not let use its proposed APIs: ${JSON.stringify(argv)}`);
+    assert.strictEqual(
+        argv.lastIndexOf('--enable-proposed-api'), at,
+        `the flag is given more than once: ${JSON.stringify(argv)}`,
+    );
+    assert.strictEqual(
+        argv[at + 1], 'ms-python.python',
+        `the flag must name the one extension that needs it: ${JSON.stringify(argv)}`,
+    );
+    assert.ok(
+        !argv.some((arg) => /^--enable-proposed-api=/.test(arg)),
+        `a joined form of the flag appears beside the separate one: ${JSON.stringify(argv)}`,
+    );
+    fs.rmSync(dir, { recursive: true, force: true });
+}
+
 /**
  * The preload rides as one token, because its shape decides what the process
  * monitor calls the editor server.

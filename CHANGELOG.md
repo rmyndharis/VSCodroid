@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Accounts and Manage buttons stay reachable in the activity bar on a phone in landscape: views that do not fit move into the overflow menu.
 - On a phone in landscape with the keyboard up, the title bar and the status bar are put away so the editor shows four lines of code instead of one; they return with the keyboard.
 - On a phone in landscape with the keyboard up, an open terminal panel steps aside while the editor has the focus, so the editor keeps its four lines; the panel returns with the keyboard, and stays when you are typing in it.
+- The Python extension is allowed the editor APIs it declares, so it finishes activating instead of failing at its first test API.
 - Stopping the editor also ends its surviving server when the bootstrap has already exited.
 - Stopping the editor ends a server that has stopped responding.
 - A failed SSH key generation keeps a public key file that was already there.

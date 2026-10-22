@@ -140,6 +140,7 @@
 | EX-5 | Bundled extensions | Check Extensions sidebar after first run | Process Monitor, SAF bridge, Serve on Network, Welcome, Python, ESLint, Prettier and Tailwind visible; no third-party icon theme is bundled; file icons use the built-in Seti theme, and Minimal and VS Code Modern Icons are the other two built-in icon themes | | |
 | EX-6 | Uninstall extension | Uninstall a previously installed extension | Removed cleanly, no errors | | |
 | EX-7 | Jupyter notebook | Install **Jupyter** from Open VSX, `python3 -m venv .venv` in the terminal, open a `.ipynb`, **Select Kernel** > **Python Environments...** > that environment, run a cell printing something, then run a cell starting a subprocess (`import subprocess; subprocess.run(['sleep','600'])`) and press Interrupt | `ipykernel` installs into the environment (about half a minute, needs the network), the cell prints, and the interrupt ends both the cell and the `sleep` it started rather than leaving it behind. The kernel talks over the bundled zeromq addon, so a kernel that never becomes ready is that addon, not the extension | | |
+| EX-8 | The Python extension starts clean | Open a `.py` file, open the Python log from Output, run **Python: Configure Tests** with unittest and `test*.py`, then run the tests. Open one `.js` file and a terminal as well | No "CANNOT use API proposal" line in the log; tests are listed without a request to reload; the process warning does not appear for one file and one terminal | | |
 
 ## 7. Background / Foreground
 
@@ -321,7 +322,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | Keyboard Input | 47 | | | |
 | Screen & Orientation | 15 | | | |
 | Editor Operations | 17 | | | |
-| Extensions | 7 | | | |
+| Extensions | 8 | | | |
 | Background/Foreground | 9 | | | |
 | Low Memory & Stress | 5 | | | |
 | Performance | 10 | | | |
@@ -329,7 +330,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | Terminal & Tools | 18 | | | |
 | SAF & Files | 27 | | | |
 | Display Language | 6 | | | |
-| **Total** | **182** | | | |
+| **Total** | **183** | | | |
 
 **Overall Result**: [ ] PASS / [ ] FAIL
 

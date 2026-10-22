@@ -870,7 +870,7 @@ server.js
 ```
 
 What reaches the editor server is a different list. `server.js` reads `host`, `port`
-and `log` as its own **defaults** and rebuilds them, adds three flags nobody passed in,
+and `log` as its own **defaults** and rebuilds them, adds four flags nobody passed in,
 and then forwards a **whitelist of exactly four keys**:
 
 ```js
@@ -896,6 +896,10 @@ Added by `server.js` itself, not passed from Kotlin:
   APPLICATION-scoped key the server owns, `extensions.verifySignature`, does take effect
   from it. Only a key that is APPLICATION-scoped *and* read by the workbench cannot be
   defaulted there. See `Environment.getMachineSettingsPath`.
+- `--enable-proposed-api ms-python.python`: the workbench strips the proposed APIs an
+  extension declares unless the server names it, and the Python extension, which declares
+  nine, then fails to activate at its first read of one (`testObserver`). The id is the
+  point: the flag with no id turns the check off for every extension on the phone.
 
 ⚠️ **An argument that is not in that whitelist is dropped silently.** Adding a flag to
 the Kotlin command line and expecting the editor server to see it is the trap here,
