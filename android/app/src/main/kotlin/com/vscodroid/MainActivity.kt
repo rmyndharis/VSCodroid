@@ -934,12 +934,14 @@ class MainActivity : AppCompatActivity() {
      * same reason the restart case is.
      *
      * That second message is bounded rather than gated, and the difference
-     * matters. It is not out of reach of an outside caller: the id is a small
-     * integer the workbench counts from one, and a record is kept past its own
-     * window on purpose, so anything on the device can name a request the user
-     * really did start. What it cannot do is repeat, because the record is taken
-     * back as the message goes up -- one explanation per launch, and every
-     * further arrival for that id lands in the silent branch above.
+     * matters. The id is a small integer the workbench counts from one, so what
+     * keeps an outside caller out is the secret registered for the request: it is
+     * checked before the window, and a caller without it reaches neither message.
+     * A caller that does hold it can still only raise the message once,
+     * because the record is retired as the message goes up ([AuthTabWindow.expire]
+     * hides it and keeps its identity reserved until the page changes) -- one
+     * explanation per launch, and every further arrival for that id lands in the
+     * silent branch above.
      *
      * Both messages are fixed text; nothing from the callback reaches the screen.
      */
@@ -3624,10 +3626,12 @@ class MainActivity : AppCompatActivity() {
             })();
         """.trimIndent()) { result ->
             if (webView !== targetView || client.authPage(targetView)?.generation != generation) return@evaluateJavascript
-            if (!authBootstrapSucceeded(result, generation)) {
-                client.completeAuthBootstrap(targetView, generation, false)
-                return@evaluateJavascript
-            }
+            val verdict = authBootstrapVerdict(result, generation)
+            if (verdict != true) client.completeAuthBootstrap(targetView, generation, false)
+            // Sign-in registration failing costs the page its sign-in and nothing else: the key
+            // row, the touch fixes and the rest below are not what it protects. Only a page
+            // that did not answer for this document is left alone, since it is not the workbench.
+            if (verdict == null) return@evaluateJavascript
             // Install JS interceptor so ExtraKeyRow Ctrl/Alt modifiers apply to soft keyboard input
             extraKeyRow?.keyInjector?.setupModifierInterceptor()
             // Inject safe area CSS for round-corner devices
@@ -3666,9 +3670,11 @@ class MainActivity : AppCompatActivity() {
             // Last, because everything above is what makes the page able to receive
             // an auth callback at all. From here a callback arriving through
             // onNewIntent goes straight into this page, which is the only page that
-            // can consume one.
-            workbenchLoaded = true
-            client.completeAuthBootstrap(targetView, generation, true)
+            // can consume one. A page whose registration failed receives none.
+            if (verdict) {
+                workbenchLoaded = true
+                client.completeAuthBootstrap(targetView, generation, true)
+            }
         }
     }
 
@@ -8328,11 +8334,22 @@ internal class AppNavigationMark(private val windowMs: Long) {
     }
 }
 
-/** Accept only the completed bootstrap for the document that requested it. */
-internal fun authBootstrapSucceeded(result: String?, generation: Long): Boolean = try {
+/**
+ * What the bootstrap script answered for the document that requested it: true when sign-in
+ * registration is working, false when the page is the workbench but it is not, and null
+ * when the answer is not for this document at all (no marker, another generation, a page
+ * that is not the top-level workbench).
+ */
+internal fun authBootstrapVerdict(result: String?, generation: Long): Boolean? = try {
     val marker = JSONArray(result ?: "null")
-    marker.length() == 2 && marker.opt(0) is Number && marker.getLong(0) == generation &&
-        marker.getDouble(0) == generation.toDouble() && marker.opt(1) == true
+    if (marker.length() == 2 && marker.opt(0) is Number && marker.getLong(0) == generation &&
+        marker.getDouble(0) == generation.toDouble() && marker.opt(1) is Boolean
+    ) {
+        marker.getBoolean(1)
+    } else {
+        null
+    }
 } catch (_: JSONException) {
-    false
+    null
 }
+
