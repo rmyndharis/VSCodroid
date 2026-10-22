@@ -969,8 +969,8 @@ class SafSyncEngine(private val context: Context) {
                 // not exotic: the mirror is named by a hash of the tree URI rather than
                 // by the session, the phase-2 loop has no suspension point so cancelling
                 // the coroutine does not stop it, and an activity recreated mid-open
-                // builds a second engine over the same directory. Both wrote the same
-                // scratch path, so one writer's rename pulled the inode out from under
+                // builds a second engine over the same directory. Both used to write the
+                // same scratch path, so one writer's rename pulled the inode out from under
                 // the other, whose remaining bytes then landed inside the finished
                 // mirror file that [recordIdentity] had already vouched for.
                 if (!mirrorCopiesInFlight.add(localPath.absolutePath)) {
@@ -5514,10 +5514,12 @@ class SafSyncEngine(private val context: Context) {
          * leaves one sync copying while its replacement opens the same folder and starts
          * another.
          *
-         * Both wrote the same scratch path, `<name>.vscodroid-partial`, so one writer's
-         * rename into place carried the other writer's open stream with it and the rest
-         * of that copy landed inside the finished mirror file, which [recordIdentity]
-         * had already vouched for by then. The vouched identity is what
+         * Both used to write the same scratch path, `<name>.vscodroid-partial`, so one
+         * writer's rename into place carried the other writer's open stream with it and
+         * the rest of that copy landed inside the finished mirror file, which
+         * [recordIdentity] had already vouched for by then. Scratch names are unique per
+         * copy now; what the loser still has to be kept from is choosing the same
+         * preserved-copy name. The vouched identity is what
          * [reconcileDeletions] and [holdsOnlyVouchedCopies] later act on, so a corrupted
          * file was also a deletable one.
          *
@@ -5724,7 +5726,7 @@ class SafSyncEngine(private val context: Context) {
          * onto the same name: nothing else puts the move on the device, but two cannot
          * both land, and the second would be asked to rename into a name the device holds
          * by then, which providers answer with an invented one. A delete goes for a later
-         * write of the same kind and for no other. A file removed and written again is
+         * delete and for a later write of the same kind, and for no other. A file removed and written again is
          * overwritten in place, and the save queued behind a checkout's unlink holds the
          * document the delete would have removed, so the delete has to be the one that is
          * dropped. A file replaced by a folder, or a folder by a file, is not the document
@@ -5869,8 +5871,8 @@ class SafSyncEngine(private val context: Context) {
          *   cost far more than it saved: almost every edit changes a file's length, so
          *   almost every unsaved edit read as "not a copy of the source" and was
          *   overwritten by the older device copy. That truncation case is closed
-         *   elsewhere now, by [copyDocumentToLocal] writing beside the destination and
-         *   renaming only once the stream finished, so an interrupted copy leaves no
+         *   elsewhere now, by [copyDocumentToLocal] staging the bytes outside the mirror
+         *   and renaming only once the stream finished, so an interrupted copy leaves no
          *   file at the destination at all.
          * - An unknown source timestamp (0) is decided by [mirrorIsOurCopy], not by the
          *   clock, because there is no clock to ask. COLUMN_LAST_MODIFIED is optional and
@@ -6286,8 +6288,8 @@ class SafSyncEngine(private val context: Context) {
          * editor, saved, and silently lost on the device side.
          *
          * The temporary suffixes are the one asymmetry that stays, and it is the
-         * intended one: [PARTIAL_SUFFIX] files are this engine's own half-written
-         * copies, and `~`/`.tmp` belong to a writer that is about to rename them away.
+         * intended one: [PARTIAL_SUFFIX] files are the half-written copies an earlier build
+         * left beside their destinations, and `~`/`.tmp` belong to a writer that is about to rename them away.
          * Uploading them would push a file that is about to stop existing.
          */
         internal fun shouldWriteBack(relativePath: String, isDirectory: Boolean): Boolean {

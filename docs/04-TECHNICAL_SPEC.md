@@ -1311,7 +1311,7 @@ flowchart TD
   P --> P16["0016 sidebar: sash travel on narrow viewports"]
   P --> P17["0017 menus: ignore a pan that started in a submenu"]
   P --> P18["0018 debug terminal: build the command without /usr/bin/env"]
-  P --> P19["0019 callback URL carries a secret minted per request"]
+  P --> P19["0019 each sign-in identity is registered with the app when the workbench mints it"]
   P --> P20["0020 chat agent host: not started on Android"]
   P --> P21["0021 terminal hint: no Copilot CLI line on Android"]
   P --> P22["0022 EditContext: keep the IME buffer and caret in step"]
@@ -1322,6 +1322,11 @@ flowchart TD
   P --> P27["0027 configuration: start a remote workspace from the settings the page read"]
   P --> P28["0028 code actions: keep the list open as the keyboard goes"]
   P --> P29["0029 EditContext: a keyboard's long or multi-line commit is one paste"]
+  P --> P30["0030 activity bar: overflow sized from the height an item is drawn at"]
+  P --> P31["0031 File > Open Folder offers the system folder picker"]
+  P --> P32["0032 settings list and modal editor shrink to a phone-width window"]
+  P --> P33["0033 title bar and status bar put away while the keyboard is up in landscape"]
+  P --> P34["0034 bottom panel taken out of the layout while the keyboard is up in landscape"]
 ```
 
 Five of these are load-bearing in ways their titles understate:

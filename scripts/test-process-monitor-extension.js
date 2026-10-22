@@ -351,7 +351,7 @@ function snapshot(total, terminals, langservers, budget = { idle: 5, soft: 8, er
 // that runs the count away.
 //
 // The warning tier deliberately does NOT re-arm there: 7 is still above the
-// target that warning names, so repeating it says nothing the user did not act
+// idle baseline that re-arms it, so repeating it says nothing the user did not act
 // on. That is the second assertion, and it is the one that fails on the obvious
 // over-correction of clearing both flags below the soft budget.
 //

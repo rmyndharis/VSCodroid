@@ -23,14 +23,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Get Started walkthrough names C/C++ among the toolchains that install on demand.
 - The Settings editor fits a phone-width screen: its list no longer runs 131 px past the right edge at 411 px, and the window it opens in no longer ends past it either.
 - The Accounts and Manage buttons stay reachable in the activity bar on a phone in landscape: views that do not fit move into the overflow menu.
-- On a phone in landscape with the keyboard up, the title bar and the status bar are put away so the editor shows four lines of code instead of one; they return with the keyboard.
-- On a phone in landscape with the keyboard up, an open terminal panel steps aside while the editor has the focus, so the editor keeps its four lines; the panel returns with the keyboard, and stays when you are typing in it.
+- On a phone in landscape with the keyboard up, the title bar and the status bar are put away so the editor shows four lines of code instead of one; they come back when the keyboard goes down.
+- On a phone in landscape, an open terminal panel is put away when the keyboard comes up unless the panel has the focus, so the editor keeps its four lines; it comes back at its size when the keyboard goes down.
 - The Python extension is allowed the editor APIs it declares, so it finishes activating instead of failing at its first test API.
-- The process count warning appears from 10 processes instead of 6, so one open file and a terminal no longer raise it, and its text no longer calls the idle count a target.
+- The process count warning appears from 10 processes instead of 6, so one open file and a terminal no longer raise it.
+- The process count warning no longer calls the idle count a target.
 - Stopping the editor also ends its surviving server when the bootstrap has already exited.
-- Stopping the editor ends a server that has stopped responding.
+- Stopping the editor ends a bootstrap process that ignores the stop signal.
 - A failed SSH key generation keeps a public key file that was already there.
 - Sign-in returns retain their original request identity until the editor page changes.
+- A sign-in return without the secret the editor registered for it is refused.
+- A sign-in started before the editor page has finished loading waits up to 30 seconds for it, then reports a failure.
 - Ctrl or Alt latched on the key row applies to the next key typed in the editor when focus moves there after the latch.
 - Python package build failures explain the optional C/C++ toolchain and Android dependency requirements.
 - App updates preserve older bundled extension versions still used by named profiles while updating the default profile.
@@ -40,26 +43,31 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Device-folder imports preserve local edits made while the provider is being read.
 - Device-folder directory deletes preserve descendants added or changed on the device since the folder was opened.
 - Device-folder saves preserve both copies and report a failure when the upload recovery record cannot be written.
-- Device-folder saves and new files made just after a folder rename reach the renamed folder, and one whose folder the device lacks is reported.
-- Device-folder sync overwrites neither side when it cannot first set a conflicting copy aside, and protects documents in directories the provider could not list.
+- Device-folder saves and new files made just after a folder rename reach the renamed folder.
+- A device-folder save or new file whose folder the device lacks is reported.
+- Device-folder sync overwrites neither side when it cannot first set a conflicting copy aside.
+- Device-folder sync protects documents in directories the provider could not list.
 - Reopening a device folder rejects stale saves, deletes and watcher callbacks from the previous sync.
 - Device-folder sync no longer skips a folder rename when the renamed folder is deleted before the sync runs.
 - Replacing a file with a folder, or a folder with a file, in a device folder takes effect on the device when the original is deleted from the terminal.
 - Reopening a device folder reclaims abandoned temporary downloads while retaining active copies and existing workspace files.
 - Opening a device folder during an active save or delete reports that the folder is busy instead of waiting for the provider.
 - A device folder that is busy when it is opened again leaves the folder already open saving.
-- Device-folder saves, deletes and renames that arrive while another write to the folder is still going wait their turn instead of being dropped.
-- A file and a folder that share a name between the device and the editor are both kept: the device's keeps the name, and the other is set aside as `.local-<time>` and sent across, instead of failing at every open.
+- Device-folder saves, deletes and renames that arrive while another write to the folder is still going wait up to two minutes for their turn instead of being dropped.
+- A file and a folder that share a name between the device and the editor no longer fail at every open: the device's keeps the name and the editor's is set aside as `.local-<time>` and sent across.
+- An unchanged file in the editor that the device replaced with a folder is removed instead of set aside.
 - An older version's half-copied `.vscodroid-partial` files are removed when a device folder is reopened, if they match the start of the device document.
 - A device folder listing that the provider has not finished loading no longer removes files from the editor or creates them again on the device.
 - A device-folder import refuses to install a copy if a parent directory is redirected by a symbolic link during the read.
 - Generating SSH keys preserves an existing private key whose public file is missing and explains how to recover the public key.
 - Toolchain installation rejects packs with a missing payload directory or required binary instead of marking them installed.
-- Cancelling a toolchain install no longer deletes a pack during a copy, and installation is refused while pack removal is pending.
+- Cancelling a toolchain install no longer deletes a pack during a copy.
+- A toolchain install is refused while a pack removal is pending.
 - Removing a toolchain works while Play is still clearing its download.
 - Late callbacks from an old editor server no longer clear its replacement's readiness, restart it or display obsolete heap warnings.
 - Building from source retries interrupted bundled-extension extraction instead of accepting a partial extension directory as verified.
 - Building from source stops when a Python dependency library's SONAME differs from the name the build ships it under.
+- Building from source no longer stops at a dangling Termux link in pip's CA bundle.
 - Building the server from source compiles the Copilot extension once more when the first run leaves its SDK entry missing, instead of failing at packaging.
 - The server built from source includes the Copilot SDK's definitions and builtin-skills directories, which it lacked.
 

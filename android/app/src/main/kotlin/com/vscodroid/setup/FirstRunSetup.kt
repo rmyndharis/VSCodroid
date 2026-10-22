@@ -3626,13 +3626,14 @@ claude() {
 
     /**
      * The directories every profile other than the default one lists, or null
-     * when one of their manifests cannot be read.
+     * when one of their manifests cannot be read or lists an entry that names no
+     * directory.
      *
      * Profiles share the extensions directory and keep a manifest each under
      * `data/User/profiles/<id>/`, and a profile created while a bundled copy was
      * still listed goes on naming it after the default profile moved on. A
-     * profile whose manifest this cannot read may name anything, so the answer is
-     * then "unknown" rather than "nothing".
+     * profile whose manifest this cannot read, or one with an entry it cannot place,
+     * may name anything, so the answer is then "unknown" rather than "nothing".
      */
     private fun otherProfilesExtensionDirs(): Set<String>? {
         val profilesDir = File(Environment.getUserDataDir(context), "data/User/profiles")

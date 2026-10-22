@@ -605,8 +605,9 @@ sequenceDiagram
   participant K as Kotlin
   participant C as Chrome Custom Tabs
   participant P as Identity provider
+  W->>K: registerAuthCallback(id, nonce, documentId, pageGeneration, authToken)
   W->>K: openExternalUrl(authUrl, authToken)
-  K->>K: AuthTabWindow.arm(authRequestIdsIn(authUrl), authCallbackNonceIn(authUrl), elapsedRealtime)
+  K->>K: AuthTabWindow.arm(authRequestIdsIn(authUrl), authCallbackNonceIn(authUrl), elapsedRealtime, pageGeneration)
   K->>C: CustomTabsIntent.launchUrl (https to a non-loopback host, a plain VIEW intent otherwise)
   C->>P: user login + consent
   P-->>C: redirect to the workbench callback page
@@ -627,13 +628,13 @@ The exported `BROWSABLE` intent filter can be invoked by any app or web page. Th
 
 Patch 0019 registers each real callback id and minted nonce through `registerAuthCallback` before returning its URI. The native registry accepts canonical positive ids, exactly 32 lowercase hexadecimal nonce and document-id characters, the current document generation and a valid bridge token. Repeating the same registration is harmless; a conflicting nonce or document identity is refused. The method is not exposed through the extension command relay.
 
-Requests created before token injection remain in a private provider queue. Native token injection sets the document generation and dispatches `vscodroid-bridge-ready`; the provider synchronously flushes its own queued identities. Native readiness is accepted only after the JavaScript completion marker confirms that generation and successful registration. The source document must be the owned top-level HTTP workbench at the configured loopback port and root path. Completion from a replaced WebView or document is ignored.
+Requests created before token injection remain in a private provider queue. Native token injection sets the document generation and dispatches `vscodroid-bridge-ready`; the provider synchronously flushes its own queued identities. Native readiness is accepted only after the JavaScript completion marker confirms that generation and successful registration. A page that answered with a failed registration keeps its editor scripts (key row, touch fixes, relay, clipboard and download capture) but is not marked ready, so it receives no sign-in return; a page that did not answer for the document gets no scripts at all. The source document must be the owned top-level HTTP workbench at the configured loopback port and root path. Completion from a replaced WebView or document is ignored.
 
 A main-frame auth navigation before readiness waits in a queue of at most 32 URLs with one fixed 30-second deadline. Successful bootstrap drains only matching registered requests. Failed bootstrap, timeout, page failure or replacement clears the queue without opening a browser. Subframes cannot enqueue auth launches. Ordinary external links keep their existing behavior.
 
 Outgoing addresses can activate only an already issued id with its original nonce. Missing, alternate or unissued pairs grant no callback authority. The parser reads at most eight distinct ids and applies the one extracted nonce independently to each issued identity. A repeated active launch preserves its original timestamp. Failed browser attempts retain the issued identity for an original-nonce retry; overlapping failures cannot remove an activation another attempt successfully launched.
 
-The registry retains at most 32 issued identities per document and refuses additional registrations without evicting existing requests. Arbitrary outgoing ids consume no capacity. Reload, folder switch, renderer recreation and process recreation discard the old authority. Numeric ids may then repeat with fresh nonces. A valid accepted callback keeps its launch visible while the workbench collects the relayed value, preserving resume suppression. The relay removes only the nonce parameter and preserves all other callback query bytes.
+The registry retains at most 32 issued identities per document. When it is full, a registration drops the oldest identity that can no longer be satisfied, one whose late return was already reported or one launched more than ten minutes ago with no launch in flight, and is refused when there is none, so a request waiting for its launch or inside its window is never evicted. Arbitrary outgoing ids consume no capacity. Reload, folder switch, renderer recreation and process recreation discard the old authority. Numeric ids may then repeat with fresh nonces. A valid accepted callback keeps its launch visible while the workbench collects the relayed value, preserving resume suppression. The relay removes only the nonce parameter and preserves all other callback query bytes.
 
 The workbench's pending requests are in memory. A callback after process loss cannot restore them; the app shows the existing restart notice and requires a fresh sign-in. The actual provider exposes its random document identity through a non-configurable getter without a setter. Bootstrap never writes that identity. Callback delivery snapshots the registered identity and requires the current provider getter to match before writing localStorage, so stale bootstrap metadata cannot admit an old callback into a replacement page. While an active launch remains within its window, returning from the background uses the IndexedDB health check instead of a forced reload so the pending request remains available.
 
@@ -697,7 +698,8 @@ fun generateSshKey(authToken: String, comment: String): String
 // written into the comment field.
 // Empty passphrase, deliberately: the key is protected by the app sandbox,
 // which is the right trade against typing one on a phone keyboard.
-// Never overwrites an existing key; if one is there, returns it unchanged.
+// Never overwrites an existing private key. A full pair is returned unchanged; a private
+// key without its public file fails with an error that says how to recover that file.
 // Returns a JSON OBJECT string, not a bare key:
 //   {"success": true,  "publicKey": "ssh-ed25519 AAAA..."}                  <- newly generated
 //   {"success": true,  "publicKey": "ssh-ed25519 AAAA...", "existed": true} <- already there

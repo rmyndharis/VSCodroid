@@ -111,16 +111,19 @@ VSCodroid is VS Code. If you have used VS Code on desktop, everything works the 
   device, and make a file of the same name, the device's keeps the name and
   yours is kept beside it as `<name>.local-<time>`, in the editor and in the
   device folder, the next time you open the folder. Until then a notice says the
-  file exists only inside VSCodroid. If you open a folder again while a large
+  file exists only inside VSCodroid. A file in the editor that you have not changed
+  since VSCodroid copied it, where the device now holds a folder, is not kept: the
+  folder replaces it. If you open a folder again while a large
   save to it is still being written, the open does not wait for it: it says
-  the folder is busy, saving carries on, and your later saves are sent after
-  that one.
+  the folder is still syncing, saving carries on, and your later saves wait up
+  to two minutes and are sent after that one.
 - A file of a device folder that you delete in the editor is deleted in the
   device folder too, unless the device folder's version is one VSCodroid has not
   read: another app may have changed it since you opened the folder or last
   saved the file, by the same check as a save, or opening the folder could not
   read it. Such a file is kept in the device folder, and so is a folder holding
-  it that you delete from the terminal; a notice says so, and the file comes
+  it, or holding a file another app added since you opened the folder, that you
+  delete from the terminal; a notice says so, and the file comes
   back into the editor the next time you open the folder.
 - If opening a folder cannot list it or one of its subdirectories, saves and
   deletes of existing device documents under that directory are held back.
@@ -505,8 +508,8 @@ The picker it opens is the editor's own, not Android's. It starts in your home
 folder, lists only files ending in `.vsix`, and shows only what VSCodroid can
 see. A path typed into it reaches Downloads, Documents or an SD card, but a
 file the browser or another app saved there is hidden from it, for the same
-reason a folder opened there with **File > Open Folder** shows none of those
-files. So bring the file inside first:
+reason a folder opened there with **File > Open Folder** and **In the app's
+storage** shows none of those files. So bring the file inside first:
 
 1. Download the `.vsix` with the phone's browser.
 2. Run **VSCodroid: Open Folder from Device** and grant the folder it landed in;
