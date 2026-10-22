@@ -588,7 +588,7 @@ class ExternalUrlHandoffTest {
     }
 
     @Test
-    fun `failed bootstrap leaves deferred browsers unlaunched and permits a later user retry`() {
+    fun `failed bootstrap leaves deferred browsers unlaunched and a retry after a reload launches`() {
         client.onPageStarted(view, view.url, null)
         val generation = AuthTabWindow.pageGeneration()
         AuthTabWindow.register(SIGN_IN_REQUEST_ID, SIGN_IN_SECRET, "d".repeat(32), generation)
@@ -597,7 +597,15 @@ class ExternalUrlHandoffTest {
         assertEquals(1, announced.size)
         assertNull(AuthTabWindow.armedAt(SIGN_IN_REQUEST_ID))
         verify(exactly = 0) { context.startActivity(any()) }
-        assertTrue(client.completeAuthBootstrap(view, generation, true))
+
+        // The bootstrap runs once per document and is not retried (injectBridgeToken has
+        // a single caller, onPageLoaded), so the way back is the page loading again, which
+        // begins a new generation and a new bootstrap.
+        client.onPageStarted(view, view.url, null)
+        val reloaded = AuthTabWindow.pageGeneration()
+        assertTrue(reloaded != generation, "a reload must begin a new page generation")
+        AuthTabWindow.register(SIGN_IN_REQUEST_ID, SIGN_IN_SECRET, "e".repeat(32), reloaded)
+        assertTrue(client.completeAuthBootstrap(view, reloaded, true))
         client.shouldOverrideUrlLoading(view, request("https", "github.com", -1, SIGN_IN_WITH_SECRET))
         verify(exactly = 1) { context.startActivity(any()) }
     }

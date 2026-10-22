@@ -15,10 +15,13 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.Timeout
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.io.FileOutputStream
 import java.io.InputStream
 import java.io.OutputStream
 import java.util.concurrent.CountDownLatch
@@ -148,6 +151,42 @@ class EditorShutdownTest {
         manager.stopServer()
         assertTrue(killed.isEmpty())
         assertEquals(8124, JSONObject(note.readText()).getInt("pid"))
+    }
+
+    /**
+     * The check right before the signal, which nothing else exercises: the first look at
+     * the note is a few lines above it, and the reads of the process's environment and
+     * command line sit between the two. A replacement bootstrap that writes its own note
+     * in that gap is a different run on the same port, and the pid in the note this Stop
+     * captured must not be signalled on its account.
+     *
+     * The environment is read through a pipe so the gap can be held open: the replacement
+     * note is written from inside the read, after the first look and before the second.
+     */
+    @Test
+    @Timeout(30)
+    fun `stop preserves a note replaced after the process was checked`() {
+        val original = runId
+        record(8123)
+        val environ = File(temp, "proc/8123/environ")
+        assertTrue(environ.delete())
+        val made = runCatching {
+            ProcessBuilder("mkfifo", environ.path).redirectErrorStream(true).start().waitFor() == 0
+        }.getOrDefault(false)
+        assumeTrue(made, "this host cannot make a named pipe")
+
+        val replacing = Thread {
+            FileOutputStream(environ).use { pipe ->
+                record(8124, owner = "replacement")
+                pipe.write("VSCODROID_SERVER_RUN_ID=$original\u0000".toByteArray())
+            }
+        }.apply { isDaemon = true; start() }
+
+        manager.stopServer()
+        replacing.join(5_000)
+
+        assertTrue(killed.isEmpty(), "the pid of the replaced note was signalled: $killed")
+        assertEquals(8124, JSONObject(note.readText()).getInt("pid"), "the replacement's note was consumed")
     }
 
     @Test
