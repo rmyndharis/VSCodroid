@@ -3489,6 +3489,9 @@ claude() {
 
         val present = extensionsDir.list()?.toList() ?: emptyList()
         val superseded = supersededExtensionDirs(present, bundled.toList())
+        // Before the profiles are read for the sweep below: it is what lets the old copies
+        // of OUR extensions go, by taking them off the lists that were keeping them.
+        repointOwnExtensionsInProfiles(extensionsDir, bundled.toList(), superseded, present)
         val elsewhere = otherProfilesExtensionDirs()
         var removedSuperseded = 0
         for (name in superseded) {
@@ -3644,6 +3647,45 @@ claude() {
             dirs += entries.map { it.second }
         }
         return dirs
+    }
+
+    /**
+     * Points every named profile's entries for superseded copies of OUR extensions at the
+     * copies this build bundles; [repointOwnExtensionEntries] has the rules.
+     *
+     * A profile whose manifest cannot be read, parsed or written is left exactly as it
+     * was, and the sweep that follows then keeps whatever it lists: [otherProfilesExtensionDirs]
+     * answers unknown for a manifest it cannot read, and a manifest this could not rewrite
+     * still names the old directory. Failing to update a profile therefore costs the old
+     * extension staying, which is what happened before, and never an extension removed
+     * from under a profile. The default profile is not touched here: its own reconcile
+     * does this for it.
+     */
+    private fun repointOwnExtensionsInProfiles(
+        extensionsDir: File,
+        bundled: List<String>,
+        superseded: List<String>,
+        present: List<String>,
+    ) {
+        val profilesDir = File(Environment.getUserDataDir(context), "data/User/profiles")
+        val profiles = profilesDir.listFiles() ?: return
+        val onDisk = bundled.filter { it in present }
+        for (profile in profiles) {
+            val manifest = File(profile, "extensions.json")
+            if (!manifest.isFile) continue
+            try {
+                val rewritten = repointOwnExtensionEntries(
+                    manifest.readText(), superseded, onDisk, extensionsDir.absolutePath,
+                ) ?: continue
+                if (writeAtomically(manifest) { it.write(rewritten.toByteArray()) }) {
+                    Logger.i(tag, "Pointed a profile's entries for our own extensions at the current copies")
+                } else {
+                    Logger.w(tag, "Could not rewrite a profile's extension list; its old copies stay")
+                }
+            } catch (e: Exception) {
+                Logger.w(tag, "Could not update a profile's extension list: ${e.javaClass.simpleName}")
+            }
+        }
     }
 
     /**
@@ -5793,6 +5835,81 @@ internal fun supersededExtensionDirs(present: List<String>, bundled: List<String
         val bundledVersion = current[id] ?: return@filter false
         isOlderVersion(version, bundledVersion)
     }
+}
+
+/**
+ * A named profile's `extensions.json` with each entry for a superseded copy of one of OUR
+ * extensions pointed at the copy this build bundles, or null when nothing changes or the
+ * text is not a manifest.
+ *
+ * A profile made by copying the default one lists the copy of each extension that was
+ * current then, and an update replaces the default profile's entries only. The superseded
+ * sweep never removes a directory another profile lists, so the profile went on running
+ * the old bridge and the old welcome page for good, without the Run button or any later
+ * fix, with the old directory beside the new one. Our extensions are the app and not the
+ * user's choice, so for them the entry follows the update; an older copy of anything else
+ * a profile lists is the user's to keep and is returned as it was. Both are on disk
+ * together at this point, which is why [bundled] is what is there and not what the APK
+ * carries: an entry is never pointed at a directory that is missing.
+ *
+ * The entry is edited, not replaced: its version, the path of its location and, where it
+ * has one, its relative location. The identifier and whatever the profile recorded beside
+ * them stay. A profile that lists the new copy already loses the old entry instead, so
+ * nothing is listed twice. Entries the reader cannot place are carried over unchanged.
+ *
+ * Pure, and takes the text rather than a file, so the decision is testable without a
+ * Context or a tree; the caller writes the result atomically or not at all.
+ */
+internal fun repointOwnExtensionEntries(
+    manifest: String,
+    superseded: Collection<String>,
+    bundled: Collection<String>,
+    extensionsPath: String,
+): String? {
+    val entries = try {
+        JSONArray(manifest)
+    } catch (_: Exception) {
+        return null
+    }
+    val current = bundled
+        .filter { it.startsWith(OWN_EXTENSION_PREFIX) }
+        .mapNotNull { dir -> splitExtensionDir(dir)?.let { (id, version) -> id to (dir to version) } }
+        .toMap()
+
+    // The directory an entry names, read the way manifestEntryDirs reads it.
+    fun directoryOf(entry: JSONObject): String =
+        entry.optString("relativeLocation").ifEmpty {
+            val path = entry.optJSONObject("location")?.optString("path").orEmpty()
+            if (path.isEmpty()) "" else File(path).name
+        }
+
+    val listed = (0 until entries.length())
+        .mapNotNull { entries.optJSONObject(it)?.let(::directoryOf) }
+        .toSet()
+    val result = JSONArray()
+    var changed = false
+    for (i in 0 until entries.length()) {
+        val entry = entries.optJSONObject(i)
+        val directory = entry?.let(::directoryOf).orEmpty()
+        val replacement = if (entry != null && directory in superseded && directory.startsWith(OWN_EXTENSION_PREFIX)) {
+            splitExtensionDir(directory)?.first?.let(current::get)
+        } else {
+            null
+        }
+        when {
+            entry == null || replacement == null -> result.put(entries.get(i))
+            replacement.first in listed -> changed = true
+            else -> {
+                val (newDirectory, newVersion) = replacement
+                entry.put("version", newVersion)
+                entry.optJSONObject("location")?.put("path", File(extensionsPath, newDirectory).path)
+                if (entry.has("relativeLocation")) entry.put("relativeLocation", newDirectory)
+                result.put(entry)
+                changed = true
+            }
+        }
+    }
+    return if (changed) result.toString(2) else null
 }
 
 /**

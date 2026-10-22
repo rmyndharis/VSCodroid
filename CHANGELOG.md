@@ -32,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Python package build failures explain the optional C/C++ toolchain and Android dependency requirements.
 - App updates preserve older bundled extension versions still used by named profiles while updating the default profile.
 - App updates install a bundled extension's new version for the default profile even when a named profile has its own copy of it.
+- App updates move a named profile's entries for the app's own extensions to the new version and remove the old copy.
 - Device-folder cleanup retains unrecorded workspace files, including names ending in `.vscodroid-partial`.
 - Device-folder imports preserve local edits made while the provider is being read.
 - Device-folder directory deletes preserve descendants added or changed on the device since the folder was opened.

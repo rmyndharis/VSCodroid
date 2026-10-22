@@ -19,7 +19,15 @@ import org.junit.runner.RunWith
 import java.io.File
 import java.io.IOException
 
-/** Real APK assets and Android storage, isolated from the installed editor's data. */
+/**
+ * Real APK assets and Android storage, isolated from the installed editor's data.
+ *
+ * What an update does to the older copy of an extension a named profile lists depends on
+ * whose extension it is. One the user installed (here the ESLint extension, which the build
+ * fetches) keeps its older copy for as long as any profile lists it. One of OURS (the
+ * process monitor) is the app and not the user's choice: the profile's entry follows the
+ * update and the older copy goes. Each test names the fixture it runs against.
+ */
 @RunWith(AndroidJUnit4::class)
 class ProfileExtensionPreservationOnDeviceTest {
     private lateinit var appContext: Context
@@ -34,6 +42,9 @@ class ProfileExtensionPreservationOnDeviceTest {
     private lateinit var oldPackage: ByteArray
 
     private val preferencePrefix = "profile-extension-preservation-"
+
+    /** A file of the fixture's own that a stale copy would not match. */
+    private lateinit var codeFile: String
     private val oldVersion = "0.0.0"
     private val extensionsDir get() = File(sandbox, "home/.vscodroid/extensions")
     private val defaultManifest get() = File(extensionsDir, "extensions.json")
@@ -48,14 +59,29 @@ class ProfileExtensionPreservationOnDeviceTest {
         context = isolatedContext()
         assertTrue(context.getSharedPreferences("vscodroid_setup", Context.MODE_PRIVATE).edit().clear().commit())
         assertEquals(sandbox, context.applicationContext.filesDir)
+    }
 
+    /**
+     * One of OUR extensions, which an update replaces everywhere: the process monitor,
+     * always unpacked and small.
+     */
+    private fun useOwnExtension() = useFixture("vscodroid.vscodroid-process-monitor-", "extension.js")
+
+    /**
+     * One the user could have installed, which the build fetches and an update leaves
+     * alone wherever a profile still lists its older copy.
+     */
+    private fun useFetchedExtension() = useFixture("dbaeumer.vscode-eslint-", "License.txt")
+
+    private fun useFixture(directoryPrefix: String, codeFile: String) {
+        this.codeFile = codeFile
         val candidates = appContext.assets.list("extensions").orEmpty()
-            .filter { it.startsWith("vscodroid.vscodroid-process-monitor-") }
-        assertEquals("the APK must contain one process monitor extension", 1, candidates.size)
+            .filter { it.startsWith(directoryPrefix) }
+        assertEquals("the APK must contain one $directoryPrefix extension", 1, candidates.size)
         bundledDir = candidates.single()
         bundledPackage = appContext.assets.open("extensions/$bundledDir/package.json").use { it.readBytes() }
-        bundledCode = appContext.assets.open("extensions/$bundledDir/extension.js").use { it.readBytes() }
-        assertTrue("the bundled extension has no executable code", bundledCode.isNotEmpty())
+        bundledCode = appContext.assets.open("extensions/$bundledDir/$codeFile").use { it.readBytes() }
+        assertTrue("the bundled extension has no file to compare", bundledCode.isNotEmpty())
         val pkg = JSONObject(String(bundledPackage, Charsets.UTF_8))
         extensionId = "${pkg.getString("publisher")}.${pkg.getString("name")}".lowercase()
         currentVersion = pkg.getString("version")
@@ -118,12 +144,12 @@ class ProfileExtensionPreservationOnDeviceTest {
     private fun assertOldCopyIntact() {
         assertTrue("the saved profile's extension was deleted", File(extensionsDir, oldDir).isDirectory)
         assertArrayEquals(oldPackage, File(extensionsDir, "$oldDir/package.json").readBytes())
-        assertArrayEquals(bundledCode, File(extensionsDir, "$oldDir/extension.js").readBytes())
+        assertArrayEquals(bundledCode, File(extensionsDir, "$oldDir/$codeFile").readBytes())
     }
 
     private fun assertDefaultAdvanced() {
         assertArrayEquals(bundledPackage, File(extensionsDir, "$bundledDir/package.json").readBytes())
-        assertArrayEquals(bundledCode, File(extensionsDir, "$bundledDir/extension.js").readBytes())
+        assertArrayEquals(bundledCode, File(extensionsDir, "$bundledDir/$codeFile").readBytes())
         val entries = JSONArray(defaultManifest.readText())
         val selected = (0 until entries.length()).map { entries.getJSONObject(it) }
             .filter { it.getJSONObject("identifier").getString("id") == extensionId }
@@ -134,6 +160,7 @@ class ProfileExtensionPreservationOnDeviceTest {
 
     @Test
     fun namedProfileKeepsItsVersionWhileDefaultAdvances() {
+        useFetchedExtension()
         val savedManifest = writeProfile()
 
         extractBundledExtensions()
@@ -145,6 +172,7 @@ class ProfileExtensionPreservationOnDeviceTest {
 
     @Test
     fun absolutePathProfileReferenceKeepsItsVersion() {
+        useFetchedExtension()
         val savedManifest = writeProfile(pathOnly = true)
 
         extractBundledExtensions()
@@ -156,6 +184,7 @@ class ProfileExtensionPreservationOnDeviceTest {
 
     @Test
     fun unreferencedSupersededVersionIsRemoved() {
+        useOwnExtension()
         extractBundledExtensions()
 
         assertFalse("an unused older version survived", File(extensionsDir, oldDir).exists())
@@ -164,6 +193,7 @@ class ProfileExtensionPreservationOnDeviceTest {
 
     @Test
     fun malformedProfileManifestPreservesItsVersion() {
+        useOwnExtension()
         writeProfile()
         val malformed = "[{truncated".toByteArray()
         profileManifest.writeBytes(malformed)
@@ -177,6 +207,7 @@ class ProfileExtensionPreservationOnDeviceTest {
 
     @Test
     fun unreadableProfileManifestPreservesItsVersion() {
+        useOwnExtension()
         val savedManifest = writeProfile()
         try {
             Os.chmod(profileManifest.path, 0)
@@ -199,6 +230,7 @@ class ProfileExtensionPreservationOnDeviceTest {
 
     @Test
     fun removingTheReferenceReclaimsTheOldVersionAfterReopen() {
+        useFetchedExtension()
         writeProfile()
         extractBundledExtensions()
         assertOldCopyIntact()
@@ -214,7 +246,63 @@ class ProfileExtensionPreservationOnDeviceTest {
     }
 
     @Test
+    fun namedProfileFollowsOurOwnExtensionToTheNewVersion() {
+        useOwnExtension()
+        writeProfile()
+
+        extractBundledExtensions()
+
+        assertFalse("the profile kept the app on its old extension", File(extensionsDir, oldDir).exists())
+        assertDefaultAdvanced()
+        val listed = profileEntries().filter { it.getJSONObject("identifier").getString("id") == extensionId }
+        assertEquals("the profile must list the extension once", 1, listed.size)
+        assertEquals(bundledDir, listed.single().getString("relativeLocation"))
+        assertEquals(currentVersion, listed.single().getString("version"))
+        assertEquals(
+            File(extensionsDir, bundledDir).absolutePath,
+            listed.single().getJSONObject("location").getString("path"),
+        )
+    }
+
+    @Test
+    fun namedProfileEntryWithAPathAloneFollowsToo() {
+        useOwnExtension()
+        writeProfile(pathOnly = true)
+
+        extractBundledExtensions()
+
+        assertFalse(File(extensionsDir, oldDir).exists())
+        val entry = profileEntries().single { it.getJSONObject("identifier").getString("id") == extensionId }
+        assertFalse("a key the profile never wrote was added", entry.has("relativeLocation"))
+        assertEquals(
+            File(extensionsDir, bundledDir).absolutePath,
+            entry.getJSONObject("location").getString("path"),
+        )
+    }
+
+    @Test
+    fun aProfileThatListsOurNewCopyAlreadyDropsTheOldEntry() {
+        useOwnExtension()
+        writeProfile()
+        // The profile was opened by an app that listed the new copy as well.
+        val both = JSONArray(profileManifest.readText()).put(entry(bundledDir, currentVersion))
+        profileManifest.writeText(both.toString())
+
+        extractBundledExtensions()
+
+        assertFalse(File(extensionsDir, oldDir).exists())
+        val listed = profileEntries().filter { it.getJSONObject("identifier").getString("id") == extensionId }
+        assertEquals(listOf(bundledDir), listed.map { it.getString("relativeLocation") })
+    }
+
+    private fun profileEntries(): List<JSONObject> {
+        val entries = JSONArray(profileManifest.readText())
+        return (0 until entries.length()).map { entries.getJSONObject(it) }
+    }
+
+    @Test
     fun defaultProfileAdvancesBesideAGalleryCopyOnlyAnotherProfileLists() {
+        useOwnExtension()
         // A fetched extension, so that the decision not to unpack a copy the user already
         // has applies to it: the process monitor above is ours and is always unpacked.
         val fetchedDir = appContext.assets.list("extensions").orEmpty()
