@@ -21,7 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - The Get Started walkthrough names C/C++ among the toolchains that install on demand.
-- The Settings editor fits a phone-width screen: its list is no longer 26% wider than the screen at 411 px, and the window it opens in no longer ends past the right edge.
+- The Settings editor fits a phone-width screen: its list no longer runs 131 px past the right edge at 411 px, and the window it opens in no longer ends past it either.
 - The Accounts and Manage buttons stay reachable in the activity bar on a phone in landscape: views that do not fit move into the overflow menu.
 - On a phone in landscape with the keyboard up, the title bar and the status bar are put away so the editor shows four lines of code instead of one; they return with the keyboard.
 - Stopping the editor also ends its surviving server when the bootstrap has already exited.
@@ -33,7 +33,6 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - App updates preserve older bundled extension versions still used by named profiles while updating the default profile.
 - App updates install a bundled extension's new version for the default profile even when a named profile has its own copy of it.
 - Device-folder cleanup retains unrecorded workspace files, including names ending in `.vscodroid-partial`.
-
 - Device-folder imports preserve local edits made while the provider is being read.
 - Device-folder directory deletes preserve descendants added or changed on the device since the folder was opened.
 - Device-folder saves preserve both copies and report a failure when the upload recovery record cannot be written.
@@ -41,7 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Device-folder sync preserves local edits when a conflicting device copy cannot be kept and protects documents in directories the provider could not list.
 - Reopening a device folder rejects stale saves, deletes and watcher callbacks from the previous sync.
 - Device-folder sync no longer skips a folder rename when the renamed folder is deleted before the sync runs.
-- Replacing a file with a folder, or a folder with a file, in a device folder now takes effect on the device.
+- Replacing a file with a folder, or a folder with a file, in a device folder takes effect on the device when the original is deleted from the terminal.
 - Reopening a device folder reclaims abandoned temporary downloads while retaining active copies and existing workspace files.
 - Opening a device folder during an active save or delete reports that the folder is busy instead of waiting for the provider.
 - A device-folder import refuses to install a copy if a parent directory is redirected by a symbolic link during the read.

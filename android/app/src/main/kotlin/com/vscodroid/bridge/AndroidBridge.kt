@@ -572,6 +572,20 @@ class AndroidBridge(
     }
 
     /**
+     * Registers a sign-in request the workbench has just issued: its numeric id, the
+     * secret minted for it and the document that minted it, for [pageGeneration] only.
+     * False makes the workbench fail that request rather than open a browser whose
+     * return the relay would refuse. Not a relay command, so an extension cannot call it.
+     */
+    @JavascriptInterface
+    fun registerAuthCallback(
+        requestId: String, nonce: String, documentId: String, pageGeneration: Long, authToken: String
+    ): Boolean {
+        if (!security.validateToken(authToken)) return false
+        return AuthTabWindow.register(requestId, nonce, documentId, pageGeneration)
+    }
+
+    /**
      * Opens a URL outside the editor. Any URL. Says whether it did.
      *
      * There is no allow-list, and its absence is the product decision rather than
@@ -606,14 +620,6 @@ class AndroidBridge(
      *   for one of them and unfollowable for the rest, `file://` included, which
      *   Android refuses outright rather than for want of an app.
      */
-    @JavascriptInterface
-    fun registerAuthCallback(
-        requestId: String, nonce: String, documentId: String, pageGeneration: Long, authToken: String
-    ): Boolean {
-        if (!security.validateToken(authToken)) return false
-        return AuthTabWindow.register(requestId, nonce, documentId, pageGeneration)
-    }
-
     @JavascriptInterface
     fun openExternalUrl(url: String, authToken: String): String {
         if (!security.validateToken(authToken)) return context.getString(OPEN_URL_STALE_SESSION)

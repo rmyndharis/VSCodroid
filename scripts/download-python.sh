@@ -391,10 +391,11 @@ python3 "$SCRIPT_DIR/verify-android-elf.py" "$JNILIBS_DIR/libpython.so" \
 # libsqlite3, _bz2 needs libbz2. An upstream rename would surface as an
 # ImportError naming the module on a user's device, never the library.
 #
-# No separate SONAME comparison. Resolving DT_NEEDED for every placed object
-# tests the same disagreement at its consequence, and catches architecture and
-# page alignment besides -- a name that nothing links against cannot break a
-# load, and a name that something does link against fails here as unresolved.
+# The SONAME of a library is compared where it is copied, above, and only for the
+# names this script asks for. Resolving DT_NEEDED for every placed object tests the
+# same disagreement at its consequence, and catches architecture and page
+# alignment besides -- a name that nothing links against cannot break a load, and
+# a name that something does link against fails here as unresolved.
 echo ""
 echo "Verifying every ELF this script placed..."
 verified=0

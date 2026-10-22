@@ -127,8 +127,9 @@ release that moves to another zeromq needs the pin in the script moved with it.
 
 The server is built from the MIT `microsoft/vscode` source, once per VS Code version, by
 `scripts/build-vscode-oss.sh`. `.github/workflows/build-vscode-oss.yml` runs it on an arm64 runner
-and publishes the result as a `server-<version>` release; every app build then fetches that
-artifact with `scripts/fetch-vscode-oss.sh` instead of building it again.
+and publishes the result as a `server-<version>` release; release builds and local builds then fetch
+that artifact with `scripts/fetch-vscode-oss.sh` instead of building it again, while the debug build in CI
+builds its own tree for the revision through `.github/workflows/codeoss-build.yml`.
 
 ```bash
 # 1. Fetch the pinned source. VSCODE_VERSION holds the tag and VSCODE_COMMIT the

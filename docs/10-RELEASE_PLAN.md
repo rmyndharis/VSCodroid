@@ -61,11 +61,17 @@ Two workflows answer every pull request and every push to `main`.
 ```yaml
 # .github/workflows/build.yml
 jobs:
+  codeoss:          # calls codeoss-build.yml
+    # Builds the Code - OSS server tree for this revision on an arm64 runner, or
+    # restores it from the cache when no file that decides the tree changed, and
+    # hands it to the next job as an artifact.
+
   build:            # "Build Debug APK"
     # Assembles the asset tree, then ./gradlew assembleDebug.
-    # Fetches the published Code - OSS server tarball with fetch-vscode-oss.sh,
+    # Takes that artifact through fetch-vscode-oss.sh (VSCODE_OSS_URL pointing at it),
     # takes Node, Python and the Termux tools with the download-*.sh scripts,
     # and compiles the native addons with build-native-addons.sh.
+    needs: codeoss
     runs-on: ubuntu-latest
 
   test:             # "Unit Tests"
@@ -108,15 +114,16 @@ jobs:
 
 Both declare `restore-keys`, so a miss on the exact key still restores the newest older entry.
 That matters for correctness, not just speed: on an `assets-` hit the fetch step and its digest
-check against the release never run, which is why `patches/`, `branding/` and
-`build-vscode-oss.sh` are in the key even though no step in this workflow reads them. They change
-the server tarball, which is republished under the same `server-<version>` tag, and the key is
-what makes the fetch run again. The key alone does not stop a stale tree: a miss downloads whatever
-the release holds, and `fetch-vscode-oss.sh` is what refuses a tree older than `patches/`
-(`check-patch-fingerprints.py`) or `branding/product.json` (its Branding stage). A server
-republished with no change to any key input is not refetched by `build.yml` until one changes. The step that builds the native addons also runs only
-on an `assets-` miss, and `build-native-addons.sh` is in the key, so a change to it is what makes
-the cache miss.
+check never run, which is why `patches/`, `branding/` and `build-vscode-oss.sh` are in the key even
+though no step in this workflow reads them. They change the server tree, which the `codeoss` job
+builds for each revision, and the key is what makes the `build` job take that tree again. On a miss
+`fetch-vscode-oss.sh` still refuses a tree older than `patches/` (`check-patch-fingerprints.py`) or
+`branding/product.json` (its Branding stage). What this workflow tests is its own tree, not the
+`server-<version>` release that `release.yml` and local builds fetch: a change to `patches/` or
+`branding/` that was not republished passes here and is refused at the tag, while a change to
+`build-vscode-oss.sh` alone is not compared with the release at all. The step that builds the native addons also
+runs only on an `assets-` miss, and `build-native-addons.sh` is in the key, so a change to it is
+what makes the cache miss.
 
 Gradle's own dependency and build caches are handled by `gradle/actions/setup-gradle`.
 

@@ -229,12 +229,15 @@
       </div>
       <ul class="features">
         <li class="feature">
-          <h3>No C compiler</h3>
+          <h3>No C compiler until you add one</h3>
           <p>
-            Packages that build native code at install time, anything reaching
-            for node-gyp, will not install. Pure JavaScript and pure Python
-            packages are fine, and pip is pointed at prebuilt Android builds of
-            NumPy, pandas, pydantic-core and psutil, so those install too.
+            Packages that build native code at install time fail until the
+            C/C++ toolchain is added from the toolchains screen. With it, pip
+            compiles a package's C extension; node-gyp builds have not been
+            tried, so a pure JavaScript alternative is the reliable route. Pure
+            JavaScript and pure Python packages are fine, and pip is pointed at
+            prebuilt Android builds of NumPy, pandas, pydantic-core and psutil,
+            so those install without it.
           </p>
         </li>
         <li class="feature">

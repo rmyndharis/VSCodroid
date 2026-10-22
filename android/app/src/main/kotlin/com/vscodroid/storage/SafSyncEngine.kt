@@ -353,6 +353,9 @@ class SafSyncEngine(private val context: Context) {
      * @param safUri The tree URI granted by the SAF folder picker.
      * @param mirrorDir The local directory to mirror into.
      * @param onProgress Callback with (filesDone, totalFiles).
+     * @throws IOException when another sync of this mirror, or a save, delete or rename
+     *   still being sent to the provider, holds it: the mirror is left as it was, and the
+     *   caller says the folder is busy.
      */
     suspend fun initialSync(
         safUri: Uri,

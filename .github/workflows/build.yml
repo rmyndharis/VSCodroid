@@ -10,8 +10,8 @@ concurrency:
   group: build-${{ github.ref }}
   cancel-in-progress: true
 
-# Read by default. Neither job here publishes anything: the only step that
-# reaches GitHub is the server fetch, which asks the API for a release asset.
+# Read by default. No job here publishes anything: what they upload is the debug
+# APK and the server tree this run built for itself, to its own run's artifacts.
 # Without this block the token's scope is whatever the repository's default
 # workflow permissions happen to be, which is a setting outside this file and
 # outside review. release.yml has said this since it was written.
@@ -39,9 +39,8 @@ jobs:
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
           # These jobs run Gradle plugins, npm postinstalls and the download
-          # scripts, and none of them pushes: the server fetch asks the API with
-          # GH_TOKEN scoped to its own step, and nothing else touches a remote. A
-          # persisted checkout token would be readable by all of that for the
+          # scripts, and none of them pushes or holds a credential for a remote.
+          # A persisted checkout token would be readable by all of that for the
           # length of the job. Where checkout stores it is deliberately not named:
           # it has moved between major versions and this setting is right whatever
           # the location is.

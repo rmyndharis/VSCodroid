@@ -1685,8 +1685,10 @@ class ToolchainManager(private val context: Context) {
      * toolchain as repaired, and the repair could not see these paths at all.
      *
      * A path that is not there is not a failure. Nothing can give a bit to a
-     * file that does not exist, now or on any later launch, and a manifest may
-     * legitimately name a binary a particular payload did not ship.
+     * file that does not exist, now or on any later launch. An install no longer
+     * reaches this with one missing, since it refuses the pack first, but a
+     * toolchain installed before that check can still name a binary its payload
+     * did not ship, and the repair walks those too.
      *
      * @return false when a file exists, lacks the bit, and would not take it
      */

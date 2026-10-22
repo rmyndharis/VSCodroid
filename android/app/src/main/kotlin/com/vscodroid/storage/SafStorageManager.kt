@@ -923,6 +923,7 @@ class SafStorageManager(context: Context) {
      * @param onProgress Callback with (filesDone, totalFiles) for progress reporting.
      * @return The local mirror directory containing the synced files.
      * @throws SecurityException if the URI permission has been revoked.
+     * @throws java.io.IOException if the folder is busy: see [SafSyncEngine.initialSync].
      */
     suspend fun syncToLocal(
         safUri: Uri,
