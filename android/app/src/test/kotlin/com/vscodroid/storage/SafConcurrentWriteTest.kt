@@ -376,8 +376,12 @@ class SafConcurrentWriteTest {
 
         assertFalse(first.isAlive, "the first sync did not finish")
         assertEquals("what the device holds", File(mirror, "notes.md").readText())
+        // And the mirror is free again: a sync that has nothing left to copy would pass
+        // with the claim stuck, so the file is taken away and has to come back.
+        assertTrue(File(mirror, "notes.md").delete())
         syncNow()
         assertEquals("what the device holds", File(mirror, "notes.md").readText())
+        assertEquals(2, fetched.get(), "the busy sync left the mirror claimed")
     }
 
     /**

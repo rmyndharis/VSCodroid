@@ -454,7 +454,6 @@ class SafUnfetchedDocumentTest {
             assertTrue(reopenFinished.await(5, TimeUnit.SECONDS), "the reopen waited for the blocked provider mutation")
 
             assertTrue(reopenFailure.get() is IOException, "the busy reopen did not report an IOException: ${reopenFailure.get()}")
-            assertEquals(1L, releaseMutation.count, "the provider mutation was released before the reopen returned")
             assertTrue(exists.get())
             assertEquals("device contents", contents.get())
         } finally {

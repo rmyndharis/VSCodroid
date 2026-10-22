@@ -324,6 +324,8 @@ class SafDirectoryRenameTest {
         assertEquals("archive", directoryName.get(), "the device directory was not renamed")
 
         assertTrue(File(mirror, "archive").delete())
+        val kept = mutableListOf<Triple<String, Boolean, Boolean>>()
+        engine.onKeptOnDevice = { file, isDirectory, changed -> kept += Triple(file.name, isDirectory, changed) }
         deliver(FileObserver.DELETE or isDirFlag, "archive")
 
         assertEquals(
@@ -331,6 +333,14 @@ class SafDirectoryRenameTest {
             "deleting the renamed directory destroyed unread device bytes",
         )
         verify(exactly = 0) { DocumentsContract.deleteDocument(any(), any()) }
+        // Refused where the event arrives, on the strength of the unread marker that moved
+        // with the rename. The drain would decline it as well, on what it can still check,
+        // but it says the folder "changed" where this says it holds files never read, so the
+        // notice is what tells the two apart and shows the marker followed the folder.
+        assertEquals(
+            listOf(Triple("archive", true, false)), kept,
+            "the unread marker did not follow the renamed directory",
+        )
     }
 
     @Test

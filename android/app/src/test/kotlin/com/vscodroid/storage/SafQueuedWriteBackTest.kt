@@ -526,6 +526,11 @@ class SafQueuedWriteBackTest {
 
         drain()
 
+        // The first rename gave way to the second, so `a` is the one thing the device keeps
+        // of what the user removed. It is not deleted: nothing in the queue can say the
+        // folder that left `b` was `a` and not something renamed away, and a delete is the
+        // one call that cannot be taken back. The next open brings `a` into the editor
+        // again, where it can be removed once more.
         assertEquals(setOf("a", "a/fa.txt", "b", "b/fc.txt"), device.keys)
         assertEquals(emptyList<String>(), lost + refused)
     }

@@ -3452,11 +3452,14 @@ class SafSyncEngine(private val context: Context) {
         { _, _, _ -> }
 
     /**
-     * Told when the device folder would not delete something the editor did.
+     * Told when something the editor deleted is still on the device folder because the
+     * delete did not happen there: the provider refused it, or the engine could not name the
+     * document to ask it about, as when a folder was renamed and removed again inside one
+     * poll and the device had no document of the new name yet.
      *
      * Its own seam rather than [onKeptOnDevice], which reads as a decision this
      * app made and explains it with a reason that is false here: the editor did
-     * have a copy, and it deleted it. This is the provider refusing, so the
+     * have a copy, and it deleted it. The outcome is the same either way, so the
      * sentence has to be about the device folder rather than about the editor.
      *
      * Worth a notice at all because the outcome is not merely a stale document.
