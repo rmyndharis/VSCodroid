@@ -373,8 +373,9 @@ class ToolchainInstallTest {
     @Test
     fun `a Ruby manifest without its payload cannot complete installation`() {
         val pack = File(filesDir, "pack-ruby").apply { mkdirs() }
+        // No binaries named, so the missing usr/ directory is the only thing that can refuse it.
         File(pack, "toolchain_ruby.json").writeText(
-            """{"name":"ruby","installRoot":"usr/lib/ruby","binaries":["usr/bin/ruby"]}"""
+            """{"name":"ruby","installRoot":"usr/lib/ruby"}"""
         )
         val m = manager()
 
