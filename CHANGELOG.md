@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Accounts and Manage buttons stay reachable in the activity bar on a phone in landscape: views that do not fit move into the overflow menu.
 - On a phone in landscape with the keyboard up, the title bar and the status bar are put away so the editor shows four lines of code instead of one; they return with the keyboard.
 - Stopping the editor also ends its surviving server when the bootstrap has already exited.
+- Stopping the editor ends a server that has stopped responding.
 - Sign-in returns retain their original request identity until the editor page changes.
 - Ctrl or Alt latched on the key row applies to the next key typed in the editor when focus moves there after the latch.
 - Python package build failures explain the optional C/C++ toolchain and Android dependency requirements.

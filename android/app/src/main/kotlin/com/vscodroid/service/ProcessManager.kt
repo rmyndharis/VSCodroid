@@ -427,9 +427,9 @@ class ProcessManager(private val context: Context) {
     private var procDir = File("/proc")
 
     /**
-     * How [reapRecordedEditorServer] signals a process. A `var` for the same reason
-     * [procDir] is one: the suite runs on a JVM where `android.os.Process` is a stub, so a
-     * test calling through to it could only ever assert that nothing happened.
+     * How [reapRecordedEditorServer] and [killBootstrap] signal a process. A `var` for the
+     * same reason [procDir] is one: the suite runs on a JVM where `android.os.Process` is a
+     * stub, so a test calling through to it could only ever assert that nothing happened.
      */
     internal var killRecordedProcess: (Int) -> Unit = { android.os.Process.killProcess(it) }
 
@@ -1498,7 +1498,7 @@ class ProcessManager(private val context: Context) {
      *
      * It is not moved to a background thread, and that is deliberate. Android
      * will not kill the process while a lifecycle callback is running, so
-     * waiting here is what keeps [Process.destroyForcibly] reachable. Hand the
+     * waiting here is what keeps [killBootstrap] reachable. Hand the
      * wait to another thread and a process killed the moment onDestroy returns
      * leaves Node reparented to init and still running -- trading a freeze for
      * an orphan, which is worse and much harder to notice.
@@ -1510,7 +1510,7 @@ class ProcessManager(private val context: Context) {
      * forcible kill below is the answer rather than a longer wait.
      *
      * And the forcible kill reaches the bootstrap ONLY, which is what the reap
-     * below it is for. `destroyForcibly` is a SIGKILL, SIGKILL is not forwarded,
+     * below it is for. [killBootstrap] ends it with a SIGKILL, which is not forwarded,
      * and `fork()` sets no PDEATHSIG, so an editor server nothing else signalled
      * outlives the stop still holding the port. Nothing clears the note naming it
      * either, because `assets/server.js` deletes that from the child's exit
@@ -1583,11 +1583,11 @@ class ProcessManager(private val context: Context) {
                     Logger.i(tag, "Server stopped with exit code ${process.exitValue()}")
                 } else {
                     Logger.w(tag, "Graceful shutdown timed out, force killing")
-                    process.destroyForcibly()
+                    killBootstrap(process)
                 }
             } catch (e: Exception) {
                 Logger.w(tag, "Shutdown failed, force killing", e)
-                process.destroyForcibly()
+                killBootstrap(process)
             }
             // A wait on an already dead bootstrap says nothing about its child's exit.
             if ((!wasAlive || !bootstrapExited) && capturedNote != null) {
@@ -1606,6 +1606,19 @@ class ProcessManager(private val context: Context) {
         stoppingWatchdog?.interrupt()
     }
 
+    /**
+     * Ends a bootstrap that did not leave on the SIGTERM [Process.destroy] sent.
+     *
+     * On Android [Process.destroyForcibly] is [Process.destroy] again, a second SIGTERM,
+     * and a bootstrap whose event loop has stopped answering signals survives both, so the
+     * SIGKILL goes by pid. A pid that cannot be read, or a process that has gone since,
+     * leaves it at the SIGTERM; a pid of 0 or below would signal a whole process group.
+     */
+    private fun killBootstrap(process: Process) {
+        process.destroyForcibly()
+        val pid = pidOf(process)?.takeIf { it > 0 && process.isAlive } ?: return
+        killRecordedProcess(pid.toInt())
+    }
 
     /**
      * The V8 heap ceiling for this device.
@@ -1760,8 +1773,10 @@ class ProcessManager(private val context: Context) {
     /**
      * Returns the PID of the running server process, or `null` if not running.
      */
-    fun getServerPid(): Long? {
-        val process = serverProcess ?: return null
+    fun getServerPid(): Long? = serverProcess?.let { pidOf(it) }
+
+    /** The pid of [process], or null where the runtime does not give it up. */
+    private fun pidOf(process: Process): Long? {
         return try {
             // Prefer the public Java 9+ Process.pid() method when available.
             val pidMethod = process.javaClass.methods.firstOrNull {
@@ -1771,10 +1786,10 @@ class ProcessManager(private val context: Context) {
                 (pidMethod.invoke(process) as? Long)
             } else {
                 // Fallback for runtimes that only expose an internal pid field.
-                // This is the branch Android takes: its java.lang.Process has no
-                // pid(). On a desktop JVM the method is found but belongs to the
-                // package-private ProcessImpl, so invoking it fails and this
-                // returns null; do not assert on it from a JVM unit test.
+                // This is the branch Android takes up to API 36: its java.lang.Process
+                // has no pid() there. On a desktop JVM the method is found but
+                // belongs to the package-private ProcessImpl, so invoking it fails
+                // and this returns null; do not assert on it from a JVM unit test.
                 val pidField = process.javaClass.getDeclaredField("pid")
                 pidField.isAccessible = true
                 pidField.getInt(process).toLong()

@@ -19,6 +19,8 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.io.InputStream
+import java.io.OutputStream
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 
@@ -124,6 +126,22 @@ class EditorShutdownTest {
     }
 
     @Test
+    fun `a bootstrap that outlives the first signal is killed by pid`() {
+        record(8123)
+        set("serverProcess", PidProcess(4242L))
+        manager.stopServer()
+        assertEquals(listOf(4242, 8123), killed)
+    }
+
+    @Test
+    fun `a bootstrap whose pid is unreadable is never signalled by pid 0`() {
+        record(8123)
+        set("serverProcess", PidProcess(0L))
+        manager.stopServer()
+        assertEquals(listOf(8123), killed)
+    }
+
+    @Test
     fun `stop preserves a note replaced while waiting for the bootstrap`() {
         record(8123)
         bootstrap(alive = true, exits = false) { record(8124, owner = "replacement") }
@@ -217,6 +235,23 @@ class EditorShutdownTest {
             every { isAlive } returns alive
             every { waitFor(any(), any()) } answers { waiting(); exits }
         })
+    }
+
+    /**
+     * A bootstrap that never leaves, whose `pid()` the reflective read in `ProcessManager`
+     * can reach: a public class, which a mock or an anonymous object is not.
+     */
+    class PidProcess(private val bootstrapPid: Long) : Process() {
+        fun pid(): Long = bootstrapPid
+        override fun getOutputStream(): OutputStream = throw UnsupportedOperationException()
+        override fun getInputStream(): InputStream = throw UnsupportedOperationException()
+        override fun getErrorStream(): InputStream = throw UnsupportedOperationException()
+        override fun waitFor(): Int = throw UnsupportedOperationException()
+        override fun waitFor(timeout: Long, unit: TimeUnit): Boolean = false
+        override fun exitValue(): Int = throw IllegalThreadStateException()
+        override fun destroy() {}
+        override fun destroyForcibly(): Process = this
+        override fun isAlive(): Boolean = true
     }
 
     private fun set(name: String, value: Any) {
