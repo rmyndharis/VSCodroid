@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Settings editor fits a phone-width screen: its list no longer runs 131 px past the right edge at 411 px, and the window it opens in no longer ends past it either.
 - The Accounts and Manage buttons stay reachable in the activity bar on a phone in landscape: views that do not fit move into the overflow menu.
 - On a phone in landscape with the keyboard up, the title bar and the status bar are put away so the editor shows four lines of code instead of one; they return with the keyboard.
+- On a phone in landscape with the keyboard up, an open terminal panel steps aside while the editor has the focus, so the editor keeps its four lines; the panel returns with the keyboard, and stays when you are typing in it.
 - Stopping the editor also ends its surviving server when the bootstrap has already exited.
 - Stopping the editor ends a server that has stopped responding.
 - A failed SSH key generation keeps a public key file that was already there.

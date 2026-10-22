@@ -187,8 +187,9 @@ rather than covering it, so where the keyboard leaves almost nothing behind, the
 row stands down instead of taking the last of it. That is landscape on a phone,
 where the keyboard alone can be two thirds of the screen. For the same reason the
 title bar and the status bar are put away there, which leaves the editor four lines
-instead of one. Turn back to portrait, or put the keyboard away, and they return
-along with the row.
+instead of one. An open panel, such as the terminal, steps aside there too while the
+editor has the focus, and stays when you tap into it to type. Turn back to portrait,
+or put the keyboard away, and they all return along with the row.
 
 To hide the row altogether, for example while typing on a hardware keyboard, tap
 the remote indicator at the left end of the status bar and choose

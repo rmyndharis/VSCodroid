@@ -105,6 +105,7 @@
 | SC-12 | A reload does not show the workbench half dismantled | With a folder open and a terminal running, run **Developer: Reload Window**, and again open another folder from **File > Open Recent**. Record the screen and step the recording through, or watch it from the command to the new page. Then make an edit and reload at once, so that the editor asks to leave, and tap **Stay on this page** | In both reloads the editor is followed by its plain background until the new page paints. A frame with upper-case panel titles, an empty terminal and the editor's own status items (Spaces, UTF-8, LF) is the failure: it stayed for about half a second on an API 33 emulator. When the editor asks to leave, the dialog is drawn over the intact editor, and after Stay nothing covers it | | |
 | SC-13 | Settings fits a phone | On a phone in portrait (about 411 dp wide), tap the Manage gear and choose **Settings**; scroll the list and tap a dropdown. Then set **VSCodroid: UI Scale** to 125% and open Settings again, and turn the phone to landscape. On a tablet, open Settings in landscape. Repeat on a phone 360 dp wide if one is at hand. Record the device width in dp and read the Settings window's right edge with remote debugging if a debug build is at hand | In portrait the Settings window and its list end inside the screen: no description, dropdown (arrow included) or number box is cut at the right edge, and the list can be scrolled. The same at 125%, and in landscape. On a tablet the table of contents beside the list is shown as before. Before the fix the list was 500 px wide on a 411 px page, 131 px past the edge, and the window began 41 px in and ended 30 px past it | | |
 | SC-14 | Landscape with the keyboard up keeps a few lines | On a phone, open a file with at least ten lines, turn to landscape and tap in the editor so the keyboard rises. Read the screen, then put the keyboard away with Back. Repeat with the status bar hidden (**View: Toggle Status Bar Visibility**) before the keyboard rises. On a tablet, do the same in landscape | With the keyboard up the title bar and the status bar are gone and the editor shows about four lines, the one being typed among them; with the keyboard away both are back, and on the tablet they never leave. A status bar you had hidden is still hidden afterwards | | |
+| SC-15 | Landscape with the keyboard up and the terminal open keeps a few lines | On a phone, open a `.js` file, tap Run so the terminal opens, turn to landscape and tap in the editor so the keyboard rises. Put the keyboard away with Back. Then tap in the terminal and type with the keyboard up. Repeat in portrait | With the keyboard up and the editor focused the terminal is out of the way and the editor shows about four lines, the one being typed among them; the terminal you tap into and type in stays; with the keyboard away the terminal is back at its size; portrait never changes | | |
 
 ## 5. Editor Operations
 
@@ -318,7 +319,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | Device Matrix | 4 | | | |
 | Android Versions | 5 | | | |
 | Keyboard Input | 47 | | | |
-| Screen & Orientation | 14 | | | |
+| Screen & Orientation | 15 | | | |
 | Editor Operations | 17 | | | |
 | Extensions | 7 | | | |
 | Background/Foreground | 9 | | | |
@@ -328,7 +329,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | Terminal & Tools | 18 | | | |
 | SAF & Files | 27 | | | |
 | Display Language | 6 | | | |
-| **Total** | **181** | | | |
+| **Total** | **182** | | | |
 
 **Overall Result**: [ ] PASS / [ ] FAIL
 

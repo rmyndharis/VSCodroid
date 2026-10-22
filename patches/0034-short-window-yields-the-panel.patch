@@ -1,0 +1,62 @@
+Take the bottom panel out of the layout while a phone shows the keyboard in landscape and the focus is not in it.
+
+With the soft keyboard up on a phone held in landscape the page is about 122px tall, and 0033 puts the title bar and the status bar away so that the editor keeps four lines. An open panel undid that. It cannot shrink under its 77px minimum, so it kept its size and the editor was left with its tab strip and no line of code (measured on an API 37 emulator with a 411dp wide screen: the editor part 41px, 7px of it below the tab strip, the panel 69px). Running a file opens the terminal panel, so a tap in the editor afterwards raised the keyboard over an editor that showed nothing.
+
+On Android, Layout#updateShortWindow now also takes the panel out of the grid at the moment the window turns short, and puts it back when the window is tall again (the same 200px and 240px as 0033). It applies to a panel above or below the editor that the layout state shows open, with the editor visible, and only when the panel does not hold the focus at that moment: a terminal the keyboard is typing into stays where it is, because hiding it would take the keyboard down with it. The decision is made when the window turns short or tall, so moving the focus between the editor and the panel while the keyboard stays up does not change it.
+
+Only the grid is touched; the layout state and the open view are left alone. The part visibility listener skips the change the grid reports while the panel is out, which it would otherwise read as the user closing the panel. The size saved for the next start is read from the size the grid remembers for a hidden view while the panel is out, because the live size of a view outside the grid is 0 and a state save that ran in a short window would otherwise store it.
+
+diff --git a/src/vs/workbench/browser/layout.ts b/src/vs/workbench/browser/layout.ts
+index 45cc5f0..cb6922f 100644
+--- a/src/vs/workbench/browser/layout.ts
++++ b/src/vs/workbench/browser/layout.ts
+@@ -290,6 +290,7 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
+ 
+ 	private initialized = false;
+ 	private shortWindow = false;
++	private panelYielded = false;
+ 	private workbenchGrid!: SerializableGrid<ISerializableView>;
+ 
+ 	private titleBarPartView!: ISerializableView;
+@@ -1711,7 +1712,7 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
+ 
+ 					if (part === sideBar) {
+ 						this.setSideBarHidden(!visible);
+-					} else if (part === panelPart && this.stateModel.getRuntimeValue(LayoutStateKeys.PANEL_HIDDEN) === visible) {
++					} else if (part === panelPart && !this.panelYielded && this.stateModel.getRuntimeValue(LayoutStateKeys.PANEL_HIDDEN) === visible) {
+ 						this.setPanelHidden(!visible, true);
+ 					} else if (part === auxiliaryBarPart) {
+ 						this.setAuxiliaryBarHidden(!visible, true);
+@@ -1742,7 +1743,7 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
+ 			this.stateModel.setInitializationValue(LayoutStateKeys.SIDEBAR_SIZE, sideBarSize as number);
+ 
+ 			// Panel Size
+-			const panelSize = this.stateModel.getRuntimeValue(LayoutStateKeys.PANEL_HIDDEN)
++			const panelSize = this.stateModel.getRuntimeValue(LayoutStateKeys.PANEL_HIDDEN) || this.panelYielded
+ 				? this.workbenchGrid.getViewCachedVisibleSize(this.panelPartView)
+ 				: isHorizontal(this.stateModel.getRuntimeValue(LayoutStateKeys.PANEL_POSITION))
+ 					? this.workbenchGrid.getViewSize(this.panelPartView).height
+@@ -2404,6 +2405,23 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
+ 			this.shortWindow = shortWindow;
+ 			this.workbenchGrid.setViewVisible(this.titleBarPartView, this.shouldShowTitleBar());
+ 			this.updateStatusBarVisibility();
++			this.updatePanelYield();
++		}
++	}
++
++	/**
++	 * VSCodroid: a panel below the editor cannot shrink under 77px, so in a short window it left the
++	 * editor less than one line. The panel is taken out of the grid for as long as the window is short,
++	 * unless it holds the focus: hiding a terminal the keyboard is typing into would take the keyboard
++	 * down with it. Only the grid is touched; the layout state still says the panel is open, so it is
++	 * drawn again at its size when the window is tall.
++	 */
++	private updatePanelYield(): void {
++		const yielded = this.shortWindow && isHorizontal(this.getPanelPosition()) && this.isVisible(Parts.PANEL_PART) && this.isVisible(Parts.EDITOR_PART) && !this.hasFocus(Parts.PANEL_PART);
++		if (yielded !== this.panelYielded) {
++			this.panelYielded = yielded;
++			this.mainContainer.classList.toggle(LayoutClasses.PANEL_HIDDEN, yielded || !this.isVisible(Parts.PANEL_PART));
++			this.workbenchGrid.setViewVisible(this.panelPartView, !yielded && this.isVisible(Parts.PANEL_PART));
+ 		}
+ 	}
+ 

@@ -339,3 +339,7 @@
 # 0033's pattern is the name of the flag it adds. Member names survive the bundler (0029 and
 # 0032 rely on the same), and the literal is 0 times in the shipped 1.139.1 workbench.js.
 0033 short window hides title and status bar|out/vs/code/browser/workbench/workbench.js x3|shortWindow
+
+# 0034's pattern is the name of the flag it adds. Member names survive the bundler (0029, 0032 and
+# 0033 rely on the same), and the literal is 0 times in the shipped 1.139.1 workbench.js.
+0034 short window yields the panel|out/vs/code/browser/workbench/workbench.js x5|panelYielded
