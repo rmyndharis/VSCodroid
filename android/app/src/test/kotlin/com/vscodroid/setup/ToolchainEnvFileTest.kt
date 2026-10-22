@@ -295,6 +295,9 @@ class ToolchainEnvFileTest {
 
     private val jdk = "usr/lib/jvm/java-17-openjdk"
 
+    /** What the java wrapper hands the loader ahead of the caller's arguments. */
+    private val java = "</p/../$jdk/bin/java><-Duser.home=/h o/me><-Djava.io.tmpdir=/t m/p>"
+
     /** What the jshell wrapper hands the loader ahead of the caller's arguments. */
     private val jshell = "</p/../$jdk/bin/jshell><-J-Djdk.lang.Process.launchMechanism=VFORK>" +
         "<-J-Duser.home=/h o/me>"
@@ -310,8 +313,9 @@ class ToolchainEnvFileTest {
         assumeTrue(File("/bin/bash").canExecute(), "no /bin/bash on this host")
         elf("$jdk/bin/java")
         elf("$jdk/bin/jshell")
+        elf("$jdk/bin/keytool")
         stateFile.writeText(
-            """[{"name":"java","binaries":["$jdk/bin/java","$jdk/bin/jshell"],""" +
+            """[{"name":"java","binaries":["$jdk/bin/java","$jdk/bin/jshell","$jdk/bin/keytool"],""" +
                 """"env":{"JAVA_HOME":"${'$'}FILESDIR/$jdk"}}]"""
         )
 
@@ -321,7 +325,7 @@ class ToolchainEnvFileTest {
         sourced.writeText(envFile.readText().replace("/system/bin/linker64", "argv"))
         val builder = ProcessBuilder(
             "/bin/bash", "-c",
-            """argv() { printf '<%s>' "${'$'}@"; echo; }; PREFIX=/p; HOME='/h o/me'; """ +
+            """argv() { printf '<%s>' "${'$'}@"; echo; }; PREFIX=/p; HOME='/h o/me'; TMPDIR='/t m/p'; """ +
                 """. "${'$'}1"; $commands""",
             "bash", sourced.path,
         ).redirectErrorStream(true)
@@ -344,8 +348,8 @@ class ToolchainEnvFileTest {
      * local engine unless the caller chose one. jshell refuses `--execution`
      * given twice and accepts abbreviations of it, so the guard is asserted in
      * all three spellings. The `$HOME` with a space in it holds the quoting.
-     * `java` is the control: the special case must not leak into the ordinary
-     * wrapper beside it.
+     * `java` runs beside it with its own two properties, which must not pick up
+     * jshell's engine argument.
      */
     @Test
     fun `jshell runs its snippets in its own JVM`() {
@@ -361,11 +365,43 @@ class ToolchainEnvFileTest {
                 "$jshell<--execution><jdi>",
                 "$jshell<--exec=jdi>",
                 "$jshell<-execution><jdi>",
-                "</p/../$jdk/bin/java><-version>",
+                "$java<-version>",
             ),
             out,
             "the jshell wrapper no longer selects the local engine exactly once, so " +
                 "jshell fails to launch or refuses its arguments:\n" + envFile.readText(),
+        )
+    }
+
+    /**
+     * Termux compiled its own directories into libjava as the defaults of `user.home`
+     * and `java.io.tmpdir`, which this app can neither read nor create, so a program
+     * that makes a temporary file or reads the home directory fails on a path that
+     * belongs to another application. The wrapper passes the shell's values; a
+     * `-D` the caller writes after them wins because the last one is the one the
+     * JVM keeps, and an unset variable adds nothing rather than an empty property.
+     * keytool takes the home as a launcher option and nothing else.
+     */
+    @Test
+    fun `java and keytool start with this app's home and temporary directory`() {
+        val out = runJavaWrappers(
+            """java -version; java -Djava.io.tmpdir=/mine Main; """ +
+                """(unset TMPDIR; java -version); (unset HOME TMPDIR; java -version); """ +
+                """keytool -list; (unset HOME; keytool -list)"""
+        )
+
+        assertEquals(
+            listOf(
+                "$java<-version>",
+                "$java<-Djava.io.tmpdir=/mine><Main>",
+                "</p/../$jdk/bin/java><-Duser.home=/h o/me><-version>",
+                "</p/../$jdk/bin/java><-version>",
+                "</p/../$jdk/bin/keytool><-J-Duser.home=/h o/me><-list>",
+                "</p/../$jdk/bin/keytool><-list>",
+            ),
+            out,
+            "the java or keytool wrapper no longer hands over the home or the temporary " +
+                "directory exactly once:\n" + envFile.readText(),
         )
     }
 

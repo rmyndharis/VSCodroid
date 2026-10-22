@@ -2966,6 +2966,26 @@ class ToolchainManager(private val context: Context) {
                         )
                         continue
                     }
+                    if (command == "java" || command == "keytool") {
+                        // Termux compiled its own paths into libjava as the defaults of
+                        // `user.home` (/data/data/com.termux/files/home) and
+                        // `java.io.tmpdir` (/data/data/com.termux/files/usr/tmp/), which
+                        // this app can neither read nor create. Measured on an API 33
+                        // emulator: File.createTempFile and an embedded web server's
+                        // work directory fail on the second, keytool's default keystore
+                        // on the first. The shell has the right values, so they are
+                        // handed over unless the caller sets its own later on the line
+                        // (the last -D wins). A variable that is not set adds nothing.
+                        // keytool is a launcher that takes them as -J options and has
+                        // no use for a temporary directory.
+                        val properties = if (command == "java") {
+                            "\${HOME:+\"-Duser.home=\$HOME\"} \${TMPDIR:+\"-Djava.io.tmpdir=\$TMPDIR\"}"
+                        } else {
+                            "\${HOME:+\"-J-Duser.home=\$HOME\"}"
+                        }
+                        lines.add("$command() { $systemLoader \"\$PREFIX/../$relPath\" $properties \"\$@\"; }")
+                        continue
+                    }
                     lines.add("$command() { $systemLoader \"\$PREFIX/../$relPath\" \"\$@\"; }")
                 }
                 if (lines.isNotEmpty()) {
