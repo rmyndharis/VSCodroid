@@ -150,7 +150,9 @@ SPAWN_SRC="$WORK_DIR/libandroid-spawn-src"
 rm -rf "$SPAWN_SRC"
 mkdir -p "$SPAWN_SRC"
 for f in posix_spawn.cpp posix_spawn.h LICENSE; do
-    curl -sL --fail --show-error -o "$SPAWN_SRC/$f" "$SPAWN_RAW/$f"
+    # --retry: raw.githubusercontent.com answers a CI runner's shared address with a
+    # 429 now and then, and an unretried download failed the whole tag run.
+    curl -sL --fail --show-error --retry 6 -o "$SPAWN_SRC/$f" "$SPAWN_RAW/$f"
     expected_var="SPAWN_SHA_$(echo "$f" | tr '.' '_')"
     eval "expected=\$$expected_var"
     actual=$( (sha256sum "$SPAWN_SRC/$f" 2>/dev/null || shasum -a 256 "$SPAWN_SRC/$f") | cut -d' ' -f1)

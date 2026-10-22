@@ -74,6 +74,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A gem with a native extension builds when the C/C++ toolchain is installed, because the Ruby toolchain now carries the headers it compiles against. A Ruby installed earlier needs removing and installing again to get them.
 - `java` and `keytool` start with the app's home and temporary directory instead of Termux's, so a program that makes a temporary file no longer fails on a path that is not there. A Java installed earlier gets this at the next launch.
 - The terminal no longer pins the command line over the first lines of its output: terminal sticky scroll is off by default, and can be turned on in Settings.
+- Release builds retry the downloads from raw.githubusercontent.com when it answers with a rate limit.
 
 ## [1.5.0] - 2026-10-14
 
