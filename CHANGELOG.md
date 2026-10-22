@@ -70,6 +70,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Building from source no longer stops at a dangling Termux link in pip's CA bundle.
 - Building the server from source compiles the Copilot extension once more when the first run leaves its SDK entry missing, instead of failing at packaging.
 - The server built from source includes the Copilot SDK's definitions and builtin-skills directories, which it lacked.
+- A Ruby script can `require` a gem it installed: the interpreter starts with RubyGems loaded. A Ruby installed earlier gets this at the next launch.
+- A gem with a native extension builds when the C/C++ toolchain is installed, because the Ruby toolchain now carries the headers it compiles against. A Ruby installed earlier needs removing and installing again to get them.
 
 ## [1.5.0] - 2026-10-14
 

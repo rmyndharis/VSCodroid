@@ -312,6 +312,20 @@ class ToolchainManager(private val context: Context) {
         private const val KEY_EXEC_REPAIRED = "execBitsChecked"
 
         /**
+         * Environment a toolchain's manifest carries today and an install made by an
+         * earlier build does not, by toolchain name. The record keeps the manifest it
+         * was installed with, so a variable added to the pack's manifest reaches new
+         * installs only; [backfillToolchainEnvSync] adds these to the rest.
+         *
+         * Ruby: `RUBYOPT=-rrubygems`, because the interpreter starts without
+         * RubyGems and a script's `require` of an installed gem fails (see
+         * `scripts/download-ruby.sh`).
+         */
+        private val ENV_BACKFILL = mapOf(
+            "ruby" to mapOf("RUBYOPT" to "-rrubygems"),
+        )
+
+        /**
          * How much of a file in `usr/bin` is read to find out what runs it.
          *
          * A `#!` line is the first thing in the file and a console script's is well
@@ -3803,6 +3817,14 @@ class ToolchainManager(private val context: Context) {
                 Logger.w(tag, "Toolchain repair pass failed: ${e.message}")
             }
             try {
+                // Before the derived files below are written from the record, so
+                // that the variable is in the env file and the exec table of this
+                // launch. A value the record already has is never overwritten.
+                backfillToolchainEnvSync()
+            } catch (e: Exception) {
+                Logger.w(tag, "Could not add a toolchain's new environment: ${e.message}")
+            }
+            try {
                 // Unconditionally, and separately from the repair above, because
                 // the two answer different questions. The repair is marked done per
                 // toolchain and never runs again; this has to run on every launch,
@@ -4032,6 +4054,30 @@ class ToolchainManager(private val context: Context) {
             }
         }
 
+        if (changed) writeState(state)
+    }
+
+    /**
+     * Adds the [ENV_BACKFILL] variables an installed toolchain's record lacks.
+     *
+     * Runs on every launch and writes only when something is missing, so a record
+     * that has them costs one read. A key the record already holds is left as it
+     * is, whatever its value.
+     */
+    private fun backfillToolchainEnvSync() = synchronized(stateLock) {
+        val state = readState()
+        var changed = false
+        for (i in 0 until state.length()) {
+            val entry = state.optJSONObject(i) ?: continue
+            val wanted = ENV_BACKFILL[entry.optString("name")] ?: continue
+            val env = entry.optJSONObject("env") ?: JSONObject().also { entry.put("env", it) }
+            for ((key, value) in wanted) {
+                if (!env.has(key)) {
+                    env.put(key, value)
+                    changed = true
+                }
+            }
+        }
         if (changed) writeState(state)
     }
 

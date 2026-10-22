@@ -1443,8 +1443,8 @@ ToolchainInfo(
     displayName = "Ruby",
     shortLabel = "Ruby",
     descriptionRes = R.string.toolchain_ruby_description,   // "Ruby with irb, gem, bundler"
-    estimatedSize = 39_000_000,   // unpacked, what the free-space gate uses; 37.6 MB measured
-    downloadSize = 10_500_000,    // the ZIP, what the picker quotes to the user
+    estimatedSize = 41_000_000,   // unpacked, what the free-space gate uses; 39.7 MB measured
+    downloadSize = 11_000_000,    // the ZIP, what the picker quotes to the user
     downloadUrl = "https://github.com/rmyndharis/VSCodroid/releases/latest/download/toolchain_ruby.zip",
 )
 ```

@@ -410,7 +410,7 @@ M6 (Release)   → Play Store release
    - [x] Reduces phantom process count by 2 (ExtHost + ptyHost invisible in `/proc`)
 
 2. **On-demand toolchain download scripts** (`scripts/download-ruby.sh`, `download-java.sh`, `download-cpp.sh`)
-   - [x] Ruby from Termux `ruby` + libgmp + libyaml. Unpacked size is recorded in `ToolchainRegistry`, which is what every gate reads: 39 MB today
+   - [x] Ruby from Termux `ruby` + libgmp + libyaml. Unpacked size is recorded in `ToolchainRegistry`, which is what every gate reads: 41 MB today, 39.7 MB of it measured, with the C headers a native gem is built against
    - [x] Java from Termux `openjdk-17` + libandroid-shmem + libandroid-spawn. 155.5 MB unpacked; the registry records 160 MB, which left 4.5 MB of room where 156 left half a megabyte, and read 146 until the JDK grew past it
    - [x] C/C++ from Termux `clang`, `libllvm`, `lld`, `llvm`, `libcompiler-rt`, `ndk-sysroot`, `libxml2` and the headers of `python`, minus what the base APK already ships. 254.0 MB unpacked in 3,790 files (the registry records 260 MB) and a 73.7 MB ZIP. Its programs start only through the terminal's exec interceptor, so its manifest is `preloadOnly` and the card says that it does not work with `LD_PRELOAD` set to null
    - [x] Each script: download .deb → extract → place in asset pack module → strip → write manifest
