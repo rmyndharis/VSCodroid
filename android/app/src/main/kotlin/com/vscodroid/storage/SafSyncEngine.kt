@@ -596,6 +596,7 @@ class SafSyncEngine(private val context: Context) {
                 localPath.mkdirs()
             } else {
                 clearKindConflict(doc, localPath) { previouslyRecorded }
+                removeStagingLeftover(doc, localPath)
                 // First, so it covers every arm below: each one either arms `unfetched`,
                 // which blocks writes on its own, leaves the device as enumerated, or
                 // writes it, and the write refreshes this entry.
@@ -1404,6 +1405,56 @@ class SafSyncEngine(private val context: Context) {
             )
         }
     }
+
+    /**
+     * Removes the scratch copy an earlier build left beside [localPath], when it can be
+     * shown to be one.
+     *
+     * Up to 1.5.0 a copy was staged as `<name>.vscodroid-partial` next to its destination, so
+     * one cut off by the process dying stayed behind. The name proves nothing on its own,
+     * since a user can make one too, and the engine accordingly does not vouch for it. What
+     * does is the device: it holds the document being staged, and the leftover's bytes are
+     * the start of that document's, which is all an interrupted copy can leave. Asked of the
+     * provider only when such a file is there, which is almost never, and never past
+     * [MAX_FILE_SIZE], the most a copy was allowed to stage.
+     *
+     * Anything that does not show it stays: a different start, a file longer than the
+     * document, a document the provider will not read, and a leftover with no device
+     * document by that name at all.
+     */
+    private fun removeStagingLeftover(doc: DocumentInfo, localPath: File) {
+        val leftover = File(localPath.parentFile, "${localPath.name}$PARTIAL_SUFFIX")
+        if (isLink(leftover) || !leftover.isFile || leftover.length() > MAX_FILE_SIZE) return
+        try {
+            if (!deviceStartsWith(doc.uri, leftover)) return
+            Files.delete(leftover.toPath())
+            Logger.i(
+                tag,
+                "Removed ${leftover.name}: it is the start of ${doc.relativePath}, left by a " +
+                    "copy that was cut off",
+            )
+        } catch (e: Exception) {
+            Logger.w(tag, "Could not judge ${leftover.name}: ${e.javaClass.simpleName}")
+        }
+    }
+
+    /** Whether the bytes of [prefix] are the first bytes of the device document [docUri]. */
+    private fun deviceStartsWith(docUri: Uri, prefix: File): Boolean =
+        context.contentResolver.openInputStream(docUri)?.use { device ->
+            Files.newInputStream(prefix.toPath(), LinkOption.NOFOLLOW_LINKS).use { local ->
+                val own = ByteArray(COPY_BUFFER_SIZE)
+                val theirs = ByteArray(COPY_BUFFER_SIZE)
+                var same = true
+                while (same) {
+                    val count = readFully(local, own, own.size)
+                    if (count == 0) break
+                    // A loop and not Arrays.equals over a range, which is Java 9 and API 33.
+                    same = readFully(device, theirs, count) == count &&
+                        (0 until count).all { own[it] == theirs[it] }
+                }
+                same
+            }
+        } ?: false
 
     /**
      * Whether the device document [doc] has changed since the last sync recorded it.
