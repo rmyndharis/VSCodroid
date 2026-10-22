@@ -1015,7 +1015,7 @@ class VSCodroidWebViewClient(
         // `vscodroid://callback` is this app's own sign-in relay. Its VIEW filter
         // is exported and BROWSABLE, so handing one to `startActivity` delivers
         // it straight back into `MainActivity.onNewIntent`, and a main-frame
-        // launch arms the ids the address carries first: one navigation would
+        // launch arms the registered identities the address carries first: one navigation would
         // both open the window and post the callback that window judges. The
         // launch alone is the other half, and the frame test below does not
         // cover it: a subframe arms nothing, but a tapped link in the simple

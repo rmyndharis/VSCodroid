@@ -13,6 +13,7 @@ import androidx.annotation.StringRes
 import androidx.browser.customtabs.CustomTabsIntent
 import com.google.android.play.core.assetpacks.model.AssetPackStatus
 import com.vscodroid.R
+import com.vscodroid.authCallbackIsExpected
 import com.vscodroid.isExtensionCallback
 import com.vscodroid.setup.ToolchainManager
 import com.vscodroid.setup.ToolchainRegistry
@@ -74,7 +75,10 @@ private const val DRAIN_JOIN_MILLIS = 1_000L
  */
 internal const val AUTH_TAB_WINDOW_MILLIS = 10 * 60 * 1000L
 
-/** Bound retained identities per workbench document without evicting pending requests. */
+/**
+ * Bound retained identities per workbench document. A full registry makes room only by
+ * dropping an identity that can no longer be satisfied, see [AuthTabWindow.register].
+ */
 private const val MAX_TRACKED_SIGN_INS = 32
 
 /**
@@ -99,12 +103,13 @@ private const val MAX_TRACKED_SIGN_INS = 32
  * arms nothing, so the callback that comes back for it is refused in the log and
  * nowhere else: the message for a late arrival sits on the other side of that
  * branch, and `openExternalUrl` still reports the launch as made, so the sign-in
- * fails quietly. An id it invents has to have come out of a URL this app was
- * asked to open, and there are two askers rather than one. [openExternalUrl]
- * refuses a caller without the session token. `VSCodroidWebViewClient`'s
- * `shouldOverrideUrlLoading` has no token to check, so it arms only for a
- * main-frame navigation: the main frame is our own page, while the other frames
- * carry content this app does not vouch for. Widening this pattern widens both.
+ * fails quietly. An id it invents arms nothing unless the workbench registered
+ * that id with the same secret ([AuthTabWindow.register]), so a URL this app was
+ * asked to open cannot choose which identities the relay accepts. Of the two
+ * askers, [openExternalUrl] refuses a caller without the session token, and
+ * `VSCodroidWebViewClient`'s `shouldOverrideUrlLoading`, which has no token to
+ * check, arms only for a main-frame navigation: the main frame is our own page,
+ * while the other frames carry content this app does not vouch for.
  */
 private val AUTH_REQUEST_ID = Regex("""vscode-reqid(?:=|%(?:25)*3[Dd])(\d+)""")
 
@@ -347,15 +352,41 @@ object AuthTabWindow {
         launches.clear()
     }
 
+    /**
+     * Records the identity the workbench minted for a sign-in request.
+     *
+     * With the registry full, [nowMillis] lets it drop the oldest identity whose return can
+     * no longer be accepted: one already reported late, or one launched and past
+     * [AUTH_TAB_WINDOW_MILLIS]. A request that is waiting for its launch, or whose window is
+     * open, is never dropped, so a page left open for days can go on signing in without a
+     * reload, and one with 32 sign-ins in flight is still refused. Without a clock nothing is
+     * dropped.
+     */
     @Synchronized
-    fun register(requestId: String, nonce: String, documentId: String, pageGeneration: Long): Boolean {
+    fun register(
+        requestId: String, nonce: String, documentId: String, pageGeneration: Long,
+        nowMillis: Long? = null,
+    ): Boolean {
         val numericId = requestId.toLongOrNull() ?: return false
         if (numericId <= 0 || numericId.toString() != requestId ||
             !nonce.matches(Regex("[0-9a-f]{32}")) || !documentId.matches(Regex("[0-9a-f]{32}")) ||
             pageGeneration != generation) return false
         launches[requestId]?.let { return it.nonce == nonce && it.documentId == documentId }
-        if (launches.size >= MAX_TRACKED_SIGN_INS) return false
+        if (launches.size >= MAX_TRACKED_SIGN_INS && !(nowMillis != null && dropOldestClosed(nowMillis))) {
+            return false
+        }
         launches[requestId] = Launch(nonce, documentId)
+        return true
+    }
+
+    /** Caller holds the lock. True when it made room. */
+    private fun dropOldestClosed(nowMillis: Long): Boolean {
+        val closed = launches.entries.firstOrNull { (_, launch) ->
+            val openedAt = launch.at
+            launch.expired || (openedAt != null && launch.outstanding == 0 &&
+                !authCallbackIsExpected(openedAt, nowMillis, AUTH_TAB_WINDOW_MILLIS))
+        } ?: return false
+        launches.remove(closed.key)
         return true
     }
 
@@ -582,7 +613,9 @@ class AndroidBridge(
         requestId: String, nonce: String, documentId: String, pageGeneration: Long, authToken: String
     ): Boolean {
         if (!security.validateToken(authToken)) return false
-        return AuthTabWindow.register(requestId, nonce, documentId, pageGeneration)
+        return AuthTabWindow.register(
+            requestId, nonce, documentId, pageGeneration, SystemClock.elapsedRealtime(),
+        )
     }
 
     /**
@@ -624,8 +657,8 @@ class AndroidBridge(
     fun openExternalUrl(url: String, authToken: String): String {
         if (!security.validateToken(authToken)) return context.getString(OPEN_URL_STALE_SESSION)
         val address = encodeCallbackState(url)
-        // Empty until the launch arms something, and then the ids to take back if
-        // the launch that armed them throws. Arming has to precede the launch, so
+        // Null until the launch arms something, and then the activation to take back
+        // if the launch that armed it throws. Arming has to precede the launch, so
         // without this a launch nothing accepted still left the callback relay
         // open to those ids for ten minutes with no sign-in in flight.
         var armed: AuthTabWindow.Attempt? = null
@@ -668,8 +701,8 @@ class AndroidBridge(
             // method exists to serve on a LAN, that arms nothing hangs with the
             // callback refused and nothing said.
             //
-            // What is armed is the request ids this URL carries, not the fact that
-            // a browser opened. A documentation link carries none and so opens
+            // What is armed is the registered identities whose ids and secret this URL
+            // carries, not the fact that a browser opened. A documentation link carries none and so opens
             // nothing: it used to widen the callback window by ten minutes exactly
             // as a sign-in did.
             armed = AuthTabWindow.arm(

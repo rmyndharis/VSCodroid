@@ -155,7 +155,7 @@ class BridgeTokenUniformityTest {
         // stubbed so the real implementations cannot run, but the detection below is not
         // stub-shaped: `wasNot Called` catches any call, including ones added later.
         mockkObject(AuthTabWindow)
-        every { AuthTabWindow.register(any(), any(), any(), any()) } returns false
+        every { AuthTabWindow.register(any(), any(), any(), any(), any()) } returns false
         mockkObject(CrashReporter)
         every { CrashReporter.getLastCrash() } returns null
         every { CrashReporter.clearCrashLogs() } just Runs
