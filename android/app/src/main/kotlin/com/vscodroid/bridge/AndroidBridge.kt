@@ -1321,6 +1321,9 @@ class AndroidBridge(
             }
 
             val keyComment = if (comment.isBlank()) "vscodroid@android" else comment
+            // The private key cannot be there (returned above), but a public file can be: it is
+            // the user's, so a failed generation leaves it and removes only what it made.
+            val publicWasThere = pubFile.exists()
 
             val process = ProcessBuilder(
                 "$nativeLibDir/libssh-keygen.so",
@@ -1369,9 +1372,8 @@ class AndroidBridge(
             if (!process.waitFor(KEYGEN_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)) {
                 process.destroyForcibly()
                 Logger.e(tag, "ssh-keygen did not finish within ${KEYGEN_TIMEOUT_SECONDS}s; killed")
-                // Remove files created by this failed generation; existing private keys returned above.
                 keyFile.delete()
-                pubFile.delete()
+                if (!publicWasThere) pubFile.delete()
                 result.put("success", false)
                 result.put("error", "ssh-keygen did not finish within ${KEYGEN_TIMEOUT_SECONDS}s")
                 return result.toString()
@@ -1398,9 +1400,8 @@ class AndroidBridge(
                 result.put("success", true)
                 result.put("publicKey", pubKey)
             } else {
-                // Remove only files from this generation; existing private keys returned above.
                 keyFile.delete()
-                pubFile.delete()
+                if (!publicWasThere) pubFile.delete()
                 result.put("success", false)
                 result.put("error", output.trim().ifEmpty { "ssh-keygen exited with code $exitCode" })
             }

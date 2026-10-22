@@ -37,7 +37,8 @@ import java.io.File
  * The generation cases end at the spawn, deliberately. `ProcessBuilder` cannot
  * launch the bundled `ssh-keygen` on this classpath and is not asked to: what is
  * under test is the state of the directory on the way in and on the way out, and
- * a failed spawn is one of the failures that state has to survive.
+ * a failed spawn is one of the failures that state has to survive. One case stands a
+ * script in for the binary, to reach the exit a failed run takes.
  */
 class SshKeyStateTest {
 
@@ -148,6 +149,28 @@ class SshKeyStateTest {
         assertFalse(answer.getBoolean("success"))
         assertFalse(privateKey.exists(), "a failed generation left a private key behind")
         assertFalse(publicKey.exists(), "a failed generation left a public key behind")
+    }
+
+    @Test
+    fun `a failed generation leaves a public file that was already there`() {
+        // A script in place of the binary, so the spawn succeeds and the exit path runs; the
+        // marker shows it did, since a spawn that failed would pass this case for nothing.
+        val lib = File(files, "lib").apply { mkdirs() }
+        File(lib, "libssh-keygen.so").apply {
+            writeText("#!/bin/sh\ntouch \"\$0.ran\"\nexit 3\n")
+            check(setExecutable(true))
+        }
+        every { context.applicationInfo } returns ApplicationInfo().apply {
+            nativeLibraryDir = lib.absolutePath
+        }
+        publicKey.writeText("$PUBLIC_LINE\n")
+
+        val answer = JSONObject(bridge.generateSshKey(security.getSessionToken(), ""))
+
+        assertTrue(File(lib, "libssh-keygen.so.ran").isFile, "the stand-in ssh-keygen never ran")
+        assertFalse(answer.getBoolean("success"))
+        assertEquals("$PUBLIC_LINE\n", publicKey.readText(), "a failed generation deleted the user's public file")
+        assertFalse(privateKey.exists(), "a failed generation left a private key behind")
     }
 
     @Test
