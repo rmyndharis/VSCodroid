@@ -106,6 +106,12 @@ VSCodroid is VS Code. If you have used VS Code on desktop, everything works the 
   file times opening the folder tries the save too. In either kind of folder, an
   open that finds that version reported as over 50 MB keeps saves of the file
   inside VSCodroid until an open finds it smaller.
+  When a file and a folder share a name, one on the device and one in the editor,
+  for example after you delete a folder in the Explorer, which leaves it on the
+  device, and make a file of the same name, the device's keeps the name and
+  yours is kept beside it as `<name>.local-<time>`, in the editor and in the
+  device folder, the next time you open the folder. Until then a notice says the
+  file exists only inside VSCodroid.
 - A file of a device folder that you delete in the editor is deleted in the
   device folder too, unless the device folder's version is one VSCodroid has not
   read: another app may have changed it since you opened the folder or last

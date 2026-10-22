@@ -592,8 +592,10 @@ class SafSyncEngine(private val context: Context) {
             }
 
             if (doc.isDirectory) {
+                clearKindConflict(doc, localPath) { previouslyRecorded }
                 localPath.mkdirs()
             } else {
+                clearKindConflict(doc, localPath) { previouslyRecorded }
                 // First, so it covers every arm below: each one either arms `unfetched`,
                 // which blocks writes on its own, leaves the device as enumerated, or
                 // writes it, and the write refreshes this entry.
@@ -1326,6 +1328,81 @@ class SafSyncEngine(private val context: Context) {
                 "differs from the device copy replacing it and no sync wrote it",
         )
         return true
+    }
+
+    /**
+     * Makes room for the device document [doc] where the mirror holds the other kind of
+     * entry at its path: a file where the device has a folder, or a folder where it has a
+     * file. Matching by name alone, an open otherwise tried to make a directory where a file
+     * stood (or copy a file onto a directory), failed on the document and on every child
+     * below it, and said so at every open for as long as the entry lived.
+     *
+     * The device keeps the name. The mirror's entry is set aside under a `.local-` name,
+     * exactly as [setAsideDivergedMirror] does for a file both sides changed, and
+     * [uploadMirrorOnlyDocuments] puts it across in this same sync, so both are kept and
+     * nothing waits for the user. Nothing else of the mirror is touched, and a link is left
+     * to the confinement rules that already refuse to write through one.
+     *
+     * One entry does not become a copy: a file the last sync can vouch for, unchanged since
+     * it was read, where the device now holds a folder. That is this app's own copy of
+     * what the device replaced, so it follows the device as it does when the device deletes
+     * it ([reconcileDeletions] acts on the same evidence); keeping it would put a stale
+     * file back on a device folder whose owner replaced it. A mirror folder is never judged
+     * this way, because what a folder holds is not one line of the record.
+     *
+     * Failing to do either leaves the old behaviour: the document cannot be made or
+     * copied, and the open reports it. The journal line of a failed save of the entry is
+     * retired with it (a folder's lines move with the folder): the path it names is a
+     * different kind of entry now, and the set-aside copy's own upload leaves a line of its
+     * own if it fails, so no stale line pins the mirror.
+     */
+    private fun clearKindConflict(
+        doc: DocumentInfo,
+        localPath: File,
+        previouslyRecorded: () -> Set<String>?,
+    ) {
+        if (isLink(localPath)) return
+        val inTheWay = if (doc.isDirectory) localPath.isFile else localPath.isDirectory
+        if (!inTheWay) return
+        try {
+            if (doc.isDirectory) {
+                val recorded = previouslyRecorded()
+                if (recorded != null && identityLine(doc.relativePath, localPath) in recorded) {
+                    Files.delete(localPath.toPath())
+                    consumeStaleUploadRecord(localPath.absolutePath)
+                    Logger.i(
+                        tag,
+                        "Removed the mirror copy of ${doc.relativePath}: the device replaced " +
+                            "the file with a folder",
+                    )
+                    return
+                }
+            }
+            val parent = inboundParent(localPath)
+            var time = localPath.lastModified()
+            var preserved = File(localPath.parentFile, "${localPath.name}$LOCAL_COPY_SUFFIX$time")
+            while (Files.exists(preserved.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+                time++
+                preserved = File(localPath.parentFile, "${localPath.name}$LOCAL_COPY_SUFFIX$time")
+            }
+            if (inboundParent(localPath) != parent) {
+                throw IOException("The destination directory changed before preservation")
+            }
+            Files.move(localPath.toPath(), preserved.toPath())
+            if (doc.isDirectory) consumeStaleUploadRecord(localPath.absolutePath)
+            else renameUploadsUnder(localPath, preserved)
+            Logger.i(
+                tag,
+                "Set the mirror ${if (doc.isDirectory) "file" else "folder"} " +
+                    "${doc.relativePath} aside as ${preserved.name}: the device holds a " +
+                    "${if (doc.isDirectory) "folder" else "file"} under that name",
+            )
+        } catch (e: Exception) {
+            Logger.w(
+                tag,
+                "Could not make room for ${doc.relativePath}: ${e.javaClass.simpleName}",
+            )
+        }
     }
 
     /**
@@ -3873,7 +3950,21 @@ class SafSyncEngine(private val context: Context) {
         return try {
             if (isLink(localFile) || (!localFile.isDirectory && !localFile.isFile)) return null
             val parentDocId = DocumentsContract.getDocumentId(parentSafUri)
-            val existingDocId = findChildDocId(treeUri, parentDocId, localFile.name)
+            val existing = findChildDocument(treeUri, parentDocId, localFile.name)
+            val existingDocId = existing?.docId
+            if (existing?.isDirectory != null && existing.isDirectory != localFile.isDirectory) {
+                // The device holds the other kind under this name. Writing a file into a
+                // folder, or making entries inside a file, is refused by the provider and
+                // was tried anyway, twice, on every save; the entry stays inside the app
+                // and the next open sets it aside next to the device's, see
+                // [clearKindConflict]. The caller says so.
+                Logger.w(
+                    tag,
+                    "Not writing ${localFile.name} back: the device holds a " +
+                        "${if (existing.isDirectory) "folder" else "file"} under that name",
+                )
+                return null
+            }
             if (existingDocId == null && access != null) {
                 // Keep creation, mirror naming and the first write in the same generation.
                 return withCurrent(access) { createOneInSaf(localFile, parentSafUri, treeUri) }
@@ -4186,14 +4277,26 @@ class SafSyncEngine(private val context: Context) {
      * between writing into a document and making a new one, and the cache can still
      * name a document deleted since it was filled.
      */
-    private fun findChildDocId(treeUri: Uri, parentDocId: String, name: String): String? {
+    private fun findChildDocId(treeUri: Uri, parentDocId: String, name: String): String? =
+        findChildDocument(treeUri, parentDocId, name)?.docId
+
+    /**
+     * [findChildDocId] with what kind of document the provider says it is.
+     *
+     * A name is not an identity: a folder and a file can take the same name in turn, and a
+     * caller that writes into what it found by name has to know it found the kind it meant.
+     * [ChildDocument.isDirectory] is null where the provider reported no usable type, and
+     * a caller treats that as unknown rather than as a file.
+     */
+    private fun findChildDocument(treeUri: Uri, parentDocId: String, name: String): ChildDocument? {
         val childrenUri = DocumentsContract.buildChildDocumentsUriUsingTree(treeUri, parentDocId)
         try {
             context.contentResolver.query(
                 childrenUri,
                 arrayOf(
                     DocumentsContract.Document.COLUMN_DOCUMENT_ID,
-                    DocumentsContract.Document.COLUMN_DISPLAY_NAME
+                    DocumentsContract.Document.COLUMN_DISPLAY_NAME,
+                    DocumentsContract.Document.COLUMN_MIME_TYPE,
                 ),
                 null, null, null
             )?.use { cursor ->
@@ -4203,8 +4306,18 @@ class SafSyncEngine(private val context: Context) {
                 val nameIndex = cursor.getColumnIndexOrThrow(
                     DocumentsContract.Document.COLUMN_DISPLAY_NAME
                 )
+                val mimeIndex = cursor.getColumnIndexOrThrow(
+                    DocumentsContract.Document.COLUMN_MIME_TYPE
+                )
                 while (cursor.moveToNext()) {
-                    if (cursor.getString(nameIndex) == name) return cursor.getString(idIndex)
+                    if (cursor.getString(nameIndex) == name) {
+                        val mime = cursor.getString(mimeIndex)
+                        return ChildDocument(
+                            cursor.getString(idIndex),
+                            mime?.takeIf { '/' in it }
+                                ?.let { it == DocumentsContract.Document.MIME_TYPE_DIR },
+                        )
+                    }
                 }
             }
         } catch (e: Exception) {
@@ -4212,6 +4325,9 @@ class SafSyncEngine(private val context: Context) {
         }
         return null
     }
+
+    /** A direct child of a device directory: its id, and whether it is a directory when known. */
+    private class ChildDocument(val docId: String, val isDirectory: Boolean?)
 
     /**
      * Gives an existing device document a new display name, in place.

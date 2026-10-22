@@ -295,6 +295,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | SF-23 | A device folder shows its name | Open a folder with **Open Folder from Device**, then reopen it from **VSCodroid: Open Recent Folder**; force-stop the app and relaunch it; open a terminal, run `pwd` and `git status` in a repository folder, and save a file | Each time, the Explorer root and the title bar show the folder's name, not a twelve-character code. The terminal opens in the folder with `[saf]` as its prompt, and git sees the repository. The save reaches the device | | |
 | SF-24 | A folder opened before names | Install the previous release, open a device folder, change a file without saving it and open a terminal. Install this build over it without clearing data and relaunch; choose **Reopen** in the notice, then save the file, close the terminal, relaunch and choose **Reopen** again | The folder reopens under its code with the unsaved change, and the notice offers its name. The first **Reopen** says to save and close the terminal first and moves nothing. The second reopens the folder under its name with the same files open. **File > Open Recent** lists both, and a further relaunch opens the folder by name with no notice | | |
 | SF-25 | File > Open Folder asks where the folder is | A few seconds after the window opens, with the editor open, run **File > Open Folder**; then run **File > Close Folder** and tap **Open Folder** in the empty Explorer; then press Ctrl+K Ctrl+O on a hardware keyboard. In each, choose **On the device** and cancel the picker; repeat and choose **In the app's storage**, then cancel the dialog; repeat and dismiss the question. Then run **File > Add Folder to Workspace** | Each route raises the question **Where is the folder?** with **On the device** and **In the app's storage**. **On the device** opens Android's folder picker, **In the app's storage** shows the path dialog it showed before, and dismissing the question shows neither. **Add Folder to Workspace** shows the path dialog with no question. In the first seconds after the window loads, before the bundled extension has started, **File > Open Folder** shows the path dialog alone | | |
+| SF-26 | A file and a folder share a name | Open a device folder. In another app or `adb shell`, add a folder `x` holding a file to it; in the terminal, create a file `x` in the same folder. Read the notice. Open the folder again. Repeat the other way round: a file `y` on the device, a folder `y` with a file in it made in the editor | A notice says `x` exists only inside VSCodroid and the device folder is unchanged. After the second open the device keeps `x` as a folder, the editor has it too, and your file is `x.local-<time>` in both, with its content. A third open changes nothing. The same for `y`, with your folder and its file under `y.local-<time>` | | |
 
 ---
 
@@ -324,9 +325,9 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | Performance | 10 | | | |
 | Toolchains | 12 | | | |
 | Terminal & Tools | 18 | | | |
-| SAF & Files | 25 | | | |
+| SAF & Files | 26 | | | |
 | Display Language | 6 | | | |
-| **Total** | **179** | | | |
+| **Total** | **180** | | | |
 
 **Overall Result**: [ ] PASS / [ ] FAIL
 

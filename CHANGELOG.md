@@ -37,12 +37,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Device-folder directory deletes preserve descendants added or changed on the device since the folder was opened.
 - Device-folder saves preserve both copies and report a failure when the upload recovery record cannot be written.
 - Device-folder saves and new files made just after a folder rename reach the renamed folder, and one whose folder the device lacks is reported.
-- Device-folder sync preserves local edits when a conflicting device copy cannot be kept and protects documents in directories the provider could not list.
+- Device-folder sync overwrites neither side when it cannot first set a conflicting copy aside, and protects documents in directories the provider could not list.
 - Reopening a device folder rejects stale saves, deletes and watcher callbacks from the previous sync.
 - Device-folder sync no longer skips a folder rename when the renamed folder is deleted before the sync runs.
 - Replacing a file with a folder, or a folder with a file, in a device folder takes effect on the device when the original is deleted from the terminal.
 - Reopening a device folder reclaims abandoned temporary downloads while retaining active copies and existing workspace files.
 - Opening a device folder during an active save or delete reports that the folder is busy instead of waiting for the provider.
+- A file and a folder that share a name between the device and the editor are both kept: the device's keeps the name, and the other is set aside as `.local-<time>` and sent across, instead of failing at every open.
 - A device-folder import refuses to install a copy if a parent directory is redirected by a symbolic link during the read.
 - Generating SSH keys preserves an existing private key whose public file is missing and explains how to recover the public key.
 - Toolchain installation rejects packs with a missing payload directory or required binary instead of marking them installed.

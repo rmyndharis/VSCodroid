@@ -59,6 +59,9 @@ class SafQueuedWriteBackTest {
     /** Every document opened for writing, by path, in the order it happened. */
     private val writes = mutableListOf<String>()
 
+    /** Every document a write was tried into, whether or not the provider took it. */
+    private val attempts = mutableListOf<String>()
+
     /** Files announced as existing only inside the app, by mirror-relative path. */
     private val lost = mutableListOf<String>()
 
@@ -165,6 +168,7 @@ class SafQueuedWriteBackTest {
         }
         every { resolver.openOutputStream(any(), any()) } answers {
             val path = pathOf(firstArg<Uri>())
+            attempts += path
             // A directory cannot be written and a deleted document is gone, which is how
             // a provider answers a write through a URI that went stale.
             if (device[path] == null) throw FileNotFoundException(path)
@@ -323,6 +327,36 @@ class SafQueuedWriteBackTest {
         assertEquals(mapOf("lib/sub/f" to 1), writes.groupingBy { it }.eachCount())
         assertEquals("x", text("lib/sub/f"))
         assertEquals(emptyList<String>(), lost)
+    }
+
+    @Test
+    fun `a file made where the device holds a folder is announced and never written into the folder`() {
+        onDevice("foo")
+        onDevice("foo/kid.txt", "k")
+        inMirror("foo", "my notes")
+
+        observe(FileObserver.CREATE, "foo")
+        drain()
+
+        assertEquals(listOf("foo"), lost, "the file that cannot be sent was not announced")
+        assertEquals(emptyList<String>(), attempts, "a write was tried into a folder")
+        assertEquals(setOf("foo", "foo/kid.txt"), device.keys)
+    }
+
+    @Test
+    fun `a folder made where the device holds a file is announced and nothing is made inside the file`() {
+        onDevice("foo", "device file")
+
+        // Observed before the folder is filled in, as the first case in this class does: a
+        // folder that already holds directories would register real watches.
+        observe(FileObserver.CREATE or isDirFlag, "foo")
+        File(mirror, "foo").mkdirs()
+        inMirror("foo/a.txt", "mine")
+        drain()
+
+        assertEquals(listOf("foo"), lost, "the folder that cannot be sent was not announced")
+        assertEquals(setOf("foo"), device.keys, "something was made inside a file")
+        assertEquals("device file", text("foo"))
     }
 
     @Test
