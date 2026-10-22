@@ -90,6 +90,25 @@ class ShortWindowYieldPatchTest {
     }
 
     @Test
+    fun `a window turning tall is acted on after the grid is sized, one turning short before`() {
+        // Shown into a grid that is still short, the panel is squeezed to its minimum and the
+        // grid then gives the room the window gained to the editor: measured on an API 37
+        // emulator, a 218px panel came back at 69px. Hidden before the grid is sized, it keeps
+        // the size the grid remembers for it.
+        val all = patch.lines()
+        val gridLayout = all.indexOfFirst { it.contains("this.workbenchGrid.layout(this._mainContainerDimension.width") }
+        val after = all.indexOfFirst {
+            it.startsWith("+") && it.contains("this.updateShortWindow(this._mainContainerDimension.height, true);")
+        }
+        assertTrue(gridLayout >= 0 && after == gridLayout + 1, "the tall half must run right after the grid layout")
+        assertTrue(
+            addedLines.any { it.contains("shortWindow !== this.shortWindow && shortWindow !== afterGridLayout") },
+            "the call before the grid layout must only act on a window turning short, and the call " +
+                "after it only on one turning tall",
+        )
+    }
+
+    @Test
     fun `the decision is taken when the window turns short or tall, after the bars`() {
         // The status bar call is a context line of the hunk, so the whole patch is searched.
         val all = patch.lines()

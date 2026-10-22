@@ -4,10 +4,12 @@ With the soft keyboard up on a phone held in landscape the page is about 122px t
 
 On Android, Layout#updateShortWindow now also takes the panel out of the grid at the moment the window turns short, and puts it back when the window is tall again (the same 200px and 240px as 0033). It applies to a panel above or below the editor that the layout state shows open, with the editor visible, and only when the panel does not hold the focus at that moment: a terminal the keyboard is typing into stays where it is, because hiding it would take the keyboard down with it. The decision is made when the window turns short or tall, so moving the focus between the editor and the panel while the keyboard stays up does not change it.
 
+The panel goes before the grid is sized and comes back after it. Shown into a grid that is still short, a panel is squeezed to its minimum height, and the grid then gives the room the window gained to the editor, so a panel that was 218px tall came back at 69px (measured on an API 37 emulator with a 411dp wide screen, the keyboard raised and put away again). updateShortWindow takes a flag for the call after the grid layout: before it only a window turning short is acted on (the panel is hidden at the size it had, which is the size the grid remembers for it), after it only a window turning tall. The title bar and the status bar follow the same order.
+
 Only the grid is touched; the layout state and the open view are left alone. The part visibility listener skips the change the grid reports while the panel is out, which it would otherwise read as the user closing the panel. The size saved for the next start is read from the size the grid remembers for a hidden view while the panel is out, because the live size of a view outside the grid is 0 and a state save that ran in a short window would otherwise store it.
 
 diff --git a/src/vs/workbench/browser/layout.ts b/src/vs/workbench/browser/layout.ts
-index 45cc5f0..cb6922f 100644
+index 45cc5f0..1b91c14 100644
 --- a/src/vs/workbench/browser/layout.ts
 +++ b/src/vs/workbench/browser/layout.ts
 @@ -290,6 +290,7 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
@@ -36,7 +38,31 @@ index 45cc5f0..cb6922f 100644
  				? this.workbenchGrid.getViewCachedVisibleSize(this.panelPartView)
  				: isHorizontal(this.stateModel.getRuntimeValue(LayoutStateKeys.PANEL_POSITION))
  					? this.workbenchGrid.getViewSize(this.panelPartView).height
-@@ -2404,6 +2405,23 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
+@@ -1781,6 +1782,7 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
+ 
+ 			// Layout the grid widget
+ 			this.workbenchGrid.layout(this._mainContainerDimension.width, this._mainContainerDimension.height);
++			this.updateShortWindow(this._mainContainerDimension.height, true);
+ 			this.initialized = true;
+ 
+ 			// Emit as event
+@@ -2394,16 +2396,37 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
+ 		return !this.shortWindow && shouldShowCustomTitleBar(this.configurationService, mainWindow, this.state.runtime.menuBar.toggled);
+ 	}
+ 
+-	private updateShortWindow(height: number): void {
++	private updateShortWindow(height: number, afterGridLayout = false): void {
+ 		if (!isAndroid) {
+ 			return;
+ 		}
+ 
++		// VSCodroid: a window turning short is acted on before the grid is sized, so the panel is hidden
++		// at the size it had and that size is what the grid remembers for it; a window turning tall is
++		// acted on after, because a panel shown into a grid that is still short is squeezed to its
++		// minimum and the grid then gives the room it gains to the editor.
+ 		const shortWindow = height < (this.shortWindow ? SHORT_WINDOW_RELEASE_HEIGHT : SHORT_WINDOW_HEIGHT);
+-		if (shortWindow !== this.shortWindow) {
++		if (shortWindow !== this.shortWindow && shortWindow !== afterGridLayout) {
  			this.shortWindow = shortWindow;
  			this.workbenchGrid.setViewVisible(this.titleBarPartView, this.shouldShowTitleBar());
  			this.updateStatusBarVisibility();
