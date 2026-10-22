@@ -47,9 +47,15 @@ const IDLE_THRESHOLD_MS = 5 * 60 * 1000;
 // costs more than the warning was worth.
 const IDLE_BASELINE = 3;
 
-// Idle, plus a terminal and two language servers: a session with real work in
-// it. Below this the count says nothing a user could act on.
-const SOFT_BUDGET = 6;
+// A busy session, not an ordinary one. Opening ONE JavaScript file starts four
+// processes (the ESLint server, two tsserver processes and the typings
+// installer), Run adds a terminal, and a Python file brings its language server
+// and a helper, so idle plus a terminal and two language servers, which this was
+// at 6, put the status item amber and raised the warning for opening a file.
+// Measured on API 37 with Code - OSS 1.139.1: 8 with a JavaScript file and a
+// terminal, 10 once a Python file is open too, 11 with a second terminal. Below
+// this the count says nothing a user could act on.
+const SOFT_BUDGET = 10;
 
 // Far enough above the soft budget to mean something has gone wrong rather than
 // that the user is busy, and still well short of the hard limit, so there is

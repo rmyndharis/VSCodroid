@@ -149,6 +149,14 @@ function snapshot(total, terminals, langservers, budget = { idle: 5, soft: 8, er
             `  at 11 processes: ${busy[0].message}`,
     );
 
+    // Not "the target of N": the number it named is the idle baseline, what the app costs
+    // when nothing is open. Said at the soft budget it read as a goal the user had missed
+    // for opening a file, when the count is only something to keep an eye on.
+    assert.ok(
+        !/\btarget\b/i.test(quiet[0].message),
+        `the warning calls the idle baseline a target: ${quiet[0].message}`,
+    );
+
     // One button, and it opens the details view. The other one signalled the
     // idle rows, and measured on device the servers were back under new pids
     // within a second, so the button promised a slot it never freed.

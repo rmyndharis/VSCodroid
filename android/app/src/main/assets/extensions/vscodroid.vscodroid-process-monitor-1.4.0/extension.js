@@ -188,8 +188,9 @@ function updateStatusBar(snapshot) {
     // once, latched by the flags below, and VS Code gives no way to edit one
     // that is already open. So the two disagreed on screen -- measured on an
     // API 35 emulator, the toast read 8 while the bar read 7, and the toast was
-    // simply older. The target stays because it is a constant of the app, the
-    // idle baseline the snapshot carries, not a reading.
+    // simply older. The warning used to name the idle baseline, a constant of the
+    // app and not a reading, as "the target"; it no longer names a number at all, see
+    // below.
     //
     // Nothing actionable is lost. The button opens the details view, which
     // reads lastSnapshot, refreshed by poll() every interval, so it shows the
@@ -200,10 +201,7 @@ function updateStatusBar(snapshot) {
     // The tiers are the snapshot's, like the colours above. They were 12 and 8
     // here while the bar coloured on 14 and 8, so between 12 and 13 an error
     // notification stood in front of a status item that was merely amber, and
-    // nothing tied the 12 to any number the monitor publishes. The target named
-    // in the warning is the idle baseline, which is a constant of the app rather
-    // than a reading of this tree, so it stays in the sentence and now comes from
-    // the same place as everything else.
+    // nothing tied the 12 to any number the monitor publishes.
     if (total >= error && !criticalShownAtThreshold) {
         // Both latches, because this count already meets the softer tier as
         // well: error is above soft, and the three arms are one else-if chain
@@ -223,8 +221,11 @@ function updateStatusBar(snapshot) {
         ).then(onTierChoice);
     } else if (total >= soft && !warningShownAtThreshold) {
         warningShownAtThreshold = true;
+        // Not "the target of N". The number it named was the idle baseline, what the app
+        // costs with nothing open, and said at the soft budget it read as a goal the user
+        // had missed by opening a file. The sentence is the condition, as the error's is.
         vscode.window.showWarningMessage(
-            `Phantom processes are above the target of ${idle}. ` +
+            'Phantom processes are adding up; Android may start ending them. ' +
                 'The live count is in the status bar.',
             'Show Details'
         ).then(onTierChoice);

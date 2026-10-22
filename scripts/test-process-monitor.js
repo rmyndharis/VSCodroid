@@ -667,6 +667,19 @@ function run(tmp, proc, signals) {
         `thresholds out of order: idle ${budget.idle}, soft ${budget.soft}, ` +
         `error ${budget.error}, hard ${budget.hard}`,
     );
+    // Standing clear of the idle set is not enough, the ordinary session has to clear it
+    // too. Opening ONE JavaScript file starts four processes (the ESLint server, two
+    // tsserver processes and the typings installer; measured on API 37 with Code - OSS
+    // 1.139.1), and Run adds a terminal, so the count of a session doing nothing unusual
+    // is the idle set plus five. A soft budget under that lit the warning, and the amber
+    // status item, for opening a file.
+    const ONE_JAVASCRIPT_FILE = 4;
+    const ONE_TERMINAL = 1;
+    assert.ok(
+        budget.soft > budget.idle + ONE_JAVASCRIPT_FILE + ONE_TERMINAL,
+        `the soft budget (${budget.soft}) is at or under what one JavaScript file and a terminal ` +
+        `cost on top of the idle ${budget.idle}: the warning would show for an ordinary session`,
+    );
     // No threshold that promises an action. `reclaim` was the count at which
     // idle servers were signalled, and the details view rendered it as the one
     // number that made something happen on its own; a snapshot still naming it
