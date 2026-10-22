@@ -4581,8 +4581,8 @@ class SafSyncEngine(private val context: Context) {
                 // into that name is refused its pair. Nothing else removes these,
                 // so the delete that strands them is the delete that clears them.
                 withCurrentMemory(access) {
-                    if (job.relativePath.isNotEmpty()) {
-                        forgetCachedSubtree(job.relativePath)
+                    if (job.relativePath.isNotEmpty() && job.safTreeUri != null) {
+                        forgetCachedSubtree(job.safTreeUri, job.relativePath)
                     }
                     // And the upload record, for the same reason and with the same
                     // reach. A journal line is keyed by the mirror path and is removed
@@ -5065,7 +5065,7 @@ class SafSyncEngine(private val context: Context) {
         // nothing to duplicate, so this falls back to creating the new name outright.
         val renamedFromUri = renamedFrom?.let { resolveDocumentUri(safTreeUri, it, access) }
         if (renamedFrom != null && renamedFromUri != null) {
-            withCurrentMemory(access) { forgetCachedSubtree(renamedFrom) }
+            withCurrentMemory(access) { forgetCachedSubtree(safTreeUri, renamedFrom) }
         }
 
         // Only for a pair that crosses directories, and resolved from where the document
@@ -5279,9 +5279,11 @@ class SafSyncEngine(private val context: Context) {
      * mirror no longer has. Dropping them costs a tree walk on the next lookup of a path
      * below the new name, which is the slow path that already exists for new files.
      */
-    private fun forgetCachedSubtree(relativePath: String) {
+    private fun forgetCachedSubtree(treeUri: Uri, relativePath: String) {
         val prefix = "$relativePath/"
-        docIdCache.keys.removeAll { it == relativePath || it.startsWith(prefix) }
+        synchronized(docIdCache) {
+            if (cacheTree == treeUri) docIdCache.keys.removeAll { it == relativePath || it.startsWith(prefix) }
+        }
     }
 
     /**

@@ -215,6 +215,33 @@ class SafCacheTreeTest {
     }
 
     /**
+     * The cleanup after a delete is by relative path, and the cache is by relative path
+     * too, so a drain still finishing the previous folder removed the entries of the next
+     * folder that happened to share a name. Harmless to the data, since a miss only sends
+     * the lookup to the provider, but it is the label the cache's own contract promises to
+     * honour on every access.
+     */
+    @Test
+    fun `a delete drained for the previous folder does not forget the next folder's documents`() {
+        sync(treeA, mirrorA)
+        sync(treeB, mirrorB)
+        File(mirrorA, "src").deleteRecursively()
+        engine.handleMirrorEvent(
+            FileObserver.DELETE or 0x40000000, File(mirrorA, "src"), mirrorA, treeA,
+        )
+        engine.runWriteBackLoop { false }
+        File(mirrorB, "src/b.txt").writeText("edited")
+        queries.set(0)
+
+        engine.handleMirrorEvent(FileObserver.MODIFY, File(mirrorB, "src/b.txt"), mirrorB, treeB)
+
+        assertEquals(
+            0, queries.get(),
+            "the previous folder's delete removed documents the next folder had cached",
+        )
+    }
+
+    /**
      * And the folder the cache does speak for still gets its fast path: a save under a
      * directory the sync enumerated resolves both the file and its parent without asking
      * the provider anything. Without this a label test that always failed would pass the
