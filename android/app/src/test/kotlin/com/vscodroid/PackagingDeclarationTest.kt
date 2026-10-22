@@ -110,10 +110,12 @@ class PackagingDeclarationTest {
      * declared for `*.md`), so a reader that reaches a NEW corner of a declared
      * directory passes: widen the check the day a suite reads one.
      *
-     * An interpolated literal is dropped rather than resolved. The only one is
-     * the pack payload `../$packName/src/main/assets/usr`, which a download
-     * script writes and git ignores: a source checkout does not carry it, and
-     * declaring it would hash a 150 MB tree on every run of every suite.
+     * An interpolated literal is not resolved. It is judged by the text before its
+     * first `$`, which has to open a string in the block, as `../../scripts/download-$name.sh`
+     * is covered by the three scripts it can name. One that spells nothing before the `$`
+     * is dropped, and the only one is the pack payload `../$packName/src/main/assets/usr`,
+     * which a download script writes and git ignores: a source checkout does not carry it,
+     * and declaring it would hash a 150 MB tree on every run of every suite.
      *
      * A reader that keeps a base directory and resolves names off it is invisible
      * here, and `NoticesTest` is one; its paths are covered because another suite
@@ -178,6 +180,25 @@ class PackagingDeclarationTest {
                 "them, so an edit to one leaves the task UP-TO-DATE and the suite that " +
                 "exists to catch it never runs. Add each to the inputs block in " +
                 "build.gradle.kts."
+        )
+
+        val unspelled = File("src/test/kotlin").walkTopDown()
+            .filter { it.isFile && it.extension == "kt" }
+            .flatMap { Regex("\"((?:\\.\\./)+)([^\"$]+)\\$[^\"]*\"").findAll(it.readText()) }
+            .map { it.groupValues[1] to it.groupValues[2] }
+            .filter { (climb, prefix) ->
+                val dir = File(climb + prefix.substringBeforeLast('/', ""))
+                dir.isDirectory && dir.canonicalFile.toPath().startsWith(repoRoot)
+            }
+            .map { (_, prefix) -> prefix }
+            .filterNot { inputs.contains("\"$it") }
+            .toSortedSet()
+        assertEquals(
+            emptySet<String>(),
+            unspelled,
+            "a unit test opens a repository path that starts with these and ends in an " +
+                "interpolated name, and no string in the inputs block of build.gradle.kts " +
+                "starts with it. Declare each file the name can take."
         )
     }
 }

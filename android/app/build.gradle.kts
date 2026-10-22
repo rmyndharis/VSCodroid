@@ -647,14 +647,31 @@ tasks.withType<Test> {
     // keeps a 1px divider from being drawn as a 44px band lives there, and
     // FirstRunEditorDefaultsTest reads the REQUIRED list of verify-server-tree.py,
     // because the reason it gives for hiding the secondary side bar is that the
-    // tree is required to carry the chat provider. Nothing else under scripts/
-    // is opened by a test besides build-nls-bundles.py above, and most of it is
-    // Python the Python gates already cover.
+    // tree is required to carry the chat provider. Besides build-nls-bundles.py
+    // above and the download scripts below, nothing else under scripts/ is opened
+    // by a test, and most of it is Python the Python gates already cover.
     inputs.file(rootProject.projectDir.parentFile.resolve("scripts/build-vscode-oss.sh"))
         .withPropertyName("codeOssBuildScript")
         .withPathSensitivity(PathSensitivity.RELATIVE)
     inputs.file(rootProject.projectDir.parentFile.resolve("scripts/verify-server-tree.py"))
         .withPropertyName("serverTreeGate")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    // RunFileCommandTest holds the toolchain names the Run button offers to the manifests
+    // these three write, and CaretDragWiringTest holds the caret-drag self-check to the two
+    // workflows that run it. Both name their file by an interpolated literal, which the
+    // declaration check in PackagingDeclarationTest reads by the text before the `$`.
+    inputs.files(
+        rootProject.projectDir.parentFile.resolve("scripts/download-ruby.sh"),
+        rootProject.projectDir.parentFile.resolve("scripts/download-java.sh"),
+        rootProject.projectDir.parentFile.resolve("scripts/download-cpp.sh"),
+    )
+        .withPropertyName("toolchainDownloadScripts")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.files(
+        rootProject.projectDir.parentFile.resolve(".github/workflows/lint.yml"),
+        rootProject.projectDir.parentFile.resolve(".github/workflows/release.yml"),
+    )
+        .withPropertyName("selfCheckWorkflows")
         .withPathSensitivity(PathSensitivity.RELATIVE)
     // The licence texts NoticesTest pins byte for byte. That pin exists for the
     // edit nobody means to make: a reflow, a re-wrap, an editor stripping the
