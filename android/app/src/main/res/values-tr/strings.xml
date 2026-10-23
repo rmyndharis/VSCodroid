@@ -207,6 +207,7 @@
     <string name="toolchain_cancel">İptal</string>
     <string name="toolchain_remove_confirm_title">%s kaldırılsın mı?</string>
     <string name="toolchain_remove_confirm_message">Bu işlem tüm %s dosyalarını siler. İstediğiniz zaman yeniden yükleyebilirsiniz.</string>
+    <string name="toolchain_older_build">%1$s yüklü. %2$s sürümünü almak için kaldırıp yeniden yükleyin.</string>
 
     <!-- Launcher shortcut: in practice the only route to the toolchain screen.
          The activity is not exported and has no launcher entry, and the one

@@ -535,7 +535,9 @@ class SplashActivity : AppCompatActivity() {
      */
     override fun onStart() {
         super.onStart()
-        pickerAdapter?.setInstalled(ToolchainManager(applicationContext).getInstalledToolchains())
+        ToolchainManager(applicationContext).let {
+            pickerAdapter?.setInstalled(it.getInstalledToolchains(), it.installedLabels())
+        }
     }
 
     override fun onDestroy() {
@@ -663,7 +665,9 @@ class SplashActivity : AppCompatActivity() {
         // Read on the main thread, as ToolchainActivity already reads it twice: it
         // is one small JSON file, and the alternative is drawing the cards wrong
         // and correcting them afterwards.
-        adapter.setInstalled(ToolchainManager(applicationContext).getInstalledToolchains())
+        ToolchainManager(applicationContext).let {
+            adapter.setInstalled(it.getInstalledToolchains(), it.installedLabels())
+        }
         grid.layoutManager = GridLayoutManager(this, 2)
         grid.adapter = adapter
         // So [onStart] can correct these cards when the screen comes back. One

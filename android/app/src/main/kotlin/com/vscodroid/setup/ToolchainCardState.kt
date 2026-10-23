@@ -112,12 +112,23 @@ class ToolchainCardState(private val mode: ToolchainCardMode) {
      * them the pack way ("toolchain_ruby"), so each name is normalised on the way
      * in. Both spellings are accepted because both reach here.
      */
-    fun setInstalled(packNames: Collection<String>) {
+    fun setInstalled(packNames: Collection<String>, olderBuilds: Map<String, String> = emptyMap()) {
         installed.clear()
         installed.addAll(packNames.map { name ->
             if (name.startsWith("toolchain_")) name else "toolchain_$name"
         })
+        this.olderBuilds = olderBuilds
     }
+
+    /**
+     * Installed toolchains whose recorded build is not the one the registry offers, by
+     * pack name (see [ToolchainManager.installedLabels]).
+     */
+    private var olderBuilds: Map<String, String> = emptyMap()
+
+    /** What the card and the removal question call [packName]: the recorded build if it is an older one. */
+    fun labelFor(packName: String, fallback: String): String =
+        if (packName in installed) olderBuilds[packName] ?: fallback else fallback
 
     /**
      * Replaces what the process is downloading with [percentByPack].

@@ -174,7 +174,7 @@ class ToolchainActivity : AppCompatActivity() {
 
         // Set up grid with MANAGER mode adapter
         adapter = ToolchainPickerAdapter(ToolchainCardMode.MANAGER)
-        adapter.setInstalled(toolchainManager.getInstalledToolchains())
+        adapter.setInstalled(toolchainManager.getInstalledToolchains(), toolchainManager.installedLabels())
 
         adapter.onAction = { packName, action ->
             when (action) {
@@ -355,7 +355,7 @@ class ToolchainActivity : AppCompatActivity() {
         super.onStart()
         toolchainManager.registerListener()
         // Refresh installed state on resume (user may have installed from terminal)
-        adapter.setInstalled(toolchainManager.getInstalledToolchains())
+        adapter.setInstalled(toolchainManager.getInstalledToolchains(), toolchainManager.installedLabels())
         // And what is downloading, which this screen is not told about at all when
         // another manager began the transfer: the cards started empty and offered
         // Install for a pack already downloading, with no progress and no Cancel.
@@ -482,14 +482,15 @@ class ToolchainActivity : AppCompatActivity() {
         // for something that has just finished installing. Reading the record on
         // every percentage tick instead would be a file read a second for an
         // answer that cannot have changed.
-        if (refresh.rereadInstalled) adapter.setInstalled(toolchainManager.getInstalledToolchains())
+        if (refresh.rereadInstalled) adapter.setInstalled(toolchainManager.getInstalledToolchains(), toolchainManager.installedLabels())
     }
 
     private fun showRemoveConfirmation(packName: String) {
         val info = ToolchainRegistry.find(packName) ?: return
+        val label = adapter.labelFor(packName, info.displayName)
         removeDialog = AlertDialog.Builder(this)
-            .setTitle(getString(R.string.toolchain_remove_confirm_title, info.displayName))
-            .setMessage(getString(R.string.toolchain_remove_confirm_message, info.displayName))
+            .setTitle(getString(R.string.toolchain_remove_confirm_title, label))
+            .setMessage(getString(R.string.toolchain_remove_confirm_message, label))
             .setPositiveButton(getString(R.string.toolchain_remove)) { _, _ ->
                 val shortName = packName.removePrefix("toolchain_")
                 toolchainManager.uninstall(shortName)

@@ -207,6 +207,7 @@
     <string name="toolchain_cancel">Cancelar</string>
     <string name="toolchain_remove_confirm_title">Remover %s?</string>
     <string name="toolchain_remove_confirm_message">Isso vai excluir todos os arquivos do %s. Você pode reinstalar quando quiser.</string>
+    <string name="toolchain_older_build">%1$s está instalado. Remova-o e instale novamente para obter %2$s.</string>
 
     <!-- Launcher shortcut: in practice the only route to the toolchain screen.
          The activity is not exported and has no launcher entry, and the one

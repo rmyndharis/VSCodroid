@@ -643,6 +643,25 @@ class ToolchainManager(private val context: Context) {
         return result.filter { it.isNotEmpty() }
     }
 
+    /**
+     * The name the record holds for an installed toolchain whose build is not the one the
+     * registry offers now, by pack name. Java 17 stays on a device that installed it
+     * before the pack moved to 21 (the record keeps its own manifest), and the card
+     * drawn from the registry called it "Java 21".
+     */
+    fun installedLabels(): Map<String, String> {
+        val state = readState()
+        val labels = mutableMapOf<String, String>()
+        for (i in 0 until state.length()) {
+            val entry = state.optJSONObject(i) ?: continue
+            val pack = "toolchain_${entry.optString("name")}"
+            val recorded = entry.optString("displayName")
+            val current = ToolchainRegistry.find(pack)?.displayName ?: continue
+            if (recorded.isNotEmpty() && recorded != current) labels[pack] = recorded
+        }
+        return labels
+    }
+
     // -- Install --
 
     fun install(packName: String) {

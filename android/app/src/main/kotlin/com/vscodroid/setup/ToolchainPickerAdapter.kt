@@ -49,10 +49,13 @@ class ToolchainPickerAdapter(
      * ([ToolchainCardState.items] is the registry), so nothing here can add or
      * remove a row.
      */
-    fun setInstalled(packNames: Collection<String>) {
-        cards.setInstalled(packNames)
+    fun setInstalled(packNames: Collection<String>, olderBuilds: Map<String, String> = emptyMap()) {
+        cards.setInstalled(packNames, olderBuilds)
         notifyItemRangeChanged(0, itemCount, PAYLOAD_REBIND)
     }
+
+    /** What the card and the removal question call [packName]; see [ToolchainCardState.labelFor]. */
+    fun labelFor(packName: String, fallback: String): String = cards.labelFor(packName, fallback)
 
     /**
      * MANAGER mode: a download this screen still draws as running has settled
@@ -118,8 +121,13 @@ class ToolchainPickerAdapter(
         val info = cards.items[position]
         val ctx = holder.itemView.context
 
-        holder.name.text = info.shortLabel
-        holder.description.text = ctx.getString(info.descriptionRes)
+        val label = labelFor(info.packName, info.shortLabel)
+        holder.name.text = label
+        holder.description.text = if (label == info.shortLabel) {
+            ctx.getString(info.descriptionRes)
+        } else {
+            ctx.getString(R.string.toolchain_older_build, label, info.shortLabel)
+        }
         // Both, because they answer different questions and only one of them
         // used to be here. The single figure was the unpacked size, so a card
         // offered "179 MB" for a 59 MB download, and the person most likely to

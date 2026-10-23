@@ -221,4 +221,25 @@ class ToolchainReinstallTest {
             "a ZIP install was refused over a directory it never reads",
         )
     }
+    @Test
+    fun `an installed build older than the registry's is named by its record`() {
+        record(
+            """[{"name":"java","displayName":"Java 17"},{"name":"ruby","displayName":"Ruby"},""" +
+                """{"name":"cpp"},{"name":"gone","displayName":"Gone 1"}]""",
+        )
+
+        assertEquals(mapOf("toolchain_java" to "Java 17"), ToolchainManager(context).installedLabels())
+    }
+
+    @Test
+    fun `the card names the older build only while it is installed`() {
+        val adapter = ToolchainCardState(ToolchainCardMode.MANAGER)
+        val offered = ToolchainRegistry.find("toolchain_java")!!.shortLabel
+
+        adapter.setInstalled(listOf("java"), mapOf("toolchain_java" to "Java 17"))
+        assertEquals("Java 17", adapter.labelFor("toolchain_java", offered))
+
+        adapter.setInstalled(emptyList(), mapOf("toolchain_java" to "Java 17"))
+        assertEquals(offered, adapter.labelFor("toolchain_java", offered), "a removed toolchain kept its old name")
+    }
 }

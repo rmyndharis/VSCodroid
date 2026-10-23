@@ -207,6 +207,7 @@
     <string name="toolchain_cancel">取消</string>
     <string name="toolchain_remove_confirm_title">移除 %s？</string>
     <string name="toolchain_remove_confirm_message">这将删除 %s 的所有文件。您可以随时重新安装。</string>
+    <string name="toolchain_older_build">已安装 %1$s。移除后重新安装即可获得 %2$s。</string>
 
     <!-- Launcher shortcut: in practice the only route to the toolchain screen.
          The activity is not exported and has no launcher entry, and the one

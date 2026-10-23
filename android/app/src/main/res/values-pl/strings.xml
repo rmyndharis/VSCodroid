@@ -207,6 +207,7 @@
     <string name="toolchain_cancel">Anuluj</string>
     <string name="toolchain_remove_confirm_title">Usunąć %s?</string>
     <string name="toolchain_remove_confirm_message">Spowoduje to usunięcie wszystkich plików %s. Ponowna instalacja jest możliwa w każdej chwili.</string>
+    <string name="toolchain_older_build">Zainstalowano %1$s. Usuń go i zainstaluj ponownie, aby uzyskać %2$s.</string>
 
     <!-- Launcher shortcut: in practice the only route to the toolchain screen.
          The activity is not exported and has no launcher entry, and the one

@@ -207,6 +207,7 @@
     <string name="toolchain_cancel">Cancel</string>
     <string name="toolchain_remove_confirm_title">Remove %s?</string>
     <string name="toolchain_remove_confirm_message">This will delete all %s files. You can reinstall anytime.</string>
+    <string name="toolchain_older_build">%1$s is installed. Remove it and install again to get %2$s.</string>
 
     <!-- Launcher shortcut: one of two routes to the toolchain screen, and the
          only one that works while the editor is not up. The activity is not
