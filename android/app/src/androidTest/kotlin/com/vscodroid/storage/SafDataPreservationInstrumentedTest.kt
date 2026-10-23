@@ -358,6 +358,7 @@ class SafDataPreservationInstrumentedTest {
 
     @Test
     fun unrecordedPartialFileSurvivesRevokedMirrorCleanup() = runBlocking {
+        persistFixtureGrant()
         val manager = SafStorageManager(context)
         val savedMirror = manager.getMirrorDir(treeUri)
         engine.initialSync(treeUri, savedMirror) { _, _ -> }
@@ -365,7 +366,9 @@ class SafDataPreservationInstrumentedTest {
         val originalRecord = record.readBytes()
         val local = File(savedMirror, "workspace-notes" + SafSyncEngine.PARTIAL_SUFFIX)
         local.writeBytes(EDITED)
+        assertEquals("A live persistent grant must keep its mirror", 0, manager.reclaimRevokedMirrorsSync())
         fixtureGrant(SafProviderGrantReceiver.REVOKE)
+        assertFalse(context.contentResolver.persistedUriPermissions.any { it.uri == treeUri })
         assertEquals(PackageManager.PERMISSION_DENIED, context.checkUriPermission(
             treeUri, Process.myPid(), Process.myUid(), Intent.FLAG_GRANT_READ_URI_PERMISSION,
         ))
@@ -378,16 +381,32 @@ class SafDataPreservationInstrumentedTest {
 
     @Test
     fun recordedMirrorIsReclaimedAfterItsGrantIsRevoked() = runBlocking {
+        persistFixtureGrant()
         val manager = SafStorageManager(context)
         val savedMirror = manager.getMirrorDir(treeUri)
         engine.initialSync(treeUri, savedMirror) { _, _ -> }
         assertArrayEquals(ORIGINAL, File(savedMirror, SafDocumentsProvider.FILE_NAME).readBytes())
+        assertEquals("A live persistent grant must keep its mirror", 0, manager.reclaimRevokedMirrorsSync())
+        assertTrue(savedMirror.exists())
         fixtureGrant(SafProviderGrantReceiver.REVOKE)
+        assertFalse(context.contentResolver.persistedUriPermissions.any { it.uri == treeUri })
+        assertEquals(PackageManager.PERMISSION_DENIED, context.checkUriPermission(
+            treeUri, Process.myPid(), Process.myUid(), Intent.FLAG_GRANT_READ_URI_PERMISSION,
+        ))
 
         assertTrue(manager.reclaimRevokedMirrorsSync() > 0)
 
         assertFalse(savedMirror.exists())
         assertFalse(File(savedMirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX).exists())
+    }
+
+    private fun persistFixtureGrant() {
+        context.contentResolver.takePersistableUriPermission(treeUri,
+            Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+        assertTrue("The fixture tree must have a persistent read and write grant",
+            context.contentResolver.persistedUriPermissions.any {
+                it.uri == treeUri && it.isReadPermission && it.isWritePermission
+            })
     }
 
     private fun providerBytes(): ByteArray = requireNotNull(control("read").getByteArray("bytes"))

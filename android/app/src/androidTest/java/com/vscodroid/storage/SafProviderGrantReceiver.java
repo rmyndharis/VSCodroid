@@ -19,7 +19,7 @@ public final class SafProviderGrantReceiver extends BroadcastReceiver {
         int access = Intent.FLAG_GRANT_READ_URI_PERMISSION | Intent.FLAG_GRANT_WRITE_URI_PERMISSION;
         if (GRANT.equals(intent.getAction())) {
             context.grantUriPermission(TARGET_PACKAGE, tree,
-                access | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION);
+                access | Intent.FLAG_GRANT_PREFIX_URI_PERMISSION | Intent.FLAG_GRANT_PERSISTABLE_URI_PERMISSION);
             setResultCode(1);
         } else if (REVOKE.equals(intent.getAction())) {
             context.revokeUriPermission(TARGET_PACKAGE, tree, access);
