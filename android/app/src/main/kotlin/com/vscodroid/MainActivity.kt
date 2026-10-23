@@ -99,6 +99,9 @@ import com.vscodroid.webview.SecretStorageKey
 import com.vscodroid.webview.TlsFailure
 import com.vscodroid.webview.TlsFailureReason
 import com.vscodroid.webview.HandoffFailure
+import com.vscodroid.webview.SignInRefusal
+import com.vscodroid.webview.SignInRefused
+import com.vscodroid.webview.handoffFailureType
 import com.vscodroid.webview.handoffFailureToAnnounce
 import com.vscodroid.webview.publishedResourceRoots
 import com.vscodroid.webview.redactToken
@@ -3270,15 +3273,17 @@ class MainActivity : AppCompatActivity() {
             // the set has one owner thread whatever the platform guarantees about
             // which thread the callback arrives on.
             onHandoffFailed = { uri, error ->
-                val failure = HandoffFailure(
-                    uri.scheme ?: "external", error.javaClass.simpleName
-                )
+                val handoffFailure = HandoffFailure(uri.scheme ?: "external", handoffFailureType(error))
                 runOnUiThread {
-                    handoffFailureToAnnounce(failure, announcedHandoffFailures)?.let {
-                        val message = if (error is android.content.ActivityNotFoundException) {
-                            getString(R.string.url_handoff_no_app, it.scheme)
-                        } else {
-                            getString(R.string.url_handoff_failed, it.scheme, it.failureType)
+                    handoffFailureToAnnounce(handoffFailure, announcedHandoffFailures)?.let {
+                        val message = when {
+                            error is android.content.ActivityNotFoundException ->
+                                getString(R.string.url_handoff_no_app, it.scheme)
+                            error is SignInRefused -> getString(
+                                if (error.reason == SignInRefusal.NOT_ISSUED) R.string.sign_in_not_issued
+                                else R.string.sign_in_not_ready
+                            )
+                            else -> getString(R.string.url_handoff_failed, it.scheme, it.failureType)
                         }
                         Toast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
                     }

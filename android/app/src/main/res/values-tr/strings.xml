@@ -103,6 +103,8 @@
          type is quoted because the audience is developers and it is the part
          worth putting in a bug report. -->
     <string name="url_handoff_failed">Bu %1$s bağlantısı açılamadı (%2$s).</string>
+    <string name="sign_in_not_ready">Düzenleyici bu oturum açma için hazır değil. Düzenleyiciyi yeniden yükleyip tekrar deneyin.</string>
+    <string name="sign_in_not_issued">Düzenleyici bu oturum açmayı başlatmadı. Yeniden oturum açmayı deneyin.</string>
 
     <!-- A page inside the editor asked for an https address the WebView would not
          load: a dev server previewed in the Simple Browser, an image in a preview,

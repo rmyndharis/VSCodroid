@@ -103,6 +103,8 @@
          type is quoted because the audience is developers and it is the part
          worth putting in a bug report. -->
     <string name="url_handoff_failed">その %1$s リンクを開けませんでした (%2$s)。</string>
+    <string name="sign_in_not_ready">エディターはこのサインインの準備ができていません。エディターを再読み込みして、もう一度お試しください。</string>
+    <string name="sign_in_not_issued">エディターがこのサインインを開始しませんでした。もう一度サインインしてください。</string>
 
     <!-- A page inside the editor asked for an https address the WebView would not
          load: a dev server previewed in the Simple Browser, an image in a preview,

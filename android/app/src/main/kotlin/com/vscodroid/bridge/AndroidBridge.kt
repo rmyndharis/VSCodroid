@@ -76,6 +76,15 @@ private const val DRAIN_JOIN_MILLIS = 1_000L
 internal const val AUTH_TAB_WINDOW_MILLIS = 10 * 60 * 1000L
 
 /**
+ * How long an identity that was registered and never launched keeps its slot once the
+ * registry is full. The workbench opens the address right after it registers one, so an
+ * hour is long past any sign-in that is still going to happen; what it frees are the
+ * identities of requests that were abandoned between the two, which otherwise held a slot
+ * until the page was reloaded and, thirty-two of them in, refused every later sign-in.
+ */
+internal const val AUTH_UNLAUNCHED_GRACE_MILLIS = 60 * 60 * 1000L
+
+/**
  * Bound retained identities per workbench document. A full registry makes room only by
  * dropping an identity that can no longer be satisfied, see [AuthTabWindow.register].
  */
@@ -328,6 +337,8 @@ private const val MAX_QUEUED_DISK_COMMANDS = 4
  */
 object AuthTabWindow {
     internal class Launch(val nonce: String, val documentId: String) {
+        /** When it was registered, if the caller had a clock; an identity without one is never aged out. */
+        var registeredAt: Long? = null
         var at: Long? = null
         var expired = false
         var outstanding = 0
@@ -356,11 +367,12 @@ object AuthTabWindow {
      * Records the identity the workbench minted for a sign-in request.
      *
      * With the registry full, [nowMillis] lets it drop the oldest identity whose return can
-     * no longer be accepted: one already reported late, or one launched and past
-     * [AUTH_TAB_WINDOW_MILLIS]. A request that is waiting for its launch, or whose window is
-     * open, is never dropped, so a page left open for days can go on signing in without a
-     * reload, and one with 32 sign-ins in flight is still refused. Without a clock nothing is
-     * dropped.
+     * no longer be accepted: one already reported late, one launched and past
+     * [AUTH_TAB_WINDOW_MILLIS], or one registered and still not launched after
+     * [AUTH_UNLAUNCHED_GRACE_MILLIS]. A request that is waiting for its launch within that
+     * time, or whose window is open, is never dropped, so a page left open for days can go
+     * on signing in without a reload, and one with 32 sign-ins in flight is still refused.
+     * Without a clock nothing is dropped.
      */
     @Synchronized
     fun register(
@@ -375,7 +387,7 @@ object AuthTabWindow {
         if (launches.size >= MAX_TRACKED_SIGN_INS && !(nowMillis != null && dropOldestClosed(nowMillis))) {
             return false
         }
-        launches[requestId] = Launch(nonce, documentId)
+        launches[requestId] = Launch(nonce, documentId).also { it.registeredAt = nowMillis }
         return true
     }
 
@@ -383,8 +395,11 @@ object AuthTabWindow {
     private fun dropOldestClosed(nowMillis: Long): Boolean {
         val closed = launches.entries.firstOrNull { (_, launch) ->
             val openedAt = launch.at
+            val registeredAt = launch.registeredAt
             launch.expired || (openedAt != null && launch.outstanding == 0 &&
-                !authCallbackIsExpected(openedAt, nowMillis, AUTH_TAB_WINDOW_MILLIS))
+                !authCallbackIsExpected(openedAt, nowMillis, AUTH_TAB_WINDOW_MILLIS)) ||
+                (openedAt == null && launch.outstanding == 0 && registeredAt != null &&
+                    nowMillis - registeredAt > AUTH_UNLAUNCHED_GRACE_MILLIS)
         } ?: return false
         launches.remove(closed.key)
         return true

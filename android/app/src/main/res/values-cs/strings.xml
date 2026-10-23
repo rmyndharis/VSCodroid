@@ -103,6 +103,8 @@
          type is quoted because the audience is developers and it is the part
          worth putting in a bug report. -->
     <string name="url_handoff_failed">Tento odkaz typu %1$s se nepodařilo otevřít (%2$s).</string>
+    <string name="sign_in_not_ready">Editor ještě není připraven na toto přihlášení. Načtěte editor znovu a zkuste to znovu.</string>
+    <string name="sign_in_not_issued">Editor toto přihlášení nespustil. Zkuste se přihlásit znovu.</string>
 
     <!-- A page inside the editor asked for an https address the WebView would not
          load: a dev server previewed in the Simple Browser, an image in a preview,

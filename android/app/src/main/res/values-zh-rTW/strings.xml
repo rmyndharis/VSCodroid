@@ -103,6 +103,8 @@
          type is quoted because the audience is developers and it is the part
          worth putting in a bug report. -->
     <string name="url_handoff_failed">無法開啟該 %1$s 連結（%2$s）。</string>
+    <string name="sign_in_not_ready">編輯器尚未準備好進行此次登入。請重新載入編輯器後再試。</string>
+    <string name="sign_in_not_issued">編輯器沒有發起此次登入。請重新登入。</string>
 
     <!-- A page inside the editor asked for an https address the WebView would not
          load: a dev server previewed in the Simple Browser, an image in a preview,

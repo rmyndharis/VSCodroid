@@ -602,6 +602,30 @@ private fun <T> failureToAnnounce(
 internal data class HandoffFailure(val scheme: String, val failureType: String)
 
 /**
+ * Why a sign-in address was refused before any browser was asked to open it. These used
+ * to be bare `IllegalStateException`s, so the notice read "Could not open that https link
+ * (IllegalStateException)" for all of them and, keyed on the exception type, the second
+ * cause was never said at all.
+ */
+internal enum class SignInRefusal {
+    /** The editor page that would have registered the sign-in is gone or not ready. */
+    NOT_READY,
+
+    /** The editor never issued the request this address carries. */
+    NOT_ISSUED,
+}
+
+/** A sign-in launch this app refused, with the reason the person can act on. */
+internal class SignInRefused(val reason: SignInRefusal, detail: String) : Exception(detail)
+
+/**
+ * The type half of a [HandoffFailure] for [error]: the exception's class, or for a refused
+ * sign-in the reason too, so two different refusals are two different notices.
+ */
+internal fun handoffFailureType(error: Throwable): String =
+    if (error is SignInRefused) "SignInRefused:${error.reason.name}" else error.javaClass.simpleName
+
+/**
  * How many hand-off failures are put on screen, and with them how many are
  * remembered.
  *
@@ -878,7 +902,7 @@ class VSCodroidWebViewClient(
         val first = deferredAuth.peekFirst()
         clearAuthWait()
         authReady = false
-        if (first != null) onHandoffFailed(first, IllegalStateException("The editor bridge is not ready"))
+        if (first != null) onHandoffFailed(first, SignInRefused(SignInRefusal.NOT_READY, "The editor bridge is not ready"))
     }
 
     fun completeAuthBootstrap(view: WebView, generation: Long, succeeded: Boolean): Boolean {
@@ -1040,12 +1064,12 @@ class VSCodroidWebViewClient(
         if (request.isForMainFrame && hasAuthMetadata) {
             val page = authPage(view)
             if (page == null) {
-                onHandoffFailed(target, IllegalStateException("No active editor document"))
+                onHandoffFailed(target, SignInRefused(SignInRefusal.NOT_READY, "No active editor document"))
                 return true
             }
             if (!authReady) {
                 if (deferredAuth.size >= 32) {
-                    onHandoffFailed(target, IllegalStateException("Too many waiting sign-in launches"))
+                    onHandoffFailed(target, SignInRefused(SignInRefusal.NOT_READY, "Too many waiting sign-in launches"))
                 } else {
                     deferredAuth.addLast(target)
                     if (authTimeout == null) {
@@ -1073,7 +1097,9 @@ class VSCodroidWebViewClient(
                 armed = AuthTabWindow.arm(authRequestIdsIn(target.toString()),
                     authCallbackNonceIn(target.toString()), SystemClock.elapsedRealtime(),
                     AuthTabWindow.pageGeneration())
-                check(!requireIssued || !armed.isEmpty()) { "The editor did not issue this sign-in request" }
+                if (requireIssued && armed.isEmpty()) {
+                    throw SignInRefused(SignInRefusal.NOT_ISSUED, "The editor did not issue this sign-in request")
+                }
             }
             val intent = Intent(Intent.ACTION_VIEW, target).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
             view.context.startActivity(intent)

@@ -103,6 +103,8 @@
          type is quoted because the audience is developers and it is the part
          worth putting in a bug report. -->
     <string name="url_handoff_failed">해당 %1$s 링크를 열지 못했습니다(%2$s).</string>
+    <string name="sign_in_not_ready">편집기가 이 로그인을 처리할 준비가 되지 않았습니다. 편집기를 다시 불러온 뒤 다시 시도하세요.</string>
+    <string name="sign_in_not_issued">편집기가 이 로그인을 시작하지 않았습니다. 다시 로그인해 보세요.</string>
 
     <!-- A page inside the editor asked for an https address the WebView would not
          load: a dev server previewed in the Simple Browser, an image in a preview,

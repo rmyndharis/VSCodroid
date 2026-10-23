@@ -3,6 +3,7 @@ package com.vscodroid
 import android.net.Uri
 import com.vscodroid.bridge.AUTH_TAB_WINDOW_MILLIS
 import com.vscodroid.bridge.AuthTabWindow
+import com.vscodroid.bridge.AUTH_UNLAUNCHED_GRACE_MILLIS
 import com.vscodroid.bridge.authCallbackNonceIn
 import com.vscodroid.bridge.authRequestIdsIn
 import com.vscodroid.bridge.encodeCallbackState
@@ -264,10 +265,37 @@ class AuthTabWindowTest {
     }
 
     @Test
-    fun `a request waiting for its launch is never dropped to make room`() {
+    fun `a request registered without a clock is never dropped to make room`() {
         fill()
         assertFalse(issueAt("33", Long.MAX_VALUE / 2))
         for (id in 1..32) assertEquals(original, AuthTabWindow.nonceFor(id.toString()), "$id")
+    }
+
+    /**
+     * An identity registered and never launched (the workbench asked for one and the request
+     * was abandoned before the address opened) used to hold its slot until the page was
+     * reloaded; thirty-two of them refused every later sign-in. It ages out, but only past a
+     * grace the real sequence never approaches, and only when the caller had a clock.
+     */
+    @Test
+    fun `an identity never launched is dropped for room once an hour has passed`() {
+        for (id in 1..32) assertTrue(issueAt(id.toString(), 1_000L))
+        assertFalse(issueAt("33", 1_000L + AUTH_UNLAUNCHED_GRACE_MILLIS), "dropped inside the grace")
+        assertTrue(issueAt("33", 1_000L + AUTH_UNLAUNCHED_GRACE_MILLIS + 1))
+        assertNull(AuthTabWindow.nonceFor("1"), "the oldest was kept")
+        assertEquals(original, AuthTabWindow.nonceFor("2"))
+    }
+
+    @Test
+    fun `an attempt in flight keeps its identity when an old unlaunched one is dropped`() {
+        for (id in 1..32) assertTrue(issueAt(id.toString(), 1_000L))
+        val attempt = AuthTabWindow.arm(listOf("1"), original, 1_500L)
+
+        assertTrue(issueAt("33", 1_000L + AUTH_UNLAUNCHED_GRACE_MILLIS + 1))
+
+        assertEquals(original, AuthTabWindow.nonceFor("1"), "an attempt in flight lost its identity")
+        assertNull(AuthTabWindow.nonceFor("2"), "the oldest identity not in flight was kept")
+        AuthTabWindow.launched(attempt)
     }
 
     @Test

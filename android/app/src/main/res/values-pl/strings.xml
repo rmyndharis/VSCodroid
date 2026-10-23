@@ -103,6 +103,8 @@
          type is quoted because the audience is developers and it is the part
          worth putting in a bug report. -->
     <string name="url_handoff_failed">Nie udało się otworzyć tego linku %1$s (%2$s).</string>
+    <string name="sign_in_not_ready">Edytor nie jest gotowy na to logowanie. Załaduj edytor ponownie i spróbuj jeszcze raz.</string>
+    <string name="sign_in_not_issued">Edytor nie rozpoczął tego logowania. Spróbuj zalogować się ponownie.</string>
 
     <!-- A page inside the editor asked for an https address the WebView would not
          load: a dev server previewed in the Simple Browser, an image in a preview,
