@@ -132,11 +132,11 @@ class ToolchainEnvBackfillTest {
 
     @Test
     fun `a record that is not readable is left as it is`() {
-        record("""{ not json""")
+        record("""not json at all""")
 
         backfill(ToolchainManager(context))
 
-        assertEquals("""{ not json""", stateFile().readText(), "a damaged record was overwritten")
+        assertEquals("""not json at all""", stateFile().readText(), "a damaged record was overwritten")
     }
 
     @Test
