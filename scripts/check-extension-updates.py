@@ -19,7 +19,7 @@ def problems():
     for directory in sorted((ROOT / EXTENSIONS).glob("vscodroid.*")):
         manifest = directory / "package.json"
         relative = manifest.relative_to(ROOT).as_posix()
-        added = git("log", "--no-renames", "--diff-filter=A", "--format=%H", "--", relative).splitlines()
+        added = git("log", "--reverse", "--no-renames", "--diff-filter=A", "--format=%H", "--", relative).splitlines()
         if not added:
             continue
         original = json.loads(git("show", f"{added[0]}:{relative}"))

@@ -76,6 +76,19 @@ class ExtensionUpdatesTest(unittest.TestCase):
                 self.assertNotEqual(0, self.check_status().returncode)
                 file.write_text(original)
 
+    def test_readding_directory_keeps_its_first_content_baseline(self):
+        files = {file.name: file.read_text() for file in self.directory.iterdir()}
+        relative = str(self.directory.relative_to(self.root))
+        self.git("rm", "-qr", "--", relative)
+        self.git("commit", "-qm", "Remove extension")
+        self.directory.mkdir(parents=True)
+        for name, text in files.items():
+            (self.directory / name).write_text(text)
+        self.manifest.write_text(self.manifest.read_text().replace('"enabled":false', '"enabled":true'))
+        self.git("add", "--", relative)
+        self.git("commit", "-qm", "Restore extension")
+        self.assertNotEqual(0, self.check_status().returncode)
+
 
 if __name__ == "__main__":
     unittest.main()
