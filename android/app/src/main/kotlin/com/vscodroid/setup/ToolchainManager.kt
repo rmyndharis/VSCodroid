@@ -326,7 +326,12 @@ class ToolchainManager(private val context: Context) {
         )
 
         /**
-         * `-XX:Name=value`, `-XX:+Name`, `-XX:-Name`, and the heap and stack sizes. */
+         * Environment variables that hold a list of options the caller may already have
+         * set, which a toolchain adds to rather than replaces.
+         */
+        private val OPTION_LIST_VARS = setOf("RUBYOPT")
+
+        /** `-XX:Name=value`, `-XX:+Name`, `-XX:-Name`, and the heap and stack sizes. */
         private val JVM_FLAG = Regex("-(?:XX:(?:[+-][A-Za-z0-9_]+|[A-Za-z0-9_]+=[A-Za-z0-9_.+-]+)|X(?:mx|ms|ss)[0-9]+[kKmMgG]?)")
 
         /**
@@ -3015,7 +3020,23 @@ class ToolchainManager(private val context: Context) {
                 // transformation and is not one.
                 val value = env.getString(key)
                     .replace("\$FILESDIR", "\$PREFIX/..")
-                sb.appendLine("export $key=\"$value\"")
+                if (!isShellSafeEnvEntry(key, value)) {
+                    Logger.w(tag, "No export for $name's ${redactToken(key)}: not a line that is " +
+                        "safe to put in a file every terminal sources")
+                    continue
+                }
+                if (key in OPTION_LIST_VARS) {
+                    // Added to what the parent passed, once. A plain export put
+                    // `-rrubygems` over the `-rbundler/setup` of a `bundle exec`, so
+                    // a bash started under it (BASH_ENV runs this file in every one)
+                    // lost the Gemfile's gems.
+                    sb.appendLine(
+                        "case \" \${$key-} \" in *\" $value \"*) ;; " +
+                            "*) export $key=\"\${$key:+\$$key }$value\" ;; esac"
+                    )
+                } else {
+                    sb.appendLine("export $key=\"$value\"")
+                }
             }
             sb.appendLine()
 
@@ -3197,13 +3218,18 @@ class ToolchainManager(private val context: Context) {
             val pathDirs = tc.optJSONArray("pathDirs")
             if (pathDirs != null) {
                 for (j in 0 until pathDirs.length()) {
-                    extraPaths.add("\$PREFIX/../${pathDirs.getString(j)}")
+                    val dir = pathDirs.getString(j)
+                    if (!isShellSafePathDir(dir)) {
+                        Logger.w(tag, "No PATH entry for $name's ${redactToken(dir)}: not a directory " +
+                            "name that is safe to put in a file every terminal sources")
+                        continue
+                    }
+                    extraPaths.add("\$PREFIX/../$dir")
                 }
             }
         }
 
         if (extraPaths.isNotEmpty()) {
-            val paths = extraPaths.joinToString(":")
             sb.appendLine("# Toolchain PATH additions")
             // Appended, never prepended. These directories hold the raw payload:
             // `usr/bin/ruby` is the interpreter itself and the JDK's bin holds
@@ -3219,7 +3245,15 @@ class ToolchainManager(private val context: Context) {
             // They are kept rather than dropped as insurance for a future
             // manifest whose `binaries` list is incomplete: behind the
             // trampoline directory they cost nothing.
-            sb.appendLine("export PATH=\"\$PATH:$paths\"")
+            //
+            // Each directory is added once per PATH. Every bash this file reaches
+            // sources it again, and a plain `export PATH="$PATH:..."` made a bash
+            // started from a terminal's bash carry every directory twice.
+            sb.appendLine(
+                "for d in ${extraPaths.distinct().joinToString(" ") { "\"$it\"" }}; do " +
+                    "case \":\$PATH:\" in *\":\$d:\"*) ;; *) PATH=\"\$PATH:\$d\" ;; esac; done; " +
+                    "export PATH"
+            )
         }
 
         envFile.parentFile?.mkdirs()
@@ -5051,6 +5085,27 @@ internal fun sha256Of(file: File): String {
     }
     return digest.digest().joinToString("") { "%02x".format(it) }
 }
+
+/**
+ * Whether `export [key]="[value]"` is a line `toolchain-env.sh` can carry.
+ *
+ * A manifest comes from the pack the app ships or the release ZIP whose digest the same
+ * release publishes, so this is not a boundary against it: whoever can write a bad
+ * manifest can already ship a binary. It is what [isShellFunctionName] is, a bar that
+ * keeps one unusable entry from taking out the file every new terminal sources. `$FILESDIR`
+ * and `$HOME` stay possible, because the manifests mean them; a command substitution, a
+ * backtick, a double quote and a line break do not, and neither does a name that is not a
+ * variable's.
+ */
+internal fun isShellSafeEnvEntry(key: String, value: String): Boolean =
+    key.matches(Regex("[A-Za-z_][A-Za-z0-9_]*")) &&
+        value.none { it == '"' || it == '`' || it == '\n' || it == '\r' } && "\$(" !in value
+
+/** Whether [dir], a manifest's `pathDirs` entry, can follow `$PREFIX/../` in the same file. */
+internal fun isShellSafePathDir(dir: String): Boolean =
+    dir.isNotEmpty() && !dir.startsWith("/") &&
+        dir.split('/').none { it == ".." || it.isEmpty() } &&
+        dir.none { it == '"' || it == '`' || it == '\n' || it == '\r' || it == '$' }
 
 /**
  * Whether [relative] may name a path a toolchain owns, in a manifest's

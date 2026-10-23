@@ -150,9 +150,26 @@ class ToolchainEnvBackfillTest {
         val envFile = File(filesDir, "home/.vscodroid/toolchain-env.sh")
         assertTrue(envFile.exists(), "the launch pass wrote no environment file")
         assertTrue(
-            envFile.readText().contains("export RUBYOPT=\"-rrubygems\""),
+            envFile.readText().contains("-rrubygems\" ;; esac"),
             "the record has the variable but the environment file does not: the backfill ran " +
                 "after the derived files were written",
         )
+    }
+    /**
+     * The backfill's value is a second copy of what the pack's script writes into the
+     * manifest, and the two have to stay one: a script that moved to another option would
+     * leave an install made before it with the old one, and nothing else would say so.
+     */
+    @Test
+    fun `the value added to an old record is the one the Ruby pack's manifest carries`() {
+        val script = File("../../scripts/download-ruby.sh")
+        assertTrue(script.isFile, "${script.absolutePath} is missing; this would pass by reading nothing")
+
+        val written = Regex(""""RUBYOPT":\s*"([^"]*)"""").find(script.readText())?.groupValues?.get(1)
+
+        assertEquals(written, "-rrubygems")
+        record("""[{"name":"ruby"}]""")
+        backfill(ToolchainManager(context))
+        assertEquals(written, envOf("ruby").getString("RUBYOPT"))
     }
 }

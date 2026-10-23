@@ -12,6 +12,7 @@ import io.mockk.mockkStatic
 import io.mockk.unmockkAll
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.BeforeEach
@@ -156,10 +157,13 @@ class ToolchainEnvFileTest {
             "the toolchain's environment is missing:\n" + envFile.readText(),
         )
         assertTrue(
-            lines.contains("""export PATH="${'$'}PATH:${'$'}PREFIX/../usr/opt/ruby/bin""""),
+            pathLine().contains(""""${'$'}PREFIX/../usr/opt/ruby/bin""""),
             "the toolchain's PATH entry is missing:\n" + envFile.readText(),
         )
     }
+
+    /** The one line that adds the toolchains' directories to PATH, in the form it is written. */
+    private fun pathLine() = envLines().single { it.startsWith("for d in ") }
 
     /**
      * Appended, never prepended, and the direction is the whole point.
@@ -181,11 +185,15 @@ class ToolchainEnvFileTest {
 
         regenerate()
 
-        val pathLine = envLines().single { it.startsWith("export PATH=") }
+        val pathLine = pathLine()
         assertTrue(
-            pathLine.startsWith("""export PATH="${'$'}PATH:"""),
+            pathLine.contains("""PATH="${'$'}PATH:${'$'}d""""),
             "the raw, unexecutable payload directories were put back in front of the " +
                 "trampoline directory: $pathLine",
+        )
+        assertFalse(
+            pathLine.contains("""PATH="${'$'}d:"""),
+            "a directory is prepended: $pathLine",
         )
     }
 
@@ -693,7 +701,7 @@ class ToolchainEnvFileTest {
 
         val lines = envLines()
         assertTrue(
-            lines.contains("""export PATH="${'$'}PATH:${'$'}PREFIX/../usr/bin""""),
+            pathLine().contains(""""${'$'}PREFIX/../usr/bin""""),
             "the flag took the PATH entry too:\n" + envFile.readText(),
         )
         assertTrue(
@@ -736,5 +744,96 @@ class ToolchainEnvFileTest {
             envLines().filter { it.startsWith("tool()") || it.startsWith("interp()") },
             envFile.readText(),
         )
+    }
+    /**
+     * The generated lines, run by a real bash the way every new terminal runs them.
+     *
+     * Sourced twice, because that is what a bash started from a terminal's bash does:
+     * a plain `export PATH="$PATH:..."` carried every toolchain directory twice, and a
+     * plain `export RUBYOPT=...` put `-rrubygems` over the `-rbundler/setup` a
+     * `bundle exec` had set, so a bash started under it lost the Gemfile's gems.
+     */
+    private fun sourcedTwice(env: Map<String, String>): Map<String, String> {
+        val script = File(filesDir, "source.sh")
+        script.writeText(
+            ". '${envFile.absolutePath}'; . '${envFile.absolutePath}'; " +
+                "printf 'PATH=%s\\nRUBYOPT=%s\\n' \"\$PATH\" \"\${RUBYOPT-}\"",
+        )
+        val builder = ProcessBuilder("bash", script.absolutePath).redirectErrorStream(true)
+        builder.environment().apply {
+            clear()
+            putAll(env)
+            put("PREFIX", "${filesDir.absolutePath}/usr")
+        }
+        val out = builder.start().let { p -> p.inputStream.bufferedReader().readText().also { p.waitFor() } }
+        return out.lines().filter { '=' in it }.associate { it.substringBefore('=') to it.substringAfter('=') }
+    }
+
+    private fun rubyWithOptions() {
+        elf("usr/opt/ruby/bin/ruby")
+        stateFile.writeText(
+            """[{"name":"ruby","installRoot":"usr/opt/ruby","binaries":["usr/opt/ruby/bin/ruby"],""" +
+                """"env":{"RUBYOPT":"-rrubygems"},"pathDirs":["usr/opt/ruby/bin","usr/opt/ruby/bin"]}]""",
+        )
+    }
+
+    @Test
+    fun `sourcing the file twice adds each directory to PATH once`() {
+        rubyWithOptions()
+        regenerate()
+
+        val path = sourcedTwice(mapOf("PATH" to "/bin:/usr/bin"))["PATH"]!!.split(":")
+
+        assertEquals(1, path.count { it.endsWith("/usr/opt/ruby/bin") }, "PATH: $path")
+        assertEquals(listOf("/bin", "/usr/bin"), path.take(2), "the existing PATH was reordered: $path")
+    }
+
+    @Test
+    fun `RUBYOPT is added to what the caller already set, once`() {
+        rubyWithOptions()
+        regenerate()
+
+        assertEquals(
+            "-rbundler/setup -rrubygems",
+            sourcedTwice(mapOf("PATH" to "/bin", "RUBYOPT" to "-rbundler/setup"))["RUBYOPT"],
+        )
+        assertEquals("-rrubygems", sourcedTwice(mapOf("PATH" to "/bin"))["RUBYOPT"])
+        assertEquals(
+            "-W0 -rrubygems",
+            sourcedTwice(mapOf("PATH" to "/bin", "RUBYOPT" to "-W0 -rrubygems"))["RUBYOPT"],
+            "an option already present was added again",
+        )
+    }
+    /**
+     * Not a boundary against the pack, whose manifest is as trusted as its binaries; a bar
+     * that keeps one unusable entry from taking out the file every new terminal sources,
+     * the way an unusable function name already is. Run through a real bash: the line after
+     * the refused ones has to still be defined.
+     */
+    @Test
+    fun `an entry that cannot be written safely is skipped and the rest still source`() {
+        assumeTrue(File("/bin/bash").canExecute(), "no /bin/bash on this host")
+        elf("usr/opt/ruby/bin/ruby")
+        stateFile.writeText(
+            """[{"name":"ruby","installRoot":"usr/opt/ruby","binaries":["usr/opt/ruby/bin/ruby"],""" +
+                """"env":{"BAD KEY":"x","QUOTE":"a\"b","SUBST":"${'$'}(id)","TICK":"`id`",""" +
+                """"GOOD":"${'$'}FILESDIR/ok"},""" +
+                """"pathDirs":["usr/opt/ruby/bin","../up","/abs","a/${'$'}x","bad\"dir"]}]""",
+        )
+
+        regenerate()
+
+        val text = envFile.readText()
+        assertTrue(text.contains("""export GOOD="${'$'}PREFIX/../ok""""), text)
+        for (bad in listOf("BAD KEY", "QUOTE", "SUBST", "TICK")) {
+            assertFalse(text.contains(bad), "$bad reached the file:\n$text")
+        }
+        assertEquals(
+            """for d in "${'$'}PREFIX/../usr/opt/ruby/bin"; do""",
+            pathLine().substringBefore("; do") + "; do",
+        )
+        val check = ProcessBuilder("bash", "-n", envFile.absolutePath).redirectErrorStream(true).start()
+        val out = check.inputStream.bufferedReader().readText()
+        assertEquals(0, check.waitFor(), "the generated file does not parse:\n$out")
     }
 }
