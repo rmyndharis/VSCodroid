@@ -24,7 +24,7 @@ function body(text, declaration) {
   }
   assert.fail(`Unclosed ${declaration}`);
 }
-const Parts = Object.fromEntries(['TITLEBAR', 'STATUSBAR', 'PANEL', 'EDITOR'].map(name => [name + '_PART', name]));
+const Parts = Object.fromEntries(['TITLEBAR', 'STATUSBAR', 'PANEL', 'EDITOR', 'SIDEBAR', 'AUXILIARYBAR'].map(name => [name + '_PART', name]));
 const LayoutStateKeys = new Proxy({}, { get: (_, name) => name });
 const mainWindow = {};
 const context = {
@@ -216,7 +216,131 @@ function panelSave() {
   }
 }
 
-const sections = { activity, modal, bars, panel, sash, 'status-toggle': statusToggle, 'panel-save': panelSave };
+function patchedPanelPosition() {
+  const fixture = fs.readFileSync(path.join(__dirname, 'fixtures/workbench-panel-position.ts'), 'utf8');
+  const firstLine = Number(fixture.match(/First source line: (\d+)/)[1]);
+  const original = fixture.slice(fixture.indexOf('\tsetPanelPosition(')).trimEnd().split('\n');
+  const added = new Map(), removed = new Set();
+  let line;
+  for (const entry of fs.readFileSync(path.join(root, 'patches/0034-short-window-yields-the-panel.patch'), 'utf8').split('\n')) {
+    const hunk = entry.match(/^@@ -(\d+)/);
+    if (hunk) { line = Number(hunk[1]); continue; }
+    if (line === undefined || ![' ', '+', '-'].includes(entry[0])) continue;
+    const index = line - firstLine;
+    if (index >= 0 && index < original.length) {
+      if (entry[0] === '+') added.set(index, [...(added.get(index) ?? []), entry.slice(1)]);
+      else {
+        assert.equal(original[index], entry.slice(1), `Panel position fixture context at source line ${line}`);
+        if (entry[0] === '-') removed.add(index);
+      }
+    }
+    if (entry[0] !== '+') line++;
+  }
+  const patched = original.flatMap((entry, index) => [...(added.get(index) ?? []), ...(removed.has(index) ? [] : [entry])]).join('\n');
+  return vm.runInNewContext(`(function(position) ${body(patched, 'setPanelPosition(')})`, {
+    ...context, Position: { TOP: 'top', BOTTOM: 'bottom', LEFT: 'left', RIGHT: 'right' },
+    Direction: { Up: 'up', Down: 'down', Left: 'left', Right: 'right' },
+    positionToString: position => position, positionFromString: position => position, assertReturnsDefined: value => value,
+  });
+}
+
+function panelRoundTrip() {
+  const text = source('0034');
+  const setPanelPosition = patchedPanelPosition();
+  function create(focusOrder) {
+    const layout = fixture();
+    const state = layout.stateModel;
+    const values = {
+      PANEL_HIDDEN: false, PANEL_POSITION: 'bottom', PANEL_LAST_NON_MAXIMIZED_HEIGHT: 300,
+      PANEL_LAST_NON_MAXIMIZED_WIDTH: 292,
+    };
+    state.getRuntimeValue = key => values[key];
+    state.setRuntimeValue = (key, value) => { values[key] = value; };
+    Object.assign(layout, {
+      _mainContainerDimension: { height: 428 },
+      getPanelPosition: () => values.PANEL_POSITION, getPanelAlignment: () => 'center', getSideBarPosition: () => 'left',
+      getPart: () => ({ getContainer: () => ({ classList: { add() {}, remove() {} } }), updateStyles() {} }),
+      isVisible: part => part === Parts.EDITOR_PART || (part === Parts.PANEL_PART && !layout.panelYielded && !values.PANEL_HIDDEN),
+      isPanelMaximized: () => false, setSideBarHidden() {}, setAuxiliaryBarHidden() {}, adjustPartPositions() {},
+      updateStatusBarVisibility() {}, shouldShowTitleBar: () => !layout.shortWindow,
+      _onDidChangePanelPosition: { fire() {} }, setPanelPosition,
+      updateShortWindow: method(text, 'updateShortWindow', 'height, afterGridLayout = false'),
+      rememberPanelHeight: method(text, 'rememberPanelHeight'), restorePanelHeight: method(text, 'restorePanelHeight'),
+      updatePanelYield: method(text, 'updatePanelYield'),
+    });
+    layout.mainContainer.classList.add = layout.mainContainer.classList.remove = () => {};
+    const grid = {
+      visible: true, height: 176, width: 915, cached: 176,
+      maxHeight: () => layout._mainContainerDimension.height < 200 ? 113 : 365,
+      getViewSize: view => view === layout.panelPartView ? { height: grid.visible ? grid.height : 0, width: grid.width } : { height: 0, width: 0 },
+      getViewCachedVisibleSize: () => grid.cached,
+      setViewVisible(view, visible) {
+        if (view !== layout.panelPartView || visible === grid.visible) return;
+        if (visible) grid.height = Math.min(grid.cached, grid.maxHeight());
+        else grid.cached = grid.height;
+        grid.visible = visible;
+      },
+      moveView(view, requested) {
+        assert.equal(view, layout.panelPartView);
+        if (context.isHorizontal(values.PANEL_POSITION)) { grid.height = Math.min(requested, grid.maxHeight()); grid.width = 915; }
+        else { grid.width = requested; grid.height = layout._mainContainerDimension.height - 8; }
+      },
+      resizeView(view, size) { if (view === layout.panelPartView) { grid.height = Math.min(size.height, grid.maxHeight()); grid.width = size.width; } },
+    };
+    layout.workbenchGrid = grid;
+    layout.setPanelHidden = hidden => {
+      layout.panelYielded = false;
+      values.PANEL_HIDDEN = hidden;
+      grid.setViewVisible(layout.panelPartView, !hidden);
+      if (!layout.shortWindow && !hidden) layout.restorePanelHeight();
+    };
+    function resize(height) {
+      layout._mainContainerDimension.height = height;
+      layout.updateShortWindow(height);
+      if (grid.visible) grid.height = context.isHorizontal(values.PANEL_POSITION) ? Math.min(grid.height, grid.maxHeight()) : height - 8;
+      layout.updateShortWindow(height, true);
+    }
+    layout.focusPart = () => { layout.focused = true; if (focusOrder === 'inside') resize(428); };
+    function command(position) {
+      if (focusOrder === 'inside') layout.focused = true;
+      layout.setPanelPosition(position);
+      if (context.isHorizontal(position) && layout.shortWindow) {
+        assert.equal(grid.height, 113, 'moving into the short grid squeezes the requested height');
+        assert.equal(layout.panelHeightBeforeShort, 176, 'retain the target height until the focus resize');
+        assert.equal(layout.panelYielded, true, 'an editor-focused horizontal panel yields until focus resizes the window');
+      }
+      layout.focused = true;
+      resize(428);
+    }
+    return { layout, values, grid, resize, command };
+  }
+  for (const side of ['right', 'left']) for (const horizontal of ['bottom', 'top']) for (const focusOrder of ['after', 'inside']) {
+    const { layout, values, grid, resize, command } = create(focusOrder);
+    resize(191);
+    assert.equal(layout.panelYielded, true);
+    command(side);
+    assert.equal(values.PANEL_LAST_NON_MAXIMIZED_HEIGHT, 176, 'moving to a side preserves the previous horizontal height');
+    assert.equal(layout.panelHeightBeforeShort, undefined, 'a tall side panel clears the horizontal restoration');
+    layout.focused = false;
+    resize(191);
+    assert.equal(grid.height, 183);
+    command(horizontal);
+    assert.equal(grid.height, 176, `${side} -> ${horizontal}, focus ${focusOrder}: restore the height after the grid squeezed it to 113`);
+    assert.equal(values.PANEL_LAST_NON_MAXIMIZED_WIDTH, 292, 'the side panel retains its own width');
+    assert.equal(layout.panelHeightBeforeShort, undefined, 'restoring consumes the saved height');
+  }
+  const tall = create('after');
+  tall.layout.setPanelPosition('right');
+  tall.layout.setPanelPosition('bottom');
+  assert.equal(tall.layout.panelHeightBeforeShort, undefined, 'a tall move must not create a pending restoration');
+  const remembered = create('after');
+  remembered.resize(191);
+  remembered.values.PANEL_LAST_NON_MAXIMIZED_HEIGHT = 90;
+  remembered.layout.setPanelPosition('top');
+  assert.equal(remembered.layout.panelHeightBeforeShort, 176, 'a short move must keep an earlier unsqueezed height');
+}
+
+const sections = { activity, modal, bars, panel, sash, 'status-toggle': statusToggle, 'panel-save': panelSave, 'panel-round-trip': panelRoundTrip };
 for (const name of process.argv.slice(2).length ? process.argv.slice(2) : Object.keys(sections)) {
   assert.ok(sections[name], `Unknown section ${name}`);
   sections[name]();

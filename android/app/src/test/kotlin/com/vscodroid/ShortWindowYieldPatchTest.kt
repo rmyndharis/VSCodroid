@@ -33,6 +33,11 @@ class ShortWindowYieldPatchTest {
         WorkbenchPatchBehavior.run("panel-save")
     }
 
+    @Test
+    fun `moving a short side panel back restores its horizontal height after focus resizes the window`() {
+        WorkbenchPatchBehavior.run("panel-round-trip")
+    }
+
     /** The repository root is two levels above `android/app`, this suite's working directory. */
     private val patch: String = File("../../patches/0034-short-window-yields-the-panel.patch").also {
         check(it.isFile) {

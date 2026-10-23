@@ -345,4 +345,4 @@
 0034 short window yields the panel|out/vs/code/browser/workbench/workbench.js x11|panelYielded
 
 # The same patch's second flag, the height a panel that stayed in a short window had before it.
-0034 short window panel height is remembered|out/vs/code/browser/workbench/workbench.js x9|panelHeightBeforeShort
+0034 short window panel height is remembered|out/vs/code/browser/workbench/workbench.js x10|panelHeightBeforeShort

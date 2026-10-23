@@ -16,11 +16,13 @@ An editor sash snapping the yielded panel open is reconciled after the grid fini
 without publishing the incidental show or changing the user's panel state. An explicit panel
 show still ends the yield. Moving a yielded panel to a side preserves its remembered horizontal
 height instead of saving the height squeezed by the short grid.
+Moving a side panel back above or below the editor in a short window also remembers the requested
+horizontal height before the grid squeezes it, so a subsequent focus resize can restore it.
 
 Measured on an API 33 emulator (WebView 149, 411dp wide, landscape) with the keyboard up and the panel out: Ctrl+J used to do nothing the first time and show the panel at 97px, with the editor at 13px, the second time, and the panel was still 97px once the keyboard was away. Now the first press shows it, and a 203px panel is 203px after the keyboard goes away whether it was out, shown in the short window, closed there and shown again in a tall one, focused through it, or maximized when the window turned short and un-maximized in it. Killing the last terminal while the panel is out leaves it closed when the window turns tall.
 
 diff --git a/src/vs/workbench/browser/layout.ts b/src/vs/workbench/browser/layout.ts
-index 59ca3d9c..be608867 100644
+index 59ca3d9c..dede8f40 100644
 --- a/src/vs/workbench/browser/layout.ts
 +++ b/src/vs/workbench/browser/layout.ts
 @@ -290,6 +290,8 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
@@ -255,7 +257,19 @@ index 59ca3d9c..be608867 100644
  			}
  		}
  
-@@ -2526,6 +2642,8 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
+@@ -2497,6 +2613,11 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
+ 
+ 		const hadFocus = this.hasFocus(Parts.PANEL_PART);
+ 
++		// Preserve the requested horizontal height before the short grid squeezes it.
++		if (this.shortWindow && isHorizontal(position)) {
++			this.panelHeightBeforeShort ??= this.stateModel.getRuntimeValue(LayoutStateKeys.PANEL_LAST_NON_MAXIMIZED_HEIGHT);
++		}
++
+ 		if (position === Position.BOTTOM) {
+ 			this.workbenchGrid.moveView(this.panelPartView, editorHidden ? size.height : this.stateModel.getRuntimeValue(LayoutStateKeys.PANEL_LAST_NON_MAXIMIZED_HEIGHT), this.editorPartView, Direction.Down);
+ 		} else if (position === Position.TOP) {
+@@ -2526,6 +2647,8 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
  			this.adjustPartPositions(this.getSideBarPosition(), this.getPanelAlignment(), position);
  		}
  
