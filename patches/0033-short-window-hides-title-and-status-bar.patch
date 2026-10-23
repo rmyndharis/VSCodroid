@@ -169,10 +169,18 @@ index 75f9238f..59ca3d9c 100644
  
  	private arrangeEditorNodes(nodes: { editor: ISerializedNode; sideBar?: ISerializedNode; auxiliaryBar?: ISerializedNode }, availableHeight: number, availableWidth: number): ISerializedNode {
 diff --git a/src/vs/workbench/browser/actions/layoutActions.ts b/src/vs/workbench/browser/actions/layoutActions.ts
-index f7b82f29..a51efb32 100644
+index f7b82f29..e8712896 100644
 --- a/src/vs/workbench/browser/actions/layoutActions.ts
 +++ b/src/vs/workbench/browser/actions/layoutActions.ts
-@@ -421,10 +421,9 @@ export class ToggleStatusbarVisibilityAction extends Action2 {
+@@ -28,7 +28,6 @@ import { ThemeIcon } from '../../../base/common/themables.js';
+ import { DisposableStore } from '../../../base/common/lifecycle.js';
+ import { registerIcon } from '../../../platform/theme/common/iconRegistry.js';
+ import { ICommandActionTitle } from '../../../platform/action/common/action.js';
+-import { mainWindow } from '../../../base/browser/window.js';
+ import { IKeybindingService } from '../../../platform/keybinding/common/keybinding.js';
+ import { TitlebarStyle } from '../../../platform/window/common/window.js';
+ import { IPreferencesService } from '../../services/preferences/common/preferences.js';
+@@ -421,10 +420,9 @@ export class ToggleStatusbarVisibilityAction extends Action2 {
  	}
  
  	run(accessor: ServicesAccessor): Promise<void> {
