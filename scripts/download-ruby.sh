@@ -273,7 +273,13 @@ SCRIPT_WRAPPERS+='}'
 # inside Ruby 4.0.7 was not found; if a later package starts RubyGems by
 # itself the option does nothing.
 #
-# ownedPaths: the headers copied above, so that Remove takes them with the rest.
+# ownedPaths: the headers copied above and the notices termux_copy_notices placed in
+# usr/share/doc/<package>, so that Remove takes them with the rest. None of the
+# packages here is also in the base install's usr/share/doc.
+OWNED_PATHS="\"usr/include/ruby-$RUBY_MINOR\""
+for doc in "$PACK_ASSETS"/usr/share/doc/*/; do
+    [ -d "$doc" ] && OWNED_PATHS+=",\"usr/share/doc/$(basename "$doc")\""
+done
 cat > "$PACK_ASSETS/toolchain_ruby.json" << EOF
 {
     "name": "ruby",
@@ -288,7 +294,7 @@ cat > "$PACK_ASSETS/toolchain_ruby.json" << EOF
     },
     "pathDirs": ["usr/bin"],
     "installRoot": "usr/lib/ruby",
-    "ownedPaths": ["usr/include/ruby-$RUBY_MINOR"],
+    "ownedPaths": [$OWNED_PATHS],
     "libs": ["libruby.so", "libgmp.so", "libyaml-0.so", "libandroid-execinfo.so"],
     "libSymlinks": {
         "libruby.so.${RUBY_MINOR%.*}": "libruby.so"

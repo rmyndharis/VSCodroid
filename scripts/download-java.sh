@@ -219,6 +219,16 @@ rm -rf "$JDK_DIR/demo" 2>/dev/null || true
 rm -rf "$JDK_DIR/man" 2>/dev/null || true
 # Strip jmods (module files, large, not needed at runtime)
 rm -rf "$JDK_DIR/jmods" 2>/dev/null || true
+# Strip the launchers that cannot do their job on a phone, each measured on an API 33
+# emulator with JDK 21: jlink stops with "this runtime image does not contain jmods
+# directory" (the jmods are removed above), jpackage builds platform installers and
+# fails on a null path, jconsole is a GUI and prints nothing, jrunscript reports "script
+# engine for language js can not be found" (no engine ships since JDK 15), and jhsdb
+# attaches through a serviceability library this pack does not carry. Each one read as
+# a broken install rather than as an absent tool.
+for tool in jlink jpackage jconsole jrunscript jhsdb; do
+    rm -f "$JDK_DIR/bin/$tool"
+done
 # Strip header files (not needed without JNI compilation)
 rm -rf "$JDK_DIR/include" 2>/dev/null || true
 
@@ -338,6 +348,16 @@ SYMLINKS+='}'
 #   OpenJDK 64-Bit Server VM warning: Unable to get SVE vector length on this system.
 # Measured on an API 33 emulator whose CPU lists sve2: all six launchers tried did, once
 # each. The flag does not exist in JDK 17, so it is a manifest field and not a rule.
+#
+# ownedPaths: the notices termux_copy_notices placed in usr/share/doc/<package>, so that
+# Remove takes them with the rest. None of the packages here is also in the base
+# install's usr/share/doc.
+OWNED_PATHS=""
+for doc in "$PACK_ASSETS"/usr/share/doc/*/; do
+    [ -d "$doc" ] || continue
+    [ -n "$OWNED_PATHS" ] && OWNED_PATHS+=","
+    OWNED_PATHS+="\"usr/share/doc/$(basename "$doc")\""
+done
 cat > "$PACK_ASSETS/toolchain_java.json" << EOF
 {
     "name": "java",
@@ -351,6 +371,7 @@ cat > "$PACK_ASSETS/toolchain_java.json" << EOF
     "pathDirs": ["usr/lib/jvm/$JDK_DIRNAME/bin"],
     "installRoot": "usr/lib/jvm/$JDK_DIRNAME",
     "jvmFlags": ["-XX:UseSVE=0"],
+    "ownedPaths": [$OWNED_PATHS],
     "libs": ["libandroid-shmem.so", "libandroid-spawn.so"]
 }
 EOF
