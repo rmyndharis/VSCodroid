@@ -449,6 +449,7 @@ jobs:
           node scripts/test-caret-drag.js
           node scripts/test-serve-network.js
           node scripts/test-welcome.js
+          node scripts/test-workbench-layout.js
           node scripts/test-xdg-open.js
 
       - name: Install system dependencies
