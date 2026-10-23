@@ -422,7 +422,8 @@ class ToolchainEnvFileTest {
      */
     @Test
     fun `the JVM flags a manifest lists reach every launcher in the JDK`() {
-        val flags = """"jvmFlags":["-XX:UseSVE=0","a b","-X;rm","-Dx=\"y\""],"""
+        val flags = """"jvmFlags":["-XX:UseSVE=0","a b","-X;rm","-Dx=\"y\"","-agentlib:jdwp=transport=dt_socket",""" +
+            """"-javaagent:a.jar","-Dx=y","-Xbootclasspath","-XX:","-XX:=1","-XX:+"],"""
         val out = runJavaWrappers(
             """java -version; javac -version; keytool -list; jshell; """ +
                 """javac -J-Dx=1 A.java""",
@@ -445,16 +446,19 @@ class ToolchainEnvFileTest {
     }
 
     @Test
-    fun `a binary outside the JDK bin directory is not a launcher and gets no flag`() {
+    fun `a binary kept in lib is no command at all`() {
         // jexec and jspawnhelper live in lib/ and are listed in the manifest so that they get an
-        // execute bit; they are not started by the JLI, which is what takes -J, so a flag handed to
-        // them would be an argument of their own.
-        val out = runJavaWrappers("""jexec x""", jvmFlags = """"jvmFlags":["-XX:UseSVE=0"],""")
+        // execute bit. The JVM starts the helper by absolute path and jexec is a `#!` target, so a
+        // function named after either only added a command that prints nothing useful.
+        val out = runJavaWrappers(
+            """type -t jexec || echo none; type -t java""",
+            jvmFlags = """"jvmFlags":["-XX:UseSVE=0"],""",
+        )
 
         assertEquals(
-            listOf("</p/../$jdk/lib/jexec><x>"),
+            listOf("none", "function"),
             out,
-            "a program under lib/ was started with a JVM flag meant for the launchers in bin/",
+            "a helper the JVM starts by absolute path became a shell function",
         )
     }
 

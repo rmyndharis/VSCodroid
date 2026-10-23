@@ -1062,4 +1062,99 @@ class ToolchainExecTableTest {
 
         assertEquals(emptyList<String>(), toolchainLines(), execTable.readText())
     }
+    private fun jdkRecord(flags: String) =
+        """[{"name":"java","installRoot":"usr/lib/jvm/jdk",$flags""" +
+            """"binaries":["usr/lib/jvm/jdk/bin/java","usr/lib/jvm/jdk/bin/javac",""" +
+            """"usr/lib/jvm/jdk/bin/keytool","usr/lib/jvm/jdk/bin/jshell",""" +
+            """"usr/lib/jvm/jdk/lib/jspawnhelper"]}]"""
+
+    private fun jdkElfs() {
+        for (b in listOf("bin/java", "bin/javac", "bin/keytool", "bin/jshell", "lib/jspawnhelper")) {
+            elf("usr/lib/jvm/jdk/$b")
+        }
+    }
+
+    /**
+     * A JDK launcher reached through the trampoline starts the way its shell function
+     * does. A `make` recipe, a `process` task and a program's own `spawn("java")` do not
+     * go through bash, so without these a JVM warned about SVE on every start and took
+     * `user.home` and `java.io.tmpdir` from Termux's prefix, where nothing can be
+     * created: `File.createTempFile` failed under `make run`.
+     */
+    @Test
+    fun `a JDK launcher row carries the VM options its shell function has`() {
+        every { context.cacheDir } returns File(filesDir, "cache")
+        jdkElfs()
+        stateFile.writeText(jdkRecord(""""jvmFlags":["-XX:UseSVE=0"],"""))
+
+        regenerate()
+
+        val root = filesDir.absolutePath
+        val home = "$root/home"
+        val bin = "$root/usr/lib/jvm/jdk/bin"
+        assertEquals(
+            listOf(
+                "java\t$bin/java\t-XX:UseSVE=0\t-Duser.home=$home\t-Djava.io.tmpdir=$root/cache/tmp",
+                "javac\t$bin/javac\t-J-XX:UseSVE=0",
+                "keytool\t$bin/keytool\t-J-XX:UseSVE=0\t-J-Duser.home=$home",
+                "jshell\t$bin/jshell\t-J-XX:UseSVE=0\t-J-Djdk.lang.Process.launchMechanism=VFORK" +
+                    "\t-J-Duser.home=$home",
+            ),
+            toolchainLines().filter { !it.startsWith("\t") },
+            "a JDK launcher started through the trampoline lost its options:\n" + execTable.readText(),
+        )
+    }
+
+    @Test
+    fun `a JDK without jvmFlags still gets its home and temporary directory`() {
+        every { context.cacheDir } returns File(filesDir, "cache")
+        jdkElfs()
+        stateFile.writeText(jdkRecord(""))
+
+        regenerate()
+
+        val root = filesDir.absolutePath
+        assertTrue(
+            tableLines().contains(
+                "java\t$root/usr/lib/jvm/jdk/bin/java\t-Duser.home=$root/home\t-Djava.io.tmpdir=$root/cache/tmp",
+            ),
+            execTable.readText(),
+        )
+        assertTrue(
+            tableLines().contains("javac\t$root/usr/lib/jvm/jdk/bin/javac"),
+            "a tool with nothing to add gained arguments:\n" + execTable.readText(),
+        )
+    }
+
+    @Test
+    fun `a launcher kept in lib is not a command`() {
+        every { context.cacheDir } returns File(filesDir, "cache")
+        jdkElfs()
+        stateFile.writeText(jdkRecord(""))
+
+        regenerate()
+
+        assertFalse(
+            tableLines().any { it.startsWith("jspawnhelper\t") },
+            "the JVM's own helper became a PATH command:\n" + execTable.readText(),
+        )
+        assertFalse(envFile.readText().contains("jspawnhelper()"), "or a shell function")
+    }
+
+    @Test
+    fun `a row with options survives an unreadable record`() {
+        every { context.cacheDir } returns File(filesDir, "cache")
+        jdkElfs()
+        stateFile.writeText(jdkRecord(""""jvmFlags":["-XX:UseSVE=0"],"""))
+        regenerate()
+        val before = tableLines().first { it.startsWith("javac\t") }
+
+        stateFile.writeText("""[{"name":"java","installRo""")
+        regenerate()
+
+        assertTrue(
+            tableLines().contains(before),
+            "a row whose arguments are not paths was dropped as stale:\n" + execTable.readText(),
+        )
+    }
 }

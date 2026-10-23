@@ -68,8 +68,12 @@
 // $JAVA_HOME/bin/java is not a PATH lookup and never reaches here; a toolchain
 // forking its own helper by absolute path (the JDK's lib/jspawnhelper) is the
 // same; and a shebang script under filesDir is refused on its own inode before
-// its interpreter is ever consulted, which is why the table carries a two-field
-// form naming the interpreter explicitly.
+// its interpreter is ever consulted, which is why a row can carry arguments after
+// the target: the script for an interpreter, the VM options for a JDK launcher
+// (a JVM of 20 or later warns on every start under the app's seccomp filter
+// unless -XX:UseSVE=0 is given, and takes its home and temporary directories
+// from Termux's prefix unless told otherwise). They go between the target and
+// the caller's own arguments, in the order the row lists them.
 
 #include <errno.h>
 #include <limits.h>
@@ -90,6 +94,11 @@ static const char *kLoader = "/system/bin/linker64";
 // truncated and used: a truncated path is a command that fails naming a path the
 // user never chose.
 #define MAX_LINE (2 * PATH_MAX + 64)
+
+// How many arguments a row may carry after its target. Eight covers the longest
+// row written today (a JDK launcher's three VM options) with room; a longer one
+// is refused whole rather than cut, for the reason MAX_LINE gives.
+#define MAX_ROW_ARGS 8
 
 // The exit status a shell reports for "command not found". Used for every way
 // this cannot identify a program to run, so the caller sees the same status it
@@ -146,7 +155,8 @@ int main(int argc, char **argv) {
     // differently from this one costs nothing. Copies, because the buffer below
     // is reused by every read.
     char *target = NULL;
-    char *arg = NULL;
+    char *args[MAX_ROW_ARGS];
+    int nargs = 0;
 
     char line[MAX_LINE];
     for (;;) {
@@ -214,9 +224,19 @@ int main(int argc, char **argv) {
 
         if (target || strcmp(line, name) != 0) continue;
 
+        // The target ends at the next tab and each argument at the one after it.
         char *found = tab + 1;
-        char *found_arg = strchr(found, '\t');
-        if (found_arg) *found_arg++ = '\0';
+        char *found_args[MAX_ROW_ARGS];
+        int found_nargs = 0;
+        for (char *rest = strchr(found, '\t'); rest; rest = strchr(rest, '\t')) {
+            *rest++ = '\0';
+            if (found_nargs == MAX_ROW_ARGS) {
+                fprintf(stderr, "vscodroid: %s: toolchain entry has too many arguments\n", name);
+                fclose(f);
+                return EXIT_NOT_FOUND;
+            }
+            found_args[found_nargs++] = rest;
+        }
 
         // Absolute only. The trampoline has no working directory it can trust:
         // it inherits whatever the caller had, so a relative target would name a
@@ -228,8 +248,11 @@ int main(int argc, char **argv) {
         }
 
         target = strdup(found);
-        arg = found_arg ? strdup(found_arg) : NULL;
-        if (!target || (found_arg && !arg)) {
+        for (nargs = 0; target && nargs < found_nargs; nargs++) {
+            args[nargs] = strdup(found_args[nargs]);
+            if (!args[nargs]) target = NULL;
+        }
+        if (!target) {
             fprintf(stderr, "vscodroid: %s: out of memory\n", name);
             fclose(f);
             return EXIT_CANNOT_EXEC;
@@ -246,8 +269,8 @@ int main(int argc, char **argv) {
         return EXIT_NOT_FOUND;
     }
 
-    // loader, target, optional script argument, argv[1..], NULL.
-    char **next = calloc((size_t)argc + 4, sizeof(char *));
+    // loader, target, the row's arguments, argv[1..], NULL.
+    char **next = calloc((size_t)argc + MAX_ROW_ARGS + 3, sizeof(char *));
     if (!next) {
         fprintf(stderr, "vscodroid: %s: out of memory\n", name);
         return EXIT_CANNOT_EXEC;
@@ -255,7 +278,7 @@ int main(int argc, char **argv) {
     int n = 0;
     next[n++] = (char *)kLoader;
     next[n++] = target;
-    if (arg) next[n++] = arg;
+    for (int i = 0; i < nargs; i++) next[n++] = args[i];
     for (int i = 1; i < argc; i++) next[n++] = argv[i];
     next[n] = NULL;
 

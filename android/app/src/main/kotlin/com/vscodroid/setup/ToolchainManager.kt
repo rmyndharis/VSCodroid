@@ -326,17 +326,47 @@ class ToolchainManager(private val context: Context) {
         )
 
         /**
+         * `-XX:Name=value`, `-XX:+Name`, `-XX:-Name`, and the heap and stack sizes. */
+        private val JVM_FLAG = Regex("-(?:XX:(?:[+-][A-Za-z0-9_]+|[A-Za-z0-9_]+=[A-Za-z0-9_.+-]+)|X(?:mx|ms|ss)[0-9]+[kKmMgG]?)")
+
+        /**
          * The JVM flags a toolchain manifest asks every JDK launcher to start with
-         * (`jvmFlags`), restricted to what a flag looks like. They are written into
-         * shell functions, so anything with a space, a quote or a metacharacter is
-         * dropped rather than trusted: the manifest is the app's own, but a line
-         * that breaks this file breaks every new terminal.
+         * (`jvmFlags`), restricted to the HotSpot option shapes in [JVM_FLAG]. They are
+         * written into shell functions, so anything with a space, a quote or a
+         * metacharacter is dropped rather than trusted: the manifest is the app's own,
+         * but a line that breaks this file breaks every new terminal. An agent, a
+         * system property or a class path option is not a tuning flag and is dropped
+         * with them: it would start in every JVM the user runs.
          */
         internal fun jvmFlagsOf(manifest: JSONObject): List<String> {
             val flags = manifest.optJSONArray("jvmFlags") ?: return emptyList()
             return (0 until flags.length())
                 .map { flags.optString(it, "") }
-                .filter { it.matches(Regex("-[A-Za-z0-9:=_.+-]+")) }
+                .filter { JVM_FLAG.matches(it) }
+        }
+
+        /**
+         * The VM options the manifest's `jvmFlags` put in front of a JDK launcher: as they
+         * are for `java`, as `-J` options for every tool beside it. Empty for anything that
+         * is not a launcher in the install root's `bin/`, and for a manifest without any (an
+         * install made while the pack carried JDK 17, which has no such flag).
+         */
+        internal fun jvmLauncherFlags(manifest: JSONObject, relPath: String): List<String> {
+            val root = manifest.optString("installRoot", "")
+            if (root.isEmpty() || !relPath.startsWith("$root/bin/")) return emptyList()
+            val direct = relPath.substringAfterLast('/') == "java"
+            return jvmFlagsOf(manifest).map { if (direct) it else "-J$it" }
+        }
+
+        /**
+         * Whether a manifest binary is a command at all. The JDK keeps `jspawnhelper` and
+         * `jexec` in `lib/`: the JVM starts the first by absolute path and the second is a
+         * `#!` target, so neither belongs on PATH, where each only showed up as a command
+         * that prints nothing useful when typed.
+         */
+        internal fun isPathCommand(manifest: JSONObject, relPath: String): Boolean {
+            val root = manifest.optString("installRoot", "")
+            return root.isEmpty() || !relPath.startsWith("$root/lib/")
         }
 
         /**
@@ -1779,6 +1809,28 @@ class ToolchainManager(private val context: Context) {
     }
 
     /**
+     * The options a JDK launcher's exec-table row carries, the table's counterpart of
+     * the shell function [regenerateEnvFileLocked] writes for it: the manifest's
+     * `jvmFlags`, and for `java`, `keytool` and `jshell` the home (and for `java` the
+     * temporary directory) that libjava would otherwise take from Termux's prefix.
+     *
+     * Without them a `make` recipe, a `process` task or a program's own `spawn("java")`
+     * got a JVM that warned on every start and could not create a temporary file.
+     * Values are expanded here, because the trampoline reads them as they are; the
+     * shell function takes the shell's own HOME and TMPDIR instead.
+     */
+    private fun jdkLauncherArgs(manifest: JSONObject, relPath: String, command: String): List<String> {
+        val args = jvmLauncherFlags(manifest, relPath).toMutableList()
+        val tmpDir = "${context.cacheDir.absolutePath}/tmp"
+        when (command) {
+            "java" -> args += listOf("-Duser.home=$homeDir", "-Djava.io.tmpdir=$tmpDir")
+            "keytool" -> args += "-J-Duser.home=$homeDir"
+            "jshell" -> args += listOf("-J-Djdk.lang.Process.launchMechanism=VFORK", "-J-Duser.home=$homeDir")
+        }
+        return args
+    }
+
+    /**
      * Gives the execute bit to every binary [manifest] names, and says whether
      * they all have it now.
      *
@@ -2972,20 +3024,15 @@ class ToolchainManager(private val context: Context) {
             }
             if (binaries != null) {
                 val lines = mutableListOf<String>()
-                val installRoot = tc.optString("installRoot", "")
-                val jvmFlags = jvmFlagsOf(tc)
                 for (i in 0 until binaries.length()) {
                     val relPath = binaries.getString(i)
                     val command = relPath.substringAfterLast('/')
-                    if (command.isEmpty() || command in scriptNames) continue
+                    if (command.isEmpty() || command in scriptNames || !isPathCommand(tc, relPath)) continue
                     // The JVM flags the manifest names reach every launcher in the JDK's
                     // bin/: `java` takes them as they are, every tool beside it takes
                     // them as -J options. A manifest without any (an install made while
                     // the pack carried JDK 17, which has no such flag) gets none.
-                    val jdkTool = jvmFlags.isNotEmpty() && installRoot.isNotEmpty() &&
-                        relPath.startsWith("$installRoot/bin/")
-                    val toolFlags = if (!jdkTool) "" else
-                        jvmFlags.joinToString(" ") { if (command == "java") it else "-J$it" } + " "
+                    val toolFlags = jvmLauncherFlags(tc, relPath).joinToString("") { "$it " }
                     // A name bash cannot use as a function is skipped rather than
                     // written. The manifests are regenerated from upstream packages
                     // at build time, so a future version can introduce a binary
@@ -3181,10 +3228,14 @@ class ToolchainManager(private val context: Context) {
      * own `exec()` for the same reason, bash invoked as `sh`, and a
      * `"type": "process"` task. This file is what those callers reach instead.
      *
-     * Two record shapes, matching the two the env file already emits:
+     * Two record shapes, matching the two the env file already emits, each with optional
+     * arguments the trampoline puts between the target and the caller's own:
      *
-     *   `<command>\t<absolute path of an ELF>`
+     *   `<command>\t<absolute path of an ELF>[\t<argument>...]`
      *   `<command>\t<absolute path of the interpreter>\t<absolute path of a script>`
+     *
+     * The arguments are what makes a JDK launcher start the way its shell function
+     * does, for the callers the function does not reach (see [jdkLauncherArgs]).
      *
      * and a third for the environment, with an empty command field:
      *
@@ -3257,7 +3308,9 @@ class ToolchainManager(private val context: Context) {
                 if (fields.size < 2) return@forEach
                 if (fields[0].isEmpty()) {
                     envRows[fields[1]] = line
-                } else if (fields.drop(1).all { it.startsWith("$filesDir/") && File(it).exists() }) {
+                } else if (fields.drop(1).filter { !it.startsWith("-") }
+                        .all { it.startsWith("$filesDir/") && File(it).exists() }
+                ) {
                     rows[fields[0]] = line
                 }
             }
@@ -3301,11 +3354,12 @@ class ToolchainManager(private val context: Context) {
                 for (j in 0 until binaries.length()) {
                     val relPath = binaries.getString(j)
                     val command = relPath.substringAfterLast('/')
-                    if (command.isEmpty() || command in scriptNames) continue
+                    if (command.isEmpty() || command in scriptNames || !isPathCommand(tc, relPath)) continue
                     if (!isElfFile(File(context.filesDir, relPath))) continue
                     val absolute = "$filesDir/$relPath"
                     elfPaths[command] = absolute
-                    rows[command] = "$command\t$absolute"
+                    rows[command] = (listOf(command, absolute) + jdkLauncherArgs(tc, relPath, command))
+                        .joinToString("\t")
                 }
             }
 
