@@ -29,6 +29,7 @@ did before this script existed.
 
 from __future__ import annotations
 
+import http.client
 import json
 import re
 import sys
@@ -107,7 +108,9 @@ def fetch(url: str) -> bytes:
         except urllib.error.HTTPError as err:
             if err.code not in (429, 500, 502, 503, 504) or attempt == 5:
                 raise
-        except (urllib.error.URLError, TimeoutError):
+        except (OSError, http.client.HTTPException):
+            # A refused or reset connection, a timeout (an OSError before Python 3.10 as well)
+            # and a body cut short, which urlopen reports while read() runs.
             if attempt == 5:
                 raise
         time.sleep(2 ** attempt)
