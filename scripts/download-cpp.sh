@@ -268,6 +268,16 @@ echo ""
 echo "Pointing paths.h at /system/bin/sh..."
 python3 "$SCRIPT_DIR/patch-default-shell.py" "$PACK_ASSETS/usr/include/paths.h"
 
+# --- Step 4c: the two inline replacements that name Termux's directories ---
+#
+# stdio.h's tmpfile() creates its file under Termux's prefix and returned NULL for
+# every program, and pwd.h sets pw_dir and pw_shell to Termux's home and bash. Both are
+# code in the header, so a program cannot override them. See patch-sysroot-paths.py.
+# Fails closed on a header that no longer holds exactly one such block.
+echo ""
+echo "Pointing stdio.h and pwd.h at the app's own directories..."
+python3 -I "$SCRIPT_DIR/patch-sysroot-paths.py" "$PACK_ASSETS/usr/include"
+
 # --- Step 5: the upstream notices, beside what they describe ---
 termux_copy_notices "$PACK_ASSETS/usr" "${NOTICE_PACKAGES[@]}"
 

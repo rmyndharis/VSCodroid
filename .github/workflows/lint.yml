@@ -224,6 +224,9 @@ jobs:
       - name: Check the Copilot compile stage leaves a complete SDK directory
         run: python3 scripts/test-copilot-compile-guard.py
 
+      - name: Check the sysroot header patcher rewrites tmpfile and the passwd entry
+        run: python3 scripts/test-patch-sysroot-paths.py
+
       # The release preflight reads this repository's real server tag, which differs
       # whenever a server input changed since the last publish, so lint does not run
       # it. This builds throwaway repositories from a copy of the real cache key and
