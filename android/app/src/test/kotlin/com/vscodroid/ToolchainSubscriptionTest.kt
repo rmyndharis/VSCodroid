@@ -16,7 +16,7 @@ import java.util.concurrent.atomic.AtomicBoolean
  * `AndroidBridge` refuses to do with the same manager: the COMPLETED branch of
  * the manager's state handler is the only thing that copies a delivered pack
  * into `usr/`, and Play Core promises nothing about re-emitting a state to a
- * listener that subscribes afterwards. A user who started a 155 MB install and
+ * listener that subscribes afterwards. A user who started a 180 MB install and
  * pressed Home therefore paid for a pack that was delivered and never installed,
  * repaired only by the next launch that runs `SplashActivity`, which resuming a
  * live task never does.

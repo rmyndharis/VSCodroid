@@ -632,7 +632,7 @@ class StoragePreflightTest {
      * The estimate this replaces came out of `toolchains.json`, which records the
      * installs that FINISHED. `ToolchainManager` takes its install root back on
      * both failures it can see, but a process killed mid-copy reaches neither
-     * and leaves about 155 MB in `usr/` that nothing names, the part written
+     * and leaves about 180 MB in `usr/` that nothing names, the part written
      * into the shared `usr/bin` and `usr/lib` is never reclaimed on any exit,
      * and `npm install -g` and pip never had a record at all. Every one of those
      * bytes was subtracted from nothing and credited as a byte the unpack writes
@@ -648,7 +648,7 @@ class StoragePreflightTest {
         every { assets.list("usr") } returns arrayOf("lib")
         every { assets.list("usr/lib") } returns arrayOf("libcrypto.so.3")
         stageServerTree(assetBytes / 2)
-        stageUsrFile("lib/jvm/java-17-openjdk/runtime", (2 * mb).toInt())
+        stageUsrFile("lib/jvm/java-21-openjdk/runtime", (2 * mb).toInt())
 
         val result = runBlocking { setup(free = 5 * mb + slack).runSetup() }
 

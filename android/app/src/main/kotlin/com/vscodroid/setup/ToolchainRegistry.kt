@@ -14,7 +14,7 @@ object ToolchainRegistry {
     data class ToolchainInfo(
         val packName: String,
         val displayName: String,
-        /** Short label for the toolchain card (e.g. "Ruby", "Java 17"). */
+        /** Short label for the toolchain card (e.g. "Ruby", "Java 21"). */
         val shortLabel: String,
         /**
          * The sentence under the name on the toolchain card, as a resource id.
@@ -107,22 +107,20 @@ object ToolchainRegistry {
         ),
         ToolchainInfo(
             packName = "toolchain_java",
-            displayName = "Java 17",
-            shortLabel = "Java 17",
+            displayName = "Java 21",
+            shortLabel = "Java 21",
             descriptionRes = R.string.toolchain_java_description,
-            // 151,840 KiB measured with `du -sk` over the pack's `usr/` tree,
-            // which is 155.5 MB; the file contents sum to 154.8 MB. This read
-            // 146,000,000 until the JDK grew past it: `download-java.sh` stopped
-            // deleting OpenJDK's `legal/` and began copying with `-RL`, which
-            // dereferences 208 symlinks, and the constant every gate reads did
-            // not move with it. Two comments in ToolchainManager were updated to
-            // say "about 155 MB" while this stayed at 146.
-            //
-            // 156,000,000 left 515,840 bytes over the 155,484,160 measured, which
-            // a Termux point release of openjdk-17 can spend, and then
-            // package-toolchains.sh refuses the tag. 160,000,000 leaves 4.5 MB.
-            estimatedSize = 160_000_000,
-            downloadSize = 56_500_000,
+            // 175,268 KiB measured with `du -sk` over the pack's `usr/` tree,
+            // which is 179.5 MB in 4 KiB blocks, in 334 files. The pack carried
+            // OpenJDK 17 until 21 replaced it (the Language Support for Java
+            // extension needs 21 to run its server), and 21 is 24 MB larger.
+            // `download-java.sh` copies with `-RL`, which dereferences the 200
+            // odd symlinks of `legal/`, and `package-toolchains.sh` refuses a
+            // tree above this figure rather than shipping a card that admits a
+            // device to an install it cannot finish. 186,000,000 leaves 6.5 MB
+            // for a point release of openjdk-21, which Termux has made before.
+            estimatedSize = 186_000_000,
+            downloadSize = 64_000_000,
             downloadUrl = "https://github.com/rmyndharis/VSCodroid/releases/latest/download/toolchain_java.zip",
         ),
         ToolchainInfo(

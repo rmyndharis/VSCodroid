@@ -209,7 +209,7 @@ object StorageManager {
      * in the `cache` row, and [CLEARABLE_KEYS] offers that row to [clearCaches].
      * Leaving them out meant the Clear action reported success and left the figure
      * on the same screen unmoved, and it is by some way the largest thing here: an
-     * abandoned Java download is roughly 155 MB of expanded tree, against a few MB
+     * abandoned Java download is roughly 180 MB of expanded tree, against a few MB
      * for the other four directories put together. The user who opens that screen
      * is the one who is out of space.
      *

@@ -27,7 +27,7 @@ import java.io.File
  *
  * The install record is written last, so a copy killed in the middle, by the
  * low-memory killer or by a force stop, leaves up to the whole unpacked tree
- * (about 155 MB for Java 17) under nothing that names it. Every pass in
+ * (about 180 MB for Java 21) under nothing that names it. Every pass in
  * `repairInstalledToolchains` reads `toolchains.json`, which for such an install
  * was never written, so all of them stepped over it: no card offered a Remove,
  * no uninstall could find it, and clearing app data was the only way back.
@@ -242,7 +242,7 @@ class ToolchainInterruptedInstallTest {
      *
      * The reclaim at the end is the consequence, not decoration. A marker is only
      * worth keeping because a later launch acts on it, and that is the launch the
-     * defect took away: no record, no card, no marker, and ~155 MB that nothing in
+     * defect took away: no record, no card, no marker, and ~180 MB that nothing in
      * the app can name.
      *
      * Both delivery paths reach this, which is why it is driven at the point they

@@ -266,8 +266,8 @@ class ToolchainCardStateTest {
 
         /**
          * An uninstall is queued onto the same single-thread executor a download
-         * occupies for its whole transfer, extraction and ~155 MB copy, so
-         * confirming "Remove Ruby?" while Java 17 is downloading is answered
+         * occupies for its whole transfer, extraction and ~180 MB copy, so
+         * confirming "Remove Ruby?" while Java 21 is downloading is answered
          * minutes later. Until then the card went on offering Remove, which says
          * the tap did nothing, and tapping again queued a second removal that
          * would also do nothing.

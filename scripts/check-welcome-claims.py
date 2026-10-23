@@ -18,7 +18,7 @@ Two rules, both mechanical:
     the tool is there and ready; a user who needs the number runs `node -v`,
     which the very next step of the walkthrough tells them to do.
 
-  * No "coming soon". Java 17 and Ruby are installable today, and the screen
+  * No "coming soon". Java 21 and Ruby are installable today, and the screen
     said the opposite -- which is worse than a stale number, because it sends a
     user away from a toolchain already sitting on their device. Rust and C/C++
     were promised there too, and neither has a module, a pack or a registry
@@ -39,7 +39,7 @@ EXTENSIONS = ROOT / "android/app/src/main/assets/extensions"
 
 # Tier-1 tools, all resolved from the Termux index at build time. Naming a
 # version for any of them is the defect; the toolchains are excluded on purpose,
-# because Java 17 is a pinned choice rather than whatever the index happens to
+# because Java 21 is a pinned choice rather than whatever the index happens to
 # carry, and saying which Java is useful.
 BUNDLED = r"(?:Node\.js|Node|npm|Python|Git|make)"
 
@@ -53,7 +53,7 @@ FORBIDDEN = [
     (re.compile(r"\bv?\d+\.\d+\.\d+\b"),
      "prints a version string that goes stale on the next rebuild"),
     (re.compile(r"\bcoming soon\b", re.I),
-     "promises something as unavailable; Go, Java 17 and Ruby ship today, and "
+     "promises something as unavailable; Go, Java 21 and Ruby ship today, and "
      "nothing else is planned"),
 ]
 
@@ -71,7 +71,7 @@ FORBIDDEN = [
 # glance. The illustrations keep the denylist: their text is mock terminal
 # output, where digits are the point.
 PROSE_ALLOWED = (
-    "Java 17",   # a pinned toolchain, not a version resolved at build time
+    "Java 21",   # a pinned toolchain, not a version resolved at build time
     "python3",   # the command's name
 )
 

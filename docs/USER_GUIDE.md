@@ -871,7 +871,7 @@ Beyond the bundled tools (Node.js, Python, Git, Bash), VSCodroid offers addition
 | Language | Download Size | Installed Size | Includes |
 |----------|--------------|----------------|----------|
 | Ruby 4.0 | 11 MB | 41 MB | ruby, gem, irb, bundler, rake, and the headers native gems build against |
-| Java 17 (OpenJDK) | 56.5 MB | 160 MB | java, javac, jar, jshell |
+| Java 21 (OpenJDK) | 64 MB | 186 MB | java, javac, jar, jshell |
 | C/C++ (clang 21) | 74 MB | 260 MB | cc, c++, gcc, g++, clang, clang++, ld, ar, ranlib, nm, strip, objdump, objcopy, readelf, size, and the C and C++ headers |
 
 The C/C++ toolchain is the largest. Installing a toolchain holds the unpacked copy and the

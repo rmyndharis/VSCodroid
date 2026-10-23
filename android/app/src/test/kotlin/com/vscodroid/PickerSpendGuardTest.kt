@@ -17,8 +17,8 @@ import org.junit.jupiter.api.Test
  *
  * Nothing downstream catches it. `downloadNext` installs what it is handed and
  * `ToolchainManager.install` has no already-installed branch, so a tick that
- * gets through spends the download and the copy again, 55 MB and 155 MB for
- * Java 17, or meets the in-flight claim and paints a red "Failed" row for an
+ * gets through spends the download and the copy again, 55 MB and 180 MB for
+ * Java 21, or meets the in-flight claim and paints a red "Failed" row for an
  * install that is going perfectly well.
  *
  * [notYetInstalled] is the last check before that spend, and these pin it.

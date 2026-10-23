@@ -18,7 +18,7 @@ import java.io.File
  * and goes on certifying bytes that may never have left memory.
  *
  * Two call sites, one shape. `markSetupComplete()` fsyncs through `commit()`, and
- * `toolchains.json` is the only thing that names the ~155 MB a toolchain install
+ * `toolchains.json` is the only thing that names the ~180 MB a toolchain install
  * copies, which no later pass reads the contents of.
  *
  * Source reading, with comments dropped first so that prose naming the calls

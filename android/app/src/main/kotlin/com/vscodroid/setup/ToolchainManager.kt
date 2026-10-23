@@ -65,7 +65,7 @@ class ToolchainManager(private val context: Context) {
      * [stateFile] is written last, so for the tens of seconds a copy takes,
      * nothing on disk names the directory being filled. A low-memory kill or a
      * force stop in that window leaves up to the whole unpacked tree, about
-     * 155 MB for the Java 17 that ships today, under no manifest at all:
+     * 180 MB for the Java 21 that ships today, under no manifest at all:
      * [getInstalledToolchains] does not name it, no card offers a Remove for it,
      * [uninstallLocked] has no record to work from, and every pass in
      * [repairInstalledToolchains] is driven by that same record. Clearing app
@@ -625,7 +625,7 @@ class ToolchainManager(private val context: Context) {
             // reserve for the unpacked tree; the progress bar divides by what
             // crosses the network, and only when the server sends no
             // Content-Length. Given the unpacked figure, a chunked response left
-            // the Java 17 bar topping out near 30% for the whole transfer.
+            // the Java 21 bar topping out near 30% for the whole transfer.
             downloadViaHttp(info.packName, url, info.estimatedSize, info.downloadSize)
         } else {
             // Ensure listener is registered before fetching
@@ -1034,7 +1034,7 @@ class ToolchainManager(private val context: Context) {
         // A retired pack answers null from the registry -- that pass-through is
         // deliberate and keeps uninstalling one working -- and the elvis then made the
         // whole reservation the 50 MB buffer. A gate that asks for 50 MB before copying
-        // 155 MB, which is what Java 17 unpacks to today, is worse than no gate: it
+        // 180 MB, which is what Java 21 unpacks to today, is worse than no gate: it
         // passes exactly the devices it exists to refuse, and reports success while
         // doing it. That figure moves with the JDK, so re-measure it rather than
         // trusting it here: `du -sk android/toolchain_java/src/main/assets/usr`.
@@ -1075,7 +1075,7 @@ class ToolchainManager(private val context: Context) {
                 // it frees `unpacked` bytes and the retry re-downloads and re-extracts
                 // `unpacked` bytes into the same directory, arriving back at the free
                 // space that failed the gate. The delete buys the next attempt nothing
-                // and charges it a full download, 55 MB for Java 17.
+                // and charges it a full download, 55 MB for Java 21.
                 //
                 // Keeping it is also what makes the repair work. The user frees space,
                 // and the next launch's [reconcileDeliveredPacks] finds this same
@@ -1295,7 +1295,7 @@ class ToolchainManager(private val context: Context) {
             // `removePack` posts the delete and returns; the Task is how Play says
             // whether it happened. Logging success on the return alone said "freed"
             // for a delete that failed or never ran, and the pack it left behind is
-            // a whole toolchain in `filesDir/assetpacks` -- 155 MB for Java 17 --
+            // a whole toolchain in `filesDir/assetpacks` -- 180 MB for Java 21 --
             // that no space pre-flight here counts, because both of them measure
             // free space rather than what Play is holding. So the one line that
             // would have named the leak was the line asserting it had not happened.
@@ -1397,7 +1397,7 @@ class ToolchainManager(private val context: Context) {
             // this call had no part in. A delivery with no manifest takes the
             // claim, reports CORRUPT and returns without writing a byte, and took
             // an EARLIER interrupted install's marker with it; that marker is the
-            // last thing on disk naming its tree, so those ~155 MB stopped being
+            // last thing on disk naming its tree, so those ~180 MB stopped being
             // reclaimable at all. It also came off on a throw partway through the
             // copy, which is the one event the marker exists for.
             //
@@ -1650,14 +1650,14 @@ class ToolchainManager(private val context: Context) {
             // name the toolchain, the environment below is regenerated from a
             // record that predates it, readState() re-reads the file, so it
             // reads back the old one, and no manifest survives to tell
-            // uninstallLocked which files, symlinks and libraries the ~160 MB
+            // uninstallLocked which files, symlinks and libraries the ~180 MB
             // just copied consists of. Reporting COMPLETED on top of that is the
             // part that makes it silent: the picker shows 100% and Done, the
             // first-run queue moves on, and the card reads "Install" again after
             // the next launch with nothing said.
             if (!writeState(state)) {
                 // Same reclaim as the copy failure above, because this is the same
-                // event a step later: the record naming the ~155 MB just copied does
+                // event a step later: the record naming the ~180 MB just copied does
                 // not exist, so nothing else can ever find those files. Uninstall
                 // works off this manifest, no card offers a Remove for a toolchain
                 // getInstalledToolchains() cannot name, and the repair pass only
@@ -1741,7 +1741,7 @@ class ToolchainManager(private val context: Context) {
      *
      * The install record is written last, so both ways an install can end after
      * the copy has started -- the copy throwing, and the record write failing --
-     * leave up to the whole unpacked size, about 155 MB for the Java 17 that
+     * leave up to the whole unpacked size, about 180 MB for the Java 21 that
      * ships today, under no manifest at all: [getInstalledToolchains] does not
      * name it, the Toolchains screen offers no Remove for it, [uninstallLocked]
      * has no record to work from, and the repair pass only visits records that
@@ -1920,7 +1920,7 @@ class ToolchainManager(private val context: Context) {
         // The same question one stage earlier, and it is the one that catches the
         // case the check above cannot. [installsInFlight] is claimed only once the
         // archive has been downloaded and expanded, so for the whole of a transfer
-        // -- 56 MB for Java 17, minutes on a phone connection -- it reads free.
+        // -- 56 MB for Java 21, minutes on a phone connection -- it reads free.
         // Rotating the toolchain screen destroys the Activity, rebuilds it with a
         // second manager whose card knows nothing of the download still running,
         // and offers Install again; a tap then spent the whole download a second
@@ -2007,7 +2007,7 @@ class ToolchainManager(private val context: Context) {
                 // path lacked the credit. The two differ only if a pack moves its
                 // `installRoot` between versions under an unchanged pack name, and
                 // no shipped pack does (`usr/lib/ruby`,
-                // `usr/lib/jvm/java-17-openjdk`). If one ever did, this gate
+                // `usr/lib/jvm/java-21-openjdk`). If one ever did, this gate
                 // understates by at most the measured old tree, which costs one
                 // download and a STORAGE refusal at the copy rather than a wrong
                 // install; the reclaim then takes the partial tree back, so the
@@ -2096,7 +2096,7 @@ class ToolchainManager(private val context: Context) {
                 // Asked again, because the digest above hashes the whole archive
                 // and the card offers Cancel throughout it. Everything past this
                 // line writes: the extraction fills a staging tree the size of the
-                // unpacked toolchain, and the copy after it is ~155 MB into `usr/`.
+                // unpacked toolchain, and the copy after it is ~180 MB into `usr/`.
                 if (download.cancelled) {
                     Logger.i(tag, "HTTP download cancelled for $packName")
                     return@execute
@@ -2113,7 +2113,7 @@ class ToolchainManager(private val context: Context) {
                     // The same event the copy into `usr/` already catches in
                     // [installFromDirectoryHoldingPack], one stage earlier and for
                     // the same reason: this writes the whole unpacked tree, about
-                    // 155 MB for the Java 17 that ships today, and a phone that
+                    // 180 MB for the Java 21 that ships today, and a phone that
                     // ran out of room while the download was in flight fails here
                     // rather than there. Left to unwind, it reached the
                     // `catch (e: IOException)` below, which speaks for the
@@ -3921,7 +3921,7 @@ class ToolchainManager(private val context: Context) {
      *
      * Every other pass in [repairInstalledToolchains] reads `toolchains.json`,
      * and an install killed during its copy never got that far, so all of them
-     * step straight over up to 155 MB that nothing in the app can name. The
+     * step straight over up to 180 MB that nothing in the app can name. The
      * marker [installMarkerDir] holds is the one witness that survives the kill,
      * and reading the install root out of it rather than out of
      * [ToolchainRegistry] is what lets a withdrawn toolchain's orphan be
@@ -4031,7 +4031,7 @@ class ToolchainManager(private val context: Context) {
      * "Normally" is the honest word, and what it excludes is worth pricing. An
      * entry goes unmarked when a binary the manifest names is present and will
      * not take the execute bit, and that entry is walked again on the next
-     * launch: for Java 17 a `walkTopDown` over about 155 MB reading the first
+     * launch: for Java 21 a `walkTopDown` over about 180 MB reading the first
      * four bytes of every file, under this lock, for as long as the condition
      * lasts. Retrying is still the right call -- a toolchain whose interpreter
      * has no execute bit is unusable, and the walk is the only thing that can
@@ -4272,7 +4272,7 @@ internal const val SPACE_BUFFER = 50_000_000L
  * that peak: the one unpacked into the cache and the one being written into
  * `filesDir/usr`. The reservation used to charge for one, which is the product
  * rather than the process, and nothing frees a stage before the next allocates.
- * For Java 17 that asked 196 MB for something that needs about 342, so every
+ * For Java 21 that asked 196 MB for something that needs about 342, so every
  * device between the two figures downloaded 55 MB and then failed partway
  * through the copy, with the disk error reported as a network problem and the
  * half-copied files left in `usr/` under no manifest, so each retry started from
@@ -4290,7 +4290,7 @@ internal const val SPACE_BUFFER = 50_000_000L
  *    frees file by file as it goes).
  *
  * A fresh install is dominated by the second, which is where the doubled term
- * came from and why the first went unnoticed: 312 MB against 211 MB for Java 17.
+ * came from and why the first went unnoticed: 312 MB against 211 MB for Java 21.
  * Credit the copy with a tree already on disk, though, and the second peak drops
  * below the first, and a caller subtracting the credit from a single figure
  * reserved 207 MB for an extraction that needs 211 MB. That is the whole of the

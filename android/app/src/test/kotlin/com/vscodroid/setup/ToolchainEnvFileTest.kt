@@ -293,7 +293,7 @@ class ToolchainEnvFileTest {
         )
     }
 
-    private val jdk = "usr/lib/jvm/java-17-openjdk"
+    private val jdk = "usr/lib/jvm/java-21-openjdk"
 
     /** What the java wrapper hands the loader ahead of the caller's arguments. */
     private val java = "</p/../$jdk/bin/java><-Duser.home=/h o/me><-Djava.io.tmpdir=/t m/p>"

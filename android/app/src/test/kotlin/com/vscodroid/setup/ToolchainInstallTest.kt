@@ -482,7 +482,7 @@ class ToolchainInstallTest {
      * What a failed copy already wrote is taken back.
      *
      * The install record is written last, so a copy that throws leaves up to the
-     * whole unpacked tree -- about 155 MB for Java 17 -- under no manifest at
+     * whole unpacked tree -- about 180 MB for Java 21 -- under no manifest at
      * all: `getInstalledToolchains` does not name it, the Toolchains screen
      * offers no Remove, the uninstall has no record to work from, and the repair
      * pass only visits records that exist. Clearing app data was the only way
@@ -523,7 +523,7 @@ class ToolchainInstallTest {
      * An install whose record does not survive is not an install, and saying
      * COMPLETED over it is the part that makes the loss silent.
      *
-     * `toolchains.json` is four lines written after ~160 MB has already been
+     * `toolchains.json` is four lines written after ~180 MB has already been
      * copied, so it is exactly the write a device that has just filled up fails.
      * What follows from losing it: `getInstalledToolchains()` does not name the
      * toolchain, `toolchain-env.sh` is regenerated from a record that predates it

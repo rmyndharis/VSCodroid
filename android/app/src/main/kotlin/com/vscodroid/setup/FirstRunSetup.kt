@@ -390,7 +390,7 @@ class FirstRunSetup(
                     // came from `toolchains.json`, which knows the installs that
                     // FINISHED. `ToolchainManager` takes its install root back
                     // on both failures it can see, but a process killed mid-copy
-                    // reaches neither and leaves up to 155 MB in `usr/` that
+                    // reaches neither and leaves up to 180 MB in `usr/` that
                     // nothing names, the part written into the shared `usr/bin`
                     // and `usr/lib` is never reclaimed on any exit, and
                     // `npm install -g` and pip never had a record at all, so
@@ -5649,7 +5649,7 @@ private fun releaseWriteLock(path: String, lock: DestinationLock) = synchronized
  *    MiB and the slack absorbs them many times over, so they are left rather
  *    than filtered. A repair that ever writes something substantial there would
  *    have to be.
- *  - `usr/` is shared ground. Toolchains install into it, Java is 155 MB
+ *  - `usr/` is shared ground. Toolchains install into it, Java is 180 MB
  *    unpacked, and `npm install -g` lands there too, so its size on disk is not
  *    an answer to "how much of what we are about to write is already here".
  *    Only the entries the APK names are measured, see

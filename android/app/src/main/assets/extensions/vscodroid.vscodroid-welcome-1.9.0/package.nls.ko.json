@@ -13,7 +13,7 @@
   "walkthrough.run.title": "코드 실행하기",
   "walkthrough.run.description": "파일을 열고 편집기 제목 표시줄의 재생 버튼을 누르세요. JavaScript, TypeScript, Python, Ruby, Java, C, C++, 셸 파일이 터미널에서 실행됩니다.\n\nRuby, Java, C/C++는 필요할 때 설치하며, 없으면 버튼이 안내합니다.\n\n[툴체인 관리](command:vscodroid.manageToolchains)",
   "walkthrough.tools.title": "개발 도구",
-  "walkthrough.tools.description": "VSCodroid에는 코딩을 시작하는 데 필요한 것이 모두 들어 있습니다.\n\n$(check) **Node.js** + npm: 준비됨\n\n$(check) **Python** + pip: 준비됨\n\n$(check) **Git**: 준비됨\n\n$(check) **make**: 준비됨\n\n**Java 17**, **Ruby**, **C/C++**는 필요할 때 설치할 수 있습니다. 홈 화면에서 VSCodroid 아이콘을 길게 누른 다음 **툴체인 관리**를 선택하세요.\n\n[알겠습니다](command:vscodroid.welcome.toolsDismissed)",
+  "walkthrough.tools.description": "VSCodroid에는 코딩을 시작하는 데 필요한 것이 모두 들어 있습니다.\n\n$(check) **Node.js** + npm: 준비됨\n\n$(check) **Python** + pip: 준비됨\n\n$(check) **Git**: 준비됨\n\n$(check) **make**: 준비됨\n\n**Java 21**, **Ruby**, **C/C++**는 필요할 때 설치할 수 있습니다. 홈 화면에서 VSCodroid 아이콘을 길게 누른 다음 **툴체인 관리**를 선택하세요.\n\n[알겠습니다](command:vscodroid.welcome.toolsDismissed)",
   "walkthrough.terminal.title": "제대로 된 터미널",
   "walkthrough.terminal.description": "번들로 들어 있는 모든 도구가 PATH에 있는 완전한 bash 터미널을 열 수 있습니다: ``node``, ``python3``, ``git``, ``npm``.\n\n``node -e 'console.log(\"hi\")'`` 는 ``hi`` 를 출력합니다\n\n``python3 -c 'print(\"hi\")'`` 는 ``hi`` 를 출력합니다\n\n``git init demo`` 는 ``Initialized empty Git repository`` 를 출력합니다\n\n[터미널 열기](command:workbench.action.terminal.new)",
   "walkthrough.extensions.title": "기능을 더 추가하기",

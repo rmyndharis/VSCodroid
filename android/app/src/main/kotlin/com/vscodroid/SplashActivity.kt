@@ -600,7 +600,7 @@ class SplashActivity : AppCompatActivity() {
         // immediately; the copy runs on the toolchain I/O thread.
         //
         // Here rather than in onCreate, and the difference is minutes on the one
-        // launch that matters. This copies up to 155 MB into the same `usr/` the
+        // launch that matters. This copies up to 180 MB into the same `usr/` the
         // first run unpacks the asset tree into (BuildConfig.EXTRACTED_ASSET_BYTES,
         // which moves with every pin), and the two space pre-flights cannot see
         // each other: setup measures usableSpace before extracting, the install

@@ -39,7 +39,7 @@
 
   <g>
     <rect x="75" y="150" width="60" height="24" rx="4" fill="var(--vscode-badge-background)" opacity="0.15"/>
-    <text x="105" y="166" font-family="sans-serif" font-size="9" fill="var(--vscode-foreground)" text-anchor="middle">Java 17</text>
+    <text x="105" y="166" font-family="sans-serif" font-size="9" fill="var(--vscode-foreground)" text-anchor="middle">Java 21</text>
 
     <rect x="145" y="150" width="60" height="24" rx="4" fill="var(--vscode-badge-background)" opacity="0.15"/>
     <text x="175" y="166" font-family="sans-serif" font-size="9" fill="var(--vscode-foreground)" text-anchor="middle">Ruby</text>

@@ -134,7 +134,7 @@ const RUN_COMMANDS = {
     typescript: { command: (/** @type {string} */ file) => `node ${file}` },
     shellscript: { command: (/** @type {string} */ file) => `bash ${file}` },
     ruby: { toolchain: 'ruby', label: 'Ruby', command: (/** @type {string} */ file) => `ruby ${file}` },
-    java: { toolchain: 'java', label: 'Java 17', command: (/** @type {string} */ file) => `java ${file}` },
+    java: { toolchain: 'java', label: 'Java 21', command: (/** @type {string} */ file) => `java ${file}` },
     c: { toolchain: 'cpp', label: 'C/C++', command: (/** @type {string} */ file) => `cc ${file} -o "$TMPDIR/vscodroid-run" && "$TMPDIR/vscodroid-run"` },
     cpp: { toolchain: 'cpp', label: 'C/C++', command: (/** @type {string} */ file) => `c++ ${file} -o "$TMPDIR/vscodroid-run" && "$TMPDIR/vscodroid-run"` },
 };

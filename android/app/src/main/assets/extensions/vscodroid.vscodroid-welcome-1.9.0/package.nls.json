@@ -13,7 +13,7 @@
   "walkthrough.run.title": "Run your code",
   "walkthrough.run.description": "Open a file and tap the play button in the editor's title bar. JavaScript, TypeScript, Python, Ruby, Java, C, C++ and shell files run in a terminal.\n\nRuby, Java and C/C++ install on demand, and the button offers them when they are missing.\n\n[Manage Toolchains](command:vscodroid.manageToolchains)",
   "walkthrough.tools.title": "Your development tools",
-  "walkthrough.tools.description": "VSCodroid comes with everything you need to start coding:\n\n$(check) **Node.js** + npm: ready\n\n$(check) **Python** + pip: ready\n\n$(check) **Git**: ready\n\n$(check) **make**: ready\n\n**Java 17**, **Ruby** and **C/C++** install on demand. Touch and hold the VSCodroid icon on your home screen and pick **Manage toolchains**.\n\n[Got It](command:vscodroid.welcome.toolsDismissed)",
+  "walkthrough.tools.description": "VSCodroid comes with everything you need to start coding:\n\n$(check) **Node.js** + npm: ready\n\n$(check) **Python** + pip: ready\n\n$(check) **Git**: ready\n\n$(check) **make**: ready\n\n**Java 21**, **Ruby** and **C/C++** install on demand. Touch and hold the VSCodroid icon on your home screen and pick **Manage toolchains**.\n\n[Got It](command:vscodroid.welcome.toolsDismissed)",
   "walkthrough.terminal.title": "A powerful terminal",
   "walkthrough.terminal.description": "Open a full bash terminal with every bundled tool on PATH: ``node``, ``python3``, ``git``, ``npm``.\n\n``node -e 'console.log(\"hi\")'`` prints ``hi``\n\n``python3 -c 'print(\"hi\")'`` prints ``hi``\n\n``git init demo`` prints ``Initialized empty Git repository``\n\n[Open Terminal](command:workbench.action.terminal.new)",
   "walkthrough.extensions.title": "Extend with more features",

@@ -741,7 +741,7 @@ fun listSshKeys(authToken: String): String
 #### Toolchain Control
 
 `ToolchainRegistry.available` is the source for what these can name. It lists Ruby,
-Java 17 and C/C++, and nothing else.
+Java 21 and C/C++, and nothing else.
 
 ```kotlin
 @JavascriptInterface
@@ -1160,11 +1160,11 @@ interface Toolchain {
   id: string; // "ruby", "java", "cpp" -- those three. Rust has no module, no
               // asset pack and no ToolchainRegistry entry; it was planned and
               // deferred, and naming it here read as a shipped option
-  name: string; // "Java 17"
+  name: string; // "Java 21"
   version: string; // "17"
   sizeMb: number; // 146
   installed: boolean; // Whether asset pack is downloaded and extracted
-  installPath?: string; // e.g., "$PREFIX/lib/jvm/java-17-openjdk"
+  installPath?: string; // e.g., "$PREFIX/lib/jvm/java-21-openjdk"
   fileAssociations: string[]; // [".java"]
   recommendedExtensions: string[]; // Open VSX extension ids
 }

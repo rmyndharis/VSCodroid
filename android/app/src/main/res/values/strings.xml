@@ -354,7 +354,7 @@
          translator must leave alone, but the sentence around them is language,
          and a Kotlin constant is the same sentence in every locale. The registry
          carries the resource id instead. displayName and shortLabel stay plain
-         strings on purpose; "Ruby", "Java 17" and "C/C++" are the products' own
+         strings on purpose; "Ruby", "Java 21" and "C/C++" are the products' own
          names.
 
          The C/C++ sentence is also the one place a card says what the toolchain
@@ -362,7 +362,7 @@
          preloads, so LD_PRELOAD has to be left alone. The variable name and the
          command names are literal and stay as they are. -->
     <string name="toolchain_ruby_description">Ruby with irb, gem, bundler</string>
-    <string name="toolchain_java_description">OpenJDK 17 (javac, jar, jshell)</string>
+    <string name="toolchain_java_description">OpenJDK 21 (javac, jar, jshell)</string>
     <string name="toolchain_cpp_description">C and C++ (clang, lld). Needs the terminal\'s exec interceptor: it does not work with LD_PRELOAD set to null.</string>
 
     <!-- The checkmark on a selected toolchain card. It is an ImageView with no

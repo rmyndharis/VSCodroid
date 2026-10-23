@@ -89,8 +89,8 @@ class ToolchainCardState(private val mode: ToolchainCardMode) {
      * Packs the user has confirmed a removal for, until something reports back.
      *
      * An uninstall is queued on the same single-thread executor a download
-     * occupies for the whole of a transfer, an extraction and a ~155 MB copy, so
-     * confirming "Remove Ruby?" while Java 17 downloads does nothing for
+     * occupies for the whole of a transfer, an extraction and a ~180 MB copy, so
+     * confirming "Remove Ruby?" while Java 21 downloads does nothing for
      * minutes: the dialog closed, the card went on offering Remove, and tapping
      * it again queued a second removal that would also do nothing. Taking the
      * button away is the honest reading of what the user asked for and what has

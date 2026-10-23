@@ -136,16 +136,16 @@ class EnvironmentPathOrderTest {
      */
     @Test
     fun `a toolchain's own path dirs sit behind the trampoline directory`() {
-        val jdkBin = "usr/lib/jvm/java-17-openjdk/bin"
+        val jdkBin = "usr/lib/jvm/java-21-openjdk/bin"
         File(filesDir, jdkBin).mkdirs()
         File(filesDir, "$jdkBin/java").writeBytes(
             byteArrayOf(0x7F, 'E'.code.toByte(), 'L'.code.toByte(), 'F'.code.toByte()) +
                 ByteArray(64)
         )
         File(filesDir, "home/.vscodroid/toolchains.json").writeText(
-            """[{"name":"java","installRoot":"usr/lib/jvm/java-17-openjdk",""" +
+            """[{"name":"java","installRoot":"usr/lib/jvm/java-21-openjdk",""" +
                 """"binaries":["$jdkBin/java"],""" +
-                """"env":{"JAVA_HOME":"${'$'}FILESDIR/usr/lib/jvm/java-17-openjdk"},""" +
+                """"env":{"JAVA_HOME":"${'$'}FILESDIR/usr/lib/jvm/java-21-openjdk"},""" +
                 """"pathDirs":["$jdkBin"]}]"""
         )
 
