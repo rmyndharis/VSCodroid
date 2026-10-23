@@ -24,9 +24,9 @@ class ProfileOwnExtensionRepointTest {
 
     private val extensions = "/data/user/0/com.vscodroid/files/home/.vscodroid/extensions"
     private val oldBridge = "vscodroid.vscodroid-saf-bridge-1.11.0"
-    private val newBridge = "vscodroid.vscodroid-saf-bridge-1.12.0"
+    private val newBridge = "vscodroid.vscodroid-saf-bridge-1.12.1"
     private val oldWelcome = "vscodroid.vscodroid-welcome-1.8.1"
-    private val newWelcome = "vscodroid.vscodroid-welcome-1.9.0"
+    private val newWelcome = "vscodroid.vscodroid-welcome-1.9.1"
     private val oldPython = "ms-python.python-2026.3.0"
     private val newPython = "ms-python.python-2026.4.0"
     private val bundled = listOf(newBridge, newWelcome, newPython)
@@ -57,7 +57,7 @@ class ProfileOwnExtensionRepointTest {
 
         val bridge = entriesOf(result).single()
         assertEquals(newBridge, bridge.getString("relativeLocation"))
-        assertEquals("1.12.0", bridge.getString("version"))
+        assertEquals("1.12.1", bridge.getString("version"))
         assertEquals("$extensions/$newBridge", bridge.getJSONObject("location").getString("path"))
     }
 
@@ -80,7 +80,7 @@ class ProfileOwnExtensionRepointTest {
         val welcome = entriesOf(result).single()
         assertFalse(welcome.has("relativeLocation"), "a key the profile never wrote was added")
         assertEquals("$extensions/$newWelcome", welcome.getJSONObject("location").getString("path"))
-        assertEquals("1.9.0", welcome.getString("version"))
+        assertEquals("1.9.1", welcome.getString("version"))
     }
 
     @Test
@@ -105,7 +105,7 @@ class ProfileOwnExtensionRepointTest {
 
     @Test
     fun `an entry already at the current copy is left alone`() {
-        val text = manifest(entry(newBridge, "1.12.0", "vscodroid.vscodroid-saf-bridge"))
+        val text = manifest(entry(newBridge, "1.12.1", "vscodroid.vscodroid-saf-bridge"))
 
         assertNull(repoint(text))
     }
@@ -115,7 +115,7 @@ class ProfileOwnExtensionRepointTest {
         val result = repoint(
             manifest(
                 entry(oldBridge, "1.11.0", "vscodroid.vscodroid-saf-bridge"),
-                entry(newBridge, "1.12.0", "vscodroid.vscodroid-saf-bridge"),
+                entry(newBridge, "1.12.1", "vscodroid.vscodroid-saf-bridge"),
             ),
         )
 
