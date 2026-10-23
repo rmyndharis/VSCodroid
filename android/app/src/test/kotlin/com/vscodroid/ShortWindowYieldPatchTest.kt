@@ -56,6 +56,11 @@ class ShortWindowYieldPatchTest {
     fun `only a panel below the editor with the editor showing yields`() {
         assertTrue(decision.contains("isHorizontal(this.getPanelPosition())"), "a side panel costs width, not lines")
         assertTrue(
+            decision.contains("!this.isAuxiliaryBarMaximized()"),
+            "a maximized secondary side bar hides the editor and is the thing being looked at, and the " +
+                "panel put away beside it came back open beside it when the window turned tall",
+        )
+        assertTrue(
             decision.contains("&& open &&"),
             "a closed panel has nothing to yield; `open` is read from the layout state, because " +
                 "isVisible answers false for a panel that is already yielded and would end the yield " +
@@ -72,11 +77,55 @@ class ShortWindowYieldPatchTest {
     }
 
     @Test
-    fun `the layout state is left alone`() {
+    fun `the layout state is left alone, except to close a panel with nothing in it`() {
         assertFalse(
-            addedLines.any { it.contains("setRuntimeValue(LayoutStateKeys.PANEL_HIDDEN") || it.contains("setPanelHidden(") },
+            addedLines.any { it.contains("setRuntimeValue(LayoutStateKeys.PANEL_HIDDEN") },
             "yielding must touch the grid only: the state says the panel is open, which is what " +
                 "brings it back at its size, and what a restart restores",
+        )
+        // The one exception is the panel whose last view was closed while it was out.
+        assertEquals(
+            listOf("this.setPanelHidden(true, true);"),
+            addedLines.map { it.trim() }.filter { it.contains("setPanelHidden(") },
+            "the only call that may change the state is the one that closes an empty panel",
+        )
+    }
+
+    @Test
+    fun `a panel whose last view was closed while it was out is closed, not shown empty`() {
+        // hideActivePaneComposite only hides the part while isVisible says it is showing, and isVisible
+        // answers false for a yielded panel, so the composite went and the state kept saying open.
+        val all = patch.lines()
+        val test = all.indexOfFirst {
+            it.startsWith("+") && it.contains("!this.paneCompositeService.getActivePaneComposite(ViewContainerLocation.Panel)")
+        }
+        val close = all.indexOfFirst { it.startsWith("+") && it.contains("this.setPanelHidden(true, true);") }
+        val show = all.indexOfFirst { it.startsWith("+") && it.contains("this.workbenchGrid.setViewVisible(this.panelPartView, !yielded && open);") }
+        assertTrue(test >= 0 && close > test && show > close, "the empty panel must be closed before the grid shows it")
+        assertTrue(
+            all.subList(test, show).any { it.contains("return;") },
+            "after closing it the decision must stop: showing the grid view would undo the close",
+        )
+    }
+
+    @Test
+    fun `the order inside the decision keeps the visibility listener from reading it as a close`() {
+        // The flag is set before the grid is told. Swapped, the listener would see PANEL_HIDDEN false
+        // against visible false and really close the panel on every keyboard raise.
+        val all = patch.lines()
+        val flag = all.indexOfFirst { it.contains("this.panelYielded = yielded;") }
+        val css = all.indexOfFirst { it.contains("this.mainContainer.classList.toggle(LayoutClasses.PANEL_HIDDEN, yielded || !open);") }
+        val grid = all.indexOfFirst { it.contains("this.workbenchGrid.setViewVisible(this.panelPartView, !yielded && open);") }
+        assertTrue(flag >= 0 && css > flag && grid > css, "flag, then the class, then the grid")
+    }
+
+    @Test
+    fun `zen mode and a maximized secondary side bar remember a panel that was out as open`() {
+        assertEquals(
+            2,
+            addedLines.count { it.contains("this.isVisible(Parts.PANEL_PART) || this.panelYielded") },
+            "isVisible answers false for a yielded panel, so both would record it closed and leave it " +
+                "closed for good when they end",
         )
     }
 
@@ -130,9 +179,14 @@ class ShortWindowYieldPatchTest {
         val remember = all.indexOfFirst { it.startsWith("+") && it.contains("this.rememberPanelHeight();") }
         val flag = all.indexOfFirst { it.contains("this.shortWindow = shortWindow;") }
         val yield = all.indexOfFirst { it.startsWith("+") && it.contains("this.updatePanelYield();") }
-        val restore = all.indexOfFirst { it.startsWith("+") && it.contains("this.restorePanelHeight();") }
+        // Two call sites: one when a panel is shown in a tall window, one at the tall flip.
+        val restores = all.withIndex().filter { (_, l) -> l.startsWith("+") && l.contains("this.restorePanelHeight();") }.map { it.index }
+        assertEquals(2, restores.size, "the tall flip and a show in a tall window")
         assertTrue(remember in 0 until flag, "the height is read before the title bar and the yield change the grid")
+        val restore = restores.firstOrNull { it > yield } ?: -1
         assertTrue(restore > yield, "the height is given back after the panel is shown again")
+        val guard = all.indexOfFirst { it.startsWith("+") && it.contains("if (!shortWindow) {") }
+        assertTrue(guard in 0 until restore, "only a window turning tall gives the height back: unconditionally it clears the memory at the short flip")
         assertTrue(
             addedLines.any { it.contains("this.workbenchGrid.resizeView(this.panelPartView, { width: size.width, height });") },
             "a panel that stayed in the short window must be resized back, not left at its minimum",
@@ -141,6 +195,47 @@ class ShortWindowYieldPatchTest {
             addedLines.any { it.contains("if (size.height < height) {") },
             "a panel the grid already drew back at its size is left alone",
         )
+    }
+
+    @Test
+    fun `what is remembered is a height the panel really had, and never a maximized one`() {
+        assertTrue(
+            addedLines.any { it.contains("? this.stateModel.getRuntimeValue(LayoutStateKeys.PANEL_LAST_NON_MAXIMIZED_HEIGHT)") },
+            "a maximized panel measures the whole branch, and giving that back crushes the editor: what is " +
+                "remembered for it is the height it returns to when it is un-maximized",
+        )
+        assertTrue(
+            addedLines.any { it.contains(": this.workbenchGrid.getViewCachedVisibleSize(this.panelPartView);") },
+            "a closed panel has no live height; the grid's memory of it is what it comes back at",
+        )
+        assertTrue(
+            addedLines.any { it.contains("Math.min(remembered, Math.floor(this._mainContainerDimension.height * 0.7))") },
+            "the window it comes back to can be another one after a turn",
+        )
+    }
+
+    @Test
+    fun `a panel maximized meanwhile, or closed, is handled and not resized`() {
+        val all = patch.lines()
+        val maximized = all.indexOfFirst { it.startsWith("+") && it.contains("if (this.isPanelMaximized()) {") }
+        val last = all.indexOfFirst { it.startsWith("+") && it.contains("LayoutStateKeys.PANEL_LAST_NON_MAXIMIZED_HEIGHT, height") }
+        val closed = all.indexOfFirst { it.startsWith("+") && it.contains("if (!this.isVisible(Parts.PANEL_PART)) {") }
+        val resize = all.indexOfFirst { it.startsWith("+") && it.contains("this.workbenchGrid.resizeView(this.panelPartView, { width: size.width, height });") }
+        assertTrue(maximized in 0 until last && last < closed && closed < resize, "maximized first, then closed, then the resize")
+        assertTrue(
+            all.subList(closed, resize).none { it.contains("this.panelHeightBeforeShort = undefined;") && all.indexOf(it) < closed + 2 },
+            "a closed panel keeps the memory for when it is next shown",
+        )
+    }
+
+    @Test
+    fun `showing a panel in a tall window gives the height back, hiding it there drops it`() {
+        val all = patch.lines()
+        val grid = all.indexOfFirst { it.contains("this.workbenchGrid.setViewVisible(this.panelPartView, !hidden);") }
+        val block = all.drop(grid).take(14).joinToString("\n")
+        assertTrue(block.contains("if (!this.shortWindow) {"), "only in a tall window")
+        assertTrue(block.contains("this.panelHeightBeforeShort = undefined;"), "a panel the user hides in a tall window has no height to come back to")
+        assertTrue(block.contains("this.restorePanelHeight();"), "a panel shown in a tall window after a short one is given its height")
     }
 
     @Test

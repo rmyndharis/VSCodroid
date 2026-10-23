@@ -8,12 +8,14 @@ The panel goes before the grid is sized and comes back after it. Shown into a gr
 
 The layout state still says the panel is open, so it is drawn again at its size when the window is tall. While it is out the part visibility listener skips the change the grid reports, which it would otherwise read as the user closing the panel, and `isVisible` answers false for it, so everything that asks treats it as hidden: a toggle, a focus request or running a file shows it instead of closing a panel nobody can see, a maximize or a move to another side reads the size the grid remembers for a hidden view (the live size of a view outside the grid is 0), and so does the size saved for the next start. Showing or hiding the panel ends the yield.
 
-A panel that stays in a short window, because it holds the focus or because it was shown there, is squeezed to its minimum, and the grid gives the room the window gains to the editor. So the height the panel had when the window turned short is remembered, given back when the window is tall again, and saved in place of the squeezed one in the meantime.
+A panel that stays in a short window, because it holds the focus or because it was shown there, is squeezed to its minimum, and the grid gives the room the window gains to the editor. So the height the panel had when the window turned short, or the one the grid remembers for it when it was closed, is remembered. It is given back when the window is tall again, or when the panel is next shown in a tall window if it is closed by then, capped at 70% of the window it comes back to, and a panel maximized in the meantime gets it as the height it returns to. In the short window it is saved in place of the squeezed one. A maximized panel has no height of its own, so the height it returns to when it is un-maximized is remembered.
 
-Measured on an API 33 emulator (WebView 149, 411dp wide, landscape) with the keyboard up and the panel out: Ctrl+J used to do nothing the first time and show the panel at 97px, with the editor at 13px, the second time, and the panel was still 97px once the keyboard was away. Now the first press shows it, and a 178px panel is 179px after the keyboard goes away, whether it was shown in the short window or kept the focus through it.
+Zen mode and a maximized secondary side bar record whether the panel was open, and a panel that is out counts as open there; a panel does not yield beside a maximized secondary side bar. A panel whose last view was closed while it was out is closed when the window turns tall, because hiding its composite while isVisible answered false left it open and empty.
+
+Measured on an API 33 emulator (WebView 149, 411dp wide, landscape) with the keyboard up and the panel out: Ctrl+J used to do nothing the first time and show the panel at 97px, with the editor at 13px, the second time, and the panel was still 97px once the keyboard was away. Now the first press shows it, and a 203px panel is 203px after the keyboard goes away whether it was out, shown in the short window, closed there and shown again in a tall one, focused through it, or maximized when the window turned short and un-maximized in it. Killing the last terminal while the panel is out leaves it closed when the window turns tall.
 
 diff --git a/src/vs/workbench/browser/layout.ts b/src/vs/workbench/browser/layout.ts
-index 45cc5f0..cbb8fb8 100644
+index 45cc5f0..bffb02a 100644
 --- a/src/vs/workbench/browser/layout.ts
 +++ b/src/vs/workbench/browser/layout.ts
 @@ -290,6 +290,8 @@
@@ -36,6 +38,15 @@ index 45cc5f0..cbb8fb8 100644
  			case Parts.AUXILIARYBAR_PART:
  				return !this.stateModel.getRuntimeValue(LayoutStateKeys.AUXILIARYBAR_HIDDEN);
  			case Parts.STATUSBAR_PART:
+@@ -1500,7 +1504,7 @@
+ 				zenModeExitInfo.transitionedToCenteredEditorLayout = !this.isMainEditorLayoutCentered() && config.centerLayout;
+ 				zenModeExitInfo.handleNotificationsDoNotDisturbMode = this.notificationService.getFilter() === NotificationsFilter.OFF;
+ 				zenModeExitInfo.wasVisible.sideBar = this.isVisible(Parts.SIDEBAR_PART);
+-				zenModeExitInfo.wasVisible.panel = this.isVisible(Parts.PANEL_PART);
++				zenModeExitInfo.wasVisible.panel = this.isVisible(Parts.PANEL_PART) || this.panelYielded;
+ 				zenModeExitInfo.wasVisible.auxiliaryBar = this.isVisible(Parts.AUXILIARYBAR_PART);
+ 				this.stateModel.setRuntimeValue(LayoutStateKeys.ZEN_MODE_EXIT_INFO, zenModeExitInfo);
+ 			}
 @@ -1711,7 +1715,7 @@
  
  					if (part === sideBar) {
@@ -77,7 +88,33 @@ index 45cc5f0..cbb8fb8 100644
  		this.stateModel.setRuntimeValue(LayoutStateKeys.PANEL_HIDDEN, hidden);
  
  		const panelOpensMaximized = this.panelOpensMaximized();
-@@ -2394,16 +2403,71 @@
+@@ -2134,6 +2143,16 @@
+ 		// Propagate layout changes to grid
+ 		this.workbenchGrid.setViewVisible(this.panelPartView, !hidden);
+ 
++		// VSCodroid: a panel shown in a tall window after a short one comes back at the height it had before it,
++		// and one the user hides in a tall window has no height to come back to.
++		if (!this.shortWindow) {
++			if (hidden) {
++				this.panelHeightBeforeShort = undefined;
++			} else {
++				this.restorePanelHeight();
++			}
++		}
++
+ 		// If panel part becomes hidden, also hide the current active panel if any
+ 		let focusEditor = false;
+ 		if (hidden && this.paneCompositeService.getActivePaneComposite(ViewContainerLocation.Panel)) {
+@@ -2205,7 +2224,7 @@
+ 			const state = {
+ 				sideBarVisible: this.isVisible(Parts.SIDEBAR_PART),
+ 				editorVisible: this.isVisible(Parts.EDITOR_PART),
+-				panelVisible: this.isVisible(Parts.PANEL_PART),
++				panelVisible: this.isVisible(Parts.PANEL_PART) || this.panelYielded,
+ 				auxiliaryBarVisible: this.isVisible(Parts.AUXILIARYBAR_PART)
+ 			};
+ 			this.stateModel.setRuntimeValue(LayoutStateKeys.AUXILIARYBAR_WAS_LAST_MAXIMIZED, true);
+@@ -2394,19 +2413,103 @@
  		return !this.shortWindow && shouldShowCustomTitleBar(this.configurationService, mainWindow, this.state.runtime.menuBar.toggled);
  	}
  
@@ -104,30 +141,53 @@ index 45cc5f0..cbb8fb8 100644
 +			if (!shortWindow) {
 +				this.restorePanelHeight();
 +			}
-+		}
-+	}
-+
+ 		}
+ 	}
+ 
 +	/**
-+	 * VSCodroid: the height the panel had when the window turned short, taken before anything is hidden.
-+	 * A panel that stays in a short window, because it holds the focus or because it was shown there, is
-+	 * squeezed to its minimum, and the grid gives the room the window gains to the editor.
++	 * VSCodroid: the height the panel had when the window turned short, taken before anything is hidden: the
++	 * live height of a panel that is showing, the grid's memory of one that is closed. A panel that stays in a
++	 * short window, because it holds the focus or because it was shown there, is squeezed to its minimum, and the
++	 * grid gives the room the window gains to the editor. A maximized panel has no height of its own, so the one
++	 * it returns to when it is un-maximized is remembered.
 +	 */
 +	private rememberPanelHeight(): void {
-+		const height = this.workbenchGrid.getViewSize(this.panelPartView).height;
-+		this.panelHeightBeforeShort = this.isVisible(Parts.PANEL_PART) && isHorizontal(this.getPanelPosition()) && height > 0 ? height : undefined;
++		let height: number | undefined;
++		if (isHorizontal(this.getPanelPosition())) {
++			height = this.isPanelMaximized()
++				? this.stateModel.getRuntimeValue(LayoutStateKeys.PANEL_LAST_NON_MAXIMIZED_HEIGHT)
++				: this.isVisible(Parts.PANEL_PART)
++					? this.workbenchGrid.getViewSize(this.panelPartView).height
++					: this.workbenchGrid.getViewCachedVisibleSize(this.panelPartView);
++		}
++		this.panelHeightBeforeShort = height !== undefined && height > 0 ? height : undefined;
 +	}
 +
 +	/**
-+	 * VSCodroid: gives a panel that stayed in the short window back the height it had. One the grid put away
-+	 * comes back at its size already and is left alone.
++	 * VSCodroid: gives a panel that stayed in the short window back the height it had, capped at 70% of the
++	 * window it comes back to, which may be a different one after a turn. One the grid put away comes back at its
++	 * size already and is left alone, and one that is closed keeps the memory for when it is next shown. A panel
++	 * that was maximized in the meantime gets it as the height it returns to when it is un-maximized.
 +	 */
 +	private restorePanelHeight(): void {
-+		const height = this.panelHeightBeforeShort;
-+		this.panelHeightBeforeShort = undefined;
-+		if (height === undefined || !this.isVisible(Parts.PANEL_PART) || !isHorizontal(this.getPanelPosition()) || this.isPanelMaximized()) {
++		const remembered = this.panelHeightBeforeShort;
++		if (remembered === undefined || !isHorizontal(this.getPanelPosition())) {
++			this.panelHeightBeforeShort = undefined;
 +			return;
 +		}
 +
++		const height = Math.min(remembered, Math.floor(this._mainContainerDimension.height * 0.7));
++		if (this.isPanelMaximized()) {
++			this.stateModel.setRuntimeValue(LayoutStateKeys.PANEL_LAST_NON_MAXIMIZED_HEIGHT, height);
++			this.panelHeightBeforeShort = undefined;
++			return;
++		}
++
++		if (!this.isVisible(Parts.PANEL_PART)) {
++			return;
++		}
++
++		this.panelHeightBeforeShort = undefined;
 +		const size = this.workbenchGrid.getViewSize(this.panelPartView);
 +		if (size.height < height) {
 +			this.workbenchGrid.resizeView(this.panelPartView, { width: size.width, height });
@@ -143,20 +203,29 @@ index 45cc5f0..cbb8fb8 100644
 +	 */
 +	private updatePanelYield(): void {
 +		const open = !this.stateModel.getRuntimeValue(LayoutStateKeys.PANEL_HIDDEN);
-+		const yielded = this.shortWindow && open && isHorizontal(this.getPanelPosition()) && this.isVisible(Parts.EDITOR_PART) && !this.hasFocus(Parts.PANEL_PART);
++		const yielded = this.shortWindow && open && isHorizontal(this.getPanelPosition()) && this.isVisible(Parts.EDITOR_PART) && !this.isAuxiliaryBarMaximized() && !this.hasFocus(Parts.PANEL_PART);
 +		if (yielded !== this.panelYielded) {
 +			this.panelYielded = yielded;
 +			this.mainContainer.classList.toggle(LayoutClasses.PANEL_HIDDEN, yielded || !open);
++			if (!yielded && open && !this.paneCompositeService.getActivePaneComposite(ViewContainerLocation.Panel)) {
++				// Closing the last view of a panel that was out hid its composite and nothing else, because
++				// isVisible answered false for it: it would come back open and empty.
++				this.setPanelHidden(true, true);
++				return;
++			}
 +			this.workbenchGrid.setViewVisible(this.panelPartView, !yielded && open);
- 		}
- 	}
- 
-@@ -2526,6 +2590,8 @@
++		}
++	}
++
+ 	updateMenubarVisibility(skipLayout: boolean): void {
+ 		const shouldShowTitleBar = this.shouldShowTitleBar();
+ 		if (!skipLayout && this.workbenchGrid && shouldShowTitleBar !== this.isVisible(Parts.TITLEBAR_PART, mainWindow)) {
+@@ -2525,6 +2628,8 @@
+ 		if (isHorizontal(position)) {
  			this.adjustPartPositions(this.getSideBarPosition(), this.getPanelAlignment(), position);
  		}
- 
-+		this.updatePanelYield();
 +
++		this.updatePanelYield();
+ 
  		this._onDidChangePanelPosition.fire(newPositionValue);
  	}
- 
