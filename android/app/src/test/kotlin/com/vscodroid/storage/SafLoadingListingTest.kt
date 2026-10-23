@@ -61,4 +61,32 @@ class SafLoadingListingTest : SafInitialSyncTestBase() {
         assertEquals(emptyList<Pair<String, String>>(), created, "something was created on an unfinished listing")
         assertEquals("new work", mirrorFile("fresh.txt").readText())
     }
+
+    /**
+     * A drive that lists two documents under one name in a folder. The mirror holds one file per
+     * path, so an open copied the later row over the earlier, and a mirror newer than the older
+     * document uploaded the other document's bytes over it with no copy kept.
+     */
+    @Test
+    fun `two documents under one name are left alone, in both directions`() {
+        mirror.mkdirs()
+        mirrorFile("x.txt").writeText("my edit")
+        deviceTree(
+            mapOf(
+                "root" to listOf(
+                    Child("x.txt", contents = "older document"),
+                    Child("y.txt", contents = "y"),
+                    Child("x.txt", contents = "newer document"),
+                ),
+            )
+        )
+
+        sync()
+
+        assertEquals("my edit", mirrorFile("x.txt").readText(), "a document replaced the file under its name")
+        assertEquals("y", mirrorFile("y.txt").readText(), "the other documents of the folder were not copied")
+        assertEquals(emptyList<Pair<String, String>>(), created, "a document was created for the repeated name")
+        assertTrue(written.isEmpty(), "something was uploaded over one of the two documents: $written")
+        assertFalse(record.exists(), "an open that left a name alone vouched for the listing as a whole")
+    }
 }

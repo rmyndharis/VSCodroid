@@ -77,6 +77,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - In a terminal, `java` and `keytool` start with the app's home and temporary directory instead of Termux's (`keytool` the home only), so a program that makes a temporary file no longer fails on a path that is not there. A Java installed earlier gets this at the next launch; a program an extension or a task starts by its full path does not.
 - The terminal no longer pins the command line over the first lines of its output: terminal sticky scroll is off by default, and can be turned on in Settings.
 - Builds retry the downloads from raw.githubusercontent.com when it answers with a rate limit.
+- A device folder whose provider lists two documents under one name leaves both alone: it copied the later over the earlier and, with a newer mirror copy, uploaded one document's bytes over the other's with no copy kept.
 
 ## [1.5.0] - 2026-10-14
 

@@ -2734,6 +2734,14 @@ class SafSyncEngine(private val context: Context) {
                     skipped.add(parentRelPath)
                 }
 
+                // Names this directory lists more than once: a drive that allows two documents
+                // of one name in a folder. A path names one file in the mirror and cannot
+                // name two, so an open copied the later row over the earlier, and a mirror
+                // newer than the older document uploaded one document's bytes over the
+                // other's with no copy kept.
+                val seenNames = HashSet<String>()
+                val repeatedNames = LinkedHashSet<String>()
+
                 while (cursor.moveToNext()) {
                     val docId = cursor.getString(idIndex)
                     val name = cursor.getString(nameIndex)
@@ -2780,6 +2788,11 @@ class SafSyncEngine(private val context: Context) {
                         continue
                     }
 
+                    if (!seenNames.add(name)) {
+                        repeatedNames.add(name)
+                        continue
+                    }
+
                     // Cache the docId so write-back resolves this path without
                     // walking the tree again
                     cacheDocId(treeUri, relativePath, docId)
@@ -2801,6 +2814,26 @@ class SafSyncEngine(private val context: Context) {
                         // ordinary one.
                         skipped.add(relativePath)
                     }
+                }
+
+                // Taken back out, the first row and whatever was listed under it included, and
+                // recorded the way an unlistable directory is: nothing at that path is fetched,
+                // written, created or deleted on the word of one of two documents, and the open
+                // reports it as not copied. The listing as a whole is incomplete, so the deletion
+                // pass leaves the mirror alone.
+                for (name in repeatedNames) {
+                    val path = if (parentRelPath.isEmpty()) name else "$parentRelPath/$name"
+                    result.removeAll { it.relativePath == path || it.relativePath.startsWith("$path/") }
+                    skipped.add(path)
+                    complete = false
+                }
+                if (repeatedNames.isNotEmpty()) {
+                    Logger.w(
+                        tag,
+                        "Left ${repeatedNames.size} names alone in " +
+                            (if (parentRelPath.isEmpty()) "the folder root" else parentRelPath) +
+                            ": the provider lists two documents under each",
+                    )
                 }
             } ?: run {
                 skipped.add(parentRelPath)
