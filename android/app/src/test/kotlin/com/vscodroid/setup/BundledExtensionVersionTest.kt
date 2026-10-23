@@ -43,10 +43,9 @@ import java.io.File
  * the only kind that needs one, and half a bump, the name moved or the manifest
  * moved but not both, is what this file refuses.
  *
- * Deliberately not a check that the version was bumped *this* change: there is
- * no baseline in the tree to compare against, and a rule demanding a bump on
- * every edit would fire on whitespace. Agreement between the two halves is the
- * part that is decidable here, and it is the half that fails silently.
+ * `scripts/check-extension-updates.py` separately compares manifests, translations
+ * and browser entries with the commit that introduced their directory. It requires
+ * a new directory for changed content while accepting JSON formatting changes.
  */
 class BundledExtensionVersionTest {
 
