@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Accounts and Manage buttons stay reachable in the activity bar on a phone in landscape: views that do not fit move into the overflow menu.
 - On a phone in landscape with the keyboard up, the title bar and the status bar are put away so the editor shows four lines of code instead of one; they come back when the keyboard goes down.
 - On a phone in landscape, an open terminal panel is put away when the keyboard comes up unless the panel has the focus, so the editor keeps its four lines; it comes back at its size when the keyboard goes down.
+- On a phone in landscape with the keyboard up, Ctrl+J and Ctrl+backtick show a panel that was put away instead of closing it unseen, and a panel shown or focused in that window is back at its height when the keyboard goes down instead of at its minimum.
 - The Python extension is allowed the editor APIs it declares, so it finishes activating instead of failing at its first test API.
 - The process count warning appears from 10 processes instead of 6, so one open file and a terminal no longer raise it.
 - The process count warning no longer calls the idle count a target.

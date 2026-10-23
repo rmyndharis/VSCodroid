@@ -55,7 +55,16 @@ class ShortWindowYieldPatchTest {
     @Test
     fun `only a panel below the editor with the editor showing yields`() {
         assertTrue(decision.contains("isHorizontal(this.getPanelPosition())"), "a side panel costs width, not lines")
-        assertTrue(decision.contains("this.isVisible(Parts.PANEL_PART)"), "a closed panel has nothing to yield")
+        assertTrue(
+            decision.contains("&& open &&"),
+            "a closed panel has nothing to yield; `open` is read from the layout state, because " +
+                "isVisible answers false for a panel that is already yielded and would end the yield " +
+                "at the next decision",
+        )
+        assertTrue(
+            addedLines.any { it.contains("const open = !this.stateModel.getRuntimeValue(LayoutStateKeys.PANEL_HIDDEN);") },
+            "the decision's `open` must be the state, not isVisible",
+        )
         assertTrue(
             decision.contains("this.isVisible(Parts.EDITOR_PART)"),
             "with the editor hidden (a maximized panel) the panel is the thing being looked at",
@@ -87,6 +96,60 @@ class ShortWindowYieldPatchTest {
             addedLines.any { it.contains("getRuntimeValue(LayoutStateKeys.PANEL_HIDDEN) || this.panelYielded") },
             "a view outside the grid measures 0, which would be stored as the panel size for the next start",
         )
+        assertTrue(
+            addedLines.any { it.contains("this.panelHeightBeforeShort ?? this.workbenchGrid.getViewSize(this.panelPartView).height") },
+            "a panel that stayed in a short window is squeezed, and its squeezed height would be " +
+                "stored as the size for the next start",
+        )
+    }
+
+    @Test
+    fun `a panel the grid has put away counts as hidden to everything that asks`() {
+        // Upstream reads isVisible for a toggle, a focus request, a maximize, a move and the
+        // sizes it saves. While the state said open and the grid said hidden, Ctrl+J closed a panel
+        // nobody could see and the second press showed it squeezed.
+        assertTrue(
+            addedLines.any { it.contains("return !this.stateModel.getRuntimeValue(LayoutStateKeys.PANEL_HIDDEN) && !this.panelYielded;") },
+            "isVisible(PANEL_PART) must be false while the panel is yielded",
+        )
+    }
+
+    @Test
+    fun `showing or hiding the panel ends the yield, after wasHidden is read`() {
+        val all = patch.lines()
+        val wasHidden = all.indexOfFirst { it.contains("const wasHidden = !this.isVisible(Parts.PANEL_PART);") }
+        val end = all.indexOfFirst { it.startsWith("+") && it.contains("this.panelYielded = false;") }
+        assertTrue(wasHidden >= 0 && end > wasHidden, "the flag must be cleared after wasHidden is read: a yielded panel was hidden")
+        val state = all.indexOfFirst { it.contains("this.stateModel.setRuntimeValue(LayoutStateKeys.PANEL_HIDDEN, hidden);") }
+        assertTrue(state > end, "the flag must be cleared before the grid is told, or the visibility listener reads the change")
+    }
+
+    @Test
+    fun `the height a panel had is remembered before it is hidden and given back after the tall layout`() {
+        val all = patch.lines()
+        val remember = all.indexOfFirst { it.startsWith("+") && it.contains("this.rememberPanelHeight();") }
+        val flag = all.indexOfFirst { it.contains("this.shortWindow = shortWindow;") }
+        val yield = all.indexOfFirst { it.startsWith("+") && it.contains("this.updatePanelYield();") }
+        val restore = all.indexOfFirst { it.startsWith("+") && it.contains("this.restorePanelHeight();") }
+        assertTrue(remember in 0 until flag, "the height is read before the title bar and the yield change the grid")
+        assertTrue(restore > yield, "the height is given back after the panel is shown again")
+        assertTrue(
+            addedLines.any { it.contains("this.workbenchGrid.resizeView(this.panelPartView, { width: size.width, height });") },
+            "a panel that stayed in the short window must be resized back, not left at its minimum",
+        )
+        assertTrue(
+            addedLines.any { it.contains("if (size.height < height) {") },
+            "a panel the grid already drew back at its size is left alone",
+        )
+    }
+
+    @Test
+    fun `a move to another side decides the yield again`() {
+        val all = patch.lines()
+        val moved = all.indexOfFirst { it.contains("this.adjustPartPositions(this.getSideBarPosition(), this.getPanelAlignment(), position);") }
+        val decide = all.withIndex().indexOfFirst { (i, line) -> i > moved && line.startsWith("+") && line.contains("this.updatePanelYield();") }
+        val fire = all.indexOfFirst { it.contains("this._onDidChangePanelPosition.fire(newPositionValue);") }
+        assertTrue(moved >= 0 && decide in 0 until fire, "a panel moved beside the editor must come back, one moved below must yield")
     }
 
     @Test
@@ -115,6 +178,10 @@ class ShortWindowYieldPatchTest {
         val update = all.indexOfFirst { it.contains("this.updateStatusBarVisibility();") }
         val yield = all.indexOfFirst { it.startsWith("+") && it.contains("this.updatePanelYield();") }
         assertTrue(update >= 0 && yield > update, "updatePanelYield must follow the bars' update in updateShortWindow")
-        assertEquals(1, addedLines.count { it.contains("this.updatePanelYield();") }, "one call site: the flip")
+        assertEquals(
+            2,
+            addedLines.count { it.contains("this.updatePanelYield();") },
+            "two call sites: the flip, and a move of the panel to another side",
+        )
     }
 }
