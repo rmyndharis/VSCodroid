@@ -78,6 +78,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The terminal no longer pins the command line over the first lines of its output: terminal sticky scroll is off by default, and can be turned on in Settings.
 - Builds retry the downloads from raw.githubusercontent.com when it answers with a rate limit.
 - A device folder whose provider lists two documents under one name leaves both alone: it copied the later over the earlier and, with a newer mirror copy, uploaded one document's bytes over the other's with no copy kept.
+- `java`, `javac` and the other JDK tools start without the SVE warning and with the app's home and temporary directory when a program or a `make` recipe starts them, not only from a shell function.
+- A Java installed over an older record deletes the older install root, and a Java 17 left from an earlier release is named as such on the toolchains screen, with how to get Java 21.
+- A cancelled toolchain download no longer asks Play to remove a pack on a sideloaded install, and a ZIP install is not refused while Play removes its copy of the same pack.
+- Java installs no longer list `jlink`, `jpackage`, `jconsole`, `jrunscript` or `jhsdb`, which cannot work here, and `jspawnhelper` and `jexec` are not commands.
+- Removing Java or Ruby also removes the notices it installed.
+- A `bundle exec` keeps its `-rbundler/setup` in a bash started under it, and opening a bash inside a bash no longer repeats the toolchain directories on PATH.
+- A program compiled with the C/C++ toolchain gets a working `tmpfile()` and the app's home and shell from `getpwuid()`, instead of Termux's directories.
 
 ## [1.5.0] - 2026-10-14
 
