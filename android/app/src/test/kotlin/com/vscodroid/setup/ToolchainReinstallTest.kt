@@ -207,6 +207,32 @@ class ToolchainReinstallTest {
     }
 
     @Test
+    fun `a superseded root link is unlinked without deleting its target`() {
+        record("""[{"name":"java","installRoot":"usr/lib/jvm/java-17-openjdk"}]""")
+        file("home/project/source.java", "user source")
+        link("usr/lib/jvm/java-17-openjdk", "home/project")
+
+        install(manager(), pack("usr/lib/jvm/java-21-openjdk", listOf("java")))
+
+        assertEquals("user source", File(filesDir, "home/project/source.java").readText())
+        assertFalse(exists("usr/lib/jvm/java-17-openjdk"))
+        assertTrue(exists("usr/lib/jvm/java-21-openjdk/bin/java"))
+    }
+
+    @Test
+    fun `a redirected ancestor of a superseded root is left alone`() {
+        record("""[{"name":"java","installRoot":"old-jvm/java-17-openjdk"}]""")
+        file("home/project/java-17-openjdk/source.java", "user source")
+        link("old-jvm", "home/project")
+
+        install(manager(), pack("usr/lib/jvm/java-21-openjdk", listOf("java")))
+
+        assertEquals("user source", File(filesDir, "home/project/java-17-openjdk/source.java").readText())
+        assertTrue(exists("old-jvm"))
+        assertTrue(exists("usr/lib/jvm/java-21-openjdk/bin/java"))
+    }
+
+    @Test
     fun `an install over a pack Play is removing is declined, and one from a ZIP is not`() {
         removalsInFlight().add("toolchain_java")
 

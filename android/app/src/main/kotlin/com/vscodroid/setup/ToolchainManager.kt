@@ -1812,13 +1812,17 @@ class ToolchainManager(private val context: Context) {
         val oldRoot = replaced?.optString("installRoot", "").orEmpty()
         if (oldRoot.isEmpty() || oldRoot == manifest.optString("installRoot", "")) return
         val base = runCatching { context.filesDir.canonicalFile }.getOrNull() ?: return
-        val old = runCatching { File(context.filesDir, oldRoot).canonicalFile }.getOrNull() ?: return
+        val old = File(base, oldRoot).absoluteFile
+        val parent = old.parentFile ?: return
+        // Delete a root link itself, but never descend through a redirected ancestor.
+        if (runCatching { parent.canonicalFile }.getOrNull() != parent.normalize()) return
+        val resolvedOld = runCatching { old.canonicalFile }.getOrNull() ?: return
         val new = runCatching {
             File(context.filesDir, manifest.optString("installRoot", "")).canonicalFile
         }.getOrNull() ?: return
-        if (!old.path.startsWith(base.path + File.separator)) return
-        if (new.path == old.path || new.path.startsWith(old.path + File.separator) ||
-            old.path.startsWith(new.path + File.separator)
+        if (!resolvedOld.path.startsWith(base.path + File.separator)) return
+        if (new.path == resolvedOld.path || new.path.startsWith(resolvedOld.path + File.separator) ||
+            resolvedOld.path.startsWith(new.path + File.separator)
         ) return
         StorageManager.deleteRecursive(old)
         Logger.i(tag, "Deleted the superseded install root: $oldRoot")
@@ -5099,13 +5103,13 @@ internal fun sha256Of(file: File): String {
  */
 internal fun isShellSafeEnvEntry(key: String, value: String): Boolean =
     key.matches(Regex("[A-Za-z_][A-Za-z0-9_]*")) &&
-        value.none { it == '"' || it == '`' || it == '\n' || it == '\r' } && "\$(" !in value
+        value.none { it == '"' || it == '`' || it == '\\' || it == '\n' || it == '\r' } && "\$(" !in value
 
 /** Whether [dir], a manifest's `pathDirs` entry, can follow `$PREFIX/../` in the same file. */
 internal fun isShellSafePathDir(dir: String): Boolean =
     dir.isNotEmpty() && !dir.startsWith("/") &&
         dir.split('/').none { it == ".." || it.isEmpty() } &&
-        dir.none { it == '"' || it == '`' || it == '\n' || it == '\r' || it == '$' }
+        dir.none { it == '"' || it == '`' || it == '\\' || it == '\n' || it == '\r' || it == '$' }
 
 /**
  * Whether [relative] may name a path a toolchain owns, in a manifest's

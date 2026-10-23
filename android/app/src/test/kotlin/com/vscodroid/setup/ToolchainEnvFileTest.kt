@@ -816,16 +816,16 @@ class ToolchainEnvFileTest {
         elf("usr/opt/ruby/bin/ruby")
         stateFile.writeText(
             """[{"name":"ruby","installRoot":"usr/opt/ruby","binaries":["usr/opt/ruby/bin/ruby"],""" +
-                """"env":{"BAD KEY":"x","QUOTE":"a\"b","SUBST":"${'$'}(id)","TICK":"`id`",""" +
+                """"env":{"BAD KEY":"x","QUOTE":"a\"b","SUBST":"${'$'}(id)","TICK":"`id`","SLASH":"trailing\\",""" +
                 """"GOOD":"${'$'}FILESDIR/ok"},""" +
-                """"pathDirs":["usr/opt/ruby/bin","../up","/abs","a/${'$'}x","bad\"dir"]}]""",
+                """"pathDirs":["usr/opt/ruby/bin","../up","/abs","a/${'$'}x","bad\"dir","trailing\\"]}]""",
         )
 
         regenerate()
 
         val text = envFile.readText()
         assertTrue(text.contains("""export GOOD="${'$'}PREFIX/../ok""""), text)
-        for (bad in listOf("BAD KEY", "QUOTE", "SUBST", "TICK")) {
+        for (bad in listOf("BAD KEY", "QUOTE", "SUBST", "TICK", "SLASH")) {
             assertFalse(text.contains(bad), "$bad reached the file:\n$text")
         }
         assertEquals(
