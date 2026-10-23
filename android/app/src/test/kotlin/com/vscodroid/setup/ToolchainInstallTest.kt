@@ -154,6 +154,8 @@ class ToolchainInstallTest {
 
     private val javaUnpacked = ToolchainRegistry.find("toolchain_java")!!.estimatedSize
 
+    private val javaName = ToolchainRegistry.find("toolchain_java")!!.displayName
+
     /**
      * The other half of the reservation, and it has to come from the registry
      * too. The gate charges for the stage that holds the most at once, and for a
@@ -296,7 +298,7 @@ class ToolchainInstallTest {
         installedBy("com.example.sideloader")
         val alreadyThere = 40_000_000L
         File(filesDir, "home/.vscodroid/toolchains.json").writeText(
-            """[{"name":"java","installRoot":"usr/opt/java"}]"""
+            """[{"name":"java","displayName":"$javaName","installRoot":"usr/opt/java"}]"""
         )
         sparseFile("usr/opt/java/lib/modules", alreadyThere)
 
@@ -323,6 +325,28 @@ class ToolchainInstallTest {
     @Test
     fun `a device with no record is charged for both copies`() {
         installedBy("com.example.sideloader")
+        sparseFile("usr/opt/java/lib/modules", 40_000_000L)
+
+        manager().install("toolchain_java")
+
+        assertTrue(failed.await(10, TimeUnit.SECONDS), "the HTTP task never reported an outcome")
+        verify { Logger.e(any(), refusalNaming(toolchainInstallBytes(javaUnpacked, javaDownload, 0L)), any()) }
+    }
+
+    /**
+     * A record written by another build of the same toolchain credits nothing.
+     *
+     * Java 17 and 21 share the pack name `java` and not the install root, so the
+     * Java 17 tree on disk is beside the one the download will write, not under it.
+     * Credited anyway it took 155 MB off a reservation the copy then needs in full.
+     * A record that names no build at all is treated the same way.
+     */
+    @Test
+    fun `a record from another build of the toolchain credits nothing`() {
+        installedBy("com.example.sideloader")
+        File(filesDir, "home/.vscodroid/toolchains.json").writeText(
+            """[{"name":"java","displayName":"Java 17","installRoot":"usr/opt/java"}]"""
+        )
         sparseFile("usr/opt/java/lib/modules", 40_000_000L)
 
         manager().install("toolchain_java")

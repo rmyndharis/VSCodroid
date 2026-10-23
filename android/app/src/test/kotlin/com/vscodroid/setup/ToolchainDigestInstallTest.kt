@@ -472,6 +472,33 @@ class ToolchainDigestInstallTest {
         assertTrue(recorded().contains("\"test\""), "the install was reported but not recorded: ${recorded()}")
     }
 
+    /**
+     * The ZIP path installs from its own staging tree, so a removal of Play's copy of
+     * the pack, which a cancel on a Play install posts, is none of its business.
+     * Claimed as a reader of that copy it was declined and reported UNKNOWN after the
+     * download had already been paid for.
+     *
+     * NEGATIVE CONTROL: pass `readsDeliveredPack = true` from `downloadViaHttp` and
+     * this ends on UNKNOWN with nothing recorded.
+     */
+    @Test
+    fun `a zip install is not held up by a removal of Play's copy of the pack`() {
+        publishManifest("$zipDigest  toolchain_test.zip\n")
+        @Suppress("UNCHECKED_CAST")
+        val removals = ToolchainManager::class.java.getDeclaredField("packRemovalsInFlight")
+            .apply { isAccessible = true }
+            .get(null) as MutableSet<String>
+        removals.add("toolchain_test")
+        try {
+            installAndWait()
+        } finally {
+            removals.remove("toolchain_test")
+        }
+
+        assertEquals(AssetPackStatus.COMPLETED, statuses().last(), "expected an install, got $events")
+        assertTrue(recorded().contains("\"test\""), "the install was reported but not recorded: ${recorded()}")
+    }
+
     // ── the payload is not what the release published ────────────────────
 
     @Test

@@ -687,7 +687,13 @@ class ToolchainManager(private val context: Context) {
         //
         // Deletion stays off the caller's thread. releasePack also coordinates
         // with copies started by other managers and with Play's pending delete.
-        ioExecutor.execute { releasePack(info.packName) }
+        //
+        // Only on a Play install. A sideload has no delivered copy, and the removal it
+        // posted anyway is a Play Core call that can fail on every cancel, logging a
+        // pack that "stays on disk" when there is none.
+        if (!shouldUseHttpFallback()) {
+            ioExecutor.execute { releasePack(info.packName) }
+        }
         Logger.i(tag, "Cancelled download of ${info.packName}")
     }
 
@@ -1363,8 +1369,20 @@ class ToolchainManager(private val context: Context) {
      *   while the delivery is still there. The HTTP path ignores the answer, and
      *   correctly: its staging directory belongs to one download.
      */
-    private fun installFromDirectory(packName: String, assetsDir: File): Boolean {
-        if (!claimPack(packName)) {
+    private fun installFromDirectory(packName: String, assetsDir: File): Boolean =
+        installFromDirectory(packName, assetsDir, readsDeliveredPack = true)
+
+    /**
+     * [readsDeliveredPack] is false for the HTTP path, whose [assetsDir] is its own staging
+     * tree. Claimed as a reader of Play's copy it was refused for as long as a
+     * [releasePack] of that pack was in flight, over a directory it never opens.
+     */
+    private fun installFromDirectory(
+        packName: String,
+        assetsDir: File,
+        readsDeliveredPack: Boolean,
+    ): Boolean {
+        if (!claimPack(packName, readsDeliveredPack)) {
             Logger.i(tag, "Another install already holds $packName; leaving it to that one")
             // Neither COMPLETED nor FAILED, because both would be untrue in a way
             // something acts on. COMPLETED is the word this class uses for "the
@@ -1432,12 +1450,19 @@ class ToolchainManager(private val context: Context) {
      * A lookup by name rather than string surgery through the registry, because
      * an entry can outlive its registry row and because the record is what those
      * files were actually written from.
+     *
+     * Null unless the record's `displayName` is [displayName], the registry's name for
+     * the build about to be downloaded. A reinstall only overwrites the recorded tree
+     * when the root stays put, and the one pack that moved it, Java 17 to 21, kept
+     * the name `java`: the old 155 MB were credited against a tree that was written
+     * beside them. A record that names no build gets no credit either.
      */
-    private fun recordedInstallRoot(name: String): File? {
+    private fun recordedInstallRoot(name: String, displayName: String?): File? {
         val state = readState()
         for (i in 0 until state.length()) {
             val entry = state.optJSONObject(i) ?: continue
             if (entry.optString("name") != name) continue
+            if (displayName == null || entry.optString("displayName") != displayName) return null
             val root = entry.optString("installRoot", "")
             return if (root.isEmpty()) null else File(context.filesDir, root)
         }
@@ -1642,11 +1667,14 @@ class ToolchainManager(private val context: Context) {
         // across.
         flushWritesToMedia()
 
+        var replaced: JSONObject? = null
         synchronized(stateLock) {
             val state = readState()
             // Remove any existing entry for this toolchain
             for (i in state.length() - 1 downTo 0) {
-                if (state.optJSONObject(i)?.optString("name") == name) {
+                val entry = state.optJSONObject(i)
+                if (entry?.optString("name") == name) {
+                    replaced = entry
                     state.remove(i)
                 }
             }
@@ -1699,6 +1727,8 @@ class ToolchainManager(private val context: Context) {
             regenerateDerivedFilesLocked()
         }
 
+        removeSupersededTree(replaced, manifest)
+
         // The record now says everything the marker was standing in for, so this
         // is where it goes. Not in the caller's `finally`, which also ran for
         // calls that never wrote one and for the throw the marker exists to
@@ -1707,6 +1737,45 @@ class ToolchainManager(private val context: Context) {
         Logger.i(tag, "Toolchain $name installed successfully")
         report(packName, AssetPackStatus.COMPLETED, 100)
         return true
+    }
+
+    /**
+     * Deletes the install root of the record a reinstall just replaced, when the new
+     * manifest names a different one, and the `usr/bin` links that were left pointing
+     * into it.
+     *
+     * The record was the only thing that named the old tree, and the new record has
+     * replaced it: Java 17's `usr/lib/jvm/java-17-openjdk` stayed on disk, 155 MB
+     * that no Remove could reach, when the toolchain moved to
+     * `usr/lib/jvm/java-21-openjdk`. A same-root reinstall overwrote its own tree and
+     * is none of this function's business.
+     *
+     * Skipped when either root contains the other, or when the old one leaves
+     * `filesDir`, since the new tree would go with it. A link is removed only when it
+     * now dangles; one that points anywhere that still exists is not ours to judge.
+     */
+    private fun removeSupersededTree(replaced: JSONObject?, manifest: JSONObject) {
+        val oldRoot = replaced?.optString("installRoot", "").orEmpty()
+        if (oldRoot.isEmpty() || oldRoot == manifest.optString("installRoot", "")) return
+        val base = runCatching { context.filesDir.canonicalFile }.getOrNull() ?: return
+        val old = runCatching { File(context.filesDir, oldRoot).canonicalFile }.getOrNull() ?: return
+        val new = runCatching {
+            File(context.filesDir, manifest.optString("installRoot", "")).canonicalFile
+        }.getOrNull() ?: return
+        if (!old.path.startsWith(base.path + File.separator)) return
+        if (new.path == old.path || new.path.startsWith(old.path + File.separator) ||
+            old.path.startsWith(new.path + File.separator)
+        ) return
+        StorageManager.deleteRecursive(old)
+        Logger.i(tag, "Deleted the superseded install root: $oldRoot")
+        val kept = manifest.optJSONObject("symlinks")
+        val links = replaced?.optJSONObject("symlinks") ?: return
+        for (linkName in links.keys()) {
+            if (kept?.has(linkName) == true) continue
+            val link = File(context.filesDir, "usr/bin/$linkName")
+            val dangling = try { Os.lstat(link.absolutePath); !link.exists() } catch (e: Exception) { false }
+            if (dangling) link.delete()
+        }
     }
 
     /**
@@ -2018,18 +2087,18 @@ class ToolchainManager(private val context: Context) {
                 //
                 // The root comes from the RECORD, not from the incoming payload,
                 // which is not on disk yet, and that gap is the whole reason this
-                // path lacked the credit. The two differ only if a pack moves its
-                // `installRoot` between versions under an unchanged pack name, and
-                // no shipped pack does (`usr/lib/ruby`,
-                // `usr/lib/jvm/java-21-openjdk`). If one ever did, this gate
-                // understates by at most the measured old tree, which costs one
-                // download and a STORAGE refusal at the copy rather than a wrong
-                // install; the reclaim then takes the partial tree back, so the
-                // retry is no worse off.
+                // path lacked the credit. The two differ when a pack moves its
+                // `installRoot` between versions under an unchanged pack name, as
+                // Java did from 17 to 21, so the record only counts when it was
+                // written by the build now being downloaded
+                // ([recordedInstallRoot] compares `displayName`).
                 val stat = StatFs(context.filesDir.absolutePath)
                 val availableBytes = stat.availableBytes
                 val credit = existingTreeCredit(
-                    recordedInstallRoot(toolchainShortName(packName)),
+                    recordedInstallRoot(
+                        toolchainShortName(packName),
+                        ToolchainRegistry.find(packName)?.displayName,
+                    ),
                     context.filesDir,
                     unpackedBytes,
                     StorageManager::dirSize,
@@ -2175,7 +2244,7 @@ class ToolchainManager(private val context: Context) {
                 // deletes a staging directory this download owns alone, so it
                 // cannot reach whatever the install that holds the pack is
                 // reading.
-                installFromDirectory(packName, extractDir)
+                installFromDirectory(packName, extractDir, readsDeliveredPack = false)
 
             } catch (e: MissingFromRelease) {
                 // Ahead of the IOException it extends, because they are not the
