@@ -199,8 +199,8 @@ jobs:
           # greedy quote match took the last quoted string on a line that carries a
           # comment, so either one made the comparison below about a number that was
           # never declared.
-          version_name=$(grep -m1 -E '^[[:space:]]*versionName = ' "$gradle_file" | sed -E 's/^[^"]*"([^"]*)".*$/\1/')
-          version_code=$(grep -m1 -E '^[[:space:]]*versionCode = ' "$gradle_file" | sed -E 's/^[[:space:]]*versionCode = ([0-9]+).*$/\1/')
+          version_name=$(grep -m1 -E '^[[:space:]]*versionName = ' "$gradle_file" | sed -n -E 's@^[[:space:]]*versionName = "([^"]*)"[[:space:]]*(//.*)?$@\1@p')
+          version_code=$(grep -m1 -E '^[[:space:]]*versionCode = ' "$gradle_file" | sed -n -E 's@^[[:space:]]*versionCode = ([0-9]+)[[:space:]]*(//.*)?$@\1@p')
           tag_version=${TAG#v}
 
           case "$version_code" in *[!0-9]*) version_code="" ;; esac
@@ -242,14 +242,18 @@ jobs:
           if [ -n "$previous" ]; then
             previous_code=$(git show "$previous:$gradle_file" 2>/dev/null \
               | grep -m1 -E '^[[:space:]]*versionCode = ' \
-              | sed -E 's/^[[:space:]]*versionCode = ([0-9]+).*$/\1/' || echo "")
+              | sed -n -E 's@^[[:space:]]*versionCode = ([0-9]+)[[:space:]]*(//.*)?$@\1@p' || echo "")
             case "$previous_code" in *[!0-9]*) previous_code="" ;; esac
-            if [ -n "$previous_code" ] && [ "$version_code" -le "$previous_code" ]; then
+            if [ -z "$previous_code" ]; then
+              echo "::error::Could not read versionCode in $previous; refusing an unchecked release."
+              exit 1
+            fi
+            if [ "$version_code" -le "$previous_code" ]; then
               echo "::error::versionCode $version_code is not greater than $previous_code in $previous." \
                    "Migrations threshold on versionCode and would not run."
               exit 1
             fi
-            echo "previous tag : $previous (versionCode ${previous_code:-unknown})"
+            echo "previous tag : $previous (versionCode $previous_code)"
           fi
 
           # The published release notes come from `generate_release_notes: true`
@@ -438,6 +442,9 @@ jobs:
 
       - name: Check the device suite can still read what it asserts
         run: bash scripts/device-test.sh --self-check
+
+      - name: Check release version declarations are read exactly
+        run: python3 scripts/test-release-versions.py
 
       - name: Check the bundled JavaScript runtime
         run: |

@@ -230,6 +230,9 @@ jobs:
       - name: Check toolchain argument parsing with the host compiler
         run: python3 scripts/test-exec-trampoline.py
 
+      - name: Check release version declarations are read exactly
+        run: python3 scripts/test-release-versions.py
+
       # The release preflight reads this repository's real server tag, which differs
       # whenever a server input changed since the last publish, so lint does not run
       # it. This builds throwaway repositories from a copy of the real cache key and
