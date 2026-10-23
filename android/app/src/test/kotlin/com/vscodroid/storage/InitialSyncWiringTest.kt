@@ -365,7 +365,8 @@ class InitialSyncWiringTest {
         sync()
 
         assertEquals("edited in the editor!", local.readText(), "the local edit was overwritten")
-        assertEquals(emptyList<String>(), openedDocuments, "the engine read the document it should have left alone")
+        assertEquals(listOf("notes.txt"), openedDocuments, "the unrecorded device copy was not read before replacement")
+        assertEquals("from the device", File(mirror, setAsideCopies().single()).readText())
     }
 
     /**

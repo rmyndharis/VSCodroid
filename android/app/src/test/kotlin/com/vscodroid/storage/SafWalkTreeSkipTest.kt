@@ -103,7 +103,7 @@ class SafWalkTreeSkipTest {
 
         val result = mutableListOf<DocumentInfo>()
         skipped.clear()
-        // Five parameters, and the fifth is not decoration: what the walk leaves
+        // What the walk leaves
         // out is device content no later phase can see, so it is reported rather
         // than dropped and the delete guard is armed from it. Reflection cannot
         // be told by the compiler that the arity moved, so this call is the one
@@ -111,10 +111,10 @@ class SafWalkTreeSkipTest {
         SafSyncEngine::class.java
             .getDeclaredMethod(
                 "walkTree", Uri::class.java, String::class.java,
-                String::class.java, MutableList::class.java, MutableList::class.java
+                String::class.java, MutableList::class.java, MutableList::class.java, Set::class.java,
             )
             .apply { isAccessible = true }
-            .invoke(engine, treeUri, "root", "", result, skipped)
+            .invoke(engine, treeUri, "root", "", result, skipped, emptySet<String>())
         return result.map { it.relativePath }
     }
 

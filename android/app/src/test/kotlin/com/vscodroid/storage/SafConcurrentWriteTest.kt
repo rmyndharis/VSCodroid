@@ -323,7 +323,7 @@ class SafConcurrentWriteTest {
             )
 
             // The replacement Activity must retry once the admitted sync finishes.
-            assertThrows(IOException::class.java) { syncNow() }
+            assertThrows(FolderBusyException::class.java) { syncNow() }
         } finally {
             releaseFirstFetch.countDown()
             first.join(5_000)
@@ -361,7 +361,7 @@ class SafConcurrentWriteTest {
             assertTrue(firstFetchInside.await(5, TimeUnit.SECONDS), "nothing was contended")
 
             val started = System.nanoTime()
-            assertThrows(IOException::class.java) { syncNow() }
+            assertThrows(FolderBusyException::class.java) { syncNow() }
             val waitedMs = (System.nanoTime() - started) / 1_000_000
 
             assertTrue(

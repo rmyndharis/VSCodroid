@@ -455,6 +455,54 @@ class SafLiveDeviceEditTest {
     }
 
     @Test
+    fun `a completed stable save records the mirror identity delivered to the device`() {
+        open()
+        save("delivered edit")
+        assertEquals("delivered edit", deviceText)
+        assertTrue(engine.holdsOnlyVouchedCopies(mirror), "the delivered edit still looks undelivered")
+    }
+
+    @Test
+    fun `an edit made while an upload closes is never recorded as delivered`() {
+        open()
+        val before = record.readText()
+        every { resolver.openOutputStream(any(), "wt") } answers {
+            object : ByteArrayOutputStream() {
+                override fun close() {
+                    land(toByteArray())
+                    File(mirror, "notes.txt").writeText("a later undelivered edit")
+                }
+            }
+        }
+        save("delivered edit")
+        assertEquals("delivered edit", deviceText)
+        assertEquals("a later undelivered edit", File(mirror, "notes.txt").readText())
+        assertEquals(before, record.readText())
+    }
+
+    @Test
+    fun `a pending interrupt does not stop preserving a foreign edit before a save`() {
+        open()
+        editOnDevice("foreign device edit")
+        val file = File(mirror, "notes.txt").apply { writeText("local edit") }
+        engine.handleMirrorEvent(FileObserver.MODIFY, file, mirror, treeUri)
+        var turns = 0
+        try {
+            engine.runWriteBackLoop {
+                if (turns++ == 0) {
+                    Thread.currentThread().interrupt()
+                    true
+                } else false
+            }
+        } finally {
+            Thread.interrupted()
+        }
+        assertEquals("local edit", deviceText)
+        assertEquals(listOf("foreign device edit"), deviceCopies().values.toList())
+        assertTrue(failed.isEmpty())
+    }
+
+    @Test
     fun `a save after a failed root listing cannot overwrite an unread device edit`() {
         open()
         editOnDevice("UNREAD DEVICE EDIT")
@@ -1966,18 +2014,13 @@ class SafLiveDeviceEditTest {
     }
 
     /**
-     * Opened again on a provider with no clock, a file whose device copy differs from the
-     * mirror's is left as it is on both sides, with no time to say which is newer. Two
-     * states look like that: another app changed a file this app saved in the session
-     * before, or a save the watcher never delivered, the app killed before its drain ran,
-     * sits over a device copy nobody touched. The open took the size it listed as what it
-     * last saw, so the next save went over another app's edit with no copy kept. The device
-     * copy is read at that save now: the copy the record vouched for, the second state, is
-     * replaced as it stands, and anything else is kept.
+     * A stable delivered save leaves a receipt, so a no-clock reopen can fetch a later
+     * device edit before any user action. An undelivered local edit stays in the mirror,
+     * protected against the older device copy vouched for by its previous record.
      */
     @ParameterizedTest(name = "another app changed the file: {0}")
     @ValueSource(booleans = [true, false])
-    fun `a save after a reopen with no clock keeps another app's edit and nothing else`(anotherApp: Boolean) {
+    fun `a save after a no-clock reopen replaces only a read or vouched device copy`(anotherApp: Boolean) {
         deviceHasClock = false
         open()
         if (anotherApp) {
@@ -1987,14 +2030,17 @@ class SafLiveDeviceEditTest {
             File(mirror, "notes.txt").writeText("saved, never delivered")
         }
         open()
+        assertEquals(
+            if (anotherApp) "changed by another app" else "saved, never delivered",
+            File(mirror, "notes.txt").readText(),
+            "the reopen must show an external edit after the preceding save was delivered",
+        )
 
         save("typed after the reopen")
 
         assertEquals(
-            if (anotherApp) listOf("changed by another app") else emptyList(),
-            deviceCopies().values.toList(),
-            if (anotherApp) "the save replaced another app's edit with no copy of it anywhere"
-            else "the copy the record vouched for was kept as if another app had written it",
+            emptyList<String>(), deviceCopies().values.toList(),
+            "the save kept a spare copy of bytes the reopen already read or vouched for",
         )
         assertEquals("typed after the reopen", deviceText)
     }
@@ -2002,7 +2048,7 @@ class SafLiveDeviceEditTest {
     /** The same two states meeting a delete, which the bytes decide as they decide a save. */
     @ParameterizedTest(name = "another app changed the file: {0}")
     @ValueSource(booleans = [true, false])
-    fun `a delete after a reopen with no clock is declined only over another app's edit`(anotherApp: Boolean) {
+    fun `a delete after a no-clock reopen removes the read or vouched device copy`(anotherApp: Boolean) {
         deviceHasClock = false
         open()
         if (anotherApp) {
@@ -2012,18 +2058,21 @@ class SafLiveDeviceEditTest {
             File(mirror, "notes.txt").writeText("saved, never delivered")
         }
         open()
+        assertEquals(
+            if (anotherApp) "changed by another app" else "saved, never delivered",
+            File(mirror, "notes.txt").readText(),
+        )
         val file = File(mirror, "notes.txt").apply { delete() }
 
         engine.handleMirrorEvent(FileObserver.DELETE, file, mirror, treeUri)
         engine.runWriteBackLoop { false }
 
         assertEquals(
-            anotherApp, deviceHasDocument,
-            if (anotherApp) "the delete took another app's edit with the file"
-            else "the delete was declined over the copy the record vouched for",
+            false, deviceHasDocument,
+            "the delete was declined over bytes the reopen already read or vouched for",
         )
-        assertEquals(if (anotherApp) listOf(file.absolutePath) else emptyList(), kept.map { it.absolutePath })
-        assertEquals(if (anotherApp) listOf(true) else emptyList(), keptAsChanged)
+        assertTrue(kept.isEmpty())
+        assertTrue(keptAsChanged.isEmpty())
     }
 
     /**
@@ -2045,16 +2094,18 @@ class SafLiveDeviceEditTest {
             File(mirror, "notes.txt").writeText("saved, never delivered")
         }
         open()
+        assertEquals(
+            if (anotherApp) "changed by another app" else "saved, never delivered",
+            File(mirror, "notes.txt").readText(),
+        )
         failNextQuery = true
 
         save("typed after the reopen")
 
         assertEquals(false, failNextQuery, "precondition: the save asked the provider for the stamp")
         assertEquals(
-            if (anotherApp) listOf("changed by another app") else emptyList(),
-            deviceCopies().values.toList(),
-            if (anotherApp) "the save replaced another app's edit with no copy of it anywhere"
-            else "the copy the record vouched for was kept as if another app had written it",
+            emptyList<String>(), deviceCopies().values.toList(),
+            "the save kept a spare copy of bytes the reopen already read or vouched for",
         )
         assertEquals("typed after the reopen", deviceText)
     }
@@ -2074,6 +2125,10 @@ class SafLiveDeviceEditTest {
             File(mirror, "notes.txt").writeText("saved, never delivered")
         }
         open()
+        assertEquals(
+            if (anotherApp) "changed by another app" else "saved, never delivered",
+            File(mirror, "notes.txt").readText(),
+        )
         val file = File(mirror, "notes.txt").apply { delete() }
         failNextQuery = true
 
@@ -2081,9 +2136,8 @@ class SafLiveDeviceEditTest {
         engine.runWriteBackLoop { false }
 
         assertEquals(
-            anotherApp, deviceHasDocument,
-            if (anotherApp) "the delete took another app's edit with the file"
-            else "the delete was declined over the copy the record vouched for",
+            false, deviceHasDocument,
+            "the delete was declined over bytes the reopen already read or vouched for",
         )
         assertEquals(false, failNextQuery, "precondition: the delete asked the provider for the stamp")
     }

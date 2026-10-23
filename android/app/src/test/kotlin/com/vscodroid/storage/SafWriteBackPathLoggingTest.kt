@@ -2,6 +2,7 @@ package com.vscodroid.storage
 
 import android.content.ContentResolver
 import android.content.Context
+import android.database.Cursor
 import android.net.Uri
 import android.provider.DocumentsContract
 import io.mockk.every
@@ -139,8 +140,19 @@ class SafWriteBackPathLoggingTest {
         engine.runWriteBackLoop { false }
     }
 
+    private fun completeEmptyListing() {
+        every { resolver.query(any(), any(), any(), any(), any()) } answers {
+            mockk<Cursor>(relaxed = true) {
+                every { extras } returns null
+                every { getColumnIndexOrThrow(any()) } returns 0
+                every { moveToNext() } returns false
+            }
+        }
+    }
+
     @Test
     fun `a create the provider refuses does not repeat its message`() {
+        completeEmptyListing()
         every { DocumentsContract.createDocument(any(), any(), any(), any()) } throws
             providerRefusal
         File(mirror, "notes.txt").writeText("the only copy")
@@ -235,6 +247,7 @@ class SafWriteBackPathLoggingTest {
      */
     @Test
     fun `a refused create still says which file it was`() {
+        completeEmptyListing()
         every { DocumentsContract.createDocument(any(), any(), any(), any()) } throws
             providerRefusal
         File(mirror, "notes.txt").writeText("the only copy")

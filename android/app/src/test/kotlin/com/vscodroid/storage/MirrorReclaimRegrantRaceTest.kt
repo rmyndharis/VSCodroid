@@ -19,6 +19,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.security.MessageDigest
 
 /**
  * A folder granted again while the launch-time reclaim pass is deciding about its mirror.
@@ -90,7 +91,10 @@ class MirrorReclaimRegrantRaceTest {
         record.writeText(
             listOf(
                 SafSyncEngine.RECORD_HEADER,
-                SafSyncEngine(context).identityLine("notes.md", copied),
+                SafSyncEngine.recordLine(
+                    SafSyncEngine(context).identityLine("notes.md", copied),
+                    MessageDigest.getInstance("SHA-256").digest(copied.readBytes()),
+                ),
             ).joinToString("\n")
         )
     }

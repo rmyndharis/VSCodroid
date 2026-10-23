@@ -23,6 +23,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.ByteArrayInputStream
 import java.io.File
+import java.io.IOException
 import java.nio.file.Files
 
 /**
@@ -438,6 +439,7 @@ class SafReconcileDeletionsTest {
             writeText("an hour of writing")
             setLastModified(DEVICE_TIME + 1_000)
         }
+        every { resolver.openOutputStream(any(), "wt") } throws IOException("device offline")
 
         // Reopened while the device still has the file. The engine keeps the local copy.
         deviceFolderHolding("a.txt" to "kept", "notes.txt" to "from the device")

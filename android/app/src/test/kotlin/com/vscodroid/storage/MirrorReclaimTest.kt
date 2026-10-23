@@ -23,6 +23,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.security.MessageDigest
 import java.nio.file.Files
 
 /**
@@ -111,7 +112,10 @@ class MirrorReclaimTest {
         val record = File(dir.path + SafSyncEngine.SYNCED_RECORD_SUFFIX).apply {
             writeText(
                 SafSyncEngine.RECORD_HEADER + "\n" +
-                    SafSyncEngine(context).identityLine("src/main.kt", file)
+                    SafSyncEngine.recordLine(
+                        SafSyncEngine(context).identityLine("src/main.kt", file),
+                        MessageDigest.getInstance("SHA-256").digest(file.readBytes()),
+                    )
             )
         }
         check(SafSyncEngine(context).holdsOnlyVouchedCopies(dir)) {

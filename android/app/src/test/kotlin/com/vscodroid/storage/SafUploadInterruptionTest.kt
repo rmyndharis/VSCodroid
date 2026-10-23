@@ -25,6 +25,8 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
+import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.ValueSource
 import java.io.ByteArrayOutputStream
 import java.io.OutputStream
 import java.util.concurrent.CountDownLatch
@@ -135,6 +137,73 @@ class SafUploadInterruptionTest {
     private fun deliver(event: Int, entry: String) {
         engine.handleMirrorEvent(event, File(mirror, entry), mirror, treeUri)
         engine.runWriteBackLoop { false }
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = ["Icon\r", "line\nname"])
+    fun `an interrupted upload with a line break name is repaired at reopen`(name: String) {
+        deviceHolding(name)
+        val file = File(mirror, name).apply { writeText("complete local edit") }
+        every { resolver.openOutputStream(any(), "wt") } answers {
+            object : OutputStream() {
+                override fun write(value: Int) = throw IOException("provider interrupted")
+            }
+        }
+        deliver(FileObserver.MODIFY, name)
+        assertEquals(setOf(file.absolutePath), engine.uploadsInFlight())
+        val repaired = ByteArrayOutputStream()
+        every { resolver.openOutputStream(any(), "wt") } returns repaired
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        assertEquals("complete local edit", repaired.toString())
+        assertEquals("complete local edit", file.readText())
+        assertTrue(engine.uploadsInFlight().isEmpty())
+        File(mirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX).delete()
+    }
+
+    @Test
+    fun `corrupt journal lines do not permit replacing a foreign document without a copy`() {
+        deviceHolding("notes.txt")
+        val file = File(mirror, "notes.txt").apply { writeText("local edit") }
+        journal.writeText("junk\n\u0000bad\n${file.absolutePath}")
+        every { resolver.openInputStream(any()) } answers {
+            ByteArrayInputStream("foreign device edit".toByteArray())
+        }
+        val repaired = ByteArrayOutputStream()
+        every { resolver.openOutputStream(any(), "wt") } returns repaired
+
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+
+        assertEquals("local edit", repaired.toString())
+        val copies = mirror.listFiles()!!.filter { it.name.startsWith("notes.txt.device-") }
+        assertEquals(1, copies.size)
+        assertEquals("foreign device edit", copies.single().readText())
+        assertFalse(file.absolutePath in engine.uploadsInFlight())
+        File(mirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX).delete()
+    }
+
+    @Test
+    fun `journal round trips line breaks and literal escape sequences`() {
+        val names = listOf("Icon\r", "line\nname", "literal\\nname")
+        val paths = names.map { File(mirror, it).apply { writeText("pending") }.absolutePath }
+        val record = SafSyncEngine::class.java.getDeclaredMethod("recordUploadIntent", String::class.java)
+            .apply { isAccessible = true }
+        val consume = SafSyncEngine::class.java.getDeclaredMethod("consumeStaleUploadRecord", String::class.java)
+            .apply { isAccessible = true }
+        for (path in paths) assertEquals(true, record.invoke(engine, path))
+        assertEquals(paths.toSet(), engine.uploadsInFlight())
+        for (path in paths) consume.invoke(engine, path)
+        assertTrue(engine.uploadsInFlight().isEmpty())
+        assertFalse(journal.exists())
+    }
+
+    @Test
+    fun `a legacy journal keeps literal backslash names while corrupt lines stay inert`() {
+        val local = File(mirror, "literal\\nname").apply { writeText("keep") }
+        journal.writeText("junk\n\u0000bad\n${local.absolutePath}")
+        assertTrue(local.absolutePath in engine.uploadsInFlight())
+        engine.clearUploadsUnder(mirror)
+        assertEquals("keep", local.readText())
+        assertFalse(local.absolutePath in engine.uploadsInFlight())
     }
 
     @Test

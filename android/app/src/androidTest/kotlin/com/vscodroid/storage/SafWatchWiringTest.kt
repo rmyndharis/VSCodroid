@@ -148,15 +148,26 @@ class SafWatchWiringTest {
         // Both land in the same watched directory, so the control and the claim share an
         // observer: an empty queue is also what a broken fixture produces.
         File(mirror, "real.txt").writeText("keep me")
-        File(mirror, "scratch.tmp").writeText("about to be renamed away")
+        val scratch = "scratch${SafSyncEngine.PARTIAL_SUFFIX}"
+        File(mirror, scratch).writeText("unfinished inbound copy")
 
         assertTrue(
             "the ordinary file produced no job, so the absence below proves nothing",
             queues("real.txt", ARRIVES_MS)
         )
         assertFalse(
-            "a scratch file the writer is about to rename away was queued for upload",
-            queues("scratch.tmp", ABSENT_MS)
+            "a reserved partial file was queued for upload",
+            queues(scratch, ABSENT_MS)
+        )
+    }
+
+    @Test
+    fun aPersistentTmpFile_isQueuedForWriteBack() {
+        File(mirror, "persistent.tmp").writeText("a user file kept under this name")
+
+        assertTrue(
+            "a persistent tmp file was not queued for upload",
+            queues("persistent.tmp", ARRIVES_MS)
         )
     }
 

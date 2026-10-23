@@ -21,6 +21,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.security.MessageDigest
 
 /**
  * Reclaiming the mirrors of folders the user no longer grants.
@@ -232,7 +233,12 @@ class SafMirrorReclamationTest {
         mirrorFor(liveUri)
         val local = File(staleDir, "src/notes.txt" + SafSyncEngine.PARTIAL_SUFFIX)
             .apply { writeText("a copy the device already holds") }
-        record.appendText("\n" + SafSyncEngine(context).identityLine("src/" + local.name, local))
+        record.appendText(
+            "\n" + SafSyncEngine.recordLine(
+                SafSyncEngine(context).identityLine("src/" + local.name, local),
+                MessageDigest.getInstance("SHA-256").digest(local.readBytes()),
+            )
+        )
         every { resolver.persistedUriPermissions } returns listOf(permissionFor(liveUri))
 
         val removed = manager.reclaimRevokedMirrorsSync()
@@ -319,7 +325,10 @@ class SafMirrorReclamationTest {
         val record = File(dir.path + SafSyncEngine.SYNCED_RECORD_SUFFIX).apply {
             writeText(
                 SafSyncEngine.RECORD_HEADER + "\n" +
-                    SafSyncEngine(context).identityLine("src/main.kt", file)
+                    SafSyncEngine.recordLine(
+                        SafSyncEngine(context).identityLine("src/main.kt", file),
+                        MessageDigest.getInstance("SHA-256").digest(file.readBytes()),
+                    )
             )
         }
         // The fixture's own precondition, asserted rather than assumed. Composing the

@@ -374,6 +374,8 @@ class SafDirectoryRenameTest {
         engine.handleMirrorEvent(
             FileObserver.DELETE, localFile, mirror, treeUri, sourceSession = oldSession,
         )
+        assertTrue(oldSession.queue.isEmpty(), "an old callback queued a provider deletion")
+        assertTrue(engine.session.queue.isEmpty(), "an old callback adopted the new session")
         engine.runWriteBackLoop(oldSession) { false }
         drain()
 
@@ -397,7 +399,7 @@ class SafDirectoryRenameTest {
 
     @Test
     fun `an ignored temporary callback from an older watch session reports no lost save`() {
-        val localFile = File(mirror, "notes.txt.tmp").apply { writeText("temporary bytes") }
+        val localFile = File(mirror, "notes.txt${SafSyncEngine.PARTIAL_SUFFIX}").apply { writeText("temporary bytes") }
         val reported = mutableListOf<File>()
         engine.onWriteBackFailed = { reported.add(it) }
 

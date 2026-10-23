@@ -87,6 +87,7 @@ class SafLoadingListingTest : SafInitialSyncTestBase() {
         assertEquals("y", mirrorFile("y.txt").readText(), "the other documents of the folder were not copied")
         assertEquals(emptyList<Pair<String, String>>(), created, "a document was created for the repeated name")
         assertTrue(written.isEmpty(), "something was uploaded over one of the two documents: $written")
-        assertFalse(record.exists(), "an open that left a name alone vouched for the listing as a whole")
+        assertTrue(record.readLines().any { it.startsWith("y.txt\t") }, "the distinct fetched file lost its identity")
+        assertFalse(record.readText().contains("x.txt"), "a repeated name was vouched for")
     }
 }

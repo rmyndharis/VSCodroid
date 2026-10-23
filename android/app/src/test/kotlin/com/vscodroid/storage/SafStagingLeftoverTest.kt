@@ -55,11 +55,11 @@ class SafStagingLeftoverTest : SafInitialSyncTestBase() {
     @Test
     fun `a leftover that is not the start of the device document is kept`() {
         openedBefore()
-        mirrorFile("notes.md.vscodroid-partial").writeText("something I wrote")
+        mirrorFile("notes.md.vscodroid-partial").writeText("X")
 
         sync()
 
-        assertEquals("something I wrote", mirrorFile("notes.md.vscodroid-partial").readText())
+        assertEquals("X", mirrorFile("notes.md.vscodroid-partial").readText())
     }
 
     @Test

@@ -67,6 +67,7 @@ class SafMirrorOnlyUploadTest {
      * documented contract, not an exception.
      */
     private var createsAccepted = true
+    private val createdDirectories = mutableSetOf<String>()
 
     /** Every file the sync said exists only inside the app, by name. */
     private val lost = mutableListOf<String>()
@@ -88,6 +89,7 @@ class SafMirrorOnlyUploadTest {
         created.clear()
         written.clear()
         createsAccepted = true
+        createdDirectories.clear()
 
         mockkObject(Logger)
         every { Logger.i(any(), any()) } just Runs
@@ -114,7 +116,10 @@ class SafMirrorOnlyUploadTest {
             val mime = thirdArg<String>()
             val name = arg<String>(3)
             created.add(mime to name)
-            if (createsAccepted) named("doc-uri:doc:$name") else null
+            if (createsAccepted) {
+                if (mime == DocumentsContract.Document.MIME_TYPE_DIR) createdDirectories += "doc:$name"
+                named("doc-uri:doc:$name")
+            } else null
         }
 
         resolver = mockk(relaxed = true)
@@ -137,14 +142,15 @@ class SafMirrorOnlyUploadTest {
 
     /**
      * A device folder with real structure, keyed by each parent's document id, with
-     * `root` as the tree's own. A parent absent from [tree] answers with nothing; a
-     * parent mapped to null makes the provider refuse, which is what an incomplete
-     * enumeration looks like from here.
+     * `root` as the tree's own. A directory this fixture just created lists as empty.
+     * Unknown parents and explicit null entries refuse the listing.
      */
     private fun deviceTree(tree: Map<String, List<Child>?>) {
         every { resolver.query(any(), any(), any(), any(), any()) } answers {
             val parent = firstArg<Uri>().toString().removePrefix("children:")
-            tree[parent]?.let { cursorOver(it) }
+            val children = if (tree.containsKey(parent)) tree[parent]
+                else if (parent in createdDirectories) emptyList() else null
+            children?.let { cursorOver(it) }
         }
         every { resolver.openInputStream(any()) } answers {
             val docId = firstArg<Uri>().toString().removePrefix("doc-uri:")

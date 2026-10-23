@@ -111,6 +111,66 @@ class SafDataPreservationInstrumentedTest {
     }
 
     @Test
+    fun deliveredSaveFollowsExternalDeletionAcrossTwoReopens() = runBlocking {
+        control("directoryReset", Bundle().apply { putByteArray("bytes", ORIGINAL) })
+        engine.initialSync(treeUri, mirror) { _, _ -> }
+        val local = File(mirror, SafDocumentsProvider.FILE_NAME)
+        assertArrayEquals(ORIGINAL, local.readBytes())
+        engine.startWatching(mirror, treeUri)
+
+        local.writeBytes(EDITED)
+        assertTrue("The watcher never delivered the complete edited bytes", await {
+            providerBytes().contentEquals(EDITED) && engine.uploadsInFlight().isEmpty()
+        })
+        engine.stopWatching()
+        assertTrue("The save never opened the provider output descriptor", writeOpens() > 0)
+        val createsBeforeDeletion = control("stats").getInt("createCalls")
+        val document = DocumentsContract.buildDocumentUriUsingTree(treeUri, SafDocumentsProvider.FILE_NAME)
+        assertTrue("The external deletion was refused", DocumentsContract.deleteDocument(context.contentResolver, document))
+        assertFalse("The external deletion left the provider document", control("stats").getBoolean("exists"))
+
+        repeat(2) { reopen ->
+            engine.initialSync(treeUri, mirror) { _, _ -> }
+            assertFalse("Reopen ${reopen + 1} retained the delivered mirror copy", local.exists())
+            val stats = control("stats")
+            assertFalse("Reopen ${reopen + 1} recreated the provider document", stats.getBoolean("exists"))
+            assertEquals("Reopen ${reopen + 1} created a document after the deletion",
+                createsBeforeDeletion, stats.getInt("createCalls"))
+        }
+    }
+
+    @Test
+    fun undeliveredSameStampEditSurvivesExternalDeletion() = runBlocking {
+        control("directoryReset", Bundle().apply { putByteArray("bytes", ORIGINAL) })
+        engine.initialSync(treeUri, mirror) { _, _ -> }
+        val local = File(mirror, SafDocumentsProvider.FILE_NAME)
+        engine.startWatching(mirror, treeUri)
+        local.writeBytes(EDITED)
+        assertTrue("The watcher never delivered the complete edited bytes", await {
+            providerBytes().contentEquals(EDITED) && engine.uploadsInFlight().isEmpty()
+        })
+        engine.stopWatching()
+        val deliveredTime = local.lastModified()
+        val undelivered = ByteArray(EDITED.size) { 'z'.code.toByte() }
+        assertFalse(EDITED.contentEquals(undelivered))
+        local.writeBytes(undelivered)
+        assertTrue("The preserved timestamp could not be restored", local.setLastModified(deliveredTime))
+        assertEquals(deliveredTime, local.lastModified())
+        assertEquals(EDITED.size.toLong(), local.length())
+        val createsBeforeDeletion = control("stats").getInt("createCalls")
+        val document = DocumentsContract.buildDocumentUriUsingTree(treeUri, SafDocumentsProvider.FILE_NAME)
+        assertTrue("The external deletion was refused", DocumentsContract.deleteDocument(context.contentResolver, document))
+
+        engine.initialSync(treeUri, mirror) { _, _ -> }
+
+        assertTrue("Reopening removed the only undelivered edit", local.isFile)
+        assertArrayEquals("The only undelivered bytes changed", undelivered, local.readBytes())
+        val stats = control("stats")
+        assertFalse("The same reopen recreated the provider document", stats.getBoolean("exists"))
+        assertEquals("The same reopen uploaded the unproved mirror copy", createsBeforeDeletion, stats.getInt("createCalls"))
+    }
+
+    @Test
     fun createDoesNotChangeProviderWhenUploadJournalCannotBeWritten() = runBlocking {
         control("reset", Bundle().apply { putBoolean("empty", true) })
         engine.initialSync(treeUri, mirror) { _, _ -> }

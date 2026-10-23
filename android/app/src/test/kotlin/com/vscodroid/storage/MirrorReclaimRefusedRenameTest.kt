@@ -22,6 +22,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.security.MessageDigest
 
 /**
  * A removal whose rename the filesystem refuses is not a removal.
@@ -153,7 +154,10 @@ class MirrorReclaimRefusedRenameTest {
         val file = File(dir, "src/main.kt").apply { writeText("fun main() {}") }
         File(dir.path + SafSyncEngine.SYNCED_RECORD_SUFFIX).writeText(
             SafSyncEngine.RECORD_HEADER + "\n" +
-                SafSyncEngine(context).identityLine("src/main.kt", file)
+                SafSyncEngine.recordLine(
+                    SafSyncEngine(context).identityLine("src/main.kt", file),
+                    MessageDigest.getInstance("SHA-256").digest(file.readBytes()),
+                )
         )
         check(SafSyncEngine(context).holdsOnlyVouchedCopies(dir)) {
             "the fixture wrote a record the engine does not accept, so this case would " +

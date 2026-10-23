@@ -269,13 +269,13 @@ class SafInboundConfinementTest {
     @Test
     fun `an existing scratch file is not consumed by an import`() {
         val scratch = File(mirror, "notes.txt.vscodroid-partial").apply {
-            writeText("UNRELATED LOCAL CONTENT")
+            writeText("X")
         }
         deviceTree(mapOf("root" to listOf(Child("notes.txt", contents = "DEVICE CONTENT"))))
 
         sync()
 
-        assertEquals("UNRELATED LOCAL CONTENT", scratch.readText())
+        assertEquals("X", scratch.readText())
         assertEquals("DEVICE CONTENT", File(mirror, "notes.txt").readText())
         assertEquals(setOf("notes.txt", scratch.name), mirror.list()!!.toSet())
     }
@@ -302,6 +302,24 @@ class SafInboundConfinementTest {
             "a device document was written through a link and landed outside the folder " +
                 "the user granted, where nothing in this engine may look for it again",
         )
+    }
+
+    @Test
+    fun `a nested document under a linked ancestor is not written outside the mirror`() {
+        val target = File(elsewhere, "target").apply { mkdirs() }
+        File(target, "sub").mkdirs()
+        Files.createSymbolicLink(File(mirror, "docs").toPath(), target.toPath())
+        deviceTree(
+            mapOf(
+                "root" to listOf(Child("docs", isDirectory = true)),
+                "doc:docs" to listOf(Child("sub", isDirectory = true)),
+                "doc:sub" to listOf(Child("secrets.txt", contents = "DEVICE CONTENT")),
+            )
+        )
+
+        sync()
+
+        assertFalse(File(target, "sub/secrets.txt").exists(), "the nested parent resolved outside the mirror")
     }
 
     @Test

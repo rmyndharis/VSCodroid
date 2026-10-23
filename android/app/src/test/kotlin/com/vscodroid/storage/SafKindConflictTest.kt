@@ -24,6 +24,17 @@ import java.io.File
  */
 class SafKindConflictTest : SafInitialSyncTestBase() {
 
+    @Test
+    fun `an unrecorded file is preserved when the device holds a directory under its name`() {
+        mirrorFile("foo").writeText("my only copy")
+        deviceTree(mapOf("root" to listOf(Child("foo", isDirectory = true)), "doc:foo" to emptyList()))
+
+        sync()
+
+        assertTrue(mirrorFile("foo").isDirectory)
+        assertEquals("my only copy", setAsideCopies("foo").single().readText())
+    }
+
     /**
      * An earlier open, which leaves the record beside the mirror. The put-back pass acts
      * only against a record it can read, because that is what tells a stranded save from a

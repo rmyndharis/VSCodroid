@@ -23,6 +23,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.security.MessageDigest
 
 /**
  * What [SafStorageManager.listMirrors] reports, which is the only place in the app that
@@ -122,7 +123,10 @@ class MirrorListingTest {
         val dir = manager.getMirrorDir(uri).apply { mkdirs() }
         val file = File(dir, "main.kt").apply { writeText("fun main() {}") }
         File(dir.path + SafSyncEngine.SYNCED_RECORD_SUFFIX).writeText(
-            SafSyncEngine.RECORD_HEADER + "\n" + SafSyncEngine(context).identityLine("main.kt", file)
+            SafSyncEngine.RECORD_HEADER + "\n" + SafSyncEngine.recordLine(
+                SafSyncEngine(context).identityLine("main.kt", file),
+                MessageDigest.getInstance("SHA-256").digest(file.readBytes()),
+            )
         )
         check(SafSyncEngine(context).holdsOnlyVouchedCopies(dir)) {
             "the fixture wrote a record the engine does not accept"

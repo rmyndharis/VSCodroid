@@ -158,7 +158,7 @@ class SafUnfetchedDocumentTest {
     /** One entry as the provider lists it. */
     private data class Entry(
         val name: String,
-        val size: Long = 64,
+        val size: Long = 15,
         val isDirectory: Boolean = false,
     )
 
@@ -776,7 +776,7 @@ class SafUnfetchedDocumentTest {
                 every { getColumnIndex(DocumentsContract.Document.COLUMN_SIZE) } returns 1
                 every { isNull(any<Int>()) } returns false
                 every { getLong(0) } returns 1_700_000_060_000
-                every { getLong(1) } returns 64
+                every { getLong(1) } returns 22
             }
         }
         every { resolver.openInputStream(document) } answers {
@@ -1294,7 +1294,7 @@ class SafUnfetchedDocumentTest {
     fun `a document the sync did read is deleted from the device`() {
         val kept = mutableListOf<String>()
         engine.onKeptOnDevice = { file, _, _ -> kept.add(file.name) }
-        deviceHolding("notes.md", size = 64)
+        deviceHolding("notes.md", size = 15)
         runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
 
         File(mirror, "notes.md").delete()
@@ -1481,7 +1481,7 @@ class SafUnfetchedDocumentTest {
      */
     @Test
     fun `a document the sync did read is still written back`() {
-        deviceHolding("notes.md", size = 64)
+        deviceHolding("notes.md", size = 15)
         runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
 
         File(mirror, "notes.md").writeText("edited in the editor")
@@ -1564,24 +1564,13 @@ class SafUnfetchedDocumentTest {
     }
 
     /**
-     * The refusal that is not a skip and not a failure: this sync did not read the
-     * document because another sync of the same mirror was already reading it.
-     *
-     * The claim is in the companion object because two engines routinely meet over
-     * one mirror; `unfetched` is per engine, so the loser is the only thing that
-     * can arm its own guard, and the loser is routinely the engine that outlives
-     * the winner. An activity recreated mid-open leaves the claim with the engine
-     * of the activity being destroyed, so the survivor, the one whose watcher goes
-     * on serving saves, is exactly the one that walked away with no record.
-     *
-     * Built reentrantly and single-threaded rather than with two threads: the
-     * second engine's whole `initialSync` runs inside the first engine's answer to
-     * `openInputStream`, which is precisely the window in which the first engine
-     * holds the claim. Nothing here can flake and nothing can hang.
+     * A replacement engine refused admission while the departing engine reads must
+     * still guard device documents it never read. The nested open reaches the busy
+     * refusal before per-file copy admission, and the outer provider read then fails.
      */
     @Test
-    fun `a sync that lost the copy to another engine still guards the document`() {
-        deviceHolding("notes.md", size = 64)
+    fun `a sync refused while another engine reads still guards the document`() {
+        deviceHolding("notes.md", size = 15)
         val loser = SafSyncEngine(context)
         val announced = mutableListOf<String>()
         loser.onWriteBackFailed = { announced.add(it.name) }
@@ -1596,8 +1585,7 @@ class SafUnfetchedDocumentTest {
         every { resolver.openInputStream(any()) } answers {
             if (!reentered) {
                 reentered = true
-                // Inside the winner's read, so the claim is held: this sync meets
-                // it, loses, and walks away without the file.
+                // Inside the winner's read, so mirror admission refuses the nested open.
                 runBlocking { loser.initialSync(treeUri, mirror) { _, _ -> } }
             }
             // And then the winner's own copy fails, which is what leaves the
@@ -1655,7 +1643,7 @@ class SafUnfetchedDocumentTest {
         val announced = mutableListOf<String>()
         engine.onWriteBackFailed = { announced.add(it.name) }
 
-        deviceHolding("notes.md", size = 64)
+        deviceHolding("notes.md", size = 15)
         runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
 
         File(mirror, "notes.md").writeText("edited in the editor")
