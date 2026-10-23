@@ -2,8 +2,9 @@ package com.vscodroid
 
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
-import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import java.io.File
+import java.util.concurrent.TimeUnit
 
 class AuthBootstrapTest {
     @Test
@@ -23,19 +24,9 @@ class AuthBootstrapTest {
      */
     @Test
     fun `a failed registration keeps the page injections and a missing answer does not`() {
-        val source = SourceScan.withoutComments(SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt"))
-        val body = SourceScan.body(source, "private fun injectBridgeToken(")
-        val unanswered = body.indexOf("if (verdict == null) return@evaluateJavascript")
-        val firstInjection = body.indexOf("setupModifierInterceptor()")
-        val ready = body.indexOf("if (verdict) {")
-        assertTrue(unanswered in 0 until firstInjection, "a page that did not answer must stop before any injection")
-        assertTrue(
-            firstInjection < ready && body.indexOf("workbenchLoaded = true") > ready,
-            "workbenchLoaded may only be set for a verdict of true, after every injection",
-        )
-        assertTrue(
-            body.indexOf("if (verdict != true) client.completeAuthBootstrap(targetView, generation, false)") in 0 until unanswered,
-            "a failed or unanswered bootstrap must still be reported to the waiting sign-ins",
-        )
+        val process = ProcessBuilder("node", "scripts/test-auth-bootstrap.js")
+            .directory(File("../..")).redirectErrorStream(true).start()
+        check(process.waitFor(20, TimeUnit.SECONDS)) { "bootstrap completion check timed out" }
+        assertEquals(0, process.exitValue(), process.inputStream.bufferedReader().readText())
     }
 }

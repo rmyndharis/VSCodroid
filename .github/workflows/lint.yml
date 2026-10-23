@@ -39,7 +39,7 @@ jobs:
       - name: Checkout
         uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
         with:
-          # Full history, for the document-date check below and nothing else.
+          # Full history, for document dates and bundled extension version checks.
           # `git log -1 -- <file>` in checkout's default single-commit clone
           # reports the tip commit for every file it can see, so that check
           # cannot answer here without this and refuses to guess. 58 MiB of
@@ -333,6 +333,10 @@ jobs:
           node scripts/test-caret-drag.js
           node scripts/test-serve-network.js
           node scripts/test-welcome.js
+          node scripts/test-run-file.js
+          node scripts/test-auth-bootstrap.js
+          python3 scripts/test-extension-updates.py
+          python3 scripts/check-extension-updates.py
           node scripts/test-xdg-open.js
 
       - name: Run lint
