@@ -1089,7 +1089,7 @@ class ToolchainManager(private val context: Context) {
                 // it frees `unpacked` bytes and the retry re-downloads and re-extracts
                 // `unpacked` bytes into the same directory, arriving back at the free
                 // space that failed the gate. The delete buys the next attempt nothing
-                // and charges it a full download, 55 MB for Java 21.
+                // and charges it a full download, 55 MB for Java 17 as it was then.
                 //
                 // Keeping it is also what makes the repair work. The user frees space,
                 // and the next launch's [reconcileDeliveredPacks] finds this same
@@ -1628,7 +1628,7 @@ class ToolchainManager(private val context: Context) {
         // back an array that predates whatever the other one added.
         //
         // Only this tail is held, not the copy above it. The copy moves up to
-        // 160 MB and holds nothing anyone else needs; the record is four lines
+        // 180 MB and holds nothing anyone else needs; the record is four lines
         // and is what everything else reads.
         //
         // Flushed before the record, for the reason [flushWritesToMedia] gives:
@@ -1934,7 +1934,7 @@ class ToolchainManager(private val context: Context) {
         // The same question one stage earlier, and it is the one that catches the
         // case the check above cannot. [installsInFlight] is claimed only once the
         // archive has been downloaded and expanded, so for the whole of a transfer
-        // -- 56 MB for Java 21, minutes on a phone connection -- it reads free.
+        // -- 64 MB for Java 21, minutes on a phone connection -- it reads free.
         // Rotating the toolchain screen destroys the Activity, rebuilds it with a
         // second manager whose card knows nothing of the download still running,
         // and offers Install again; a tap then spent the whole download a second
@@ -4297,7 +4297,7 @@ internal const val SPACE_BUFFER = 50_000_000L
  * that peak: the one unpacked into the cache and the one being written into
  * `filesDir/usr`. The reservation used to charge for one, which is the product
  * rather than the process, and nothing frees a stage before the next allocates.
- * For Java 21 that asked 196 MB for something that needs about 342, so every
+ * For Java 17 as it was then that asked 196 MB for something that needs about 342, so every
  * device between the two figures downloaded 55 MB and then failed partway
  * through the copy, with the disk error reported as a network problem and the
  * half-copied files left in `usr/` under no manifest, so each retry started from
@@ -4315,7 +4315,7 @@ internal const val SPACE_BUFFER = 50_000_000L
  *    frees file by file as it goes).
  *
  * A fresh install is dominated by the second, which is where the doubled term
- * came from and why the first went unnoticed: 312 MB against 211 MB for Java 21.
+ * came from and why the first went unnoticed: 312 MB against 211 MB for Java 17.
  * Credit the copy with a tree already on disk, though, and the second peak drops
  * below the first, and a caller subtracting the credit from a single figure
  * reserved 207 MB for an extraction that needs 211 MB. That is the whole of the

@@ -803,7 +803,7 @@ class ToolchainDigestInstallTest {
      *
      * `installsInFlight` is claimed only where the two delivery paths converge,
      * once the archive has been downloaded and expanded, so for the whole of a
-     * transfer -- 56 MB for Java 21, minutes on a phone connection -- it reads
+     * transfer -- 64 MB for Java 21, minutes on a phone connection -- it reads
      * free. `ToolchainActivity` declares no `configChanges`, so turning the phone
      * destroys it and rebuilds it with a second manager whose card knows nothing
      * of the download still running and offers Install again. The tap spent the
