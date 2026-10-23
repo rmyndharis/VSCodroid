@@ -315,9 +315,10 @@ class ToolchainEnvFileTest {
         elf("$jdk/bin/jshell")
         elf("$jdk/bin/keytool")
         elf("$jdk/bin/javac")
+        elf("$jdk/lib/jexec")
         stateFile.writeText(
             """[{"name":"java","installRoot":"$jdk",""" +
-                """"binaries":["$jdk/bin/java","$jdk/bin/jshell","$jdk/bin/keytool","$jdk/bin/javac"],""" +
+                """"binaries":["$jdk/bin/java","$jdk/bin/jshell","$jdk/bin/keytool","$jdk/bin/javac","$jdk/lib/jexec"],""" +
                 jvmFlags +
                 """"env":{"JAVA_HOME":"${'$'}FILESDIR/$jdk"}}]"""
         )
@@ -440,6 +441,20 @@ class ToolchainEnvFileTest {
             out,
             "a JDK launcher no longer starts with the manifest's JVM flags, or took one that is " +
                 "not shaped like a flag:\n" + envFile.readText(),
+        )
+    }
+
+    @Test
+    fun `a binary outside the JDK bin directory is not a launcher and gets no flag`() {
+        // jexec and jspawnhelper live in lib/ and are listed in the manifest so that they get an
+        // execute bit; they are not started by the JLI, which is what takes -J, so a flag handed to
+        // them would be an argument of their own.
+        val out = runJavaWrappers("""jexec x""", jvmFlags = """"jvmFlags":["-XX:UseSVE=0"],""")
+
+        assertEquals(
+            listOf("</p/../$jdk/lib/jexec><x>"),
+            out,
+            "a program under lib/ was started with a JVM flag meant for the launchers in bin/",
         )
     }
 

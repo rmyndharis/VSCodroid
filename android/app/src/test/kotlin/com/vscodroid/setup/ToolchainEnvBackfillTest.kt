@@ -118,6 +118,28 @@ class ToolchainEnvBackfillTest {
     }
 
     @Test
+    fun `a record with no environment object gets one, and a second pass changes nothing`() {
+        record("""[{"name":"ruby","installRoot":"usr/lib/ruby"}]""")
+        val manager = ToolchainManager(context)
+
+        backfill(manager)
+        val once = stateFile().readText()
+        backfill(manager)
+
+        assertEquals("-rrubygems", envOf("ruby").getString("RUBYOPT"))
+        assertEquals(once, stateFile().readText(), "a record that already has it was rewritten")
+    }
+
+    @Test
+    fun `a record that is not readable is left as it is`() {
+        record("""{ not json""")
+
+        backfill(ToolchainManager(context))
+
+        assertEquals("""{ not json""", stateFile().readText(), "a damaged record was overwritten")
+    }
+
+    @Test
     fun `the launch pass writes it into the environment file of that launch`() {
         record(rubyBefore)
         val manager = ToolchainManager(context)
