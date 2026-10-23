@@ -124,10 +124,12 @@
              re-resolves, leaving the screen in the previous appearance. Handle
              onConfigurationChanged then, or take uiMode back out.
 
-             The other ten stay undeclared deliberately. locale, layoutDirection,
-             fontScale, density, colorMode and fontWeightAdjustment all need the
-             user to leave the app and change a system setting, and a relaunch is
-             the correct answer to them. -->
+             MainActivity also handles density because moving to another display
+             can change it during a session. Its key row rebuilds its pixel sizes
+             without destroying the WebView or pending sign-in requests.
+
+             locale, layoutDirection, fontScale, colorMode and fontWeightAdjustment
+             still recreate the native UI so its resources are resolved again. -->
         <activity
             android:name=".SplashActivity"
             android:exported="true"
@@ -144,7 +146,7 @@
             android:name=".MainActivity"
             android:exported="true"
             android:launchMode="singleTask"
-            android:configChanges="orientation|screenSize|keyboard|keyboardHidden|screenLayout|smallestScreenSize|uiMode"
+            android:configChanges="orientation|screenSize|keyboard|keyboardHidden|screenLayout|smallestScreenSize|uiMode|density"
             android:windowSoftInputMode="adjustResize"
             android:theme="@style/Theme.VSCodroid">
 

@@ -143,7 +143,7 @@ test source.
 
 ### 3.2 Instrumented Tests
 
-104 tests across seventeen classes, in `android/app/src/androidTest/`. They
+105 tests across eighteen classes, in `android/app/src/androidTest/`. They
 need an `arm64-v8a` device or emulator, because the app ships that ABI alone.
 Counted from the sources (`grep -cE '^\s*@Test'` over the directory), because no
 run covers the whole set and none of it is scheduled. Nothing holds this figure
@@ -152,6 +152,7 @@ to the suite; `android/app/src/androidTest/README.md` states the total that
 
 | Test | Description | Setup |
 |------|-------------|-------|
+| **KeyRowDensityInstrumentedTest** | Simulates a density change on the real key row, checks its new dimensions and inset cost, and retains the selected page and latched Ctrl | arm64 device or emulator |
 | **ServerHealthTest** | The server becomes reachable, answers its `GET /version` readiness probe with 200, and survives activity recreation | arm64 device, app launched once so the assets are extracted |
 | **SplashActivityTest** | First-run extraction, and that a later launch skips it | arm64 device |
 | **ExtractionOnDeviceTest** | Bundled-extension extraction against the real `AssetManager`, including the abort and retry driven by a genuine out-of-space condition | arm64 device |

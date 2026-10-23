@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Moving the editor to a display with a different density preserves its session and rebuilds the key row at the new scale.
 - The Get Started walkthrough names C/C++ among the toolchains that install on demand.
 - The Settings editor fits a phone-width screen: its list no longer runs 131 px past the right edge at 411 px, and the window it opens in no longer ends past it either.
 - The Accounts and Manage buttons stay reachable in the activity bar on a phone in landscape: views that do not fit move into the overflow menu.
@@ -43,6 +44,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - App updates move a named profile's entries for the app's own extensions to the new version and remove the old copy.
 - Device-folder cleanup retains unrecorded workspace files, including names ending in `.vscodroid-partial`.
 - Device-folder imports preserve local edits made while the provider is being read.
+- Device-folder cleanup and replacement compare recorded files by content, protecting edits with unchanged size and timestamps.
+- Successfully saved files stay deleted when removed on the device and the folder is reopened.
+- Files fetched from incomplete device-folder listings remain writable while unread documents stay protected.
+- Incomplete listings and failed record replacements retain the previous sync history.
+- Device-folder sync rejects downloads shorter than the provider's reported size and refuses ambiguous lookups.
+- Device-folder saves follow provider-renamed directories and queued edits across folder renames.
+- Device-folder upload recovery supports filenames containing line breaks while preserving older recovery paths.
+- Saving a file ending in `.tmp` or `~` updates its device folder without reopening it.
+- Device-folder sync stops recursive provider loops and bounds excessively deep directory trees.
+- Conflict copies use free names so later device-folder syncs retain earlier copies.
+- Symbolic links no longer trigger a misleading save-failure notice in device folders.
 - Device-folder directory deletes preserve descendants added or changed on the device since the folder was opened.
 - Device-folder saves preserve both copies and report a failure when the upload recovery record cannot be written.
 - Device-folder saves and new files made just after a folder rename reach the renamed folder.
