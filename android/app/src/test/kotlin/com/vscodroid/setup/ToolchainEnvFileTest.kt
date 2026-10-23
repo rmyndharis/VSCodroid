@@ -309,13 +309,16 @@ class ToolchainEnvFileTest {
      * Anything the file prints while it is sourced, a syntax error included,
      * lands in the same output.
      */
-    private fun runJavaWrappers(commands: String): List<String> {
+    private fun runJavaWrappers(commands: String, jvmFlags: String = ""): List<String> {
         assumeTrue(File("/bin/bash").canExecute(), "no /bin/bash on this host")
         elf("$jdk/bin/java")
         elf("$jdk/bin/jshell")
         elf("$jdk/bin/keytool")
+        elf("$jdk/bin/javac")
         stateFile.writeText(
-            """[{"name":"java","binaries":["$jdk/bin/java","$jdk/bin/jshell","$jdk/bin/keytool"],""" +
+            """[{"name":"java","installRoot":"$jdk",""" +
+                """"binaries":["$jdk/bin/java","$jdk/bin/jshell","$jdk/bin/keytool","$jdk/bin/javac"],""" +
+                jvmFlags +
                 """"env":{"JAVA_HOME":"${'$'}FILESDIR/$jdk"}}]"""
         )
 
@@ -402,6 +405,55 @@ class ToolchainEnvFileTest {
             out,
             "the java or keytool wrapper no longer hands over the home or the temporary " +
                 "directory exactly once:\n" + envFile.readText(),
+        )
+    }
+
+    /**
+     * A JVM from 20 on probes the CPU's SVE vector length with prctl, which the app's
+     * seccomp filter refuses, and says so on stderr at the start of every run on a
+     * phone whose CPU advertises SVE. A manifest that lists `-XX:UseSVE=0` has every
+     * launcher in the JDK's bin/ start with it: `java` takes it as it is, and the tools
+     * beside it take it as a -J option, which they hand to the VM they start. A manifest
+     * that lists none, an install made while the pack held JDK 17, starts them without it,
+     * because JDK 17 has no such flag and refuses to start with one. A flag that is not
+     * the shape of one is dropped, for the same reason the names of the wrappers are
+     * held to a bar: the line is read by every new terminal.
+     */
+    @Test
+    fun `the JVM flags a manifest lists reach every launcher in the JDK`() {
+        val flags = """"jvmFlags":["-XX:UseSVE=0","a b","-X;rm","-Dx=\"y\""],"""
+        val out = runJavaWrappers(
+            """java -version; javac -version; keytool -list; jshell; """ +
+                """javac -J-Dx=1 A.java""",
+            jvmFlags = flags,
+        )
+
+        assertEquals(
+            listOf(
+                "</p/../$jdk/bin/java><-XX:UseSVE=0><-Duser.home=/h o/me><-Djava.io.tmpdir=/t m/p><-version>",
+                "</p/../$jdk/bin/javac><-J-XX:UseSVE=0><-version>",
+                "</p/../$jdk/bin/keytool><-J-XX:UseSVE=0><-J-Duser.home=/h o/me><-list>",
+                "</p/../$jdk/bin/jshell><-J-XX:UseSVE=0><-J-Djdk.lang.Process.launchMechanism=VFORK>" +
+                    "<-J-Duser.home=/h o/me><--execution><local>",
+                "</p/../$jdk/bin/javac><-J-XX:UseSVE=0><-J-Dx=1><A.java>",
+            ),
+            out,
+            "a JDK launcher no longer starts with the manifest's JVM flags, or took one that is " +
+                "not shaped like a flag:\n" + envFile.readText(),
+        )
+    }
+
+    @Test
+    fun `a manifest without JVM flags starts the launchers as before`() {
+        val out = runJavaWrappers("""java -version; javac -version""")
+
+        assertEquals(
+            listOf(
+                "$java<-version>",
+                "</p/../$jdk/bin/javac><-version>",
+            ),
+            out,
+            "an install made while the pack held JDK 17 must not be given a flag its JVM refuses",
         )
     }
 

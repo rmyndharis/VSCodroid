@@ -326,6 +326,20 @@ class ToolchainManager(private val context: Context) {
         )
 
         /**
+         * The JVM flags a toolchain manifest asks every JDK launcher to start with
+         * (`jvmFlags`), restricted to what a flag looks like. They are written into
+         * shell functions, so anything with a space, a quote or a metacharacter is
+         * dropped rather than trusted: the manifest is the app's own, but a line
+         * that breaks this file breaks every new terminal.
+         */
+        internal fun jvmFlagsOf(manifest: JSONObject): List<String> {
+            val flags = manifest.optJSONArray("jvmFlags") ?: return emptyList()
+            return (0 until flags.length())
+                .map { flags.optString(it, "") }
+                .filter { it.matches(Regex("-[A-Za-z0-9:=_.+-]+")) }
+        }
+
+        /**
          * How much of a file in `usr/bin` is read to find out what runs it.
          *
          * A `#!` line is the first thing in the file and a console script's is well
@@ -2889,10 +2903,20 @@ class ToolchainManager(private val context: Context) {
             }
             if (binaries != null) {
                 val lines = mutableListOf<String>()
+                val installRoot = tc.optString("installRoot", "")
+                val jvmFlags = jvmFlagsOf(tc)
                 for (i in 0 until binaries.length()) {
                     val relPath = binaries.getString(i)
                     val command = relPath.substringAfterLast('/')
                     if (command.isEmpty() || command in scriptNames) continue
+                    // The JVM flags the manifest names reach every launcher in the JDK's
+                    // bin/: `java` takes them as they are, every tool beside it takes
+                    // them as -J options. A manifest without any (an install made while
+                    // the pack carried JDK 17, which has no such flag) gets none.
+                    val jdkTool = jvmFlags.isNotEmpty() && installRoot.isNotEmpty() &&
+                        relPath.startsWith("$installRoot/bin/")
+                    val toolFlags = if (!jdkTool) "" else
+                        jvmFlags.joinToString(" ") { if (command == "java") it else "-J$it" } + " "
                     // A name bash cannot use as a function is skipped rather than
                     // written. The manifests are regenerated from upstream packages
                     // at build time, so a future version can introduce a binary
@@ -2961,6 +2985,7 @@ class ToolchainManager(private val context: Context) {
                                 "esac; done; " +
                                 "[ -n \"\$chosen\" ] || set -- --execution local \"\$@\"; " +
                                 "$systemLoader \"\$PREFIX/../$relPath\" " +
+                                toolFlags +
                                 "-J-Djdk.lang.Process.launchMechanism=VFORK " +
                                 "-J-Duser.home=\"\$HOME\" \"\$@\"; }"
                         )
@@ -2983,10 +3008,10 @@ class ToolchainManager(private val context: Context) {
                         } else {
                             "\${HOME:+\"-J-Duser.home=\$HOME\"}"
                         }
-                        lines.add("$command() { $systemLoader \"\$PREFIX/../$relPath\" $properties \"\$@\"; }")
+                        lines.add("$command() { $systemLoader \"\$PREFIX/../$relPath\" $toolFlags$properties \"\$@\"; }")
                         continue
                     }
-                    lines.add("$command() { $systemLoader \"\$PREFIX/../$relPath\" \"\$@\"; }")
+                    lines.add("$command() { $systemLoader \"\$PREFIX/../$relPath\" $toolFlags\"\$@\"; }")
                 }
                 if (lines.isNotEmpty()) {
                     sb.appendLine("# $name binaries (SELinux blocks exec under filesDir)")

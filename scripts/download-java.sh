@@ -331,6 +331,13 @@ done
 BINARIES+=']'
 SYMLINKS+='}'
 
+# jvmFlags: every JDK launcher starts with these (java as they are, the tools beside
+# it as -J options; see ToolchainManager). -XX:UseSVE=0 because a JVM from 20 on probes
+# the CPU's SVE vector length with prctl, the app's seccomp filter refuses the call, and
+# on any ARMv9 phone whose CPU advertises SVE every javac, jar and java run printed
+#   OpenJDK 64-Bit Server VM warning: Unable to get SVE vector length on this system.
+# Measured on an API 33 emulator whose CPU lists sve2: all six launchers tried did, once
+# each. The flag does not exist in JDK 17, so it is a manifest field and not a rule.
 cat > "$PACK_ASSETS/toolchain_java.json" << EOF
 {
     "name": "java",
@@ -343,6 +350,7 @@ cat > "$PACK_ASSETS/toolchain_java.json" << EOF
     },
     "pathDirs": ["usr/lib/jvm/$JDK_DIRNAME/bin"],
     "installRoot": "usr/lib/jvm/$JDK_DIRNAME",
+    "jvmFlags": ["-XX:UseSVE=0"],
     "libs": ["libandroid-shmem.so", "libandroid-spawn.so"]
 }
 EOF
