@@ -23,6 +23,11 @@ import java.io.File
  */
 class NarrowWindowPatchTest {
 
+    @Test
+    fun `modal minimum and positioned height fit a short window`() {
+        WorkbenchPatchBehavior.run("modal")
+    }
+
     /** The repository root is two levels above `android/app`, this suite's working directory. */
     private val patch: String = File("../../patches/0032-settings-list-and-modal-shrink-to-a-phone.patch").also {
         check(it.isFile) {
@@ -67,7 +72,7 @@ class NarrowWindowPatchTest {
             "the modal's minimum width must not exceed the window's",
         )
         assertTrue(
-            addedLines.contains("resizableElement.minSize = new Dimension(minWidth, MODAL_MIN_HEIGHT);"),
+            addedLines.contains("resizableElement.minSize = new Dimension(minWidth, minHeight);"),
             "the wrapper clamps up to the minSize it was created with, 400px, so without this " +
                 "line the modal is still 400px wide in a narrower window however `width` is clamped",
         )

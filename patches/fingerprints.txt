@@ -342,7 +342,7 @@
 
 # 0034's pattern is the name of the flag it adds. Member names survive the bundler (0029, 0032 and
 # 0033 rely on the same), and the literal is 0 times in the shipped 1.139.1 workbench.js.
-0034 short window yields the panel|out/vs/code/browser/workbench/workbench.js x9|panelYielded
+0034 short window yields the panel|out/vs/code/browser/workbench/workbench.js x11|panelYielded
 
 # The same patch's second flag, the height a panel that stayed in a short window had before it.
-0034 short window panel height is remembered|out/vs/code/browser/workbench/workbench.js x7|panelHeightBeforeShort
+0034 short window panel height is remembered|out/vs/code/browser/workbench/workbench.js x9|panelHeightBeforeShort

@@ -13,14 +13,14 @@ the narrower width had put it, so the modal began at 41px and ended 30px past th
 
 On Android the list may now shrink to 280px. NARROW_TOTAL_WIDTH, which decides when the table
 of contents is dropped, still goes by 500px, so a tablet or a desktop-sized window lays out as
-before. The modal's minimum width is capped at the window's, and the modal is centred from the
-width it really gets.
+before. The modal's minimum width and height are capped at the available window dimensions,
+and the modal is positioned from the dimensions the resizable element really draws.
 
 diff --git a/src/vs/workbench/browser/parts/editor/modalEditorPart.ts b/src/vs/workbench/browser/parts/editor/modalEditorPart.ts
-index ca467f2..b20ee5c 100644
+index ca467f29..5c08826c 100644
 --- a/src/vs/workbench/browser/parts/editor/modalEditorPart.ts
 +++ b/src/vs/workbench/browser/parts/editor/modalEditorPart.ts
-@@ -705,6 +705,13 @@ export class ModalEditorPart {
+@@ -705,6 +705,15 @@ export class ModalEditorPart {
  
  			height = Math.min(height, availableHeight); // Ensure the modal never exceeds available height (below the title bar)
  
@@ -28,14 +28,16 @@ index ca467f2..b20ee5c 100644
 +			// width it ends up with: resizableElement.layout raises a narrower request to its
 +			// minSize, which on a phone pushed the modal past the right edge.
 +			const minWidth = Math.min(effectiveMinWidth, containerDimension.width);
-+			resizableElement.minSize = new Dimension(minWidth, MODAL_MIN_HEIGHT);
++			const minHeight = Math.min(MODAL_MIN_HEIGHT, availableHeight);
++			resizableElement.minSize = new Dimension(minWidth, minHeight);
 +			width = Math.min(Math.max(width, minWidth), containerDimension.width);
++			height = Math.min(Math.max(height, minHeight), availableHeight);
 +
  			// On first layout, clamp sidebar width if it would leave the editor too narrow
  			if (isFirstLayout) {
  				isFirstLayout = false;
 diff --git a/src/vs/workbench/contrib/preferences/browser/settingsEditor2.ts b/src/vs/workbench/contrib/preferences/browser/settingsEditor2.ts
-index 9f9907c..8ba482d 100644
+index 9f9907cf..8ba482d2 100644
 --- a/src/vs/workbench/contrib/preferences/browser/settingsEditor2.ts
 +++ b/src/vs/workbench/contrib/preferences/browser/settingsEditor2.ts
 @@ -127,6 +127,9 @@ export class SettingsEditor2 extends EditorPane {

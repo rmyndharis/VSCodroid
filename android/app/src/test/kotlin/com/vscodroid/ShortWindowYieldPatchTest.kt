@@ -12,11 +12,26 @@ import java.io.File
  *
  * A panel cannot shrink under its 77px minimum, so on a phone in landscape with the soft
  * keyboard up it left the editor its tab strip and nothing else. The patch lives in
- * TypeScript on top of 0033's `shortWindow`, and nothing but this reads it, so the rules
- * that keep it from doing damage are pinned here by reading the source it adds:
- * [ShortWindowPatchTest] does the same for 0033, and no JVM test can lay the workbench out.
+ * TypeScript on top of 0033's `shortWindow`. Source checks keep the wiring aligned,
+ * and Node fixtures execute the yield decision, deferred snap handling, and saved
+ * move height. They do not render the workbench.
  */
 class ShortWindowYieldPatchTest {
+
+    @Test
+    fun `the executed panel decision and move retain visibility and height`() {
+        WorkbenchPatchBehavior.run("panel")
+    }
+
+    @Test
+    fun `an editor sash cannot reveal a yielded panel`() {
+        WorkbenchPatchBehavior.run("sash")
+    }
+
+    @Test
+    fun `saving a closed or yielded panel retains its unsqueezed height`() {
+        WorkbenchPatchBehavior.run("panel-save")
+    }
 
     /** The repository root is two levels above `android/app`, this suite's working directory. */
     private val patch: String = File("../../patches/0034-short-window-yields-the-panel.patch").also {
@@ -146,7 +161,7 @@ class ShortWindowYieldPatchTest {
             "a view outside the grid measures 0, which would be stored as the panel size for the next start",
         )
         assertTrue(
-            addedLines.any { it.contains("this.panelHeightBeforeShort ?? this.workbenchGrid.getViewSize(this.panelPartView).height") },
+            addedLines.any { it.contains("isHorizontal(this.getPanelPosition()) && this.panelHeightBeforeShort !== undefined") },
             "a panel that stayed in a short window is squeezed, and its squeezed height would be " +
                 "stored as the size for the next start",
         )

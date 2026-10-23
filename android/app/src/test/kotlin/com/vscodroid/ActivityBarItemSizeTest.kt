@@ -19,12 +19,16 @@ import java.io.File
  * pushed below the bar. Up to 1.133 the workbench used a constant 52, above the
  * floor, which is why nothing disagreed until the pin moved.
  *
- * Reading source rather than rendering, because the numbers sit in a string
- * literal here and in a TypeScript patch there, and no JVM test can lay either
- * out. So this cannot see a floor that is present and wrong, only the two
- * drifting apart, which is the whole of how the defect arose.
+ * The stylesheet and patch must agree on the floor and pointer. Node fixtures also
+ * execute the patched height getter for both pointers and compact and larger items.
+ * These checks cover the sizing decision; they do not render the workbench.
  */
 class ActivityBarItemSizeTest {
+
+    @Test
+    fun `coarse pointer item height respects both the touch floor and larger items`() {
+        WorkbenchPatchBehavior.run("activity")
+    }
 
     private val stylesheet: String =
         SourceScan.body(
