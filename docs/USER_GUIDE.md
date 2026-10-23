@@ -1000,6 +1000,8 @@ and Ninja; OpenMP (`-fopenmp`); the sanitizers (`-fsanitize=`); a debugger; and 
 program that calls `posix_spawn` does not compile. Programs are built for the phone, as arm64
 Android programs, and for nothing else.
 
+Two C library calls still name Termux's directories, because the headers were built for it: `tmpfile()` returns NULL and `getpwuid()` reports a home directory that does not exist here. Use `mkstemp` on a name under `getenv("TMPDIR")` and `getenv("HOME")` instead.
+
 `make -j4` starts four compilers at once, each a process Android counts against its phantom
 process limit (see [Android Phantom Process Limit](#android-phantom-process-limit)); `make -j2` is
 the sensible ceiling on a phone.
