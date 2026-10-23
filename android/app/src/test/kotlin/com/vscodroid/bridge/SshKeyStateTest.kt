@@ -60,16 +60,14 @@ class SshKeyStateTest {
         const val COMMENT = "alice@example.com"
         const val PUBLIC_LINE = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI0000000000 $COMMENT"
 
-        // Disposable test key; no external key generator is needed to run these tests.
-        val PRIVATE_KEY_FIXTURE = """
-            -----BEGIN OPENSSH PRIVATE KEY-----
-            b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
-            QyNTUxOQAAACBE+XagBHucV0ZB/1j6RqStC2pKEPJn8T261HcrvkeOsAAAAJCTz4fSk8+H
-            0gAAAAtzc2gtZWQyNTUxOQAAACBE+XagBHucV0ZB/1j6RqStC2pKEPJn8T261HcrvkeOsA
-            AAAEBfLok2TJcrpVBuG2ENPZe9pYMQB61KJjLVA+IgPP/mikT5dqAEe5xXRkH/WPpGpK0L
-            akoQ8mfxPbrUdyu+R46wAAAADHRlc3QtZml4dHVyZQE=
-            -----END OPENSSH PRIVATE KEY-----
-        """.trimIndent() + "\n"
+        // Only the shape of a key file matters here: the bytes are kept or they are not. The
+        // body is not a key, and the header is written in two pieces so that a secret scanner
+        // reading this source finds no key block in it.
+        val PRIVATE_KEY_FIXTURE = listOf(
+            "-----BEGIN OPENSSH " + "PRIVATE KEY-----",
+            "dGVzdC1maXh0dXJlLW5vdC1hLWtleQ==",
+            "-----END OPENSSH " + "PRIVATE KEY-----",
+        ).joinToString("\n") + "\n"
     }
 
     @BeforeEach

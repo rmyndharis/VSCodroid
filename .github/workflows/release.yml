@@ -192,10 +192,18 @@ jobs:
           # a sentence, and the case this gate exists to catch (a versionCode
           # that does not increase, so the release's migrations run for nobody)
           # is exactly the one it would then wave through.
-          version_name=$(grep -m1 -E '^[[:space:]]*versionName = ' "$gradle_file" | sed 's/.*"\(.*\)".*/\1/')
-          version_code=$(grep -m1 -E '^[[:space:]]*versionCode = ' "$gradle_file" | sed 's/[^0-9]*//g')
+          #
+          # Each value is cut out of its own declaration: the first quoted string, and
+          # the digits that follow the equals sign. Stripping every non-digit from the
+          # line instead turned `versionCode = 16 // v1.5.0` into 16150, and the
+          # greedy quote match took the last quoted string on a line that carries a
+          # comment, so either one made the comparison below about a number that was
+          # never declared.
+          version_name=$(grep -m1 -E '^[[:space:]]*versionName = ' "$gradle_file" | sed -E 's/^[^"]*"([^"]*)".*$/\1/')
+          version_code=$(grep -m1 -E '^[[:space:]]*versionCode = ' "$gradle_file" | sed -E 's/^[[:space:]]*versionCode = ([0-9]+).*$/\1/')
           tag_version=${TAG#v}
 
+          case "$version_code" in *[!0-9]*) version_code="" ;; esac
           if [ -z "$version_name" ] || [ -z "$version_code" ]; then
             echo "::error::Could not read versionName/versionCode from $gradle_file." \
                  "The declaration moved or changed shape; this gate compared nothing."
@@ -233,7 +241,9 @@ jobs:
           previous=$(git tag --list 'v[0-9]*' --sort=-v:refname | grep -vFx "$TAG" | head -1 || true)
           if [ -n "$previous" ]; then
             previous_code=$(git show "$previous:$gradle_file" 2>/dev/null \
-              | grep -m1 -E '^[[:space:]]*versionCode = ' | sed 's/[^0-9]*//g' || echo "")
+              | grep -m1 -E '^[[:space:]]*versionCode = ' \
+              | sed -E 's/^[[:space:]]*versionCode = ([0-9]+).*$/\1/' || echo "")
+            case "$previous_code" in *[!0-9]*) previous_code="" ;; esac
             if [ -n "$previous_code" ] && [ "$version_code" -le "$previous_code" ]; then
               echo "::error::versionCode $version_code is not greater than $previous_code in $previous." \
                    "Migrations threshold on versionCode and would not run."
