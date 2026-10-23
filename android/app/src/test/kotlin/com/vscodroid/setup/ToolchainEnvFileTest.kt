@@ -459,7 +459,7 @@ class ToolchainEnvFileTest {
         // execute bit. The JVM starts the helper by absolute path and jexec is a `#!` target, so a
         // function named after either only added a command that prints nothing useful.
         val out = runJavaWrappers(
-            """type -t jexec || echo none; type -t java""",
+            """declare -F jexec || echo none; type -t java""",
             jvmFlags = """"jvmFlags":["-XX:UseSVE=0"],""",
         )
 
