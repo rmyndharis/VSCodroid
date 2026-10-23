@@ -878,6 +878,31 @@ The C/C++ toolchain is the largest. Installing a toolchain holds the unpacked co
 installed copy at once, so the install asks for roughly twice the installed size free while
 it runs, which for this one is about 570 MB.
 
+### What You Get For Each Language
+
+Every language gets syntax highlighting, the title bar's play button and a terminal. What sits
+beyond that differs a great deal, and this is the whole of it, so you can pick what you need:
+
+| Language | Run button | Completion and error squiggles | Debugger | Packages |
+|----------|------------|--------------------------------|----------|----------|
+| JavaScript and TypeScript (bundled) | `node file` | Yes, the editor's own | js-debug | npm; see the TypeScript note below |
+| Python (bundled) | Yes | Completion and hover from Jedi; no type checking | None | pip, including wheels built for Android (numpy installs and runs) |
+| Ruby | `ruby file` | None | None | gem and bundler; a gem with a compiled part needs the C/C++ toolchain as well (puma and nio4r build) |
+| Java 21 | `java file` (a single source file) | None | None | None: no Maven or Gradle |
+| C and C++ | Compiles to a temporary file and runs it | None | None | None: no CMake or Ninja; `make` works |
+
+**Java and C/C++ here are for compiling and running programs, not an IDE.** The Language
+Support for Java extension from Open VSX installs but cannot run: it starts its server by the
+JDK's full path, which Android refuses to execute, and the server it would start needs about 650
+MB of memory on a phone. Nothing in VSCodroid works around that, so do not expect error squiggles
+or completion for Java. The same goes for C and C++, where `clangd` is not included.
+
+**TypeScript.** `npm install typescript` now installs version 7, whose compiler is a native
+program with no Android build, so `npx tsc` stops with `Unable to resolve ... Either your
+platform is unsupported`. Install `typescript@6` instead, which compiles in JavaScript and works
+here. The editor's own TypeScript checking is separate and is not affected. Node itself runs
+`.ts` files directly (`node file.ts`) as long as they use only syntax that can be stripped.
+
 ### Installing During First Run
 
 The Language Picker appears on first launch. Select the languages you want and they
