@@ -1,0 +1,73 @@
+name: Self-check Node compatibility
+
+on:
+  push:
+    branches:
+      - fix/self-check-node-version-message
+  pull_request:
+    branches: [main]
+    paths:
+      - scripts/test-auth-callback-provider.js
+      - scripts/test-bridge-relay.js
+      - .github/workflows/self-check-node-compat.yml
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: self-check-node-compat-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  node-20-diagnostic:
+    name: Node 20 compatibility diagnostic
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node.js 20.20.2
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 20.20.2
+      - name: Assert both affected scripts explain the missing API
+        shell: bash
+        run: |
+          set -euo pipefail
+          for script in scripts/test-auth-callback-provider.js scripts/test-bridge-relay.js; do
+            output_file="$(mktemp)"
+            if node "$script" >"$output_file" 2>&1; then
+              cat "$output_file"
+              echo "::error::$script unexpectedly succeeded on Node 20"
+              exit 1
+            fi
+            cat "$output_file"
+            grep -Fq 'needs node:module.stripTypeScriptTypes' "$output_file"
+            grep -Fq 'this is v20.20.2' "$output_file"
+            if grep -Fq 'TypeError: stripTypeScriptTypes is not a function' "$output_file"; then
+              echo "::error::$script regressed to the original TypeError"
+              exit 1
+            fi
+            rm -f "$output_file"
+          done
+
+  node-24-self-checks:
+    name: Affected self-checks on Node 24.22.1
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - name: Checkout
+        uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+        with:
+          persist-credentials: false
+      - name: Set up Node.js 24.22.1
+        uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
+        with:
+          node-version: 24.22.1
+      - name: Run both affected self-checks
+        run: |
+          node scripts/test-auth-callback-provider.js
+          node scripts/test-bridge-relay.js
