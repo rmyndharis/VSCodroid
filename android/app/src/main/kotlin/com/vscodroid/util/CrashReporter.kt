@@ -332,10 +332,11 @@ object CrashReporter {
             // would read as a crash that had nothing to say.
             val timestamp = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US).format(Date())
             var file = File(crashDir, "crash_$timestamp.txt")
-            var taken = 1
-            while (taken < MAX_LOGS && !file.createNewFile()) {
-                file = File(crashDir, "crash_${timestamp}_$taken.txt")
+            var taken = 0
+            while (!file.createNewFile()) {
                 taken++
+                if (taken == MAX_LOGS) return
+                file = File(crashDir, "crash_${timestamp}_$taken.txt")
             }
 
             file.writeText(sw.toString())

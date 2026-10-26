@@ -23,6 +23,9 @@ import org.junit.jupiter.api.Nested
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.text.SimpleDateFormat
+import java.util.Date
+import java.util.Locale
 import java.util.concurrent.atomic.AtomicReference
 
 /**
@@ -357,6 +360,43 @@ class CrashReporterTest {
         fun pointTheServerLogSomewhereEmpty() {
             mockkObject(Environment)
             every { Environment.getLogsDir(any()) } returns File(tempDir, "logs").absolutePath
+        }
+
+        @Test
+        fun `reports and crash previews redact escaped quoted password values`() {
+            val line = """{"DB_PASSWORD":"prefix \" PRIVATE_SUFFIX"}"""
+            val crashDir = initCrashDir()
+            File(crashDir, "crash_20260214_120000.txt").writeText("$line\nretained crash frame")
+            val log = File(tempDir, "logs/server.log")
+            log.parentFile.mkdirs()
+            log.writeText("$line\nretained server context\n")
+
+            val preview = CrashReporter.getLastCrash()!!
+            val report = CrashReporter.generateBugReport(context)
+
+            assertFalse("PRIVATE_SUFFIX" in preview)
+            assertTrue("retained crash frame" in preview)
+            assertFalse("PRIVATE_SUFFIX" in report)
+            assertTrue("retained crash frame" in report)
+            assertTrue("retained server context" in report)
+            assertTrue("<redacted>" in report)
+        }
+
+        @Test
+        fun `unfinished quoted passwords retain no content in previews or reports`() {
+            val line = "DB_PASSWORD=\"first PRIVATE_SUFFIX"
+            val crashDir = initCrashDir()
+            File(crashDir, "crash_20260214_120000.txt").writeText("$line\nretained crash frame")
+            val log = File(tempDir, "logs/server.log")
+            log.parentFile.mkdirs()
+            log.writeText("$line\nretained server context\n")
+
+            val preview = CrashReporter.getLastCrash()!!
+            val report = CrashReporter.generateBugReport(context)
+            assertFalse("PRIVATE_SUFFIX" in preview)
+            assertFalse("PRIVATE_SUFFIX" in report)
+            assertTrue("retained crash frame" in report)
+            assertTrue("retained server context" in report)
         }
 
         @Test
@@ -911,6 +951,55 @@ class CrashReporterTest {
                     "caused, which is the only one worth reading:\n$all",
             )
             assertTrue(all.contains("the symptom"), "the second crash is missing:\n$all")
+        }
+
+        private fun reserveCrashNames(slots: Int): Pair<Long, Map<File, String>> {
+            Thread.setDefaultUncaughtExceptionHandler { _, _ -> }
+            val context = mockk<Context>(relaxed = true)
+            every { context.cacheDir } returns tempDir
+            CrashReporter.init(context)
+            val started = System.currentTimeMillis()
+            val format = SimpleDateFormat("yyyyMMdd_HHmmss", Locale.US)
+            val records = mutableMapOf<File, String>()
+            for (second in 0..30) {
+                val timestamp = format.format(Date(started + second * 1000L))
+                for (slot in 0 until slots) {
+                    val suffix = if (slot == 0) "" else "_$slot"
+                    val file = File(tempDir, "crash-logs/crash_$timestamp$suffix.txt")
+                    records[file] = "existing record $second/$slot"
+                    file.writeText(records.getValue(file))
+                }
+            }
+            return started to records
+        }
+
+        @Test
+        fun `exhausting the crash name budget preserves every existing record`() {
+            val (started, records) = reserveCrashNames(10)
+
+            Thread.getDefaultUncaughtExceptionHandler()!!.uncaughtException(
+                Thread("worker"), IllegalStateException("later crash"),
+            )
+
+            assertTrue(System.currentTimeMillis() - started < 30_000, "the filename fixture expired")
+            records.forEach { (file, text) -> assertEquals(text, file.readText(), file.name) }
+            assertEquals(records.size, File(tempDir, "crash-logs").listFiles()!!.size)
+        }
+
+        @Test
+        fun `the last free crash name is reserved and used`() {
+            val (started, records) = reserveCrashNames(9)
+
+            Thread.getDefaultUncaughtExceptionHandler()!!.uncaughtException(
+                Thread("worker"), IllegalStateException("later crash"),
+            )
+
+            assertTrue(System.currentTimeMillis() - started < 30_000, "the filename fixture expired")
+            records.forEach { (file, text) -> assertEquals(text, file.readText(), file.name) }
+            val added = File(tempDir, "crash-logs").listFiles()!!.filter { it !in records }
+            assertEquals(1, added.size)
+            assertTrue(added.single().readText().contains("later crash"))
+            assertTrue(added.single().name.endsWith("_9.txt"))
         }
     }
 }

@@ -26,6 +26,50 @@ class ServerLogTest {
     private fun logFile() = File(tempDir, "logs/server.log")
 
     @Test
+    fun `quoted passwords retain no suffix after an escaped quote`() {
+        val lines = listOf(
+            """{"DB_PASSWORD":"prefix \" PRIVATE_SUFFIX"}""",
+            """{\"DB_PASSWORD\":\"prefix \\\" PRIVATE_SUFFIX\"}""",
+            """DB_PASSWORD='prefix \' PRIVATE_SUFFIX' trailing diagnostic""",
+            """DB_PASSWORD="prefix \\ PRIVATE_SUFFIX" trailing diagnostic""",
+        )
+        for (line in lines) {
+            val once = redactSecrets(line)
+            assertFalse("PRIVATE_SUFFIX" in once, "a password suffix survived: $once")
+            assertTrue("<redacted>" in once)
+            assertEquals(once, redactSecrets(once), "a second report pass changed the result")
+            if ("trailing diagnostic" in line) assertTrue("trailing diagnostic" in once)
+            val file = logFile()
+            file.delete()
+            ServerLog(file).append(line)
+            assertFalse("PRIVATE_SUFFIX" in file.readText())
+        }
+    }
+
+    @Test
+    fun `unfinished quoted secrets redact through the end of their line`() {
+        for (line in listOf(
+            "DB_PASSWORD=\"first PRIVATE_SUFFIX",
+            "DB_PASSWORD='first PRIVATE_SUFFIX",
+            "DB_PASSWORD=\\\"first PRIVATE_SUFFIX",
+        )) {
+            val redacted = redactSecrets("$line\nretained stack frame")
+            assertEquals("DB_PASSWORD=<redacted>\nretained stack frame", redacted)
+            assertEquals(redacted, redactSecrets(redacted))
+            val file = logFile()
+            file.delete()
+            ServerLog(file).append(line)
+            assertFalse("PRIVATE_SUFFIX" in file.readText())
+        }
+    }
+
+    @Test
+    fun `a long quoted password with escapes does not exhaust the stack`() {
+        val line = "DB_PASSWORD=\"" + "\\\"".repeat(20_000) + "PRIVATE_SUFFIX\" trailing diagnostic"
+        assertEquals("DB_PASSWORD=<redacted> trailing diagnostic", redactSecrets(line))
+    }
+
+    @Test
     fun `each line lands in the file as its own line`() {
         val file = logFile()
         val log = ServerLog(file)
