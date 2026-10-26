@@ -347,11 +347,11 @@ owning extension is what frees a slot.
 sequenceDiagram
   participant W as WebView (vscode-web)
   participant S as VS Code Server (vscode-reh)
-  W->>S: GET /index.html
-  S-->>W: index.html (initial page load)
+  W->>S: GET / with workspace and connection-token query
+  S-->>W: Workbench HTML (initial page load)
   W->>S: GET /static/*
   S-->>W: JS, CSS, fonts
-  W->>S: Connect WebSocket /ws
+  W->>S: Connect the remote-agent WebSocket
   S-->>W: RPC stream (file operations, terminal I/O, extension messages, diagnostics)
 ```
 

@@ -171,7 +171,7 @@ fresh.
 
 | ID | Scenario | Steps | Expected Result | Pass/Fail | Notes |
 |----|----------|-------|-----------------|-----------|-------|
-| ST-1 | Trim memory signal | `adb shell am send-trim-memory <PID> RUNNING_CRITICAL` | Process monitor kills idle LS, no crash | | |
+| ST-1 | Trim memory signal | `adb shell am send-trim-memory <PID> RUNNING_CRITICAL` | Critical pressure is logged without a crash; idle language servers remain running | | |
 | ST-2 | Many terminals | Open 10 terminal tabs | Bash spawns for each, process count reported | | |
 | ST-3 | OOM recovery | Force WebView OOM (open huge file + extensions) | onRenderProcessGone fires, WebView recreated | | |
 | ST-4 | Storage nearly full | Fill device storage to under 100 MB free, as Settings reports it | Warning toast shown, app still functional | | |

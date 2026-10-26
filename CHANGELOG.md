@@ -21,6 +21,94 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Load the language-detection CPU backend in browser workers without requiring CommonJS.
+- Detect a stopped adopted editor even when another process answers its health URL.
+- Reload the editor when an adopted server changes during readiness checks.
+- Honor empty Android trust stores and keep raw system roots from overriding certificate removals.
+- Preserve curl's independent trust store when the managed CA bundle is unavailable.
+- Capture keyboard validation screenshots after WebView renders the current frame.
+- Preserve visual arrow-key movement in right-to-left and mixed text without moving focus out of text fields.
+- Preserve existing SSH public files and keys imported during key generation.
+- Stop failed or interrupted SSH generation before cleaning its temporary output.
+- Keep device conflict copies and fallback timestamp updates inside their selected device folder mirror.
+- Keep newer folder and workspace configuration when earlier reads finish.
+- Stop extension-host startup after its connection is disposed.
+- Load webview resources from every active workspace member.
+- Keep current resource roots when workspace folders change during initialization.
+- Keep deeply nested device-folder saves within the open-file limit.
+- Read startup settings for the final workspace selector in the page URL.
+- Refuse redirected device-folder upload sources before opening or truncating provider documents.
+- Keep Python runtime repair pending when the packaged standard-library root cannot be read.
+- Redact unfinished quoted passwords through the end of their diagnostic line.
+- Bound test subprocess output and cleanup, and require isolated storage for disk-pressure tests.
+- Make accessibility and About-dialog checks follow the configured language.
+- Reject stale sign-in bootstrap metadata before it reaches a replacement editor document.
+- Preserve GNU and XPG error-string return values and buffer limits in native compatibility libraries.
+- Prevent a delayed server-log page from replacing a newer editor or recovery screen.
+- Resolve device-folder filesystem aliases before selecting their synchronization watcher.
+- Keep the composition caret at the requested character offset across line breaks.
+- Account for activity-bar insets and item gaps when choosing overflow actions.
+- Refresh activity-bar item sizes when the pointer type changes.
+- Restore closed workspaces from either supported loopback host.
+
+- Use accurate device-folder recovery messages in every supported language.
+
+- Keep named-folder preference write failures inside the command error handler.
+- Increase toolchain action buttons to a minimum 48dp touch target.
+- Correct backup, compiler-launch, build, and server-entry instructions.
+
+- Keep delayed Run File requests from replacing a newer terminal or opening stale toolchain prompts.
+- Recheck unsaved work and workspace identity before reopening a device folder by name.
+- Preserve newer carried-editor records when an earlier reopen is canceled or fails.
+
+- Preserve a closed workspace when an earlier recovery lookup finishes.
+- Publish adopted server ownership and its watchdog before Stop can retire them.
+- Attribute heap-limit death counts to the value used by the process that ended.
+- Keep debug environment changes local when a terminal is reused.
+- Retry server startup when the editor cannot bind its listener.
+
+- Protect device-folder copies used by workspace members and restored editors before filesystem access.
+
+- Keep toolchain downloads cancellable when concurrent install or removal requests overlap.
+- Retain Play download subscriptions until every requested toolchain settles.
+- Match toolchain cards to the current HTTP transfer when delayed progress or failure reports arrive.
+
+- Match the editor's final workspace URL selector before remembering or adopting a device folder.
+
+- Setup retries bundled files that were listed but could not be opened.
+- Managed settings preserve commented examples while updating active values.
+- Reinstalling an app with unchanged version labels refreshes bundled files.
+- Older app-owned Claude terminal wrappers receive the current compatibility launcher.
+- Setup retries show the current failure cause without an outdated or empty step label.
+- Removing an old device-folder copy retains pending saves created after a new folder grant.
+- WebSocket proxy upgrades send the target host while retaining authentication and header encoding.
+- Process details classify interpreter entrypoints without mistaking input paths or flags for language servers.
+- Resource files with literal question marks retain their correct MIME type.
+- Download filenames honor supported character encodings and fall back for unsupported encodings.
+- Duplicate blob downloads preserve the active save, and revoked previews release their captured bytes.
+- Device-folder copies and sync records survive revoked permissions until explicitly removed.
+- Removing a device-folder copy always requires confirmation and preserves copies used in the current session.
+- Device-folder removals refuse queued requests and ignore expired native confirmations.
+- Removal timeouts report an unknown outcome without retrying the request.
+- Setup file replacements preserve files linked through a leftover temporary path.
+- Python repair remains pending when its standard library cannot be copied.
+- Project shortcuts retain their previous directory when the replacement target is a file.
+- Older bundled extension entries gain builtin status while preserving profile metadata.
+- Automatic editor recovery preserves the unsaved-work confirmation.
+- Complete IME text commits survive latched Ctrl or Alt in the editor.
+- Plain Enter consumes the key row's Shift latch while preserving physical modifiers.
+- A stale navigation cancellation retains the newer loading cover.
+- Sign-in callbacks preserve literal percent characters in extension URI components.
+- Native addon file copies reject overlapping ranges before modifying the file.
+- CLI compatibility waits handle large and invalid timeouts without integer overflow.
+- Diagnostic exports redact quoted passwords containing escaped quotes.
+- Repeated crashes preserve existing logs when their filename budget is exhausted.
+- Recent-folder eviction retains permissions reacquired by a replacement screen.
+- Folder removal retires its sync records and permission before a new grant.
+- Interrupted mirror cleanup retains a recoverable directory and sync-record pair.
+- Device-folder deletes retain replacement files and pending saves when document IDs are reused.
+- Pending child saves retry temporary failures after a directory rename without repeating completed uploads.
+- Mirror cleanup retains named paths and opening markers after folder permission is reacquired.
 - Settings and notification popups fit short windows and use the space left by hidden title and status bars.
 - Resizing or moving a panel in a short window preserves its height across position changes and reloads.
 - Toggling the status bar while it is temporarily hidden keeps the chosen visibility when the window grows.
@@ -47,12 +135,16 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - App updates move a named profile's entries for the app's own extensions to the new version and remove the old copy.
 - Device-folder cleanup retains unrecorded workspace files, including names ending in `.vscodroid-partial`.
 - Device-folder imports preserve local edits made while the provider is being read.
+- Device-folder imports retain distinct local copies when sync history is missing or unreadable.
+- Device-folder cleanup verifies provider bytes before upgrading older sync records.
+- Device-folder deletes verify provider content and retain unknown, changed or unreadable files.
+- Queued deletes retain their original provider baseline until a directory rename succeeds.
 - Device-folder cleanup and replacement compare recorded files by content, protecting edits with unchanged size and timestamps.
 - Successfully saved files stay deleted when removed on the device and the folder is reopened.
 - Files fetched from incomplete device-folder listings remain writable while unread documents stay protected.
 - Incomplete listings and failed record replacements retain the previous sync history.
 - Device-folder sync rejects downloads shorter than the provider's reported size and refuses ambiguous lookups.
-- Device-folder saves follow provider-renamed directories and queued edits across folder renames.
+- Pending files and folders follow directory renames, including provider-normalized names.
 - Device-folder upload recovery supports filenames containing line breaks while preserving older recovery paths.
 - Saving a file ending in `.tmp` or `~` updates its device folder without reopening it.
 - Device-folder sync stops recursive provider loops and bounds excessively deep directory trees.
@@ -73,11 +165,21 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Device-folder saves, deletes and renames that arrive while another write to the folder is still going wait up to two minutes for their turn instead of being dropped.
 - A file and a folder that share a name between the device and the editor no longer fail at every open: the device's keeps the name and the editor's is set aside as `.local-<time>` and sent across.
 - An unchanged file in the editor that the device replaced with a folder is removed instead of set aside.
-- An older version's half-copied `.vscodroid-partial` files are removed when a device folder is reopened, if they match the start of the device document.
 - A device folder listing that the provider has not finished loading no longer removes files from the editor or creates them again on the device.
 - A device-folder import refuses to install a copy if a parent directory is redirected by a symbolic link during the read.
 - Generating SSH keys preserves an existing private key whose public file is missing and explains how to recover the public key.
 - Toolchain installation rejects packs with a missing payload directory or required binary instead of marking them installed.
+- Toolchain installation and cleanup preserve unreadable installation records.
+- Toolchain recovery retains installation markers until all named paths are settled.
+- Toolchain removal refuses paths reached through redirected parent directories.
+- Asset extraction and toolchain installation refuse redirected destination directories.
+- App updates preserve nested user preferences when removing migrated defaults.
+- Retired extension cleanup preserves platform-specific gallery installations.
+- Legacy server cleanup unlinks symbolic links without deleting their targets.
+- Device tests stop before clearing app data when the build or installation fails.
+- Device launch checks count only the requested application's Node processes.
+- Native addon verification rejects scans containing only unsupported addons.
+- Wheelhouse generation accepts relative and external output paths.
 - Cancelling a toolchain install no longer deletes a pack during a copy.
 - A toolchain install is refused while a pack removal is pending.
 - Removing a toolchain works while Play is still clearing its download.

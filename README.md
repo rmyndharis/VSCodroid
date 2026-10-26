@@ -221,7 +221,7 @@ git clone https://github.com/rmyndharis/VSCodroid.git
 cd VSCodroid
 
 # Build the Android app
-cd android && ./gradlew assembleDebug
+(cd android && ./gradlew assembleDebug)
 
 # Install on connected device
 adb install android/app/build/outputs/apk/debug/app-debug.apk

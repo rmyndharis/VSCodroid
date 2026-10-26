@@ -85,7 +85,8 @@ VSCodroid is VS Code. If you have used VS Code on desktop, everything works the 
   unnoticed, and a folder over 64 MB that changes a file's time on its own can
   occasionally leave such a copy holding the file as you opened it, until
   VSCodroid has read each of its files once after an update from version 1.4.0
-  or earlier, which it does 64 MB per opening of the folder. A folder that
+  or earlier. It checks up to 64 MB per opening of local copies and reads the
+  corresponding provider bytes before recording them as synchronized. A folder that
   reports no times cannot say which copy is newer when yours and the device
   folder's differ as you open it, as when another app changed a file you saved
   there in an earlier session: the editor keeps showing your version, and your
@@ -120,8 +121,10 @@ VSCodroid is VS Code. If you have used VS Code on desktop, everything works the 
 - A file of a device folder that you delete in the editor is deleted in the
   device folder too, unless the device folder's version is one VSCodroid has not
   read: another app may have changed it since you opened the folder or last
-  saved the file, by the same check as a save, or opening the folder could not
-  read it. Such a file is kept in the device folder, and so is a folder holding
+  saved the file, or opening the folder could not read it. Deletion requires
+  the provider bytes to match the version VSCodroid last read or delivered,
+  even when its size and timestamp are unchanged. An unavailable read keeps
+  the provider file. Such a file is kept in the device folder, and so is a folder holding
   it, or holding a file another app added since you opened the folder, that you
   delete from the terminal; a notice says so, and the file comes
   back into the editor the next time you open the folder.
@@ -129,6 +132,12 @@ VSCodroid is VS Code. If you have used VS Code on desktop, everything works the 
   deletes of existing device documents under that directory are held back.
   Your edits stay inside VSCodroid until you reopen the folder successfully
   and save again; the unread device version is kept.
+- Device-folder copies stay inside VSCodroid after their folder permission is
+  removed. Use **VSCodroid: Manage Device Folder Storage** to see and remove them.
+  Copies may contain files that never reached the device folder. Save anything
+  needed elsewhere and stop terminals or other work using the copy before removal.
+  Removing a copy asks for confirmation in the editor and in Android. A copy used
+  in the current session remains protected until VSCodroid restarts.
 - The Explorer and the title bar show a device folder under its own name. A
   folder opened in an earlier version is shown under a twelve-character code
   such as `8e440ff38c8e`, the name of its copy, and offers to reopen under its
@@ -1000,7 +1009,7 @@ and Ninja; OpenMP (`-fopenmp`); the sanitizers (`-fsanitize=`); a debugger; and 
 program that calls `posix_spawn` does not compile. Programs are built for the phone, as arm64
 Android programs, and for nothing else.
 
-Two C library calls still name Termux's directories, because the headers were built for it: `tmpfile()` returns NULL and `getpwuid()` reports a home directory that does not exist here. Use `mkstemp` on a name under `getenv("TMPDIR")` and `getenv("HOME")` instead.
+Newly built C/C++ packs make `tmpfile()` use `TMPDIR`, and `getpwuid()` use `HOME` and `SHELL`. Reinstall an older pack to get those header fixes. The `P_tmpdir` and `_PATH_TMP` macros still name Termux paths; use `getenv("TMPDIR")` instead.
 
 `make -j4` starts four compilers at once, each a process Android counts against its phantom
 process limit (see [Android Phantom Process Limit](#android-phantom-process-limit)); `make -j2` is
@@ -1512,10 +1521,11 @@ in-app routes exist:
 - Or run **VSCodroid: Open Folder from Device** from the Command Palette
   (**Ctrl+Shift+P**), choose a folder outside the app such as Documents, and copy
   your work there. A folder opened that way lives outside the app's storage, so
-  Clear Data does not touch it. **It does not carry `.git` or `.env`**, along
-  with `node_modules`, `.gradle`, `.idea`, `venv` and `__pycache__`: the
-  device-folder sync skips those directories, so this rescues your files but not
-  your repository history and not your local configuration.
+  Clear Data does not touch it. Device-folder sync skips directories named
+  `.git`, `.env`, `node_modules`, `.gradle`, `.idea`, `venv` and `__pycache__`.
+  An ordinary `.env` file is copied, including any configuration or secrets it
+  contains. This rescues your files, but the excluded `.git` directory means it
+  does not preserve repository history.
 
 Then clear app data from Settings > Apps > VSCodroid > Clear Data and relaunch.
 

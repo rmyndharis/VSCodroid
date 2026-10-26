@@ -243,11 +243,12 @@
         <li class="feature">
           <h3>Tools start indirectly</h3>
           <p>
-            Android refuses to execute files in an app's private storage, so a
-            toolchain's commands are reached through a small launcher on PATH.
-            Typing them, running them from a task and extensions spawning them
-            all work; <code>pip</code> and <code>npm</code> are shell functions,
-            so a task has to spell those as <code>python3 -m pip</code>.
+            Android refuses to execute files in an app's private storage.
+            Ruby and Java commands use launchers on PATH, including extension
+            spawns and process tasks. C/C++ requires a terminal or shell task;
+            direct compiler spawns are unsupported. <code>pip</code> and
+            <code>npm</code> are shell functions, so use a shell task for them,
+            or <code>python3 -m pip</code> for pip in a process task.
           </p>
         </li>
         <li class="feature">
