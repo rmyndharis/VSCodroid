@@ -336,6 +336,13 @@ class DownloadCoordinator(
         // behind would let a later download of the same URL that the page did
         // not name inherit this one's filename.
         val fileName = downloadFileName(url, contentDisposition, reportedNames.remove(url))
+        if (url.startsWith("blob:") &&
+            (pending?.url == url || waiting.any { it.url == url })
+        ) {
+            // The page has one hold for this URL, still owned by the earlier request.
+            host.report(DownloadOutcome.FAILED, fileName, "this blob download is already in progress")
+            return
+        }
         requestCounter += 1
         val request = Pending("dl-$requestCounter", url, fileName)
 

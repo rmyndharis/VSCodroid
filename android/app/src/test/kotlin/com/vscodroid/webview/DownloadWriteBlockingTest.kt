@@ -244,7 +244,12 @@ class DownloadWriteBlockingTest {
     @AfterEach
     fun tearDown() {
         release.countDown()
-        providerWork.shutdownNow()
+        awaitProviderIdle()
+        providerWork.shutdown()
+        assertTrue(
+            providerWork.awaitTermination(5, TimeUnit.SECONDS),
+            "the provider worker must finish before its mocks are removed",
+        )
         unmockkAll()
     }
 

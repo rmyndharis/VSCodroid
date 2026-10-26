@@ -1,6 +1,7 @@
 package com.vscodroid.webview
 
 import java.net.URLDecoder
+import java.nio.charset.Charset
 
 /**
  * The name offered when nothing usable can be read off the download.
@@ -31,7 +32,7 @@ private const val FIRST_PRINTABLE = 0x20
 private const val DELETE_CHAR = 0x7F
 
 private val CONTENT_DISPOSITION_EXTENDED =
-    Regex("""filename\*\s*=\s*[^']*'[^']*'([^;]+)""", RegexOption.IGNORE_CASE)
+    Regex("""filename\*\s*=\s*([^']*)'[^']*'([^;]+)""", RegexOption.IGNORE_CASE)
 
 private val CONTENT_DISPOSITION_PLAIN =
     Regex("""filename\s*=\s*"([^"]*)"|filename\s*=\s*([^;"]+)""", RegexOption.IGNORE_CASE)
@@ -139,8 +140,13 @@ private fun String.takeBytes(maxBytes: Int): String {
 
 private fun fileNameFromContentDisposition(header: String?): String? {
     if (header.isNullOrEmpty()) return null
-    CONTENT_DISPOSITION_EXTENDED.find(header)?.groupValues?.get(1)?.let {
-        return percentDecode(it.trim())
+    CONTENT_DISPOSITION_EXTENDED.find(header)?.groupValues?.let { values ->
+        val charset = try {
+            Charset.forName(values[1]).name()
+        } catch (_: IllegalArgumentException) {
+            null
+        }
+        if (charset != null) return percentDecode(values[2].trim(), charset)
     }
     val plain = CONTENT_DISPOSITION_PLAIN.find(header) ?: return null
     return plain.groupValues.drop(1).firstOrNull { it.isNotEmpty() }?.trim()
@@ -175,7 +181,7 @@ private fun lastPathSegment(url: String): String? =
  * throw would travel out of a naming helper and cancel a download over a
  * filename.
  */
-private fun percentDecode(value: String): String =
+private fun percentDecode(value: String, charset: String = "UTF-8"): String =
     try {
         // Percent-escapes only. `URLDecoder` also turns `+` into a space, which
         // is the rule for a query parameter and wrong everywhere else: a path
@@ -183,7 +189,7 @@ private fun percentDecode(value: String): String =
         // so `c++notes.txt` would arrive as `c  notes.txt`. Escaping it first
         // makes the decoder hand it back unchanged, and the one caller that
         // does want the query rule applies it before calling here.
-        URLDecoder.decode(value.replace("+", "%2B"), "UTF-8")
+        URLDecoder.decode(value.replace("+", "%2B"), charset)
     } catch (e: IllegalArgumentException) {
         value
     }
