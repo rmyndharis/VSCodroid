@@ -103,6 +103,8 @@
          type is quoted because the audience is developers and it is the part
          worth putting in a bug report. -->
     <string name="url_handoff_failed">Não foi possível abrir esse link %1$s (%2$s).</string>
+    <string name="sign_in_not_ready">O editor não está pronto para esse login. Recarregue o editor e tente de novo.</string>
+    <string name="sign_in_not_issued">O editor não iniciou esse login. Tente entrar de novo.</string>
 
     <!-- A page inside the editor asked for an https address the WebView would not
          load: a dev server previewed in the Simple Browser, an image in a preview,
@@ -207,6 +209,7 @@
     <string name="toolchain_cancel">Cancelar</string>
     <string name="toolchain_remove_confirm_title">Remover %s?</string>
     <string name="toolchain_remove_confirm_message">Isso vai excluir todos os arquivos do %s. Você pode reinstalar quando quiser.</string>
+    <string name="toolchain_older_build">%1$s está instalado. Remova-o e instale novamente para obter %2$s.</string>
 
     <!-- Launcher shortcut: in practice the only route to the toolchain screen.
          The activity is not exported and has no launcher entry, and the one
@@ -270,12 +273,9 @@
          from a list this app built a moment earlier, so this means the folder was
          removed or re-synced in between rather than that they typed something wrong. -->
     <string name="saf_mirror_unknown">Não há cópia local dessa pasta para remover.</string>
-    <!-- The reclaim gate declining. Worded as what is at stake rather than as a
-         refusal, because the user's next step is to confirm and remove it anyway: the
-         mirrors that hold unsynced files are exactly the ones worth the disk, since a
-         folder gets large by being worked in and working in one creates files the sync
-         excludes by construction. -->
-    <string name="saf_mirror_not_a_copy">Alguns arquivos dessa pasta não estão na pasta do dispositivo. Remover a cópia local excluiria esses arquivos.</string>
+    <!-- Native confirmation and unconfirmed-removal refusal. A snapshot cannot
+         exclude files added directly after the check. -->
+    <string name="saf_mirror_not_a_copy">Esta cópia local pode conter arquivos que nunca chegaram à pasta do dispositivo. Salve os arquivos necessários em outro lugar e pare de usar a cópia antes de continuar. A remoção não pode ser desfeita.</string>
     <!-- The rename that commits a removal was refused by the filesystem. Separate from
          saf_mirror_unknown, which says there was nothing to remove: here the copy is
          still there, whole, and trying again is worth something. -->
@@ -355,9 +355,9 @@
          translator must leave alone, but the sentence around them is language,
          and a Kotlin constant is the same sentence in every locale. The registry
          carries the resource id instead. displayName and shortLabel stay plain
-         strings on purpose; "Ruby" and "Java 17" are the products' own names. -->
+         strings on purpose; "Ruby" and "Java 21" are the products' own names. -->
     <string name="toolchain_ruby_description">Ruby com irb, gem, bundler</string>
-    <string name="toolchain_java_description">OpenJDK 17 (javac, jar, jshell)</string>
+    <string name="toolchain_java_description">OpenJDK 21 (javac, jar, jshell)</string>
     <string name="toolchain_cpp_description">C e C++ (clang, lld). Precisa do interceptador de exec do terminal: não funciona com LD_PRELOAD definido como null.</string>
 
     <!-- The checkmark on a selected toolchain card. It is an ImageView with no
@@ -603,4 +603,5 @@
          tls_unknown_host stands in for an address. Written in Kotlin before, so
          one English word survived inside an otherwise translated About dialog. -->
     <string name="about_version_unknown">desconhecida</string>
+    <string name="saf_folder_unavailable">A cópia local desta pasta do dispositivo não está mais disponível. Abra a pasta novamente a partir do dispositivo.</string>
 </resources>

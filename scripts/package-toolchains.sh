@@ -19,8 +19,8 @@ set -euo pipefail
 #   ./scripts/package-toolchains.sh ruby java     # Package Ruby and Java
 #
 # Output:
-#   toolchain-zips/toolchain_ruby.zip  (~10 MB)
-#   toolchain-zips/toolchain_java.zip  (~56 MB)
+#   toolchain-zips/toolchain_ruby.zip  (~11 MB)
+#   toolchain-zips/toolchain_java.zip  (~64 MB)
 #   toolchain-zips/toolchain_cpp.zip   (~74 MB)
 #
 # The ZIPs are intended to be attached to GitHub Releases so that sideloaded

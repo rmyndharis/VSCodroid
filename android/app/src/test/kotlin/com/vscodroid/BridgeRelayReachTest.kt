@@ -130,10 +130,8 @@ class BridgeRelayReachTest {
      * `reclaimSafMirror`'s own contract says `force` may be set only "after the
      * user has confirmed a modal that says so". That is a promise the caller makes
      * and this side cannot check, and the caller is any script on the workbench's
-     * origin. What `force` skips is the check that every file in the copy is also
-     * on the device, so what it deletes is by construction work that exists in no
-     * other place: anything under `node_modules`, `.git`, `__pycache__` or
-     * `.gradle`, and anything written while no watcher was running.
+     * origin. Every ordinary copy needs that consent because it may contain files
+     * absent on the device, including terminal writes and excluded directories.
      */
     @Test
     fun `a forced removal asks the user before anything is deleted`() {
@@ -237,6 +235,18 @@ class BridgeRelayReachTest {
         assertTrue(dismissed > waited) {
             "nothing takes the dialog down after the wait expires, so a question the user " +
                 "answers late is answered into nothing"
+        }
+    }
+
+    @Test
+    fun `an expired confirmation cannot use a later positive answer`() {
+        val confirm = code("private fun confirmForcedRemoval(")
+        val result = Regex("""val (\w+) = answered\.await\(FORCED_REMOVAL_CONFIRM_MS, TimeUnit\.MILLISECONDS\)""")
+            .find(confirm)
+        assertTrue(result != null) { "the bounded wait no longer records whether an answer arrived in time" }
+        val timely = result!!.groupValues[1]
+        assertTrue(Regex("""return $timely && confirmed\.get\(\)""").containsMatchIn(confirm)) {
+            "a positive callback after the wait expired can still authorize deletion"
         }
     }
 }

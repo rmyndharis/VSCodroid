@@ -111,6 +111,66 @@ class SafDataPreservationInstrumentedTest {
     }
 
     @Test
+    fun deliveredSaveFollowsExternalDeletionAcrossTwoReopens() = runBlocking {
+        control("directoryReset", Bundle().apply { putByteArray("bytes", ORIGINAL) })
+        engine.initialSync(treeUri, mirror) { _, _ -> }
+        val local = File(mirror, SafDocumentsProvider.FILE_NAME)
+        assertArrayEquals(ORIGINAL, local.readBytes())
+        engine.startWatching(mirror, treeUri)
+
+        local.writeBytes(EDITED)
+        assertTrue("The watcher never delivered the complete edited bytes", await {
+            providerBytes().contentEquals(EDITED) && engine.uploadsInFlight().isEmpty()
+        })
+        engine.stopWatching()
+        assertTrue("The save never opened the provider output descriptor", writeOpens() > 0)
+        val createsBeforeDeletion = control("stats").getInt("createCalls")
+        val document = DocumentsContract.buildDocumentUriUsingTree(treeUri, SafDocumentsProvider.FILE_NAME)
+        assertTrue("The external deletion was refused", DocumentsContract.deleteDocument(context.contentResolver, document))
+        assertFalse("The external deletion left the provider document", control("stats").getBoolean("exists"))
+
+        repeat(2) { reopen ->
+            engine.initialSync(treeUri, mirror) { _, _ -> }
+            assertFalse("Reopen ${reopen + 1} retained the delivered mirror copy", local.exists())
+            val stats = control("stats")
+            assertFalse("Reopen ${reopen + 1} recreated the provider document", stats.getBoolean("exists"))
+            assertEquals("Reopen ${reopen + 1} created a document after the deletion",
+                createsBeforeDeletion, stats.getInt("createCalls"))
+        }
+    }
+
+    @Test
+    fun undeliveredSameStampEditSurvivesExternalDeletion() = runBlocking {
+        control("directoryReset", Bundle().apply { putByteArray("bytes", ORIGINAL) })
+        engine.initialSync(treeUri, mirror) { _, _ -> }
+        val local = File(mirror, SafDocumentsProvider.FILE_NAME)
+        engine.startWatching(mirror, treeUri)
+        local.writeBytes(EDITED)
+        assertTrue("The watcher never delivered the complete edited bytes", await {
+            providerBytes().contentEquals(EDITED) && engine.uploadsInFlight().isEmpty()
+        })
+        engine.stopWatching()
+        val deliveredTime = local.lastModified()
+        val undelivered = ByteArray(EDITED.size) { 'z'.code.toByte() }
+        assertFalse(EDITED.contentEquals(undelivered))
+        local.writeBytes(undelivered)
+        assertTrue("The preserved timestamp could not be restored", local.setLastModified(deliveredTime))
+        assertEquals(deliveredTime, local.lastModified())
+        assertEquals(EDITED.size.toLong(), local.length())
+        val createsBeforeDeletion = control("stats").getInt("createCalls")
+        val document = DocumentsContract.buildDocumentUriUsingTree(treeUri, SafDocumentsProvider.FILE_NAME)
+        assertTrue("The external deletion was refused", DocumentsContract.deleteDocument(context.contentResolver, document))
+
+        engine.initialSync(treeUri, mirror) { _, _ -> }
+
+        assertTrue("Reopening removed the only undelivered edit", local.isFile)
+        assertArrayEquals("The only undelivered bytes changed", undelivered, local.readBytes())
+        val stats = control("stats")
+        assertFalse("The same reopen recreated the provider document", stats.getBoolean("exists"))
+        assertEquals("The same reopen uploaded the unproved mirror copy", createsBeforeDeletion, stats.getInt("createCalls"))
+    }
+
+    @Test
     fun createDoesNotChangeProviderWhenUploadJournalCannotBeWritten() = runBlocking {
         control("reset", Bundle().apply { putBoolean("empty", true) })
         engine.initialSync(treeUri, mirror) { _, _ -> }
@@ -298,6 +358,7 @@ class SafDataPreservationInstrumentedTest {
 
     @Test
     fun unrecordedPartialFileSurvivesRevokedMirrorCleanup() = runBlocking {
+        persistFixtureGrant()
         val manager = SafStorageManager(context)
         val savedMirror = manager.getMirrorDir(treeUri)
         engine.initialSync(treeUri, savedMirror) { _, _ -> }
@@ -305,7 +366,9 @@ class SafDataPreservationInstrumentedTest {
         val originalRecord = record.readBytes()
         val local = File(savedMirror, "workspace-notes" + SafSyncEngine.PARTIAL_SUFFIX)
         local.writeBytes(EDITED)
+        assertEquals("A live persistent grant must keep its mirror", 0, manager.reclaimRevokedMirrorsSync())
         fixtureGrant(SafProviderGrantReceiver.REVOKE)
+        assertFalse(context.contentResolver.persistedUriPermissions.any { it.uri == treeUri })
         assertEquals(PackageManager.PERMISSION_DENIED, context.checkUriPermission(
             treeUri, Process.myPid(), Process.myUid(), Intent.FLAG_GRANT_READ_URI_PERMISSION,
         ))
@@ -317,17 +380,45 @@ class SafDataPreservationInstrumentedTest {
     }
 
     @Test
-    fun recordedMirrorIsReclaimedAfterItsGrantIsRevoked() = runBlocking {
+    fun recordedMirrorRequiresConfirmationAfterItsGrantIsRevoked() = runBlocking {
+        persistFixtureGrant()
         val manager = SafStorageManager(context)
         val savedMirror = manager.getMirrorDir(treeUri)
         engine.initialSync(treeUri, savedMirror) { _, _ -> }
+        val record = File(savedMirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX)
+        val originalRecord = record.readBytes()
         assertArrayEquals(ORIGINAL, File(savedMirror, SafDocumentsProvider.FILE_NAME).readBytes())
+        assertEquals("A live persistent grant must keep its mirror", 0, manager.reclaimRevokedMirrorsSync())
+        assertTrue(savedMirror.exists())
         fixtureGrant(SafProviderGrantReceiver.REVOKE)
+        assertFalse(context.contentResolver.persistedUriPermissions.any { it.uri == treeUri })
+        assertEquals(PackageManager.PERMISSION_DENIED, context.checkUriPermission(
+            treeUri, Process.myPid(), Process.myUid(), Intent.FLAG_GRANT_READ_URI_PERMISSION,
+        ))
 
-        assertTrue(manager.reclaimRevokedMirrorsSync() > 0)
+        assertEquals(0, manager.reclaimRevokedMirrorsSync())
+        assertArrayEquals(ORIGINAL, File(savedMirror, SafDocumentsProvider.FILE_NAME).readBytes())
+        assertArrayEquals(originalRecord, record.readBytes())
+        assertFalse(manager.listMirrors().single { it.hash == savedMirror.name }.reclaimable)
+        assertEquals(SafStorageManager.RECLAIM_REFUSED,
+            manager.reclaimMirror(savedMirror.name, force = false))
+        assertArrayEquals(ORIGINAL, File(savedMirror, SafDocumentsProvider.FILE_NAME).readBytes())
+        assertArrayEquals(originalRecord, record.readBytes())
+
+        assertTrue(manager.reclaimMirror(savedMirror.name, force = true) >= 0)
+        assertEquals(2, manager.sweepDiscardedMirrors())
 
         assertFalse(savedMirror.exists())
-        assertFalse(File(savedMirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX).exists())
+        assertFalse(record.exists())
+    }
+
+    private fun persistFixtureGrant() {
+        context.contentResolver.takePersistableUriPermission(treeUri,
+            Intent.FLAG_GRANT_READ_URI_PERMISSION or Intent.FLAG_GRANT_WRITE_URI_PERMISSION)
+        assertTrue("The fixture tree must have a persistent read and write grant",
+            context.contentResolver.persistedUriPermissions.any {
+                it.uri == treeUri && it.isReadPermission && it.isWritePermission
+            })
     }
 
     private fun providerBytes(): ByteArray = requireNotNull(control("read").getByteArray("bytes"))

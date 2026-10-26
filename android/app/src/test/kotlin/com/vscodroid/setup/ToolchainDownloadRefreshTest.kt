@@ -31,7 +31,7 @@ class ToolchainDownloadRefreshTest {
         // The normal case, once a second, for as long as the screen is in front.
         // Pushing anyway costs a full rebind of every card, and a rebind is what
         // takes accessibility focus off a button someone is on.
-        assertFalse(downloadRefreshFor(mapOf(java to 40), mapOf(java to 40)).push)
+        assertFalse(downloadRefreshFor(mapOf(java to ToolchainDownloadProgress(1, 40)), mapOf(java to ToolchainDownloadProgress(1, 40))).push)
     }
 
     @Test
@@ -40,7 +40,7 @@ class ToolchainDownloadRefreshTest {
         // repaint; only a pack leaving the map is worth going back to disk, and
         // folding them together would mean a file read a second for an answer
         // that cannot have changed while the download is still running.
-        val refresh = downloadRefreshFor(mapOf(java to 40), mapOf(java to 55))
+        val refresh = downloadRefreshFor(mapOf(java to ToolchainDownloadProgress(1, 40)), mapOf(java to ToolchainDownloadProgress(1, 55)))
 
         assertTrue(refresh.push)
         assertFalse(refresh.rereadInstalled)
@@ -51,7 +51,7 @@ class ToolchainDownloadRefreshTest {
         // Its outcome becomes readable exactly when it leaves the map, and this is
         // the moment the screen would otherwise draw Install for something that
         // has just finished installing.
-        val refresh = downloadRefreshFor(mapOf(java to 90), emptyMap())
+        val refresh = downloadRefreshFor(mapOf(java to ToolchainDownloadProgress(1, 90)), emptyMap())
 
         assertTrue(refresh.push)
         assertTrue(refresh.rereadInstalled)
@@ -59,7 +59,7 @@ class ToolchainDownloadRefreshTest {
 
     @Test
     fun `a download that has just started does not re-read it`() {
-        val refresh = downloadRefreshFor(emptyMap(), mapOf(java to 0))
+        val refresh = downloadRefreshFor(emptyMap(), mapOf(java to ToolchainDownloadProgress(1, 0)))
 
         assertTrue(refresh.push)
         assertFalse(refresh.rereadInstalled)

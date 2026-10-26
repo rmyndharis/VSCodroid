@@ -6,6 +6,8 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
+import java.nio.file.Files
 import java.io.File
 
 /**
@@ -25,6 +27,9 @@ import java.io.File
  */
 class MirrorLookupTest {
 
+    @TempDir
+    lateinit var temp: File
+
     private val sep = File.separator
     private val root = "/data/user/0/com.vscodroid/files/saf-mirrors"
 
@@ -38,6 +43,34 @@ class MirrorLookupTest {
     private val abc = folder("abc123def456")
     private val other = folder("999888777666")
     private val all = listOf(abc, other)
+
+    @Test
+    fun `parent segments select the mirror that actually contains the path`() {
+        val a = abc.copy(mirrorPath = File(temp, "mirrors/${abc.displayName}").path)
+        val b = other.copy(mirrorPath = File(temp, "mirrors/${other.displayName}").path)
+        File(a.mirrorPath).mkdirs()
+        File(b.mirrorPath, "src").mkdirs()
+        val opened = "${a.mirrorPath}/../${b.displayName}/src"
+        assertEquals(b, SafStorageManager.folderForOpenedPath(listOf(a, b), opened))
+        assertNull(SafStorageManager.folderForOpenedPath(listOf(a), opened))
+    }
+
+    @Test
+    fun `filesystem aliases select the granted mirror they reach`() {
+        val a = abc.copy(mirrorPath = File(temp, "mirrors/${abc.displayName}").path)
+        val b = other.copy(mirrorPath = File(temp, "mirrors/${other.displayName}").path)
+        File(a.mirrorPath).mkdirs()
+        File(b.mirrorPath, "src").mkdirs()
+        val alias = File(temp, "project")
+        Files.createSymbolicLink(alias.toPath(), File(b.mirrorPath).toPath())
+        assertEquals(b, SafStorageManager.folderForOpenedPath(listOf(a, b), File(alias, "src").path))
+        assertNull(SafStorageManager.folderForOpenedPath(listOf(a), alias.path))
+        val named = File(temp, "mirrors/by-name/${b.displayName}/Notes")
+        named.parentFile.mkdirs()
+        Files.createSymbolicLink(named.toPath(), File(b.mirrorPath).toPath())
+        assertEquals(b, SafStorageManager.folderForOpenedPath(listOf(a, b), named.path))
+        assertEquals(a, SafStorageManager.folderForOpenedPath(listOf(a, b), a.mirrorPath))
+    }
 
     @Test
     fun `the mirror root itself is the folder`() {

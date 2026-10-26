@@ -99,6 +99,9 @@ import com.vscodroid.webview.SecretStorageKey
 import com.vscodroid.webview.TlsFailure
 import com.vscodroid.webview.TlsFailureReason
 import com.vscodroid.webview.HandoffFailure
+import com.vscodroid.webview.SignInRefusal
+import com.vscodroid.webview.SignInRefused
+import com.vscodroid.webview.handoffFailureType
 import com.vscodroid.webview.handoffFailureToAnnounce
 import com.vscodroid.webview.publishedResourceRoots
 import com.vscodroid.webview.redactToken
@@ -210,6 +213,7 @@ class MainActivity : AppCompatActivity() {
      * [receiveCallbackIntent].
      */
     private var workbenchLoaded = false
+    private var recoveryPageEpoch = 0L
 
     /**
      * When each renderer crash this Activity has handled arrived, oldest first.
@@ -365,12 +369,10 @@ class MainActivity : AppCompatActivity() {
      * hundreds during a cold load. Deriving on navigation pays for the
      * `isDirectory` guard once per folder switch and keeps it.
      *
-     * Only ever overwritten with a folder, never with the absence of one.
-     * [folderFromUrl] answers null for every URL that is not a workbench URL
-     * (the `data:` placeholder in [setupWebView], an error page), so assigning its
-     * result directly would drop a perfectly good folder on any of them. What
-     * that looks like from the outside is workspace resources 404ing now and
-     * then, which is about as expensive as a symptom gets.
+     * Placeholder and error pages retain the last workspace. A completed workbench
+     * load with an unusable selected path clears the live fields, while retaining
+     * the last valid reopen preference. An explicit empty window also records the
+     * closed state for the next launch.
      */
     @Volatile
     private var openWorkspaceFolder: String? = null
@@ -400,6 +402,7 @@ class MainActivity : AppCompatActivity() {
      */
     @Volatile
     private var openWorkspaceRoot: String? = null
+    private val workspaceResources = com.vscodroid.webview.WorkspaceResourcePublication(AuthTabWindow::pageGeneration)
 
     /**
      * Where the last open workspace and the key row's hidden state are
@@ -934,12 +937,14 @@ class MainActivity : AppCompatActivity() {
      * same reason the restart case is.
      *
      * That second message is bounded rather than gated, and the difference
-     * matters. It is not out of reach of an outside caller: the id is a small
-     * integer the workbench counts from one, and a record is kept past its own
-     * window on purpose, so anything on the device can name a request the user
-     * really did start. What it cannot do is repeat, because the record is taken
-     * back as the message goes up -- one explanation per launch, and every
-     * further arrival for that id lands in the silent branch above.
+     * matters. The id is a small integer the workbench counts from one, so what
+     * keeps an outside caller out is the secret registered for the request: it is
+     * checked before the window, and a caller without it reaches neither message.
+     * A caller that does hold it can still only raise the message once,
+     * because the record is retired as the message goes up ([AuthTabWindow.expire]
+     * hides it and keeps its identity reserved until the page changes) -- one
+     * explanation per launch, and every further arrival for that id lands in the
+     * silent branch above.
      *
      * Both messages are fixed text; nothing from the callback reaches the screen.
      */
@@ -1286,7 +1291,7 @@ class MainActivity : AppCompatActivity() {
             if (watchedSafFolder?.first?.path == folder.mirrorPath) return@launch
             if (syncingFolder == folder.uri) return@launch
             Logger.i(tag, "Adopting a device folder the workbench opened on its own")
-            openSafFolder(folder.uri, navigate = false)
+            openSafFolder(folder.uri, navigate = false, adoptedPath = folderPath)
         }
     }
 
@@ -1306,7 +1311,11 @@ class MainActivity : AppCompatActivity() {
      *   Recent, the Get Started list and Open Folder reach a mirror: reloading
      *   would throw away the page the user just opened.
      */
-    private fun openSafFolder(uri: Uri, navigate: Boolean) {
+    private fun openSafFolder(uri: Uri, navigate: Boolean, adoptedPath: String? = null) {
+        if (!safManager.claimMirrorOpen(safManager.getMirrorDir(uri))) {
+            Toast.makeText(this, R.string.saf_folder_unavailable, Toast.LENGTH_LONG).show()
+            return
+        }
         // The mirror's name and never the tree URI. A SAF tree URI spells the
         // user's own directory (`.../tree/primary%3ADocuments%2F<folder>`),
         // `Logger.i` is not gated on a debuggable build, and logcat is readable
@@ -1361,9 +1370,8 @@ class MainActivity : AppCompatActivity() {
                 if (adoptionIsStale(
                         navigate,
                         watchedSafFolder?.first?.name,
-                        SafStorageManager.mirrorNameFor(
-                            openWorkspaceFolder, Environment.getSafMirrorsDir(this@MainActivity)
-                        ),
+                        openWorkspaceFolder,
+                        adoptedPath,
                         safManager.getMirrorDir(uri).name,
                     )
                 ) {
@@ -1523,7 +1531,7 @@ class MainActivity : AppCompatActivity() {
                         navigateToFolder(serverPort, target)
                     } else {
                         Logger.i(tag, "The server is not serving; opening the folder once it is")
-                        rememberWorkspaceFolder(target)
+                        if (!rememberWorkspaceFolder(target)) return@launch
                         retryServerStart()
                     }
                 }
@@ -1652,22 +1660,9 @@ class MainActivity : AppCompatActivity() {
         return true
     }
 
-    /**
-     * Records that a watcher is on [mirrorDir], both for now and for the rest of
-     * the process.
-     *
-     * One method rather than two assignments at each site, because the two
-     * records answer different questions and only one of them is ever cleared.
-     * [watchedSafFolder] says what is watched now and goes null on every folder
-     * switch; [mirrorsWatchedThisProcess] says what a write-back drain could
-     * still be inside, and a drain outlives the switch that stopped it. A site
-     * that set the first without the second would leave the removal guard
-     * believing a mirror was untouched while a thread was still writing out of
-     * it, and nothing about that site would look wrong.
-     */
+    /** The manager has already retained process-wide ownership before watcher registration. */
     private fun beginWatching(mirrorDir: File, uri: Uri) {
         watchedSafFolder = mirrorDir to uri
-        mirrorsWatchedThisProcess.add(mirrorDir.name)
     }
 
     /**
@@ -1721,26 +1716,14 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Removes the local copy of one device folder, or says why it cannot be.
+     * Removes a local copy after native confirmation, or says why it cannot be removed.
      *
-     * Two refusals, in two places, because they answer different questions and
-     * only one of them can be answered here. Whether anything is still using the
-     * mirror is this Activity's to know, and
-     * [SafStorageManager.reclaimRefusal] is the rule; whether removing it would
-     * lose the user's only copy of something is the storage manager's, and
-     * [SafStorageManager.reclaimMirror] re-asks it at the moment of the removal
-     * rather than trusting the listing the user was shown, because a write-back
-     * can strand a file while a confirmation dialog is on screen.
+     * Activity state provides specific in-use refusals. The manager checks shared
+     * process usage again at the rename, even after a positive native answer. An
+     * unconfirmed request is refused because snapshots cannot exclude later direct
+     * filesystem writes.
      *
-     * The open workspace is read from [openWorkspaceFolder] and not from
-     * `webView?.url`. This runs on the bridge thread, and `WebView.getUrl` is a
-     * View call that belongs to the UI thread; that field exists precisely
-     * because the resource interceptor has the same problem.
-     *
-     * @return the empty string when the copy was removed, and when the user
-     *   declined a forced removal, since there is nothing to tell them about a
-     *   choice they just made. Otherwise the sentence to show. Success is the
-     *   falsy value; see [com.vscodroid.bridge.AndroidBridge.reclaimSafMirror].
+     * @return empty after removal or a user cancellation, otherwise a refusal reason.
      */
     private fun removeDeviceFolderCopy(hash: String, force: Boolean): String {
         val mirrorsRoot = Environment.getSafMirrorsDir(this)
@@ -1755,7 +1738,7 @@ class MainActivity : AppCompatActivity() {
             openWorkspaceMirror = SafStorageManager.mirrorNameFor(
                 openWorkspaceFolder, mirrorsRoot
             ),
-            watchedThisProcess = mirrorsWatchedThisProcess,
+            watchedThisProcess = safManager.usedMirrorNames(),
         )?.let { getString(it) }
         if (inUse != null) return inUse
 
@@ -1781,6 +1764,7 @@ class MainActivity : AppCompatActivity() {
         return when (freed) {
             SafStorageManager.RECLAIM_UNKNOWN -> getString(R.string.saf_mirror_unknown)
             SafStorageManager.RECLAIM_REFUSED -> getString(R.string.saf_mirror_not_a_copy)
+            SafStorageManager.RECLAIM_IN_USE -> getString(R.string.saf_mirror_folder_this_session)
             // The copy is still there and still whole: nothing was released and
             // nothing was deleted, so the sentence is the one that invites a retry.
             //
@@ -1828,40 +1812,11 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
-     * Asks the user, here, before a forced removal deletes files that exist
-     * nowhere else.
+     * Asks the user before deleting a copy that may contain files absent on the device.
      *
-     * `reclaimSafMirror`'s own documentation says `force` may only be set "after
-     * the user has confirmed a modal that says so". That is a promise the caller
-     * makes and this side cannot check, and the caller is not only the bundled
-     * extension: the relay is shared by every web extension on the workbench's
-     * origin (see [injectBridgeRelay]), so `{cmd:'reclaimSafMirror', force:true}`
-     * from a script the user never looked at satisfied the contract exactly as
-     * well as a person pressing Remove. What `force` skips is the check that every
-     * file in the copy is also on the device, so what it deletes is by definition
-     * work that exists in no other place: anything under `node_modules`, `.git`,
-     * `__pycache__` or `.gradle`, which the sync excludes by construction, and
-     * anything written while no watcher was running.
-     *
-     * So the question is asked by the app, of the person holding the phone, and
-     * the answer is theirs. The wording is the same sentence a refused unforced
-     * removal gives, which is the one that names the stake, and the affirmative
-     * button names the act rather than agreeing with the app: "OK" beside a
-     * warning about files that exist nowhere else leaves a reader who confirms
-     * quickly nothing to read but the sentence they are dismissing.
-     *
-     * This runs on the bridge's own disk-work thread, never the UI thread, which
-     * is what lets it wait: the four storage commands are answered there precisely
-     * so the workbench's own thread is not held. The wait is bounded all the same,
-     * because that thread is single and everything else queued on it waits too.
-     * The bound is well inside the two minutes the bundled extension gives a
-     * storage command, so a question nobody answered is reported as a refusal
-     * rather than as a caller timing out.
-     *
-     * A question that outlives the wait is taken off the screen rather than left
-     * there. Nothing was removed, which is the honest outcome, but a dialog still
-     * offering Remove says the opposite: pressing it would do nothing, and a
-     * second attempt would stack a second dialog on top of the first.
+     * Any same-origin caller can set `force`, so the app obtains its own answer. The
+     * dialog waits on the storage worker while the UI stays responsive. A positive
+     * callback authorizes removal only when it arrives within the bounded wait.
      */
     private fun confirmForcedRemoval(): Boolean {
         // The one thread this cannot be asked from, refused rather than obeyed.
@@ -1913,7 +1868,7 @@ class MainActivity : AppCompatActivity() {
                 if (!isFinishing && !isDestroyed) shown.get()?.dismiss()
             }
         }
-        return confirmed.get()
+        return got && confirmed.get()
     }
 
     /**
@@ -2038,7 +1993,7 @@ class MainActivity : AppCompatActivity() {
                 // every spawn is followed by onServerReady, whose loadVSCode
                 // rebuilds the URL with it, so the cookie this reload sends
                 // already holds the live one.
-                markAppNavigation()
+                // Automatic recovery leaves an unsaved-work veto to the user.
                 webView?.reload()
             }
             ResumeAction.PROBE_CONNECTION -> checkConnectionHealth(bgMs)
@@ -2167,6 +2122,7 @@ class MainActivity : AppCompatActivity() {
             // server is still coming up at that moment nothing else clears the
             // record: the user would sit on "Starting server..." with no control.
             rendererCrashLoopShown = false
+            recoveryPageEpoch++
             wv.loadData(dataUrlSafe(loadingPage()), "text/html", "utf-8")
         }
     }
@@ -2795,6 +2751,9 @@ class MainActivity : AppCompatActivity() {
         // dispatch later than this call, and nothing arriving in between should
         // be told a workbench is up.
         workbenchLoaded = false
+        val targetView = webView ?: return
+        val request = ++recoveryPageEpoch
+        val generation = AuthTabWindow.pageGeneration()
         lifecycleScope.launch {
             // Off the main thread, for the reason checkPreviousCrash gives about
             // the same file: ServerLog.tail reads it whole, up to MAX_BYTES, under
@@ -2816,6 +2775,8 @@ class MainActivity : AppCompatActivity() {
                     .map { redactSecrets(redactToken(it)) }
                     .let { collapseRuns(it, SERVER_LOG_LINES) }
             }
+            if (request != recoveryPageEpoch || webView !== targetView ||
+                generation != AuthTabWindow.pageGeneration()) return@launch
             showErrorPage(getString(R.string.error_server_gave_up), RETRY_URL, detail.joinToString("\n"))
         }
     }
@@ -2924,6 +2885,7 @@ class MainActivity : AppCompatActivity() {
         // The page below is dark whatever the editor's theme, and the window
         // around it, which a light one had made light, goes with it.
         paintWindowNow(getColor(R.color.colorBackground))
+        recoveryPageEpoch++
         webView?.loadDataWithBaseURL(
             null,
             """<html><head><meta name="viewport" content="width=device-width, initial-scale=1.0, viewport-fit=cover"></head>
@@ -2986,6 +2948,7 @@ class MainActivity : AppCompatActivity() {
         // The loading page's colour, as setupWebView gives it: this can replace an
         // error page, which painted the window its own.
         paintWindowNow(lastPageColor(this))
+        recoveryPageEpoch++
         webView?.loadData(dataUrlSafe(loadingPage()), "text/html", "utf-8")
         // Guarded for the reason [startAndBindService] is, and put back rather
         // than only logged. The loading page is already on screen by the time this
@@ -3086,9 +3049,15 @@ class MainActivity : AppCompatActivity() {
             // outranking it after: a renderer crash recovering into the folder it
             // was showing arrives through this same method, and a remembered
             // folder resolved before it would otherwise land last and win.
-            navigateToFolder(port, folderFromUrl(webView?.url) ?: resolved)
+            val currentUrl = webView?.url
+            val target = workspaceTargetAfterLookup(currentUrl, port, folderFromUrl(currentUrl), resolved)
+            navigateToFolder(port, target)
         }
     }
+
+    /** The encoded query, excluding opaque placeholders and URL fragments. */
+    private fun workspaceQueryFromUrl(url: String?): String? =
+        url?.let { it.toUri() }?.takeIf { it.isHierarchical }?.encodedQuery
 
     /**
      * The folder encoded in a workbench URL, if it still exists on disk.
@@ -3101,22 +3070,16 @@ class MainActivity : AppCompatActivity() {
      *
      * The hierarchical check is load-bearing, not defensive. Before the workbench
      * is loaded the WebView still holds the `data:` placeholder from
-     * [setupWebView], and `getQueryParameter` throws
+     * [setupWebView], and querying it throws
      * `UnsupportedOperationException` on an opaque URI. This runs on the main
      * thread from `onServiceConnected`, so on every cold start the app died at the
      * moment the server came up.
      */
-    private fun folderFromUrl(url: String?): String? =
-        url?.let { it.toUri() }
-            ?.takeIf { it.isHierarchical }
-            ?.let {
-                workbenchTarget(
-                    folder = it.getQueryParameter("folder"),
-                    workspace = it.getQueryParameter("workspace"),
-                    isDirectory = { path -> File(path).isDirectory },
-                    isFile = { path -> File(path).isFile },
-                )
-            }
+    private fun folderFromUrl(url: String?): String? = workbenchTarget(
+        query = workspaceQueryFromUrl(url),
+        isDirectory = { path -> File(path).isDirectory },
+        isFile = { path -> File(path).isFile },
+    )
 
     /**
      * Initializes the WebView bridge, security manager, and clients.
@@ -3198,6 +3161,9 @@ class MainActivity : AppCompatActivity() {
             // The answer's road back into the page. evaluateJavascript is a
             // WebView call and belongs to the thread the view was made on, which
             // is why this hops while the two above must not.
+            onWorkspaceRoots = { generation, paths ->
+                workspaceResources.publish(generation, paths.mapNotNull { workspaceDirectoryInForce(it) })
+            },
             onAsyncAnswer = { id, ok, payload ->
                 runOnUiThread { answerBridgeCommand(id, ok, payload) }
             },
@@ -3240,7 +3206,8 @@ class MainActivity : AppCompatActivity() {
         // than `self.get()?....` for that reason.
         val self = WeakReference(this)
         VSCodroidWebViewClient.setupServiceWorkerInterception(
-            port, roots, sensitive, { self.get()?.openWorkspaceRoot }
+            port, roots, sensitive, { self.get()?.openWorkspaceRoot },
+            { self.get()?.workspaceResources?.roots() },
         ) { self.get()?.nodeService?.getConnectionToken() }
 
         wv.webViewClient = VSCodroidWebViewClient(
@@ -3248,6 +3215,7 @@ class MainActivity : AppCompatActivity() {
             resourceRoots = roots,
             sensitiveLocations = sensitive,
             openFolder = { openWorkspaceRoot },
+            workspaceMembers = { workspaceResources.roots() },
             connectionToken = { nodeService?.getConnectionToken() },
             onCrash = { recreateWebView() },
             // The page covers itself the moment it is told to leave, and a
@@ -3268,15 +3236,17 @@ class MainActivity : AppCompatActivity() {
             // the set has one owner thread whatever the platform guarantees about
             // which thread the callback arrives on.
             onHandoffFailed = { uri, error ->
-                val failure = HandoffFailure(
-                    uri.scheme ?: "external", error.javaClass.simpleName
-                )
+                val handoffFailure = HandoffFailure(uri.scheme ?: "external", handoffFailureType(error))
                 runOnUiThread {
-                    handoffFailureToAnnounce(failure, announcedHandoffFailures)?.let {
-                        val message = if (error is android.content.ActivityNotFoundException) {
-                            getString(R.string.url_handoff_no_app, it.scheme)
-                        } else {
-                            getString(R.string.url_handoff_failed, it.scheme, it.failureType)
+                    handoffFailureToAnnounce(handoffFailure, announcedHandoffFailures)?.let {
+                        val message = when {
+                            error is android.content.ActivityNotFoundException ->
+                                getString(R.string.url_handoff_no_app, it.scheme)
+                            error is SignInRefused -> getString(
+                                if (error.reason == SignInRefusal.NOT_ISSUED) R.string.sign_in_not_issued
+                                else R.string.sign_in_not_ready
+                            )
+                            else -> getString(R.string.url_handoff_failed, it.scheme, it.failureType)
                         }
                         Toast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
                     }
@@ -3308,8 +3278,7 @@ class MainActivity : AppCompatActivity() {
             onPageLoaded = { url ->
                 val opened = folderFromUrl(url)
                 if (opened != null) {
-                    rememberWorkspaceFolder(opened)
-                    adoptWorkbenchFolder(opened)
+                    if (rememberWorkspaceFolder(opened)) adoptWorkbenchFolder(opened)
                 } else if (emptyWindowUrl(url, port) != null) {
                     // Closing the folder is a navigation the workbench performs on
                     // itself, so this callback is the only place Kotlin can learn
@@ -3319,6 +3288,12 @@ class MainActivity : AppCompatActivity() {
                     // (the next launch drops the user in the projects directory)
                     // looks nothing like the cause.
                     rememberWorkspaceFolder(null)
+                } else if (isWorkbenchUrl(url, port) &&
+                    workbenchSelection(workspaceQueryFromUrl(url))?.kind in setOf("folder", "workspace")
+                ) {
+                    // The selected path failed validation, but this load replaced the old page.
+                    openWorkspaceFolder = null
+                    openWorkspaceRoot = null
                 }
                 // A main-frame load is a new document, and the document that owed a
                 // download's bytes went with the old one. [recreateWebView] used to
@@ -3439,7 +3414,11 @@ class MainActivity : AppCompatActivity() {
      * and moving it earlier would put a preference write on the interception
      * path.
      */
-    private fun rememberWorkspaceFolder(folderPath: String?) {
+    private fun rememberWorkspaceFolder(folderPath: String?): Boolean {
+        if (folderPath != null && !safManager.claimWorkspacePaths(listOf(folderPath))) {
+            Toast.makeText(this, R.string.saf_folder_unavailable, Toast.LENGTH_LONG).show()
+            return false
+        }
         openWorkspaceFolder = folderPath
         // The one `stat` this costs, and the only place it is paid. Above the
         // early return, because the return only means the preference is already
@@ -3454,8 +3433,9 @@ class MainActivity : AppCompatActivity() {
         // Written only on a change: this runs on every main-frame load, and the
         // server redirects, so a folder switch alone reaches it twice.
         val stored = folderPath ?: NO_FOLDER
-        if (workspacePrefs.getString(KEY_LAST_FOLDER, null) == stored) return
+        if (workspacePrefs.getString(KEY_LAST_FOLDER, null) == stored) return true
         workspacePrefs.edit { putString(KEY_LAST_FOLDER, stored) }
+        return true
     }
 
     /**
@@ -3571,7 +3551,7 @@ class MainActivity : AppCompatActivity() {
         // loadUrl below and onPageFinished the workbench is already fetching
         // resources, against a supplier that would still be answering null, so
         // everything inside the workspace would 404 for the length of the load.
-        rememberWorkspaceFolder(folderPath)
+        if (!rememberWorkspaceFolder(folderPath)) return
         // The token rides in the query once. The server consumes it on `/`, turns
         // it into the vscode-tkn cookie and redirects with the folder intact;
         // everything after that authenticates itself: the cookie for pages, the
@@ -3602,6 +3582,7 @@ class MainActivity : AppCompatActivity() {
         // no future edit can read it as "this URL is safe to print".
         Logger.i(tag, "Loading VS Code at ${urlLogLabel(url)}")
         markAppNavigation()
+        recoveryPageEpoch++
         wv.loadUrl(url)
     }
 
@@ -3615,6 +3596,7 @@ class MainActivity : AppCompatActivity() {
         targetView.evaluateJavascript("""
             (function() {
                 if (window !== window.top || location.origin !== $origin || location.pathname !== '/') return null;
+                if (!AndroidBridge.isAuthPageCurrent($token, $generation)) return null;
                 var metadata = window.__vscodroid = window.__vscodroid || {};
                 metadata.authToken = $token;
                 metadata.pageGeneration = $generation;
@@ -3624,10 +3606,12 @@ class MainActivity : AppCompatActivity() {
             })();
         """.trimIndent()) { result ->
             if (webView !== targetView || client.authPage(targetView)?.generation != generation) return@evaluateJavascript
-            if (!authBootstrapSucceeded(result, generation)) {
-                client.completeAuthBootstrap(targetView, generation, false)
-                return@evaluateJavascript
-            }
+            val verdict = authBootstrapVerdict(result, generation)
+            if (verdict != true) client.completeAuthBootstrap(targetView, generation, false)
+            // Sign-in registration failing costs the page its sign-in and nothing else: the key
+            // row, the touch fixes and the rest below are not what it protects. Only a page
+            // that did not answer for this document is left alone, since it is not the workbench.
+            if (verdict == null) return@evaluateJavascript
             // Install JS interceptor so ExtraKeyRow Ctrl/Alt modifiers apply to soft keyboard input
             extraKeyRow?.keyInjector?.setupModifierInterceptor()
             // Inject safe area CSS for round-corner devices
@@ -3666,9 +3650,11 @@ class MainActivity : AppCompatActivity() {
             // Last, because everything above is what makes the page able to receive
             // an auth callback at all. From here a callback arriving through
             // onNewIntent goes straight into this page, which is the only page that
-            // can consume one.
-            workbenchLoaded = true
-            client.completeAuthBootstrap(targetView, generation, true)
+            // can consume one. A page whose registration failed receives none.
+            if (verdict) {
+                workbenchLoaded = true
+                client.completeAuthBootstrap(targetView, generation, true)
+            }
         }
     }
 
@@ -5174,9 +5160,10 @@ class MainActivity : AppCompatActivity() {
      * whose editor Enter is filled here too, it would reach the editor's
      * Shift+Enter bindings: in a Python file the bundled Python extension runs
      * the line in the terminal instead of inserting a newline, and the find box
-     * goes to the previous match. An Enter that arrives with a `code` is not
-     * touched, and a binding that accepts it still leaves the latch standing.
-     * Read from the 1.139.1 bundle; not measured on a device. The replacement of
+     * goes to the previous match. A trusted plain Enter with a `code` spends
+     * the same row latch without changing its physical modifier flags. An
+     * identically shaped hardware Enter follows that same next-keypress rule;
+     * Ctrl, Alt and Meta chords keep their existing handling. The replacement of
      * a composing Enter spends a lone Shift the same way: it is built without
      * Shift, and once a binding accepts it no `beforeinput` follows either, so
      * on Gboard 12.4 a Shift latched over Quick Open's composing file name stood
@@ -5249,6 +5236,11 @@ class MainActivity : AppCompatActivity() {
                         // Spent, never applied. See the KDoc.
                         mod.shift = false;
                         return;
+                    }
+                    if (e.key === 'Enter' && e.code !== '' && !e.isComposing && e.isTrusted &&
+                        !e.ctrlKey && !e.altKey && !e.metaKey) {
+                        var latch = window.__vscodroid;
+                        if (latch && !latch.ctrl && !latch.alt) latch.shift = false;
                     }
                     if (e.isComposing && e.isTrusted && quickInputBinds(e) &&
                         e.target.closest('.quick-input-widget') && !e.target.closest('.monaco-editor')) {
@@ -5733,10 +5725,11 @@ class MainActivity : AppCompatActivity() {
                     curtain.style.cssText = 'position:fixed;top:0;left:0;right:0;bottom:0;' +
                         'z-index:2147483647;background:' + color;
                     document.documentElement.appendChild(curtain);
+                    var leaving = curtain;
                     // Whether the workbench vetoed is known only once its own listener
                     // has run, which may be after this one, so it is asked a task later.
                     setTimeout(function() {
-                        if (e.defaultPrevented || e.returnValue) lower();
+                        if (curtain === leaving && (e.defaultPrevented || e.returnValue)) lower();
                     }, 0);
                     failsafe = setTimeout(lower, 5000);
                 }, true);
@@ -6181,6 +6174,7 @@ class MainActivity : AppCompatActivity() {
                 var revoke = URL.revokeObjectURL.bind(URL);
                 URL.revokeObjectURL = function(url) {
                     if (held.has(url)) return;
+                    made.delete(url);
                     revoke(url);
                 };
 
@@ -7133,44 +7127,6 @@ class MainActivity : AppCompatActivity() {
          */
         private const val SERVER_LOG_SCAN_LINES = 200
 
-        /**
-         * Every mirror this process has put a watcher on, whether or not one is
-         * on it now.
-         *
-         * Never cleared, and that is the point rather than an omission.
-         * [SafStorageManager.stopFileWatcher] stops the observers, but the
-         * engine waits only two seconds for the write-back worker to drain and
-         * then leaves it running rather than discarding writes the user expects
-         * on the device. So a folder the app considers closed can still have a
-         * thread streaming bytes out of its mirror, and every such write opens
-         * the device document with `"wt"`, which truncates at open: deleting the
-         * mirror underneath one empties the user's file rather than leaving it
-         * alone.
-         *
-         * A drain only ever touches the mirror it was started for, so refusing
-         * every mirror this process has watched is what puts it out of reach
-         * without needing to know whether a particular drain is still alive. The
-         * cost is that removing a folder opened this session needs a restart,
-         * which is a sentence the user can act on.
-         *
-         * In the companion, and that scope is load-bearing rather than a
-         * placement preference. The drain this guards belongs to the process,
-         * not to the Activity that started it: a rotation, a WebView recreation,
-         * or any other Activity restart hands the replacement a fresh instance
-         * while the worker is still streaming bytes out of the same mirror. Held
-         * as an instance field, the set would be empty in that replacement and
-         * would answer "never watched" for exactly the mirror it exists to put
-         * out of reach, so an Activity restart would grant the removal that
-         * [SafStorageManager.reclaimRefusal] tells the user needs a restart of
-         * VSCodroid. That refusal is also the one `force` cannot bypass, so
-         * nothing further down would catch it.
-         *
-         * Concurrent because it is written on the UI thread and read on the
-         * bridge thread, and a set that answers the guard cannot be one the
-         * guard may see mid-write.
-         */
-        private val mirrorsWatchedThisProcess: MutableSet<String> =
-            java.util.concurrent.ConcurrentHashMap.newKeySet()
 
     }
 }
@@ -7181,17 +7137,7 @@ internal const val HEALTH_CHECK_THRESHOLD_MS = 60_000L   // 1 minute
 /** Force page reload if backgrounded longer than this. */
 internal const val FORCE_RELOAD_THRESHOLD_MS = 300_000L  // 5 minutes
 
-/**
- * How long a forced device-folder removal waits for the user's answer.
- *
- * Not a guess about how long a person takes to read one sentence: it is the point
- * at which "still deciding" stops being the explanation and "nobody is looking at
- * this screen" becomes one. The wait is on the bridge's single disk-work thread,
- * so everything else queued on it waits too, and the bundled extension gives a
- * storage command two minutes; this side gives up well inside that, so the
- * failure is reported as a refusal by the layer that knows why rather than as a
- * caller's deadline expiring. See `MainActivity.confirmForcedRemoval`.
- */
+/** The maximum lifetime of a native removal confirmation, independent of RPC timing. */
 private const val FORCED_REMOVAL_CONFIRM_MS = 45_000L
 
 // Severities a trim level maps to. Only the log line carries the word; the page
@@ -7762,32 +7708,41 @@ internal fun workbenchUrl(
 /** What the workbench calls a multi-root workspace, in the only place it is spelled. */
 internal const val WORKSPACE_FILE_SUFFIX = ".code-workspace"
 
-/**
- * What a workbench URL has open, whether that is a folder or a workspace.
- *
- * The workbench navigates itself, and it names the two cases with different
- * query parameters: `folder` for a directory and `workspace` for a
- * `.code-workspace` file. Reading only `folder` is what made a workspace
- * invisible to this side, and the cost was not that the URL looked wrong. It was
- * that [MainActivity.adoptWorkbenchFolder] never ran, so a workspace opened out
- * of a device-folder mirror got no write-back watcher and every edit stayed in
- * the mirror, and that the workspace was not remembered, so the next launch
- * reopened the default projects directory instead.
- *
- * Each branch stats what it reads, and for the kind of thing it is. A `folder`
- * naming a file and a `workspace` naming a directory are both URLs nothing
- * builds; refusing them keeps a dead or wrong path from pinning the WebView,
- * which is what the directory test has always been for.
- *
- * The predicates are passed rather than called because `File` is unavailable in
- * a plain JVM test, the same reason [rememberedFolderToReopen] takes its own.
- */
+/** The final decoded workspace selector, before checking whether its path exists. */
+private data class WorkbenchSelection(val kind: String, val value: String)
+
+private fun workbenchSelection(query: String?): WorkbenchSelection? {
+    var selected: WorkbenchSelection? = null
+    for (part in query?.split('&').orEmpty()) {
+        val kind = decodeWorkbenchQueryPart(part.substringBefore('='))
+        if (kind == "folder" || kind == "workspace" || kind == "ew") {
+            selected = WorkbenchSelection(kind, decodeWorkbenchQueryPart(part.substringAfter('=', "")))
+        }
+    }
+    return selected
+}
+
+private fun decodeWorkbenchQueryPart(part: String): String = java.net.URLDecoder.decode(
+    // Form queries keep malformed percent signs literal and decode valid escapes once.
+    part.replace(Regex("%(?![0-9a-fA-F]{2})"), "%25"),
+    "UTF-8",
+)
+
+/** Validate only the selected target; an earlier selector is never a fallback. */
 internal fun workbenchTarget(
-    folder: String?,
-    workspace: String?,
+    query: String?,
     isDirectory: (String) -> Boolean,
     isFile: (String) -> Boolean,
-): String? = folder?.takeIf(isDirectory) ?: workspace?.takeIf(isFile)
+): String? {
+    val selected = workbenchSelection(query) ?: return null
+    // Relative and empty values become file URIs in the workbench, not paths under our cwd.
+    if (!selected.value.startsWith('/')) return null
+    return when (selected.kind) {
+        "folder" -> selected.value.takeIf(isDirectory)
+        "workspace" -> selected.value.takeIf(isFile)
+        else -> null
+    }
+}
 
 /**
  * The directory a target stands in: itself for a folder, its parent for a workspace.
@@ -7833,26 +7788,29 @@ internal fun workspaceDirectoryInForce(
  * it. The URL carries no token, and the cookie that authenticated it named a
  * server that a restart may since have replaced with one holding a new token, so
  * the closed state is rebuilt through [workbenchUrl], which spells `ew=true` with
- * the live one. A `folder` or `workspace` URL is deliberately NOT recognised:
- * those the folder chain can name.
+ * the live one. The final recognized selector decides: `ew` closes the window
+ * regardless of its value, while a final `folder` or `workspace` stays with the
+ * folder chain.
  *
- * What makes a URL ours is asked of [workbenchUrl] rather than spelled again
- * here. That keeps the host in exactly one expression, which is the affordance
- * `the workbench URL is assembled in exactly one place` exists to protect: a
- * second spelling is what lets the string loaded drift from the string logged,
- * and it caught this function written the obvious way.
+ * The native workbench predicate owns the supported hosts, port and root path.
+ * Only HTTP windows are restored, matching [workbenchUrl].
  */
 internal fun emptyWindowUrl(url: String?, port: Int): String? {
     if (url == null) return null
-    val ours = workbenchUrl(port, null, null).substringBefore('?')
-    if (!url.startsWith(ours)) return null
-    val query = url.substringAfter('?', "")
-    if (query.isEmpty()) return null
-    val closed = query.split('&').any {
-        it.substringBefore('=') == "ew" && it.substringAfter('=', "") == "true"
-    }
-    return if (closed) url else null
+    // Keep form-query percent decoding separate from strict address parsing.
+    val workbenchAddress = url.substringBefore('#').substringBefore('?')
+    if (!workbenchAddress.startsWith("http://") || !isWorkbenchUrl(workbenchAddress, port)) return null
+    val query = url.substringBefore('#').substringAfter('?', "")
+    return url.takeIf { workbenchSelection(query)?.kind == "ew" }
 }
+
+/** A workspace changed while its reopen path was being resolved on IO. */
+internal fun workspaceTargetAfterLookup(
+    currentUrl: String?,
+    port: Int,
+    currentTarget: String?,
+    resolved: String?,
+): String? = if (emptyWindowUrl(currentUrl, port) != null) null else currentTarget ?: resolved
 
 /**
  * What to open once a device folder has been granted and synced.
@@ -7969,16 +7927,17 @@ internal fun shouldRestorePreviousWatcher(
  * when it finishes, so the page is on it by construction, and reopening the
  * folder already open is how a user pulls down fresh content.
  *
- * Mirror names rather than URIs, for the reason [shouldRestorePreviousWatcher]
- * compares text, and because the name is what the removal guard and the
- * adoption lookup already compare.
+ * The captured path already resolved to this mirror on Dispatchers.IO. Compare
+ * that same spelling after waiting, so aliases retain their resolved owner and
+ * no filesystem lookup is needed on the main thread.
  */
 internal fun adoptionIsStale(
     navigate: Boolean,
     watchedMirror: String?,
-    openMirror: String?,
+    openPath: String?,
+    adoptedPath: String?,
     mirror: String,
-): Boolean = !navigate && (watchedMirror == mirror || openMirror != mirror)
+): Boolean = !navigate && (watchedMirror == mirror || openPath == null || openPath != adoptedPath)
 
 /**
  * The remembered workspace folder, or null when reopening it is not safe.
@@ -8328,11 +8287,22 @@ internal class AppNavigationMark(private val windowMs: Long) {
     }
 }
 
-/** Accept only the completed bootstrap for the document that requested it. */
-internal fun authBootstrapSucceeded(result: String?, generation: Long): Boolean = try {
+/**
+ * What the bootstrap script answered for the document that requested it: true when sign-in
+ * registration is working, false when the page is the workbench but it is not, and null
+ * when the answer is not for this document at all (no marker, another generation, a page
+ * that is not the top-level workbench).
+ */
+internal fun authBootstrapVerdict(result: String?, generation: Long): Boolean? = try {
     val marker = JSONArray(result ?: "null")
-    marker.length() == 2 && marker.opt(0) is Number && marker.getLong(0) == generation &&
-        marker.getDouble(0) == generation.toDouble() && marker.opt(1) == true
+    if (marker.length() == 2 && marker.opt(0) is Number && marker.getLong(0) == generation &&
+        marker.getDouble(0) == generation.toDouble() && marker.opt(1) is Boolean
+    ) {
+        marker.getBoolean(1)
+    } else {
+        null
+    }
 } catch (_: JSONException) {
-    false
+    null
 }
+

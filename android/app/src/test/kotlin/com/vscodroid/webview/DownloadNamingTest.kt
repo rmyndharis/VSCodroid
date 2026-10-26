@@ -262,4 +262,64 @@ class DownloadNamingTest {
             downloadFileName("https://host/r?path=/w/my+file.txt", null, null),
         )
     }
+
+    @Test
+    fun `UTF-8 extended filenames preserve Unicode and literal plus signs`() {
+        assertEquals(
+            "café+menu.txt",
+            downloadFileName("https://host/other.txt",
+                "attachment; filename=\"fallback.txt\"; filename*=UTF-8''caf%C3%A9+menu.txt", null),
+        )
+    }
+
+    @Test
+    fun `Latin-1 extended filenames use their declared charset`() {
+        assertEquals(
+            "café+menu.txt",
+            downloadFileName("https://host/other.txt",
+                "attachment; filename=\"cafe.txt\"; filename*=ISO-8859-1'fr'caf%E9+menu.txt", null),
+        )
+    }
+
+    @Test
+    fun `a charset alias is read using the same declared encoding`() {
+        assertEquals(
+            "café.txt",
+            downloadFileName("https://host/other.txt", "attachment; filename*=latin1''caf%E9.txt", null),
+        )
+    }
+
+    @Test
+    fun `an unsupported extended charset falls back to the plain filename`() {
+        assertEquals(
+            "plain.txt",
+            downloadFileName("https://host/other.txt",
+                "attachment; filename=\"plain.txt\"; filename*=x-unsupported-charset''broken%E9.txt", null),
+        )
+    }
+
+    @Test
+    fun `an unsupported extended charset without a plain filename falls back to the URL`() {
+        assertEquals(
+            "from-url.txt",
+            downloadFileName("https://host/from-url.txt",
+                "attachment; filename*=x-unsupported-charset''broken%E9.txt", null),
+        )
+    }
+
+    @Test
+    fun `a stray percent in a supported extended filename stays a display character`() {
+        assertEquals(
+            "100%.csv",
+            downloadFileName("https://host/other.txt", "attachment; filename*=UTF-8''100%.csv", null),
+        )
+    }
+
+    @Test
+    fun `the page suggestion still outranks an extended header`() {
+        assertEquals(
+            "chosen.txt",
+            downloadFileName("https://host/other.txt", "attachment; filename*=ISO-8859-1''caf%E9.txt", "chosen.txt"),
+        )
+    }
 }

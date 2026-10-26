@@ -401,30 +401,48 @@ class DeviceFolderOpenThreadTest {
     /**
      * The decision itself, which is pure and so needs no reading of the source.
      *
-     * Mirror names because that is what a JVM test can supply: `android.net.Uri`
-     * can be neither built nor mocked here, which is the same reason
-     * `shouldRestorePreviousWatcher` compares text.
+     * The captured path and current path are plain strings; filesystem ownership
+     * has already been resolved before an adoption is queued.
      */
     @Test
     fun `an adoption whose folder is on screen and unwatched runs`() {
-        assertFalse(adoptionIsStale(navigate = false, watchedMirror = null, openMirror = "a1b2c3d4e5f6", mirror = "a1b2c3d4e5f6"))
-        assertFalse(adoptionIsStale(navigate = false, watchedMirror = "0f0f0f0f0f0f", openMirror = "a1b2c3d4e5f6", mirror = "a1b2c3d4e5f6"))
+        assertFalse(adoptionIsStale(navigate = false, watchedMirror = null, openPath = "a1b2c3d4e5f6", adoptedPath = "a1b2c3d4e5f6", mirror = "a1b2c3d4e5f6"))
+        assertFalse(adoptionIsStale(navigate = false, watchedMirror = "0f0f0f0f0f0f", openPath = "a1b2c3d4e5f6", adoptedPath = "a1b2c3d4e5f6", mirror = "a1b2c3d4e5f6"))
     }
 
     @Test
     fun `an adoption is skipped once the page has moved to another folder`() {
         // The open ahead navigated, or the workbench opened a third folder. Syncing
         // now would take the only watcher off the folder on screen.
-        assertTrue(adoptionIsStale(navigate = false, watchedMirror = null, openMirror = "0f0f0f0f0f0f", mirror = "a1b2c3d4e5f6"))
+        assertTrue(adoptionIsStale(navigate = false, watchedMirror = null, openPath = "0f0f0f0f0f0f", adoptedPath = "a1b2c3d4e5f6", mirror = "a1b2c3d4e5f6"))
         // A page on no mirror at all is not on this one either.
-        assertTrue(adoptionIsStale(navigate = false, watchedMirror = null, openMirror = null, mirror = "a1b2c3d4e5f6"))
+        assertTrue(adoptionIsStale(navigate = false, watchedMirror = null, openPath = null, adoptedPath = "a1b2c3d4e5f6", mirror = "a1b2c3d4e5f6"))
     }
 
     @Test
     fun `an adoption is skipped when the folder is already watched`() {
         // The open ahead was for the same folder: a second sync under a fresh stop
         // would only re-copy what is there.
-        assertTrue(adoptionIsStale(navigate = false, watchedMirror = "a1b2c3d4e5f6", openMirror = "a1b2c3d4e5f6", mirror = "a1b2c3d4e5f6"))
+        assertTrue(adoptionIsStale(navigate = false, watchedMirror = "a1b2c3d4e5f6", openPath = "a1b2c3d4e5f6", adoptedPath = "a1b2c3d4e5f6", mirror = "a1b2c3d4e5f6"))
+    }
+
+    @Test
+    fun `an adoption keeps the filesystem alias that resolved its mirror`() {
+        for (path in listOf("/mirrors/a/../b/src", "/projects/linked-copy")) {
+            assertFalse(adoptionIsStale(false, null, path, path, "b"))
+            assertTrue(adoptionIsStale(false, null, "/projects/other", path, "b"))
+        }
+        assertTrue(adoptionIsStale(false, null, null, null, "b"))
+    }
+
+    @Test
+    fun `the resolved adoption carries the path through the open queue`() {
+        val source = File("src/main/kotlin/com/vscodroid/MainActivity.kt").readText()
+        val adoption = SourceScan.body(source, "private fun adoptWorkbenchFolder(")
+        assertTrue(adoption.contains("openSafFolder(folder.uri, navigate = false, adoptedPath = folderPath)"))
+        val decision = opened.joinToString("\n").substringAfter("if (adoptionIsStale(").substringBefore("Not syncing")
+        assertTrue(decision.contains("openWorkspaceFolder") && decision.contains("adoptedPath"))
+        assertFalse(decision.contains("mirrorNameFor("))
     }
 
     @Test
@@ -432,7 +450,7 @@ class DeviceFolderOpenThreadTest {
         // It navigates to its folder when it finishes, so the page is on it by
         // construction, and reopening the folder already open is how a user pulls
         // fresh content down.
-        assertFalse(adoptionIsStale(navigate = true, watchedMirror = "a1b2c3d4e5f6", openMirror = "0f0f0f0f0f0f", mirror = "a1b2c3d4e5f6"))
-        assertFalse(adoptionIsStale(navigate = true, watchedMirror = null, openMirror = null, mirror = "a1b2c3d4e5f6"))
+        assertFalse(adoptionIsStale(navigate = true, watchedMirror = "a1b2c3d4e5f6", openPath = "0f0f0f0f0f0f", adoptedPath = "a1b2c3d4e5f6", mirror = "a1b2c3d4e5f6"))
+        assertFalse(adoptionIsStale(navigate = true, watchedMirror = null, openPath = null, adoptedPath = "a1b2c3d4e5f6", mirror = "a1b2c3d4e5f6"))
     }
 }

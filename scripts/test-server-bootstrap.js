@@ -1275,6 +1275,88 @@ async function exitingBootstrapPreservesReplacementNote() {
         startsOn(device.visit('?folder=/p/pro'), 'Monokai Pro', 'a folder naming a theme of an installed extension, opened again');
     }
 
+    // The page reads settings for the final recognized URL selector.
+    for (const [search, file] of [
+        [
+            "?folder=/p/a&folder=/p/b",
+            "/p/b/.vscode/settings.json"
+        ],
+        [
+            "?workspace=/p/a.code-workspace&folder=/p/b",
+            "/p/b/.vscode/settings.json"
+        ],
+        [
+            "?folder=/p/a&workspace=/p/b.code-workspace",
+            "/p/b.code-workspace"
+        ],
+        [
+            "?folder=/p/a&ew=false",
+            null
+        ],
+        [
+            "?ew=false&folder=/p/b",
+            "/p/b/.vscode/settings.json"
+        ],
+        [
+            "?folder=/p/a&%77orkspace=/p/b.code-workspace",
+            "/p/b.code-workspace"
+        ],
+        [
+            "?folder=/p/a&folder=",
+            null
+        ],
+        [
+            "?folder=/p/a&folder=relative",
+            null
+        ],
+        [
+            "?folder=/p/a&workspace=/p/missing.code-workspace",
+            "/p/missing.code-workspace"
+        ],
+        [
+            "?folder=/p/space+name",
+            "/p/space name/.vscode/settings.json"
+        ],
+        [
+            "?folder=/p/plus%2Bname",
+            "/p/plus+name/.vscode/settings.json"
+        ],
+        [
+            "?folder=/p/percent%252Fname",
+            "/p/percent%2Fname/.vscode/settings.json"
+        ],
+        [
+            "?folder=/p/a&%66older=/p/b",
+            "/p/b/.vscode/settings.json"
+        ],
+        [
+            "?folder=/p/a&%65w=false",
+            null
+        ],
+        [
+            "?workspace=/p/a.code-workspace&workspace=/p/b.code-workspace",
+            "/p/b.code-workspace"
+        ],
+        [
+            "?folder=/p/a&folder=/p/name%26workspace%3Dignored",
+            "/p/name&workspace=ignored/.vscode/settings.json"
+        ]
+    ]) {
+        const files = {
+            '/p/a/.vscode/settings.json': '{"editor.fontSize":11}',
+            '/p/b/.vscode/settings.json': '{"editor.fontSize":22}',
+            '/p/b.code-workspace': '{"folders":[],"settings":{"editor.fontSize":33}}',
+            '/p/space name/.vscode/settings.json': '{"editor.fontSize":44}',
+            '/p/plus+name/.vscode/settings.json': '{"editor.fontSize":55}',
+            '/p/percent%2Fname/.vscode/settings.json': '{"editor.fontSize":66}',
+        };
+        const page = load({ items: {}, dark: true, search, files });
+        assert.deepStrictEqual(page.requests.map(request => new URL(request.url, 'http://127.0.0.1').searchParams.get('path')),
+            file === null ? [] : [file], 'the settings request disagrees with the final workspace selector: ' + search);
+        assert.strictEqual(page.settings.initialWorkspaceSettings, file === null ? undefined : (files[file] ?? null),
+            'the settings snapshot belongs to an earlier selector: ' + search);
+    }
+
     // A settings file the way people write them, with a byte order mark,
     // comments and a trailing comma, and a comment marker inside a string, which
     // is not a comment; and a theme under its older name, which the workbench

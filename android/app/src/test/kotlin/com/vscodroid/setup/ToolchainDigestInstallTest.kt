@@ -436,7 +436,7 @@ class ToolchainDigestInstallTest {
             .newInstance()
 
     private fun manager() = ToolchainManager(context).apply {
-        onStateChange = { pack, status, pct, why ->
+        onStateChange = { pack, status, pct, why, _ ->
             if (why != null) reasons.add(why)
             events.add(Triple(pack, status, pct))
             if (status == AssetPackStatus.COMPLETED || status == AssetPackStatus.FAILED) {
@@ -467,6 +467,33 @@ class ToolchainDigestInstallTest {
         publishManifest("$zipDigest  toolchain_test.zip\n")
 
         installAndWait()
+
+        assertEquals(AssetPackStatus.COMPLETED, statuses().last(), "expected an install, got $events")
+        assertTrue(recorded().contains("\"test\""), "the install was reported but not recorded: ${recorded()}")
+    }
+
+    /**
+     * The ZIP path installs from its own staging tree, so a removal of Play's copy of
+     * the pack, which a cancel on a Play install posts, is none of its business.
+     * Claimed as a reader of that copy it was declined and reported UNKNOWN after the
+     * download had already been paid for.
+     *
+     * NEGATIVE CONTROL: pass `readsDeliveredPack = true` from `downloadViaHttp` and
+     * this ends on UNKNOWN with nothing recorded.
+     */
+    @Test
+    fun `a zip install is not held up by a removal of Play's copy of the pack`() {
+        publishManifest("$zipDigest  toolchain_test.zip\n")
+        @Suppress("UNCHECKED_CAST")
+        val removals = ToolchainManager::class.java.getDeclaredField("packRemovalsInFlight")
+            .apply { isAccessible = true }
+            .get(null) as MutableSet<String>
+        removals.add("toolchain_test")
+        try {
+            installAndWait()
+        } finally {
+            removals.remove("toolchain_test")
+        }
 
         assertEquals(AssetPackStatus.COMPLETED, statuses().last(), "expected an install, got $events")
         assertTrue(recorded().contains("\"test\""), "the install was reported but not recorded: ${recorded()}")
@@ -803,7 +830,7 @@ class ToolchainDigestInstallTest {
      *
      * `installsInFlight` is claimed only where the two delivery paths converge,
      * once the archive has been downloaded and expanded, so for the whole of a
-     * transfer -- 56 MB for Java 17, minutes on a phone connection -- it reads
+     * transfer -- 64 MB for Java 21, minutes on a phone connection -- it reads
      * free. `ToolchainActivity` declares no `configChanges`, so turning the phone
      * destroys it and rebuilds it with a second manager whose card knows nothing
      * of the download still running and offers Install again. The tap spent the
@@ -1040,8 +1067,8 @@ class ToolchainDigestInstallTest {
      *
      * The flag was read three times on the success path and all three sat before
      * the digest check, so a cancel from that point on was collected by nobody:
-     * the archive was hashed, expanded and copied into `usr/` -- about 155 MB for
-     * Java 17 -- and recorded as installed. The card offers Cancel throughout,
+     * the archive was hashed, expanded and copied into `usr/` -- about 180 MB for
+     * Java 21 -- and recorded as installed. The card offers Cancel throughout,
      * because TRANSFERRING is one of the states that draws it.
      *
      * Deterministic without a race: the cancel is issued from inside the report
@@ -1062,7 +1089,7 @@ class ToolchainDigestInstallTest {
         publishManifest("$zipDigest  toolchain_test.zip\n")
 
         val manager = ToolchainManager(context)
-        manager.onStateChange = { pack, status, percent, why ->
+        manager.onStateChange = { pack, status, percent, why, _ ->
             if (why != null) reasons.add(why)
             events.add(Triple(pack, status, percent))
             // The user's own tap, through the same call the Cancel button makes.
@@ -1181,7 +1208,7 @@ class ToolchainDigestInstallTest {
      *
      * `install` handed one figure to the download for two jobs. The space gate
      * needs the unpacked size, and the bar needs the transfer size, and they
-     * differ by about three times: for Java 17, 160,000,000 against a 56,500,000
+     * differ by about three times: for Java 21, 186,000,000 against a 64,000,000
      * byte ZIP. A response with no Content-Length -- a chunked proxy on the path
      * -- has nothing else to divide by, so the bar topped out near 30% and sat
      * there for the rest of the transfer.
@@ -1227,8 +1254,8 @@ class ToolchainDigestInstallTest {
      * A write that cannot finish is answered by the stage it happened in, not by
      * the transfer that had already succeeded.
      *
-     * Unpacking is the second bulk write an install performs, and about 155 MB of
-     * it for the Java 17 that ships today. The copy into `usr/` that follows has
+     * Unpacking is the second bulk write an install performs, and about 180 MB of
+     * it for the Java 21 that ships today. The copy into `usr/` that follows has
      * caught its own IOException and reported STORAGE ever since a device with a
      * full disk was told to check its connection; the unpacking had no such
      * catch, so the identical event one stage earlier unwound into the

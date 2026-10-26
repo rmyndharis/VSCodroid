@@ -103,6 +103,8 @@
          type is quoted because the audience is developers and it is the part
          worth putting in a bug report. -->
     <string name="url_handoff_failed">その %1$s リンクを開けませんでした (%2$s)。</string>
+    <string name="sign_in_not_ready">エディターはこのサインインの準備ができていません。エディターを再読み込みして、もう一度お試しください。</string>
+    <string name="sign_in_not_issued">エディターがこのサインインを開始しませんでした。もう一度サインインしてください。</string>
 
     <!-- A page inside the editor asked for an https address the WebView would not
          load: a dev server previewed in the Simple Browser, an image in a preview,
@@ -207,6 +209,7 @@
     <string name="toolchain_cancel">キャンセル</string>
     <string name="toolchain_remove_confirm_title">%s を削除しますか?</string>
     <string name="toolchain_remove_confirm_message">%s のファイルがすべて削除されます。いつでも再インストールできます。</string>
+    <string name="toolchain_older_build">%1$sがインストールされています。%2$sにするには、削除してからもう一度インストールしてください。</string>
 
     <!-- Launcher shortcut: in practice the only route to the toolchain screen.
          The activity is not exported and has no launcher entry, and the one
@@ -266,12 +269,9 @@
          from a list this app built a moment earlier, so this means the folder was
          removed or re-synced in between rather than that they typed something wrong. -->
     <string name="saf_mirror_unknown">そのフォルダーには、削除できるローカルコピーがありません。</string>
-    <!-- The reclaim gate declining. Worded as what is at stake rather than as a
-         refusal, because the user's next step is to confirm and remove it anyway: the
-         mirrors that hold unsynced files are exactly the ones worth the disk, since a
-         folder gets large by being worked in and working in one creates files the sync
-         excludes by construction. -->
-    <string name="saf_mirror_not_a_copy">そのフォルダー内の一部のファイルは、デバイスのフォルダーにありません。ローカルコピーを削除すると、それらのファイルも削除されます。</string>
+    <!-- Native confirmation and unconfirmed-removal refusal. A snapshot cannot
+         exclude files added directly after the check. -->
+    <string name="saf_mirror_not_a_copy">このローカルコピーには、デバイスのフォルダーに転送されていないファイルが含まれている可能性があります。続行する前に、必要なファイルを別の場所に保存し、このコピーを使用する作業を停止してください。削除は元に戻せません。</string>
     <!-- The rename that commits a removal was refused by the filesystem. Separate from
          saf_mirror_unknown, which says there was nothing to remove: here the copy is
          still there, whole, and trying again is worth something. -->
@@ -349,9 +349,9 @@
          translator must leave alone, but the sentence around them is language,
          and a Kotlin constant is the same sentence in every locale. The registry
          carries the resource id instead. displayName and shortLabel stay plain
-         strings on purpose; "Ruby" and "Java 17" are the products' own names. -->
+         strings on purpose; "Ruby" and "Java 21" are the products' own names. -->
     <string name="toolchain_ruby_description">Ruby (irb、gem、bundler 付き)</string>
-    <string name="toolchain_java_description">OpenJDK 17 (javac、jar、jshell)</string>
+    <string name="toolchain_java_description">OpenJDK 21 (javac、jar、jshell)</string>
     <string name="toolchain_cpp_description">C と C++ (clang、lld)。ターミナルの exec インターセプターが必要です。LD_PRELOAD を null にすると動作しません。</string>
 
     <!-- The checkmark on a selected toolchain card. It is an ImageView with no
@@ -595,4 +595,5 @@
          tls_unknown_host stands in for an address. Written in Kotlin before, so
          one English word survived inside an otherwise translated About dialog. -->
     <string name="about_version_unknown">不明</string>
+    <string name="saf_folder_unavailable">このデバイスフォルダーのローカルコピーは利用できなくなりました。デバイスからフォルダーをもう一度開いてください。</string>
 </resources>

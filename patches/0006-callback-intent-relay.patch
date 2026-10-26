@@ -25,11 +25,13 @@ scripts/build-vscode-oss.sh strips it instead, and verify-server-tree.py asserts
 on both sides of the pivot that the packaged page carries no embedded image and
 no Microsoft product name.
 
+URI components come from URLSearchParams, which already decodes each value.
+Keep literal percent escapes intact when returning to an extension.
+
 diff --git a/src/vs/code/browser/workbench/callback.html b/src/vs/code/browser/workbench/callback.html
-index 4f54d4d1..fa0adede 100644
 --- a/src/vs/code/browser/workbench/callback.html
 +++ b/src/vs/code/browser/workbench/callback.html
-@@ -7,7 +7,7 @@
+@@ -7,20 +7,16 @@
  		<!-- Disable pinch zooming -->
  		<meta name="viewport" content="width=device-width, initial-scale=1.0, maximum-scale=1.0, minimum-scale=1.0, user-scalable=no">
  
@@ -38,7 +40,36 @@ index 4f54d4d1..fa0adede 100644
  
  		<!-- Scripts -->
  		<script>
-@@ -62,6 +62,22 @@
+ 
+-			function decode(value) {
+-				return value === null ? null : decodeURIComponent(value);
+-			}
+-
+ 			const url = new URL(window.location.href);
+ 			const params = url.searchParams;
+-			const id = decode(params.get('vscode-reqid'));
+-			const scheme = decode(params.get('vscode-scheme'));
+-			const authority = decode(params.get('vscode-authority'));
++			const id = params.get('vscode-reqid');
++			const scheme = params.get('vscode-scheme');
++			const authority = params.get('vscode-authority');
+ 
+ 			if (!id) {
+ 				throw new Error('Missing id');
+@@ -30,9 +26,9 @@
+ 				throw new Error('Missing authority');
+ 			}
+ 
+-			const path = decode(params.get('vscode-path'));
+-			const query = decode(params.get('vscode-query'));
+-			const fragment = decode(params.get('vscode-fragment'));
++			const path = params.get('vscode-path');
++			const query = params.get('vscode-query');
++			const fragment = params.get('vscode-fragment');
+ 
+ 			params.delete('vscode-reqid');
+ 			params.delete('vscode-scheme');
+@@ -62,6 +58,22 @@
  			}
  
  			localStorage.setItem(`vscode-web.url-callbacks[${id}]`, JSON.stringify(uri));
@@ -61,7 +92,7 @@ index 4f54d4d1..fa0adede 100644
  		</script>
  
  		<!-- Styling -->
-@@ -112,7 +128,7 @@
+@@ -112,7 +124,7 @@
  	</head>
  	<body>
  		<span class="branding">

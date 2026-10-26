@@ -421,8 +421,7 @@ class SettingsPathsTest {
 
         @Test
         fun `leaves a nested language override alone`() {
-            // A deeper indent, which is the whole guard: `"[markdown]": {` puts
-            // the same key one level in, and it is the user's.
+            // A nested setting belongs to the user at any indentation.
             val before = "{\n" +
                 "    \"[markdown]\": {\n" +
                 "        \"editor.wordWrap\": \"on\",\n" +

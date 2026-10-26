@@ -110,9 +110,9 @@ class SafWriteBackFilterTest {
     }
 
     @Test
-    fun `scratch files a writer is about to rename away are left alone`() {
-        assertFalse(SafSyncEngine.shouldWriteBack("notes.txt~", isDirectory = false))
-        assertFalse(SafSyncEngine.shouldWriteBack("build/out.tmp", isDirectory = false))
+    fun `temporary-looking user files are written back`() {
+        assertTrue(SafSyncEngine.shouldWriteBack("notes.txt~", isDirectory = false))
+        assertTrue(SafSyncEngine.shouldWriteBack("build/out.tmp", isDirectory = false))
     }
 
     // ── the two filters, side by side ────────────────────────────────────

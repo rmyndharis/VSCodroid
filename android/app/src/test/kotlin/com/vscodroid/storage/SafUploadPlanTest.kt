@@ -184,12 +184,7 @@ class SafUploadPlanTest {
     }
 
     @Test
-    fun `machine-temporary files are not uploaded`(@TempDir tmp: File) {
-        // The same filter shouldWriteBack applies to single-file events. The
-        // recursion was the one route around it, so a directory appearing while an
-        // editor held a backup, or while a mirror copy was still partial, put that
-        // scratch file on the device under its temporary name with nothing to
-        // remove it later.
+    fun `only engine partial copies are excluded from an upload plan`(@TempDir tmp: File) {
         val root = File(tmp, "proj").apply { mkdirs() }
         File(root, "real.kt").writeText("k")
         File(root, "notes.md~").writeText("x")
@@ -200,8 +195,8 @@ class SafUploadPlanTest {
             .map { it.name }
 
         assertTrue(names.contains("real.kt"), "the real file must still go: $names")
-        assertFalse(names.any { it.endsWith("~") }, names.toString())
-        assertFalse(names.any { it.endsWith(".tmp") }, names.toString())
+        assertTrue(names.contains("notes.md~"), names.toString())
+        assertTrue(names.contains("session.tmp"), names.toString())
         assertFalse(names.any { it.contains("partial") }, names.toString())
     }
 

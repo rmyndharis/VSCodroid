@@ -105,8 +105,7 @@ class WorkspaceUrlRoundTripTest {
     fun `a folder parameter naming something that is not a directory is refused`() {
         assertNull(
             workbenchTarget(
-                folder = workspace,
-                workspace = null,
+                query = "folder=$workspace",
                 isDirectory = { false },
                 isFile = { true },
             ),
@@ -121,8 +120,7 @@ class WorkspaceUrlRoundTripTest {
         assertEquals(
             workspace,
             workbenchTarget(
-                folder = null,
-                workspace = workspace,
+                query = "workspace=$workspace",
                 isDirectory = { false },
                 isFile = { true },
             ),
@@ -136,8 +134,7 @@ class WorkspaceUrlRoundTripTest {
     fun `a workspace file that is gone is not taken`() {
         assertNull(
             workbenchTarget(
-                folder = null,
-                workspace = workspace,
+                query = "workspace=$workspace",
                 isDirectory = { false },
                 isFile = { false },
             ),
@@ -148,18 +145,80 @@ class WorkspaceUrlRoundTripTest {
     }
 
     @Test
-    fun `the folder parameter wins when a URL somehow carries both`() {
-        assertEquals(
-            folder,
-            workbenchTarget(
-                folder = folder,
-                workspace = workspace,
-                isDirectory = { true },
-                isFile = { true },
-            ),
-            "not a URL anything builds, and the ordering is stated rather than left to " +
-                "whichever branch happens to be written first",
+    fun `the final recognized selector wins in either order and across duplicates`() {
+        val cases = listOf(
+            "folder=$folder&workspace=$workspace" to workspace,
+            "workspace=$workspace&folder=$folder" to folder,
+            "folder=/old&folder=$folder" to folder,
+            "workspace=/old.code-workspace&workspace=$workspace" to workspace,
+            "folder=/old&workspace=$workspace&folder=$folder&token=ignored" to folder,
+            "folder=$folder&ew=false" to null,
+            "workspace=$workspace&ew" to null,
+            "ew=true&folder=$folder" to folder,
+            "ew=true&workspace=$workspace" to workspace,
         )
+        for ((query, expected) in cases) {
+            assertEquals(
+                expected,
+                workbenchTarget(query, { it == folder }, { it == workspace }),
+                query,
+            )
+        }
+    }
+
+    @Test
+    fun `an unusable final target never falls back to an earlier selector`() {
+        for (query in listOf(
+            "folder=$folder&workspace=/missing.code-workspace",
+            "workspace=$workspace&folder=/missing",
+            "folder=$folder&workspace=$folder",
+            "workspace=$workspace&folder=$workspace",
+            "folder=$folder&folder=/missing",
+            "workspace=$workspace&workspace=",
+            "ew=true&folder=/missing",
+            "folder=$folder&folder=relative",
+            "workspace=$workspace&workspace=relative.code-workspace",
+        )) {
+            assertNull(workbenchTarget(query, { it == folder }, { it == workspace }), query)
+            assertNull(emptyWindowUrl("http://127.0.0.1:13337/?$query", 13337), query)
+        }
+    }
+
+    @Test
+    fun `relative and empty selected paths are refused before filesystem checks`() {
+        for (query in listOf("folder=relative", "workspace=relative.code-workspace", "folder=", "workspace=")) {
+            assertNull(workbenchTarget(query, { error("must not stat a relative path") }, {
+                error("must not stat a relative path")
+            }), query)
+        }
+    }
+
+    @Test
+    fun `selector names and values use form decoding once after splitting`() {
+        val cases = listOf(
+            "folder=$folder&work%73pace=$workspace" to workspace,
+            "workspace=$workspace&%66older=$folder" to folder,
+            "folder=/a+b" to "/a b",
+            "folder=/a%2Bb" to "/a+b",
+            "folder=/a%26workspace%3Dother" to "/a&workspace=other",
+            "folder=/a%252Fb" to "/a%2Fb",
+            "folder=%2Fa%" to "/a%",
+            "folder=%2Fa%2" to "/a%2",
+        )
+        for ((query, expected) in cases) {
+            assertEquals(expected, workbenchTarget(query, { true }, { true }), query)
+        }
+    }
+
+    @Test
+    fun `only the final empty selector closes the window regardless of its value`() {
+        for (query in listOf("ew", "ew=", "ew=false", "folder=$folder&%65w=0", "ew=true&ew=false")) {
+            val url = "http://127.0.0.1:13337/?$query#folder=/ignored"
+            assertEquals(url, emptyWindowUrl(url, 13337), query)
+        }
+        assertNull(emptyWindowUrl("http://127.0.0.1:13337/?ew=true&folder=$folder", 13337))
+        assertNull(emptyWindowUrl("http://127.0.0.1:13337/#?ew=true", 13337))
+        assertNull(emptyWindowUrl("http://127.0.0.1:13337/?folder=$folder#&ew=true", 13337))
     }
 
     @Test
@@ -293,6 +352,70 @@ class WorkspaceUrlRoundTripTest {
         assertTrue(bridge.contains("rememberWorkspaceFolder(null)")) {
             "nothing clears the remembered folder, so closing it and relaunching puts " +
                 "the user back into the folder they closed"
+        }
+    }
+
+    @Test
+    fun `a failed selected path clears only the live workspace after the page loads`() {
+        val bridge = SourceScan.withoutComments(
+            SourceScan.body(
+                SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt"),
+                "private fun initBridge(",
+            ),
+        )
+        val invalid = SourceScan.body(bridge, "else if (isWorkbenchUrl(url, port) &&")
+        assertTrue(invalid.contains("openWorkspaceFolder = null"))
+        assertTrue(invalid.contains("openWorkspaceRoot = null"))
+        assertFalse(invalid.contains("rememberWorkspaceFolder("))
+        assertFalse(invalid.contains("workspacePrefs"))
+        assertTrue(bridge.contains("workbenchSelection(workspaceQueryFromUrl(url))?.kind"))
+    }
+
+    @Test
+    fun `recovery follows a close or folder switch after the lookup`() {
+        assertEquals(folder, workspaceTargetAfterLookup("data:text/html,placeholder", 13337, null, folder))
+        assertEquals(workspace, workspaceTargetAfterLookup(workbenchUrl(13337, workspace, null), 13337, workspace, folder))
+        for (query in listOf("ew=true", "ew=false", "folder=$folder&ew=0")) {
+            assertNull(workspaceTargetAfterLookup("http://127.0.0.1:13337/?$query", 13337, null, folder))
+        }
+        assertNull(workspaceTargetAfterLookup(null, 13337, null, null))
+    }
+
+    @Test
+    fun `empty windows accept both supported HTTP loopback hosts and root spellings`() {
+        for (address in listOf(
+            "http://127.0.0.1:13337", "http://127.0.0.1:13337/",
+            "http://localhost:13337", "http://localhost:13337/",
+        )) {
+            for (query in listOf("ew", "ew=false", "folder=/missing&%65w=0", "ew=true&ew=false")) {
+                val url = "$address?$query#ignored"
+                assertEquals(url, emptyWindowUrl(url, 13337), url)
+            }
+        }
+    }
+
+    @Test
+    fun `empty window aliases retain the HTTP root and selector guards`() {
+        for (url in listOf(
+            "http://localhost:9999/?ew=true", "http://example.com:13337/?ew=true",
+            "http://localhost:13337/vscode-remote-resource?ew=true",
+            "http://127.0.0.1:13337/static/workbench.html?ew=true",
+            "https://localhost:13337/?ew=true", "ftp://127.0.0.1:13337/?ew=true",
+            "http://localhost:13337/?ew=true&folder=/missing",
+            "http://localhost:13337/?ew=true&workspace=/missing.code-workspace",
+            "http://localhost:13337/#?ew=true",
+        )) assertNull(emptyWindowUrl(url, 13337), url)
+        val malformedQuery = "http://localhost:13337/?ignored=%&%65w=false"
+        assertEquals(malformedQuery, emptyWindowUrl(malformedQuery, 13337))
+        assertNull(emptyWindowUrl("http://localhost:13337/%?ew=true", 13337))
+    }
+
+    @Test
+    fun `resource paths are not closed workbench windows`() {
+        for (path in listOf("vscode-remote-resource", "static/workbench.html")) {
+            val url = "http://127.0.0.1:13337/$path?ew=true"
+            assertNull(emptyWindowUrl(url, 13337))
+            assertEquals(folder, workspaceTargetAfterLookup(url, 13337, null, folder))
         }
     }
 

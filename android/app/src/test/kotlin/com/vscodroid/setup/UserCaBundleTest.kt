@@ -36,13 +36,9 @@ import java.util.Base64
  * had distrusted. It used to matter only for git; SSL_CERT_FILE and
  * REQUESTS_CA_BUNDLE now put the same file in front of python, pip and curl.
  *
- * So where the store answers, it is the whole bundle and the certificate
- * directory is not read at all, which is what `a root the store stops answering
- * with leaves the bundle` measures. Where the store answers with nothing (a
- * provider that threw, a device that has none) the directory is concatenated as
- * before, because a bundle that honours a removal is worth less than a bundle
- * that exists: this runs inside SplashActivity's per-launch repair block, and
- * what it writes is the file every HTTPS client in the terminal reads.
+ * A successful platform read is authoritative, including zero roots. Only an
+ * unavailable provider falls back to the raw certificate directory. Complete
+ * encoding failure preserves the previous bundle and its fingerprint.
  *
  * Freshness is two conditions and neither is redundant. The certificate
  * directory's mtime is the cheap one, and it is blind to both halves of what
@@ -110,11 +106,7 @@ class UserCaBundleTest {
         }
 
     /**
-     * The store answers with the root every device has, plus [certs].
-     *
-     * The merged store holds both halves, so a case that supplied only its own
-     * certificates would be measuring a device that trusts nothing else, which
-     * is not a device.
+     * The merged store with the fixture's system root, plus [certs].
      */
     private fun buildWith(vararg certs: Certificate) =
         setupWith { listOf(systemRoot) + certs }.setupGitCaBundle()
@@ -309,25 +301,103 @@ class UserCaBundleTest {
         assertTrue(systemPem in bundleText(), "the rest of the store was dropped over one broken certificate")
     }
 
-    /**
-     * The closed-failure argument the whole feature rests on, as a property.
-     *
-     * This runs from SplashActivity's per-launch repair block, ahead of the
-     * symlink and settings repairs, so an exception escaping here costs work
-     * that matters more than this does. And the bundle is now what git, python,
-     * pip and curl all read, so a device whose provider is missing or refuses to
-     * load has to end up with the bundle as it was before any of this existed:
-     * the certificate directory, concatenated, which cannot see a root the owner
-     * removed but does keep HTTPS working at all. That is the trade, and it is
-     * the right way round.
-     *
-     * Both ways of answering with nothing, because they arrive by different
-     * doors: a provider that throws is caught inside the seam's caller, and an
-     * empty list is a store that loaded and held nothing usable. Only the first
-     * of the two was measured before.
-     */
     @Test
-    fun `a store that answers with nothing falls back to the certificate directory`() {
+    fun `a successfully empty store removes the last trusted root`() {
+        buildWith()
+        makeMtimeLookFresh()
+
+        setupWith { emptyList() }.setupGitCaBundle()
+
+        assertTrue(bundle.isFile, "empty trust must remain explicit for bundle consumers")
+        assertEquals("", bundleText(), "the raw directory restored a root the store no longer trusts")
+        assertEquals(
+            "dc0ae9da7a6ea37e7e55618c6f7e2ce747fc399031be9c203d53fe0b8079f1df",
+            File(bundle.parentFile, ".user-ca-fingerprint").readText(),
+            "device diagnostics must recognize the authoritative empty-store marker",
+        )
+        assertTrue(File(systemCaDir, "a1b2c3d4.0").isFile)
+    }
+
+    @Test
+    fun `an old empty-store fingerprint cannot retain a fallback bundle`() {
+        bundle.parentFile?.mkdirs()
+        bundle.writeText(systemPem)
+        File(bundle.parentFile, ".user-ca-fingerprint").writeText(
+            "e3b0c44298fc1c149afbf4c8996fb92427ae41e4649b934ca495991b7852b855",
+        )
+        makeMtimeLookFresh()
+
+        setupWith { emptyList() }.setupGitCaBundle()
+
+        assertEquals("", bundleText(), "an old fallback fingerprint bypassed the empty trust policy")
+    }
+
+    @Test
+    fun `a recovered empty provider replaces its previous directory fallback`() {
+        setupWith { throw java.security.KeyStoreException("no such provider") }.setupGitCaBundle()
+        makeMtimeLookFresh()
+
+        setupWith { emptyList() }.setupGitCaBundle()
+
+        assertEquals("", bundleText(), "provider fallback was cached as authoritative empty trust")
+    }
+
+    @Test
+    fun `authoritative trust does not require a raw certificate directory`() {
+        setupWith { listOf(systemRoot) }.apply {
+            systemCaCertificateDirs = listOf(File(filesDir, "absent-cacerts").path)
+        }.setupGitCaBundle()
+
+        assertTrue(bundle.isFile, "the usable platform store was ignored without a raw directory")
+        assertEquals(systemPem, bundleText())
+    }
+
+    @Test
+    fun `authoritative empty trust does not require a raw certificate directory`() {
+        setupWith { emptyList() }.apply {
+            systemCaCertificateDirs = listOf(File(filesDir, "absent-cacerts").path)
+        }.setupGitCaBundle()
+
+        assertTrue(bundle.isFile, "empty platform trust must override client defaults")
+        assertEquals("", bundleText())
+    }
+
+    @Test
+    fun `an unchanged authoritative empty store is not rebuilt`() {
+        val setup = setupWith { emptyList() }
+        setup.setupGitCaBundle()
+        makeMtimeLookFresh()
+
+        setup.setupGitCaBundle()
+
+        assertEquals("", bundleText())
+        assertEquals(2_000_000_000_000L, bundle.lastModified())
+    }
+
+    @Test
+    fun `total certificate encoding failure preserves the previous bundle and fingerprint`() {
+        setupWith { listOf(certificateOf(byteArrayOf(7, 7, 7))) }.setupGitCaBundle()
+        val previous = bundleText()
+        val marker = File(bundle.parentFile, ".user-ca-fingerprint")
+        val previousFingerprint = marker.readText()
+
+        setupWith { listOf(certificateOf(null)) }.setupGitCaBundle()
+
+        assertEquals(previous, bundleText(), "encoding failure replaced known trust with raw roots")
+        assertEquals(previousFingerprint, marker.readText())
+    }
+
+    @Test
+    fun `total certificate encoding failure does not create a raw fallback bundle`() {
+        setupWith { listOf(certificateOf(null)) }.setupGitCaBundle()
+
+        assertFalse(bundle.exists())
+        assertFalse(File(bundle.parentFile, ".user-ca-fingerprint").exists())
+    }
+
+    /** Provider unavailability retains the system-directory availability fallback. */
+    @Test
+    fun `an unavailable provider falls back to the certificate directory`() {
         // Two files, because the fallback has to carry the whole directory: this
         // is the one path on which what the platform ships is copied through
         // rather than encoded here, and a bundle holding some roots and not the
@@ -335,30 +405,12 @@ class UserCaBundleTest {
         val secondPem = "-----BEGIN CERTIFICATE-----\nc2Vjb25k\n-----END CERTIFICATE-----\n"
         File(systemCaDir, "e5f6a7b8.0").writeText(secondPem)
 
-        fun assertFallsBack(how: String, store: () -> List<Certificate>) {
-            // Cleared first, or a later pass is answered by the freshness check
-            // rather than by the fallback: a store that answers with nothing
-            // fingerprints to the same hash whichever way it emptied, so a
-            // surviving bundle would satisfy the assertion without the method
-            // having built anything.
-            bundle.parentFile?.deleteRecursively()
-            assertFalse(bundle.exists(), "could not clear the bundle between passes; the harness is wrong")
-
-            setupWith(store).setupGitCaBundle()
-
-            assertTrue(bundle.isFile, "$how left no bundle at all")
-            assertEquals(
-                systemPem + secondPem,
-                bundleText(),
-                "$how left the terminal without the system roots, so HTTPS fails everywhere " +
-                    "the bundle is read: git, python, pip and curl",
-            )
-        }
-
-        assertFallsBack("a provider that cannot be loaded") {
+        setupWith {
             throw java.security.KeyStoreException("no such provider")
-        }
-        assertFallsBack("a device with no such store") { emptyList() }
+        }.setupGitCaBundle()
+
+        assertTrue(bundle.isFile, "an unavailable provider left no fallback bundle")
+        assertEquals(systemPem + secondPem, bundleText())
     }
 
     /**

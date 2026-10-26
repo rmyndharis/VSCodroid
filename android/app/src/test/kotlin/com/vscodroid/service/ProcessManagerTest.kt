@@ -209,6 +209,21 @@ class ProcessManagerTest {
     }
 
     @Test
+    fun `heap attribution reads only the matching server epoch`() {
+        manager.heapOverrideActiveField = true
+        field("heapOverrideAskedMb").set(manager, 640)
+        val endedEpoch = manager.serverEpoch
+        assertEquals(640, manager.heapOverrideValueInEffect(endedEpoch))
+
+        manager.stopServer()
+        manager.heapOverrideActiveField = true
+        field("heapOverrideAskedMb").set(manager, 768)
+
+        assertNull(manager.heapOverrideValueInEffect(endedEpoch))
+        assertEquals(768, manager.heapOverrideValueInEffect(manager.serverEpoch))
+    }
+
+    @Test
     fun `keeps the port across a restart`() {
         // The WebView's loaded URL and the WebViewClient are bound to the port and are
         // not rebuilt on restart, so it has to stay put. (This named the bridge's
@@ -2465,8 +2480,16 @@ class AdoptionTest {
     @AfterEach
     fun tearDown() {
         stub?.stop()
-        manager.stopServer()
+        stopAndAwaitWatchdog()
         unmockkAll()
+    }
+
+    private fun stopAndAwaitWatchdog() {
+        // stopServer clears this field before interrupting the watch.
+        val watchdog = field("watchdogThread").get(manager) as Thread?
+        manager.stopServer()
+        watchdog?.join(5_000)
+        assertFalse(watchdog?.isAlive == true, "the server watchdog outlived the test")
     }
 
     /**
@@ -2509,10 +2532,15 @@ class AdoptionTest {
      * bootstrap forks; a test passes something else to stand for a pid that has
      * been recycled into an unrelated process.
      */
-    private fun recordEditorServer(pid: Int, port: Int, entry: String = "server-main.js") {
+    private fun recordEditorServer(
+        pid: Int,
+        port: Int,
+        entry: String = "server-main.js",
+        runId: String = "run-$pid",
+    ) {
         File(tempDir, "server").mkdirs()
         File(tempDir, "server/editor-server.pid")
-            .writeText("""{"pid":$pid,"port":$port}""")
+            .writeText("""{"pid":$pid,"port":$port,"runId":"$runId"}""")
         File(tempDir, "proc/$pid").mkdirs()
         // NUL-separated, the way the kernel writes argv. Written as escapes
         // rather than as raw bytes: two NULs in the source made every tool
@@ -2682,9 +2710,10 @@ class AdoptionTest {
         // child; reloading then restarts the extension host for a connection that
         // never broke. But a restart can also adopt a child the page never saw, when
         // a second bootstrap died before it was announced, and that page's server is
-        // gone, so only the pid readiness was announced for may skip the reload.
+        // gone, so only the editor readiness was announced for may skip the reload.
         val holder = serving(200)
         recordEditorServer(pid = 4242, port = holder.port)
+        assertTrue(manager.probeReadiness())
         manager.markReadyAnnounced()
 
         assertTrue(manager.startServer(), "adopting is a successful start")
@@ -2699,6 +2728,7 @@ class AdoptionTest {
     fun `adopting a child the page never saw is not taken for the page's own server`() {
         val holder = serving(200)
         recordEditorServer(pid = 4242, port = holder.port)
+        assertTrue(manager.probeReadiness())
         manager.markReadyAnnounced()
         // A restart spawned a second bootstrap, which forked 4343 and died before
         // its server was announced.
@@ -2710,6 +2740,87 @@ class AdoptionTest {
             "a child the page never connected to was taken for the page's own server, " +
                 "which would leave the page on a server that is gone",
         )
+    }
+
+    @Test
+    fun `a different run reusing the announced pid still needs a page reload`() {
+        val holder = serving(200)
+        recordEditorServer(pid = 4242, port = holder.port, runId = "original")
+        assertTrue(manager.probeReadiness())
+        manager.markReadyAnnounced()
+        recordEditorServer(pid = 4242, port = holder.port, runId = "replacement")
+
+        assertTrue(manager.startServer())
+        assertFalse(manager.continuesAnnouncedServer(), "the replacement run needs its own token loaded")
+    }
+
+    @Test
+    fun `a note replaced during the adoption probe cannot claim page continuity`() {
+        val holder = serving(200)
+        recordEditorServer(pid = 4242, port = holder.port, runId = "original")
+        assertTrue(manager.probeReadiness())
+        manager.markReadyAnnounced()
+        holder.beforeAnswer = {
+            recordEditorServer(pid = 4242, port = holder.port, runId = "replacement")
+        }
+
+        assertTrue(manager.startServer())
+        assertFalse(manager.continuesAnnouncedServer(), "the probe outlived the announced editor note")
+    }
+
+    @Test
+    fun `an adopted readiness probe cannot publish a replacement run token`() {
+        val holder = serving(200)
+        recordEditorServer(pid = 4242, port = holder.port, runId = "original")
+        assertTrue(manager.probeReadiness())
+        manager.markReadyAnnounced()
+        assertTrue(manager.startServer())
+        val replacementToken = "replacement-server-token"
+        val replaced = AtomicBoolean(false)
+        holder.beforeAnswer = {
+            if (replaced.compareAndSet(false, true)) {
+                recordEditorServer(pid = 4243, port = holder.port, runId = "replacement")
+                File(tempDir, "proc/4242/cmdline").delete()
+                File(tempDir, "token").writeText(replacementToken)
+            }
+        }
+
+        synchronized(field("readinessLock").get(manager)!!) {
+            assertFalse(manager.probeReadiness(), "the request crossed into another editor run")
+            assertTrue(replaced.get(), "the fixture must replace the run during the request")
+            assertFalse(manager.isReady())
+            assertNull(manager.connectionToken)
+            holder.beforeAnswer = null
+            manager.stopServer()
+            recordEditorServer(pid = 4243, port = holder.port, runId = "replacement")
+            assertTrue(manager.startServer())
+            assertTrue(manager.probeReadiness())
+            assertEquals(replacementToken, manager.connectionToken)
+            assertFalse(manager.continuesAnnouncedServer(), "the replacement still needs its page loaded")
+        }
+    }
+
+    @Test
+    fun `a ready adoption announces its captured note after disk replacement`() {
+        val holder = serving(200)
+        recordEditorServer(pid = 4242, port = holder.port, runId = "original")
+        assertTrue(manager.probeReadiness())
+        manager.markReadyAnnounced()
+        assertTrue(manager.startServer())
+        assertTrue(manager.probeReadiness())
+
+        synchronized(field("readinessLock").get(manager)!!) {
+            recordEditorServer(pid = 4243, port = holder.port, runId = "replacement")
+            File(tempDir, "token").writeText("replacement-server-token")
+            // The callback chose continuity for the ready run, before recording it.
+            assertTrue(manager.continuesAnnouncedServer())
+            manager.markReadyAnnounced()
+            manager.stopServer()
+            recordEditorServer(pid = 4243, port = holder.port, runId = "replacement")
+            assertTrue(manager.startServer())
+            assertTrue(manager.probeReadiness())
+            assertFalse(manager.continuesAnnouncedServer(), "a mutable note replaced the announced identity")
+        }
     }
 
     @Test
@@ -3174,6 +3285,67 @@ class AdoptionTest {
     }
 
     @Test
+    fun `a healthy listener cannot keep a departed adopted editor ready`() {
+        val holder = serving(200)
+        recordEditorServer(pid = 4242, port = holder.port)
+        assertTrue(manager.startServer())
+        assertTrue(manager.probeReadiness())
+        val reported = AtomicReference<Int?>(null)
+        val crashed = CountDownLatch(1)
+        manager.onServerCrashed = {
+            reported.set(it)
+            crashed.countDown()
+        }
+
+        // The listener survives the recorded editor, so HTTP alone still succeeds.
+        assertTrue(File(tempDir, "proc/4242/cmdline").delete())
+        assertTrue(manager.isServerHealthy(), "the listener must keep answering")
+
+        assertTrue(crashed.await(15, TimeUnit.SECONDS), "the departed editor was never reported")
+        assertEquals(ADOPTED_SERVER_LOST, reported.get())
+        assertFalse(manager.isAdopted())
+        assertFalse(manager.isReady())
+        assertNull(manager.connectionToken, "a departed editor must stop publishing its token")
+    }
+
+    @Test
+    fun `a replacement note cannot migrate an adoption watch to another run`() {
+        val holder = serving(200)
+        recordEditorServer(pid = 4242, port = holder.port, runId = "original")
+        assertTrue(manager.startServer())
+        assertTrue(manager.probeReadiness())
+        val crashed = CountDownLatch(1)
+        manager.onServerCrashed = { crashed.countDown() }
+
+        recordEditorServer(pid = 4242, port = holder.port, runId = "replacement")
+        assertTrue(manager.portHeldByOurEditorServer(), "the replacement note must be valid on its own")
+
+        assertTrue(crashed.await(15, TimeUnit.SECONDS), "the watch followed the replacement run")
+        assertFalse(manager.isAdopted())
+        assertFalse(manager.isReady())
+        assertNull(manager.connectionToken)
+    }
+
+    @Test
+    fun `a live adopted editor remains ready across watch polls`() {
+        val holder = serving(200)
+        recordEditorServer(pid = 4242, port = holder.port)
+        assertTrue(manager.startServer())
+        assertTrue(manager.probeReadiness())
+        val polled = CountDownLatch(2)
+        holder.beforeAnswer = { polled.countDown() }
+        val reported = AtomicReference<Int?>(null)
+        manager.onServerCrashed = { reported.set(it) }
+
+        assertTrue(polled.await(15, TimeUnit.SECONDS), "the watch never checked the surviving editor")
+        assertTrue(manager.isAdopted())
+        assertTrue(manager.isReady())
+        assertEquals(token, manager.connectionToken)
+        assertNull(manager.serverProcessField, "the surviving editor must not need its bootstrap")
+        assertNull(reported.get())
+    }
+
+    @Test
     fun `a previous adoption watch cannot withdraw a replacement server`() {
         val holder = serving(200)
         manager.killRecordedProcess = { }
@@ -3206,7 +3378,7 @@ class AdoptionTest {
             assertTrue(manager.isReady(), "the previous watch withdrew replacement readiness")
             assertTrue(manager.isAdopted(), "the previous watch abandoned the replacement")
         } finally {
-            manager.stopServer()
+            stopAndAwaitWatchdog()
             previousWatch.interrupt()
             previousWatch.join(5_000)
         }
@@ -3274,7 +3446,7 @@ class AdoptionTest {
         recordEditorServer(pid = 4242, port = holder.port)
         assertTrue(manager.startServer())
 
-        manager.stopServer()
+        stopAndAwaitWatchdog()
 
         assertEquals(listOf(4242), killed, "the stop must end the process the note names")
         assertFalse(manager.isAdopted(), "the stop must also end our relationship with it")
@@ -3296,7 +3468,7 @@ class AdoptionTest {
         // Recycled between adoption and the stop, into something of ours that is not it.
         File(tempDir, "proc/4242/cmdline").writeText("/lib/libbash.so -i ")
 
-        manager.stopServer()
+        stopAndAwaitWatchdog()
 
         assertTrue(killed.isEmpty(), "a pid that is not an editor server must not be signalled")
     }
@@ -3310,7 +3482,7 @@ class AdoptionTest {
         assertTrue(manager.startServer())
         File(tempDir, "proc/4242/cmdline").delete()
 
-        manager.stopServer()
+        stopAndAwaitWatchdog()
 
         assertTrue(killed.isEmpty(), "nothing to signal once the process is gone")
     }
@@ -3325,7 +3497,7 @@ class AdoptionTest {
         assertTrue(manager.startServer())
         File(tempDir, "proc/4242/cmdline").writeText("/lib/libbash.so -i ")
 
-        manager.stopServer()
+        stopAndAwaitWatchdog()
 
         assertFalse(
             File(tempDir, "server/editor-server.pid").exists(),
@@ -3506,6 +3678,77 @@ class AdoptionTest {
         assertTrue(manager.startServer())
 
         assertTrue(killed.isEmpty(), "adopting a working server must not end it")
+    }
+
+    @Test
+    fun `adoption publishes its owner and watch under the same lock as Stop`() {
+        val holder = serving(200)
+        recordEditorServer(pid = 4242, port = holder.port)
+        val readinessLock = field("readinessLock").get(manager)!!
+        val entered = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val stopped = CountDownLatch(1)
+        val paused = AtomicBoolean(false)
+        val publicationHeldLock = AtomicBoolean(false)
+        val capturedWatch = AtomicReference<Thread?>()
+        val killed = Collections.synchronizedList(mutableListOf<Int>())
+        val failure = AtomicReference<Throwable?>()
+        val startResult = AtomicReference<Boolean?>()
+        every { Environment.getServerDir(any()) } answers {
+            if (Thread.currentThread().name == "adoption-starter" && manager.isAdopted() &&
+                paused.compareAndSet(false, true)
+            ) {
+                publicationHeldLock.set(Thread.holdsLock(readinessLock))
+                entered.countDown()
+                check(release.await(5, TimeUnit.SECONDS))
+            }
+            File(tempDir, "server").path
+        }
+        manager.killRecordedProcess = {
+            capturedWatch.compareAndSet(null, field("watchdogThread").get(manager) as Thread?)
+            killed.add(it)
+        }
+        val starter = thread(name = "adoption-starter") {
+            try {
+                startResult.set(manager.startServer())
+            } catch (error: Throwable) {
+                failure.set(error)
+            }
+        }
+        var stopper: Thread? = null
+        try {
+            assertTrue(entered.await(5, TimeUnit.SECONDS), "adoption never reached its recorded-pid read")
+            stopper = thread(name = "adoption-stopper") {
+                try {
+                    manager.stopServer()
+                    manager.stopServer()
+                } catch (error: Throwable) {
+                    failure.set(error)
+                } finally {
+                    stopped.countDown()
+                }
+            }
+            stopped.await(250, TimeUnit.MILLISECONDS)
+            release.countDown()
+            starter.join(5_000)
+            stopper.join(5_000)
+
+            assertFalse(starter.isAlive || stopper.isAlive, "a lifecycle worker outlived the test")
+            failure.get()?.let { throw it }
+            assertNotNull(startResult.get())
+            assertFalse(manager.isAdopted(), "adoption survived both completed stops")
+            assertNull(field("watchdogThread").get(manager), "a watch was published after Stop captured it")
+            assertEquals(listOf(4242), killed.toList())
+            assertTrue(publicationHeldLock.get(), "adoption publication bypassed the Stop lock")
+        } finally {
+            release.countDown()
+            starter.join(5_000)
+            stopper?.join(5_000)
+            val watch = capturedWatch.get() ?: field("watchdogThread").get(manager) as Thread?
+            manager.stopServer()
+            watch?.join(5_000)
+            assertFalse(starter.isAlive || stopper?.isAlive == true || watch?.isAlive == true)
+        }
     }
 }
 

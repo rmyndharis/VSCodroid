@@ -120,7 +120,7 @@ class ClearableStorageTest {
      * The staging directory a toolchain download expands into sits under
      * `cacheDir`, so the `cache` row has always counted it and the screen has
      * always offered that row to the clear action. Nothing cleared it: an
-     * abandoned Java download is roughly 155 MB, against a few MB for everything
+     * abandoned Java download is roughly 180 MB, against a few MB for everything
      * else the action reaches, so the button reported success and left the
      * largest number on the screen exactly where it was.
      */

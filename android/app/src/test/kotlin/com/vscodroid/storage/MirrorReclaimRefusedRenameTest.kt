@@ -22,6 +22,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.security.MessageDigest
 
 /**
  * A removal whose rename the filesystem refuses is not a removal.
@@ -104,7 +105,6 @@ class MirrorReclaimRefusedRenameTest {
         every { isReadPermission } returns true
     }
 
-    /** A mirror whose every file the record vouches for, so the gate lets it through. */
     /**
      * The other half of the same commit point, and the half nothing else executes.
      *
@@ -153,11 +153,14 @@ class MirrorReclaimRefusedRenameTest {
         val file = File(dir, "src/main.kt").apply { writeText("fun main() {}") }
         File(dir.path + SafSyncEngine.SYNCED_RECORD_SUFFIX).writeText(
             SafSyncEngine.RECORD_HEADER + "\n" +
-                SafSyncEngine(context).identityLine("src/main.kt", file)
+                SafSyncEngine.recordLine(
+                    SafSyncEngine(context).identityLine("src/main.kt", file),
+                    MessageDigest.getInstance("SHA-256").digest(file.readBytes()),
+                )
         )
         check(SafSyncEngine(context).holdsOnlyVouchedCopies(dir)) {
             "the fixture wrote a record the engine does not accept, so this case would " +
-                "fail on the gate rather than on the rename it is about"
+                "fail on its setup rather than on the rename it is about"
         }
         return dir
     }
@@ -187,7 +190,7 @@ class MirrorReclaimRefusedRenameTest {
                 "removal below would commit and this case would be measuring nothing",
         )
 
-        val answer = manager.reclaimMirror(dir.name, force = false)
+        val answer = manager.reclaimMirror(dir.name, force = true)
 
         assertEquals(
             SafStorageManager.RECLAIM_FAILED, answer,

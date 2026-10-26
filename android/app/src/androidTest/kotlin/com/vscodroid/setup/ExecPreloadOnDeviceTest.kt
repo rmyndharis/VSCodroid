@@ -18,7 +18,6 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
 import java.io.IOException
-import java.util.concurrent.TimeUnit
 
 /**
  * That the exec interceptor lets a shell start what the app itself is forbidden
@@ -214,7 +213,8 @@ class ExecPreloadOnDeviceTest {
     @Test
     fun `a symlink onto a system binary is started as itself`() {
         val link = File(probeRoot, "sh")
-        Runtime.getRuntime().exec(arrayOf("/system/bin/ln", "-sf", "/system/bin/sh", link.absolutePath)).waitFor()
+        val linked = run(listOf("/system/bin/ln", "-sf", "/system/bin/sh", link.absolutePath), emptyMap())
+        assertEquals(linked.second, 0, linked.first)
         assertTrue("the link was not created", link.exists())
 
         // The linked shell's own exe, by its pid: `/proc/self/exe` would be the
@@ -356,18 +356,16 @@ class ExecPreloadOnDeviceTest {
     private fun run(command: List<String>, env: Map<String, String>): Pair<Int, String> {
         val builder = ProcessBuilder(command).redirectErrorStream(true)
         builder.environment().putAll(env)
-        return try {
-            val process = builder.start()
-            val out = process.inputStream.bufferedReader().readText()
-            assertTrue("the command did not finish", process.waitFor(30, TimeUnit.SECONDS))
-            process.exitValue() to out
-        } catch (e: Exception) {
+        val process = try {
+            builder.start()
+        } catch (e: IOException) {
             // A refused execve arrives as an IOException from ProcessBuilder
             // rather than as a non-zero status, and for the control that is the
             // expected shape. Reported as 126, the status a shell gives for
             // "found but could not be executed".
-            126 to (e.message ?: e.toString())
+            return 126 to (e.message ?: e.toString())
         }
+        return finishTestProcess(process)
     }
 }
 

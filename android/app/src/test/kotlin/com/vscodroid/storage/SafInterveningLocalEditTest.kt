@@ -28,6 +28,7 @@ import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.IOException
 import java.nio.file.Files
+import java.security.MessageDigest
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicReference
@@ -227,19 +228,24 @@ class SafInterveningLocalEditTest {
     @Test
     fun `a transient fetch failure carries the unchanged previous baseline`() {
         existingMirror("recognized")
+        val baseline = SafSyncEngine.recordLine(
+            "notes.txt\t$localTime\t6", MessageDigest.getInstance("SHA-256").digest(local.readBytes()),
+        )
+        record.writeText(SafSyncEngine.RECORD_HEADER + "\n" + baseline)
         duringFetch(failRead = true) { }
-        assertTrue(record.readLines().any { it == "notes.txt\t$localTime\t6" })
+        assertTrue(record.readLines().contains(baseline))
         sync()
         assertEquals("DEVICE", local.readText())
         assertEquals(listOf("notes.txt"), mirror.list()!!.toList())
     }
 
     @Test
-    fun `an unchanged stale mirror without a record is refreshed`() {
+    fun `an unproved mirror is retained while the device copy is refreshed`() {
         existingMirror()
         sync()
-        assertEquals(listOf("notes.txt"), mirror.list()!!.toList())
         assertEquals("DEVICE", local.readText())
+        val retained = mirror.listFiles()!!.single { it.name.startsWith("notes.txt.local-") }
+        assertEquals("BEFORE", retained.readText())
     }
 
     @Test
@@ -276,8 +282,10 @@ class SafInterveningLocalEditTest {
         journal.writeText(local.absolutePath)
         val preserved = File(mirror, "notes.txt.device-$deviceTime")
         if (existed) preserved.writeText("PREVIOUS BACKUP")
-        duringFetch(fetchNumber = 2) { preserved.writeText("UNIQUE BACKUP EDIT") }
-        assertEquals("UNIQUE BACKUP EDIT", preserved.readText())
+        val destination = File(mirror, "notes.txt.device-${deviceTime + if (existed) 1 else 0}")
+        duringFetch(fetchNumber = 2) { destination.writeText("UNIQUE BACKUP EDIT") }
+        assertEquals("UNIQUE BACKUP EDIT", destination.readText())
+        if (existed) assertEquals("PREVIOUS BACKUP", preserved.readText())
         assertEquals("COMPLETE LOCAL EDIT", local.readText())
         assertEquals("DEVICE", device.readText(), "The outgoing replacement was not deferred")
         assertEquals(listOf(local.absolutePath), SafSyncEngine(context).uploadsInFlight().toList())

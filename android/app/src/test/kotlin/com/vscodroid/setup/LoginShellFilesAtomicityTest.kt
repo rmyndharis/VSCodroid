@@ -11,6 +11,7 @@ import io.mockk.mockkObject
 import io.mockk.unmockkObject
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
@@ -231,5 +232,23 @@ class LoginShellFilesAtomicityTest {
             "a half-written README was left in the projects directory, where its own " +
                 "exists() guard greets every later launch with it",
         )
+        assertTrue(File(welcome.parentFile, "${welcome.name}.tmp~").deleteRecursively())
+        invoke("createWelcomeProject")
+        val delivered = welcome.readText()
+        assertTrue(delivered.startsWith("# Welcome to VSCodroid\n"))
+        assertTrue(delivered.contains("`${welcome.parentFile!!.absolutePath}/`"))
+        invoke("createWelcomeProject")
+        assertEquals(delivered, welcome.readText())
+    }
+
+    @Test
+    fun `an existing user readme is left intact on repeated setup`() {
+        assertTrue(welcome.parentFile!!.mkdirs())
+        welcome.writeText("user project instructions")
+
+        invoke("createWelcomeProject")
+        invoke("createWelcomeProject")
+
+        assertEquals("user project instructions", welcome.readText())
     }
 }

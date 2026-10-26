@@ -11,7 +11,7 @@ import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
-import java.util.concurrent.TimeUnit
+import java.io.IOException
 
 /**
  * The one claim no JVM test can settle: that the trampoline actually starts a
@@ -78,9 +78,8 @@ class ExecTrampolineOnDeviceTest {
         )
 
         table.writeText("make\t${payload.absolutePath}\n")
-        Runtime.getRuntime().exec(
-            arrayOf("/system/bin/ln", "-sf", trampoline.absolutePath, File(tcBin, "make").absolutePath)
-        ).waitFor()
+        val linked = run(listOf("/system/bin/ln", "-sf", trampoline.absolutePath, File(tcBin, "make").absolutePath), emptyMap())
+        assertEquals(linked.second, 0, linked.first)
         assertTrue("the trampoline link was not created", File(tcBin, "make").exists())
     }
 
@@ -197,9 +196,8 @@ class ExecTrampolineOnDeviceTest {
      */
     @Test
     fun `a name with no row fails with a reason`() {
-        Runtime.getRuntime().exec(
-            arrayOf("/system/bin/ln", "-sf", trampoline.absolutePath, File(tcBin, "nosuch").absolutePath)
-        ).waitFor()
+        val linked = run(listOf("/system/bin/ln", "-sf", trampoline.absolutePath, File(tcBin, "nosuch").absolutePath), emptyMap())
+        assertEquals(linked.second, 0, linked.first)
 
         val result = runByName(
             "nosuch",
@@ -248,17 +246,15 @@ class ExecTrampolineOnDeviceTest {
         // the trampoline directory and not from /system/bin.
         builder.environment().remove("PATH")
         builder.environment().putAll(env)
-        return try {
-            val process = builder.start()
-            val out = process.inputStream.bufferedReader().readText()
-            assertTrue("the command did not finish", process.waitFor(30, TimeUnit.SECONDS))
-            process.exitValue() to out
-        } catch (e: Exception) {
+        val process = try {
+            builder.start()
+        } catch (e: IOException) {
             // A refused execve arrives as an IOException from ProcessBuilder
             // rather than as a non-zero status, and for the control that is the
             // expected shape. Reported as 126, the status a shell gives for
             // "found but could not be executed".
-            126 to (e.message ?: e.toString())
+            return 126 to (e.message ?: e.toString())
         }
+        return finishTestProcess(process)
     }
 }

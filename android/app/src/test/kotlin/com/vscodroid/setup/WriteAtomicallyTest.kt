@@ -9,6 +9,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
 import java.io.IOException
+import java.nio.file.Files
 
 /**
  * Tests for [writeAtomically], the mechanism that stops a failed extraction from
@@ -272,5 +273,75 @@ class WriteAtomicallyTest {
         assertTrue(writeAtomically(dest) { it.write("fresh".toByteArray()) })
         assertEquals("fresh", dest.readText())
         assertTrue(tempFiles().isEmpty(), "the stray was not reclaimed")
+    }
+
+    @Test
+    fun `a temporary symlink does not overwrite another file`() {
+        val project = File(dir, "project.txt").apply { writeText("project contents") }
+        val dest = File(dir, "payload.so")
+        Files.createSymbolicLink(File(dir, "payload.so.tmp~").toPath(), project.toPath())
+
+        assertTrue(writeAtomically(dest) { it.write("fresh".toByteArray()) })
+
+        assertEquals("project contents", project.readText())
+        assertEquals("fresh", dest.readText())
+        assertFalse(Files.isSymbolicLink(dest.toPath()))
+        assertTrue(tempFiles().isEmpty())
+    }
+
+    @Test
+    fun `a temporary hardlink does not overwrite another file`() {
+        val project = File(dir, "project.txt").apply { writeText("project contents") }
+        val dest = File(dir, "payload.so")
+        Files.createLink(File(dir, "payload.so.tmp~").toPath(), project.toPath())
+
+        assertTrue(writeAtomically(dest) { it.write("fresh".toByteArray()) })
+
+        assertEquals("project contents", project.readText())
+        assertEquals("fresh", dest.readText())
+        assertFalse(Files.isSameFile(dest.toPath(), project.toPath()))
+        assertTrue(tempFiles().isEmpty())
+    }
+
+    @Test
+    fun `a failed write through a temporary hardlink keeps the destination intact`() {
+        val dest = File(dir, "payload.so").apply { writeText("working version") }
+        Files.createLink(File(dir, "payload.so.tmp~").toPath(), dest.toPath())
+
+        assertFalse(writeAtomically(dest) {
+            it.write("partial".toByteArray())
+            throw IOException("no space left on device")
+        })
+
+        assertEquals("working version", dest.readText())
+        assertTrue(tempFiles().isEmpty())
+    }
+
+    @Test
+    fun `a dangling temporary symlink does not create its target`() {
+        val project = File(dir, "project.txt")
+        val dest = File(dir, "payload.so")
+        Files.createSymbolicLink(File(dir, "payload.so.tmp~").toPath(), project.toPath())
+
+        assertTrue(writeAtomically(dest) { it.write("fresh".toByteArray()) })
+
+        assertFalse(project.exists())
+        assertEquals("fresh", dest.readText())
+        assertFalse(Files.isSymbolicLink(dest.toPath()))
+        assertTrue(tempFiles().isEmpty())
+    }
+
+    @Test
+    fun `a blocked temporary directory preserves the previous destination`() {
+        val dest = File(dir, "payload.so").apply { writeText("working version") }
+        val blocker = File(dir, "payload.so.tmp~").apply { mkdirs() }
+        File(blocker, "keep.txt").writeText("keep")
+        var reported: String? = null
+
+        assertFalse(writeAtomically(dest, onError = { reported = it }) { it.write("fresh".toByteArray()) })
+
+        assertEquals("working version", dest.readText())
+        assertEquals("keep", File(blocker, "keep.txt").readText())
+        assertTrue(!reported.isNullOrEmpty())
     }
 }

@@ -1,6 +1,7 @@
 package com.vscodroid
 
 import android.annotation.SuppressLint
+import android.content.Context
 import android.content.Intent
 import android.os.Bundle
 import android.view.View
@@ -183,19 +184,8 @@ class SplashActivity : AppCompatActivity() {
         // thing that advances the queue; [endDownloadQueue] is what bounds that
         // retention.
         repair("the toolchain repair pass") { ToolchainManager(applicationContext).repairInstalledToolchains() }
-        // A folder whose permission the user withdrew in system settings never
-        // comes back through the app, so its mirror is disk nothing can reach.
-        //
-        // Here because it is a launch, not because a launch guarantees no folder
-        // is open: this used to say "this activity always precedes MainActivity"
-        // and that is false. NodeService is declared with no stopWithTask, so
-        // swiping the task from Recents leaves the server serving with a
-        // workspace open, and the next tap starts a fresh task here; an OAuth
-        // callback reaches MainActivity through its VIEW filter without coming
-        // past this screen at all. What makes the pass safe is what it will
-        // touch, and reclaimRevokedMirrors documents it: only a mirror whose
-        // permission is already gone, which the editor cannot be syncing. It
-        // returns immediately, for the reason the line above does.
+        // Finish earlier committed removals and orphan metadata cleanup. Ordinary
+        // copies survive revoked permissions because terminals may still write to them.
         repair("the SAF mirror reclaim") { SafStorageManager(this).reclaimRevokedMirrors() }
 
         if (!setup.isFirstRun()) {
@@ -414,12 +404,7 @@ class SplashActivity : AppCompatActivity() {
                     // Logger.e and nothing else before this, so a release build
                     // left the user with "Setup failed" and a Retry button that
                     // walks into the same wall.
-                    val failure = setup.lastFailure
-                    val message = if (failure == null) {
-                        getString(R.string.error_setup_failed)
-                    } else {
-                        getString(R.string.error_setup_failed_at, failure.step, failure.detail)
-                    }
+                    val message = setupFailureMessage(this@SplashActivity, setup.lastFailure)
                     showSetupError(statusText, progressBar, message, setup)
                 }
             }
@@ -535,7 +520,9 @@ class SplashActivity : AppCompatActivity() {
      */
     override fun onStart() {
         super.onStart()
-        pickerAdapter?.setInstalled(ToolchainManager(applicationContext).getInstalledToolchains())
+        ToolchainManager(applicationContext).let {
+            pickerAdapter?.setInstalled(it.getInstalledToolchains(), it.installedLabels())
+        }
     }
 
     override fun onDestroy() {
@@ -600,7 +587,7 @@ class SplashActivity : AppCompatActivity() {
         // immediately; the copy runs on the toolchain I/O thread.
         //
         // Here rather than in onCreate, and the difference is minutes on the one
-        // launch that matters. This copies up to 155 MB into the same `usr/` the
+        // launch that matters. This copies up to 180 MB into the same `usr/` the
         // first run unpacks the asset tree into (BuildConfig.EXTRACTED_ASSET_BYTES,
         // which moves with every pin), and the two space pre-flights cannot see
         // each other: setup measures usableSpace before extracting, the install
@@ -663,7 +650,9 @@ class SplashActivity : AppCompatActivity() {
         // Read on the main thread, as ToolchainActivity already reads it twice: it
         // is one small JSON file, and the alternative is drawing the cards wrong
         // and correcting them afterwards.
-        adapter.setInstalled(ToolchainManager(applicationContext).getInstalledToolchains())
+        ToolchainManager(applicationContext).let {
+            adapter.setInstalled(it.getInstalledToolchains(), it.installedLabels())
+        }
         grid.layoutManager = GridLayoutManager(this, 2)
         grid.adapter = adapter
         // So [onStart] can correct these cards when the screen comes back. One
@@ -755,7 +744,7 @@ class SplashActivity : AppCompatActivity() {
         // can no longer put.
         // ToolchainActivity holds its screen weakly because nothing there depends
         // on the callback arriving; here everything does.
-        manager.onStateChange = { packName, status, percent, why ->
+        manager.onStateChange = { packName, status, percent, why, _ ->
             runOnUiThread {
                 handleDownloadState(packName, status, percent)
                 // The row has space for one word and the reason is a sentence, so
@@ -1287,3 +1276,9 @@ internal fun reasonToAnnounce(
     why: ToolchainFailure?,
     alreadySaid: MutableSet<ToolchainFailure>,
 ): ToolchainFailure? = if (why != null && alreadySaid.add(why)) why else null
+
+internal fun setupFailureMessage(context: Context, failure: FirstRunSetup.Failure?): String = when {
+    failure == null -> context.getString(R.string.error_setup_failed)
+    failure.step.isBlank() -> context.getString(R.string.error_setup_failed) + "\n" + failure.detail
+    else -> context.getString(R.string.error_setup_failed_at, failure.step, failure.detail)
+}

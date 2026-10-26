@@ -12,13 +12,13 @@ import io.mockk.mockkStatic
 import io.mockk.unmockkAll
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Assumptions.assumeTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
-import java.util.concurrent.TimeUnit
 
 /**
  * What `toolchain-env.sh` has to contain for a downloaded toolchain to run at
@@ -156,10 +156,13 @@ class ToolchainEnvFileTest {
             "the toolchain's environment is missing:\n" + envFile.readText(),
         )
         assertTrue(
-            lines.contains("""export PATH="${'$'}PATH:${'$'}PREFIX/../usr/opt/ruby/bin""""),
+            pathLine().contains(""""${'$'}PREFIX/../usr/opt/ruby/bin""""),
             "the toolchain's PATH entry is missing:\n" + envFile.readText(),
         )
     }
+
+    /** The one line that adds the toolchains' directories to PATH, in the form it is written. */
+    private fun pathLine() = envLines().single { it.startsWith("for d in ") }
 
     /**
      * Appended, never prepended, and the direction is the whole point.
@@ -181,11 +184,15 @@ class ToolchainEnvFileTest {
 
         regenerate()
 
-        val pathLine = envLines().single { it.startsWith("export PATH=") }
+        val pathLine = pathLine()
         assertTrue(
-            pathLine.startsWith("""export PATH="${'$'}PATH:"""),
+            pathLine.contains("""PATH="${'$'}PATH:${'$'}d""""),
             "the raw, unexecutable payload directories were put back in front of the " +
                 "trampoline directory: $pathLine",
+        )
+        assertFalse(
+            pathLine.contains("""PATH="${'$'}d:"""),
+            "a directory is prepended: $pathLine",
         )
     }
 
@@ -293,7 +300,10 @@ class ToolchainEnvFileTest {
         )
     }
 
-    private val jdk = "usr/lib/jvm/java-17-openjdk"
+    private val jdk = "usr/lib/jvm/java-21-openjdk"
+
+    /** What the java wrapper hands the loader ahead of the caller's arguments. */
+    private val java = "</p/../$jdk/bin/java><-Duser.home=/h o/me><-Djava.io.tmpdir=/t m/p>"
 
     /** What the jshell wrapper hands the loader ahead of the caller's arguments. */
     private val jshell = "</p/../$jdk/bin/jshell><-J-Djdk.lang.Process.launchMechanism=VFORK>" +
@@ -306,12 +316,17 @@ class ToolchainEnvFileTest {
      * Anything the file prints while it is sourced, a syntax error included,
      * lands in the same output.
      */
-    private fun runJavaWrappers(commands: String): List<String> {
+    private fun runJavaWrappers(commands: String, jvmFlags: String = ""): List<String> {
         assumeTrue(File("/bin/bash").canExecute(), "no /bin/bash on this host")
         elf("$jdk/bin/java")
         elf("$jdk/bin/jshell")
+        elf("$jdk/bin/keytool")
+        elf("$jdk/bin/javac")
+        elf("$jdk/lib/jexec")
         stateFile.writeText(
-            """[{"name":"java","binaries":["$jdk/bin/java","$jdk/bin/jshell"],""" +
+            """[{"name":"java","installRoot":"$jdk",""" +
+                """"binaries":["$jdk/bin/java","$jdk/bin/jshell","$jdk/bin/keytool","$jdk/bin/javac","$jdk/lib/jexec"],""" +
+                jvmFlags +
                 """"env":{"JAVA_HOME":"${'$'}FILESDIR/$jdk"}}]"""
         )
 
@@ -321,7 +336,7 @@ class ToolchainEnvFileTest {
         sourced.writeText(envFile.readText().replace("/system/bin/linker64", "argv"))
         val builder = ProcessBuilder(
             "/bin/bash", "-c",
-            """argv() { printf '<%s>' "${'$'}@"; echo; }; PREFIX=/p; HOME='/h o/me'; """ +
+            """argv() { printf '<%s>' "${'$'}@"; echo; }; PREFIX=/p; HOME='/h o/me'; TMPDIR='/t m/p'; """ +
                 """. "${'$'}1"; $commands""",
             "bash", sourced.path,
         ).redirectErrorStream(true)
@@ -330,9 +345,7 @@ class ToolchainEnvFileTest {
             remove("SSH_CLIENT")
             remove("SSH2_CLIENT")
         }
-        val process = builder.start()
-        val out = process.inputStream.bufferedReader().readText()
-        assertTrue(process.waitFor(30, TimeUnit.SECONDS), "bash did not finish")
+        val out = finishTestProcess(builder.start()).second
         return out.lines().filter { it.isNotEmpty() }
     }
 
@@ -344,8 +357,8 @@ class ToolchainEnvFileTest {
      * local engine unless the caller chose one. jshell refuses `--execution`
      * given twice and accepts abbreviations of it, so the guard is asserted in
      * all three spellings. The `$HOME` with a space in it holds the quoting.
-     * `java` is the control: the special case must not leak into the ordinary
-     * wrapper beside it.
+     * `java` runs beside it with its own two properties, which must not pick up
+     * jshell's engine argument.
      */
     @Test
     fun `jshell runs its snippets in its own JVM`() {
@@ -361,11 +374,110 @@ class ToolchainEnvFileTest {
                 "$jshell<--execution><jdi>",
                 "$jshell<--exec=jdi>",
                 "$jshell<-execution><jdi>",
-                "</p/../$jdk/bin/java><-version>",
+                "$java<-version>",
             ),
             out,
             "the jshell wrapper no longer selects the local engine exactly once, so " +
                 "jshell fails to launch or refuses its arguments:\n" + envFile.readText(),
+        )
+    }
+
+    /**
+     * Termux compiled its own directories into libjava as the defaults of `user.home`
+     * and `java.io.tmpdir`, which this app can neither read nor create, so a program
+     * that makes a temporary file or reads the home directory fails on a path that
+     * belongs to another application. The wrapper passes the shell's values; a
+     * `-D` the caller writes after them wins because the last one is the one the
+     * JVM keeps, and an unset variable adds nothing rather than an empty property.
+     * keytool takes the home as a launcher option and nothing else.
+     */
+    @Test
+    fun `java and keytool start with this app's home and temporary directory`() {
+        val out = runJavaWrappers(
+            """java -version; java -Djava.io.tmpdir=/mine Main; """ +
+                """(unset TMPDIR; java -version); (unset HOME TMPDIR; java -version); """ +
+                """keytool -list; (unset HOME; keytool -list)"""
+        )
+
+        assertEquals(
+            listOf(
+                "$java<-version>",
+                "$java<-Djava.io.tmpdir=/mine><Main>",
+                "</p/../$jdk/bin/java><-Duser.home=/h o/me><-version>",
+                "</p/../$jdk/bin/java><-version>",
+                "</p/../$jdk/bin/keytool><-J-Duser.home=/h o/me><-list>",
+                "</p/../$jdk/bin/keytool><-list>",
+            ),
+            out,
+            "the java or keytool wrapper no longer hands over the home or the temporary " +
+                "directory exactly once:\n" + envFile.readText(),
+        )
+    }
+
+    /**
+     * A JVM from 20 on probes the CPU's SVE vector length with prctl, which the app's
+     * seccomp filter refuses, and says so on stderr at the start of every run on a
+     * phone whose CPU advertises SVE. A manifest that lists `-XX:UseSVE=0` has every
+     * launcher in the JDK's bin/ start with it: `java` takes it as it is, and the tools
+     * beside it take it as a -J option, which they hand to the VM they start. A manifest
+     * that lists none, an install made while the pack held JDK 17, starts them without it,
+     * because JDK 17 has no such flag and refuses to start with one. A flag that is not
+     * the shape of one is dropped, for the same reason the names of the wrappers are
+     * held to a bar: the line is read by every new terminal.
+     */
+    @Test
+    fun `the JVM flags a manifest lists reach every launcher in the JDK`() {
+        val flags = """"jvmFlags":["-XX:UseSVE=0","a b","-X;rm","-Dx=\"y\"","-agentlib:jdwp=transport=dt_socket",""" +
+            """"-javaagent:a.jar","-Dx=y","-Xbootclasspath","-XX:","-XX:=1","-XX:+"],"""
+        val out = runJavaWrappers(
+            """java -version; javac -version; keytool -list; jshell; """ +
+                """javac -J-Dx=1 A.java""",
+            jvmFlags = flags,
+        )
+
+        assertEquals(
+            listOf(
+                "</p/../$jdk/bin/java><-XX:UseSVE=0><-Duser.home=/h o/me><-Djava.io.tmpdir=/t m/p><-version>",
+                "</p/../$jdk/bin/javac><-J-XX:UseSVE=0><-version>",
+                "</p/../$jdk/bin/keytool><-J-XX:UseSVE=0><-J-Duser.home=/h o/me><-list>",
+                "</p/../$jdk/bin/jshell><-J-XX:UseSVE=0><-J-Djdk.lang.Process.launchMechanism=VFORK>" +
+                    "<-J-Duser.home=/h o/me><--execution><local>",
+                "</p/../$jdk/bin/javac><-J-XX:UseSVE=0><-J-Dx=1><A.java>",
+            ),
+            out,
+            "a JDK launcher no longer starts with the manifest's JVM flags, or took one that is " +
+                "not shaped like a flag:\n" + envFile.readText(),
+        )
+    }
+
+    @Test
+    fun `a binary kept in lib is no command at all`() {
+        // jexec and jspawnhelper live in lib/ and are listed in the manifest so that they get an
+        // execute bit. The JVM starts the helper by absolute path and jexec is a `#!` target, so a
+        // function named after either only added a command that prints nothing useful.
+        val out = runJavaWrappers(
+            """declare -F jexec || echo none; type -t java""",
+            jvmFlags = """"jvmFlags":["-XX:UseSVE=0"],""",
+        )
+
+        assertEquals(
+            listOf("none", "function"),
+            out,
+            "a helper the JVM starts by absolute path became a shell function",
+        )
+    }
+
+    @Test
+    fun `a manifest without JVM flags starts the launchers as before`() {
+        val out = runJavaWrappers("""java -version; javac -version""")
+
+        assertEquals(
+            listOf(
+                "$java<-version>",
+                "</p/../$jdk/bin/javac><-version>",
+            ),
+            out,
+            "an install made while the pack held JDK 17 must not be given a flag its JVM refuses",
         )
     }
 
@@ -586,7 +698,7 @@ class ToolchainEnvFileTest {
 
         val lines = envLines()
         assertTrue(
-            lines.contains("""export PATH="${'$'}PATH:${'$'}PREFIX/../usr/bin""""),
+            pathLine().contains(""""${'$'}PREFIX/../usr/bin""""),
             "the flag took the PATH entry too:\n" + envFile.readText(),
         )
         assertTrue(
@@ -629,5 +741,95 @@ class ToolchainEnvFileTest {
             envLines().filter { it.startsWith("tool()") || it.startsWith("interp()") },
             envFile.readText(),
         )
+    }
+    /**
+     * The generated lines, run by a real bash the way every new terminal runs them.
+     *
+     * Sourced twice, because that is what a bash started from a terminal's bash does:
+     * a plain `export PATH="$PATH:..."` carried every toolchain directory twice, and a
+     * plain `export RUBYOPT=...` put `-rrubygems` over the `-rbundler/setup` a
+     * `bundle exec` had set, so a bash started under it lost the Gemfile's gems.
+     */
+    private fun sourcedTwice(env: Map<String, String>): Map<String, String> {
+        val script = File(filesDir, "source.sh")
+        script.writeText(
+            ". '${envFile.absolutePath}'; . '${envFile.absolutePath}'; " +
+                "printf 'PATH=%s\\nRUBYOPT=%s\\n' \"\$PATH\" \"\${RUBYOPT-}\"",
+        )
+        val builder = ProcessBuilder("bash", script.absolutePath).redirectErrorStream(true)
+        builder.environment().apply {
+            clear()
+            putAll(env)
+            put("PREFIX", "${filesDir.absolutePath}/usr")
+        }
+        val out = finishTestProcess(builder.start()).second
+        return out.lines().filter { '=' in it }.associate { it.substringBefore('=') to it.substringAfter('=') }
+    }
+
+    private fun rubyWithOptions() {
+        elf("usr/opt/ruby/bin/ruby")
+        stateFile.writeText(
+            """[{"name":"ruby","installRoot":"usr/opt/ruby","binaries":["usr/opt/ruby/bin/ruby"],""" +
+                """"env":{"RUBYOPT":"-rrubygems"},"pathDirs":["usr/opt/ruby/bin","usr/opt/ruby/bin"]}]""",
+        )
+    }
+
+    @Test
+    fun `sourcing the file twice adds each directory to PATH once`() {
+        rubyWithOptions()
+        regenerate()
+
+        val path = sourcedTwice(mapOf("PATH" to "/bin:/usr/bin"))["PATH"]!!.split(":")
+
+        assertEquals(1, path.count { it.endsWith("/usr/opt/ruby/bin") }, "PATH: $path")
+        assertEquals(listOf("/bin", "/usr/bin"), path.take(2), "the existing PATH was reordered: $path")
+    }
+
+    @Test
+    fun `RUBYOPT is added to what the caller already set, once`() {
+        rubyWithOptions()
+        regenerate()
+
+        assertEquals(
+            "-rbundler/setup -rrubygems",
+            sourcedTwice(mapOf("PATH" to "/bin", "RUBYOPT" to "-rbundler/setup"))["RUBYOPT"],
+        )
+        assertEquals("-rrubygems", sourcedTwice(mapOf("PATH" to "/bin"))["RUBYOPT"])
+        assertEquals(
+            "-W0 -rrubygems",
+            sourcedTwice(mapOf("PATH" to "/bin", "RUBYOPT" to "-W0 -rrubygems"))["RUBYOPT"],
+            "an option already present was added again",
+        )
+    }
+    /**
+     * Not a boundary against the pack, whose manifest is as trusted as its binaries; a bar
+     * that keeps one unusable entry from taking out the file every new terminal sources,
+     * the way an unusable function name already is. Run through a real bash: the line after
+     * the refused ones has to still be defined.
+     */
+    @Test
+    fun `an entry that cannot be written safely is skipped and the rest still source`() {
+        assumeTrue(File("/bin/bash").canExecute(), "no /bin/bash on this host")
+        elf("usr/opt/ruby/bin/ruby")
+        stateFile.writeText(
+            """[{"name":"ruby","installRoot":"usr/opt/ruby","binaries":["usr/opt/ruby/bin/ruby"],""" +
+                """"env":{"BAD KEY":"x","QUOTE":"a\"b","SUBST":"${'$'}(id)","TICK":"`id`","SLASH":"trailing\\",""" +
+                """"GOOD":"${'$'}FILESDIR/ok"},""" +
+                """"pathDirs":["usr/opt/ruby/bin","../up","/abs","a/${'$'}x","bad\"dir","trailing\\"]}]""",
+        )
+
+        regenerate()
+
+        val text = envFile.readText()
+        assertTrue(text.contains("""export GOOD="${'$'}PREFIX/../ok""""), text)
+        for (bad in listOf("BAD KEY", "QUOTE", "SUBST", "TICK", "SLASH")) {
+            assertFalse(text.contains(bad), "$bad reached the file:\n$text")
+        }
+        assertEquals(
+            """for d in "${'$'}PREFIX/../usr/opt/ruby/bin"; do""",
+            pathLine().substringBefore("; do") + "; do",
+        )
+        val check = finishTestProcess(ProcessBuilder("bash", "-n", envFile.absolutePath).redirectErrorStream(true).start())
+        assertEquals(0, check.first, "the generated file does not parse:\n${check.second}")
     }
 }

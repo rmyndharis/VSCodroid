@@ -6,18 +6,8 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 /**
- * The scratch copy an earlier build left inside the mirror.
- *
- * Up to 1.5.0 a device document was copied into `<name>.vscodroid-partial` beside its
- * destination and renamed into place, so a copy cut off by the process dying left that file
- * behind. Later builds stage outside the mirror and no longer vouch for such a name (a user
- * can create one too), which left every upgraded mirror that held one with a stray file in
- * the Explorer, a mirror the storage screen calls unsent work, and nothing that would ever
- * clear either.
- *
- * What an open does now is remove it when it can be shown to be what it looks like: the
- * device holds the document it was staging, and its bytes are the start of that document,
- * which is all an interrupted copy can leave. Anything else stays where it is.
+ * Legacy staging names can also belong to workspace files. A name and matching prefix
+ * do not establish ownership, so reopening retains these entries.
  */
 class SafStagingLeftoverTest : SafInitialSyncTestBase() {
 
@@ -32,34 +22,35 @@ class SafStagingLeftoverTest : SafInitialSyncTestBase() {
     }
 
     @Test
-    fun `a leftover that is the start of the device document is removed at the next open`() {
+    fun `a local entry matching the start of the device document is retained`() {
         openedBefore()
         mirrorFile("notes.md.vscodroid-partial").writeText("hello w")
 
         sync()
 
-        assertFalse(mirrorFile("notes.md.vscodroid-partial").exists(), "the interrupted copy stayed")
+        assertEquals("hello w", mirrorFile("notes.md.vscodroid-partial").readText())
         assertEquals("hello world", mirrorFile("notes.md").readText())
     }
 
     @Test
-    fun `an empty leftover next to the document it was staging is removed`() {
+    fun `an empty local entry beside a device document is retained`() {
         openedBefore()
         mirrorFile("notes.md.vscodroid-partial").writeText("")
 
         sync()
 
-        assertFalse(mirrorFile("notes.md.vscodroid-partial").exists())
+        assertTrue(mirrorFile("notes.md.vscodroid-partial").isFile)
+        assertEquals(0L, mirrorFile("notes.md.vscodroid-partial").length())
     }
 
     @Test
     fun `a leftover that is not the start of the device document is kept`() {
         openedBefore()
-        mirrorFile("notes.md.vscodroid-partial").writeText("something I wrote")
+        mirrorFile("notes.md.vscodroid-partial").writeText("X")
 
         sync()
 
-        assertEquals("something I wrote", mirrorFile("notes.md.vscodroid-partial").readText())
+        assertEquals("X", mirrorFile("notes.md.vscodroid-partial").readText())
     }
 
     @Test
@@ -95,13 +86,13 @@ class SafStagingLeftoverTest : SafInitialSyncTestBase() {
     }
 
     @Test
-    fun `removing the leftover makes the mirror reclaimable again`() {
+    fun `an unrecorded suffix entry continues to protect the mirror from reclaim`() {
         openedBefore()
         mirrorFile("notes.md.vscodroid-partial").writeText("hello w")
         assertFalse(SafSyncEngine(context).holdsOnlyVouchedCopies(mirror), "the leftover is not pinning the mirror")
 
         sync()
 
-        assertTrue(SafSyncEngine(context).holdsOnlyVouchedCopies(mirror))
+        assertFalse(SafSyncEngine(context).holdsOnlyVouchedCopies(mirror))
     }
 }

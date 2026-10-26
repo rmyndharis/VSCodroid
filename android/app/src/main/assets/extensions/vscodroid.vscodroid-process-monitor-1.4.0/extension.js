@@ -254,7 +254,7 @@ function updateStatusBar(snapshot) {
         // The two are separate on purpose. A recovery to under the soft budget
         // but above the idle baseline has left the busy range and deserves the
         // error again if the count climbs back to the error budget, but it is
-        // still above the target the warning names, so repeating the warning
+        // still above the soft budget the warning fires at, so repeating the warning
         // there says nothing new. An escalation is not affected either way: a
         // latched warning does not block the critical arm, which tests its own
         // flag.

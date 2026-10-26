@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 set -euo pipefail
 
-# Download pre-compiled OpenJDK 17 from Termux APT repo.
+# Download pre-compiled OpenJDK from Termux APT repo (the major is JDK_MAJOR below).
 # Places files in the toolchain_java asset pack module for Play Asset Delivery.
 #
 # Dependencies: libandroid-shmem, libandroid-spawn (Termux-specific shims)
@@ -18,12 +18,22 @@ WORK_DIR="$ROOT_DIR/toolchains/termux-packages"
 # It also picks the mirror; TERMUX_MIRROR still overrides it.
 . "$SCRIPT_DIR/lib/termux-packages.sh"
 
+# The JDK this pack ships. 21 and not 17 because the Language Support for Java
+# extension needs a JDK of at least 21 to run its language server (version 1.40
+# to 1.57; 1.58 asks for 25), and 17 left every version of it refusing to start.
+# Termux carries 17, 21 and 25 under the same dependencies. Everything below
+# that names the JDK, its directory and the card's label follows this one value;
+# ToolchainRegistry.kt and the strings carry the label as text and have to agree.
+JDK_MAJOR=21
+JDK_NAME="openjdk-$JDK_MAJOR"
+JDK_DIRNAME="java-$JDK_MAJOR-openjdk"
+
 REQUIRED_PACKAGES=(
-    openjdk-17
+    "$JDK_NAME"
     libandroid-shmem
     libandroid-spawn
     # Not a component that ships: it carries usr/share/LICENSES, the shared
-    # licence text openjdk-17's copyright symlink points at (GPL-2.0). See
+    # licence text the JDK package's copyright symlink points at (GPL-2.0). See
     # termux_copy_notices in scripts/lib/termux-packages.sh.
     termux-licenses
 )
@@ -39,7 +49,7 @@ get_sonames() {
 
 LIB_PACKAGES=(libandroid-shmem libandroid-spawn)
 
-echo "=== Downloading Java 17 (OpenJDK) Toolchain ==="
+echo "=== Downloading Java $JDK_MAJOR (OpenJDK) Toolchain ==="
 echo ""
 
 mkdir -p "$WORK_DIR"
@@ -48,7 +58,7 @@ cd "$WORK_DIR"
 # --- Step 1: the package index, its signature, and what it resolves to ---
 termux_fetch_index
 termux_resolve_packages resolved-java.tsv "${REQUIRED_PACKAGES[@]}"
-JAVA_VERSION="$(termux_pkg_version openjdk-17)"
+JAVA_VERSION="$(termux_pkg_version "$JDK_NAME")"
 echo "  OpenJDK version: $JAVA_VERSION"
 
 # --- Step 2: Download .deb files, each checked against the signed index ---
@@ -63,17 +73,17 @@ echo "Placing Java toolchain in asset pack..."
 rm -rf "$PACK_ASSETS/usr"
 mkdir -p "$PACK_ASSETS/usr/lib"
 
-JDK_SRC="extracted/openjdk-17/data/data/com.termux/files/usr/lib/jvm/java-17-openjdk"
+JDK_SRC="extracted/$JDK_NAME/data/data/com.termux/files/usr/lib/jvm/$JDK_DIRNAME"
 if [ ! -d "$JDK_SRC" ]; then
     echo "  ERROR: JDK directory not found at $JDK_SRC"
     echo "  Searching for JDK..."
-    find "extracted/openjdk-17" -maxdepth 6 -type d -name "java-*" 2>/dev/null | head -5
+    find "extracted/$JDK_NAME" -maxdepth 6 -type d -name "java-*" 2>/dev/null | head -5
     exit 1
 fi
 
 mkdir -p "$PACK_ASSETS/usr/lib/jvm"
 # -RL, not a bare -r. legal/ is the only subtree of this JDK carrying symbolic
-# links: measured on openjdk-17, bin, conf, lib, man, jmods and include carry
+# links: measured on openjdk-21 (re-check on a new major), bin, conf, lib, man, jmods and include carry
 # none between them while legal carries 208, and every one of those points at
 # another module's copy of the same notice.
 #
@@ -87,7 +97,7 @@ mkdir -p "$PACK_ASSETS/usr/lib/jvm"
 #
 # A dangling link upstream makes this fail rather than pass silently, which is
 # the right direction and not a reason to go back to -r.
-cp -RL "$JDK_SRC" "$PACK_ASSETS/usr/lib/jvm/java-17-openjdk"
+cp -RL "$JDK_SRC" "$PACK_ASSETS/usr/lib/jvm/$JDK_DIRNAME"
 
 # Copy shared library dependencies
 echo ""
@@ -150,7 +160,9 @@ SPAWN_SRC="$WORK_DIR/libandroid-spawn-src"
 rm -rf "$SPAWN_SRC"
 mkdir -p "$SPAWN_SRC"
 for f in posix_spawn.cpp posix_spawn.h LICENSE; do
-    curl -sL --fail --show-error -o "$SPAWN_SRC/$f" "$SPAWN_RAW/$f"
+    # --retry: raw.githubusercontent.com answers a CI runner's shared address with a
+    # 429 now and then, and an unretried download failed the whole tag run.
+    curl -sL --fail --show-error --retry 6 -o "$SPAWN_SRC/$f" "$SPAWN_RAW/$f"
     expected_var="SPAWN_SHA_$(echo "$f" | tr '.' '_')"
     eval "expected=\$$expected_var"
     actual=$( (sha256sum "$SPAWN_SRC/$f" 2>/dev/null || shasum -a 256 "$SPAWN_SRC/$f") | cut -d' ' -f1)
@@ -195,7 +207,7 @@ echo "  libandroid-spawn.so rebuilt ($(du -sh "$PACK_ASSETS/usr/lib/libandroid-s
 # --- Step 5: Strip unnecessary files ---
 echo ""
 echo "Stripping unnecessary files..."
-JDK_DIR="$PACK_ASSETS/usr/lib/jvm/java-17-openjdk"
+JDK_DIR="$PACK_ASSETS/usr/lib/jvm/$JDK_DIRNAME"
 BEFORE_SIZE=$(du -sk "$PACK_ASSETS/usr" | cut -f1)
 
 # Strip the sample programs and the man pages. NOT legal/, which was filed here
@@ -207,6 +219,16 @@ rm -rf "$JDK_DIR/demo" 2>/dev/null || true
 rm -rf "$JDK_DIR/man" 2>/dev/null || true
 # Strip jmods (module files, large, not needed at runtime)
 rm -rf "$JDK_DIR/jmods" 2>/dev/null || true
+# Strip the launchers that cannot do their job on a phone, each measured on an API 33
+# emulator with JDK 21: jlink stops with "this runtime image does not contain jmods
+# directory" (the jmods are removed above), jpackage builds platform installers and
+# fails on a null path, jconsole is a GUI and prints nothing, jrunscript reports "script
+# engine for language js can not be found" (no engine ships since JDK 15), and jhsdb
+# attaches through a serviceability library this pack does not carry. Each one read as
+# a broken install rather than as an absent tool.
+for tool in jlink jpackage jconsole jrunscript jhsdb; do
+    rm -f "$JDK_DIR/bin/$tool"
+done
 # Strip header files (not needed without JNI compilation)
 rm -rf "$JDK_DIR/include" 2>/dev/null || true
 
@@ -280,7 +302,7 @@ echo "  $NOTICES_PRESENT notice files present, none a symlink"
 #
 # legal/ above is the JDK's own attribution and covers its seventy modules. It
 # says nothing about the two Termux shims this pack also ships, libandroid-shmem
-# and libandroid-spawn, whose notices reached no device; openjdk-17's own
+# and libandroid-spawn, whose notices reached no device; the JDK package's own
 # package-level copyright is added here too, resolved from the shared GPL-2.0
 # text rather than copied as the dangling symlink Termux ships.
 termux_copy_notices "$PACK_ASSETS/usr" "${REQUIRED_PACKAGES[@]}"
@@ -299,7 +321,7 @@ if [ -d "$JDK_BIN_DIR" ]; then
     for bin in "$JDK_BIN_DIR"/*; do
         [ -f "$bin" ] || [ -L "$bin" ] || continue
         name="$(basename "$bin")"
-        binpath="usr/lib/jvm/java-17-openjdk/bin/$name"
+        binpath="usr/lib/jvm/$JDK_DIRNAME/bin/$name"
         [ "$FIRST_BIN" = true ] && FIRST_BIN=false || BINARIES+=','
         BINARIES+="\"$binpath\""
         [ "$FIRST_SYM" = true ] && FIRST_SYM=false || SYMLINKS+=','
@@ -311,7 +333,7 @@ fi
 for libbin in jspawnhelper jexec; do
     libbin_path="$JDK_DIR/lib/$libbin"
     if [ -f "$libbin_path" ]; then
-        binpath="usr/lib/jvm/java-17-openjdk/lib/$libbin"
+        binpath="usr/lib/jvm/$JDK_DIRNAME/lib/$libbin"
         [ "$FIRST_BIN" = true ] && FIRST_BIN=false || BINARIES+=','
         BINARIES+="\"$binpath\""
     fi
@@ -319,18 +341,37 @@ done
 BINARIES+=']'
 SYMLINKS+='}'
 
+# jvmFlags: every JDK launcher starts with these (java as they are, the tools beside
+# it as -J options; see ToolchainManager). -XX:UseSVE=0 because a JVM from 20 on probes
+# the CPU's SVE vector length with prctl, the app's seccomp filter refuses the call, and
+# on any ARMv9 phone whose CPU advertises SVE every javac, jar and java run printed
+#   OpenJDK 64-Bit Server VM warning: Unable to get SVE vector length on this system.
+# Measured on an API 33 emulator whose CPU lists sve2: all six launchers tried did, once
+# each. The flag does not exist in JDK 17, so it is a manifest field and not a rule.
+#
+# ownedPaths: the notices termux_copy_notices placed in usr/share/doc/<package>, so that
+# Remove takes them with the rest. None of the packages here is also in the base
+# install's usr/share/doc.
+OWNED_PATHS=""
+for doc in "$PACK_ASSETS"/usr/share/doc/*/; do
+    [ -d "$doc" ] || continue
+    [ -n "$OWNED_PATHS" ] && OWNED_PATHS+=","
+    OWNED_PATHS+="\"usr/share/doc/$(basename "$doc")\""
+done
 cat > "$PACK_ASSETS/toolchain_java.json" << EOF
 {
     "name": "java",
-    "displayName": "Java 17",
+    "displayName": "Java $JDK_MAJOR",
     "version": "$JAVA_VERSION",
     "binaries": $BINARIES,
     "symlinks": $SYMLINKS,
     "env": {
-        "JAVA_HOME": "\$FILESDIR/usr/lib/jvm/java-17-openjdk"
+        "JAVA_HOME": "\$FILESDIR/usr/lib/jvm/$JDK_DIRNAME"
     },
-    "pathDirs": ["usr/lib/jvm/java-17-openjdk/bin"],
-    "installRoot": "usr/lib/jvm/java-17-openjdk",
+    "pathDirs": ["usr/lib/jvm/$JDK_DIRNAME/bin"],
+    "installRoot": "usr/lib/jvm/$JDK_DIRNAME",
+    "jvmFlags": ["-XX:UseSVE=0"],
+    "ownedPaths": [$OWNED_PATHS],
     "libs": ["libandroid-shmem.so", "libandroid-spawn.so"]
 }
 EOF
@@ -414,7 +455,7 @@ echo "  none"
 
 # --- Step 8: Size summary ---
 echo ""
-echo "=== Java 17 Toolchain Size Summary ==="
+echo "=== Java $JDK_MAJOR Toolchain Size Summary ==="
 echo "  Asset pack: $(du -sh "$PACK_ASSETS" | cut -f1) total"
 echo "  JDK bin/: $(du -sh "$JDK_BIN_DIR" 2>/dev/null | cut -f1)"
 echo "  JDK lib/: $(du -sh "$JDK_DIR/lib" 2>/dev/null | cut -f1)"

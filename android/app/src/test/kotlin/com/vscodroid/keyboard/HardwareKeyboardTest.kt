@@ -277,4 +277,12 @@ class HardwareKeyboardTest {
                 "keyboard connects or the screen rotates. Declared: $declared.",
         )
     }
+
+    @Test
+    fun `moving the editor to a display with a different density keeps its page`() {
+        assertTrue(
+            activityConfigChanges()[".MainActivity"].orEmpty().split('|').contains("density"),
+            "a display density change must not destroy the editor and its pending sign-in",
+        )
+    }
 }

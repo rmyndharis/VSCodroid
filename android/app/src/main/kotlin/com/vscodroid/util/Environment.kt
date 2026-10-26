@@ -194,13 +194,14 @@ object Environment {
             "GIT_EXEC_PATH" to "$filesDir/usr/lib/git-core",
             "GIT_TEMPLATE_DIR" to "$filesDir/usr/share/git-core/templates",
             "GIT_SSH_COMMAND" to "$nativeLibDir/libssh.so -F $homeDir/.ssh/config",
-            "GIT_SSL_CAPATH" to getSystemCaCertsPath(),
+            // Directory lookup must not restore roots excluded from the bundle.
+            "GIT_SSL_CAPATH" to "$filesDir/usr/etc/tls",
             // The bundle file curl actually reads. Its Termux build looks for
             // one at a path that does not exist here, and fails before checking
             // any certificate; CAPATH alone does not satisfy it, measured on
             // device. setupGitCaBundle() writes this on every launch it has
-            // changed, from the system trust store plus any CA the device owner
-            // installed themselves through Settings.
+            // changed, from the platform's merged trust store, including owner
+            // additions and excluding system roots disabled through Settings.
             "GIT_SSL_CAINFO" to "$filesDir/usr/etc/tls/cert.pem",
             // The same bundle for everything else that links OpenSSL, and this
             // used to say the directory below was enough for them. It is not,
@@ -228,10 +229,9 @@ object Environment {
             // broken is everything that asks OpenSSL for the default trust,
             // which is any ordinary script a user writes.
             //
-            // The directory stays beside it. It costs nothing, and a client that
-            // does resolve the old hashes keeps working.
+            // Use the managed directory so raw system roots cannot override removals.
             "SSL_CERT_FILE" to "$filesDir/usr/etc/tls/cert.pem",
-            "SSL_CERT_DIR" to getSystemCaCertsPath(),
+            "SSL_CERT_DIR" to "$filesDir/usr/etc/tls",
             // The configuration file libcrypto loads at start, named here
             // because the default is Termux's. The bundled libcrypto carries
             // OPENSSLDIR /data/data/com.termux/files/usr/etc/tls compiled in,
@@ -297,12 +297,17 @@ object Environment {
         // client that works without any of this. SSL_CERT_FILE above wants no
         // such guard: with a path that does not exist OpenSSL loads nothing and
         // verification fails, which is where this started rather than worse.
+        // Older curl versions prefer SSL_CERT_DIR over SSL_CERT_FILE, so give
+        // curl its explicit file override too, only when that file exists.
         val caBundle = File("$filesDir/usr/etc/tls/cert.pem")
-        val requestsCa =
-            if (caBundle.isFile) mapOf("REQUESTS_CA_BUNDLE" to caBundle.absolutePath)
+        val bundleOverrides =
+            if (caBundle.isFile) mapOf(
+                "REQUESTS_CA_BUNDLE" to caBundle.absolutePath,
+                "CURL_CA_BUNDLE" to caBundle.absolutePath,
+            )
             else emptyMap()
 
-        return base + requestsCa + toolchainEnv
+        return base + bundleOverrides + toolchainEnv
     }
 
     private fun getToolchainEnvironment(context: Context): MutableMap<String, String> {
@@ -635,13 +640,6 @@ object Environment {
      */
     fun getClaudeLauncherPath(context: Context): String =
         "${context.applicationInfo.nativeLibraryDir}/libclaude-launch.so"
-
-    private fun getSystemCaCertsPath(): String =
-        // Android 14+ (APEX module), fallback to legacy path
-        if (File("/apex/com.android.conscrypt/cacerts").isDirectory)
-            "/apex/com.android.conscrypt/cacerts"
-        else
-            "/system/etc/security/cacerts"
 
     private fun getVersionName(context: Context): String =
         try {

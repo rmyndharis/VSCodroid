@@ -92,7 +92,7 @@
           <h3>Node.js and Python, bundled</h3>
           <p>
             Node&nbsp;24 with npm, and Python&nbsp;3 with pip, both installed on
-            first launch. Ruby, Java&nbsp;17 and C/C++ install on demand when you
+            first launch. Ruby, Java&nbsp;21 and C/C++ install on demand when you
             ask for them.
           </p>
         </li>
@@ -158,7 +158,7 @@
           <div>
             <h3>Pick your languages</h3>
             <p>
-              Ruby, Java&nbsp;17 and C/C++ are offered once, and can be added
+              Ruby, Java&nbsp;21 and C/C++ are offered once, and can be added
               or removed later from the app icon's long-press menu.
             </p>
           </div>
@@ -243,11 +243,12 @@
         <li class="feature">
           <h3>Tools start indirectly</h3>
           <p>
-            Android refuses to execute files in an app's private storage, so a
-            toolchain's commands are reached through a small launcher on PATH.
-            Typing them, running them from a task and extensions spawning them
-            all work; <code>pip</code> and <code>npm</code> are shell functions,
-            so a task has to spell those as <code>python3 -m pip</code>.
+            Android refuses to execute files in an app's private storage.
+            Ruby and Java commands use launchers on PATH, including extension
+            spawns and process tasks. C/C++ requires a terminal or shell task;
+            direct compiler spawns are unsupported. <code>pip</code> and
+            <code>npm</code> are shell functions, so use a shell task for them,
+            or <code>python3 -m pip</code> for pip in a process task.
           </p>
         </li>
         <li class="feature">

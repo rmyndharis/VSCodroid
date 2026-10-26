@@ -1,5 +1,6 @@
 package com.vscodroid.webview
 
+import org.junit.jupiter.api.Assertions.assertAll
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -141,5 +142,39 @@ class ProxiedAssetSuffixTest {
                 "server tree is written in",
         )
         assertEquals("utf-8", VSCodroidWebViewClient.charsetOf(null))
+    }
+
+    @Test
+    fun `decoded resource paths retain literal question marks in their MIME lookup`() {
+        val cases = mapOf(
+            "/work/a?b/entry.mjs" to "text/javascript",
+            "/work/entry?draft.mjs" to "text/javascript",
+            "/work/a?b/entry.wasm" to "application/wasm",
+            "/work/a?b/style.css" to "text/css",
+            "/work/a?b/picture.svg" to "image/svg+xml",
+            "/work/looks.js?after/no-extension" to "application/octet-stream",
+        )
+        assertAll(cases.map { (path, expected) ->
+            org.junit.jupiter.api.function.Executable {
+                assertEquals(expected, VSCodroidWebViewClient.guessMimeType(path), path)
+            }
+        })
+    }
+
+    @Test
+    fun `complete proxied URLs still remove their actual query for suffix tests`() {
+        val url = "http://127.0.0.1:41293/stable-c/static/entry.js?tkn=dummy"
+        assertEquals("application/javascript", VSCodroidWebViewClient.guessMimeType(url))
+        assertTrue(VSCodroidWebViewClient.isStaticAsset(url))
+        val module = "https://host/a%3Fb/entry.mjs?tkn=dummy"
+        assertEquals("text/javascript", VSCodroidWebViewClient.guessMimeType(module))
+        assertTrue(VSCodroidWebViewClient.isStaticAsset(module))
+        assertFalse(VSCodroidWebViewClient.isStaticAsset("https://host/index.html?tkn=dummy"))
+    }
+
+    @Test
+    fun `decoded literal fragments remain file characters`() {
+        assertEquals("text/javascript", VSCodroidWebViewClient.guessMimeType("/work/a#b/entry.mjs"))
+        assertEquals("text/css", VSCodroidWebViewClient.guessMimeType("/work/style#draft.css"))
     }
 }

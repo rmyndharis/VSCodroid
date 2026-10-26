@@ -23,18 +23,15 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.security.MessageDigest
 import java.nio.file.Files
 
 /**
  * Removing the local copy of a device folder, at the user's own instruction.
  *
- * This is the only path in the app that deletes a mirror the automatic pass has refused,
- * so it is the only path that can destroy the user's only copy of something. Four
- * separate defects produced the gate the automatic pass applies, and none of them is
- * relaxed here: the gate is re-asked at the moment of removal, and getting past it
- * requires [force], which the caller may only set after a modal that says what is at
- * stake. What this file pins is that the gate still binds without [force], and that the
- * mechanics of the delete itself do not reach outside the mirror.
+ * Every ordinary copy requires destructive consent, including one that still matches
+ * its sync record. The removal must preserve unrelated files and release the folder's
+ * grant only after its rename commits.
  */
 class MirrorReclaimTest {
 
@@ -111,7 +108,10 @@ class MirrorReclaimTest {
         val record = File(dir.path + SafSyncEngine.SYNCED_RECORD_SUFFIX).apply {
             writeText(
                 SafSyncEngine.RECORD_HEADER + "\n" +
-                    SafSyncEngine(context).identityLine("src/main.kt", file)
+                    SafSyncEngine.recordLine(
+                        SafSyncEngine(context).identityLine("src/main.kt", file),
+                        MessageDigest.getInstance("SHA-256").digest(file.readBytes()),
+                    )
             )
         }
         check(SafSyncEngine(context).holdsOnlyVouchedCopies(dir)) {
@@ -125,12 +125,10 @@ class MirrorReclaimTest {
     private fun sweep() = manager.sweepDiscardedMirrors()
 
     /**
-     * The gate the automatic pass applies, applied here too. Without [force] a mirror
-     * holding files the device folder does not is left exactly where it was, because
-     * removing it is not reclaiming a copy, it is deleting the only copy.
+     * Terminal files may exist only in the mirror and always require explicit consent.
      */
     @Test
-    fun `a copy the gate refuses is not removed without force`() {
+    fun `a copy holding local repository data is not removed without force`() {
         val (dir, record) = vouchedMirror()
         File(dir, ".git").mkdirs()
         File(dir, ".git/HEAD").writeText("ref: refs/heads/main\n")
@@ -144,7 +142,7 @@ class MirrorReclaimTest {
         assertTrue(record.isFile, "the record must not go without its mirror")
     }
 
-    /** The same for the other half of the gate: a write this app never delivered. */
+    /** An undelivered write also stays available until explicit removal. */
     @Test
     fun `a copy holding an undelivered write is not removed without force`() {
         val (dir, _) = vouchedMirror()
@@ -158,22 +156,23 @@ class MirrorReclaimTest {
         assertTrue(File(dir, "src/main.kt").isFile, "the only copy of an unsent edit went")
     }
 
-    /** The control for both refusals: the same mirror with nothing unvouched in it. */
+    /** Matching recorded bytes cannot authorize an unconfirmed removal. */
     @Test
-    fun `a copy the device folder fully holds is removed without force`() {
+    fun `a copy the device folder fully holds still requires force`() {
         val (dir, record) = vouchedMirror()
+        val originalRecord = record.readBytes()
 
-        val freed = manager.reclaimMirror(dir.name, force = false)
-        sweep()
+        val answer = manager.reclaimMirror(dir.name, force = false)
 
-        assertTrue(freed > 0, "the answer is the bytes the removal frees, got $freed")
-        assertFalse(dir.exists(), "a disposable copy was kept")
-        assertFalse(record.exists(), "the record must go with the mirror it describes")
+        assertEquals(SafStorageManager.RECLAIM_REFUSED, answer)
+        assertEquals(0, sweep())
+        assertEquals("fun main() {}", File(dir, "src/main.kt").readText())
+        org.junit.jupiter.api.Assertions.assertArrayEquals(originalRecord, record.readBytes())
     }
 
-    /** What the confirmation buys, and the only thing that gets past the gate. */
+    /** Explicit consent permits removal of an unused copy containing unique data. */
     @Test
-    fun `force removes a copy the gate refuses`() {
+    fun `force removes an unused copy holding local repository data`() {
         val (dir, record) = vouchedMirror()
         File(dir, ".git").mkdirs()
         File(dir, ".git/HEAD").writeText("ref: refs/heads/main\n")
@@ -221,10 +220,9 @@ class MirrorReclaimTest {
 
     /**
      * `File.deleteRecursively` asks `isDirectory` and `listFiles`, both of which answer
-     * for a link's target, so it descends out of the mirror. On the automatic pass that
-     * is masked by the gate refusing any mirror containing a link at all. A forced
-     * removal has no such mask, and a mirror is routinely a checked-out repository, so a
-     * link inside one is attacker-supplied in the ordinary case.
+     * for a link's target, so it descends out of the mirror. Automatic cleanup retains
+     * every ordinary mirror. A forced removal must safely unlink entries,
+     * including links supplied by a checked-out repository.
      */
     @Test
     fun `a forced removal does not follow a link out of the copy`() {

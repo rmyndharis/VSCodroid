@@ -14,10 +14,20 @@ import java.io.File
  * bars took 63 of it. The patch lives in TypeScript and its thresholds have to agree with
  * the native key row, which stands down on the same screens, so nothing but this reads both.
  *
- * Reading source rather than rendering, as [NarrowWindowPatchTest] does: no JVM test can
- * lay the workbench out.
+ * Source checks keep the patch wiring aligned. Node fixtures execute its height
+ * transitions and visibility decisions without rendering the workbench.
  */
 class ShortWindowPatchTest {
+
+    @Test
+    fun `height transitions and reported bar visibility follow the actual window`() {
+        WorkbenchPatchBehavior.run("bars")
+    }
+
+    @Test
+    fun `status bar command toggles the saved preference while the window hides it`() {
+        WorkbenchPatchBehavior.run("status-toggle")
+    }
 
     /** The repository root is two levels above `android/app`, this suite's working directory. */
     private val patch: String = File("../../patches/0033-short-window-hides-title-and-status-bar.patch").also {
@@ -82,11 +92,11 @@ class ShortWindowPatchTest {
         assertEquals(7, removedLines.lines().count { it.contains(direct) }, "the patch no longer replaces all seven direct asks")
         assertEquals(
             1,
-            addedLines.lines().count { it.contains(direct) },
+            addedLines.lines().count { it.contains("shouldShowCustomTitleBar(") },
             "only Layout#shouldShowTitleBar may ask shouldShowCustomTitleBar: any other site " +
                 "can bring the title bar back while the keyboard is still up",
         )
         // The seven sites it replaces, and the one in updateShortWindow that applies the answer.
-        assertEquals(8, addedLines.lines().count { it.contains("this.shouldShowTitleBar()") })
+        assertEquals(8, addedLines.lines().count { it.contains("this.shouldShowTitleBar(") })
     }
 }

@@ -803,4 +803,139 @@ class DownloadCoordinatorTest {
 
         assertArrayEquals(payload, documents[target]!!.written.toByteArray())
     }
+
+    @Test
+    fun `a duplicate blob request keeps the original picker and bytes`() {
+        coordinator.onDownloadNamed("blob:shared", "first.txt")
+        coordinator.onDownloadStart("blob:shared", null)
+        coordinator.onDownloadNamed("blob:shared", "duplicate.txt")
+        coordinator.onDownloadStart("blob:shared", null)
+        val target = destination("first")
+        chooseDestination(target)
+        val id = liveRequestId()
+        assertTrue(coordinator.onBytes(id, encode("original bytes")))
+        coordinator.onComplete(id, null)
+
+        assertEquals(listOf("first.txt"), asked, "a duplicate must not reach another picker")
+        assertEquals("original bytes", documents[target]!!.written.toString())
+        assertTrue(documents[target]!!.closed)
+        assertEquals(
+            listOf(DownloadOutcome.FAILED to "duplicate.txt", DownloadOutcome.SAVED to "first.txt"),
+            reported,
+        )
+        assertTrue(released.isEmpty(), "refusing the duplicate must not revoke the original hold")
+    }
+
+    @Test
+    fun `a duplicate blob already in the queue does not gain another picker`() {
+        coordinator.onDownloadNamed("blob:busy", "busy.txt")
+        coordinator.onDownloadStart("blob:busy", null)
+        coordinator.onDownloadNamed("blob:shared", "queued.txt")
+        coordinator.onDownloadStart("blob:shared", null)
+        coordinator.onDownloadNamed("blob:shared", "duplicate.txt")
+        coordinator.onDownloadStart("blob:shared", null)
+        chooseDestination(null)
+        val target = destination("queued")
+        chooseDestination(target)
+        val id = liveRequestId()
+        coordinator.onBytes(id, encode("queued bytes"))
+        coordinator.onComplete(id, null)
+
+        assertEquals(listOf("busy.txt", "queued.txt"), asked)
+        assertEquals("queued bytes", documents[target]!!.written.toString())
+        assertEquals(listOf("blob:busy"), released)
+        assertEquals(
+            listOf(DownloadOutcome.FAILED to "duplicate.txt", DownloadOutcome.CANCELLED to "busy.txt",
+                DownloadOutcome.SAVED to "queued.txt"),
+            reported,
+        )
+    }
+
+    @Test
+    fun `a duplicate blob behind a full queue keeps the admitted hold`() {
+        coordinator.onDownloadStart("blob:busy", null)
+        coordinator.onDownloadNamed("blob:shared", "queued.txt")
+        coordinator.onDownloadStart("blob:shared", null)
+        repeat(MAX_QUEUED - 1) { coordinator.onDownloadStart("blob:other$it", null) }
+        coordinator.onDownloadNamed("blob:shared", "duplicate.txt")
+        coordinator.onDownloadStart("blob:shared", null)
+
+        assertEquals(listOf(DownloadOutcome.FAILED to "duplicate.txt"), reported)
+        assertTrue(released.isEmpty(), "the queue already owns the shared URL")
+        chooseDestination(null)
+        val target = destination("queued")
+        chooseDestination(target)
+        val id = liveRequestId()
+        coordinator.onBytes(id, encode("queued bytes"))
+        coordinator.onComplete(id, null)
+        assertEquals("queued bytes", documents[target]!!.written.toString())
+        assertEquals(listOf("blob:busy"), released)
+    }
+
+    @Test
+    fun `a duplicate blob is declined while the original stream is being read`() {
+        coordinator.onDownloadNamed("blob:shared", "first.txt")
+        val target = destination("first")
+        val id = startAndChoose("blob:shared", target)
+        coordinator.onBytes(id, encode("partial"))
+        coordinator.onDownloadNamed("blob:shared", "duplicate.txt")
+        coordinator.onDownloadStart("blob:shared", null)
+        writesFail = true
+
+        assertEquals(false, coordinator.onBytes(id, encode("remaining")))
+
+        assertEquals(listOf("first.txt"), asked)
+        assertEquals(listOf(target), discarded)
+        assertEquals(listOf("blob:shared"), released)
+        assertEquals(
+            listOf(DownloadOutcome.FAILED to "duplicate.txt", DownloadOutcome.FAILED to "first.txt"),
+            reported,
+        )
+    }
+
+    @Test
+    fun `independent HTTP requests may still download the same URL twice`() {
+        val url = "https://host/report.txt"
+        coordinator.onDownloadNamed(url, "first.txt")
+        coordinator.onDownloadStart(url, null)
+        coordinator.onDownloadNamed(url, "second.txt")
+        coordinator.onDownloadStart(url, null)
+        val first = destination("first")
+        chooseDestination(first)
+        coordinator.onBytes(liveRequestId(), encode("first bytes"))
+        coordinator.onComplete(liveRequestId(), null)
+        val second = destination("second")
+        chooseDestination(second)
+        coordinator.onBytes(liveRequestId(), encode("second bytes"))
+        coordinator.onComplete(liveRequestId(), null)
+
+        assertEquals(listOf("first.txt", "second.txt"), asked)
+        assertEquals("first bytes", documents[first]!!.written.toString())
+        assertEquals("second bytes", documents[second]!!.written.toString())
+        assertEquals(listOf(DownloadOutcome.SAVED to "first.txt", DownloadOutcome.SAVED to "second.txt"), reported)
+    }
+
+    @Test
+    fun `a retired page does not block a new request with the same URL spelling`() {
+        coordinator.onDownloadStart("blob:shared", null)
+        val oldPicker = pickerIds.last()
+        coordinator.onPageGone()
+        coordinator.onDownloadNamed("blob:shared", "new.txt")
+        coordinator.onDownloadStart("blob:shared", null)
+        assertEquals(1, asked.size, "the old picker must answer before a new one opens")
+        val orphan = destination("orphan")
+        coordinator.onDestinationChosen(oldPicker, orphan)
+        val newPicker = pickerIds.last()
+        val target = destination("current")
+        chooseDestination(target)
+        coordinator.onBytes(liveRequestId(), encode("current page bytes"))
+        coordinator.onComplete(liveRequestId(), null)
+
+        assertTrue(oldPicker != newPicker)
+        assertEquals(listOf(FALLBACK_DOWNLOAD_NAME, "new.txt"), asked)
+        assertEquals(listOf(orphan), discarded)
+        assertEquals("current page bytes", documents[target]!!.written.toString())
+        assertEquals(listOf(DownloadOutcome.SAVED to "new.txt"), reported)
+    }
+
 }

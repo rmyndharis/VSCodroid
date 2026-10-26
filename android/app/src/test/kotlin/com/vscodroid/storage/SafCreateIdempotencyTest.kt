@@ -4,6 +4,7 @@ import android.content.ContentResolver
 import android.content.Context
 import android.database.Cursor
 import android.net.Uri
+import android.os.Bundle
 import android.provider.DocumentsContract
 import com.vscodroid.util.Logger
 import io.mockk.Runs
@@ -17,10 +18,13 @@ import io.mockk.verify
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.ByteArrayOutputStream
+import java.io.ByteArrayInputStream
+import java.nio.file.Files
 import java.io.File
 import java.io.IOException
 
@@ -78,6 +82,7 @@ class SafCreateIdempotencyTest {
         written = ByteArrayOutputStream()
         resolver = mockk(relaxed = true)
         every { resolver.openOutputStream(any(), "wt") } returns written
+        every { resolver.openInputStream(any()) } answers { ByteArrayInputStream("the only copy".toByteArray()) }
 
         val context = mockk<Context>(relaxed = true)
         every { context.contentResolver } returns resolver
@@ -89,9 +94,13 @@ class SafCreateIdempotencyTest {
     fun tearDown() = unmockkAll()
 
     /** A cursor over a folder holding exactly [names]. */
-    private fun folderHolding(vararg names: String): Cursor {
+    private fun folderHolding(vararg names: String, loading: Boolean = false, error: Boolean = false): Cursor {
         var index = -1
         return mockk<Cursor>(relaxed = true) {
+            every { extras } returns mockk<Bundle>(relaxed = true) {
+                every { getBoolean(DocumentsContract.EXTRA_LOADING) } returns loading
+                every { containsKey(DocumentsContract.EXTRA_ERROR) } returns error
+            }
             every {
                 getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID)
             } returns 0
@@ -111,7 +120,38 @@ class SafCreateIdempotencyTest {
         SafSyncEngine::class.java.declaredMethods
             .single { it.name == "createInSaf" }
             .apply { isAccessible = true }
-            .invoke(engine, localFile, parentUri, treeUri, null)
+            .invoke(engine, localFile, parentUri, treeUri, workspace, null)
+    }
+
+    @Test
+    fun `an unread path stays held when its parent listing is incomplete`() {
+        every { DocumentsContract.getTreeDocumentId(treeUri) } returns "root"
+        val holds = SafSyncEngine::class.java.getDeclaredMethod("providerHolds", Uri::class.java, String::class.java)
+            .apply { isAccessible = true }
+        val guard = SafSyncEngine::class.java.getDeclaredMethod("providerHoldsDocument", Uri::class.java, String::class.java)
+            .apply { isAccessible = true }
+        val resolve = SafSyncEngine::class.java.declaredMethods.single { it.name == "resolveDocumentUri" }
+            .apply { isAccessible = true }
+        for (listing in listOf(folderHolding(loading = true), folderHolding(error = true))) {
+            every { resolver.query(childrenUri, any(), any(), any(), any()) } returns listing
+            assertNull(holds.invoke(engine, treeUri, "notes.txt"))
+            assertEquals(true, guard.invoke(engine, treeUri, "notes.txt"))
+            assertNull(resolve.invoke(engine, treeUri, "notes.txt", null))
+        }
+    }
+
+    @Test
+    fun `a matching row in a partial listing is not permission to replace it`() {
+        every { resolver.query(childrenUri, any(), any(), any(), any()) } returns
+            folderHolding("notes.txt", loading = true)
+        assertUnknownListingRefusesCreate()
+    }
+
+    @Test
+    fun `duplicate device names are not permission to replace either document`() {
+        every { resolver.query(childrenUri, any(), any(), any(), any()) } returns
+            folderHolding("notes.txt", "notes.txt")
+        assertUnknownListingRefusesCreate()
     }
 
     @Test
@@ -205,16 +245,65 @@ class SafCreateIdempotencyTest {
     }
 
     @Test
-    fun `a lookup that fails still creates rather than dropping the file`() {
-        // A failed lookup reads the same as a real absence, so this can duplicate a
-        // document from a transient provider error. The alternative -- refusing to
-        // create -- loses a genuinely new file instead. Keeping the data is the
-        // direction to fail in, and the choice is pinned here so it stays a choice.
+    fun `a lookup that throws keeps the file in the mirror and reports it`() {
         every { resolver.query(childrenUri, any(), any(), any(), any()) } throws
             RuntimeException("provider went away")
+        assertUnknownListingRefusesCreate()
+    }
 
+    @Test
+    fun `a null listing keeps the file in the mirror and reports it`() {
+        every { resolver.query(childrenUri, any(), any(), any(), any()) } returns null
+        assertUnknownListingRefusesCreate()
+    }
+
+    @Test
+    fun `a loading listing keeps the file in the mirror and reports it`() {
+        every { resolver.query(childrenUri, any(), any(), any(), any()) } returns
+            folderHolding(loading = true)
+        assertUnknownListingRefusesCreate()
+    }
+
+    @Test
+    fun `an error listing keeps the file in the mirror and reports it`() {
+        every { resolver.query(childrenUri, any(), any(), any(), any()) } returns
+            folderHolding(error = true)
+        assertUnknownListingRefusesCreate()
+    }
+
+    private fun assertUnknownListingRefusesCreate() {
+        val lost = mutableListOf<String>()
+        engine.onWriteBackFailed = { lost += it.name }
         create("notes.txt", "still mine")
+        verify(exactly = 0) { DocumentsContract.createDocument(any(), any(), any(), any()) }
+        assertEquals("", written.toString())
+        assertEquals("still mine", File(workspace, "notes.txt").readText())
+        assertEquals(listOf("notes.txt"), lost)
+    }
 
-        verify(exactly = 1) { DocumentsContract.createDocument(any(), any(), any(), "notes.txt") }
+    @Test
+    fun `an existing document unknown to the session is preserved before replacement`() {
+        every { resolver.query(childrenUri, any(), any(), any(), any()) } returns folderHolding("notes.txt")
+        every { resolver.openInputStream(resolvedUri) } answers {
+            ByteArrayInputStream("foreign device edit".toByteArray())
+        }
+        create("notes.txt", "my new file")
+        assertEquals("my new file", written.toString())
+        val copies = workspace.listFiles()!!.filter { it.name.startsWith("notes.txt.device-") }
+        assertEquals(1, copies.size, "the foreign device document was overwritten without a preserved copy")
+        assertEquals("foreign device edit", copies.single().readText())
+    }
+
+    @Test
+    fun `a symlink create has no lost-file notice`() {
+        val target = File(workspace, "target").apply { writeText("private") }
+        val link = File(workspace, "link")
+        Files.createSymbolicLink(link.toPath(), target.toPath())
+        val lost = mutableListOf<File>()
+        engine.onWriteBackFailed = { lost += it }
+        SafSyncEngine::class.java.declaredMethods.single { it.name == "createInSaf" }
+            .apply { isAccessible = true }.invoke(engine, link, parentUri, treeUri, workspace, null)
+        assertTrue(lost.isEmpty())
+        assertEquals("", written.toString())
     }
 }

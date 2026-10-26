@@ -85,7 +85,7 @@ is why `listSshKeys` no longer answers with a key's comment and why a forced
    (`SecurityManager.generateToken`, in `bridge/`, not a `security/` package).
    `MainActivity.injectBridgeToken()` writes it to `window.__vscodroid.authToken`
    after the page loads.
-2. **Every method, not a chosen subset**: all 35 `@JavascriptInterface` methods take the
+2. **Every method, not a chosen subset**: all `@JavascriptInterface` methods take the
    token and validate it before doing anything, returning without acting on refusal
    (§2.4 records the six whose refusal value is not an empty one).
    `BridgeTokenUniformityTest` enumerates them by reflection and fails the build
@@ -191,8 +191,8 @@ The OAuth pair described a flow this app does not implement; see §2.5.
 Exposed via `@JavascriptInterface`:
 
 Every method takes the session token and validates it before doing anything; a call
-with a token that does not match is refused before the method acts. Twenty-nine of
-the thirty-five then return an empty value: `false`, `null`, `""`, `"{}"`, `"[]"`,
+with a token that does not match is refused before the method acts. Most then
+return an empty value: `false`, `null`, `""`, `"{}"`, `"[]"`,
 `0`, or nothing. **Six do not, and each is truthy on refusal.**
 `generateSshKey` returns `{"success":false,"error":"unauthorized"}`, so a caller
 testing `if (!result)` reads a refusal as success; test its `success` field.
@@ -208,7 +208,7 @@ with `"[]"`, and both are non-empty strings, so truthy until parsed. Read the to
 added without the check, so this holds for the class rather than for the list below.
 
 **Registered is not the same as reachable, and the difference decides what an extension
-can do.** All 35 methods below live on the `AndroidBridge` object injected into the
+can do.** All bridge methods below live on the `AndroidBridge` object injected into the
 workbench page, so anything running in that page's own realm can call them directly. An
 extension cannot: it runs in the web extension host, which does not see objects added by
 `addJavascriptInterface`. Extensions reach the bridge over the BroadcastChannel relay
@@ -297,6 +297,11 @@ fun hasClipboardText(authToken: String): Boolean
 #### Navigation
 
 ```kotlin
+@JavascriptInterface
+fun isAuthPageCurrent(authToken: String, pageGeneration: Long): Boolean
+// Checks the native document generation before bootstrap metadata is written.
+// Returns false for a stale session or generation; unavailable through the extension relay.
+
 @JavascriptInterface
 fun registerAuthCallback(requestId: String, nonce: String, documentId: String, pageGeneration: Long, authToken: String): Boolean
 // Registers the request and immutable document identity minted by the callback provider.
@@ -428,6 +433,18 @@ fun getRecentFolders(authToken: String): String
 // provider's display name.
 
 @JavascriptInterface
+fun claimWorkspacePaths(authToken: String, pathsJson: String): Boolean
+// Claims absolute workspace and filesystem paths before they become usable.
+// A claimed device-folder copy cannot be removed until the app process restarts.
+// False rejects malformed input, a stale session, or a copy being removed or gone.
+
+@JavascriptInterface
+fun publishWorkspaceRoots(authToken: String, pageGeneration: Long, pathsJson: String): Boolean
+// Replaces the current document's complete workspace resource-root set.
+// Empty input closes the set; stale sessions, generations, and relative paths are refused.
+// Resource requests retain their origin, referrer, sensitive-path, and containment checks.
+
+@JavascriptInterface
 fun openRecentFolder(authToken: String, uriString: String)
 // Re-opens a previously granted SAF folder by URI.
 // Returns NOTHING -- it hands the URI to MainActivity and returns. A URI this
@@ -469,77 +486,34 @@ fun getAvailableStorage(authToken: String): Long
 
 @JavascriptInterface
 fun listSafMirrors(authToken: String, replyId: String): String
-// ANSWERS BY replyId. Returns "" once the walk has started; anything else is a
-// refusal decided before it started, and is the sentence to show.
-//
-// Posted against replyId: a
-// JSON array of the local copies of device folders, largest first. This is the
-// contents of the `saf_mirrors` row that getStorageBreakdown reports as one
-// number, and there is no other listing of them anywhere in the app.
-// Format: [{"hash": "abc123def456", "name": "MyProject", "bytes": N,
-//           "lastOpened": 1700000000, "granted": true, "reclaimable": false}]
-// "name" and a non-zero "lastOpened" are ABSENT for a copy whose folder fell off
-// the recent list: the grant and the list entry are released together, so the
-// copy that survives has no name left. Do not substitute the hash; it reads like
-// a folder name and is not one.
-// "reclaimable" false means the copy holds files the device folder does not, so
-// removing it destroys the only copy of them. That is the ordinary state of any
-// folder something has been built or cloned in.
-// The posted array is "[]" when no SAF manager is wired up, which an install
-// that has copied no device folder cannot be told apart from. A refusal is no
-// longer one of those cases: it comes back as the return value instead.
-//
-// TAKES AS LONG AS THE DISK: every copy is walked twice, once for "bytes" and
-// once for "reclaimable". Same note.
+// Returns "" once accepted, with the outcome posted against replyId. A non-empty
+// return is an immediate refusal and starts no work.
+// Posted data: ordinary local copies of device folders, largest first.
+// [{"hash":"abc123def456","name":"MyProject","bytes":N,
+//   "lastOpened":1700000000,"granted":true,"reclaimable":false}]
+// name and a non-zero lastOpened are absent after the recent entry is removed.
+// reclaimable remains false for compatibility. A snapshot cannot prove that
+// direct filesystem writes will not add unique files before removal commits.
+// Revoked permissions do not remove ordinary copies or their sync records.
+// Sizing walks every copy; call asynchronously. Discarded entries are not listed.
 
 @JavascriptInterface
 fun reclaimSafMirror(authToken: String, hash: String, force: Boolean, replyId: String): String
-// Removes the local copy of one device folder. `hash` comes from listSafMirrors.
-//
-// ANSWERS BY replyId. Returns "" once the removal has started; anything else is
-// a refusal decided before it started, and is the sentence to show.
-//
-// `force` removes a copy whose "reclaimable" is false, which DELETES FILES THAT
-// EXIST NOWHERE ELSE. It is not a retry flag, and nothing else in this API
-// deletes user data.
-//
-// The caller's own modal is no longer what controls it. A promise the caller
-// makes is one this side cannot check, and the relay is shared by every web
-// extension on the workbench's origin, so `force:true` from a script the user
-// never looked at satisfied that contract as well as a person pressing Remove.
-// MainActivity.confirmForcedRemoval now asks on the Activity, before anything
-// is deleted, with the sentence that names the stake. A decline posts the EMPTY
-// string, which is this command's success value, so the caller sees ok. That is
-// deliberate: the bundled extension renders every non-empty answer as "Could not
-// remove that folder's local copy: <reason>", so any sentence at all reports a
-// cancel the user chose as a failure of the app's. Two were tried and dropped,
-// the not-a-copy sentence, which told someone who had just pressed Cancel that
-// the app had overruled them to protect their data, and the retry sentence,
-// which invited them to press the button they had just declined.
-//
-// Nothing states or implies that anything was freed on that road: the byte
-// figure is announced from the success branch alone, and an ok sends the
-// extension back to the folder list, where the copy the user kept is still on it.
-//
-// The answer posted against replyId is the empty string when the copy was
-// removed, and otherwise the reason it was not. CALLERS MUST COMPARE AGAINST THE
-// EMPTY STRING: success is the falsy value on both roads back, exactly as in
-// openExternalUrl, so a truthiness test reads backwards and reports every refusal
-// as freed disk. The relay decides that comparison on the Android side and posts
-// a refusal as ok:false, so an extension using the relay sees it as a rejection.
-//
-// The refusals name something that has to change first: the folder is open, it is
-// still opening, or it was open in this session and VSCodroid must be restarted.
-// The last one is not caution. Closing a folder stops its watchers but leaves a
-// write-back drain running rather than discarding writes, and that drain opens
-// each device document with "wt", which truncates at open, so deleting the copy
-// underneath it empties the user's file on the device.
-//
-// The answer is posted as soon as the copy is unreachable; the recursive delete
-// continues afterwards and is finished by the next launch if the process dies.
-//
-// It is still not quick: without `force` the copy is walked to re-ask the gate,
-// and it is walked again to report the bytes freed. Same note.
+// Requests removal of the local copy identified by a listed hash.
+// force=false refuses: every ordinary copy requires explicit destructive consent.
+// force=true asks for confirmation in Android, independently of the caller's UI.
+// Confirmation warns that the copy may contain files absent on the device.
+// It never bypasses the in-use guard, including mirrors claimed earlier in this
+// process. Closing a workspace can leave a write-back drain or filesystem client.
+// A request is refused immediately while this bridge has other storage work.
+// Empty return means accepted and answered later against replyId; any other
+// return is an immediate refusal and starts no work.
+// Posted empty payload means removed or cancelled by the user. A refusal posts
+// ok:false with its reason. Compare against the empty string, not truthiness.
+// The directory rename commits removal; recursive deletion runs afterwards and
+// the next launch finishes any discarded entries. Regrant creates a fresh copy.
+// Sizing can outlast a transport timeout. A timeout does not cancel native work.
+
 ```
 
 #### Device Info
@@ -605,8 +579,9 @@ sequenceDiagram
   participant K as Kotlin
   participant C as Chrome Custom Tabs
   participant P as Identity provider
+  W->>K: registerAuthCallback(id, nonce, documentId, pageGeneration, authToken)
   W->>K: openExternalUrl(authUrl, authToken)
-  K->>K: AuthTabWindow.arm(authRequestIdsIn(authUrl), authCallbackNonceIn(authUrl), elapsedRealtime)
+  K->>K: AuthTabWindow.arm(authRequestIdsIn(authUrl), authCallbackNonceIn(authUrl), elapsedRealtime, pageGeneration)
   K->>C: CustomTabsIntent.launchUrl (https to a non-loopback host, a plain VIEW intent otherwise)
   C->>P: user login + consent
   P-->>C: redirect to the workbench callback page
@@ -627,13 +602,13 @@ The exported `BROWSABLE` intent filter can be invoked by any app or web page. Th
 
 Patch 0019 registers each real callback id and minted nonce through `registerAuthCallback` before returning its URI. The native registry accepts canonical positive ids, exactly 32 lowercase hexadecimal nonce and document-id characters, the current document generation and a valid bridge token. Repeating the same registration is harmless; a conflicting nonce or document identity is refused. The method is not exposed through the extension command relay.
 
-Requests created before token injection remain in a private provider queue. Native token injection sets the document generation and dispatches `vscodroid-bridge-ready`; the provider synchronously flushes its own queued identities. Native readiness is accepted only after the JavaScript completion marker confirms that generation and successful registration. The source document must be the owned top-level HTTP workbench at the configured loopback port and root path. Completion from a replaced WebView or document is ignored.
+Requests created before token injection remain in a private provider queue. Native token injection sets the document generation and dispatches `vscodroid-bridge-ready`; the provider synchronously flushes its own queued identities. Native readiness is accepted only after the JavaScript completion marker confirms that generation and successful registration. A page that answered with a failed registration keeps its editor scripts (key row, touch fixes, relay, clipboard and download capture) but is not marked ready, so it receives no sign-in return; a page that did not answer for the document gets no scripts at all. The source document must be the owned top-level HTTP workbench at the configured loopback port and root path. Completion from a replaced WebView or document is ignored.
 
 A main-frame auth navigation before readiness waits in a queue of at most 32 URLs with one fixed 30-second deadline. Successful bootstrap drains only matching registered requests. Failed bootstrap, timeout, page failure or replacement clears the queue without opening a browser. Subframes cannot enqueue auth launches. Ordinary external links keep their existing behavior.
 
 Outgoing addresses can activate only an already issued id with its original nonce. Missing, alternate or unissued pairs grant no callback authority. The parser reads at most eight distinct ids and applies the one extracted nonce independently to each issued identity. A repeated active launch preserves its original timestamp. Failed browser attempts retain the issued identity for an original-nonce retry; overlapping failures cannot remove an activation another attempt successfully launched.
 
-The registry retains at most 32 issued identities per document and refuses additional registrations without evicting existing requests. Arbitrary outgoing ids consume no capacity. Reload, folder switch, renderer recreation and process recreation discard the old authority. Numeric ids may then repeat with fresh nonces. A valid accepted callback keeps its launch visible while the workbench collects the relayed value, preserving resume suppression. The relay removes only the nonce parameter and preserves all other callback query bytes.
+The registry retains at most 32 issued identities per document. When it is full, a registration drops the oldest identity that can no longer be satisfied, one whose late return was already reported or one launched more than ten minutes ago with no launch in flight, and is refused when there is none, so a request waiting for its launch or inside its window is never evicted. Arbitrary outgoing ids consume no capacity. Reload, folder switch, renderer recreation and process recreation discard the old authority. Numeric ids may then repeat with fresh nonces. A valid accepted callback keeps its launch visible while the workbench collects the relayed value, preserving resume suppression. The relay removes only the nonce parameter and preserves all other callback query bytes.
 
 The workbench's pending requests are in memory. A callback after process loss cannot restore them; the app shows the existing restart notice and requires a fresh sign-in. The actual provider exposes its random document identity through a non-configurable getter without a setter. Bootstrap never writes that identity. Callback delivery snapshots the registered identity and requires the current provider getter to match before writing localStorage, so stale bootstrap metadata cannot admit an old callback into a replacement page. While an active launch remains within its window, returning from the background uses the IndexedDB health check instead of a forced reload so the pending request remains available.
 
@@ -697,7 +672,15 @@ fun generateSshKey(authToken: String, comment: String): String
 // written into the comment field.
 // Empty passphrase, deliberately: the key is protected by the app sandbox,
 // which is the right trade against typing one on a phone keyboard.
-// Never overwrites an existing key; if one is there, returns it unchanged.
+// Never overwrites an existing private key. A full pair is returned unchanged; a private
+// key without its public file fails with an error that says how to recover that file.
+// A standalone public file is also preserved: generation refuses it with guidance to
+// keep it or move it aside. No child is started for either refusal.
+// New output is generated in a private temporary directory. Both final paths are
+// checked again before publication: if either appeared during generation, nothing
+// is published. Links also refuse replacement if a file appears after that check.
+// If the private key is published but a later public publication fails, the private
+// key is retained with recovery guidance. Publication of the two filenames is not atomic.
 // Returns a JSON OBJECT string, not a bare key:
 //   {"success": true,  "publicKey": "ssh-ed25519 AAAA..."}                  <- newly generated
 //   {"success": true,  "publicKey": "ssh-ed25519 AAAA...", "existed": true} <- already there
@@ -708,11 +691,13 @@ fun generateSshKey(authToken: String, comment: String): String
 //
 // ANSWERED INLINE, unlike the four disk-walking commands, so it holds the
 // page's main thread until ssh-keygen exits. Bounded rather than open ended:
-// KEYGEN_TIMEOUT_SECONDS is 4 and the stdout drain is joined for one second
-// more, against the five the bundled extension gives a bridge call. Key
-// generation is arithmetic and finishes well inside that; the bound is about
-// when "slow" becomes "never". Moving it onto a replyId is a spec change and a
-// Kotlin change in one commit.
+// KEYGEN_TIMEOUT_SECONDS is 4. After normal exit the stdout drain is joined for
+// at most one second. A failure with a live child requests forced termination and
+// waits at most one second for exit instead. An interrupted caller has its flag
+// restored after cleanup. Only temporary output is removed; if termination does
+// not finish within the cleanup bound, that output is kept and the error says so.
+// The bundled extension waits five seconds. Moving this onto a replyId changes
+// both the relay contract and the Kotlin implementation.
 
 @JavascriptInterface
 fun getSshPublicKey(authToken: String): String
@@ -739,7 +724,7 @@ fun listSshKeys(authToken: String): String
 #### Toolchain Control
 
 `ToolchainRegistry.available` is the source for what these can name. It lists Ruby,
-Java 17 and C/C++, and nothing else.
+Java 21 and C/C++, and nothing else.
 
 ```kotlin
 @JavascriptInterface
@@ -1158,11 +1143,11 @@ interface Toolchain {
   id: string; // "ruby", "java", "cpp" -- those three. Rust has no module, no
               // asset pack and no ToolchainRegistry entry; it was planned and
               // deferred, and naming it here read as a shipped option
-  name: string; // "Java 17"
+  name: string; // "Java 21"
   version: string; // "17"
   sizeMb: number; // 146
   installed: boolean; // Whether asset pack is downloaded and extracted
-  installPath?: string; // e.g., "$PREFIX/lib/jvm/java-17-openjdk"
+  installPath?: string; // e.g., "$PREFIX/lib/jvm/java-21-openjdk"
   fileAssociations: string[]; // [".java"]
   recommendedExtensions: string[]; // Open VSX extension ids
 }

@@ -263,12 +263,14 @@ function readProcStatus(pid) {
 
 /**
  * Read /proc/{pid}/cmdline (null-separated).
- * Returns the full command string.
+ * Returns argv with its null-separated boundaries intact.
  */
 function readCmdline(pid) {
     const content = readFileQuiet(path.join(procRoot, String(pid), 'cmdline'));
-    if (!content) return '';
-    return content.replace(/\0/g, ' ').trim();
+    if (!content) return [];
+    const parts = content.split('\0');
+    if (parts[parts.length - 1] === '') parts.pop();
+    return parts;
 }
 
 /**
@@ -290,62 +292,61 @@ function readCpuTime(pid) {
 }
 
 /**
- * Does this argument's basename name the program a pattern describes?
- *
- * A bare word does not name a program wherever it appears: 'eslint' is inside
- * run-eslint.js and eslint.config.js, and 'tsserver' is inside tsserver-log.js,
- * which reaches this via `--out=/tmp/tsserver-log.js` because every argument is
- * tested and not only the one the launcher runs. The label is what the user is
- * shown: five minutes with no CPU movement then report the process as an idle
- * language server, beside advice that names extensions as what to disable. So
- * a bare word has to be the whole name, give or take the extension a Node entry
- * point carries.
- *
- * Patterns carrying a separator, 'rust-analyzer' and 'cssServerMain.js', are
- * specific enough that finding one inside a name means what it says, and they
- * keep the substring test they need.
+ * Match a program basename against the supported language-server spellings.
  */
 function namesProgram(name, needle) {
     if (!/^\w+$/.test(needle)) return name.includes(needle);
     return ['', '.js', '.mjs', '.cjs'].some((ext) => name === needle + ext);
 }
 
-/**
- * The first argument that is not an option: the script the runtime was asked to
- * run.
- *
- * One definition for the two readers below. The row's name and the backend rule
- * in classify() both mean this argument, and a second copy of the rule is how
- * one of them comes to mean something slightly different.
- */
-function scriptArgument(parts) {
-    return parts.slice(1).find((arg) => !arg.startsWith('-')) || '';
+/** Remove the bundled loader wrapper before reading the executable. */
+function programArguments(parts) {
+    return path.basename(parts[0] || '').toLowerCase() === 'libldmusl.so'
+        ? parts.slice(1) : parts;
 }
 
 /**
- * The name the details view prints for a process.
- *
- * This was the basename of argv[0] followed by argv[1], and on this device that
- * is the same string for nearly everything: every process the app owns is the
- * one bundled Node binary, and the first argument it is given is the heap
- * ceiling. Measured on an API 33 emulator sitting idle, five of the six rows
- * rendered as `libnode.so --max-old-space-size=488`, so the view whose whole job
- * is to say what is running distinguished none of them, and neither did the
- * counter's tooltip.
- *
- * What identifies a process is the first argument that is not an option: the
- * script the runtime was asked to run. `--type=` is carried along beside it
- * because `bootstrap-fork` is launched more than once with different ones and is
- * otherwise several rows sharing one name. A script called `index.js` is named
- * by the directory holding it rather than by itself, which is how a Node
- * package's entry point is spelled.
+ * Select the entrypoint only for interpreter options whose arity is known.
+ * An unfamiliar option leaves the process unclassified rather than treating
+ * its value as a program. Shell command strings are never parsed here.
  */
-function shortCommand(cmdline) {
-    const parts = cmdline.split(' ').filter(Boolean);
-    const program = path.basename(parts[0] || '');
-    const script = scriptArgument(parts);
-    const type = parts.find((arg) => arg.startsWith('--type='));
+function scriptArgument(argv) {
+    const parts = programArguments(argv);
+    const program = path.basename(parts[0] || '').toLowerCase();
+    const node = ['node', 'nodejs', 'libnode.so'].includes(program);
+    const python = /^python(?:[23](?:\.\d+)*)?$/.test(program);
+    if (!node && !python) return '';
+    for (let index = 1; index < parts.length; index++) {
+        const arg = parts[index];
+        if (arg === '--') return parts[index + 1] || '';
+        if (!arg.startsWith('-')) return arg;
+        if (node) {
+            if (['-e', '--eval', '-p', '--print'].includes(arg) ||
+                /^(--eval|--print)=/.test(arg)) return '';
+            if (['-r', '--require', '--import', '--loader', '--experimental-loader', '--inspect-port'].includes(arg)) {
+                index++;
+                continue;
+            }
+            if (/^--(?:max-old-space-size|max-semi-space-size|require|import|loader|experimental-loader|inspect|inspect-brk|inspect-port)=/.test(arg)) continue;
+            if (['--nolazy', '--inspect', '--inspect-brk', '--enable-source-maps',
+                '--preserve-symlinks', '--preserve-symlinks-main', '--experimental-strip-types'].includes(arg)) continue;
+        } else {
+            if (arg === '-c') return '';
+            if (arg === '-m') return parts[index + 1] || '';
+            if (arg === '-W' || arg === '-X') { index++; continue; }
+            if (['-B', '-E', '-I', '-O', '-OO', '-s', '-S', '-u', '-v'].includes(arg)) continue;
+        }
+        return '';
+    }
+    return '';
+}
 
+/** The executable and supported entrypoint shown in the details view. */
+function shortCommand(argv) {
+    const parts = programArguments(argv);
+    const program = path.basename(parts[0] || '');
+    const script = scriptArgument(argv);
+    const type = parts.find((arg) => arg.startsWith('--type='));
     let name = script ? path.basename(script) : '';
     if (name === 'index.js') {
         const pkg = path.basename(path.dirname(script));
@@ -357,8 +358,10 @@ function shortCommand(cmdline) {
 /**
  * Classify a process by its cmdline.
  */
-function classify(cmdline) {
-    const cmd = cmdline.toLowerCase();
+function classify(argv) {
+    const parts = programArguments(argv).map((arg) => arg.toLowerCase());
+    const cmd = parts.length === 1 ? parts[0] : '';
+    const script = scriptArgument(argv).toLowerCase();
 
     // Main Android app process: not a phantom, managed by Activity Manager.
     // Its cmdline is just the package name. Other processes also have the package
@@ -366,28 +369,9 @@ function classify(cmdline) {
     // so we must check for exact match, not substring.
     if (/^com\.vscodroid(\.\w+)?$/.test(cmd)) return 'app';
 
-    // What a process IS gets decided on the basename of each argument; where it
-    // happens to live does not. Testing the whole command line made every
-    // pattern match its own name inside an unrelated path: 'eslint' matched
-    // /projects/my-eslint-tool/index.js and reported a user's build script as a
-    // language server, and '/sh' matched /share and /shim. A launcher
-    // names what it runs in one argument, and the directories above that name
-    // are the user's to choose.
-    //
-    // A 'safSync' rule used to stay on the whole line here, kept for being
-    // directories rather than program names, and it was 'vscode-eslint' again in
-    // another shape. Its subject is not a process: saf-writeback is a thread
-    // inside the Android app process (SafSyncEngine) and nothing under assets/
-    // is named safsync, so the only string it could ever reach was saf-mirrors,
-    // which is the root of the local copy of a folder opened through the SAF
-    // picker and therefore a directory the user chose. A language server whose
-    // own program path lies inside a device folder, a venv interpreter selected
-    // there or a workspace tsserver under its node_modules, returned here
-    // before the patterns below were read, so it never entered lsCpuTracker and
-    // never carried an idle verdict while holding one of the 32 phantom slots.
-    // Where a process runs says nothing about what it is, mirrors included.
-    const parts = cmd.split(' ').filter(Boolean);
-    const names = parts.map((arg) => path.basename(arg));
+    // Only the executable and the interpreter's selected entrypoint identify
+    // a process. Later arguments can name user inputs or output paths.
+    const names = [path.basename(parts[0] || ''), path.basename(script)];
 
     // These two read basenames like everything below them. They were the last
     // whole-line tests in this function, left behind when the rest moved, and
@@ -447,7 +431,6 @@ function classify(cmdline) {
     // file sits rather than written out here a second time. It holds the alias
     // FirstRunSetup.setupCopilotAndroidAliases builds for the Copilot extension,
     // and a project directory cannot be inside it.
-    const script = scriptArgument(parts);
     if (script.startsWith(REH_PREFIX) &&
         script.includes('/node_modules/@github/copilot-')) return 'langserver';
 
@@ -489,7 +472,7 @@ function scan() {
 
         for (const [pid, info] of allProcs) {
             const cmdline = readCmdline(pid);
-            if (!cmdline) continue;
+            if (!cmdline.length) continue;
 
             // This code runs inside server.js, which ProcessBuilder launched and
             // which Android's per-UID phantom accounting counts like any other

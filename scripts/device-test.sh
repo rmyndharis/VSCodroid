@@ -700,7 +700,8 @@ if $INSTRUMENTED; then
     # the only thing between a release and an unrun suite is a person
     # remembering. A record does not make anyone run it. It makes the answer to
     # "was it run, on what, and when" a file rather than a recollection.
-    ./gradlew connectedDebugAndroidTest
+    printf '  Storage pressure is disabled; its isolated filesystem prerequisites require a separate opt-in run.\n'
+    ./gradlew connectedDebugAndroidTest -Pandroid.testInstrumentationRunnerArguments.isolatedStoragePressureRoot=
     GRADLE_STATUS=$?
 
     RECORD="$ROOT_DIR/android/app/build/reports/device-run.txt"
@@ -773,6 +774,7 @@ if $SKIP_BUILD; then
         skip "build_apk" "--skip-build (APK exists)"
     else
         fail "build_apk" "--skip-build but APK not found at $APK_PATH"
+        exit 1
     fi
 elif $SKIP_INSTALL; then
     skip "build_apk" "--skip-install"
@@ -784,6 +786,7 @@ else
     else
         fail "build_apk" "Gradle build failed"
         vlog "$BUILD_OUT"
+        exit 1
     fi
 fi
 
@@ -793,12 +796,13 @@ fi
 if $SKIP_INSTALL; then
     skip "install_apk" "--skip-install"
 else
-    INSTALL_OUT=$($ADB install -r "$APK_PATH" 2>&1)
-    if echo "$INSTALL_OUT" | grep -q "Success"; then
+    if INSTALL_OUT=$("$ADB" install -r "$APK_PATH" 2>&1) &&
+        printf '%s\n' "$INSTALL_OUT" | grep -q "Success"; then
         pass "install_apk"
     else
         fail "install_apk" "adb install failed"
         vlog "$INSTALL_OUT"
+        exit 1
     fi
 fi
 
@@ -1004,21 +1008,13 @@ check_symlink "python3" "libpython.so"
 check_symlink "rg"      "libripgrep.so"
 check_symlink "ssh"     "libssh.so"
 
-# The bundle git reads, and the one place the user half of the device trust
-# store can be measured at all. Nothing in the JVM suite can reach it:
-# AndroidCAStore has no provider off a device, so the `user:` alias convention
-# that decides which certificates setupGitCaBundle folds in is checked here or
-# nowhere.
-#
-# The verdict is only that the bundle exists and holds certificates. Without one
-# every HTTPS remote dies on a trust-anchor error naming the Termux path curl
-# fell back to, which points at no install of this app and reads like a device
-# fault. Whether the device under test has a CA of its own installed is the
-# tester's choice rather than a property of the build, so the user count beside
-# it is reported and not judged. It is also arithmetic over two counts rather
-# than a parse: the system store holds one certificate per file, and the bundle
-# copies each of those files through whole, so the difference is the user half
-# unless that stops being true.
+# The bundle git reads. A certificate count checks availability, not whether
+# every platform trust decision was preserved. Raw system files include roots
+# the owner disabled, so subtracting their count cannot identify user-added CAs.
+# A zero-byte bundle with the app's authoritative-empty fingerprint records a
+# deliberate absence of trust anchors; skip connectivity validation for that
+# state. Missing, unreadable or unmarked empty bundles still fail, as do
+# nonempty files without certificate headers.
 #
 # The pattern carries no space, and that is not style. `adb shell` joins its
 # arguments and hands the result to the device's shell, so quoting applied on
@@ -1035,10 +1031,16 @@ fi
 SYSTEM_CERTS=$($ADB shell "ls $SYSTEM_CA_DIR" 2>/dev/null | tr -d '\r' | grep -c . || true)
 if [ -n "$BUNDLE_CERTS" ] && [ "$BUNDLE_CERTS" -gt 0 ] 2>/dev/null; then
     if [ -n "$SYSTEM_CERTS" ] && [ "$SYSTEM_CERTS" -gt 0 ] 2>/dev/null; then
-        pass "ca_bundle ($BUNDLE_CERTS certificates; $SYSTEM_CERTS in $SYSTEM_CA_DIR, so $((BUNDLE_CERTS - SYSTEM_CERTS)) came from the user store)"
+        pass "ca_bundle ($BUNDLE_CERTS certificates; raw system directory has $SYSTEM_CERTS)"
     else
-        pass "ca_bundle ($BUNDLE_CERTS certificates; system store unread, so the user half is unknown)"
+        pass "ca_bundle ($BUNDLE_CERTS certificates; raw system directory unread)"
     fi
+elif [ "$BUNDLE_CERTS" = "0" ] &&
+     [ "$($ADB shell run-as "$PKG" wc -c "$CA_BUNDLE_REL" 2>/dev/null | awk '{print $1}')" = "0" ] &&
+     [ "$($ADB shell run-as "$PKG" cat files/usr/etc/tls/.user-ca-fingerprint 2>/dev/null | tr -d '\r')" = \
+       "dc0ae9da7a6ea37e7e55618c6f7e2ce747fc399031be9c203d53fe0b8079f1df" ]; then
+    # SHA-256 of the app's empty-store format, android-ca-store-v2:.
+    skip "ca_bundle" "the app recorded an empty trust store; HTTPS has no trust anchors"
 else
     fail "ca_bundle" "no certificates in $CA_BUNDLE_REL; every HTTPS remote fails on a trust-anchor error"
 fi

@@ -117,6 +117,7 @@ function newPage(options) {
         fetched: [],          // urls a network request was attempted for
         cancelled: false,     // whether the reader was cancelled
         minted: 0,            // how many object URLs the page asked for
+        maps: [],             // capture maps, observed without a collection timing assumption
         timers: [],
     };
 
@@ -204,7 +205,12 @@ function newPage(options) {
         clearTimeout,
         Promise,
         Set,
-        Map,
+        Map: class extends Map {
+            constructor(entries) {
+                super(entries);
+                state.maps.push(this);
+            }
+        },
         String,
         Error,
         Object,
@@ -523,6 +529,62 @@ test('injecting the script twice changes nothing', () => {
     assert.deepStrictEqual(page.named, [
         { token: 'session-token', url: BLOB, fileName: 'App.kt' },
     ], 'one click still reports one name');
+});
+
+test('revoking an unused object URL releases its captured source', () => {
+    const page = newPage();
+    const url = page.objectUrl([Uint8Array.from([1, 2, 3])]);
+    const [made, held] = page.maps;
+    assert.strictEqual(made.has(url), true);
+    assert.strictEqual(held.has(url), false);
+
+    page.revoke(url);
+
+    assert.strictEqual(made.has(url), false, 'a revoked preview must not pin its Blob');
+    assert.strictEqual(held.has(url), false);
+    assert.deepStrictEqual(page.revoked, [url]);
+});
+
+test('a held source survives revocation until its reader is ready', async () => {
+    const page = newPage();
+    const url = page.objectUrl([Uint8Array.from([7, 8, 255])]);
+    const [made, held] = page.maps;
+    page.anchor(url, { download: 'held.bin' }).click();
+    assert.strictEqual(made.has(url), false);
+    assert.strictEqual(held.has(url), true);
+    page.revoke(url);
+    assert.strictEqual(held.has(url), true);
+    assert.deepStrictEqual(page.revoked, []);
+
+    page.send(url, 'dl-1');
+    await settle(() => page.finished.length === 1);
+
+    assert.strictEqual(page.finished[0].error, '');
+    assert.strictEqual(held.has(url), false);
+    assert.strictEqual(made.has(url), false);
+    assert.deepStrictEqual(page.fetched, []);
+    const bytes = Buffer.concat(page.chunks.map(chunk => Buffer.from(chunk.base64, 'base64')));
+    assert.deepStrictEqual(Array.from(bytes), [7, 8, 255]);
+});
+
+test('repeated clicks retain one hold until native finishes the admitted request', () => {
+    const page = newPage();
+    const url = page.objectUrl([Uint8Array.from([42])]);
+    const anchor = page.anchor(url, { download: 'same.bin' });
+    anchor.click();
+    anchor.click();
+    assert.strictEqual(page.named.length, 2);
+    const [made, held] = page.maps;
+    assert.strictEqual(held.size, 1);
+    assert.strictEqual(page.pendingHolds.length, 1);
+    page.revoke(url);
+    assert.deepStrictEqual(page.revoked, []);
+
+    page.sandbox.__vscodroidDownload.release(url);
+
+    assert.strictEqual(held.has(url), false);
+    assert.strictEqual(made.has(url), false);
+    assert.deepStrictEqual(page.revoked, [url]);
 });
 
 // ---- run ------------------------------------------------------------------

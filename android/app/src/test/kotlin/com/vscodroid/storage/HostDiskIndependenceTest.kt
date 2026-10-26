@@ -3,7 +3,6 @@ package com.vscodroid.storage
 import android.content.Context
 import io.mockk.mockk
 import org.junit.jupiter.api.Assertions.assertEquals
-import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
@@ -14,7 +13,7 @@ import java.io.File
  * The first case fails if the service registration or the autodetection switch goes: a new
  * engine would then report the room of the machine, and the cases that open a folder would be
  * back to depending on it. The second keeps the app's own default honest now that no other
- * test reads it: it has to be the filesystem's answer, not a constant.
+ * test reads it: it has to use available space rather than whole-volume capacity.
  */
 class HostDiskIndependenceTest {
 
@@ -29,9 +28,12 @@ class HostDiskIndependenceTest {
     }
 
     @Test
-    fun `the default the app ships reads the filesystem`() {
-        val room = HostDiskIndependence.shipped(dir)
+    fun `the default the app ships reads available space`() {
+        val volume = object : File("unused-volume") {
+            override fun getUsableSpace() = 123L
+            override fun getTotalSpace() = 987L
+        }
 
-        assertTrue(room in 0..dir.totalSpace, "the shipped default answered $room for a volume of ${dir.totalSpace}")
+        assertEquals(123L, HostDiskIndependence.shipped(volume))
     }
 }

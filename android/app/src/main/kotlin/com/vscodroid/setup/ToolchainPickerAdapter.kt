@@ -49,10 +49,13 @@ class ToolchainPickerAdapter(
      * ([ToolchainCardState.items] is the registry), so nothing here can add or
      * remove a row.
      */
-    fun setInstalled(packNames: Collection<String>) {
-        cards.setInstalled(packNames)
+    fun setInstalled(packNames: Collection<String>, olderBuilds: Map<String, String> = emptyMap()) {
+        cards.setInstalled(packNames, olderBuilds)
         notifyItemRangeChanged(0, itemCount, PAYLOAD_REBIND)
     }
+
+    /** What the card and the removal question call [packName]; see [ToolchainCardState.labelFor]. */
+    fun labelFor(packName: String, fallback: String): String = cards.labelFor(packName, fallback)
 
     /**
      * MANAGER mode: a download this screen still draws as running has settled
@@ -92,13 +95,13 @@ class ToolchainPickerAdapter(
      * item list is fixed ([ToolchainCardState.items] is the registry), so nothing
      * here can add or remove a row.
      */
-    fun setDownloading(percentByPack: Map<String, Int>) {
+    fun setDownloading(percentByPack: Map<String, ToolchainDownloadProgress>) {
         cards.setDownloading(percentByPack)
         notifyItemRangeChanged(0, itemCount, PAYLOAD_REBIND)
     }
 
-    fun updateState(packName: String, status: Int, percent: Int) {
-        val pos = cards.updateState(packName, status, percent)
+    fun updateState(packName: String, status: Int, percent: Int, transferId: Long? = null) {
+        val pos = cards.updateState(packName, status, percent, transferId)
         // With a payload, exactly as the selection tap below rebinds: this is the
         // channel that fires hardest. A download reports once per 8 KB read, so a
         // 55 MB toolchain rebinds this card thousands of times, and without a
@@ -118,8 +121,13 @@ class ToolchainPickerAdapter(
         val info = cards.items[position]
         val ctx = holder.itemView.context
 
-        holder.name.text = info.shortLabel
-        holder.description.text = ctx.getString(info.descriptionRes)
+        val label = labelFor(info.packName, info.shortLabel)
+        holder.name.text = label
+        holder.description.text = if (label == info.shortLabel) {
+            ctx.getString(info.descriptionRes)
+        } else {
+            ctx.getString(R.string.toolchain_older_build, label, info.shortLabel)
+        }
         // Both, because they answer different questions and only one of them
         // used to be here. The single figure was the unpacked size, so a card
         // offered "179 MB" for a 59 MB download, and the person most likely to

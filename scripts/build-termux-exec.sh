@@ -143,7 +143,10 @@ fetch() {
     if [ -f "$file" ]; then
         echo "  $(basename "$file") (cached)"
     else
-        curl -L --fail --show-error -o "$file" "$url"
+        # Retried because the runners share addresses that raw.githubusercontent.com
+        # answers with 429 for a while; curl waits out Retry-After and otherwise backs
+        # off from one second. The pin below still decides whether the bytes are used.
+        curl -L --fail --show-error --retry 6 -o "$file" "$url"
         echo "  $(basename "$file") ($(du -sh "$file" | cut -f1))"
     fi
     actual=$( (sha256sum "$file" 2>/dev/null || shasum -a 256 "$file") | cut -d' ' -f1)

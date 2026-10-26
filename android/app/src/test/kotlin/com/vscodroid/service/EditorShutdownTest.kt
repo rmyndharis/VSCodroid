@@ -1,6 +1,7 @@
 package com.vscodroid.service
 
 import android.content.Context
+import com.vscodroid.setup.finishTestProcess
 import com.vscodroid.util.Environment
 import com.vscodroid.util.Logger
 import io.mockk.Runs
@@ -170,9 +171,12 @@ class EditorShutdownTest {
         record(8123)
         val environ = File(temp, "proc/8123/environ")
         assertTrue(environ.delete())
-        val made = runCatching {
-            ProcessBuilder("mkfifo", environ.path).redirectErrorStream(true).start().waitFor() == 0
-        }.getOrDefault(false)
+        val fifo = try {
+            ProcessBuilder("mkfifo", environ.path).redirectErrorStream(true).start()
+        } catch (_: java.io.IOException) {
+            null
+        }
+        val made = fifo != null && finishTestProcess(fifo).first == 0
         assumeTrue(made, "this host cannot make a named pipe")
 
         val replacing = Thread {

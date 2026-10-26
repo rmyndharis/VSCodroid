@@ -111,10 +111,16 @@ static void on_sigsys(int sig, siginfo_t *info, void *ctx) {
     // up, for the reason the file header gives.
     int timeout_ms = -1;
     if (ts) {
-        long ms = ts->tv_sec * 1000L + (ts->tv_nsec + 999999L) / 1000000L;
-        if (ms < 0) ms = 0;
-        if (ms > 0x7fffffffL) ms = 0x7fffffffL;
-        timeout_ms = (int)ms;
+        if (ts->tv_sec < 0 || ts->tv_nsec < 0 || ts->tv_nsec >= 1000000000L) {
+            regs[0] = (unsigned long)-EINVAL;
+            return;
+        }
+        if (ts->tv_sec > 0x7fffffffL / 1000L) {
+            timeout_ms = 0x7fffffff;
+        } else {
+            long ms = ts->tv_sec * 1000L + (ts->tv_nsec + 999999L) / 1000000L;
+            timeout_ms = ms > 0x7fffffffL ? 0x7fffffff : (int)ms;
+        }
     }
 
     long r = sys6(SYS_epoll_pwait, fd, (long)events, maxevents, timeout_ms,

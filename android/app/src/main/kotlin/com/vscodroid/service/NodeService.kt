@@ -1076,7 +1076,7 @@ class NodeService : Service() {
     // silently.
     // `the count is committed rather than deferred` is the guard.
     private suspend fun chargeHeapOverride(exitCode: Int, epoch: Int) {
-        if (!processManager.heapOverrideInEffect()) return
+        val endedValue = processManager.heapOverrideValueInEffect(epoch) ?: return
         // Both touches of the preference file hop to IO; the decision between them
         // and the message after them do not. `getSharedPreferences` blocks the
         // caller until the file has been parsed, and `commit()` writes it back
@@ -1111,12 +1111,15 @@ class NodeService : Service() {
         // what keeps the line below and the notice after it from firing on an
         // ordinary crash.
         val after = withContext(NonCancellable + Dispatchers.IO) {
-            val prefs = getSharedPreferences(HEAP_PREFS_NAME, MODE_PRIVATE)
-            val before = prefs.getInt(PREF_HEAP_KILLS, 0)
-            val charged = heapKillsAfter(exitCode, overrideRaisedCeiling = true, current = before)
-            if (charged == before) return@withContext null
-            prefs.edit(commit = true) { putInt(PREF_HEAP_KILLS, charged) }
-            charged
+            synchronized(heapOverridePrefsLock) {
+                val prefs = getSharedPreferences(HEAP_PREFS_NAME, MODE_PRIVATE)
+                if (prefs.getInt(PREF_HEAP_VALUE_SEEN, 0) != endedValue) return@synchronized null
+                val before = prefs.getInt(PREF_HEAP_KILLS, 0)
+                val charged = heapKillsAfter(exitCode, overrideRaisedCeiling = true, current = before)
+                if (charged == before) return@synchronized null
+                prefs.edit(commit = true) { putInt(PREF_HEAP_KILLS, charged) }
+                charged
+            }
         } ?: return
         // Keep the death recorded without publishing its warning into a replacement run.
         if (processManager.serverEpoch != epoch) return

@@ -23,17 +23,22 @@ if (typeof stripTypeScriptTypes !== 'function') {
 const root = path.join(__dirname, '..');
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'callback-provider-'));
 let source;
+let callbackSource;
 try {
     const target = path.join(temporary, 'src/vs/code/browser/workbench/workbench.ts');
     fs.mkdirSync(path.dirname(target), { recursive: true });
     fs.copyFileSync(path.join(__dirname, 'fixtures/callback-provider.ts'), target);
     execFileSync('git', ['apply', path.join(root, 'patches/0019-callback-nonce.patch')], { cwd: temporary });
     source = stripTypeScriptTypes(fs.readFileSync(target, 'utf8'), { mode: 'transform' });
+    const callback = path.join(temporary, 'src/vs/code/browser/workbench/callback.html');
+    fs.copyFileSync(path.join(__dirname, 'fixtures/callback.html'), callback);
+    execFileSync('git', ['apply', path.join(root, 'patches/0006-callback-intent-relay.patch')], { cwd: temporary });
+    callbackSource = fs.readFileSync(callback, 'utf8').match(/<script>([\s\S]*?)<\/script>/)[1];
 } finally {
     fs.rmSync(temporary, { recursive: true, force: true });
 }
 
-function fixture({ bridge = true, ready = false, accept = true } = {}) {
+function fixture({ bridge = true, ready = false, accept = true, nativeGeneration = 7 } = {}) {
     const listeners = new Map();
     const calls = [];
     const storage = new Map();
@@ -48,6 +53,7 @@ function fixture({ bridge = true, ready = false, accept = true } = {}) {
     };
     window.top = window;
     if (bridge) window.AndroidBridge = {
+        isAuthPageCurrent(token, generation) { assert.equal(token, 'session'); return generation === nativeGeneration; },
         registerAuthCallback(...args) { calls.push(args); return typeof accept === 'function' ? accept(...args) : accept; },
     };
     if (ready) window.__vscodroid = { authToken: 'session', pageGeneration: 7 };
@@ -57,7 +63,7 @@ function fixture({ bridge = true, ready = false, accept = true } = {}) {
         dispose() { this.disposables.forEach(value => value.dispose()); }
     }
     const context = {
-        mainWindow: window, window, location: window.location,
+        mainWindow: window, window, location: window.location, AndroidBridge: window.AndroidBridge,
         Event: class { constructor(type) { this.type = type; } },
         StorageEvent: class { constructor(type, properties) { this.type = type; Object.assign(this, properties); } },
         Disposable,
@@ -207,10 +213,11 @@ pageA.provider.create({ authority: 'example.test' });
 const documentA = pageA.window.__vscodroidCallbackDocumentId;
 const callbackA = delivery(documentA, 7, 'A');
 function replacementPage() {
-    const page = fixture({ accept: (_id, _nonce, _documentId, generation) => generation === 8 });
+    const page = fixture({ nativeGeneration: 8, accept: (_id, _nonce, _documentId, generation) => generation === 8 });
     const created = page.provider.create({ authority: 'example.test' });
     assert.equal(new URLSearchParams(created.query).get('vscode-reqid'), '1');
-    assert.equal(JSON.stringify(vm.runInNewContext(bootstrap, page.context)), '[7,false]');
+    assert.equal(vm.runInNewContext(bootstrap, page.context), null);
+    assert.equal(page.window.__vscodroid, undefined, 'stale bootstrap wrote into its replacement');
     return page;
 }
 {
@@ -219,7 +226,7 @@ function replacementPage() {
     pageB.provider.checkCallbacks();
     assert.equal(pageB.writes.length, 0, 'an old callback must not write into the replacement document');
     assert.equal(pageB.delivered.length, 0, 'an old callback must not consume the replacement pending id');
-    assert.equal(JSON.stringify(vm.runInNewContext(bootstrap.replaceAll('pageGeneration = 7', 'pageGeneration = 8').replaceAll('return [7,', 'return [8,'), pageB.context)), '[8,true]');
+    assert.equal(JSON.stringify(vm.runInNewContext(bootstrap.replaceAll('pageGeneration = 7', 'pageGeneration = 8').replaceAll('return [7,', 'return [8,').replaceAll('isAuthPageCurrent("session", 7)', 'isAuthPageCurrent("session", 8)'), pageB.context)), '[8,true]');
     const callbackB = delivery(pageB.window.__vscodroidCallbackDocumentId, 8, 'B');
     vm.runInNewContext(callbackB, pageB.context);
     pageB.provider.checkCallbacks();
@@ -232,6 +239,7 @@ function replacementPage() {
 }
 {
     const pageB = replacementPage();
+    pageB.window.__vscodroid = { authToken: 'session', pageGeneration: 7 };
     const mutableOnly = callbackA.replace(/^\s*if \(window\.__vscodroidCallbackDocumentId !==.*\n/m, '');
     assert.notEqual(mutableOnly, callbackA, 'the control must remove the immutable document guard');
     vm.runInNewContext(mutableOnly, pageB.context);
@@ -240,4 +248,53 @@ function replacementPage() {
     assert.equal(pageB.delivered[0].query, 'code=A');
     pageB.provider.dispose();
 }
-console.log('ok: actual patched callback provider registers minted identities, bounds early issuance, reports flush failure and preserves browser behavior');
+{
+    const pageB = fixture({ nativeGeneration: 8, accept: (_id, _nonce, _documentId, generation) => generation === 8 });
+    assert.equal(vm.runInNewContext(bootstrap, pageB.context), null);
+    assert.equal(pageB.window.__vscodroid, undefined);
+    const callback = pageB.provider.create({ authority: 'example.test' });
+    assert.equal(pageB.calls.length, 0, 'replacement issuance used stale metadata');
+    const fresh = bootstrap.replaceAll('pageGeneration = 7', 'pageGeneration = 8')
+        .replaceAll('return [7,', 'return [8,')
+        .replaceAll('isAuthPageCurrent("session", 7)', 'isAuthPageCurrent("session", 8)');
+    assert.equal(JSON.stringify(vm.runInNewContext(fresh, pageB.context)), '[8,true]');
+    assert.equal(pageB.calls.length, 1);
+    assert.equal(pageB.calls[0][0], new URLSearchParams(callback.query).get('vscode-reqid'));
+    assert.equal(pageB.calls[0][3], 8);
+    vm.runInNewContext(delivery(pageB.window.__vscodroidCallbackDocumentId, 8, 'fresh'), pageB.context);
+    pageB.provider.checkCallbacks();
+    assert.equal(pageB.delivered.length, 1, 'early replacement issuance was not retained');
+    assert.equal(pageB.delivered[0].query, 'code=fresh');
+    pageB.provider.dispose();
+    const control = fixture({ nativeGeneration: 8, accept: (_id, _nonce, _documentId, generation) => generation === 8 });
+    const unguarded = bootstrap.replace(/^\s*if \(!AndroidBridge\.isAuthPageCurrent.*\n/m, '');
+    assert.notEqual(unguarded, bootstrap, 'generation guard mutation target is absent');
+    assert.equal(JSON.stringify(vm.runInNewContext(unguarded, control.context)), '[7,true]');
+    assert.throws(() => control.provider.create({ authority: 'example.test' }), /could not register/);
+    control.provider.dispose();
+}
+for (const options of [
+    { path: '/plain', query: 'state=ordinary', fragment: 'done' },
+    { path: '/percent%name', query: 'state=literal%252F&code=a%2Bb', fragment: 'literal%2F' },
+    { path: '/literal%2Fsegment', query: 'state=space+plus%2B', fragment: 'space + %25' },
+]) {
+    const { provider } = fixture({ ready: true });
+    const callback = provider.create({ scheme: 'vscodroid', authority: 'example.test', ...options });
+    const storage = new Map();
+    const window = { location: { href: 'http://127.0.0.1:13337/callback?' + callback.query } };
+    vm.runInNewContext(callbackSource, {
+        window, URL, URLSearchParams,
+        localStorage: { setItem(key, value) { storage.set(key, value); } },
+    });
+    const id = new URLSearchParams(callback.query).get('vscode-reqid');
+    const uri = JSON.parse(storage.get(`vscode-web.url-callbacks[${id}]`));
+    assert.equal(uri.path, options.path, 'callback paths must survive one query-parameter round trip');
+    assert.equal(uri.fragment, options.fragment);
+    for (const [key, value] of new URLSearchParams(options.query)) {
+        assert.equal(new URLSearchParams(uri.query).get(key), value);
+    }
+    const payload = window.location.href.split('?data=')[1].split('#Intent;')[0];
+    assert.deepEqual(JSON.parse(decodeURIComponent(payload)), { id, uri });
+    provider.dispose();
+}
+console.log('ok: callback issuance, document identity and URI round trips');

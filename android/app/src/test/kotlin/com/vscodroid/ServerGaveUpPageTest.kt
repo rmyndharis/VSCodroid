@@ -139,4 +139,31 @@ class ServerGaveUpPageTest {
                 "STAND_DOWN shows a stale log or a real crash loop shows none"
         }
     }
+    @Test
+    fun `a delayed log page checks its request document and view after the read`() {
+        val source = SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt")
+        val body = SourceScan.body(source, "private fun showServerGaveUpWithLog(")
+        val read = body.indexOf("withContext(Dispatchers.IO)")
+        assertTrue(body.indexOf("val request = ++recoveryPageEpoch") in 0 until read)
+        assertTrue(body.indexOf("val generation = AuthTabWindow.pageGeneration()") in 0 until read)
+        val guard = body.substringAfter("val detail =").substringAfter(".let { collapseRuns")
+        assertTrue(guard.contains("request != recoveryPageEpoch") && guard.contains("webView !== targetView"))
+        assertTrue(guard.contains("generation != AuthTabWindow.pageGeneration()") && guard.contains("return@launch"))
+        assertTrue(guard.indexOf("return@launch") < guard.indexOf("showErrorPage("))
+    }
+
+    @Test
+    fun `each native page replacement invalidates a pending log page`() {
+        val source = SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt")
+        for ((name, load) in listOf(
+            "setupWebView" to "wv.loadData(",
+            "retryServerStart" to "webView?.loadData(",
+            "showErrorPage" to "webView?.loadDataWithBaseURL(",
+            "navigateToFolder" to "wv.loadUrl(",
+        )) {
+            val body = SourceScan.body(source, "private fun $name(")
+            assertTrue(body.indexOf("recoveryPageEpoch++") in 0 until body.indexOf(load), name)
+        }
+    }
+
 }

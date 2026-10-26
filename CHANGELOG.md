@@ -17,20 +17,117 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The Get Started walkthrough has two more steps, after the theme: opening a folder from the phone's storage and running a file.
 - On Android, File > Open Folder, Ctrl+K Ctrl+O and the Explorer's Open Folder button ask whether the folder is on the device (Android's picker) or in the app's storage (the path dialog).
+- The Java toolchain is OpenJDK 21 instead of 17: 64 MB to download and 186 MB installed, up from 56.5 and 160. A Java 17 installed earlier keeps working until it is removed and installed again.
 
 ### Fixed
 
+- Load the language-detection CPU backend in browser workers without requiring CommonJS.
+- Detect a stopped adopted editor even when another process answers its health URL.
+- Reload the editor when an adopted server changes during readiness checks.
+- Honor empty Android trust stores and keep raw system roots from overriding certificate removals.
+- Preserve curl's independent trust store when the managed CA bundle is unavailable.
+- Capture keyboard validation screenshots after WebView renders the current frame.
+- Preserve visual arrow-key movement in right-to-left and mixed text without moving focus out of text fields.
+- Preserve existing SSH public files and keys imported during key generation.
+- Stop failed or interrupted SSH generation before cleaning its temporary output.
+- Keep device conflict copies and fallback timestamp updates inside their selected device folder mirror.
+- Keep newer folder and workspace configuration when earlier reads finish.
+- Stop extension-host startup after its connection is disposed.
+- Load webview resources from every active workspace member.
+- Keep current resource roots when workspace folders change during initialization.
+- Keep deeply nested device-folder saves within the open-file limit.
+- Read startup settings for the final workspace selector in the page URL.
+- Refuse redirected device-folder upload sources before opening or truncating provider documents.
+- Keep Python runtime repair pending when the packaged standard-library root cannot be read.
+- Redact unfinished quoted passwords through the end of their diagnostic line.
+- Bound test subprocess output and cleanup, and require isolated storage for disk-pressure tests.
+- Make accessibility and About-dialog checks follow the configured language.
+- Reject stale sign-in bootstrap metadata before it reaches a replacement editor document.
+- Preserve GNU and XPG error-string return values and buffer limits in native compatibility libraries.
+- Prevent a delayed server-log page from replacing a newer editor or recovery screen.
+- Resolve device-folder filesystem aliases before selecting their synchronization watcher.
+- Keep the composition caret at the requested character offset across line breaks.
+- Account for activity-bar insets and item gaps when choosing overflow actions.
+- Refresh activity-bar item sizes when the pointer type changes.
+- Restore closed workspaces from either supported loopback host.
+
+- Use accurate device-folder recovery messages in every supported language.
+
+- Keep named-folder preference write failures inside the command error handler.
+- Increase toolchain action buttons to a minimum 48dp touch target.
+- Correct backup, compiler-launch, build, and server-entry instructions.
+
+- Keep delayed Run File requests from replacing a newer terminal or opening stale toolchain prompts.
+- Recheck unsaved work and workspace identity before reopening a device folder by name.
+- Preserve newer carried-editor records when an earlier reopen is canceled or fails.
+
+- Preserve a closed workspace when an earlier recovery lookup finishes.
+- Publish adopted server ownership and its watchdog before Stop can retire them.
+- Attribute heap-limit death counts to the value used by the process that ended.
+- Keep debug environment changes local when a terminal is reused.
+- Retry server startup when the editor cannot bind its listener.
+
+- Protect device-folder copies used by workspace members and restored editors before filesystem access.
+
+- Keep toolchain downloads cancellable when concurrent install or removal requests overlap.
+- Retain Play download subscriptions until every requested toolchain settles.
+- Match toolchain cards to the current HTTP transfer when delayed progress or failure reports arrive.
+
+- Match the editor's final workspace URL selector before remembering or adopting a device folder.
+
+- Setup retries bundled files that were listed but could not be opened.
+- Managed settings preserve commented examples while updating active values.
+- Reinstalling an app with unchanged version labels refreshes bundled files.
+- Older app-owned Claude terminal wrappers receive the current compatibility launcher.
+- Setup retries show the current failure cause without an outdated or empty step label.
+- Removing an old device-folder copy retains pending saves created after a new folder grant.
+- WebSocket proxy upgrades send the target host while retaining authentication and header encoding.
+- Process details classify interpreter entrypoints without mistaking input paths or flags for language servers.
+- Resource files with literal question marks retain their correct MIME type.
+- Download filenames honor supported character encodings and fall back for unsupported encodings.
+- Duplicate blob downloads preserve the active save, and revoked previews release their captured bytes.
+- Device-folder copies and sync records survive revoked permissions until explicitly removed.
+- Removing a device-folder copy always requires confirmation and preserves copies used in the current session.
+- Device-folder removals refuse queued requests and ignore expired native confirmations.
+- Removal timeouts report an unknown outcome without retrying the request.
+- Setup file replacements preserve files linked through a leftover temporary path.
+- Python repair remains pending when its standard library cannot be copied.
+- Project shortcuts retain their previous directory when the replacement target is a file.
+- Older bundled extension entries gain builtin status while preserving profile metadata.
+- Automatic editor recovery preserves the unsaved-work confirmation.
+- Complete IME text commits survive latched Ctrl or Alt in the editor.
+- Plain Enter consumes the key row's Shift latch while preserving physical modifiers.
+- A stale navigation cancellation retains the newer loading cover.
+- Sign-in callbacks preserve literal percent characters in extension URI components.
+- Native addon file copies reject overlapping ranges before modifying the file.
+- CLI compatibility waits handle large and invalid timeouts without integer overflow.
+- Diagnostic exports redact quoted passwords containing escaped quotes.
+- Repeated crashes preserve existing logs when their filename budget is exhausted.
+- Recent-folder eviction retains permissions reacquired by a replacement screen.
+- Folder removal retires its sync records and permission before a new grant.
+- Interrupted mirror cleanup retains a recoverable directory and sync-record pair.
+- Device-folder deletes retain replacement files and pending saves when document IDs are reused.
+- Pending child saves retry temporary failures after a directory rename without repeating completed uploads.
+- Mirror cleanup retains named paths and opening markers after folder permission is reacquired.
+- Settings and notification popups fit short windows and use the space left by hidden title and status bars.
+- Resizing or moving a panel in a short window preserves its height across position changes and reloads.
+- Toggling the status bar while it is temporarily hidden keeps the chosen visibility when the window grows.
+- Moving the editor to a display with a different density preserves its session and rebuilds the key row at the new scale.
 - The Get Started walkthrough names C/C++ among the toolchains that install on demand.
 - The Settings editor fits a phone-width screen: its list no longer runs 131 px past the right edge at 411 px, and the window it opens in no longer ends past it either.
 - The Accounts and Manage buttons stay reachable in the activity bar on a phone in landscape: views that do not fit move into the overflow menu.
-- On a phone in landscape with the keyboard up, the title bar and the status bar are put away so the editor shows four lines of code instead of one; they return with the keyboard.
-- On a phone in landscape with the keyboard up, an open terminal panel steps aside while the editor has the focus, so the editor keeps its four lines; the panel returns with the keyboard, and stays when you are typing in it.
+- On a phone in landscape with the keyboard up, the title bar and the status bar are put away so the editor shows four lines of code instead of one; they come back when the keyboard goes down.
+- On a phone in landscape, an open terminal panel is put away when the keyboard comes up unless the panel has the focus, so the editor keeps its four lines; it comes back at its size when the keyboard goes down.
+- On a phone in landscape with the keyboard up, Ctrl+J and Ctrl+backtick show a panel that was put away instead of closing it unseen, and a panel shown or focused in that window is back at its height when the keyboard goes down instead of at its minimum.
 - The Python extension is allowed the editor APIs it declares, so it finishes activating instead of failing at its first test API.
-- The process count warning appears from 10 processes instead of 6, so one open file and a terminal no longer raise it, and its text no longer calls the idle count a target.
+- The process count warning appears from 10 processes instead of 6, so one open file and a terminal no longer raise it.
+- The process count warning no longer calls the idle count a target.
 - Stopping the editor also ends its surviving server when the bootstrap has already exited.
-- Stopping the editor ends a server that has stopped responding.
+- Stopping the editor ends a bootstrap process that ignores the stop signal.
 - A failed SSH key generation keeps a public key file that was already there.
 - Sign-in returns retain their original request identity until the editor page changes.
+- A sign-in return without the secret the editor registered for it is refused.
+- A sign-in started before the editor page has finished loading waits up to 30 seconds for it, then reports a failure.
 - Ctrl or Alt latched on the key row applies to the next key typed in the editor when focus moves there after the latch.
 - Python package build failures explain the optional C/C++ toolchain and Android dependency requirements.
 - App updates preserve older bundled extension versions still used by named profiles while updating the default profile.
@@ -38,30 +135,76 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - App updates move a named profile's entries for the app's own extensions to the new version and remove the old copy.
 - Device-folder cleanup retains unrecorded workspace files, including names ending in `.vscodroid-partial`.
 - Device-folder imports preserve local edits made while the provider is being read.
+- Device-folder imports retain distinct local copies when sync history is missing or unreadable.
+- Device-folder cleanup verifies provider bytes before upgrading older sync records.
+- Device-folder deletes verify provider content and retain unknown, changed or unreadable files.
+- Queued deletes retain their original provider baseline until a directory rename succeeds.
+- Device-folder cleanup and replacement compare recorded files by content, protecting edits with unchanged size and timestamps.
+- Successfully saved files stay deleted when removed on the device and the folder is reopened.
+- Files fetched from incomplete device-folder listings remain writable while unread documents stay protected.
+- Incomplete listings and failed record replacements retain the previous sync history.
+- Device-folder sync rejects downloads shorter than the provider's reported size and refuses ambiguous lookups.
+- Pending files and folders follow directory renames, including provider-normalized names.
+- Device-folder upload recovery supports filenames containing line breaks while preserving older recovery paths.
+- Saving a file ending in `.tmp` or `~` updates its device folder without reopening it.
+- Device-folder sync stops recursive provider loops and bounds excessively deep directory trees.
+- Conflict copies use free names so later device-folder syncs retain earlier copies.
+- Symbolic links no longer trigger a misleading save-failure notice in device folders.
 - Device-folder directory deletes preserve descendants added or changed on the device since the folder was opened.
 - Device-folder saves preserve both copies and report a failure when the upload recovery record cannot be written.
-- Device-folder saves and new files made just after a folder rename reach the renamed folder, and one whose folder the device lacks is reported.
-- Device-folder sync overwrites neither side when it cannot first set a conflicting copy aside, and protects documents in directories the provider could not list.
+- Device-folder saves and new files made just after a folder rename reach the renamed folder.
+- A device-folder save or new file whose folder the device lacks is reported.
+- Device-folder sync overwrites neither side when it cannot first set a conflicting copy aside.
+- Device-folder sync protects documents in directories the provider could not list.
 - Reopening a device folder rejects stale saves, deletes and watcher callbacks from the previous sync.
 - Device-folder sync no longer skips a folder rename when the renamed folder is deleted before the sync runs.
 - Replacing a file with a folder, or a folder with a file, in a device folder takes effect on the device when the original is deleted from the terminal.
 - Reopening a device folder reclaims abandoned temporary downloads while retaining active copies and existing workspace files.
 - Opening a device folder during an active save or delete reports that the folder is busy instead of waiting for the provider.
 - A device folder that is busy when it is opened again leaves the folder already open saving.
-- Device-folder saves, deletes and renames that arrive while another write to the folder is still going wait their turn instead of being dropped.
-- A file and a folder that share a name between the device and the editor are both kept: the device's keeps the name, and the other is set aside as `.local-<time>` and sent across, instead of failing at every open.
-- An older version's half-copied `.vscodroid-partial` files are removed when a device folder is reopened, if they match the start of the device document.
+- Device-folder saves, deletes and renames that arrive while another write to the folder is still going wait up to two minutes for their turn instead of being dropped.
+- A file and a folder that share a name between the device and the editor no longer fail at every open: the device's keeps the name and the editor's is set aside as `.local-<time>` and sent across.
+- An unchanged file in the editor that the device replaced with a folder is removed instead of set aside.
 - A device folder listing that the provider has not finished loading no longer removes files from the editor or creates them again on the device.
 - A device-folder import refuses to install a copy if a parent directory is redirected by a symbolic link during the read.
 - Generating SSH keys preserves an existing private key whose public file is missing and explains how to recover the public key.
 - Toolchain installation rejects packs with a missing payload directory or required binary instead of marking them installed.
-- Cancelling a toolchain install no longer deletes a pack during a copy, and installation is refused while pack removal is pending.
+- Toolchain installation and cleanup preserve unreadable installation records.
+- Toolchain recovery retains installation markers until all named paths are settled.
+- Toolchain removal refuses paths reached through redirected parent directories.
+- Asset extraction and toolchain installation refuse redirected destination directories.
+- App updates preserve nested user preferences when removing migrated defaults.
+- Retired extension cleanup preserves platform-specific gallery installations.
+- Legacy server cleanup unlinks symbolic links without deleting their targets.
+- Device tests stop before clearing app data when the build or installation fails.
+- Device launch checks count only the requested application's Node processes.
+- Native addon verification rejects scans containing only unsupported addons.
+- Wheelhouse generation accepts relative and external output paths.
+- Cancelling a toolchain install no longer deletes a pack during a copy.
+- A toolchain install is refused while a pack removal is pending.
 - Removing a toolchain works while Play is still clearing its download.
 - Late callbacks from an old editor server no longer clear its replacement's readiness, restart it or display obsolete heap warnings.
 - Building from source retries interrupted bundled-extension extraction instead of accepting a partial extension directory as verified.
 - Building from source stops when a Python dependency library's SONAME differs from the name the build ships it under.
+- Building from source no longer stops at a dangling Termux link in pip's CA bundle.
 - Building the server from source compiles the Copilot extension once more when the first run leaves its SDK entry missing, instead of failing at packaging.
 - The server built from source includes the Copilot SDK's definitions and builtin-skills directories, which it lacked.
+- A Ruby script can `require` a gem it installed: the interpreter starts with RubyGems loaded. A Ruby installed earlier gets this at the next launch.
+- A gem with a native extension builds when the C/C++ toolchain is installed, because the Ruby toolchain now carries the headers it compiles against. A Ruby installed earlier needs removing and installing again to get them.
+- The terminal no longer pins the command line over the first lines of its output: terminal sticky scroll is off by default, and can be turned on in Settings.
+- Builds retry the downloads from raw.githubusercontent.com when it answers with a rate limit.
+- A device folder whose provider lists two documents under one name leaves both alone: it copied the later over the earlier and, with a newer mirror copy, uploaded one document's bytes over the other's with no copy kept.
+- JDK commands started from terminals, extensions or build tools receive the app's directories and required JVM options.
+- Reinstalling Java removes its obsolete install root; existing Java 17 installs are labeled accurately.
+- Cancelling a sideloaded toolchain download no longer removes a Play pack; ZIP installs remain available while Play removes its copy.
+- Toolchain downloads check peak disk usage without counting an older install as reclaimable space.
+- Java toolchains omit commands unsupported on Android.
+- Uninstalling Java or Ruby removes their bundled notices.
+- Nested bash sessions preserve Bundler options and avoid duplicate toolchain PATH entries.
+- C/C++ programs resolve temporary files, home and shell through app paths.
+- Sign-in attempts that never launch no longer occupy a request slot indefinitely.
+- Sign-in failures distinguish an editor that is not ready from a request that was never issued.
+- Release builds reject ambiguous version declarations.
 
 ## [1.5.0] - 2026-10-14
 

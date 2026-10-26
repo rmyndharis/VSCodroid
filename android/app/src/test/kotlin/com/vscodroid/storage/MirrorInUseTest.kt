@@ -9,10 +9,8 @@ import java.io.File
  * Tests for [SafStorageManager.reclaimRefusal], the question asked before a mirror the
  * user has chosen to remove is touched at all.
  *
- * This is the half of the removal that the storage manager cannot answer. It knows
- * whether removing a mirror would lose anything ([SafStorageManager.mayReclaim] and
- * [SafSyncEngine.holdsOnlyVouchedCopies]); it does not know whether anything is still
- * using it, and that state lives in the Activity.
+ * Activity state supplies specific refusal reasons before confirmation. The manager
+ * checks shared process usage again when a confirmed removal reaches its rename.
  *
  * Getting it wrong is not an inconvenience. A mirror the editor still has open is
  * covered by live observers, a `FileObserver.DELETE` becomes a DELETE write-back job,
@@ -41,7 +39,7 @@ class MirrorInUseTest {
     ) = SafStorageManager.reclaimRefusal(hash, watched, syncing, open, thisSession)
 
     @Test
-    fun `a mirror nothing is using may be removed`() {
+    fun `the in-use guard accepts a mirror none of its inputs name`() {
         assertNull(
             refusal(watched = other, syncing = other, open = other, thisSession = setOf(other)),
             "every input names a different mirror, so nothing here is about this one",
@@ -129,8 +127,7 @@ class MirrorInUseTest {
     }
 
     /**
-     * The separator rule [SafStorageManager.folderForOpenedPath] and
-     * [SafStorageManager.mayReclaim] both carry, for the reason they carry it: mirror
+     * The separator rule [SafStorageManager.folderForOpenedPath] carries: mirror
      * names are a hash prefix, so one being a textual prefix of another is ordinary.
      * Here reading the wrong name means refusing to remove a mirror that is free while
      * allowing one that is open.

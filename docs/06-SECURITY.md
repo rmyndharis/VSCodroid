@@ -141,7 +141,7 @@ Releases. Only the first is covered by Play's signing.
 
 | Control             | Implementation                                                                 |
 | ------------------- | ------------------------------------------------------------------------------ |
-| Play delivery       | Toolchains delivered as on-demand asset packs: Ruby, Java 17 and C/C++, those three |
+| Play delivery       | Toolchains delivered as on-demand asset packs: Ruby, Java 21 and C/C++, those three |
 | Code signing        | Asset packs signed with same key as base APK (Play Store enforced)             |
 | HTTPS delivery      | For non-Play installs, each ZIP is checked against the sha256 the release publishes in `toolchains.sha256` beside it, before anything is extracted. A ZIP the manifest does not name is refused rather than installed unverified |
 | User-initiated only | Toolchains only downloaded when user selects them in Language Picker           |

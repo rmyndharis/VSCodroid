@@ -24,7 +24,7 @@ A practical guide to using VSCodroid -- the full VS Code IDE running natively on
 
 ### What Happens on First Open
 
-1. **Install**. Download from the [Play Store](#) or [GitHub Releases](https://github.com/rmyndharis/VSCodroid/releases). The core download is roughly 270 MB, and you need about 738 MB free for the extraction that follows.
+1. **Install**. Download from the [Play Store](https://play.google.com/store/apps/details?id=com.vscodroid) or [GitHub Releases](https://github.com/rmyndharis/VSCodroid/releases). The core download is roughly 270 MB, and you need about 738 MB free for the extraction that follows.
 2. **Binary extraction** -- On first launch, VSCodroid extracts bundled tools (Node.js, Python, Git, Bash, and others) to internal storage. About 603 MB lands on disk, unpacked one file at a time behind a progress bar, so allow minutes rather than seconds on a slower device. The ~738 MB above is that payload plus the working room setup insists on before it will start. It happens on the first launch and again after every app update, because the extraction is keyed on the app version rather than on what is already unpacked. An update needs far less free space than a fresh install (the app credits what it already holds, so roughly 230 MB rather than 738 MB), but it does re-copy the files and it does take minutes. A first run that is interrupted and retried on the same version is the one case that does not start over: files already the right size are left alone.
 3. **Language Picker** -- A prompt asks "What do you code in?" with options for Ruby, Java and C/C++. It comes back at each launch until you answer it with Continue or Skip, and your answer is not final: touch and hold the app icon and pick **Manage toolchains** to add or remove them later. Whatever you select downloads there on the setup screen, one at a time; a download that fails is skipped and the rest continue. Skip goes straight to the editor.
 4. **Ready** -- The VS Code editor loads with terminal, file explorer, and all bundled tools available immediately.
@@ -85,7 +85,8 @@ VSCodroid is VS Code. If you have used VS Code on desktop, everything works the 
   unnoticed, and a folder over 64 MB that changes a file's time on its own can
   occasionally leave such a copy holding the file as you opened it, until
   VSCodroid has read each of its files once after an update from version 1.4.0
-  or earlier, which it does 64 MB per opening of the folder. A folder that
+  or earlier. It checks up to 64 MB per opening of local copies and reads the
+  corresponding provider bytes before recording them as synchronized. A folder that
   reports no times cannot say which copy is newer when yours and the device
   folder's differ as you open it, as when another app changed a file you saved
   there in an earlier session: the editor keeps showing your version, and your
@@ -111,21 +112,32 @@ VSCodroid is VS Code. If you have used VS Code on desktop, everything works the 
   device, and make a file of the same name, the device's keeps the name and
   yours is kept beside it as `<name>.local-<time>`, in the editor and in the
   device folder, the next time you open the folder. Until then a notice says the
-  file exists only inside VSCodroid. If you open a folder again while a large
+  file exists only inside VSCodroid. A file in the editor that you have not changed
+  since VSCodroid copied it, where the device now holds a folder, is not kept: the
+  folder replaces it. If you open a folder again while a large
   save to it is still being written, the open does not wait for it: it says
-  the folder is busy, saving carries on, and your later saves are sent after
-  that one.
+  the folder is still syncing, saving carries on, and your later saves wait up
+  to two minutes and are sent after that one.
 - A file of a device folder that you delete in the editor is deleted in the
   device folder too, unless the device folder's version is one VSCodroid has not
   read: another app may have changed it since you opened the folder or last
-  saved the file, by the same check as a save, or opening the folder could not
-  read it. Such a file is kept in the device folder, and so is a folder holding
-  it that you delete from the terminal; a notice says so, and the file comes
+  saved the file, or opening the folder could not read it. Deletion requires
+  the provider bytes to match the version VSCodroid last read or delivered,
+  even when its size and timestamp are unchanged. An unavailable read keeps
+  the provider file. Such a file is kept in the device folder, and so is a folder holding
+  it, or holding a file another app added since you opened the folder, that you
+  delete from the terminal; a notice says so, and the file comes
   back into the editor the next time you open the folder.
 - If opening a folder cannot list it or one of its subdirectories, saves and
   deletes of existing device documents under that directory are held back.
   Your edits stay inside VSCodroid until you reopen the folder successfully
   and save again; the unread device version is kept.
+- Device-folder copies stay inside VSCodroid after their folder permission is
+  removed. Use **VSCodroid: Manage Device Folder Storage** to see and remove them.
+  Copies may contain files that never reached the device folder. Save anything
+  needed elsewhere and stop terminals or other work using the copy before removal.
+  Removing a copy asks for confirmation in the editor and in Android. A copy used
+  in the current session remains protected until VSCodroid restarts.
 - The Explorer and the title bar show a device folder under its own name. A
   folder opened in an earlier version is shown under a twelve-character code
   such as `8e440ff38c8e`, the name of its copy, and offers to reopen under its
@@ -505,8 +517,8 @@ The picker it opens is the editor's own, not Android's. It starts in your home
 folder, lists only files ending in `.vsix`, and shows only what VSCodroid can
 see. A path typed into it reaches Downloads, Documents or an SD card, but a
 file the browser or another app saved there is hidden from it, for the same
-reason a folder opened there with **File > Open Folder** shows none of those
-files. So bring the file inside first:
+reason a folder opened there with **File > Open Folder** and **In the app's
+storage** shows none of those files. So bring the file inside first:
 
 1. Download the `.vsix` with the phone's browser.
 2. Run **VSCodroid: Open Folder from Device** and grant the folder it landed in;
@@ -867,13 +879,38 @@ Beyond the bundled tools (Node.js, Python, Git, Bash), VSCodroid offers addition
 
 | Language | Download Size | Installed Size | Includes |
 |----------|--------------|----------------|----------|
-| Ruby 4.0 | 10.5 MB | 39 MB | ruby, gem, irb, bundler, rake |
-| Java 17 (OpenJDK) | 56.5 MB | 160 MB | java, javac, jar, jshell |
+| Ruby 4.0 | 11 MB | 41 MB | ruby, gem, irb, bundler, rake, and the headers native gems build against |
+| Java 21 (OpenJDK) | 64 MB | 186 MB | java, javac, jar, jshell |
 | C/C++ (clang 21) | 74 MB | 260 MB | cc, c++, gcc, g++, clang, clang++, ld, ar, ranlib, nm, strip, objdump, objcopy, readelf, size, and the C and C++ headers |
 
 The C/C++ toolchain is the largest. Installing a toolchain holds the unpacked copy and the
 installed copy at once, so the install asks for roughly twice the installed size free while
 it runs, which for this one is about 570 MB.
+
+### What You Get For Each Language
+
+Every language gets syntax highlighting, the title bar's play button and a terminal. What sits
+beyond that differs a great deal, and this is the whole of it, so you can pick what you need:
+
+| Language | Run button | Completion and error squiggles | Debugger | Packages |
+|----------|------------|--------------------------------|----------|----------|
+| JavaScript and TypeScript (bundled) | `node file` | Yes, the editor's own | js-debug | npm; see the TypeScript note below |
+| Python (bundled) | Yes | Completion and hover from Jedi; no type checking | None | pip, including wheels built for Android (numpy installs and runs) |
+| Ruby | `ruby file` | None | None | gem and bundler; a gem with a compiled part needs the C/C++ toolchain as well (puma and nio4r build) |
+| Java 21 | `java file` (a single source file) | None | None | None: no Maven or Gradle |
+| C and C++ | Compiles to a temporary file and runs it | None | None | None: no CMake or Ninja; `make` works |
+
+**Java and C/C++ here are for compiling and running programs, not an IDE.** The Language
+Support for Java extension from Open VSX installs but cannot run: it starts its server by the
+JDK's full path, which Android refuses to execute, and the server it would start needs about 650
+MB of memory on a phone. Nothing in VSCodroid works around that, so do not expect error squiggles
+or completion for Java. The same goes for C and C++, where `clangd` is not included.
+
+**TypeScript.** `npm install typescript` now installs version 7, whose compiler is a native
+program with no Android build, so `npx tsc` stops with `Unable to resolve ... Either your
+platform is unsupported`. Install `typescript@6` instead, which compiles in JavaScript and works
+here. The editor's own TypeScript checking is separate and is not affected. Node itself runs
+`.ts` files directly (`node file.ts`) as long as they use only syntax that can be stripped.
 
 ### Installing During First Run
 
@@ -971,6 +1008,8 @@ need libraries that are not here.
 and Ninja; OpenMP (`-fopenmp`); the sanitizers (`-fsanitize=`); a debugger; and `<spawn.h>`, so a
 program that calls `posix_spawn` does not compile. Programs are built for the phone, as arm64
 Android programs, and for nothing else.
+
+Newly built C/C++ packs make `tmpfile()` use `TMPDIR`, and `getpwuid()` use `HOME` and `SHELL`. Reinstall an older pack to get those header fixes. The `P_tmpdir` and `_PATH_TMP` macros still name Termux paths; use `getenv("TMPDIR")` instead.
 
 `make -j4` starts four compilers at once, each a process Android counts against its phantom
 process limit (see [Android Phantom Process Limit](#android-phantom-process-limit)); `make -j2` is
@@ -1428,7 +1467,7 @@ VS Code's web client runs as a single window. You cannot open multiple VS Code w
 
 ### Storage
 
-Core installation extracts approximately 603 MB to internal storage. With Ruby and Java installed, expect around 800 MB, and about 1,060 MB with C/C++ as well. Setup needs about 738 MB free before it starts, which is more than it ends up occupying because extraction needs room to work. If it refuses, it asks for the shortfall it measured rather than the whole figure, so a device part of the way through is asked only for what is missing. Beyond it, keep a few hundred MB free for node_modules, build artifacts and caches.
+Core installation extracts approximately 603 MB to internal storage. With Ruby and Java installed, expect around 830 MB, and about 1,090 MB with C/C++ as well. Setup needs about 738 MB free before it starts, which is more than it ends up occupying because extraction needs room to work. If it refuses, it asks for the shortfall it measured rather than the whole figure, so a device part of the way through is asked only for what is missing. Beyond it, keep a few hundred MB free for node_modules, build artifacts and caches.
 
 ---
 
@@ -1482,10 +1521,11 @@ in-app routes exist:
 - Or run **VSCodroid: Open Folder from Device** from the Command Palette
   (**Ctrl+Shift+P**), choose a folder outside the app such as Documents, and copy
   your work there. A folder opened that way lives outside the app's storage, so
-  Clear Data does not touch it. **It does not carry `.git` or `.env`**, along
-  with `node_modules`, `.gradle`, `.idea`, `venv` and `__pycache__`: the
-  device-folder sync skips those directories, so this rescues your files but not
-  your repository history and not your local configuration.
+  Clear Data does not touch it. Device-folder sync skips directories named
+  `.git`, `.env`, `node_modules`, `.gradle`, `.idea`, `venv` and `__pycache__`.
+  An ordinary `.env` file is copied, including any configuration or secrets it
+  contains. This rescues your files, but the excluded `.git` directory means it
+  does not preserve repository history.
 
 Then clear app data from Settings > Apps > VSCodroid > Clear Data and relaunch.
 

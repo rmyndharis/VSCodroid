@@ -103,6 +103,8 @@
          type is quoted because the audience is developers and it is the part
          worth putting in a bug report. -->
     <string name="url_handoff_failed">无法打开该 %1$s 链接（%2$s）。</string>
+    <string name="sign_in_not_ready">编辑器尚未准备好进行此次登录。请重新加载编辑器后再试。</string>
+    <string name="sign_in_not_issued">编辑器没有发起此次登录。请重新登录。</string>
 
     <!-- A page inside the editor asked for an https address the WebView would not
          load: a dev server previewed in the Simple Browser, an image in a preview,
@@ -207,6 +209,7 @@
     <string name="toolchain_cancel">取消</string>
     <string name="toolchain_remove_confirm_title">移除 %s？</string>
     <string name="toolchain_remove_confirm_message">这将删除 %s 的所有文件。您可以随时重新安装。</string>
+    <string name="toolchain_older_build">已安装 %1$s。移除后重新安装即可获得 %2$s。</string>
 
     <!-- Launcher shortcut: in practice the only route to the toolchain screen.
          The activity is not exported and has no launcher entry, and the one
@@ -266,12 +269,9 @@
          from a list this app built a moment earlier, so this means the folder was
          removed or re-synced in between rather than that they typed something wrong. -->
     <string name="saf_mirror_unknown">该文件夹没有可移除的本地副本。</string>
-    <!-- The reclaim gate declining. Worded as what is at stake rather than as a
-         refusal, because the user's next step is to confirm and remove it anyway: the
-         mirrors that hold unsynced files are exactly the ones worth the disk, since a
-         folder gets large by being worked in and working in one creates files the sync
-         excludes by construction. -->
-    <string name="saf_mirror_not_a_copy">该文件夹中的部分文件不在设备文件夹内。移除本地副本会删除这些文件。</string>
+    <!-- Native confirmation and unconfirmed-removal refusal. A snapshot cannot
+         exclude files added directly after the check. -->
+    <string name="saf_mirror_not_a_copy">此本地副本可能包含尚未传输到设备文件夹的文件。继续之前，请将需要的文件另存到其他位置，并停止使用此副本的工作。移除操作无法撤销。</string>
     <!-- The rename that commits a removal was refused by the filesystem. Separate from
          saf_mirror_unknown, which says there was nothing to remove: here the copy is
          still there, whole, and trying again is worth something. -->
@@ -349,9 +349,9 @@
          translator must leave alone, but the sentence around them is language,
          and a Kotlin constant is the same sentence in every locale. The registry
          carries the resource id instead. displayName and shortLabel stay plain
-         strings on purpose; "Ruby" and "Java 17" are the products' own names. -->
+         strings on purpose; "Ruby" and "Java 21" are the products' own names. -->
     <string name="toolchain_ruby_description">Ruby，含 irb、gem、bundler</string>
-    <string name="toolchain_java_description">OpenJDK 17（javac、jar、jshell）</string>
+    <string name="toolchain_java_description">OpenJDK 21（javac、jar、jshell）</string>
     <string name="toolchain_cpp_description">C 和 C++（clang、lld）。需要终端的 exec 拦截器，LD_PRELOAD 设为 null 时无法使用。</string>
 
     <!-- The checkmark on a selected toolchain card. It is an ImageView with no
@@ -595,4 +595,5 @@
          tls_unknown_host stands in for an address. Written in Kotlin before, so
          one English word survived inside an otherwise translated About dialog. -->
     <string name="about_version_unknown">未知</string>
+    <string name="saf_folder_unavailable">此设备文件夹的本地副本已不可用。请从设备重新打开该文件夹。</string>
 </resources>

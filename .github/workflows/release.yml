@@ -192,10 +192,18 @@ jobs:
           # a sentence, and the case this gate exists to catch (a versionCode
           # that does not increase, so the release's migrations run for nobody)
           # is exactly the one it would then wave through.
-          version_name=$(grep -m1 -E '^[[:space:]]*versionName = ' "$gradle_file" | sed 's/.*"\(.*\)".*/\1/')
-          version_code=$(grep -m1 -E '^[[:space:]]*versionCode = ' "$gradle_file" | sed 's/[^0-9]*//g')
+          #
+          # Each value is cut out of its own declaration: the first quoted string, and
+          # the digits that follow the equals sign. Stripping every non-digit from the
+          # line instead turned `versionCode = 16 // v1.5.0` into 16150, and the
+          # greedy quote match took the last quoted string on a line that carries a
+          # comment, so either one made the comparison below about a number that was
+          # never declared.
+          version_name=$(grep -m1 -E '^[[:space:]]*versionName = ' "$gradle_file" | sed -n -E 's@^[[:space:]]*versionName = "([^"]*)"[[:space:]]*(//.*)?$@\1@p')
+          version_code=$(grep -m1 -E '^[[:space:]]*versionCode = ' "$gradle_file" | sed -n -E 's@^[[:space:]]*versionCode = ([0-9]+)[[:space:]]*(//.*)?$@\1@p')
           tag_version=${TAG#v}
 
+          case "$version_code" in *[!0-9]*) version_code="" ;; esac
           if [ -z "$version_name" ] || [ -z "$version_code" ]; then
             echo "::error::Could not read versionName/versionCode from $gradle_file." \
                  "The declaration moved or changed shape; this gate compared nothing."
@@ -233,13 +241,19 @@ jobs:
           previous=$(git tag --list 'v[0-9]*' --sort=-v:refname | grep -vFx "$TAG" | head -1 || true)
           if [ -n "$previous" ]; then
             previous_code=$(git show "$previous:$gradle_file" 2>/dev/null \
-              | grep -m1 -E '^[[:space:]]*versionCode = ' | sed 's/[^0-9]*//g' || echo "")
-            if [ -n "$previous_code" ] && [ "$version_code" -le "$previous_code" ]; then
+              | grep -m1 -E '^[[:space:]]*versionCode = ' \
+              | sed -n -E 's@^[[:space:]]*versionCode = ([0-9]+)[[:space:]]*(//.*)?$@\1@p' || echo "")
+            case "$previous_code" in *[!0-9]*) previous_code="" ;; esac
+            if [ -z "$previous_code" ]; then
+              echo "::error::Could not read versionCode in $previous; refusing an unchecked release."
+              exit 1
+            fi
+            if [ "$version_code" -le "$previous_code" ]; then
               echo "::error::versionCode $version_code is not greater than $previous_code in $previous." \
                    "Migrations threshold on versionCode and would not run."
               exit 1
             fi
-            echo "previous tag : $previous (versionCode ${previous_code:-unknown})"
+            echo "previous tag : $previous (versionCode $previous_code)"
           fi
 
           # The published release notes come from `generate_release_notes: true`
@@ -429,6 +443,15 @@ jobs:
       - name: Check the device suite can still read what it asserts
         run: bash scripts/device-test.sh --self-check
 
+      - name: Check release version declarations are read exactly
+        run: python3 scripts/test-release-versions.py
+
+      - name: Check packaging and device maintenance commands offline
+        run: python3 scripts/test-maintenance-scripts.py
+
+      - name: Check native shim behavior
+        run: python3 scripts/test-native-shims.py
+
       - name: Check the bundled JavaScript runtime
         run: |
           node scripts/test-dns-proxy.js
@@ -438,6 +461,8 @@ jobs:
           node scripts/test-process-monitor-extension.js
           node scripts/test-bridge-relay.js
           node scripts/test-auth-callback-provider.js
+          node scripts/test-saf-mirror-usage.js
+          node scripts/test-server-startup.js
           node scripts/test-ui-scale.js
           node scripts/test-plain-text-page.js
           node scripts/test-download-capture.js
@@ -449,6 +474,10 @@ jobs:
           node scripts/test-caret-drag.js
           node scripts/test-serve-network.js
           node scripts/test-welcome.js
+          node scripts/test-workbench-layout.js
+          node scripts/test-run-file.js
+          node scripts/test-auth-bootstrap.js
+          python3 scripts/check-extension-updates.py
           node scripts/test-xdg-open.js
 
       - name: Install system dependencies
@@ -487,7 +516,7 @@ jobs:
             toolchains/build/npm/
             toolchains/extensions/
             toolchains/musl/
-          key: downloads-${{ hashFiles('VSCODE_VERSION', 'VSCODE_COMMIT', 'patches/**', 'branding/**', 'scripts/build-vscode-oss.sh', 'scripts/patch-js-debug-env.py', '.github/workflows/build-vscode-oss.yml', 'scripts/fetch-vscode-oss.sh', 'scripts/verify-server-tree.py', 'scripts/lib/termux-packages.sh', 'scripts/download-termux-tools.sh', 'scripts/download-node.sh', 'scripts/patch-default-shell.py', 'scripts/download-npm.sh', 'scripts/download-python.sh', 'scripts/download-extensions.sh', 'scripts/download-musl-loader.sh', 'scripts/verify-termux-index.sh', 'scripts/termux-repo-key.asc', 'scripts/alpine-devel-616ae350.rsa.pub', 'scripts/verify-android-elf.py') }}
+          key: downloads-${{ hashFiles('VSCODE_VERSION', 'VSCODE_COMMIT', 'patches/**', 'branding/**', 'scripts/build-vscode-oss.sh', 'scripts/patch-js-debug-env.py', 'scripts/patch-language-detection.py', 'scripts/test-language-detection.py', '.github/workflows/build-vscode-oss.yml', 'scripts/fetch-vscode-oss.sh', 'scripts/verify-server-tree.py', 'scripts/lib/termux-packages.sh', 'scripts/download-termux-tools.sh', 'scripts/download-node.sh', 'scripts/patch-default-shell.py', 'scripts/download-npm.sh', 'scripts/download-python.sh', 'scripts/download-extensions.sh', 'scripts/download-musl-loader.sh', 'scripts/verify-termux-index.sh', 'scripts/termux-repo-key.asc', 'scripts/alpine-devel-616ae350.rsa.pub', 'scripts/verify-android-elf.py') }}
           restore-keys: |
             downloads-
 

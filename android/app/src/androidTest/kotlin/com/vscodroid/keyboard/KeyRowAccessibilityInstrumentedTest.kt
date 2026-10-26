@@ -14,6 +14,7 @@ import org.junit.Test
 import com.vscodroid.R
 import com.vscodroid.ToolchainActivity
 import org.junit.runner.RunWith
+import java.util.Locale
 
 /**
  * What an accessibility service can actually do with the extra key row.
@@ -147,8 +148,17 @@ class KeyRowAccessibilityInstrumentedTest {
 
     @Test
     fun aLatchedModifierSaysSoOnItsNode() {
+        for (locale in listOf(Locale.ENGLISH, Locale.GERMAN)) {
+            assertLatchedModifierState(locale)
+        }
+    }
+
+    private fun assertLatchedModifierState(locale: Locale) {
         inWindow({ ctx ->
-            ExtraKeyButton(ctx).apply {
+            val localized = ctx.createConfigurationContext(
+                Configuration(ctx.resources.configuration).apply { setLocale(locale) },
+            )
+            ExtraKeyButton(localized).apply {
                 keyValue = "Ctrl"
                 isToggle = true
                 contentDescription = "Control modifier"
@@ -163,7 +173,7 @@ class KeyRowAccessibilityInstrumentedTest {
             )
             assertEquals(
                 "an idle modifier should say it is off, not stay silent",
-                "off",
+                button.context.getString(R.string.key_toggle_off),
                 node().stateDescription?.toString(),
             )
 
@@ -171,14 +181,14 @@ class KeyRowAccessibilityInstrumentedTest {
             assertEquals(
                 "a latched modifier does not say so, so a screen reader user can switch " +
                     "it on and cannot tell that they did",
-                "on",
+                button.context.getString(R.string.key_toggle_on),
                 node().stateDescription?.toString(),
             )
 
             onMain { button.performAccessibilityAction(AccessibilityNodeInfo.ACTION_CLICK, null) }
             assertEquals(
                 "switching the modifier off is not published either",
-                "off",
+                button.context.getString(R.string.key_toggle_off),
                 node().stateDescription?.toString(),
             )
         }

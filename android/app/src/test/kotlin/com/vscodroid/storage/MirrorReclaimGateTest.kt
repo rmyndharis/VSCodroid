@@ -1,78 +1,184 @@
 package com.vscodroid.storage
 
-import org.junit.jupiter.api.Assertions.assertFalse
-import org.junit.jupiter.api.Assertions.assertTrue
+import android.content.SharedPreferences
+import io.mockk.every
+import io.mockk.mockk
+import org.junit.jupiter.api.Assertions.*
+import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.ValueSource
 import java.io.File
+import java.nio.file.Files
 
-/**
- * Tests for [SafStorageManager.mayReclaim], the question the launch-time
- * reclamation pass asks before deleting a mirror whose permission has lapsed.
- *
- * Reclaiming is normally safe, and that is worth saying first: a mirror is a
- * copy, the device folder is the original, and a lapsed grant means this app can
- * never sync that folder again, so the copy is unreachable disk. The exception
- * is the app's own record that a write never reached the original. A write-back
- * that gave up after two failures, or one refused with a SecurityException,
- * leaves the mirror holding the only version of that file. A withdrawn
- * permission produces exactly that refusal, and is also what puts the mirror in
- * front of this pass, so the two arrive together rather than independently.
- *
- * The pass runs on a detached thread at launch with no screen, so the only
- * outcome it can produce is irreversible. That is why the default here is to
- * keep rather than to ask.
- */
-class MirrorReclaimGateTest {
+class MirrorReclaimGateTest : SafMirrorPairEnumerationFixture() {
+    @BeforeEach
+    fun setUpRemovalPreferences() {
+        val prefs = mockk<SharedPreferences>(relaxed = true)
+        every { prefs.getString(any(), any()) } returns "[]"
+        every { context.getSharedPreferences(any(), any()) } returns prefs
+        manager = SafStorageManager(context)
+    }
 
-    private val root = "/data/user/0/com.vscodroid/files/saf-mirrors"
-    private val sep = File.separator
+    @ParameterizedTest
+    @ValueSource(booleans = [false, true])
+    fun `automatic cleanup keeps an ordinary revoked copy and its record`(recordFirst: Boolean) {
+        val savedRecord = record.readBytes()
 
-    @Test
-    fun `a mirror with nothing stranded under it is reclaimable`() {
-        assertTrue(SafStorageManager.mayReclaim("abc123", emptySet(), root))
+        assertEquals(0, reclaimInOrder(recordFirst))
+
+        assertTrue(mirror.isDirectory)
+        assertEquals("DEVICE", File(mirror, "notes.md").readText())
+        assertArrayEquals(savedRecord, record.readBytes())
+        assertFalse(discarded(mirror).exists())
+        assertFalse(discarded(record).exists())
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = [false, true])
+    fun `a direct write during enumeration stays with the retained copy`(recordFirst: Boolean) {
+        val savedRecord = record.readBytes()
+        val unique = File(mirror, "terminal-only.txt")
+        var enumerated = false
+        val removed = manager.reclaimRevokedMirrorsSync { root ->
+            val entries = root.listFiles() ?: error("the mirrors directory was unreadable")
+            assertEquals(setOf(mirror.absolutePath, record.absolutePath), entries.map { it.absolutePath }.toSet())
+            unique.writeText("UNIQUE TERMINAL BYTES")
+            assertFalse(SafSyncEngine(context).holdsOnlyVouchedCopies(mirror))
+            enumerated = true
+            order(entries, recordFirst)
+        }
+
+        assertTrue(enumerated)
+        assertEquals(0, removed)
+        assertEquals("UNIQUE TERMINAL BYTES", unique.readText())
+        assertArrayEquals(savedRecord, record.readBytes())
+        assertTrue(created.isEmpty() && written.isEmpty())
     }
 
     @Test
-    fun `a mirror holding a write that never reached the device is kept`() {
-        val stranded = setOf("$root${sep}abc123${sep}src${sep}main.kt")
+    fun `a synchronized unused copy still requires destructive consent`() {
+        val savedRecord = record.readBytes()
+        assertTrue(SafSyncEngine(context).holdsOnlyVouchedCopies(mirror))
+        assertFalse(manager.listMirrors().single().reclaimable)
 
-        assertFalse(
-            SafStorageManager.mayReclaim("abc123", stranded, root),
-            "deleting this is not reclaiming a copy, it is deleting the only copy",
-        )
+        assertEquals(SafStorageManager.RECLAIM_REFUSED, manager.reclaimMirror(mirror.name, force = false))
+        assertEquals(0, manager.sweepDiscardedMirrors())
+
+        assertEquals("DEVICE", File(mirror, "notes.md").readText())
+        assertArrayEquals(savedRecord, record.readBytes())
+        assertFalse(discarded(mirror).exists())
     }
 
     @Test
-    fun `another mirror's stranded write does not protect this one`() {
-        val stranded = setOf("$root${sep}other9${sep}notes.md")
+    fun `a direct write after listing cannot be deleted by an unconfirmed request`() {
+        assertFalse(manager.listMirrors().single().reclaimable)
+        val unique = File(mirror, "terminal-only.txt")
+        unique.writeText("UNIQUE TERMINAL BYTES")
 
-        assertTrue(
-            SafStorageManager.mayReclaim("abc123", stranded, root),
-            "unreachable disk was kept because an unrelated folder had a stranded write",
-        )
+        assertEquals(SafStorageManager.RECLAIM_REFUSED, manager.reclaimMirror(mirror.name, force = false))
+        assertEquals(0, manager.sweepDiscardedMirrors())
+
+        assertEquals("UNIQUE TERMINAL BYTES", unique.readText())
+        assertTrue(record.isFile)
     }
 
-    /**
-     * The separator is load-bearing rather than tidiness. Mirror names are a
-     * hash prefix, so one being a prefix of another is ordinary, and a bare
-     * `startsWith` would let `abc123def` protect `abc123` for ever.
-     */
+    @ParameterizedTest
+    @ValueSource(booleans = [false, true])
+    fun `automatic cleanup finishes a pair committed by confirmed removal`(recordFirst: Boolean) {
+        assertTrue(manager.reclaimMirror(mirror.name, force = true) >= 0)
+        assertTrue(discarded(mirror).isDirectory)
+        assertTrue(discarded(record).isFile)
+
+        val removed = manager.reclaimRevokedMirrorsSync { root ->
+            val entries = root.listFiles() ?: error("the mirrors directory was unreadable")
+            assertEquals(setOf(discarded(mirror).absolutePath, discarded(record).absolutePath), entries.map { it.absolutePath }.toSet())
+            order(entries, recordFirst)
+        }
+
+        assertEquals(2, removed)
+        assertPairGone()
+    }
+
     @Test
-    fun `a mirror whose name is a prefix of another is judged on its own`() {
-        val stranded = setOf("$root${sep}abc123def${sep}notes.md")
+    fun `automatic cleanup removes an orphan record while keeping a moved copy`() {
+        val savedCopy = File(mirror.parentFile, "kept-project")
+        assertTrue(mirror.renameTo(savedCopy))
 
-        assertTrue(
-            SafStorageManager.mayReclaim("abc123", stranded, root),
-            "a longer mirror name protected a shorter one that shares its prefix",
-        )
+        assertEquals(1, manager.reclaimRevokedMirrorsSync())
+
+        assertFalse(record.exists())
+        assertFalse(discarded(record).exists())
+        assertEquals("DEVICE", File(savedCopy, "notes.md").readText())
     }
 
     @Test
-    fun `one stranded write is enough, because the pass deletes whole trees`() {
-        val stranded = setOf(
-            "$root${sep}abc123${sep}deep${sep}nested${sep}only-copy.bin",
-        )
+    fun `ordinary and staging records remain while their copy exists`() {
+        val partial = File(record.path + SafSyncEngine.PARTIAL_SUFFIX)
+        partial.writeText("STAGING RECORD")
+        val savedRecord = record.readBytes()
 
-        assertFalse(SafStorageManager.mayReclaim("abc123", stranded, root))
+        assertEquals(0, manager.reclaimRevokedMirrorsSync())
+
+        assertArrayEquals(savedRecord, record.readBytes())
+        assertEquals("STAGING RECORD", partial.readText())
+        assertEquals("DEVICE", File(mirror, "notes.md").readText())
     }
+
+    @Test
+    fun `orphan staging records are cleared without deleting a moved copy`() {
+        val partial = File(record.path + SafSyncEngine.PARTIAL_SUFFIX)
+        partial.writeText("STAGING RECORD")
+        val savedCopy = File(mirror.parentFile, "kept-project")
+        assertTrue(mirror.renameTo(savedCopy))
+
+        assertEquals(2, manager.reclaimRevokedMirrorsSync())
+
+        assertFalse(record.exists())
+        assertFalse(partial.exists())
+        assertEquals("DEVICE", File(savedCopy, "notes.md").readText())
+    }
+
+    @Test
+    fun `a dangling ordinary link retains its record`() {
+        val savedCopy = File(mirror.parentFile, "kept-project")
+        assertTrue(mirror.renameTo(savedCopy))
+        Files.createSymbolicLink(mirror.toPath(), File(mirror.parentFile, "absent-target").toPath())
+        val savedRecord = record.readBytes()
+
+        assertEquals(0, manager.reclaimRevokedMirrorsSync())
+
+        assertTrue(Files.isSymbolicLink(mirror.toPath()))
+        assertArrayEquals(savedRecord, record.readBytes())
+        assertEquals("DEVICE", File(savedCopy, "notes.md").readText())
+    }
+
+    @Test
+    fun `a directory named like a record is kept as a directory`() {
+        assertTrue(record.delete())
+        assertTrue(record.mkdir())
+        File(record, "local-notes.txt").writeText("UNIQUE RECORD DIRECTORY BYTES")
+        val savedCopy = File(mirror.parentFile, "kept-project")
+        assertTrue(mirror.renameTo(savedCopy))
+
+        assertEquals(0, manager.reclaimRevokedMirrorsSync())
+
+        assertEquals("UNIQUE RECORD DIRECTORY BYTES", File(record, "local-notes.txt").readText())
+        assertEquals("DEVICE", File(savedCopy, "notes.md").readText())
+    }
+
+    @Test
+    fun `an unused copy permits confirmed removal and later physical deletion`() {
+        assertTrue(manager.reclaimMirror(mirror.name, force = true) >= 0)
+        assertTrue(discarded(mirror).isDirectory)
+        assertFalse(mirror.exists())
+        assertEquals(2, manager.sweepDiscardedMirrors())
+        assertPairGone()
+    }
+
+    private fun discarded(entry: File) = File(entry.parentFile, SafStorageManager.DISCARD_PREFIX + entry.name)
+
+    private fun order(entries: Array<File>, recordFirst: Boolean): Array<File> = entries.sortedBy {
+        if (it.name.endsWith(SafSyncEngine.SYNCED_RECORD_SUFFIX) == recordFirst) 0 else 1
+    }.toTypedArray()
 }

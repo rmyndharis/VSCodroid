@@ -289,8 +289,8 @@ M6 (Release)   → Play Store release
    - [x] 4 marketplace extensions bundled offline in `assets/extensions/`:
      - ESLint, Prettier, Python, Tailwind CSS
    - [x] 5 custom VSCodroid extensions:
-     - `vscodroid.vscodroid-welcome-1.9.0`, welcome tab with quick actions
-     - `vscodroid.vscodroid-saf-bridge-1.12.0`, SAF storage integration
+     - `vscodroid.vscodroid-welcome-1.9.1`, welcome tab with quick actions
+     - `vscodroid.vscodroid-saf-bridge-1.12.2`, SAF storage integration
      - `vscodroid.vscodroid-process-monitor-1.4.0`, phantom process monitoring
      - `vscodroid.vscodroid-serve-network-1.3.0`, serve a dev server on the LAN
      - `vscodroid.vscodroid-editor-menus-1.0.0`, Select All in the editor context menu, declared without code so Ctrl+A never waits on an extension host
@@ -410,8 +410,8 @@ M6 (Release)   → Play Store release
    - [x] Reduces phantom process count by 2 (ExtHost + ptyHost invisible in `/proc`)
 
 2. **On-demand toolchain download scripts** (`scripts/download-ruby.sh`, `download-java.sh`, `download-cpp.sh`)
-   - [x] Ruby from Termux `ruby` + libgmp + libyaml. Unpacked size is recorded in `ToolchainRegistry`, which is what every gate reads: 39 MB today
-   - [x] Java from Termux `openjdk-17` + libandroid-shmem + libandroid-spawn. 155.5 MB unpacked; the registry records 160 MB, which left 4.5 MB of room where 156 left half a megabyte, and read 146 until the JDK grew past it
+   - [x] Ruby from Termux `ruby` + libgmp + libyaml. Unpacked size is recorded in `ToolchainRegistry`, which is what every gate reads: 41 MB today, 39.7 MB of it measured, with the C headers a native gem is built against
+   - [x] Java from Termux `openjdk-21` + libandroid-shmem + libandroid-spawn (`openjdk-17` until 21 replaced it, for the Java extension). 179.5 MB unpacked; the registry records 186 MB, which leaves 6.5 MB of room
    - [x] C/C++ from Termux `clang`, `libllvm`, `lld`, `llvm`, `libcompiler-rt`, `ndk-sysroot`, `libxml2` and the headers of `python`, minus what the base APK already ships. 254.0 MB unpacked in 3,790 files (the registry records 260 MB) and a 73.7 MB ZIP. Its programs start only through the terminal's exec interceptor, so its manifest is `preloadOnly` and the card says that it does not work with `LD_PRELOAD` set to null
    - [x] Each script: download .deb → extract → place in asset pack module → strip → write manifest
    - [x] Each script fails the build on any symbolic link anywhere in the pack. Neither delivery path can carry one: an asset pack cannot hold a link, and `ToolchainManager.extractZip` writes it as a text file holding the target path
@@ -655,7 +655,7 @@ Features planned for after Play Store launch, prioritized by user demand.
 
 - **Rust** (rustc + cargo, ~100 MB): high demand, self-contained
 - **C/C++** (clang/LLVM from Termux, ~84 MB): shipped as `toolchain_cpp` in 1.5.0, 254 MB unpacked and a 74 MB ZIP once stripped, and only through the terminal's exec interceptor
-- Delivered via same Play Asset Delivery pipeline as Ruby and Java 17
+- Delivered via same Play Asset Delivery pipeline as Ruby and Java
 
 ### Future Enhancements
 

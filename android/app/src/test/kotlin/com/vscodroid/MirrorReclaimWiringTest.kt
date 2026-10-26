@@ -22,13 +22,13 @@ import java.io.File
  * own and building one on the JVM is not possible. It does not check that the value
  * passed is the right one, only that the field is named.
  *
- * `beginWatching` is checked in the same file because it is the other half of the same
- * property: the guard's widest input is a set, and a site that starts a watcher without
- * adding to it leaves the guard believing a mirror was never touched.
+ * The manager records process usage before starting a watcher. The Activity reads
+ * that same manager authority and keeps watcher assignment centralized.
  */
 class MirrorReclaimWiringTest {
 
     private val mainActivity = File("src/main/kotlin/com/vscodroid/MainActivity.kt")
+    private val storageManager = File("src/main/kotlin/com/vscodroid/storage/SafStorageManager.kt")
 
     /**
      * The body of a named method, by brace matching from its declaration.
@@ -37,11 +37,15 @@ class MirrorReclaimWiringTest {
      * the shape that rots: a body that grows past the window stops being checked and
      * nothing says so.
      */
-    private fun methodBody(name: String): String {
-        val source = mainActivity.readText()
-        val start = source.indexOf("private fun $name(")
+    private fun methodBody(
+        name: String,
+        file: File = mainActivity,
+        declaration: String = "private fun $name(",
+    ): String {
+        val source = file.readText()
+        val start = source.indexOf(declaration)
         assertTrue(start >= 0) {
-            "Could not find `private fun $name(` in ${mainActivity.path}. If it moved or " +
+            "Could not find `$declaration` in ${file.path}. If it moved or " +
                 "was renamed, this test is measuring nothing; point it at the new name " +
                 "rather than deleting it."
         }
@@ -83,7 +87,7 @@ class MirrorReclaimWiringTest {
             "watchedSafFolder",
             "syncingFolder",
             "openWorkspaceFolder",
-            "mirrorsWatchedThisProcess",
+            "safManager.usedMirrorNames()",
             "reclaimRefusal",
         ).filterNot { body.contains(it) }
 
@@ -171,16 +175,14 @@ class MirrorReclaimWiringTest {
     }
 
     /**
-     * Starting a watcher records the mirror for the rest of the process, and it has to
-     * be one method rather than a habit at each site.
+     * Watcher state is assigned in one Activity method, and every manager watcher
+     * start claims shared process usage before the engine can register observers.
      *
      * `stopWatching` waits two seconds for the write-back worker and then leaves it
      * running rather than discarding writes the user expects on the device, so a drain
      * can still be inside a mirror the app considers closed, and each of its writes
      * opens the device document with `"wt"`, which truncates at open. The set is what
-     * puts such a mirror out of reach of a removal; a site that assigned
-     * `watchedSafFolder` without adding to it would put it back in reach, and nothing
-     * about that site would look wrong.
+     * puts such a mirror out of reach of a removal even after the Activity is recreated.
      */
     @Test
     fun `every watcher this activity starts is recorded for the whole process`() {
@@ -209,20 +211,16 @@ class MirrorReclaimWiringTest {
             .map { it.value.trim() }
         assertEquals(
             emptyList<String>(), outside,
-            "these set the watched folder without going through beginWatching: $outside. " +
-                "A mirror watched but not recorded can be removed while a write-back " +
-                "drain is still streaming out of it, and each of that drain's writes " +
-                "truncates the device document at open.",
+            "these set the watched folder without going through beginWatching: $outside",
         )
 
-        // Anchored at the start of a line, for the reason `code()` exists: a
-        // recording that has been commented out leaves its own text behind, and a
-        // substring search reads the disabled line as the live one. The call is a
-        // statement of its own in `beginWatching`, so the anchor matches what is
-        // written today and refuses the same line behind a `//`.
-        assertTrue(Regex("""(?m)^\s*mirrorsWatchedThisProcess\.add\(""").containsMatchIn(begin)) {
-            "beginWatching no longer records the mirror, so the record is empty and the " +
-                "guard's widest check passes everything"
+        val start = code(methodBody("startFileWatcher", storageManager, "fun startFileWatcher("))
+        val claim = Regex(
+            """(?m)^\s*if \(!claimMirrorOpen\(localMirrorDir\)\) throw FolderBusyException\(\)"""
+        ).find(start)
+        val watch = start.indexOf("syncEngine.startWatching(")
+        assertTrue(claim != null && watch > claim.range.last) {
+            "the manager starts observers without first claiming process usage and refusing a failed claim"
         }
     }
 }

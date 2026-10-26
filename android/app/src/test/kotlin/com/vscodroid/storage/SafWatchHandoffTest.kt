@@ -146,6 +146,7 @@ class SafWatchHandoffTest {
             safParentUri = null,
             safTreeUri = null,
             timestamp = 1_700_000_000_000,
+            mirrorRoot = mirror,
         )
     }
 

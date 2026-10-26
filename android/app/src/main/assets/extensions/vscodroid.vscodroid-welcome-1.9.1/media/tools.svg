@@ -1,0 +1,47 @@
+<svg width="280" height="200" viewBox="0 0 280 200" fill="none" xmlns="http://www.w3.org/2000/svg">
+  <!-- Node.js -->
+  <rect x="20" y="18" width="115" height="36" rx="6" fill="var(--vscode-badge-background)" opacity="0.15"/>
+  <circle cx="42" cy="36" r="12" fill="#339933"/>
+  <text x="42" y="40" font-family="sans-serif" font-size="11" font-weight="bold" fill="white" text-anchor="middle">JS</text>
+  <text x="62" y="32" font-family="sans-serif" font-size="11" font-weight="bold" fill="var(--vscode-foreground)">Node.js</text>
+  <text x="62" y="44" font-family="sans-serif" font-size="9" fill="var(--vscode-descriptionForeground)">+ npm</text>
+
+  <!-- Python -->
+  <rect x="145" y="18" width="115" height="36" rx="6" fill="var(--vscode-badge-background)" opacity="0.15"/>
+  <circle cx="167" cy="36" r="12" fill="#3776ab"/>
+  <text x="167" y="40" font-family="sans-serif" font-size="11" font-weight="bold" fill="white" text-anchor="middle">Py</text>
+  <text x="187" y="32" font-family="sans-serif" font-size="11" font-weight="bold" fill="var(--vscode-foreground)">Python</text>
+  <text x="187" y="44" font-family="sans-serif" font-size="9" fill="var(--vscode-descriptionForeground)">+ pip</text>
+
+  <!-- Git -->
+  <rect x="20" y="66" width="115" height="36" rx="6" fill="var(--vscode-badge-background)" opacity="0.15"/>
+  <circle cx="42" cy="84" r="12" fill="#f05032"/>
+  <text x="42" y="88" font-family="sans-serif" font-size="10" font-weight="bold" fill="white" text-anchor="middle">Git</text>
+  <text x="62" y="80" font-family="sans-serif" font-size="11" font-weight="bold" fill="var(--vscode-foreground)">Git</text>
+  <text x="62" y="92" font-family="sans-serif" font-size="9" fill="var(--vscode-descriptionForeground)">version control</text>
+
+  <!-- make -->
+  <rect x="145" y="66" width="115" height="36" rx="6" fill="var(--vscode-badge-background)" opacity="0.15"/>
+  <circle cx="167" cy="84" r="12" fill="#6d8086"/>
+  <text x="167" y="88" font-family="sans-serif" font-size="9" font-weight="bold" fill="white" text-anchor="middle">mk</text>
+  <text x="187" y="80" font-family="sans-serif" font-size="11" font-weight="bold" fill="var(--vscode-foreground)">make</text>
+  <text x="187" y="92" font-family="sans-serif" font-size="9" fill="var(--vscode-descriptionForeground)">build tool</text>
+
+  <!-- Divider -->
+  <line x1="40" y1="118" x2="240" y2="118" stroke="var(--vscode-editorWidget-border)" stroke-width="1" stroke-dasharray="4 3"/>
+
+  <!-- Installable on demand. Not dimmed and not labelled "coming soon": both
+       ship today, and the picture saying otherwise is what sent users
+       away from toolchains already sitting on their device. Rust and C/C++
+       were deferred with no module, pack or registry entry, so they are not
+       here at all rather than promised. -->
+  <text x="140" y="140" font-family="sans-serif" font-size="10" fill="var(--vscode-descriptionForeground)" text-anchor="middle">Install on demand</text>
+
+  <g>
+    <rect x="75" y="150" width="60" height="24" rx="4" fill="var(--vscode-badge-background)" opacity="0.15"/>
+    <text x="105" y="166" font-family="sans-serif" font-size="9" fill="var(--vscode-foreground)" text-anchor="middle">Java 21</text>
+
+    <rect x="145" y="150" width="60" height="24" rx="4" fill="var(--vscode-badge-background)" opacity="0.15"/>
+    <text x="175" y="166" font-family="sans-serif" font-size="9" fill="var(--vscode-foreground)" text-anchor="middle">Ruby</text>
+  </g>
+</svg>

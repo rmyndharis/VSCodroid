@@ -15,27 +15,156 @@ and ActivityBarItemSizeTest compares it with the stylesheet's.
 0008 measures the room the bar has; this measures what an item takes of it.
 
 diff --git a/src/vs/workbench/browser/parts/activitybar/activitybarPart.ts b/src/vs/workbench/browser/parts/activitybar/activitybarPart.ts
-index e8edbe1..9c7d9ac 100644
 --- a/src/vs/workbench/browser/parts/activitybar/activitybarPart.ts
 +++ b/src/vs/workbench/browser/parts/activitybar/activitybarPart.ts
-@@ -70,6 +70,13 @@ export class ActivitybarPart extends Part {
+@@ -1,162 +1,179 @@
+ /*---------------------------------------------------------------------------------------------
+  *  Copyright (c) Microsoft Corporation. All rights reserved.
+  *  Licensed under the MIT License. See License.txt in the project root for license information.
+  *--------------------------------------------------------------------------------------------*/
+ 
+ import './media/activitybarpart.css';
+ import './media/activityaction.css';
+ import { localize, localize2 } from '../../../../nls.js';
+ import { ActionsOrientation } from '../../../../base/browser/ui/actionbar/actionbar.js';
+ import { Part } from '../../part.js';
+ import { mainWindow } from '../../../../base/browser/window.js';
+ import { ActivityBarPosition, IWorkbenchLayoutService, LayoutSettings, Parts, Position, FLOATING_PANEL_INNER_MARGIN, FLOATING_PANEL_MARGIN, getFloatingPanelMargin, getFloatingPanelOuterMargin, isFloatingTopEdgeExposed } from '../../../services/layout/browser/layoutService.js';
+ import { IInstantiationService, ServicesAccessor } from '../../../../platform/instantiation/common/instantiation.js';
+ import { DisposableStore, MutableDisposable } from '../../../../base/common/lifecycle.js';
+ import { ToggleSidebarPositionAction, ToggleSidebarVisibilityAction } from '../../actions/layoutActions.js';
+ import { IThemeService, IColorTheme, registerThemingParticipant } from '../../../../platform/theme/common/themeService.js';
+ import { ACTIVITY_BAR_BACKGROUND, ACTIVITY_BAR_BORDER, ACTIVITY_BAR_FOREGROUND, ACTIVITY_BAR_ACTIVE_BORDER, ACTIVITY_BAR_BADGE_BACKGROUND, ACTIVITY_BAR_BADGE_FOREGROUND, ACTIVITY_BAR_INACTIVE_FOREGROUND, ACTIVITY_BAR_ACTIVE_BACKGROUND, ACTIVITY_BAR_DRAG_AND_DROP_BORDER, ACTIVITY_BAR_ACTIVE_FOCUS_BORDER, MODERN_ACTIVITY_BAR_BACKGROUND, MODERN_ACTIVITY_BAR_INACTIVE_BACKGROUND } from '../../../common/theme.js';
+ import { activeContrastBorder, contrastBorder, focusBorder } from '../../../../platform/theme/common/colorRegistry.js';
+ import { addDisposableListener, append, EventType, isAncestor, $, clearNode, Dimension } from '../../../../base/browser/dom.js';
+ import { assertReturnsDefined } from '../../../../base/common/types.js';
+ import { CustomMenubarControl } from '../titlebar/menubarControl.js';
+ import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
+ import { getMenuBarVisibility, MenuSettings } from '../../../../platform/window/common/window.js';
+ import { IAction, Separator, SubmenuAction, toAction } from '../../../../base/common/actions.js';
+ import { StandardKeyboardEvent } from '../../../../base/browser/keyboardEvent.js';
+ import { KeyCode } from '../../../../base/common/keyCodes.js';
+ import { HoverPosition } from '../../../../base/browser/ui/hover/hoverWidget.js';
+ import { GestureEvent } from '../../../../base/browser/touch.js';
+ import { IPaneCompositePart } from '../paneCompositePart.js';
+ import { IPaneCompositeBarOptions, PaneCompositeBar } from '../paneCompositeBar.js';
+ import { GlobalCompositeBar } from '../globalCompositeBar.js';
+ import { IStorageService } from '../../../../platform/storage/common/storage.js';
+ import { Action2, IMenuService, MenuId, MenuRegistry, registerAction2 } from '../../../../platform/actions/common/actions.js';
+ import { ContextKeyExpr, IContextKeyService } from '../../../../platform/contextkey/common/contextkey.js';
+ import { IsSessionsWindowContext } from '../../../common/contextkeys.js';
+ import { Categories } from '../../../../platform/action/common/actionCommonCategories.js';
+ import { getContextMenuActions } from '../../../../platform/actions/browser/menuEntryActionViewItem.js';
+ import { IViewDescriptorService, ViewContainerLocation, ViewContainerLocationToString } from '../../../common/views.js';
+ import { IExtensionService } from '../../../services/extensions/common/extensions.js';
+ import { IWorkbenchEnvironmentService } from '../../../services/environment/common/environmentService.js';
+ import { IViewsService } from '../../../services/views/common/viewsService.js';
+ import { SwitchCompositeViewAction } from '../compositeBarActions.js';
+ import { IHostService } from '../../../services/host/browser/host.js';
+ 
+ export class ActivitybarPart extends Part {
+ 
+ 	static readonly ACTION_HEIGHT = 48;
+ 	static readonly COMPACT_ACTION_HEIGHT = 28;
+ 
+ 	static readonly ACTIVITYBAR_WIDTH = 48;
+ 	static readonly COMPACT_ACTIVITYBAR_WIDTH = 36;
+ 
+ 	/** Narrower dimensions used when the floating panels (Modern UI) experiment is enabled. */
+ 	static readonly FLOATING_ACTION_HEIGHT = 36;
+ 	static readonly FLOATING_ACTIVITYBAR_WIDTH = 36;
+ 	static readonly FLOATING_COMPACT_ACTIVITYBAR_WIDTH = 28;
+ 
+ 	/**
+ 	 * Vertical gap between activity bar items at the default size under the floating
+ 	 * panels experiment. Published to CSS as `--activity-bar-action-gap` so that the
+ 	 * stylesheet and the overflow computation cannot drift apart.
+ 	 */
+ 	static readonly FLOATING_ACTION_GAP = 8;
+ 
+ 	/**
+ 	 * The compact Modern UI density tightens that gap to match its denser rhythm.
+ 	 */
+ 	static readonly FLOATING_COMPACT_ACTION_GAP = 4;
+ 
  	static readonly ICON_SIZE = 24;
  	static readonly COMPACT_ICON_SIZE = 16;
  
-+	/**
+ 	/**
 +	 * The height VSCodroid draws an item at for a finger pointer: the touch stylesheet in
 +	 * MainActivity floors .activitybar .action-item at this, above the 28px a compact item
 +	 * gets here. ActivityBarItemSizeTest keeps the two numbers equal.
 +	 */
 +	static readonly TOUCH_ACTION_HEIGHT = 44;
 +
- 	/**
++	/**
  	 * Base gutter reserved around the activity bar under the floating panels
  	 * experiment. Must match the margins applied in `floatingPanels.css`.
-@@ -138,6 +145,16 @@ export class ActivitybarPart extends Part {
- 		return this.layoutService.isModernUICompact() ? ActivitybarPart.FLOATING_COMPACT_ACTION_GAP : ActivitybarPart.FLOATING_ACTION_GAP;
+ 	 */
+ 	static readonly FLOATING_MARGIN = FLOATING_PANEL_MARGIN;
+ 
+ 	/**
+ 	 * The rail's own horizontal padding, doubled: the space inside the card beside the icon
+ 	 * column. Independent of the cluster perimeter so the icons keep their inset whatever the
+ 	 * gutter is. Must match `--modern-ui-activitybar-lane` in `floatingPanels.css`.
+ 	 */
+ 	static readonly FLOATING_LANE = 8;
+ 	static readonly FLOATING_COMPACT_LANE = 4;
+ 
+ 	/**
+ 	 * The card border the activity bar draws on each edge under the floating panels
+ 	 * experiment. Must match the border width applied in `floatingPanels.css`.
+ 	 */
+ 	static readonly FLOATING_BORDER = 1;
+ 
+ 	static readonly pinnedViewContainersKey = 'workbench.activity.pinnedViewlets2';
+ 	static readonly placeholderViewContainersKey = 'workbench.activity.placeholderViewlets';
+ 	static readonly viewContainersWorkspaceStateKey = 'workbench.activity.viewletsWorkspaceState';
+ 
+ 	//#region IView
+ 
+ 	get minimumWidth(): number { return this.baseWidth + this.floatingHorizontalGutter; }
+ 	get maximumWidth(): number { return this.baseWidth + this.floatingHorizontalGutter; }
+ 	readonly minimumHeight: number = 0;
+ 	readonly maximumHeight: number = Number.POSITIVE_INFINITY;
+ 
+ 	//#endregion
+ 
+ 	/** The intrinsic activity bar width (excludes any floating gutter). */
+ 	private get baseWidth(): number {
+ 		if (this.layoutService.isFloatingPanelsEnabled()) {
+ 			if (this._isCompact) {
+ 				return ActivitybarPart.FLOATING_COMPACT_ACTIVITYBAR_WIDTH;
+ 			}
+ 			return ActivitybarPart.FLOATING_ACTIVITYBAR_WIDTH;
+ 		}
+ 		return this._isCompact ? ActivitybarPart.COMPACT_ACTIVITYBAR_WIDTH : ActivitybarPart.ACTIVITYBAR_WIDTH;
  	}
  
+ 	/** The action (item) height that drives visible item sizing. */
+ 	private get actionHeight(): number {
+ 		if (this._isCompact) {
+ 			return ActivitybarPart.COMPACT_ACTION_HEIGHT;
+ 		}
+ 		if (this.layoutService.isFloatingPanelsEnabled()) {
+ 			return ActivitybarPart.FLOATING_ACTION_HEIGHT;
+ 		}
+ 		return ActivitybarPart.ACTION_HEIGHT;
+ 	}
+ 
+ 	/**
+ 	 * Vertical gap rendered between two adjacent items. Only the floating panels
+ 	 * experiment separates items, and only at the default activity bar size; the compact
+ 	 * Modern UI density tightens it to match its denser rhythm.
+ 	 */
+ 	private get actionGap(): number {
+ 		if (!this.layoutService.isFloatingPanelsEnabled() || this._isCompact) {
+ 			return 0;
+ 		}
+ 
+ 		return this.layoutService.isModernUICompact() ? ActivitybarPart.FLOATING_COMPACT_ACTION_GAP : ActivitybarPart.FLOATING_ACTION_GAP;
++	}
++
 +	/**
 +	 * The height an item is really drawn at. Sizing the overflow from actionHeight alone is
 +	 * wrong on a finger pointer, where the floor above makes a compact item taller than the
@@ -44,12 +173,12 @@ index e8edbe1..9c7d9ac 100644
 +	 */
 +	private get drawnActionHeight(): number {
 +		return mainWindow.matchMedia('(pointer: coarse)').matches ? Math.max(this.actionHeight, ActivitybarPart.TOUCH_ACTION_HEIGHT) : this.actionHeight;
-+	}
-+
+ 	}
+ 
  	/**
  	 * The vertical space a single item occupies in the bar (its height plus the gap that
  	 * separates it from the next one). This drives the overflow computation, so it has to
-@@ -145,7 +162,7 @@ export class ActivitybarPart extends Part {
+ 	 * track the current activity bar size, otherwise items collapse into the overflow menu
  	 * prematurely.
  	 */
  	private get compositeSize(): number {
@@ -58,7 +187,132 @@ index e8edbe1..9c7d9ac 100644
  	}
  
  	private get floatingHorizontalGutter(): number {
-@@ -289,7 +306,7 @@ export class ActivitybarPart extends Part {
+ 		if (!this.layoutService.isFloatingPanelsEnabled()) {
+ 			return 0;
+ 		}
+ 
+ 		// The cluster perimeter on the window side, plus the rail's own lane beside the icon
+ 		// column, where the primary side bar meets it flush.
+ 		const lane = this.layoutService.isModernUICompact() ? ActivitybarPart.FLOATING_COMPACT_LANE : ActivitybarPart.FLOATING_LANE;
+ 		return getFloatingPanelOuterMargin(this.layoutService) + lane
+ 			+ (this.needsFloatingLeadingGap ? getFloatingPanelMargin(this.layoutService) : 0);
+ 	}
+ 
+@@ -176,197 +193,198 @@
+ 	private readonly compositeBar = this._register(new MutableDisposable<PaneCompositeBar>());
+ 	private content: HTMLElement | undefined;
+ 	private _isCompact: boolean;
+ 	private activeWindowId: number | undefined;
+ 
+ 	constructor(
+ 		private readonly location: ViewContainerLocation,
+ 		private readonly paneCompositePart: IPaneCompositePart,
+ 		@IInstantiationService private readonly instantiationService: IInstantiationService,
+ 		@IWorkbenchLayoutService layoutService: IWorkbenchLayoutService,
+ 		@IThemeService themeService: IThemeService,
+ 		@IStorageService storageService: IStorageService,
+ 		@IConfigurationService private readonly configurationService: IConfigurationService,
+ 		@IHostService private readonly hostService: IHostService,
+ 	) {
+ 		super(Parts.ACTIVITYBAR_PART, { hasTitle: false }, themeService, storageService, layoutService);
+ 
+ 		this._isCompact = this.configurationService.getValue<boolean>(LayoutSettings.ACTIVITY_BAR_COMPACT) ?? false;
++		this._register(addDisposableListener(mainWindow.matchMedia('(pointer: coarse)'), 'change', () => this.recreateCompositeBar()));
+ 
+ 		this._register(this.configurationService.onDidChangeConfiguration(e => {
+ 			if (e.affectsConfiguration(LayoutSettings.ACTIVITY_BAR_COMPACT)) {
+ 				this._isCompact = this.configurationService.getValue<boolean>(LayoutSettings.ACTIVITY_BAR_COMPACT) ?? false;
+ 				this.updateCompactStyle();
+ 				this.recreateCompositeBar();
+ 				this._onDidChange.fire(undefined); // Signal grid that size constraints changed
+ 			}
+ 
+ 			// Floating panels changes the reserved left/bottom gutter (and therefore
+ 			// the fixed part width): signal the grid that the size constraint changed.
+ 			if (e.affectsConfiguration(LayoutSettings.MODERN_UI) || e.affectsConfiguration(LayoutSettings.MODERN_UI_DENSITY)) {
+ 				this.updateCompactStyle();
+ 				this.recreateCompositeBar();
+ 				this._onDidChange.fire(undefined);
+ 				if (this.element) {
+ 					this.updateStyles();
+ 				}
+ 			}
+ 		}));
+ 
+ 		const updateStyles = () => {
+ 			if (this.element) {
+ 				this.updateStyles();
+ 			}
+ 		};
+ 		this._register(this.hostService.onDidChangeFocus(updateStyles));
+ 		this._register(this.hostService.onDidChangeActiveWindow(windowId => {
+ 			this.activeWindowId = windowId;
+ 			updateStyles();
+ 		}));
+ 
+ 		// Showing or hiding the primary side bar decides whether the rail connects to it or
+ 		// stands alone, which can change the gutter it reserves (see `needsFloatingLeadingGap`).
+ 		this._register(this.layoutService.onDidChangePartVisibility(e => {
+ 			if (e.partId === Parts.SIDEBAR_PART && this.layoutService.isFloatingPanelsEnabled()) {
+ 				this._onDidChange.fire(undefined);
+ 			}
+ 		}));
+ 	}
+ 
+ 	private updateCompactStyle(): void {
+ 		if (this.element) {
+ 			this.element.classList.toggle('compact', this._isCompact);
+ 			// Mirrored on the workbench root for floatingPanels.css
+ 			this.layoutService.mainContainer.classList.toggle('activitybar-compact', this._isCompact);
+ 			this.element.style.setProperty('--activity-bar-width', `${this.baseWidth}px`);
+ 			this.element.style.setProperty('--activity-bar-action-height', `${this.actionHeight}px`);
+ 			this.element.style.setProperty('--activity-bar-action-gap', `${this.actionGap}px`);
+ 			this.element.style.setProperty('--activity-bar-icon-size', `${this._isCompact ? ActivitybarPart.COMPACT_ICON_SIZE : ActivitybarPart.ICON_SIZE}px`);
+ 		}
+ 	}
+ 
+ 	private recreateCompositeBar(): void {
+ 		if (!this.content || !this.compositeBar.value) {
+ 			return;
+ 		}
+ 
+ 		this.compositeBar.clear();
+ 		clearNode(this.content);
+ 		this.compositeBar.value = this.createCompositeBar();
+ 		this.compositeBar.value.create(this.content);
+ 
+ 		if (this.dimension) {
+ 			this.layout(this.dimension.width, this.dimension.height);
+ 		}
+ 	}
+ 
+ 	private createCompositeBar(): PaneCompositeBar {
+ 		const compositeSize = this.compositeSize;
+ 		const iconSize = this._isCompact ? ActivitybarPart.COMPACT_ICON_SIZE : ActivitybarPart.ICON_SIZE;
+ 
+ 		return this.instantiationService.createInstance(ActivityBarCompositeBar, this.location, {
+ 			partContainerClass: 'activitybar',
+ 			pinnedViewContainersKey: ActivitybarPart.pinnedViewContainersKey,
+ 			placeholderViewContainersKey: ActivitybarPart.placeholderViewContainersKey,
+ 			viewContainersWorkspaceStateKey: ActivitybarPart.viewContainersWorkspaceStateKey,
+ 			orientation: ActionsOrientation.VERTICAL,
+ 			icon: true,
+ 			iconSize,
+ 			activityHoverOptions: {
+ 				position: () => this.layoutService.getSideBarPosition() === Position.LEFT ? HoverPosition.RIGHT : HoverPosition.LEFT,
+ 			},
+ 			preventLoopNavigation: true,
+ 			recomputeSizes: false,
+ 			fillExtraContextMenuActions: (actions, e?: MouseEvent | GestureEvent) => { },
+ 			compositeSize,
+ 			colors: (theme: IColorTheme) => ({
+ 				activeForegroundColor: theme.getColor(ACTIVITY_BAR_FOREGROUND),
+ 				inactiveForegroundColor: theme.getColor(ACTIVITY_BAR_INACTIVE_FOREGROUND),
+ 				activeBorderColor: theme.getColor(ACTIVITY_BAR_ACTIVE_BORDER),
+ 				activeBackground: theme.getColor(ACTIVITY_BAR_ACTIVE_BACKGROUND),
+ 				badgeBackground: theme.getColor(ACTIVITY_BAR_BADGE_BACKGROUND),
+ 				badgeForeground: theme.getColor(ACTIVITY_BAR_BADGE_FOREGROUND),
+ 				dragAndDropBorder: theme.getColor(ACTIVITY_BAR_DRAG_AND_DROP_BORDER),
  				activeBackgroundColor: undefined, inactiveBackgroundColor: undefined, activeBorderBottomColor: undefined,
  			}),
  			overflowActionSize: compositeSize,
@@ -67,3 +321,80 @@ index e8edbe1..9c7d9ac 100644
  	}
  
  	protected override createContentArea(parent: HTMLElement): HTMLElement {
+ 		this.element = parent;
+ 		this.content = append(this.element, $('.content'));
+ 
+ 		this.updateCompactStyle();
+ 
+ 		if (this.layoutService.isVisible(Parts.ACTIVITYBAR_PART)) {
+ 			this.show();
+ 		}
+ 
+ 		return this.content;
+ 	}
+ 
+ 	getPinnedPaneCompositeIds(): string[] {
+ 		return this.compositeBar.value?.getPinnedPaneCompositeIds() ?? [];
+ 	}
+ 
+ 	getVisiblePaneCompositeIds(): string[] {
+ 		return this.compositeBar.value?.getVisiblePaneCompositeIds() ?? [];
+ 	}
+ 
+ 	getPaneCompositeIds(): string[] {
+ 		return this.compositeBar.value?.getPaneCompositeIds() ?? [];
+ 	}
+ 
+ 	focus(): void {
+ 		this.compositeBar.value?.focus();
+ 	}
+ 
+ 	override updateStyles(): void {
+ 		super.updateStyles();
+ 
+ 		const container = assertReturnsDefined(this.getContainer());
+ 		let backgroundColor = ACTIVITY_BAR_BACKGROUND;
+ 		if (this.configurationService.getValue<boolean>(LayoutSettings.MODERN_UI) === true) {
+ 			const isWindowActive = this.activeWindowId === undefined ? mainWindow.document.hasFocus() : this.activeWindowId === mainWindow.vscodeWindowId;
+ 			const isInactive = !this.hostService.hasFocus || !isWindowActive;
+ 			backgroundColor = isInactive ? MODERN_ACTIVITY_BAR_INACTIVE_BACKGROUND : MODERN_ACTIVITY_BAR_BACKGROUND;
+ 		}
+ 		const background = this.getColor(backgroundColor) || '';
+ 		container.style.backgroundColor = background;
+ 
+ 		// In Modern UI the rail is a floating card whose border is owned by the stylesheet via
+ 		// the `modernActivityBar.border` token. Leaving it out of the inline style lets CSS
+ 		// vary it per edge (the seam it shares with the side bar) without needing `!important`.
+ 		const borderColor = this.layoutService.isFloatingPanelsEnabled()
+ 			? ''
+ 			: this.getColor(ACTIVITY_BAR_BORDER) || this.getColor(contrastBorder) || '';
+ 		container.classList.toggle('bordered', !!borderColor);
+ 		container.style.borderColor = borderColor;
+ 	}
+ 
+ 	show(focus?: boolean): void {
+ 		if (!this.content) {
+ 			return;
+ 		}
+ 
+ 		if (!this.compositeBar.value) {
+ 			this.compositeBar.value = this.createCompositeBar();
+ 			this.compositeBar.value.create(this.content);
+ 
+ 			if (this.dimension) {
+ 				this.layout(this.dimension.width, this.dimension.height);
+ 			}
+ 		}
+ 
+ 		if (focus) {
+ 			this.focus();
+ 		}
+ 	}
+ 
+ 	hide(): void {
+ 		if (!this.compositeBar.value) {
+ 			return;
+ 		}
+ 
+ 		this.compositeBar.clear();
+ 

@@ -239,6 +239,15 @@ internal fun resourceRootsInForce(
     return published + listOfNotNull(workspace)
 }
 
+/** An acknowledged member set replaces the URL fallback, including an empty window. */
+internal fun workspaceResourceRootsInForce(
+    published: List<String>, sensitive: List<String>, workspaceRoot: String?, members: List<String>?,
+): List<String> = if (members == null) {
+    resourceRootsInForce(published, sensitive, workspaceRoot)
+} else {
+    (published + members.mapNotNull { workspaceRootOrNull(it, sensitive) }).distinct()
+}
+
 /**
  * Whether two canonical paths name the same place or one holds the other.
  *
@@ -602,6 +611,30 @@ private fun <T> failureToAnnounce(
 internal data class HandoffFailure(val scheme: String, val failureType: String)
 
 /**
+ * Why a sign-in address was refused before any browser was asked to open it. These used
+ * to be bare `IllegalStateException`s, so the notice read "Could not open that https link
+ * (IllegalStateException)" for all of them and, keyed on the exception type, the second
+ * cause was never said at all.
+ */
+internal enum class SignInRefusal {
+    /** The editor page that would have registered the sign-in is gone or not ready. */
+    NOT_READY,
+
+    /** The editor never issued the request this address carries. */
+    NOT_ISSUED,
+}
+
+/** A sign-in launch this app refused, with the reason the person can act on. */
+internal class SignInRefused(val reason: SignInRefusal, detail: String) : Exception(detail)
+
+/**
+ * The type half of a [HandoffFailure] for [error]: the exception's class, or for a refused
+ * sign-in the reason too, so two different refusals are two different notices.
+ */
+internal fun handoffFailureType(error: Throwable): String =
+    if (error is SignInRefused) "SignInRefused:${error.reason.name}" else error.javaClass.simpleName
+
+/**
  * How many hand-off failures are put on screen, and with them how many are
  * remembered.
  *
@@ -838,6 +871,7 @@ class VSCodroidWebViewClient(
      * class have no page to tell.
      */
     private val onNavigationDeclined: () -> Unit = { },
+    private val workspaceMembers: () -> List<String>? = { null },
 ) : WebViewClient() {
     // MissingOnRenderProcessGone: overridden below, and what it does there is the
     // reason the class exists in one piece. The check misses the override on a
@@ -878,7 +912,7 @@ class VSCodroidWebViewClient(
         val first = deferredAuth.peekFirst()
         clearAuthWait()
         authReady = false
-        if (first != null) onHandoffFailed(first, IllegalStateException("The editor bridge is not ready"))
+        if (first != null) onHandoffFailed(first, SignInRefused(SignInRefusal.NOT_READY, "The editor bridge is not ready"))
     }
 
     fun completeAuthBootstrap(view: WebView, generation: Long, succeeded: Boolean): Boolean {
@@ -1015,7 +1049,7 @@ class VSCodroidWebViewClient(
         // `vscodroid://callback` is this app's own sign-in relay. Its VIEW filter
         // is exported and BROWSABLE, so handing one to `startActivity` delivers
         // it straight back into `MainActivity.onNewIntent`, and a main-frame
-        // launch arms the ids the address carries first: one navigation would
+        // launch arms the registered identities the address carries first: one navigation would
         // both open the window and post the callback that window judges. The
         // launch alone is the other half, and the frame test below does not
         // cover it: a subframe arms nothing, but a tapped link in the simple
@@ -1040,12 +1074,12 @@ class VSCodroidWebViewClient(
         if (request.isForMainFrame && hasAuthMetadata) {
             val page = authPage(view)
             if (page == null) {
-                onHandoffFailed(target, IllegalStateException("No active editor document"))
+                onHandoffFailed(target, SignInRefused(SignInRefusal.NOT_READY, "No active editor document"))
                 return true
             }
             if (!authReady) {
                 if (deferredAuth.size >= 32) {
-                    onHandoffFailed(target, IllegalStateException("Too many waiting sign-in launches"))
+                    onHandoffFailed(target, SignInRefused(SignInRefusal.NOT_READY, "Too many waiting sign-in launches"))
                 } else {
                     deferredAuth.addLast(target)
                     if (authTimeout == null) {
@@ -1073,7 +1107,9 @@ class VSCodroidWebViewClient(
                 armed = AuthTabWindow.arm(authRequestIdsIn(target.toString()),
                     authCallbackNonceIn(target.toString()), SystemClock.elapsedRealtime(),
                     AuthTabWindow.pageGeneration())
-                check(!requireIssued || !armed.isEmpty()) { "The editor did not issue this sign-in request" }
+                if (requireIssued && armed.isEmpty()) {
+                    throw SignInRefused(SignInRefusal.NOT_ISSUED, "The editor did not issue this sign-in request")
+                }
             }
             val intent = Intent(Intent.ACTION_VIEW, target).apply { addFlags(Intent.FLAG_ACTIVITY_NEW_TASK) }
             view.context.startActivity(intent)
@@ -1121,7 +1157,8 @@ class VSCodroidWebViewClient(
             return interfaceBundleResponse(requested)
         }
         return interceptCdnRequest(
-            request, allowedPort, connectionToken, resourceRoots, sensitiveLocations, openFolder
+            request, allowedPort, connectionToken, resourceRoots, sensitiveLocations, openFolder,
+            workspaceMembers = workspaceMembers,
         )
     }
 
@@ -1512,10 +1549,16 @@ class VSCodroidWebViewClient(
          * so there is one rule and not two copies of one.
          */
         fun setupServiceWorkerInterception(
+            port: Int, resourceRoots: List<String>, sensitiveLocations: List<String>,
+            openFolder: () -> String?, connectionToken: () -> String?
+        ) = setupServiceWorkerInterception(port, resourceRoots, sensitiveLocations, openFolder, { null }, connectionToken)
+
+        fun setupServiceWorkerInterception(
             port: Int,
             resourceRoots: List<String>,
             sensitiveLocations: List<String>,
             openFolder: () -> String?,
+            workspaceMembers: () -> List<String>?,
             connectionToken: () -> String?
         ) {
             try {
@@ -1524,7 +1567,7 @@ class VSCodroidWebViewClient(
                     override fun shouldInterceptRequest(request: WebResourceRequest): WebResourceResponse? {
                         return interceptCdnRequest(
                             request, port, connectionToken,
-                            resourceRoots, sensitiveLocations, openFolder
+                            resourceRoots, sensitiveLocations, openFolder, workspaceMembers = workspaceMembers,
                         )
                     }
                 })
@@ -1554,6 +1597,7 @@ class VSCodroidWebViewClient(
             sensitiveLocations: List<String>,
             openFolder: () -> String?,
             tokenWaitMs: Long = TOKEN_WAIT_MS,
+            workspaceMembers: () -> List<String>? = { null },
         ): WebResourceResponse? {
             val uri = request.url
             val host = uri.host ?: return null
@@ -1625,7 +1669,7 @@ class VSCodroidWebViewClient(
                 val headers = request.requestHeaders
                 return interceptResourceRequest(
                     uri, host, port,
-                    resourceRootsInForce(resourceRoots, sensitiveLocations, openFolder()),
+                    workspaceResourceRootsInForce(resourceRoots, sensitiveLocations, openFolder(), workspaceMembers()),
                     headerValue(headers, "Origin"),
                     headerValue(headers, "Range"),
                     headerValue(headers, "Referer"),
@@ -2580,7 +2624,10 @@ class VSCodroidWebViewClient(
          * MIME type for a response that carries none of its own, had quietly
          * stopped being reachable.
          */
-        private fun assetPathOf(pathOrUrl: String): String = pathOrUrl.substringBefore('?')
+        private fun assetPathOf(pathOrUrl: String): String =
+            if (pathOrUrl.startsWith("http://", ignoreCase = true) ||
+                pathOrUrl.startsWith("https://", ignoreCase = true)
+            ) pathOrUrl.substringBefore('?') else pathOrUrl
 
         /**
          * What each file extension this app serves is, by MIME type.

@@ -546,7 +546,8 @@ def build(args, manifest, declared, tag, out, work):
 
     out.parent.mkdir(parents=True, exist_ok=True)
     out.write_text(page(entries, manifest["release-tag"]), encoding="utf-8")
-    print(f"\nWrote {out.relative_to(REPO)} listing {len(entries)} wheels")
+    display = out.relative_to(REPO) if out.is_relative_to(REPO) else out
+    print(f"\nWrote {display} listing {len(entries)} wheels")
     print(f"The wheels and notices are in {args.dist}; upload them to the {manifest['release-tag']} release.")
     print("The page must be served as text/html, which GitHub Pages does.")
     return 0

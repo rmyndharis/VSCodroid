@@ -1,0 +1,198 @@
+Protect device folder copies before workspace use
+
+Claim resolved workspace members before publication and remote filesystem
+paths before dispatch. Forward refused claims through the existing operation
+and stream error paths, and order watch teardown after registration.
+
+diff --git a/src/vs/workbench/browser/safMirrorUsage.ts b/src/vs/workbench/browser/safMirrorUsage.ts
+new file mode 100644
+--- /dev/null
++++ b/src/vs/workbench/browser/safMirrorUsage.ts
+@@ -0,0 +1,84 @@
++/*---------------------------------------------------------------------------------------------
++*  Copyright (c) Microsoft Corporation. All rights reserved.
++*  Licensed under the MIT License. See License.txt in the project root for license information.
++*--------------------------------------------------------------------------------------------*/
++
++import { mainWindow } from '../../base/browser/window.js';
++import { Event } from '../../base/common/event.js';
++import { IDisposable, toDisposable } from '../../base/common/lifecycle.js';
++import { Schemas } from '../../base/common/network.js';
++import { URI } from '../../base/common/uri.js';
++import { CancellationToken } from '../../base/common/cancellation.js';
++import { IChannel } from '../../base/parts/ipc/common/ipc.js';
++import { localize } from '../../nls.js';
++
++type AndroidWindow = typeof mainWindow & {
++	AndroidBridge?: { claimWorkspacePaths(token: string, pathsJson: string): boolean };
++	__vscodroid?: { authToken?: string };
++};
++
++/** Claims resolved members before publication and mirror paths before filesystem access. */
++export async function claimSafMirrorPaths(resources: readonly URI[]): Promise<void> {
++	const browser = mainWindow as AndroidWindow;
++	if (!browser.AndroidBridge) return;
++	const paths = [...new Set(resources.filter(resource =>
++		resource.scheme === Schemas.file || resource.scheme === Schemas.vscodeRemote
++	).map(resource => resource.path))];
++	if (!paths.length) return;
++	const unavailable = () => new Error(localize('deviceFolderUnavailable', 'The local copy of this device folder is unavailable. Open the folder from the device again.'));
++	const claim = (): boolean => {
++		const token = browser.__vscodroid?.authToken;
++		if (!token) return false;
++		if (typeof browser.AndroidBridge?.claimWorkspacePaths !== 'function' ||
++			!browser.AndroidBridge.claimWorkspacePaths(token, JSON.stringify(paths))) {
++			throw unavailable();
++		}
++		return true;
++	};
++	if (claim()) return;
++	await new Promise<void>((resolve, reject) => {
++		const finish = () => {
++			try {
++				if (!claim()) return;
++				cleanup();
++				resolve();
++			} catch (error) {
++				cleanup();
++				reject(error);
++			}
++		};
++		const timer = setTimeout(() => { cleanup(); reject(unavailable()); }, 5000);
++		const cleanup = () => {
++			clearTimeout(timer);
++			mainWindow.removeEventListener('vscodroid-bridge-ready', finish);
++		};
++		mainWindow.addEventListener('vscodroid-bridge-ready', finish);
++	});
++}
++
++/** Filesystem calls outside the current root, including restored editors, need the same claim. */
++export function protectSafMirrorChannel(channel: IChannel): IChannel {
++	const resources = (arg: unknown): URI[] => Array.isArray(arg) ? arg.filter(URI.isUri) : [];
++	return {
++		async call<T>(command: string, arg?: unknown, token?: CancellationToken): Promise<T> {
++			await claimSafMirrorPaths(resources(arg));
++			return channel.call<T>(command, arg, token);
++		},
++		listen<T>(event: string, arg?: unknown): Event<T> {
++			if (event !== 'readFileStream') return channel.listen<T>(event, arg);
++			return (listener, thisArgs, disposables) => {
++				let disposed = false;
++				let subscription: IDisposable | undefined;
++				void claimSafMirrorPaths(resources(arg)).then(() => {
++					if (!disposed) subscription = channel.listen<T>(event, arg)(listener, thisArgs);
++				}).catch(error => {
++					if (!disposed) listener.call(thisArgs, error);
++				});
++				const result = toDisposable(() => { disposed = true; subscription?.dispose(); });
++				if (Array.isArray(disposables)) disposables.push(result);
++				else disposables?.add(result);
++				return result;
++			};
++		}
++	};
++}
+diff --git a/src/vs/workbench/browser/web.main.ts b/src/vs/workbench/browser/web.main.ts
+--- a/src/vs/workbench/browser/web.main.ts
++++ b/src/vs/workbench/browser/web.main.ts
+@@ -12,6 +12,7 @@
+ import { BrowserWorkbenchEnvironmentService, IBrowserWorkbenchEnvironmentService } from '../services/environment/browser/environmentService.js';
+ import { Workbench } from './workbench.js';
+ import { RemoteFileSystemProviderClient } from '../services/remote/common/remoteFileSystemProviderClient.js';
++import { protectSafMirrorChannel } from './safMirrorUsage.js';
+ import { IWorkbenchEnvironmentService } from '../services/environment/common/environmentService.js';
+ import { IProductService } from '../../platform/product/common/productService.js';
+ import product from '../../platform/product/common/product.js';
+@@ -361,7 +362,7 @@
+ 		serviceCollection.set(IRemoteSocketFactoryService, remoteSocketFactoryService);
+ 		const remoteAgentService = this._register(new RemoteAgentService(remoteSocketFactoryService, userDataProfileService, environmentService, productService, remoteAuthorityResolverService, signService, logService));
+ 		serviceCollection.set(IRemoteAgentService, remoteAgentService);
+-		this._register(RemoteFileSystemProviderClient.register(remoteAgentService, fileService, logService));
++		this._register(RemoteFileSystemProviderClient.register(remoteAgentService, fileService, logService, protectSafMirrorChannel));
+ 
+ 		// Default Account
+ 		const defaultAccountService = this._register(new DefaultAccountService(productService));
+diff --git a/src/vs/workbench/services/configuration/browser/configurationService.ts b/src/vs/workbench/services/configuration/browser/configurationService.ts
+--- a/src/vs/workbench/services/configuration/browser/configurationService.ts
++++ b/src/vs/workbench/services/configuration/browser/configurationService.ts
+@@ -24,6 +24,7 @@
+ import { WorkspaceConfiguration, FolderConfiguration, RemoteUserConfiguration, UserConfiguration, DefaultConfiguration, ApplicationConfiguration } from './configuration.js';
+ import { IJSONSchema, IJSONSchemaMap } from '../../../../base/common/jsonSchema.js';
+ import { mark } from '../../../../base/common/performance.js';
++import { claimSafMirrorPaths } from '../../../browser/safMirrorUsage.js';
+ import { IRemoteAgentService } from '../../remote/common/remoteAgentService.js';
+ import { IFileService } from '../../../../platform/files/common/files.js';
+ import { IWorkbenchEnvironmentService } from '../../environment/common/environmentService.js';
+@@ -453,6 +454,7 @@
+ 		const trigger = this.initialized;
+ 		this.initialized = false;
+ 		const workspace = await this.createWorkspace(arg);
++		await claimSafMirrorPaths([...workspace.folders.map(folder => folder.uri), ...(workspace.configuration ? [workspace.configuration] : [])]);
+ 		await this.updateWorkspaceAndInitializeConfiguration(workspace, trigger);
+ 		this.checkAndMarkWorkspaceComplete(false);
+ 		// Read for the workspace the page opened, so for no other.
+@@ -908,6 +910,7 @@
+ 	}
+ 
+ 	private async updateWorkspaceConfiguration(workspaceFolders: WorkspaceFolder[], configuration: ConfigurationModel, fromCache: boolean): Promise<void> {
++		await claimSafMirrorPaths(workspaceFolders.map(folder => folder.uri));
+ 		const previous = { data: this._configuration.toData(), workspace: this.workspace };
+ 		const change = this._configuration.compareAndUpdateWorkspaceConfiguration(configuration);
+ 		const changes = this.compareFolders(this.workspace.folders, workspaceFolders);
+diff --git a/src/vs/workbench/services/remote/common/remoteFileSystemProviderClient.ts b/src/vs/workbench/services/remote/common/remoteFileSystemProviderClient.ts
+--- a/src/vs/workbench/services/remote/common/remoteFileSystemProviderClient.ts
++++ b/src/vs/workbench/services/remote/common/remoteFileSystemProviderClient.ts
+@@ -12,12 +12,13 @@
+ import { ILogService } from '../../../../platform/log/common/log.js';
+ import { IRemoteAgentEnvironment } from '../../../../platform/remote/common/remoteAgentEnvironment.js';
+ import { IRemoteAgentConnection, IRemoteAgentService } from './remoteAgentService.js';
++import { IChannel } from '../../../../base/parts/ipc/common/ipc.js';
+ 
+ export const REMOTE_FILE_SYSTEM_CHANNEL_NAME = 'remoteFilesystem';
+ 
+ export class RemoteFileSystemProviderClient extends DiskFileSystemProviderClient {
+ 
+-	static register(remoteAgentService: IRemoteAgentService, fileService: IFileService, logService: ILogService): IDisposable {
++	static register(remoteAgentService: IRemoteAgentService, fileService: IFileService, logService: ILogService, protectChannel: (channel: IChannel) => IChannel = channel => channel): IDisposable {
+ 		const connection = remoteAgentService.getConnection();
+ 		if (!connection) {
+ 			return Disposable.None;
+@@ -32,7 +33,7 @@
+ 					// Register remote fsp even before it is asked to activate
+ 					// because, some features (configuration) wait for its
+ 					// registration before making fs calls.
+-					fileService.registerProvider(Schemas.vscodeRemote, disposables.add(new RemoteFileSystemProviderClient(environment, connection)));
++					fileService.registerProvider(Schemas.vscodeRemote, disposables.add(new RemoteFileSystemProviderClient(environment, connection, protectChannel)));
+ 				} else {
+ 					logService.error('Cannot register remote filesystem provider. Remote environment doesnot exist.');
+ 				}
+@@ -50,7 +51,7 @@
+ 		return disposables;
+ 	}
+ 
+-	private constructor(remoteAgentEnvironment: IRemoteAgentEnvironment, connection: IRemoteAgentConnection) {
+-		super(connection.getChannel(REMOTE_FILE_SYSTEM_CHANNEL_NAME), { pathCaseSensitive: remoteAgentEnvironment.os === OperatingSystem.Linux });
++	private constructor(remoteAgentEnvironment: IRemoteAgentEnvironment, connection: IRemoteAgentConnection, protectChannel: (channel: IChannel) => IChannel) {
++		super(protectChannel(connection.getChannel(REMOTE_FILE_SYSTEM_CHANNEL_NAME)), { pathCaseSensitive: remoteAgentEnvironment.os === OperatingSystem.Linux });
+ 	}
+ }
+diff --git a/src/vs/platform/files/common/diskFileSystemProviderClient.ts b/src/vs/platform/files/common/diskFileSystemProviderClient.ts
+--- a/src/vs/platform/files/common/diskFileSystemProviderClient.ts
++++ b/src/vs/platform/files/common/diskFileSystemProviderClient.ts
+@@ -253,9 +253,13 @@
+ 		// back to us when we ask to dispose the watcher later.
+ 		const req = generateUuid();
+ 
+-		this.channel.call('watch', [this.sessionId, req, resource, opts]);
++		const watching = this.channel.call('watch', [this.sessionId, req, resource, opts]);
++		void watching.catch(error => this._onDidWatchError.fire(toErrorMessage(error)));
+ 
+-		return toDisposable(() => this.channel.call('unwatch', [this.sessionId, req]));
++		return toDisposable(() => {
++			void watching.then(() => this.channel.call('unwatch', [this.sessionId, req]), () => undefined)
++				.catch(error => this._onDidWatchError.fire(toErrorMessage(error)));
++		});
+ 	}
+ 
+ 	//#endregion

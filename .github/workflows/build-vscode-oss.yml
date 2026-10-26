@@ -119,6 +119,10 @@ jobs:
             Consumed by `scripts/fetch-vscode-oss.sh`. Not an app release.
           make_latest: false
           prerelease: true
+          # Defaults to false, which would rewrite the notes and move the tag below
+          # while the previous asset stays, and the release preflight would then
+          # take that stale asset for one built from this commit.
+          fail_on_unmatched_files: true
           files: ${{ runner.temp }}/codeoss/vscode-reh-web-linux-arm64-${{ needs.build.outputs.version }}.tar.gz
 
       # The release API never moves an existing tag, so a rebuild at a version

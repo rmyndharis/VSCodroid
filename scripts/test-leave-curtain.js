@@ -290,6 +290,20 @@ add('a second leave replaces the curtain rather than stacking another', () => {
     assert.strictEqual(p.onRoot.length, 1, `${p.onRoot.length} curtains are on the root`);
 });
 
+add('an older veto callback retains the replacement leave cover', () => {
+    const p = page();
+    p.leave({ workbench: { preventDefault: true } });
+    const previous = p.onRoot[0];
+    p.leave();
+    assert.notStrictEqual(p.onRoot[0], previous);
+    p.advance(0);
+    assert.strictEqual(p.onRoot.length, 1);
+    p.advance(4999);
+    assert.strictEqual(p.onRoot.length, 1);
+    p.advance(1);
+    assert.strictEqual(p.onRoot.length, 0);
+});
+
 add('a lowered curtain leaves no timer to lower the next one early', () => {
     const p = page();
     p.leave({ workbench: { preventDefault: true } });

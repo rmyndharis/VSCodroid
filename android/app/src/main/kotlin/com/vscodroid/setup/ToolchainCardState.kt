@@ -27,6 +27,9 @@ enum class ToolchainBadge { NONE, INSTALLED, FAILED }
  */
 data class SizeFigures(val download: String, val installed: String)
 
+/** A process-wide HTTP transfer, distinct from an earlier transfer of the same pack. */
+data class ToolchainDownloadProgress(val transferId: Long, val percent: Int)
+
 /**
  * Everything one toolchain card shows, decided without a View.
  *
@@ -64,6 +67,8 @@ class ToolchainCardState(private val mode: ToolchainCardMode) {
     private val installed = mutableSetOf<String>()
     private val downloadStatus = mutableMapOf<String, Int>()
     private val downloadPercent = mutableMapOf<String, Int>()
+    private val downloadTransfer = mutableMapOf<String, Long>()
+    private val latestHttpTransfer = mutableMapOf<String, Long>()
 
     /**
      * Downloads the process knows about that this screen was never told of, as
@@ -83,14 +88,14 @@ class ToolchainCardState(private val mode: ToolchainCardMode) {
      * report whose end no listener on this screen hears, and [clearSettledDownload]
      * is what ends it the next time Play is asked.
      */
-    private val seededDownloads = mutableMapOf<String, Int>()
+    private val seededDownloads = mutableMapOf<String, ToolchainDownloadProgress>()
 
     /**
      * Packs the user has confirmed a removal for, until something reports back.
      *
      * An uninstall is queued on the same single-thread executor a download
-     * occupies for the whole of a transfer, an extraction and a ~155 MB copy, so
-     * confirming "Remove Ruby?" while Java 17 downloads does nothing for
+     * occupies for the whole of a transfer, an extraction and a ~180 MB copy, so
+     * confirming "Remove Ruby?" while Java 21 downloads does nothing for
      * minutes: the dialog closed, the card went on offering Remove, and tapping
      * it again queued a second removal that would also do nothing. Taking the
      * button away is the honest reading of what the user asked for and what has
@@ -112,12 +117,23 @@ class ToolchainCardState(private val mode: ToolchainCardMode) {
      * them the pack way ("toolchain_ruby"), so each name is normalised on the way
      * in. Both spellings are accepted because both reach here.
      */
-    fun setInstalled(packNames: Collection<String>) {
+    fun setInstalled(packNames: Collection<String>, olderBuilds: Map<String, String> = emptyMap()) {
         installed.clear()
         installed.addAll(packNames.map { name ->
             if (name.startsWith("toolchain_")) name else "toolchain_$name"
         })
+        this.olderBuilds = olderBuilds
     }
+
+    /**
+     * Installed toolchains whose recorded build is not the one the registry offers, by
+     * pack name (see [ToolchainManager.installedLabels]).
+     */
+    private var olderBuilds: Map<String, String> = emptyMap()
+
+    /** What the card and the removal question call [packName]: the recorded build if it is an older one. */
+    fun labelFor(packName: String, fallback: String): String =
+        if (packName in installed) olderBuilds[packName] ?: fallback else fallback
 
     /**
      * Replaces what the process is downloading with [percentByPack].
@@ -134,9 +150,19 @@ class ToolchainCardState(private val mode: ToolchainCardMode) {
      * being drawn as running. That matters because its end is not reported here
      * either.
      */
-    fun setDownloading(percentByPack: Map<String, Int>) {
+    fun setDownloading(percentByPack: Map<String, ToolchainDownloadProgress>) {
         seededDownloads.clear()
-        seededDownloads.putAll(percentByPack)
+        for ((packName, progress) in percentByPack) {
+            val latest = latestHttpTransfer[packName] ?: 0
+            if (progress.transferId < latest) continue
+            if (progress.transferId > latest) {
+                downloadStatus.remove(packName)
+                downloadPercent.remove(packName)
+                downloadTransfer.remove(packName)
+                latestHttpTransfer[packName] = progress.transferId
+            }
+            seededDownloads[packName] = progress
+        }
     }
 
     /**
@@ -147,9 +173,17 @@ class ToolchainCardState(private val mode: ToolchainCardMode) {
      * set, so a card is right immediately rather than after the next
      * [setInstalled].
      */
-    fun updateState(packName: String, status: Int, percent: Int): Int {
+    fun updateState(packName: String, status: Int, percent: Int, transferId: Long? = null): Int {
+        if (transferId == null && packName in seededDownloads) {
+            return if (removing.remove(packName)) positionOf(packName) else -1
+        }
+        if (transferId != null && transferId < (latestHttpTransfer[packName] ?: 0)) return -1
         downloadStatus[packName] = status
         downloadPercent[packName] = percent
+        if (transferId != null) {
+            downloadTransfer[packName] = transferId
+            latestHttpTransfer[packName] = transferId
+        } else downloadTransfer.remove(packName)
         // Any answer at all ends the wait a confirmed removal put the card in.
         // Which answer it was decides the card below on its own merits.
         removing.remove(packName)
@@ -184,10 +218,12 @@ class ToolchainCardState(private val mode: ToolchainCardMode) {
      * Retry button and the badge beside it rest on.
      */
     fun clearSettledDownload(packName: String): Int {
+        if (packName in downloadTransfer) return -1
         val status = downloadStatus[packName]
         if (status !in IN_FLIGHT) return -1
         downloadStatus.remove(packName)
         downloadPercent.remove(packName)
+        downloadTransfer.remove(packName)
         return positionOf(packName)
     }
 
@@ -260,18 +296,17 @@ class ToolchainCardState(private val mode: ToolchainCardMode) {
 
     private fun managerCard(packName: String): ToolchainCard {
         val status = downloadStatus[packName]
-        // A report always wins over a seed, and only a pack with no report at
-        // all is read from the seeds. A report is this screen's own and keeps
-        // arriving; a seed is a one-off snapshot and would otherwise outlive the
-        // download it describes, since nothing reports that download's end here.
-        val seeded = if (status == null) seededDownloads[packName] else null
+        // A terminal report ends its own transfer, while a later transfer gets Cancel.
+        val seeded = seededDownloads[packName]?.takeIf {
+            status == null || it.transferId != downloadTransfer[packName]
+        }
         return when {
-            status in IN_FLIGHT -> ToolchainCard(
-                progressPercent = downloadPercent[packName] ?: 0,
+            seeded != null -> ToolchainCard(
+                progressPercent = seeded.percent,
                 action = ToolchainAction.CANCEL,
             )
-            seeded != null -> ToolchainCard(
-                progressPercent = seeded,
+            status in IN_FLIGHT -> ToolchainCard(
+                progressPercent = downloadPercent[packName] ?: 0,
                 action = ToolchainAction.CANCEL,
             )
             // Still installed, and no longer offering anything: the files are

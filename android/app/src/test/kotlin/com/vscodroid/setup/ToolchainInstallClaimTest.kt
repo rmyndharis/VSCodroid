@@ -153,7 +153,7 @@ class ToolchainInstallClaimTest {
     private fun copiedFile() = File(filesDir, "usr/opt/java/bin/java")
 
     private fun manager(events: MutableList<Int>) = ToolchainManager(context).apply {
-        onStateChange = { _, status, _, _ -> events.add(status) }
+        onStateChange = { _, status, _, _, _ -> events.add(status) }
     }
 
     /**

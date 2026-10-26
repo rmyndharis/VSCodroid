@@ -4,21 +4,75 @@ With the soft keyboard up on a phone held in landscape the page is about 122px t
 
 On Android, Layout#updateShortWindow now also takes the panel out of the grid at the moment the window turns short, and puts it back when the window is tall again (the same 200px and 240px as 0033). It applies to a panel above or below the editor that the layout state shows open, with the editor visible, and only when the panel does not hold the focus at that moment: a terminal the keyboard is typing into stays where it is, because hiding it would take the keyboard down with it. The decision is made when the window turns short or tall, so moving the focus between the editor and the panel while the keyboard stays up does not change it.
 
-Only the grid is touched; the layout state and the open view are left alone. The part visibility listener skips the change the grid reports while the panel is out, which it would otherwise read as the user closing the panel. The size saved for the next start is read from the size the grid remembers for a hidden view while the panel is out, because the live size of a view outside the grid is 0 and a state save that ran in a short window would otherwise store it.
+The panel goes before the grid is sized and comes back after it. Shown into a grid that is still short, a panel is squeezed to its minimum height, and the grid then gives the room the window gained to the editor, so a panel that was 218px tall came back at 69px (measured on an API 37 emulator with a 411dp wide screen, the keyboard raised and put away again). updateShortWindow takes a flag for the call after the grid layout: before it only a window turning short is acted on (the panel is hidden at the size it had, which is the size the grid remembers for it), after it only a window turning tall. The title bar and the status bar follow the same order.
+
+The layout state still says the panel is open, so it is drawn again at its size when the window is tall. While it is out the part visibility listener skips the change the grid reports, which it would otherwise read as the user closing the panel, and `isVisible` answers false for it, so everything that asks treats it as hidden: a toggle, a focus request or running a file shows it instead of closing a panel nobody can see, a maximize or a move to another side reads the size the grid remembers for a hidden view (the live size of a view outside the grid is 0), and so does the size saved for the next start. Showing or hiding the panel ends the yield.
+
+A panel that stays in a short window, because it holds the focus or because it was shown there, is squeezed to its minimum, and the grid gives the room the window gains to the editor. So the height the panel had when the window turned short, or the one the grid remembers for it when it was closed, is remembered. It is given back when the window is tall again, or when the panel is next shown in a tall window if it is closed by then, capped at 70% of the window it comes back to, and a panel maximized in the meantime gets it as the height it returns to. In the short window it is saved in place of the squeezed one. A maximized panel has no height of its own, so the height it returns to when it is un-maximized is remembered.
+
+Zen mode and a maximized secondary side bar record whether the panel was open, and a panel that is out counts as open there; a panel does not yield beside a maximized secondary side bar. A panel whose last view was closed while it was out is closed when the window turns tall, because hiding its composite while isVisible answered false left it open and empty.
+
+An editor sash snapping the yielded panel open is reconciled after the grid finishes resizing,
+without publishing the incidental show or changing the user's panel state. An explicit panel
+show still ends the yield. Moving a yielded panel to a side preserves its remembered horizontal
+height instead of saving the height squeezed by the short grid.
+Moving a side panel back above or below the editor in a short window also remembers the requested
+horizontal height before the grid squeezes it, so a subsequent focus resize can restore it.
+
+Measured on an API 33 emulator (WebView 149, 411dp wide, landscape) with the keyboard up and the panel out: Ctrl+J used to do nothing the first time and show the panel at 97px, with the editor at 13px, the second time, and the panel was still 97px once the keyboard was away. Now the first press shows it, and a 203px panel is 203px after the keyboard goes away whether it was out, shown in the short window, closed there and shown again in a tall one, focused through it, or maximized when the window turned short and un-maximized in it. Killing the last terminal while the panel is out leaves it closed when the window turns tall.
 
 diff --git a/src/vs/workbench/browser/layout.ts b/src/vs/workbench/browser/layout.ts
-index 45cc5f0..cb6922f 100644
+index 59ca3d9c..dede8f40 100644
 --- a/src/vs/workbench/browser/layout.ts
 +++ b/src/vs/workbench/browser/layout.ts
-@@ -290,6 +290,7 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
+@@ -290,6 +290,8 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
  
  	private initialized = false;
  	private shortWindow = false;
 +	private panelYielded = false;
++	private panelHeightBeforeShort: number | undefined;
  	private workbenchGrid!: SerializableGrid<ISerializableView>;
  
  	private titleBarPartView!: ISerializableView;
-@@ -1711,7 +1712,7 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
+@@ -1385,7 +1387,9 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
+ 			case Parts.SIDEBAR_PART:
+ 				return !this.stateModel.getRuntimeValue(LayoutStateKeys.SIDEBAR_HIDDEN);
+ 			case Parts.PANEL_PART:
+-				return !this.stateModel.getRuntimeValue(LayoutStateKeys.PANEL_HIDDEN);
++				// VSCodroid: a panel the grid has put away for a short window is not showing, so everything that asks
++				// treats it as hidden: a toggle shows it, and the size it had is the one the grid remembers.
++				return !this.stateModel.getRuntimeValue(LayoutStateKeys.PANEL_HIDDEN) && !this.panelYielded;
+ 			case Parts.AUXILIARYBAR_PART:
+ 				return !this.stateModel.getRuntimeValue(LayoutStateKeys.AUXILIARYBAR_HIDDEN);
+ 			case Parts.STATUSBAR_PART:
+@@ -1500,7 +1504,7 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
+ 				zenModeExitInfo.transitionedToCenteredEditorLayout = !this.isMainEditorLayoutCentered() && config.centerLayout;
+ 				zenModeExitInfo.handleNotificationsDoNotDisturbMode = this.notificationService.getFilter() === NotificationsFilter.OFF;
+ 				zenModeExitInfo.wasVisible.sideBar = this.isVisible(Parts.SIDEBAR_PART);
+-				zenModeExitInfo.wasVisible.panel = this.isVisible(Parts.PANEL_PART);
++				zenModeExitInfo.wasVisible.panel = this.isVisible(Parts.PANEL_PART) || this.panelYielded;
+ 				zenModeExitInfo.wasVisible.auxiliaryBar = this.isVisible(Parts.AUXILIARYBAR_PART);
+ 				this.stateModel.setRuntimeValue(LayoutStateKeys.ZEN_MODE_EXIT_INFO, zenModeExitInfo);
+ 			}
+@@ -1701,6 +1705,17 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
+ 
+ 		for (const part of [titleBar, editorPart, activityBar, panelPart, sideBar, statusBar, auxiliaryBarPart, bannerPart]) {
+ 			this._register(part.onDidVisibilityChange(visible => {
++				if (part === panelPart && this.panelYielded && visible) {
++					// A sash can snap a hidden panel open while the editor still needs its height.
++					// Wait until the grid finishes resizing before putting the yielded view away again.
++					queueMicrotask(() => {
++						if (this.panelYielded && this.workbenchGrid.isViewVisible(this.panelPartView)) {
++							this.workbenchGrid.setViewVisible(this.panelPartView, false);
++						}
++					});
++					return;
++				}
++
+ 				if (!this.inMaximizedAuxiliaryBarTransition) {
+ 
+ 					// skip reacting when we are transitioning
+@@ -1711,7 +1726,7 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
  
  					if (part === sideBar) {
  						this.setSideBarHidden(!visible);
@@ -27,20 +81,147 @@ index 45cc5f0..cb6922f 100644
  						this.setPanelHidden(!visible, true);
  					} else if (part === auxiliaryBarPart) {
  						this.setAuxiliaryBarHidden(!visible, true);
-@@ -1742,7 +1743,7 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
+@@ -1742,11 +1757,13 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
  			this.stateModel.setInitializationValue(LayoutStateKeys.SIDEBAR_SIZE, sideBarSize as number);
  
  			// Panel Size
 -			const panelSize = this.stateModel.getRuntimeValue(LayoutStateKeys.PANEL_HIDDEN)
-+			const panelSize = this.stateModel.getRuntimeValue(LayoutStateKeys.PANEL_HIDDEN) || this.panelYielded
- 				? this.workbenchGrid.getViewCachedVisibleSize(this.panelPartView)
- 				: isHorizontal(this.stateModel.getRuntimeValue(LayoutStateKeys.PANEL_POSITION))
- 					? this.workbenchGrid.getViewSize(this.panelPartView).height
-@@ -2404,6 +2405,23 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
+-				? this.workbenchGrid.getViewCachedVisibleSize(this.panelPartView)
+-				: isHorizontal(this.stateModel.getRuntimeValue(LayoutStateKeys.PANEL_POSITION))
+-					? this.workbenchGrid.getViewSize(this.panelPartView).height
+-					: this.workbenchGrid.getViewSize(this.panelPartView).width;
++			const panelSize = isHorizontal(this.getPanelPosition()) && this.panelHeightBeforeShort !== undefined
++				? this.panelHeightBeforeShort
++				: this.stateModel.getRuntimeValue(LayoutStateKeys.PANEL_HIDDEN) || this.panelYielded
++					? this.workbenchGrid.getViewCachedVisibleSize(this.panelPartView)
++					: isHorizontal(this.stateModel.getRuntimeValue(LayoutStateKeys.PANEL_POSITION))
++						? this.workbenchGrid.getViewSize(this.panelPartView).height
++						: this.workbenchGrid.getViewSize(this.panelPartView).width;
+ 			this.stateModel.setInitializationValue(LayoutStateKeys.PANEL_SIZE, panelSize as number);
+ 
+ 			// Auxiliary Bar Size
+@@ -1781,6 +1798,7 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
+ 
+ 			// Layout the grid widget
+ 			this.workbenchGrid.layout(this._mainContainerDimension.width, this._mainContainerDimension.height);
++			this.updateShortWindow(this._mainContainerDimension.height, true);
+ 			this.initialized = true;
+ 
+ 			// Emit as event
+@@ -2113,6 +2131,10 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
+ 		const wasHidden = !this.isVisible(Parts.PANEL_PART);
+ 		const isPanelMaximized = this.isPanelMaximized();
+ 
++		// VSCodroid: showing or hiding the panel is the user's word on it, and ends the yield. The grid is told
++		// below, and a flag left standing would make the next state read or flip act on a panel that is not there.
++		this.panelYielded = false;
++
+ 		this.stateModel.setRuntimeValue(LayoutStateKeys.PANEL_HIDDEN, hidden);
+ 
+ 		const panelOpensMaximized = this.panelOpensMaximized();
+@@ -2134,6 +2156,16 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
+ 		// Propagate layout changes to grid
+ 		this.workbenchGrid.setViewVisible(this.panelPartView, !hidden);
+ 
++		// VSCodroid: a panel shown in a tall window after a short one comes back at the height it had before it,
++		// and one the user hides in a tall window has no height to come back to.
++		if (!this.shortWindow) {
++			if (hidden) {
++				this.panelHeightBeforeShort = undefined;
++			} else {
++				this.restorePanelHeight();
++			}
++		}
++
+ 		// If panel part becomes hidden, also hide the current active panel if any
+ 		let focusEditor = false;
+ 		if (hidden && this.paneCompositeService.getActivePaneComposite(ViewContainerLocation.Panel)) {
+@@ -2205,7 +2237,7 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
+ 			const state = {
+ 				sideBarVisible: this.isVisible(Parts.SIDEBAR_PART),
+ 				editorVisible: this.isVisible(Parts.EDITOR_PART),
+-				panelVisible: this.isVisible(Parts.PANEL_PART),
++				panelVisible: this.isVisible(Parts.PANEL_PART) || this.panelYielded,
+ 				auxiliaryBarVisible: this.isVisible(Parts.AUXILIARYBAR_PART)
+ 			};
+ 			this.stateModel.setRuntimeValue(LayoutStateKeys.AUXILIARYBAR_WAS_LAST_MAXIMIZED, true);
+@@ -2394,16 +2426,100 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
+ 		return (targetWindow !== mainWindow || !this.shortWindow) && shouldShowCustomTitleBar(this.configurationService, targetWindow, targetWindow === mainWindow ? this.state.runtime.menuBar.toggled : undefined);
+ 	}
+ 
+-	private updateShortWindow(height: number): void {
++	private updateShortWindow(height: number, afterGridLayout = false): void {
+ 		if (!isAndroid) {
+ 			return;
+ 		}
+ 
++		// VSCodroid: a window turning short is acted on before the grid is sized, so the panel is hidden
++		// at the size it had and that size is what the grid remembers for it; a window turning tall is
++		// acted on after, because a panel shown into a grid that is still short is squeezed to its
++		// minimum and the grid then gives the room it gains to the editor.
+ 		const shortWindow = height < (this.shortWindow ? SHORT_WINDOW_RELEASE_HEIGHT : SHORT_WINDOW_HEIGHT);
+-		if (shortWindow !== this.shortWindow) {
++		if (shortWindow !== this.shortWindow && shortWindow !== afterGridLayout) {
++			if (shortWindow) {
++				this.rememberPanelHeight();
++			}
  			this.shortWindow = shortWindow;
  			this.workbenchGrid.setViewVisible(this.titleBarPartView, this.shouldShowTitleBar());
  			this.updateStatusBarVisibility();
 +			this.updatePanelYield();
++			if (!shortWindow) {
++				this.restorePanelHeight();
++			}
++		}
++	}
++
++	/**
++	 * VSCodroid: the height the panel had when the window turned short, taken before anything is hidden: the
++	 * live height of a panel that is showing, the grid's memory of one that is closed. A panel that stays in a
++	 * short window, because it holds the focus or because it was shown there, is squeezed to its minimum, and the
++	 * grid gives the room the window gains to the editor. A maximized panel has no height of its own, so the one
++	 * it returns to when it is un-maximized is remembered.
++	 */
++	private rememberPanelHeight(): void {
++		let height: number | undefined;
++		if (isHorizontal(this.getPanelPosition())) {
++			height = this.isPanelMaximized()
++				? this.stateModel.getRuntimeValue(LayoutStateKeys.PANEL_LAST_NON_MAXIMIZED_HEIGHT)
++				: this.isVisible(Parts.PANEL_PART)
++					? this.workbenchGrid.getViewSize(this.panelPartView).height
++					: this.workbenchGrid.getViewCachedVisibleSize(this.panelPartView);
++		}
++		this.panelHeightBeforeShort = height !== undefined && height > 0 ? height : undefined;
++	}
++
++	/**
++	 * VSCodroid: gives a panel that stayed in the short window back the height it had, capped at 70% of the
++	 * window it comes back to, which may be a different one after a turn. One the grid put away comes back at its
++	 * size already and is left alone, and one that is closed keeps the memory for when it is next shown. A panel
++	 * that was maximized in the meantime gets it as the height it returns to when it is un-maximized.
++	 */
++	private restorePanelHeight(): void {
++		const remembered = this.panelHeightBeforeShort;
++		if (remembered === undefined || !isHorizontal(this.getPanelPosition())) {
++			this.panelHeightBeforeShort = undefined;
++			return;
++		}
++
++		const height = Math.min(remembered, Math.floor(this._mainContainerDimension.height * 0.7));
++		if (this.isPanelMaximized()) {
++			this.stateModel.setRuntimeValue(LayoutStateKeys.PANEL_LAST_NON_MAXIMIZED_HEIGHT, height);
++			this.panelHeightBeforeShort = undefined;
++			return;
++		}
++
++		if (!this.isVisible(Parts.PANEL_PART)) {
++			return;
++		}
++
++		this.panelHeightBeforeShort = undefined;
++		const size = this.workbenchGrid.getViewSize(this.panelPartView);
++		if (size.height < height) {
++			this.workbenchGrid.resizeView(this.panelPartView, { width: size.width, height });
 +		}
 +	}
 +
@@ -52,11 +233,48 @@ index 45cc5f0..cb6922f 100644
 +	 * drawn again at its size when the window is tall.
 +	 */
 +	private updatePanelYield(): void {
-+		const yielded = this.shortWindow && isHorizontal(this.getPanelPosition()) && this.isVisible(Parts.PANEL_PART) && this.isVisible(Parts.EDITOR_PART) && !this.hasFocus(Parts.PANEL_PART);
++		const open = !this.stateModel.getRuntimeValue(LayoutStateKeys.PANEL_HIDDEN);
++		const yielded = this.shortWindow && open && isHorizontal(this.getPanelPosition()) && this.isVisible(Parts.EDITOR_PART) && !this.isAuxiliaryBarMaximized() && !this.hasFocus(Parts.PANEL_PART);
 +		if (yielded !== this.panelYielded) {
 +			this.panelYielded = yielded;
-+			this.mainContainer.classList.toggle(LayoutClasses.PANEL_HIDDEN, yielded || !this.isVisible(Parts.PANEL_PART));
-+			this.workbenchGrid.setViewVisible(this.panelPartView, !yielded && this.isVisible(Parts.PANEL_PART));
++			this.mainContainer.classList.toggle(LayoutClasses.PANEL_HIDDEN, yielded || !open);
++			if (!yielded && open && !this.paneCompositeService.getActivePaneComposite(ViewContainerLocation.Panel)) {
++				// Closing the last view of a panel that was out hid its composite and nothing else, because
++				// isVisible answered false for it: it would come back open and empty.
++				this.setPanelHidden(true, true);
++				return;
++			}
++			this.workbenchGrid.setViewVisible(this.panelPartView, !yielded && open);
  		}
+ 	}
+ 
+@@ -2481,7 +2597,7 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
+ 			if (isHorizontal(position)) {
+ 				this.stateModel.setRuntimeValue(LayoutStateKeys.PANEL_LAST_NON_MAXIMIZED_WIDTH, size.width);
+ 			} else if (isHorizontal(positionFromString(oldPositionValue))) {
+-				this.stateModel.setRuntimeValue(LayoutStateKeys.PANEL_LAST_NON_MAXIMIZED_HEIGHT, size.height);
++				this.stateModel.setRuntimeValue(LayoutStateKeys.PANEL_LAST_NON_MAXIMIZED_HEIGHT, this.panelHeightBeforeShort ?? size.height);
+ 			}
+ 		}
+ 
+@@ -2497,6 +2613,11 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
+ 
+ 		const hadFocus = this.hasFocus(Parts.PANEL_PART);
+ 
++		// Preserve the requested horizontal height before the short grid squeezes it.
++		if (this.shortWindow && isHorizontal(position)) {
++			this.panelHeightBeforeShort ??= this.stateModel.getRuntimeValue(LayoutStateKeys.PANEL_LAST_NON_MAXIMIZED_HEIGHT);
++		}
++
+ 		if (position === Position.BOTTOM) {
+ 			this.workbenchGrid.moveView(this.panelPartView, editorHidden ? size.height : this.stateModel.getRuntimeValue(LayoutStateKeys.PANEL_LAST_NON_MAXIMIZED_HEIGHT), this.editorPartView, Direction.Down);
+ 		} else if (position === Position.TOP) {
+@@ -2526,6 +2647,8 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
+ 			this.adjustPartPositions(this.getSideBarPosition(), this.getPanelAlignment(), position);
+ 		}
+ 
++		this.updatePanelYield();
++
+ 		this._onDidChangePanelPosition.fire(newPositionValue);
  	}
  

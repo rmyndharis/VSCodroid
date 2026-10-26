@@ -17,7 +17,6 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
-import java.util.concurrent.TimeUnit
 
 /**
  * What the terminal prompt shows inside a device folder's copy.
@@ -103,9 +102,7 @@ class PromptDirectoryTest {
             put("HOME", home.path)
             put("PWD", dir.path)
         }
-        val process = builder.start()
-        val out = process.inputStream.bufferedReader().readText()
-        assertTrue(process.waitFor(30, TimeUnit.SECONDS), "bash did not finish")
+        val out = finishTestProcess(builder.start()).second
         val lines = out.lines().filter { it.isNotEmpty() }
         assertEquals(1, lines.size, "the shell printed something besides the prompt: $lines")
         return lines.single()

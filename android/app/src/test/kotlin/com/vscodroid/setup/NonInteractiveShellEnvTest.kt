@@ -14,6 +14,7 @@ import io.mockk.mockkStatic
 import io.mockk.unmockkAll
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Assumptions.assumeTrue
@@ -21,7 +22,6 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
-import java.util.concurrent.TimeUnit
 
 /**
  * What a shell that is not interactive can run.
@@ -367,8 +367,7 @@ class NonInteractiveShellEnvTest {
                 environment().remove("BASH_ENV")
                 environment().put("HOME", bashrc.parent)
             }.start()
-        val output = process.inputStream.bufferedReader().readText()
-        assertTrue(process.waitFor(30, TimeUnit.SECONDS), "interactive bash did not finish")
+        val output = finishTestProcess(process).second
         assertTrue(output.contains("C/C++ toolchain"), "the interactive shell kept old guidance: $output")
         assertFalse(output.contains("cannot run one"), "the interactive shell kept the old restriction: $output")
         assertTrue(output.contains("status=3"), "pip's exit status changed: $output")
@@ -672,9 +671,96 @@ class NonInteractiveShellEnvTest {
             if (bashEnv != null) put("BASH_ENV", bashEnv)
             put("HOME", File(filesDir, "home").apply { mkdirs() }.path)
         }
-        val process = builder.start()
-        val out = process.inputStream.bufferedReader().readText()
-        assertTrue(process.waitFor(30, TimeUnit.SECONDS), "bash did not finish")
+        val out = finishTestProcess(builder.start()).second
         return out.lines().map { it.trim() }.filter { it.isNotEmpty() }
     }
+
+    private val olderClaudeBlock = """
+
+# claude: the CLI the Claude Code extension brings with it. Started through
+# musl's loader: the CLI is a musl binary under filesDir, which SELinux will not
+# execve but will let a loader map. libldmusl.so is found on PATH, which already
+# includes nativeLibraryDir.
+claude() {
+    local cli="" c
+    # An update can leave two versioned directories side by side, which made the
+    # old echo-glob expand to two space-joined paths and fail the -f test. Take
+    # the most recently installed candidate; -nt is a bash builtin, so this
+    # leans on nothing external. [Aa] covers a gallery serving the publisher
+    # name lowercased.
+    for c in "${'$'}HOME"/.vscodroid/extensions/[Aa]nthropic.claude-code-*/resources/native-binary/claude; do
+        [ -f "${'$'}c" ] || continue
+        if [ -z "${'$'}cli" ] || [ "${'$'}c" -nt "${'$'}cli" ]; then cli="${'$'}c"; fi
+    done
+    if [ ! -f "${'$'}cli" ]; then
+        echo "claude: install the Claude Code extension first" >&2
+        return 127
+    fi
+    libldmusl.so "${'$'}cli" "${'$'}@"
+}
+"""
+
+    @Test
+    fun `an older owned interactive Claude wrapper receives the current launcher`() {
+        val npm = File(filesDir, "usr/lib/node_modules/npm/bin/npm-cli.js")
+        npm.parentFile.mkdirs()
+        npm.writeText("// npm")
+        val bashrc = File(filesDir, "home/.bashrc")
+        bashrc.parentFile.mkdirs()
+        val alias = "alias keep_me='printf preserved'\n"
+        val prefix = byteArrayOf('#'.code.toByte(), 0xE9.toByte(), 0xFF.toByte(), '\n'.code.toByte())
+        bashrc.writeBytes(prefix + (alias + olderClaudeBlock).toByteArray())
+        val setup = FirstRunSetup(context)
+
+        setup.createNpmWrappers()
+        val updated = bashrc.readText()
+
+        assertTrue(updated.contains("    libclaude-launch.so "))
+        assertFalse(updated.contains("    libldmusl.so "))
+        assertTrue(updated.contains(alias))
+        assertArrayEquals(prefix, bashrc.readBytes().copyOf(prefix.size))
+        assertEquals(1, Regex("(?m)^claude\\(\\)").findAll(updated).count())
+        setup.createNpmWrappers()
+        assertEquals(updated, bashrc.readText())
+    }
+
+    @Test
+    fun `a custom interactive Claude function remains unchanged`() {
+        val npm = File(filesDir, "usr/lib/node_modules/npm/bin/npm-cli.js")
+        npm.parentFile.mkdirs()
+        npm.writeText("// npm")
+        val bashrc = File(filesDir, "home/.bashrc")
+        bashrc.parentFile.mkdirs()
+        for (definition in listOf("claude()", "claude ()", "function claude", "function claude()")) {
+            val custom = "$definition { printf custom; }\n"
+            bashrc.writeText(custom)
+
+            FirstRunSetup(context).createNpmWrappers()
+
+            assertTrue(bashrc.readText().startsWith(custom))
+            assertFalse(bashrc.readText().contains("    libclaude-launch.so "))
+        }
+    }
+
+    @Test
+    fun `a blocked launcher migration preserves bashrc and retries after unblocking`() {
+        val npm = File(filesDir, "usr/lib/node_modules/npm/bin/npm-cli.js")
+        npm.parentFile.mkdirs()
+        npm.writeText("// npm")
+        val bashrc = File(filesDir, "home/.bashrc")
+        bashrc.parentFile.mkdirs()
+        bashrc.writeText(olderClaudeBlock)
+        val original = bashrc.readBytes()
+        val blocker = File(bashrc.parentFile, "${bashrc.name}.tmp~").apply { mkdirs() }
+        File(blocker, "occupied").writeText("x")
+        val setup = FirstRunSetup(context)
+
+        setup.createNpmWrappers()
+
+        assertArrayEquals(original, bashrc.readBytes())
+        assertTrue(blocker.deleteRecursively())
+        setup.createNpmWrappers()
+        assertTrue(bashrc.readText().contains("    libclaude-launch.so "))
+    }
+
 }

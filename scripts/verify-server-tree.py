@@ -13,6 +13,7 @@ import json
 import os
 import pathlib
 import struct
+import subprocess
 import sys
 
 # e_machine values from the ELF spec. The tree also carries Windows PE addons for
@@ -216,7 +217,21 @@ def check_default_theme(tree, bundled=BUNDLED_EXTENSIONS):
                   "extensions/theme-defaults/package.json spells it.")
 
 
+def check_language_detection(tree):
+    label = "language model CPU backend is inlined"
+    helper = pathlib.Path(__file__).with_name("patch-language-detection.py")
+    package = tree / "node_modules/@vscode/vscode-languagedetection"
+    try:
+        result = subprocess.run([sys.executable, str(helper), "--check", str(package)],
+                                capture_output=True, text=True, timeout=10)
+    except (OSError, subprocess.SubprocessError) as error:
+        check(False, label, str(error))
+        return
+    check(result.returncode == 0, label, (result.stdout + result.stderr).strip())
+
+
 def main(tree):
+    check_language_detection(tree)
     for rel in REQUIRED:
         found = present(tree / rel, rel)
         if found is not None:

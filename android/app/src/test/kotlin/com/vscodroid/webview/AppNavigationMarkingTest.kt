@@ -1,11 +1,12 @@
 package com.vscodroid.webview
 
 import com.vscodroid.SourceScan
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
 /**
- * That every navigation this app performs is marked as its own.
+ * Explicit page replacements are marked, while automatic recovery preserves vetoes.
  *
  * `onJsBeforeUnload` answers the confirm only while [MainActivity.navigationIsOurs]
  * is true, and it is true only for a window after `markAppNavigation()`. The
@@ -70,17 +71,18 @@ class AppNavigationMarkingTest {
      * rules share it: nothing is in front of the page it loads.
      */
     @Test
-    fun `every navigation this app starts marks itself first`() {
+    fun `explicit page replacements mark themselves first`() {
         val source = mainActivity()
         val sites = sitesLoading(source, NAVIGATION)
+            .filterNot { (declaration, _) -> declaration.endsWith("fun handleResumeFromBackground(") }
 
         // The control for the case itself. A scan that matches nothing passes
         // every assertion below it, which is the one way a derived list is weaker
-        // than a written one. Four is what MainActivity holds today; a change that
+        // than a written one. Three explicit replacement sites exist; a change that
         // legitimately removes one updates this number and says which. It was five
         // until loadVSCode stopped loading the closed-folder URL itself and went
         // through navigateToFolder, which rebuilds it with the live token.
-        assertTrue(sites.size >= 4) {
+        assertTrue(sites.size >= 3) {
             "found ${sites.size} page-replacing functions in MainActivity, so this scan has " +
                 "stopped matching them and would pass by looking at nothing"
         }
@@ -98,6 +100,13 @@ class AppNavigationMarkingTest {
                     "the veto is asked during the load"
             }
         }
+    }
+
+    @Test
+    fun `automatic background recovery leaves an unsaved-work veto unmarked`() {
+        val body = SourceScan.body(mainActivity(), "private fun handleResumeFromBackground(")
+        assertTrue(body.contains("webView?.reload()"))
+        assertFalse(body.contains("markAppNavigation()"))
     }
 
     /**

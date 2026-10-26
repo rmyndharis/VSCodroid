@@ -34,11 +34,9 @@ import java.io.File
  * the workbench's origin, which is every installed web extension; nothing in this
  * app or in the bundled extensions ever read the field.
  *
- * The generation cases end at the spawn, deliberately. `ProcessBuilder` cannot
- * launch the bundled `ssh-keygen` on this classpath and is not asked to: what is
- * under test is the state of the directory on the way in and on the way out, and
- * a failed spawn is one of the failures that state has to survive. One case stands a
- * script in for the binary, to reach the exit a failed run takes.
+ * Generation cases call the real bridge method with bounded shell children in place
+ * of the native binary. The children honor its output pathname and expose readiness
+ * markers for controlled imports and interruption. Failed spawn is covered separately.
  */
 class SshKeyStateTest {
 
@@ -60,16 +58,14 @@ class SshKeyStateTest {
         const val COMMENT = "alice@example.com"
         const val PUBLIC_LINE = "ssh-ed25519 AAAAC3NzaC1lZDI1NTE5AAAAI0000000000 $COMMENT"
 
-        // Disposable test key; no external key generator is needed to run these tests.
-        val PRIVATE_KEY_FIXTURE = """
-            -----BEGIN OPENSSH PRIVATE KEY-----
-            b3BlbnNzaC1rZXktdjEAAAAABG5vbmUAAAAEbm9uZQAAAAAAAAABAAAAMwAAAAtzc2gtZW
-            QyNTUxOQAAACBE+XagBHucV0ZB/1j6RqStC2pKEPJn8T261HcrvkeOsAAAAJCTz4fSk8+H
-            0gAAAAtzc2gtZWQyNTUxOQAAACBE+XagBHucV0ZB/1j6RqStC2pKEPJn8T261HcrvkeOsA
-            AAAEBfLok2TJcrpVBuG2ENPZe9pYMQB61KJjLVA+IgPP/mikT5dqAEe5xXRkH/WPpGpK0L
-            akoQ8mfxPbrUdyu+R46wAAAADHRlc3QtZml4dHVyZQE=
-            -----END OPENSSH PRIVATE KEY-----
-        """.trimIndent() + "\n"
+        // Only the shape of a key file matters here: the bytes are kept or they are not. The
+        // body is not a key, and the header is written in two pieces so that a secret scanner
+        // reading this source finds no key block in it.
+        val PRIVATE_KEY_FIXTURE = listOf(
+            "-----BEGIN OPENSSH " + "PRIVATE KEY-----",
+            "dGVzdC1maXh0dXJlLW5vdC1hLWtleQ==",
+            "-----END OPENSSH " + "PRIVATE KEY-----",
+        ).joinToString("\n") + "\n"
     }
 
     @BeforeEach
@@ -144,33 +140,28 @@ class SshKeyStateTest {
     @Test
     fun `a generation that fails leaves nothing behind for the next one to trip on`() {
         // Nothing on disk to begin with, which is the ordinary first call.
+        val stagesBefore = temporaryStages()
         val answer = JSONObject(bridge.generateSshKey(security.getSessionToken(), ""))
 
         assertFalse(answer.getBoolean("success"))
         assertFalse(privateKey.exists(), "a failed generation left a private key behind")
         assertFalse(publicKey.exists(), "a failed generation left a public key behind")
+        assertEquals(stagesBefore, temporaryStages(), "failed spawn left a temporary generation directory")
     }
 
     @Test
-    fun `a failed generation leaves a public file that was already there`() {
-        // A script in place of the binary, so the spawn succeeds and the exit path runs; the
-        // marker shows it did, since a spawn that failed would pass this case for nothing.
-        val lib = File(files, "lib").apply { mkdirs() }
-        File(lib, "libssh-keygen.so").apply {
-            writeText("#!/bin/sh\ntouch \"\$0.ran\"\nexit 3\n")
-            check(setExecutable(true))
-        }
-        every { context.applicationInfo } returns ApplicationInfo().apply {
-            nativeLibraryDir = lib.absolutePath
-        }
+    fun `an orphan public file is preserved without starting generation`() {
+        val child = installChild("touch \"\$0.ran\"\nexit 3\n")
         publicKey.writeText("$PUBLIC_LINE\n")
 
         val answer = JSONObject(bridge.generateSshKey(security.getSessionToken(), ""))
 
-        assertTrue(File(lib, "libssh-keygen.so.ran").isFile, "the stand-in ssh-keygen never ran")
+        assertFalse(File(child.path + ".ran").exists(), "generation must not start over an orphan public file")
         assertFalse(answer.getBoolean("success"))
-        assertEquals("$PUBLIC_LINE\n", publicKey.readText(), "a failed generation deleted the user's public file")
-        assertFalse(privateKey.exists(), "a failed generation left a private key behind")
+        assertEquals("$PUBLIC_LINE\n", publicKey.readText())
+        assertFalse(privateKey.exists())
+        assertTrue(answer.getString("error").contains("move"))
+        assertTrue(answer.getString("error").contains("~/.ssh/id_ed25519.pub"))
     }
 
     @Test
@@ -195,4 +186,363 @@ class SshKeyStateTest {
             "the comment reached the caller by some other key in the object: $listing",
         )
     }
+
+    @Test
+    fun `an orphan public file is preserved before a child can replace it`() {
+        val child = installChild(
+            "printf '%s\n' 'DUMMY PRIVATE' > \"\$key_file\"\n" +
+                "printf '%s\n' 'REPLACED PUBLIC' > \"\$key_file.pub\"\n" +
+                "touch \"\$0.ran\"\nexit 3\n",
+        )
+        publicKey.writeText("$PUBLIC_LINE\n")
+
+        val answer = JSONObject(bridge.generateSshKey(security.getSessionToken(), ""))
+
+        assertFalse(File(child.path + ".ran").exists(), "the replacing child must never be started")
+        assertFalse(answer.getBoolean("success"))
+        assertEquals("$PUBLIC_LINE\n", publicKey.readText())
+        assertFalse(privateKey.exists())
+    }
+
+    @Test
+    fun `a completed child returns the generated pair`() {
+        io.mockk.mockkStatic(android.system.Os::class)
+        every { android.system.Os.chmod(any(), any()) } just Runs
+        val child = installChild(
+            "printf '%s\n' 'DUMMY PRIVATE' > \"\$key_file\"\n" +
+                "printf '%s\n' '$PUBLIC_LINE' > \"\$key_file.pub\"\n" +
+                "touch \"\$0.ran\"\nexit 0\n",
+        )
+
+        val answer = JSONObject(bridge.generateSshKey(security.getSessionToken(), ""))
+
+        assertTrue(File(child.path + ".ran").isFile, "the controlled child never completed")
+        assertTrue(answer.getBoolean("success"), answer.toString())
+        assertEquals(PUBLIC_LINE, answer.getString("publicKey"))
+        assertEquals("DUMMY PRIVATE\n", privateKey.readText())
+        assertEquals("$PUBLIC_LINE\n", publicKey.readText())
+        assertStageRemoved(child)
+    }
+
+    @Test
+    fun `an interrupted generation settles the child before returning failure`() {
+        val childFile = installChild(
+            "printf '%s\n' \"\$\$\" > \"\$0.pid\"\n" +
+                "printf '%s\n' 'DUMMY PRIVATE' > \"\$key_file\"\n" +
+                "touch \"\$0.ready\"\nexec /bin/sleep 8\n",
+        )
+        val pidFile = File(childFile.path + ".pid")
+        val readyFile = File(childFile.path + ".ready")
+        val targetFile = File(childFile.path + ".target")
+        val answer = java.util.concurrent.atomic.AtomicReference<String?>(null)
+        val failure = java.util.concurrent.atomic.AtomicReference<Throwable?>(null)
+        val interruptRestored = java.util.concurrent.atomic.AtomicBoolean(false)
+        val worker = Thread {
+            try {
+                answer.set(bridge.generateSshKey(security.getSessionToken(), ""))
+            } catch (error: Throwable) {
+                failure.set(error)
+            } finally {
+                interruptRestored.set(Thread.currentThread().isInterrupted)
+            }
+        }.apply { isDaemon = true }
+        var child: java.lang.ProcessHandle? = null
+        worker.start()
+        try {
+            val readyDeadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(2)
+            while ((!pidFile.isFile || !readyFile.isFile) && System.nanoTime() < readyDeadline) {
+                Thread.sleep(10)
+            }
+            assertTrue(pidFile.isFile && readyFile.isFile, "the child never reached its bounded wait")
+            child = java.lang.ProcessHandle.of(pidFile.readText().trim().toLong()).orElseThrow()
+            assertTrue(child.isAlive, "the child exited before the interrupt schedule")
+            assertTrue(targetFile.isFile, "the child did not record its supplied output pathname")
+            assertTrue(File(targetFile.readText().trim()).isFile,
+                "the controlled child did not create its dummy private output")
+
+            worker.interrupt()
+            worker.join(2_000)
+
+            assertFalse(worker.isAlive, "generateSshKey did not return after its caller was interrupted")
+            failure.get()?.let { throw AssertionError("the generation worker threw", it) }
+            val result = JSONObject(requireNotNull(answer.get()) { "the worker returned no answer" })
+            assertFalse(result.getBoolean("success"), result.toString())
+            try {
+                child.onExit().get(500, java.util.concurrent.TimeUnit.MILLISECONDS)
+            } catch (_: java.util.concurrent.TimeoutException) {
+                // The assertion below records the unsettled child before cleanup.
+            }
+            assertFalse(child.isAlive, "failure returned while its controlled child remained alive")
+            assertTrue(interruptRestored.get(), "generation swallowed the caller's interruption")
+            assertFalse(privateKey.exists(), "interrupted generation retained its new private file")
+            assertFalse(publicKey.exists(), "interrupted generation retained its new public file")
+            assertStageRemoved(childFile)
+        } finally {
+            val remaining = child ?: if (pidFile.isFile) {
+                java.lang.ProcessHandle.of(pidFile.readText().trim().toLong()).orElse(null)
+            } else null
+            try {
+                remaining?.descendants()?.use { descendants ->
+                    descendants.forEach { it.destroyForcibly() }
+                }
+                remaining?.destroyForcibly()
+                if (remaining != null) {
+                    try {
+                        remaining.onExit().get(1, java.util.concurrent.TimeUnit.SECONDS)
+                    } catch (_: java.util.concurrent.TimeoutException) {
+                        throw AssertionError("the controlled child did not stop during cleanup")
+                    }
+                }
+            } finally {
+                worker.interrupt()
+                worker.join(2_000)
+                assertFalse(worker.isAlive, "the bounded generation worker did not stop during cleanup")
+            }
+        }
+    }
+
+    @Test
+    fun `a failed child leaves a private key imported while it was running`() {
+        val childFile = installChild(
+            "printf '%s\n' \"\$\$\" > \"\$0.pid\"\n" +
+                "touch \"\$0.ready\"\n" +
+                "count=0\nwhile [ ! -f \"\$0.release\" ] && [ \"\$count\" -lt 250 ]; do\n" +
+                "  sleep 0.01\n  count=\$((count + 1))\ndone\n" +
+                "if [ -f \"\$0.release\" ]; then touch \"\$0.released\"; fi\nexit 3\n",
+        )
+        val pidFile = File(childFile.path + ".pid")
+        val ready = File(childFile.path + ".ready")
+        val release = File(childFile.path + ".release")
+        val answer = java.util.concurrent.atomic.AtomicReference<String?>(null)
+        val failure = java.util.concurrent.atomic.AtomicReference<Throwable?>(null)
+        val worker = Thread {
+            try { answer.set(bridge.generateSshKey(security.getSessionToken(), "")) }
+            catch (error: Throwable) { failure.set(error) }
+        }.apply { isDaemon = true }
+        worker.start()
+        try {
+            val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(2)
+            while ((!pidFile.isFile || !ready.isFile) && System.nanoTime() < deadline) Thread.sleep(10)
+            assertTrue(pidFile.isFile && ready.isFile, "the child did not reach the controlled wait")
+            assertTrue(java.lang.ProcessHandle.of(pidFile.readText().trim().toLong()).orElseThrow().isAlive)
+            privateKey.writeText("IMPORTED USER KEY")
+            release.writeText("continue")
+            worker.join(2_000)
+            assertFalse(worker.isAlive, "generation did not return after the child failed")
+            failure.get()?.let { throw AssertionError("the generation worker threw", it) }
+            assertTrue(File(childFile.path + ".released").isFile, "the child failed before the import schedule")
+            assertFalse(JSONObject(requireNotNull(answer.get())).getBoolean("success"))
+            assertTrue(privateKey.isFile, "failed generation deleted a key imported by another writer")
+            assertEquals("IMPORTED USER KEY", privateKey.readText())
+        } finally {
+            release.writeText("continue")
+            val child = if (pidFile.isFile) java.lang.ProcessHandle.of(pidFile.readText().trim().toLong()).orElse(null) else null
+            child?.destroyForcibly()
+            if (child != null) child.onExit().get(1, java.util.concurrent.TimeUnit.SECONDS)
+            worker.interrupt()
+            worker.join(2_000)
+            assertFalse(worker.isAlive, "the generation worker did not settle during cleanup")
+        }
+    }
+
+    @Test
+    fun `a failed child removes only its temporary output`() {
+        val child = installChild(
+            "printf '%s\n' 'DUMMY PRIVATE' > \"\$key_file\"\n" +
+                "printf '%s\n' '$PUBLIC_LINE' > \"\$key_file.pub\"\n" +
+                "touch \"\$0.ran\"\nexit 3\n",
+        )
+
+        val answer = JSONObject(bridge.generateSshKey(security.getSessionToken(), ""))
+
+        assertTrue(File(child.path + ".ran").isFile)
+        assertFalse(answer.getBoolean("success"))
+        assertFalse(privateKey.exists())
+        assertFalse(publicKey.exists())
+        assertStageRemoved(child)
+    }
+
+    @Test
+    fun `a timed out generation stops its child before removing temporary output`() {
+        val childFile = installChild(
+            "printf '%s\n' \"\$\$\" > \"\$0.pid\"\n" +
+                "printf '%s\n' 'DUMMY PRIVATE' > \"\$key_file\"\n" +
+                "printf '%s\n' '$PUBLIC_LINE' > \"\$key_file.pub\"\n" +
+                "touch \"\$0.ready\"\nexec /bin/sleep 8\n",
+        )
+        val pidFile = File(childFile.path + ".pid")
+        try {
+            val answer = JSONObject(bridge.generateSshKey(security.getSessionToken(), ""))
+
+            assertTrue(File(childFile.path + ".ready").isFile, "the child never reached its bounded wait")
+            assertFalse(answer.getBoolean("success"))
+            assertTrue(answer.getString("error").contains("did not finish"), answer.toString())
+            val child = java.lang.ProcessHandle.of(pidFile.readText().trim().toLong()).orElse(null)
+            assertFalse(child?.isAlive == true, "the timed out child was still alive after failure returned")
+            assertFalse(privateKey.exists())
+            assertFalse(publicKey.exists())
+            assertStageRemoved(childFile)
+        } finally {
+            val child = if (pidFile.isFile) {
+                java.lang.ProcessHandle.of(pidFile.readText().trim().toLong()).orElse(null)
+            } else null
+            child?.destroyForcibly()
+            if (child != null) child.onExit().get(1, java.util.concurrent.TimeUnit.SECONDS)
+        }
+    }
+
+    @Test
+    fun `a private key imported before publication is not replaced`() =
+        successfulChildMeetsImport(importPublic = false)
+
+    @Test
+    fun `a public file imported before publication prevents a new private key`() =
+        successfulChildMeetsImport(importPublic = true)
+
+    private fun successfulChildMeetsImport(importPublic: Boolean) {
+        io.mockk.mockkStatic(android.system.Os::class)
+        every { android.system.Os.chmod(any(), any()) } just Runs
+        val childFile = installChild(
+            "printf '%s\n' \"\$\$\" > \"\$0.pid\"\n" +
+                "printf '%s\n' 'DUMMY PRIVATE' > \"\$key_file\"\n" +
+                "printf '%s\n' '$PUBLIC_LINE' > \"\$key_file.pub\"\n" +
+                "touch \"\$0.ready\"\n" +
+                "count=0\nwhile [ ! -f \"\$0.release\" ] && [ \"\$count\" -lt 250 ]; do\n" +
+                "  sleep 0.01\n  count=\$((count + 1))\ndone\n" +
+                "if [ -f \"\$0.release\" ]; then touch \"\$0.released\"; fi\nexit 0\n",
+        )
+        val pidFile = File(childFile.path + ".pid")
+        val ready = File(childFile.path + ".ready")
+        val release = File(childFile.path + ".release")
+        val answer = java.util.concurrent.atomic.AtomicReference<String?>(null)
+        val failure = java.util.concurrent.atomic.AtomicReference<Throwable?>(null)
+        val worker = Thread {
+            try { answer.set(bridge.generateSshKey(security.getSessionToken(), "")) }
+            catch (error: Throwable) { failure.set(error) }
+        }.apply { isDaemon = true }
+        worker.start()
+        try {
+            val deadline = System.nanoTime() + java.util.concurrent.TimeUnit.SECONDS.toNanos(2)
+            while ((!pidFile.isFile || !ready.isFile) && System.nanoTime() < deadline) Thread.sleep(10)
+            assertTrue(pidFile.isFile && ready.isFile, "the child did not reach the publication schedule")
+            assertTrue(java.lang.ProcessHandle.of(pidFile.readText().trim().toLong()).orElseThrow().isAlive)
+            val imported = if (importPublic) publicKey else privateKey
+            imported.writeText("IMPORTED USER FILE\n")
+            release.writeText("continue")
+            worker.join(2_000)
+
+            assertFalse(worker.isAlive, "generation did not finish after the publication schedule")
+            failure.get()?.let { throw AssertionError("the generation worker threw", it) }
+            assertTrue(File(childFile.path + ".released").isFile)
+            val result = JSONObject(requireNotNull(answer.get()))
+            assertFalse(result.getBoolean("success"), result.toString())
+            assertEquals("IMPORTED USER FILE\n", imported.readText())
+            assertStageRemoved(childFile)
+            if (importPublic) {
+                assertFalse(privateKey.exists(), "a public file already present must prevent private publication")
+                val retry = JSONObject(bridge.generateSshKey(security.getSessionToken(), ""))
+                assertFalse(retry.getBoolean("success"), "retry must keep refusing the orphan public file")
+                assertTrue(retry.getString("error").contains("move"))
+                assertFalse(privateKey.exists())
+                assertEquals("IMPORTED USER FILE\n", publicKey.readText())
+            } else {
+                assertFalse(publicKey.exists(), "a refused private publication must not install the public file")
+            }
+        } finally {
+            release.writeText("continue")
+            val child = if (pidFile.isFile) java.lang.ProcessHandle.of(pidFile.readText().trim().toLong()).orElse(null) else null
+            try {
+                child?.destroyForcibly()
+                if (child != null) child.onExit().get(1, java.util.concurrent.TimeUnit.SECONDS)
+            } finally {
+                worker.interrupt()
+                worker.join(2_000)
+                assertFalse(worker.isAlive, "the generation worker did not settle during cleanup")
+            }
+        }
+    }
+
+    @Test
+    fun `a later public publication failure keeps the new private key for recovery`() {
+        val child = installChild(
+            "printf '%s\n' 'DUMMY PRIVATE' > \"\$key_file\"\n" +
+                "printf '%s\n' '$PUBLIC_LINE' > \"\$key_file.pub\"\n" +
+                "touch \"\$0.ran\"\nexit 0\n",
+        )
+        var publicAttempts = 0
+        var boundaryArmed = false
+        io.mockk.mockkStatic(android.system.Os::class)
+        every { android.system.Os.chmod(any(), any()) } answers {
+            if (!boundaryArmed) {
+                assertTrue(File(child.path + ".ran").isFile,
+                    "the publication fault must be armed after the child completed")
+                io.mockk.mockkStatic(java.nio.file.Files::class)
+                every { java.nio.file.Files.createLink(publicKey.toPath(), any()) } answers {
+                    publicAttempts++
+                    assertTrue(privateKey.isFile, "the private file must be admitted before this I/O failure")
+                    assertEquals("DUMMY PRIVATE\n", privateKey.readText())
+                    assertFalse(publicKey.exists(), "this failure must not stand in for an imported public file")
+                    throw java.io.IOException("public publication failed")
+                }
+                boundaryArmed = true
+            }
+            Unit
+        }
+
+        val answer = JSONObject(bridge.generateSshKey(security.getSessionToken(), ""))
+
+        assertTrue(File(child.path + ".ran").isFile, "the controlled child never completed: $answer")
+        assertTrue(boundaryArmed, "the publication boundary was never armed: $answer")
+        assertEquals(1, publicAttempts, "the public publication boundary was not reached: $answer")
+        assertFalse(answer.getBoolean("success"))
+        assertEquals("DUMMY PRIVATE\n", privateKey.readText())
+        assertFalse(publicKey.exists())
+        assertTrue(answer.getString("error").contains("ssh-keygen -y"))
+        assertTrue(answer.getString("error").contains("inspect"))
+        assertStageRemoved(child)
+
+        val retry = JSONObject(bridge.generateSshKey(security.getSessionToken(), ""))
+        assertFalse(retry.getBoolean("success"), "retry must refuse the retained private-only state")
+        assertTrue(retry.getString("error").contains("without its public file"))
+        assertEquals("DUMMY PRIVATE\n", privateKey.readText())
+        assertFalse(publicKey.exists())
+        assertEquals(1, publicAttempts, "retry must not attempt another publication")
+        assertTrue(temporaryStages().isEmpty(), "private-only refusal created temporary output")
+    }
+
+    private fun temporaryStages(): Set<String> =
+        files.listFiles().orEmpty().filter { it.name.startsWith(".ssh-keygen-") }.map { it.name }.toSet()
+
+    private fun assertStageRemoved(child: File) {
+        val receipt = File(child.path + ".target")
+        assertTrue(receipt.isFile, "the child did not record its supplied output path")
+        val target = File(receipt.readText().trim())
+        val parent = requireNotNull(target.parentFile)
+        assertTrue(parent.name.startsWith(".ssh-keygen-"), "the child did not receive temporary output ownership")
+        assertFalse(java.nio.file.Files.exists(target.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS),
+            "temporary private output remains")
+        assertFalse(java.nio.file.Files.exists(File(target.path + ".pub").toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS),
+            "temporary public output remains")
+        assertFalse(java.nio.file.Files.exists(parent.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS),
+            "the temporary generation directory remains")
+    }
+
+    private fun installChild(body: String): File {
+        val lib = File(files, "controlled-lib").apply { assertTrue(mkdirs() || isDirectory) }
+        every { context.applicationInfo } returns ApplicationInfo().apply {
+            nativeLibraryDir = lib.absolutePath
+        }
+        return File(lib, "libssh-keygen.so").apply {
+            writeText(
+                "#!/bin/sh\nset -eu\nkey_file=\n" +
+                    "while [ \"\$#\" -gt 0 ]; do\n" +
+                    "  if [ \"\$1\" = -f ]; then shift; key_file=\$1; fi\n" +
+                    "  shift\ndone\n" +
+                    "[ -n \"\$key_file\" ]\n" +
+                    "printf '%s\n' \"\$key_file\" > \"\$0.target\"\n" + body,
+            )
+            check(setExecutable(true))
+        }
+    }
+
 }

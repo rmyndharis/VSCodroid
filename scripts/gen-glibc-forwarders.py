@@ -804,7 +804,7 @@ def main():
         print("  ERROR: no such file: " + ", ".join(str(p) for p in missing),
               file=sys.stderr)
         return 1
-    if not inputs:
+    if not inputs and not (args.verify_against and blocked):
         return 0
     if args.verify_against:
         # Only when checking a tree that has been through the overlay. On the

@@ -535,6 +535,8 @@ dependencies {
 
 tasks.withType<Test> {
     useJUnitPlatform()
+    // MockK needs reflective access to Files internals for publication failure tests.
+    jvmArgs("--add-opens=java.base/java.nio.file=ALL-UNNAMED")
 
     // This build script is a genuine input to the unit tests, because one of
     // them reads it: NoticesTest parses the `bundleNotices` task to check that
@@ -1101,10 +1103,10 @@ fun jniLibsHoldsRealBinary(): Boolean =
 // assets-cache hit restores jniLibs/arm64-v8a/ wholesale with every download step
 // skipped by `if: cache-hit != 'true'`, and a local `./gradlew assembleDebug`
 // after an old fetch never re-downloads anything. scripts/verify-android-elf.py
-// is hashed into three CI cache keys: build.yml's `downloads-` and `assets-`,
-// and release.yml's `downloads-`. verify-server-tree.py is in the same three,
-// so the contrast this comment used to draw between them does not exist.
-// Tightening the checker therefore changes all three keys, the caches miss,
+// is hashed into four CI cache keys: build.yml's `downloads-` and `assets-`,
+// release.yml's `downloads-` and codeoss-build.yml's `codeoss-`. verify-server-tree.py
+// is in the same four, so the contrast this comment used to draw between them does
+// not exist. Tightening the checker therefore changes all four keys, the caches miss,
 // and every binary is fetched and examined again by the stricter version
 // rather than staying behind on the looser one. Re-measure with:
 //     grep -c 'verify-android-elf.py' .github/workflows/*.yml

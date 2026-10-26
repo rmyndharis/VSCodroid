@@ -232,11 +232,46 @@ internal fun redactSecrets(text: String): String =
     else text.split('\n').joinToString("\n") { redactOneLine(it) }
 
 private fun redactOneLine(line: String): String {
-    var out = line
+    var out = redactNamedSecrets(line)
     for ((pattern, replacement) in SECRET_PATTERNS) {
         out = out.replace(pattern, replacement)
     }
     return out
+}
+
+private fun redactNamedSecrets(line: String): String = buildString {
+    var copied = 0
+    for (match in NAMED_SECRET_PREFIX.findAll(line)) {
+        if (match.range.first < copied) continue
+        val start = match.range.last + 1
+        val escapedWrapper = line.getOrNull(start) == '\\' && line.getOrNull(start + 1) in listOf('"', '\'')
+        val quoteAt = start + if (escapedWrapper) 1 else 0
+        val quote = line.getOrNull(quoteAt)
+        var end = -1
+        if (quote == '"' || quote == '\'') {
+            var slashes = 0
+            for (index in quoteAt + 1 until line.length) {
+                val char = line[index]
+                // A JSON string wrapper doubles the slashes before an embedded quote.
+                if (char == quote && if (escapedWrapper) slashes % 4 == 1 else slashes % 2 == 0) {
+                    end = index + 1
+                    break
+                }
+                slashes = if (char == '\\') slashes + 1 else 0
+            }
+            // A truncated quoted value has no safe unquoted boundary.
+            if (end < 0) end = line.length
+        }
+        if (end < 0) {
+            val unquoted = UNQUOTED_SECRET_VALUE.find(line, start)
+            if (unquoted == null || unquoted.range.first != start) continue
+            end = unquoted.range.last + 1
+        }
+        append(line, copied, start)
+        append("<redacted>")
+        copied = end
+    }
+    append(line, copied, line.length)
 }
 
 /**
@@ -317,19 +352,19 @@ private fun redactOneLine(line: String): String {
  * what goes is the whole space-delimited run and any punctuation inside it, which
  * is one word rather than one line, but is more than the name alone suggests.
  */
+private val NAMED_SECRET_PREFIX = Regex(
+    """(?i)(?<![A-Za-z0-9])(?:api[_-]?key|apikey|access[_-]?token|refresh[_-]?token""" +
+        """|auth[_-]?token|client[_-]?secret|private[_-]?key|pgpassword|password""" +
+        """|passwd|secret|token)(?:[_-][A-Za-z0-9_-]*)?\s*(?:\\?["'])?\s*[:=]\s*"""
+)
+private val UNQUOTED_SECRET_VALUE = Regex("""["']?[^\s"',}&]+""")
+
 private val SECRET_PATTERNS: List<Pair<Regex, String>> = listOf(
     Regex(
         """(?i)(\b(?:authorization|cookie|set-cookie)\b\s*(?:\\?["'])?\s*[:=]\s*)""" +
             """(?:\\?["'])?[^"',}]+"""
     ) to "\$1<redacted>",
     Regex("""(?i)(\b(?:bearer|basic)\s+)[A-Za-z0-9._~+/=-]{8,}""") to "\$1<redacted>",
-    Regex(
-        """(?i)((?<![A-Za-z0-9])(?:api[_-]?key|apikey|access[_-]?token|refresh[_-]?token""" +
-            """|auth[_-]?token|client[_-]?secret|private[_-]?key|pgpassword|password""" +
-            """|passwd|secret|token)""" +
-            """(?:[_-][A-Za-z0-9_-]*)?\s*(?:\\?["'])?\s*[:=]\s*)""" +
-            """(?:\\?"[^"]*"|\\?'[^']*'|["']?[^\s"',}&]+)"""
-    ) to "\$1<redacted>",
     // A private key serialised onto one line, which is the shape `JSON.stringify`
     // gives it: the body is base64 and `\n` escapes, hundreds of characters of it
     // for any real key, so the floor of 40 leaves a diagnostic that merely names

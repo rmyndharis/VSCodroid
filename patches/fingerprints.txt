@@ -89,7 +89,9 @@
 0004 extHost worker|out/server-main.js|worker_thread Extension Host
 0005 webview csp|out/vs/workbench/contrib/webview/browser/pre/index.html|script-src 'unsafe-inline'
 0006 callback relay|out/vs/code/browser/workbench/callback.html|intent://callback
+0006 callback URI decoding|out/vs/code/browser/workbench/callback.html|const path = params.get('vscode-path')
 0008 activitybar height|out/vs/code/browser/workbench/workbench.js|.activitybar .composite-bar
+0008 activitybar first gap|out/vs/code/browser/workbench/workbench.js|.getPropertyValue('--activity-bar-action-gap')
 0009 alpine target|out/server-main.js|Android: requesting the alpine target platform
 0010 moduleignore keep|-|edits build/.moduleignore, so its proof is the file surviving into the tree; verify-server-tree.py requires that path
 0011 walkthrough brand|out/nls.messages.js|Get Started with VSCodroid
@@ -269,8 +271,8 @@
 0024 editcontext window start|out/vs/code/browser/workbench/workbench.js|_editContextStart=this._editContextStartAfter(
 0024 editcontext start kept at line end|out/vs/code/browser/workbench/workbench.js|startLineNumber - this._editContextStart.lineNumber >
 0024 editcontext keyboard caret|out/vs/code/browser/workbench/workbench.js x6|_expectedCaretOffset=
-0024 composition across lines|out/vs/code/browser/workbench/workbench.js x2|.positionBefore(
-0024 composition forward across lines|out/vs/code/browser/workbench/workbench.js|.positionAfter(
+0024 composition across lines|out/vs/code/browser/workbench/workbench.js x3|.positionBefore(
+0024 composition forward across lines|out/vs/code/browser/workbench/workbench.js x2|.positionAfter(
 0024 editcontext offsets as positions|out/vs/code/browser/workbench/workbench.js x5|this._modelPositionAt(
 0024 editcontext selection without an edit|out/vs/code/browser/workbench/workbench.js|.updateRangeStart===
 0024 editcontext selection as a cursor key|out/vs/code/browser/workbench/workbench.js|viewModel.setCursorStates("keyboard",
@@ -325,7 +327,7 @@
 # 0030's pattern is the media query it adds. The literal is 0 times in the shipped
 # 1.139.1 workbench.js, so a match means the patch arrived. It cannot tell a patch
 # that kept the query and dropped the floor; the manifest hash covers an edited patch.
-0030 activitybar touch item size|out/vs/code/browser/workbench/workbench.js|(pointer: coarse)
+0030 activitybar touch item size|out/vs/code/browser/workbench/workbench.js x2|(pointer: coarse)
 
 # 0031's pattern is the command id it adds. The literal is 0 times in the shipped
 # 1.139.1 workbench.js, so a match means the patch arrived. It cannot tell a patch
@@ -342,4 +344,11 @@
 
 # 0034's pattern is the name of the flag it adds. Member names survive the bundler (0029, 0032 and
 # 0033 rely on the same), and the literal is 0 times in the shipped 1.139.1 workbench.js.
-0034 short window yields the panel|out/vs/code/browser/workbench/workbench.js x5|panelYielded
+0034 short window yields the panel|out/vs/code/browser/workbench/workbench.js x11|panelYielded
+
+# The same patch's second flag, the height a panel that stayed in a short window had before it.
+0034 short window panel height is remembered|out/vs/code/browser/workbench/workbench.js x10|panelHeightBeforeShort
+0035 mirror usage acknowledgement|out/vs/code/browser/workbench/workbench.js|claimWorkspacePaths
+0036 editor bind failure exits|out/server-main.js|EADDRINUSE
+0037 current startup state|out/vs/code/browser/workbench/workbench.js x3|loadedConfigurationGeneration
+0038 workspace resource publication|out/vs/code/browser/workbench/workbench.js x2|publishWorkspaceRoots

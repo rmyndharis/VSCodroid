@@ -103,6 +103,8 @@
          type is quoted because the audience is developers and it is the part
          worth putting in a bug report. -->
     <string name="url_handoff_failed">Could not open that %1$s link (%2$s).</string>
+    <string name="sign_in_not_ready">The editor is not ready for that sign-in. Reload the editor and try again.</string>
+    <string name="sign_in_not_issued">The editor did not start that sign-in. Try signing in again.</string>
 
     <!-- A page inside the editor asked for an https address the WebView would not
          load: a dev server previewed in the Simple Browser, an image in a preview,
@@ -207,6 +209,7 @@
     <string name="toolchain_cancel">Cancel</string>
     <string name="toolchain_remove_confirm_title">Remove %s?</string>
     <string name="toolchain_remove_confirm_message">This will delete all %s files. You can reinstall anytime.</string>
+    <string name="toolchain_older_build">%1$s is installed. Remove it and install again to get %2$s.</string>
 
     <!-- Launcher shortcut: one of two routes to the toolchain screen, and the
          only one that works while the editor is not up. The activity is not
@@ -270,12 +273,9 @@
          from a list this app built a moment earlier, so this means the folder was
          removed or re-synced in between rather than that they typed something wrong. -->
     <string name="saf_mirror_unknown">There is no local copy of that folder to remove.</string>
-    <!-- The reclaim gate declining. Worded as what is at stake rather than as a
-         refusal, because the user's next step is to confirm and remove it anyway: the
-         mirrors that hold unsynced files are exactly the ones worth the disk, since a
-         folder gets large by being worked in and working in one creates files the sync
-         excludes by construction. -->
-    <string name="saf_mirror_not_a_copy">Some files in that folder are not in the device folder. Removing the local copy would delete them.</string>
+    <!-- Native confirmation and unconfirmed-removal refusal. A snapshot cannot
+         exclude files added directly after the check. -->
+    <string name="saf_mirror_not_a_copy">This local copy may contain files that never reached the device folder. Save anything needed elsewhere and stop work using it before continuing. Removal cannot be undone.</string>
     <!-- The rename that commits a removal was refused by the filesystem. Separate from
          saf_mirror_unknown, which says there was nothing to remove: here the copy is
          still there, whole, and trying again is worth something. -->
@@ -354,7 +354,7 @@
          translator must leave alone, but the sentence around them is language,
          and a Kotlin constant is the same sentence in every locale. The registry
          carries the resource id instead. displayName and shortLabel stay plain
-         strings on purpose; "Ruby", "Java 17" and "C/C++" are the products' own
+         strings on purpose; "Ruby", "Java 21" and "C/C++" are the products' own
          names.
 
          The C/C++ sentence is also the one place a card says what the toolchain
@@ -362,7 +362,7 @@
          preloads, so LD_PRELOAD has to be left alone. The variable name and the
          command names are literal and stay as they are. -->
     <string name="toolchain_ruby_description">Ruby with irb, gem, bundler</string>
-    <string name="toolchain_java_description">OpenJDK 17 (javac, jar, jshell)</string>
+    <string name="toolchain_java_description">OpenJDK 21 (javac, jar, jshell)</string>
     <string name="toolchain_cpp_description">C and C++ (clang, lld). Needs the terminal\'s exec interceptor: it does not work with LD_PRELOAD set to null.</string>
 
     <!-- The checkmark on a selected toolchain card. It is an ImageView with no
@@ -402,6 +402,7 @@
          grant it could not use, which let a caller put the chooser in front of
          the user without asking for it, so the sentence has to carry the next
          step itself. -->
+    <string name="saf_folder_unavailable">The local copy of this device folder is no longer available. Open the folder from the device again.</string>
     <string name="saf_permission_expired">Permission expired. Please select the folder again.</string>
 
     <!-- A device folder that did not open. Said as one sentence per case, with the

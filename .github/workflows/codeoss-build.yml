@@ -104,7 +104,10 @@ jobs:
           # is fetched at the commit: a moved tag would otherwise pick the Node
           # of a tree this build is not building. Measured that raw serves a
           # SHA, and that an unknown one fails rather than returning something.
-          node_version=$(curl -fsSL \
+          # --retry rides out the rate limit raw.githubusercontent.com answers
+          # from a runner's shared address with a 429, which failed another
+          # download from the same host and left the build with no Node version.
+          node_version=$(curl -fsSL --retry 6 \
             "https://raw.githubusercontent.com/microsoft/vscode/${commit}/.nvmrc")
           echo "node=$node_version" >> "$GITHUB_OUTPUT"
           echo "Building with Node $node_version"
@@ -122,7 +125,7 @@ jobs:
         uses: actions/cache@55cc8345863c7cc4c66a329aec7e433d2d1c52a9 # v6.1.0
         with:
           path: ${{ runner.temp }}/codeoss/vscode-reh-web-linux-arm64-${{ steps.pin.outputs.version }}.tar.gz
-          key: codeoss-${{ runner.os }}-${{ runner.arch }}-${{ steps.pin.outputs.version }}-${{ steps.pin.outputs.commit }}-${{ hashFiles('VSCODE_VERSION', 'VSCODE_COMMIT', 'patches/**', 'branding/**', 'scripts/build-vscode-oss.sh', 'scripts/patch-js-debug-env.py', 'scripts/check-editcontext-sync.py', 'scripts/check-patch-fingerprints.py', 'scripts/verify-server-tree.py', 'scripts/verify-android-elf.py', 'scripts/fetch-vscode-oss.sh', '.github/workflows/codeoss-build.yml') }}
+          key: codeoss-${{ runner.os }}-${{ runner.arch }}-${{ steps.pin.outputs.version }}-${{ steps.pin.outputs.commit }}-${{ hashFiles('VSCODE_VERSION', 'VSCODE_COMMIT', 'patches/**', 'branding/**', 'scripts/build-vscode-oss.sh', 'scripts/patch-js-debug-env.py', 'scripts/patch-language-detection.py', 'scripts/test-language-detection.py', 'scripts/check-editcontext-sync.py', 'scripts/check-patch-fingerprints.py', 'scripts/verify-server-tree.py', 'scripts/verify-android-elf.py', 'scripts/fetch-vscode-oss.sh', '.github/workflows/codeoss-build.yml') }}
 
       - name: Install build dependencies
         if: steps.cache.outputs.cache-hit != 'true'

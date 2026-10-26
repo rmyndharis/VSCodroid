@@ -14,7 +14,7 @@ object ToolchainRegistry {
     data class ToolchainInfo(
         val packName: String,
         val displayName: String,
-        /** Short label for the toolchain card (e.g. "Ruby", "Java 17"). */
+        /** Short label for the toolchain card (e.g. "Ruby", "Java 21"). */
         val shortLabel: String,
         /**
          * The sentence under the name on the toolchain card, as a resource id.
@@ -92,35 +92,35 @@ object ToolchainRegistry {
             displayName = "Ruby",
             shortLabel = "Ruby",
             descriptionRes = R.string.toolchain_ruby_description,
-            // 36,736 KiB measured with `du -sk` over the pack's `usr/` tree,
-            // which is 37.6 MB. 2,403 files, so the block rounding is most of
-            // the gap between that and the 31.6 MB the file contents sum to.
+            // 38,736 KiB measured with `du -sk` over the pack's `usr/` tree,
+            // which is 39.7 MB in 4 KiB blocks. 2,597 files, so the block
+            // rounding is most of the gap between that and the file contents.
             // Termux moved ruby from 3.4.1 to 4.0.6 and the tree grew past the
-            // 36,000,000 recorded here, which package-toolchains.sh refuses
+            // 36,000,000 recorded then, which package-toolchains.sh refuses
             // rather than shipping a card that admits a device to an install it
-            // cannot finish. The ZIP that tree packs into is 10,421,167 bytes.
-            estimatedSize = 39_000_000,
-            downloadSize = 10_500_000,
+            // cannot finish. It grew again by the 1.9 MB of C headers a native
+            // gem is built against (`usr/include/ruby-4.0.0`), which left 39.0
+            // MB 0.7 MB short. 41,000,000 leaves 1.3 MB for a point release.
+            estimatedSize = 41_000_000,
+            downloadSize = 11_000_000,
             downloadUrl = "https://github.com/rmyndharis/VSCodroid/releases/latest/download/toolchain_ruby.zip",
         ),
         ToolchainInfo(
             packName = "toolchain_java",
-            displayName = "Java 17",
-            shortLabel = "Java 17",
+            displayName = "Java 21",
+            shortLabel = "Java 21",
             descriptionRes = R.string.toolchain_java_description,
-            // 151,840 KiB measured with `du -sk` over the pack's `usr/` tree,
-            // which is 155.5 MB; the file contents sum to 154.8 MB. This read
-            // 146,000,000 until the JDK grew past it: `download-java.sh` stopped
-            // deleting OpenJDK's `legal/` and began copying with `-RL`, which
-            // dereferences 208 symlinks, and the constant every gate reads did
-            // not move with it. Two comments in ToolchainManager were updated to
-            // say "about 155 MB" while this stayed at 146.
-            //
-            // 156,000,000 left 515,840 bytes over the 155,484,160 measured, which
-            // a Termux point release of openjdk-17 can spend, and then
-            // package-toolchains.sh refuses the tag. 160,000,000 leaves 4.5 MB.
-            estimatedSize = 160_000_000,
-            downloadSize = 56_500_000,
+            // 175,268 KiB measured with `du -sk` over the pack's `usr/` tree,
+            // which is 179.5 MB in 4 KiB blocks, in 334 files. The pack carried
+            // OpenJDK 17 until 21 replaced it (the Language Support for Java
+            // extension needs 21 to run its server), and 21 is 24 MB larger.
+            // `download-java.sh` copies with `-RL`, which dereferences the 200
+            // odd symlinks of `legal/`, and `package-toolchains.sh` refuses a
+            // tree above this figure rather than shipping a card that admits a
+            // device to an install it cannot finish. 186,000,000 leaves 6.5 MB
+            // for a point release of openjdk-21, which Termux has made before.
+            estimatedSize = 186_000_000,
+            downloadSize = 64_000_000,
             downloadUrl = "https://github.com/rmyndharis/VSCodroid/releases/latest/download/toolchain_java.zip",
         ),
         ToolchainInfo(

@@ -61,6 +61,9 @@ abstract class SafInitialSyncTestBase {
         val name: String,
         val isDirectory: Boolean = false,
         val contents: String = "",
+        val modified: Long = DEVICE_TIME,
+        val size: Long = contents.toByteArray().size.toLong(),
+        val id: String = "doc:$name",
     )
 
     @BeforeEach
@@ -114,26 +117,36 @@ abstract class SafInitialSyncTestBase {
      * [loading] names the parents whose listing the provider flags as still loading, which
      * is how a provider backed by a network says the rows so far are not all of them.
      */
-    protected fun deviceTree(tree: Map<String, List<Child>?>, loading: Set<String> = emptySet()) {
+    protected fun deviceTree(
+        tree: Map<String, List<Child>?>,
+        loading: Set<String> = emptySet(),
+        errors: Set<String> = emptySet(),
+        maxQueries: Int = Int.MAX_VALUE,
+    ) {
+        var queries = 0
         every { resolver.query(any(), any(), any(), any(), any()) } answers {
             val parent = firstArg<Uri>().toString().removePrefix("children:")
-            tree[parent]?.let { cursorOver(it, parent in loading) }
+            val children = if (tree.containsKey(parent)) tree[parent]
+                else if (created.any { it.first == DocumentsContract.Document.MIME_TYPE_DIR && "doc:${it.second}" == parent }) emptyList()
+                else null
+            if (++queries > maxQueries) null
+            else children?.let { cursorOver(it, parent in loading, parent in errors) }
         }
         every { resolver.openInputStream(any()) } answers {
             val docId = firstArg<Uri>().toString().removePrefix("doc-uri:")
             val child = tree.values.filterNotNull().flatten()
-                .firstOrNull { "doc:${it.name}" == docId }
+                .firstOrNull { it.id == docId }
             ByteArrayInputStream((child?.contents ?: "").toByteArray())
         }
     }
 
-    private fun cursorOver(children: List<Child>, loading: Boolean): Cursor {
+    private fun cursorOver(children: List<Child>, loading: Boolean, error: Boolean): Cursor {
         var row = -1
         return mockk<Cursor>(relaxed = true) {
-            every { extras } returns if (loading) {
+            every { extras } returns if (loading || error) {
                 mockk<Bundle>(relaxed = true) {
-                    every { getBoolean(DocumentsContract.EXTRA_LOADING) } returns true
-                    every { containsKey(DocumentsContract.EXTRA_ERROR) } returns false
+                    every { getBoolean(DocumentsContract.EXTRA_LOADING) } returns loading
+                    every { containsKey(DocumentsContract.EXTRA_ERROR) } returns error
                 }
             } else {
                 null
@@ -150,14 +163,14 @@ abstract class SafInitialSyncTestBase {
             every { getColumnIndex(DocumentsContract.Document.COLUMN_LAST_MODIFIED) } returns 4
             every { getColumnIndex(DocumentsContract.Document.COLUMN_MIME_TYPE) } returns 2
             every { isNull(any<Int>()) } returns false
-            every { getString(0) } answers { "doc:${children[row].name}" }
+            every { getString(0) } answers { children[row].id }
             every { getString(1) } answers { children[row].name }
             every { getString(2) } answers {
                 if (children[row].isDirectory) DocumentsContract.Document.MIME_TYPE_DIR
                 else "text/plain"
             }
-            every { getLong(3) } answers { children[row].contents.toByteArray().size.toLong() }
-            every { getLong(4) } returns DEVICE_TIME
+            every { getLong(3) } answers { children[row].size }
+            every { getLong(4) } answers { children[row].modified }
         }
     }
 
@@ -168,6 +181,7 @@ abstract class SafInitialSyncTestBase {
         engine.onWriteBackFailed = { lost += it.name }
         engine.onDocumentsNotCopied = { count, _ -> notCopied = count }
         engine.initialSync(named("tree"), mirror) { _, _ -> }
+        engine
     }
 
     protected fun mirrorFile(name: String) = File(mirror, name)

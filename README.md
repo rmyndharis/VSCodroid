@@ -188,7 +188,7 @@ flowchart TD
 
 1. **Install** from [Google Play](https://play.google.com/store/apps/details?id=com.vscodroid).
 2. Open the app. Core binaries extract automatically the first time, behind a progress bar.
-3. Pick your languages (Ruby, Java 17, C/C++). They install automatically.
+3. Pick your languages (Ruby, Java 21, C/C++). They install automatically.
 4. Start coding. Editor, terminal, and tools are ready.
 
 > You can also download APKs directly from [GitHub Releases](https://github.com/rmyndharis/VSCodroid/releases).
@@ -198,7 +198,7 @@ flowchart TD
 | Tier                         | What                                                        | How                                                      |
 | ---------------------------- | ----------------------------------------------------------- | -------------------------------------------------------- |
 | **Core (Base APK)**          | Node.js, npm, Python 3, Git, Bash, SSH, tmux, make, ripgrep | Available immediately                                    |
-| **Toolchains (Asset Packs)** | Ruby, Java 17, C/C++                                        | Select in Language Picker: Play Asset Delivery, or direct download on sideloaded installs |
+| **Toolchains (Asset Packs)** | Ruby, Java 21, C/C++                                        | Select in Language Picker: Play Asset Delivery, or direct download on sideloaded installs |
 
 ## 🔨 Building from Source
 
@@ -221,7 +221,7 @@ git clone https://github.com/rmyndharis/VSCodroid.git
 cd VSCodroid
 
 # Build the Android app
-cd android && ./gradlew assembleDebug
+(cd android && ./gradlew assembleDebug)
 
 # Install on connected device
 adb install android/app/build/outputs/apk/debug/app-debug.apk
@@ -242,8 +242,8 @@ adb install android/app/build/outputs/apk/debug/app-debug.apk
 | + Each toolchain (on-demand)           | 10-74 MB per language |
 | Free space required to install         | ~738 MB              |
 | Extracted to internal storage (core)   | ~603 MB              |
-| Extracted, plus Ruby and Java          | ~800 MB              |
-| Extracted, plus all three toolchains   | ~1,060 MB            |
+| Extracted, plus Ruby and Java          | ~830 MB              |
+| Extracted, plus all three toolchains   | ~1,090 MB            |
 | RAM usage (typical)                    | ~400-700 MB          |
 
 The install figure is larger than what the app ends up occupying because extraction

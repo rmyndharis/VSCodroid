@@ -16,8 +16,13 @@ the status bar is drawn again only if the setting has it shown, and every site t
 shouldShowCustomTitleBar for the title bar now asks Layout#shouldShowTitleBar, which adds the
 short window to the answer, so a settings change while the keyboard is up cannot bring it back.
 
+Status bar visibility also reports the temporary main-window hide, so editor dimensions and
+notification sizing reclaim its height. Auxiliary title and status bars keep their own window's
+visibility while the main window is short. The status bar command toggles the saved setting
+instead of the temporary rendered visibility.
+
 diff --git a/src/vs/workbench/browser/layout.ts b/src/vs/workbench/browser/layout.ts
-index 75f9238..45cc5f0 100644
+index 75f9238f..59ca3d9c 100644
 --- a/src/vs/workbench/browser/layout.ts
 +++ b/src/vs/workbench/browser/layout.ts
 @@ -8,7 +8,7 @@ import { Event, Emitter } from '../../base/common/event.js';
@@ -77,15 +82,27 @@ index 75f9238..45cc5f0 100644
  
  			// Indicate active window border
  			this.updateWindowBorder(true);
-@@ -1371,7 +1381,7 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
+@@ -1369,9 +1379,9 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
+ 
+ 		switch (part) {
  			case Parts.TITLEBAR_PART:
- 				return this.initialized ?
+-				return this.initialized ?
++				return targetWindow === mainWindow && this.initialized ?
  					this.workbenchGrid.isViewVisible(this.titleBarPartView) :
 -					shouldShowCustomTitleBar(this.configurationService, mainWindow, this.state.runtime.menuBar.toggled);
-+					this.shouldShowTitleBar();
++					this.shouldShowTitleBar(targetWindow);
  			case Parts.SIDEBAR_PART:
  				return !this.stateModel.getRuntimeValue(LayoutStateKeys.SIDEBAR_HIDDEN);
  			case Parts.PANEL_PART:
+@@ -1379,7 +1389,7 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
+ 			case Parts.AUXILIARYBAR_PART:
+ 				return !this.stateModel.getRuntimeValue(LayoutStateKeys.AUXILIARYBAR_HIDDEN);
+ 			case Parts.STATUSBAR_PART:
+-				return !this.stateModel.getRuntimeValue(LayoutStateKeys.STATUSBAR_HIDDEN);
++				return (targetWindow !== mainWindow || !this.shortWindow) && !this.stateModel.getRuntimeValue(LayoutStateKeys.STATUSBAR_HIDDEN);
+ 			case Parts.ACTIVITYBAR_PART:
+ 				return !this.stateModel.getRuntimeValue(LayoutStateKeys.ACTIVITYBAR_HIDDEN);
+ 			case Parts.EDITOR_PART:
 @@ -1629,6 +1639,11 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
  
  	private setStatusBarHidden(hidden: boolean): void {
@@ -111,8 +128,8 @@ index 75f9238..45cc5f0 100644
  		return this.stateModel.getRuntimeValue(LayoutStateKeys.PANEL_ALIGNMENT);
  	}
  
-+	private shouldShowTitleBar(): boolean {
-+		return !this.shortWindow && shouldShowCustomTitleBar(this.configurationService, mainWindow, this.state.runtime.menuBar.toggled);
++	private shouldShowTitleBar(targetWindow: Window = mainWindow): boolean {
++		return (targetWindow !== mainWindow || !this.shortWindow) && shouldShowCustomTitleBar(this.configurationService, targetWindow, targetWindow === mainWindow ? this.state.runtime.menuBar.toggled : undefined);
 +	}
 +
 +	private updateShortWindow(height: number): void {
@@ -151,3 +168,27 @@ index 75f9238..45cc5f0 100644
  	}
  
  	private arrangeEditorNodes(nodes: { editor: ISerializedNode; sideBar?: ISerializedNode; auxiliaryBar?: ISerializedNode }, availableHeight: number, availableWidth: number): ISerializedNode {
+diff --git a/src/vs/workbench/browser/actions/layoutActions.ts b/src/vs/workbench/browser/actions/layoutActions.ts
+index f7b82f29..e8712896 100644
+--- a/src/vs/workbench/browser/actions/layoutActions.ts
++++ b/src/vs/workbench/browser/actions/layoutActions.ts
+@@ -28,7 +28,6 @@ import { ThemeIcon } from '../../../base/common/themables.js';
+ import { DisposableStore } from '../../../base/common/lifecycle.js';
+ import { registerIcon } from '../../../platform/theme/common/iconRegistry.js';
+ import { ICommandActionTitle } from '../../../platform/action/common/action.js';
+-import { mainWindow } from '../../../base/browser/window.js';
+ import { IKeybindingService } from '../../../platform/keybinding/common/keybinding.js';
+ import { TitlebarStyle } from '../../../platform/window/common/window.js';
+ import { IPreferencesService } from '../../services/preferences/common/preferences.js';
+@@ -421,10 +420,9 @@ export class ToggleStatusbarVisibilityAction extends Action2 {
+ 	}
+ 
+ 	run(accessor: ServicesAccessor): Promise<void> {
+-		const layoutService = accessor.get(IWorkbenchLayoutService);
+ 		const configurationService = accessor.get(IConfigurationService);
+ 
+-		const visibility = layoutService.isVisible(Parts.STATUSBAR_PART, mainWindow);
++		const visibility = configurationService.getValue<boolean>(ToggleStatusbarVisibilityAction.statusbarVisibleKey);
+ 		const newVisibilityValue = !visibility;
+ 
+ 		return configurationService.updateValue(ToggleStatusbarVisibilityAction.statusbarVisibleKey, newVisibilityValue);

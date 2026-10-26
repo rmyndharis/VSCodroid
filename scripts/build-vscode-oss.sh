@@ -806,6 +806,9 @@ step "Debug adapter"
 # where the system is.
 python3 "$SCRIPT_DIR/patch-js-debug-env.py" "$OUT"
 
+step "Language detection"
+python3 "$SCRIPT_DIR/patch-language-detection.py" "$OUT/node_modules/@vscode/vscode-languagedetection"
+
 step "Patch manifest"
 # What the fingerprints cannot see. A fingerprint row proves a patch arrived, not
 # which version of it did: editing an already-matching patch leaves every gate
@@ -831,6 +834,7 @@ fail=0
 # packaged bundles, and that the product.json key set has not drifted) stay here,
 # because only this side has the patches and the expectation file.
 python3 "$SCRIPT_DIR/verify-server-tree.py" "$OUT" || fail=1
+python3 "$SCRIPT_DIR/test-language-detection.py" --package "$OUT/node_modules/@vscode/vscode-languagedetection" || fail=1
 
 # Every patch has to be proven present in the packaged output, not merely
 # applied to the source. The expectations and the reasoning live in

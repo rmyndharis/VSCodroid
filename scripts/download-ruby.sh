@@ -121,6 +121,26 @@ if [ -d "$RUBY_USR/lib/ruby" ]; then
     echo "  lib/ruby/"
 fi
 
+# The C headers a gem with a native extension is compiled against. mkmf looks for
+# ruby.h under `$(includedir)/ruby-X.Y.Z`, which rbconfig.rb resolves to
+# `usr/include/ruby-X.Y.Z` beside the pack's own `usr/`, and the pack carried
+# none, so `gem install bcrypt` stopped at "can't find header files for ruby" even
+# with the C/C++ toolchain installed. Measured on an API 33 emulator: with this
+# directory in place the same install compiled and the gem loaded.
+#
+# A missing directory is fatal rather than skipped, so that a package that
+# moves its headers into a separate one stops the build instead of shipping a
+# pack that can no longer build a gem. The C/C++ pack keeps its own headers in
+# `usr/include` beside this one and holds no file of this name.
+RUBY_INCLUDE="$RUBY_USR/include/ruby-$RUBY_MINOR"
+if [ ! -f "$RUBY_INCLUDE/ruby.h" ]; then
+    echo "  ERROR: no ruby.h in the ruby package at $RUBY_INCLUDE" >&2
+    exit 1
+fi
+mkdir -p "$PACK_ASSETS/usr/include"
+cp -RL "$RUBY_INCLUDE" "$PACK_ASSETS/usr/include/ruby-$RUBY_MINOR"
+echo "  include/ruby-$RUBY_MINOR/"
+
 # Copy shared libraries
 echo ""
 echo "Placing shared libraries..."
@@ -184,9 +204,9 @@ echo "  Ruby: ${BEFORE_SIZE}K -> ${AFTER_SIZE}K (saved $((BEFORE_SIZE - AFTER_SI
 # makefile and never from the environment (measured: an assignment of a
 # nonexistent shell fails the build, the same value exported does nothing), so
 # the assignment mkmf emits overrides the value compiled into libmake.so and
-# every recipe line runs a shell that is not there. That path is latent rather
-# than live today: building a native gem also needs a C compiler, and none is
-# bundled. It is fixed here so the compiler is the only thing still missing.
+# every recipe line runs a shell that is not there. It is reached only when a
+# native gem is built, which needs the C/C++ toolchain and the headers copied
+# above.
 #
 # Before the ELF gate below, so what that gate examines is what ships. The
 # rewrite keeps the length of the two ELF objects and fails closed on all three:
@@ -243,6 +263,23 @@ done
 BINARIES+=']'
 SCRIPT_WRAPPERS+='}'
 
+# RUBYOPT=-rrubygems: the interpreter starts without RubyGems. Measured on an API 33
+# emulator with the pristine Termux libruby as well as the patched one, and with an
+# empty environment: `defined?(Gem)` is nil, so `require "sinatra"` in a script
+# raised LoadError for a gem `gem install` had just put in GEM_HOME, while the
+# `gem` and `bundle` commands worked because they require rubygems themselves.
+# `-rrubygems` loads it before the script runs, which is what a Ruby session
+# expects (measured: Gem::VERSION 4.0.20 and the same script ran). The cause
+# inside Ruby 4.0.7 was not found; if a later package starts RubyGems by
+# itself the option does nothing.
+#
+# ownedPaths: the headers copied above and the notices termux_copy_notices placed in
+# usr/share/doc/<package>, so that Remove takes them with the rest. None of the
+# packages here is also in the base install's usr/share/doc.
+OWNED_PATHS="\"usr/include/ruby-$RUBY_MINOR\""
+for doc in "$PACK_ASSETS"/usr/share/doc/*/; do
+    [ -d "$doc" ] && OWNED_PATHS+=",\"usr/share/doc/$(basename "$doc")\""
+done
 cat > "$PACK_ASSETS/toolchain_ruby.json" << EOF
 {
     "name": "ruby",
@@ -252,10 +289,12 @@ cat > "$PACK_ASSETS/toolchain_ruby.json" << EOF
     "env": {
         "GEM_HOME": "\$HOME/.gem/ruby",
         "GEM_PATH": "\$HOME/.gem/ruby:\$FILESDIR/usr/lib/ruby/gems",
-        "RUBYLIB": "\$FILESDIR/usr/lib/ruby/$RUBY_MINOR:\$FILESDIR/usr/lib/ruby/$RUBY_MINOR/aarch64-linux-android"
+        "RUBYLIB": "\$FILESDIR/usr/lib/ruby/$RUBY_MINOR:\$FILESDIR/usr/lib/ruby/$RUBY_MINOR/aarch64-linux-android",
+        "RUBYOPT": "-rrubygems"
     },
     "pathDirs": ["usr/bin"],
     "installRoot": "usr/lib/ruby",
+    "ownedPaths": [$OWNED_PATHS],
     "libs": ["libruby.so", "libgmp.so", "libyaml-0.so", "libandroid-execinfo.so"],
     "libSymlinks": {
         "libruby.so.${RUBY_MINOR%.*}": "libruby.so"

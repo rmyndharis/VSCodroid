@@ -15,6 +15,7 @@ import io.mockk.mockkObject
 import io.mockk.mockkStatic
 import io.mockk.unmockkAll
 import io.mockk.verify
+import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -23,6 +24,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.ByteArrayOutputStream
+import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.FileNotFoundException
 import java.io.OutputStream
@@ -146,14 +148,28 @@ class SafQueuedWriteBackTest {
                 val parent = pathOf(target.removePrefix("children:"))
                 device.keys.filter { parentOf(it) == parent }
             } else {
-                emptyList()
+                listOf(pathOf(firstArg<Uri>())).filter { it in device }
             }
             val cursor = mockk<Cursor>(relaxed = true)
             var row = -1
             every { cursor.moveToNext() } answers { ++row < rows.size }
+            every { cursor.moveToFirst() } answers { row = 0; rows.isNotEmpty() }
+            every { cursor.getColumnIndex(any()) } answers {
+                when (firstArg<String>()) {
+                    DocumentsContract.Document.COLUMN_DOCUMENT_ID -> 0
+                    DocumentsContract.Document.COLUMN_DISPLAY_NAME -> 1
+                    DocumentsContract.Document.COLUMN_MIME_TYPE -> 2
+                    DocumentsContract.Document.COLUMN_SIZE -> 3
+                    DocumentsContract.Document.COLUMN_LAST_MODIFIED -> 4
+                    else -> -1
+                }
+            }
+            every { cursor.getLong(3) } answers { device[rows[row]]?.size?.toLong() ?: 0L }
+            every { cursor.getLong(4) } returns 1_700_000_000_000L
             every { cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DOCUMENT_ID) } returns 0
             every { cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_DISPLAY_NAME) } returns 1
             every { cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_MIME_TYPE) } returns 2
+            every { cursor.getColumnIndexOrThrow(DocumentsContract.Document.COLUMN_SIZE) } returns 3
             every { cursor.getString(0) } answers { docId(rows[row]) }
             every { cursor.getString(1) } answers { rows[row].substringAfterLast('/') }
             every { cursor.getString(2) } answers {
@@ -165,6 +181,9 @@ class SafQueuedWriteBackTest {
             }
             every { cursor.extras } returns null
             cursor
+        }
+        every { resolver.openInputStream(any()) } answers {
+            ByteArrayInputStream(checkNotNull(device[pathOf(firstArg<Uri>())]))
         }
         every { resolver.openOutputStream(any(), any()) } answers {
             val path = pathOf(firstArg<Uri>())
@@ -205,6 +224,21 @@ class SafQueuedWriteBackTest {
         unmockkAll()
     }
 
+    /** Completes the real upload path before exercising deletion of these bytes. */
+    private fun deliverKnownFile(path: String) {
+        val file = File(mirror, path)
+        file.parentFile!!.mkdirs()
+        file.writeBytes(checkNotNull(device[path]))
+        SafSyncEngine::class.java
+            .getDeclaredMethod("writeLocalToSaf", File::class.java, Uri::class.java, File::class.java)
+            .apply { isAccessible = true }
+            .invoke(engine, file, docUri(docId(path)), mirror)
+        assertEquals(file.readText(), text(path), "the provider did not receive the baseline")
+        assertTrue(writes.contains(path), "the baseline upload did not reach the provider")
+        writes.clear()
+        attempts.clear()
+    }
+
     /** Puts a file or, with null text, a directory on the device folder. */
     private fun onDevice(path: String, text: String? = null) {
         device[path] = text?.toByteArray()
@@ -212,7 +246,7 @@ class SafQueuedWriteBackTest {
 
     /** Puts a file in the mirror, directories included. */
     private fun inMirror(path: String, text: String) {
-        File(mirror, path).apply { parentFile.mkdirs() }.writeText(text)
+        File(mirror, path).apply { checkNotNull(parentFile).mkdirs() }.writeText(text)
     }
 
     /** One event, without the write-back thread's pass over it. */
@@ -224,6 +258,63 @@ class SafQueuedWriteBackTest {
     private fun drain() = engine.runWriteBackLoop { false }
 
     private fun text(path: String) = device[path]?.toString(Charsets.UTF_8)
+
+    @Test
+    fun `a queued save preserves a device edit reported by its document query`() {
+        onDevice("notes.txt", "baseline")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        onDevice("notes.txt", "foreign device edit")
+        inMirror("notes.txt", "local edit")
+        observe(FileObserver.MODIFY, "notes.txt")
+
+        drain()
+
+        assertEquals("local edit", text("notes.txt"))
+        val copies = mirror.listFiles()!!.filter { it.name.startsWith("notes.txt.device-") }
+        assertEquals(1, copies.size, "a document query failed open over a foreign device edit")
+        assertEquals("foreign device edit", copies.single().readText())
+    }
+
+    @Test
+    fun `a persistent temporary-looking filename reaches the device live`() {
+        inMirror("notes.tmp", "saved user file")
+        observe(FileObserver.CREATE, "notes.tmp")
+        drain()
+        assertEquals("saved user file", text("notes.tmp"))
+        assertEquals(emptyList<String>(), lost)
+    }
+
+    @Test
+    fun `an atomic save from a temporary name delivers the final file`() {
+        inMirror("notes.tmp", "completed save")
+        observe(FileObserver.CREATE, "notes.tmp")
+        assertTrue(File(mirror, "notes.tmp").renameTo(File(mirror, "notes.txt")))
+        observe(FileObserver.MOVED_FROM, "notes.tmp")
+        observe(FileObserver.MOVED_TO, "notes.txt")
+        drain()
+        assertEquals(setOf("notes.txt"), device.keys)
+        assertEquals("completed save", text("notes.txt"))
+        assertEquals(emptyList<String>(), lost)
+    }
+
+    @Test
+    fun `a queued edit follows its folder rename before the drain`() {
+        onDevice("old_dir")
+        onDevice("old_dir/existing.txt", "old")
+        inMirror("old_dir/existing.txt", "edited before rename")
+        observe(FileObserver.MODIFY, "old_dir/existing.txt")
+        val held = File(filesDir, "renaming")
+        assertTrue(File(mirror, "old_dir").renameTo(held))
+        observe(FileObserver.MOVED_FROM or isDirFlag, "old_dir")
+        observe(FileObserver.MOVED_TO or isDirFlag, "lib")
+        assertTrue(held.renameTo(File(mirror, "lib")))
+
+        drain()
+
+        assertEquals(setOf("lib", "lib/existing.txt"), device.keys)
+        assertEquals("edited before rename", text("lib/existing.txt"))
+        assertEquals(emptyList<String>(), lost)
+    }
 
     @Test
     fun `files written into a new folder before its create runs are uploaded once`() {
@@ -252,11 +343,13 @@ class SafQueuedWriteBackTest {
         onDevice("old_dir")
         onDevice("old_dir/existing.txt", "old")
         onDevice("notes.txt", "notes")
+        deliverKnownFile("notes.txt")
 
         // mv old_dir lib && mv notes.txt lib/notes.txt, inside one poll. The rename has
         // not run when the second event resolves lib/, so the device has no such folder.
         observe(FileObserver.MOVED_FROM or isDirFlag, "old_dir")
         observe(FileObserver.MOVED_TO or isDirFlag, "lib")
+        assertTrue(File(mirror, "notes.txt").delete())
         observe(FileObserver.MOVED_FROM, "notes.txt")
         inMirror("lib/existing.txt", "old")
         inMirror("lib/notes.txt", "notes")
@@ -291,11 +384,13 @@ class SafQueuedWriteBackTest {
         onDevice("old_dir")
         onDevice("old_dir/existing.txt", "old")
         onDevice("notes.txt", "notes")
+        deliverKnownFile("notes.txt")
 
         observe(FileObserver.MOVED_FROM or isDirFlag, "old_dir")
         observe(FileObserver.MOVED_TO or isDirFlag, "lib")
         inMirror("lib/existing.txt", "old")
         drain()
+        assertTrue(File(mirror, "notes.txt").delete())
         observe(FileObserver.MOVED_FROM, "notes.txt")
         inMirror("lib/notes.txt", "notes")
         observe(FileObserver.MOVED_TO, "lib/notes.txt")
@@ -445,6 +540,8 @@ class SafQueuedWriteBackTest {
     @Test
     fun `a file replaced by a folder before the drain is deleted and the folder created`() {
         onDevice("foo", "hi")
+        deliverKnownFile("foo")
+        assertTrue(File(mirror, "foo").delete())
 
         // rm foo && mkdir foo. The directory event arrives while the directory is not yet on
         // disk, as a JVM test can only deliver one, and appears before the drain.

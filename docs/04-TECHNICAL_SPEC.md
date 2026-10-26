@@ -393,18 +393,16 @@ val env = mapOf(
     "GIT_EXEC_PATH"           to "${filesDir}/usr/lib/git-core",
     "GIT_TEMPLATE_DIR"        to "${filesDir}/usr/share/git-core/templates",
     "GIT_SSH_COMMAND"         to "${nativeLibDir}/libssh.so -F ${filesDir}/home/.ssh/config",
-    "GIT_SSL_CAPATH"          to "<system trust store>",
-    "GIT_SSL_CAINFO"          to "${filesDir}/usr/etc/tls/cert.pem",   // curl needs the bundle, not the dir
-    "SSL_CERT_FILE"           to "${filesDir}/usr/etc/tls/cert.pem",   // and so does everything else: Android
-                                                                       // names its store files with the pre-1.0
-                                                                       // OpenSSL hash, so the dir below is a
-                                                                       // store OpenSSL 3 cannot look anything up in
+    "GIT_SSL_CAPATH"          to "${filesDir}/usr/etc/tls",            // no raw Android roots bypass the bundle
+    "GIT_SSL_CAINFO"          to "${filesDir}/usr/etc/tls/cert.pem",
+    "SSL_CERT_FILE"           to "${filesDir}/usr/etc/tls/cert.pem",
+    "CURL_CA_BUNDLE"          to "${filesDir}/usr/etc/tls/cert.pem",   // set when the bundle exists, including empty
     "REQUESTS_CA_BUNDLE"      to "${filesDir}/usr/etc/tls/cert.pem",   // the name pip reads; it verifies
                                                                        // against its own vendored certifi and
                                                                        // never looks at SSL_CERT_FILE. Set only
                                                                        // when the bundle exists: requests treats
                                                                        // one it cannot open as fatal
-    "SSL_CERT_DIR"            to "<system trust store>",
+    "SSL_CERT_DIR"            to "${filesDir}/usr/etc/tls",            // an empty bundle preserves an empty trust store
     "OPENSSL_CONF"            to "${filesDir}/usr/etc/tls/openssl.cnf",  // libcrypto's built-in path is Termux's,
                                                                          // and EACCES there is fatal to Node
     "NPM_CONFIG_PREFIX"       to "${filesDir}/usr",
@@ -1311,7 +1309,7 @@ flowchart TD
   P --> P16["0016 sidebar: sash travel on narrow viewports"]
   P --> P17["0017 menus: ignore a pan that started in a submenu"]
   P --> P18["0018 debug terminal: build the command without /usr/bin/env"]
-  P --> P19["0019 callback URL carries a secret minted per request"]
+  P --> P19["0019 each sign-in identity is registered with the app when the workbench mints it"]
   P --> P20["0020 chat agent host: not started on Android"]
   P --> P21["0021 terminal hint: no Copilot CLI line on Android"]
   P --> P22["0022 EditContext: keep the IME buffer and caret in step"]
@@ -1322,6 +1320,11 @@ flowchart TD
   P --> P27["0027 configuration: start a remote workspace from the settings the page read"]
   P --> P28["0028 code actions: keep the list open as the keyboard goes"]
   P --> P29["0029 EditContext: a keyboard's long or multi-line commit is one paste"]
+  P --> P30["0030 activity bar: overflow sized from the height an item is drawn at"]
+  P --> P31["0031 File > Open Folder offers the system folder picker"]
+  P --> P32["0032 settings list and modal editor shrink to a phone-width window"]
+  P --> P33["0033 title bar and status bar put away while the keyboard is up in landscape"]
+  P --> P34["0034 bottom panel taken out of the layout while the keyboard is up in landscape"]
 ```
 
 Five of these are load-bearing in ways their titles understate:
@@ -1430,7 +1433,7 @@ is intact, not that it is the right tarball.
 ### 7.1 Toolchain Configuration
 
 Toolchains are declared in Kotlin, in `ToolchainRegistry.available`, and both the first-run picker
-and the manage screen are built from that list. Three are shipped, Ruby, Java 17 and C/C++:
+and the manage screen are built from that list. Three are shipped, Ruby, Java 21 and C/C++:
 
 ```kotlin
 ToolchainInfo(
@@ -1438,13 +1441,13 @@ ToolchainInfo(
     displayName = "Ruby",
     shortLabel = "Ruby",
     descriptionRes = R.string.toolchain_ruby_description,   // "Ruby with irb, gem, bundler"
-    estimatedSize = 39_000_000,   // unpacked, what the free-space gate uses; 37.6 MB measured
-    downloadSize = 10_500_000,    // the ZIP, what the picker quotes to the user
+    estimatedSize = 41_000_000,   // unpacked, what the free-space gate uses; 39.7 MB measured
+    downloadSize = 11_000_000,    // the ZIP, what the picker quotes to the user
     downloadUrl = "https://github.com/rmyndharis/VSCodroid/releases/latest/download/toolchain_ruby.zip",
 )
 ```
 
-The second entry is `toolchain_java`, OpenJDK 17 with `javac`, `jar` and `jshell`. The third is
+The second entry is `toolchain_java`, OpenJDK 21 with `javac`, `jar` and `jshell`. The third is
 `toolchain_cpp`, clang and lld with a minimal sysroot (section 7.5).
 
 The first two are an interpreter and a JVM, and for a long time that was a constraint rather than a

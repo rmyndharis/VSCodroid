@@ -1,8 +1,11 @@
 package com.vscodroid.util
 
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import java.io.File
+import javax.xml.parsers.DocumentBuilderFactory
+import org.w3c.dom.Element
 
 /**
  * That the three lists of languages this app ships are one list.
@@ -93,6 +96,24 @@ class LocaleCoverageTest {
         Regex("""android:name="([^"]+)"""").findAll(read(LOCALES_CONFIG))
             .map { it.groupValues[1] }
             .toSet()
+
+    private fun nativeStrings(path: String): Set<String> {
+        val nodes = DocumentBuilderFactory.newInstance().newDocumentBuilder()
+            .parse(File(path)).getElementsByTagName("string")
+        return (0 until nodes.length).map { nodes.item(it) as Element }
+            .filter { it.getAttribute("translatable") != "false" }
+            .map { it.getAttribute("name") }.toSet()
+    }
+
+    @Test
+    fun `every native string is available in every shipped language`() {
+        val expected = nativeStrings("$RES/values/strings.xml")
+        for (language in resourceDirectories().sorted()) {
+            val actual = nativeStrings("$RES/values-$language/strings.xml")
+            assertTrue(expected == actual,
+                "$language missing ${expected - actual}; extra ${actual - expected}")
+        }
+    }
 
     @Test
     fun `every translated editor language has translated app screens`() {

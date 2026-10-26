@@ -46,8 +46,7 @@ import kotlin.concurrent.thread
  * The cost is not bookkeeping. The next sync's repair branch is gated on the recorded
  * file being there, so a line under a path that has gone can never be consumed: the
  * device's own truncated upload is read as a device edit and copied over the mirror's
- * only complete copy. Until that happens the same line refuses the removal the user asked
- * for and mislabels the row on the device-folder screen.
+ * only complete copy.
  *
  * Driven through `handleMirrorEvent` rather than through an observer, and the MOVED_TO is
  * delivered while the new name is still ABSENT from disk: `watchTree` would otherwise
@@ -307,8 +306,7 @@ class SafRenamedUploadRecordTest {
         )
         assertFalse(
             File(mirror, "src/App.kt").absolutePath in listed,
-            "the old path still stands, which refuses the removal the user asks for and " +
-                "describes the mirror as holding work that is not where it says",
+            "the record still names the old path after its file moved",
         )
     }
 
@@ -495,9 +493,8 @@ class SafRenamedUploadRecordTest {
      * are made on different threads' schedules: the rename runs on the observer thread
      * while the copy runs on the write-back thread. Move only the line and the writer
      * releases a name nothing is filed under, so a save that DID reach the device is
-     * recorded for ever as one that did not. That record is not inert: the storage screen
-     * calls the mirror unreclaimable and refuses the removal the user asks for, and the
-     * next open of the folder takes the interrupted-upload repair branch and writes the
+     * recorded for ever as one that did not. The next open of the folder then takes
+     * the interrupted-upload repair branch and writes the
      * mirror over the device document with no timestamp compared.
      *
      * NEGATIVE CONTROL, run by hand: delete the `uploadClaims.forEach` that moves the
@@ -530,8 +527,8 @@ class SafRenamedUploadRecordTest {
                 "$listed",
         )
         assertTrue(
-            SafStorageManager.mayReclaim(hash, listed, mirrorsRoot.absolutePath),
-            "a mirror whose every write landed is refused the removal the user asks for",
+            listed.none { it.startsWith(mirror.absolutePath + File.separator) },
+            "a completed write left a record under this mirror's journal prefix",
         )
     }
 
@@ -577,8 +574,7 @@ class SafRenamedUploadRecordTest {
         )
         assertFalse(
             File(mirror, "src/App.kt").absolutePath in listed,
-            "the record stands under a path that no longer exists, which no sync can " +
-                "consume and which refuses the removal the user asks for",
+            "the record stands under a path that no longer exists, which no sync can consume",
         )
     }
 
@@ -593,9 +589,8 @@ class SafRenamedUploadRecordTest {
      * up under different names for good: the writer that lands retires a line nobody ever
      * wrote, and the real line stands under a path that has gone, where nothing can ever
      * consume it (a claimed departure never reaches `consumeStaleUploadsUnder`, and the
-     * sync's repair needs the file the line names to be there). `mayReclaim` then refuses
-     * that mirror for a save that did reach the device, so the storage screen describes it
-     * as holding work the device folder does not have and the launch pass keeps it.
+     * sync's repair needs the file the line names to be there). The stale line can
+     * survive indefinitely even though the save reached the device.
      *
      * The refusal is injected by taking write permission off the directory rather than by
      * mocking, so it does not depend on the temporary file's name; and the setup assertion
@@ -648,8 +643,8 @@ class SafRenamedUploadRecordTest {
                 "because its claim moved with a line that stayed behind: $listed",
         )
         assertTrue(
-            SafStorageManager.mayReclaim(hash, listed, mirrorsRoot.absolutePath),
-            "a mirror whose every write landed is refused the removal the user asks for",
+            listed.none { it.startsWith(mirror.absolutePath + File.separator) },
+            "a completed write left a record under this mirror's journal prefix",
         )
     }
 }

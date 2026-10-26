@@ -129,6 +129,9 @@ class SafWriterTurnTest {
             every { cursor.extras } returns null
             cursor
         }
+        every { resolver.openInputStream(any()) } answers {
+            ByteArrayInputStream(device[nameOf(firstArg())] ?: ByteArray(0))
+        }
         every { resolver.openOutputStream(any(), any()) } answers {
             val name = nameOf(firstArg())
             if (!device.containsKey(name)) throw FileNotFoundException(name)
@@ -210,7 +213,28 @@ class SafWriterTurnTest {
     }
 
     @Test
+    fun `a save admitted before a completed reopen never executes in the new generation`() {
+        bothSidesHold("notes.md", "device", "device")
+        val stale = sessionHolding("notes.md")
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        val record = File(mirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX)
+        val recordBefore = record.readText()
+        File(mirror, "notes.md").writeText("stale attempted write")
+
+        val worker = drain(stale).also { it.start() }
+        worker.join(5_000)
+
+        assertFalse(worker.isAlive)
+        assertTrue(opened.isEmpty(), "a stale generation executed the provider write")
+        assertEquals("device", text("notes.md"))
+        assertEquals("stale attempted write", File(mirror, "notes.md").readText())
+        assertEquals(recordBefore, record.readText(), "the stale save rewrote delivery history")
+    }
+
+    @Test
     fun `a write behind another drain's write in flight waits and is then sent`() {
+        val record = File(mirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX)
+        record.writeText(SafSyncEngine.RECORD_HEADER)
         val (_, restored, oldDrain) = twoDrainsOneHeld()
 
         val newDrain = drain(restored).also { it.start() }
@@ -230,6 +254,11 @@ class SafWriterTurnTest {
         assertEquals(emptyList<String>(), lost, "a save that only had to wait was announced as lost")
         assertEquals(1, peak.get(), "two writes held documents open at once")
         assertEquals(listOf("a.txt", "b.txt"), opened)
+        assertEquals(
+            setOf("a.txt", "b.txt"), record.readLines().drop(1).map { it.substringBefore('\t') }.toSet(),
+            "one serialized save replaced the other save's receipt",
+        )
+        assertTrue(engine.holdsOnlyVouchedCopies(mirror), "completed saves left the mirror unvouched")
     }
 
     @Test
@@ -329,6 +358,8 @@ class SafWriterTurnTest {
             val waitedMs = (System.nanoTime() - started) / 1_000_000
 
             assertTrue(waitedMs < 2_000, "a write waited ${waitedMs}ms behind a reset that supersedes it")
+            assertTrue(opened.isEmpty(), "a reset generation still executed the provider write")
+            assertEquals("device", text("notes.md"))
         } finally {
             fetchRelease.countDown()
             syncing.join(5_000)
@@ -348,5 +379,8 @@ class SafWriterTurnTest {
 
         release.countDown()
         oldDrain.join(5_000)
+        assertFalse(oldDrain.isAlive)
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        assertEquals("A1", text("a.txt"))
     }
 }

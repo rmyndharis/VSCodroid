@@ -3,6 +3,7 @@ package com.vscodroid
 import android.net.Uri
 import com.vscodroid.bridge.AUTH_TAB_WINDOW_MILLIS
 import com.vscodroid.bridge.AuthTabWindow
+import com.vscodroid.bridge.AUTH_UNLAUNCHED_GRACE_MILLIS
 import com.vscodroid.bridge.authCallbackNonceIn
 import com.vscodroid.bridge.authRequestIdsIn
 import com.vscodroid.bridge.encodeCallbackState
@@ -238,6 +239,95 @@ class AuthTabWindowTest {
         AuthTabWindow.beginPage()
         assertTrue(issue("33", other))
         assertNull(AuthTabWindow.nonceFor("1"))
+    }
+
+    private fun issueAt(id: String, nowMillis: Long?): Boolean =
+        AuthTabWindow.register(id, original, "d".repeat(32), AuthTabWindow.pageGeneration(), nowMillis)
+
+    private fun fill() {
+        for (id in 1..32) assertTrue(issue(id.toString()))
+    }
+
+    @Test
+    fun `a full registry drops only an identity whose window has closed`() {
+        fill()
+        AuthTabWindow.launched(AuthTabWindow.arm(listOf("5"), original, 100L))
+        // Open: the window is inclusive, so a return at exactly its end is still accepted.
+        assertFalse(issueAt("33", 100L + AUTH_TAB_WINDOW_MILLIS))
+        assertEquals(100L, AuthTabWindow.armedAt("5"))
+        // Closed: it goes, and only it.
+        assertTrue(issueAt("33", 100L + AUTH_TAB_WINDOW_MILLIS + 1))
+        assertNull(AuthTabWindow.nonceFor("5"))
+        assertNull(AuthTabWindow.armedAt("5"))
+        assertEquals(original, AuthTabWindow.nonceFor("33"))
+        for (id in (1..32).filter { it != 5 }) assertEquals(original, AuthTabWindow.nonceFor(id.toString()), "$id")
+        assertFalse(issueAt("34", 100L + AUTH_TAB_WINDOW_MILLIS + 1))
+    }
+
+    @Test
+    fun `a request registered without a clock is never dropped to make room`() {
+        fill()
+        assertFalse(issueAt("33", Long.MAX_VALUE / 2))
+        for (id in 1..32) assertEquals(original, AuthTabWindow.nonceFor(id.toString()), "$id")
+    }
+
+    /**
+     * An identity registered and never launched (the workbench asked for one and the request
+     * was abandoned before the address opened) used to hold its slot until the page was
+     * reloaded; thirty-two of them refused every later sign-in. It ages out, but only past a
+     * grace the real sequence never approaches, and only when the caller had a clock.
+     */
+    @Test
+    fun `an identity never launched is dropped for room once an hour has passed`() {
+        for (id in 1..32) assertTrue(issueAt(id.toString(), 1_000L))
+        assertFalse(issueAt("33", 1_000L + AUTH_UNLAUNCHED_GRACE_MILLIS), "dropped inside the grace")
+        assertTrue(issueAt("33", 1_000L + AUTH_UNLAUNCHED_GRACE_MILLIS + 1))
+        assertNull(AuthTabWindow.nonceFor("1"), "the oldest was kept")
+        assertEquals(original, AuthTabWindow.nonceFor("2"))
+    }
+
+    @Test
+    fun `an attempt in flight keeps its identity when an old unlaunched one is dropped`() {
+        for (id in 1..32) assertTrue(issueAt(id.toString(), 1_000L))
+        val attempt = AuthTabWindow.arm(listOf("1"), original, 1_500L)
+
+        assertTrue(issueAt("33", 1_000L + AUTH_UNLAUNCHED_GRACE_MILLIS + 1))
+
+        assertEquals(original, AuthTabWindow.nonceFor("1"), "an attempt in flight lost its identity")
+        assertNull(AuthTabWindow.nonceFor("2"), "the oldest identity not in flight was kept")
+        AuthTabWindow.launched(attempt)
+    }
+
+    @Test
+    fun `without a clock a full registry drops nothing`() {
+        fill()
+        AuthTabWindow.launched(AuthTabWindow.arm(listOf("5"), original, 100L))
+        assertFalse(issueAt("33", null))
+        assertEquals(100L, AuthTabWindow.armedAt("5"))
+    }
+
+    @Test
+    fun `a request already reported late is dropped when room is needed, the oldest first`() {
+        fill()
+        for (id in listOf("7", "3")) {
+            AuthTabWindow.launched(AuthTabWindow.arm(listOf(id), original, 100L))
+            AuthTabWindow.expire(id)
+        }
+        assertTrue(issueAt("33", 200L))
+        assertNull(AuthTabWindow.nonceFor("3"))
+        assertEquals(original, AuthTabWindow.nonceFor("7"))
+        assertTrue(issueAt("34", 200L))
+        assertNull(AuthTabWindow.nonceFor("7"))
+        assertFalse(issueAt("35", 200L))
+    }
+
+    @Test
+    fun `a launch still in flight is not dropped even past the window`() {
+        fill()
+        val attempt = AuthTabWindow.arm(listOf("5"), original, 100L)
+        assertFalse(issueAt("33", 100L + AUTH_TAB_WINDOW_MILLIS + 1))
+        AuthTabWindow.launched(attempt)
+        assertTrue(issueAt("33", 100L + AUTH_TAB_WINDOW_MILLIS + 1))
     }
 }
 

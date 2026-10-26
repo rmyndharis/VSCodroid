@@ -73,7 +73,7 @@ flowchart TD
 **External Systems:**
 - **Open VSX**: Extension search, download, update (HTTPS)
 - **GitHub/GitLab**: Remote git operations (HTTPS/SSH)
-- **Play Asset Delivery**: Ruby, Java 17 and C/C++ packs, for installs whose `installingPackageName` is `com.android.vending` or Play's legacy `com.google.android.feedback` (`ToolchainManager.PLAY_INSTALLERS`)
+- **Play Asset Delivery**: Ruby, Java 21 and C/C++ packs, for installs whose `installingPackageName` is `com.android.vending` or Play's legacy `com.google.android.feedback` (`ToolchainManager.PLAY_INSTALLERS`)
 - **GitHub Releases**: the same toolchains as ZIPs under `releases/latest`, for every other install source
 
 Termux's package repository is a build-time source, not a runtime one: `scripts/download-node.sh`,
@@ -268,7 +268,7 @@ owning extension is what frees a slot.
 - Termux, UserLAnd, and other apps use this approach
 - Requires: Gradle `packagingOptions { jniLibs { useLegacyPackaging = true } }`
 
-**Consequence**: All core binaries (Node.js, Python, Git, bash, tmux, make, ripgrep, ssh) bundled as .so files in the base APK. The three on-demand toolchains, Ruby, Java 17 and C/C++, are delivered as asset packs via Play Store; the user picks them in the first-run toolchain picker (`SplashActivity.showToolchainPicker()`, offered by `continueAfterSetup()` on every launch that gets past setup, until its Continue or Skip button records `toolchain_picker_shown`) and Play Store downloads them automatically. Toolchains are never inside the APK on any channel: `ToolchainManager.install()` picks a delivery path at runtime, and both paths converge on `installFromDirectory()`, which copies the payload into `filesDir/usr`, chmods the binaries its manifest names, and creates its symlinks, so installed toolchains survive app updates. This decision covers what the app installs. It does not restrict what a user runs: the terminal's exec interceptor starts user programs through `/system/bin/linker64`, which is what `termux-exec` does in the Termux build on Google Play. The C/C++ toolchain is the one pack that depends on it: a compiler forks its linker, so its programs start only through that interceptor and fail where it is off (`"LD_PRELOAD": null`) or absent (an extension that starts a process itself).
+**Consequence**: All core binaries (Node.js, Python, Git, bash, tmux, make, ripgrep, ssh) bundled as .so files in the base APK. The three on-demand toolchains, Ruby, Java 21 and C/C++, are delivered as asset packs via Play Store; the user picks them in the first-run toolchain picker (`SplashActivity.showToolchainPicker()`, offered by `continueAfterSetup()` on every launch that gets past setup, until its Continue or Skip button records `toolchain_picker_shown`) and Play Store downloads them automatically. Toolchains are never inside the APK on any channel: `ToolchainManager.install()` picks a delivery path at runtime, and both paths converge on `installFromDirectory()`, which copies the payload into `filesDir/usr`, chmods the binaries its manifest names, and creates its symlinks, so installed toolchains survive app updates. This decision covers what the app installs. It does not restrict what a user runs: the terminal's exec interceptor starts user programs through `/system/bin/linker64`, which is what `termux-exec` does in the Termux build on Google Play. The C/C++ toolchain is the one pack that depends on it: a compiler forks its linker, so its programs start only through that interceptor and fail where it is off (`"LD_PRELOAD": null`) or absent (an extension that starts a process itself).
 
 ---
 
@@ -312,7 +312,7 @@ owning extension is what frees a slot.
 
 **Status**: Accepted
 
-**Context**: VSCodroid offers language toolchains beyond the bundled core: Ruby, Java 17 and C/C++. Putting them in the base APK would make it very large, and most users want at most one of them. Options: (a) On-demand download from CDN, (b) Play Store install-time asset packs, (c) Play Store on-demand asset packs.
+**Context**: VSCodroid offers language toolchains beyond the bundled core: Ruby, Java 21 and C/C++. Putting them in the base APK would make it very large, and most users want at most one of them. Options: (a) On-demand download from CDN, (b) Play Store install-time asset packs, (c) Play Store on-demand asset packs.
 
 **Decision**: Use Play Store on-demand asset packs for toolchain delivery, with a toolchain picker UI during first-run.
 
@@ -347,11 +347,11 @@ owning extension is what frees a slot.
 sequenceDiagram
   participant W as WebView (vscode-web)
   participant S as VS Code Server (vscode-reh)
-  W->>S: GET /index.html
-  S-->>W: index.html (initial page load)
+  W->>S: GET / with workspace and connection-token query
+  S-->>W: Workbench HTML (initial page load)
   W->>S: GET /static/*
   S-->>W: JS, CSS, fonts
-  W->>S: Connect WebSocket /ws
+  W->>S: Connect the remote-agent WebSocket
   S-->>W: RPC stream (file operations, terminal I/O, extension messages, diagnostics)
 ```
 
@@ -498,7 +498,7 @@ flowchart TD
   B --> B5["server/ (VS Code extracted)"]
   B5 --> B5a["vscode-reh/ (server plus the web client it serves)"]
   B5 --> B5b["server.js, process-monitor.js, platform-fix.js, dns-proxy.js, xdg-open.js"]
-  B5 --> B5c["editor-server.pid (pid and port of the running server)"]
+  B5 --> B5c["editor-server.pid (pid, port and run identity of the running server)"]
   B --> B6["saf-mirrors/ (one hash-named local copy per granted device folder)"]
   B6 --> B6a["by-name/ (a link to each copy, named after its folder,<br/>which the editor opens so the folder shows its own name)"]
   B --> B7["projects/ (default workspace on a new install)"]
@@ -592,7 +592,7 @@ colour probe's own WebView records nothing.
 | VS Code | Code - OSS, built from MIT source with the diffs in `patches/` | 1.139.1 (pinned in the `VSCODE_VERSION` file at the repo root) |
 | Extension Host | VS Code Extension Host as a worker_thread (patch `0004`); the Pty Host likewise (patch `0003`) | Same as VS Code |
 | Terminal | node-pty spawning bash on a real PTY (tmux bundled as a standalone tool) | Latest |
-| Toolchain delivery | Play Asset Delivery packs, or `releases/latest` ZIPs for non-Play installs | Ruby, Java 17, C/C++ |
+| Toolchain delivery | Play Asset Delivery packs, or `releases/latest` ZIPs for non-Play installs | Ruby, Java 21, C/C++ |
 | SCM | Git from Termux, as `libgit.so` and `libgit-remote-curl.so` plus `usr/lib/git-core` | Whatever the Termux index names at build time |
 | Python | Python 3 from Termux, fetched by `scripts/download-python.sh` | Whatever the Termux index names at build time; read it from `assets/usr/lib/libpython*.so` |
 | C++ stdlib | `libc++_shared.so` from Termux's `libc++` package, in `assets/usr/lib` | Whatever `scripts/download-termux-tools.sh` resolves |

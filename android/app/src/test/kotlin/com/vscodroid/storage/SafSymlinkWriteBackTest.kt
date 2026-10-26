@@ -191,6 +191,10 @@ class SafSymlinkWriteBackTest {
     @Test
     fun `deleting a symbolic link still removes the device document`() {
         deviceHolding("notes.md")
+        val file = File(mirror, "notes.md")
+        val document = DocumentsContract.buildDocumentUriUsingTree(treeUri, "doc:notes.md")
+        deliverFileBaseline(engine, resolver, file, document, mirror)
+        assertTrue(file.delete())
         val link = linkToSecret("notes.md")
         link.delete()
 

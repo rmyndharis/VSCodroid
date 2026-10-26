@@ -158,7 +158,7 @@ class SafCreatedDocumentNameTest {
         SafSyncEngine::class.java.declaredMethods
             .single { it.name == "createInSaf" }
             .apply { isAccessible = true }
-            .invoke(engine, localFile, parentUri, treeUri, null)
+            .invoke(engine, localFile, parentUri, treeUri, workspace, null)
     }
 
     /**
@@ -167,6 +167,71 @@ class SafCreatedDocumentNameTest {
      * `notes.txt` stays green, which is the pair that distinguishes a fixed type from a
      * fixture that cannot rewrite anything.
      */
+    @Test
+    fun `reopen uploads a stranded child through rewritten directory names`() {
+        File(workspace, "a:b/c:d/notes.txt").apply { parentFile!!.mkdirs() }.writeText("nested content")
+        val record = File(workspace.path + SafSyncEngine.SYNCED_RECORD_SUFFIX)
+        record.writeText(SafSyncEngine.RECORD_HEADER)
+        every { DocumentsContract.getTreeDocumentId(treeUri) } returns "parent-doc"
+        every { resolver.query(childrenUri, any(), any(), any(), any()) } answers {
+            var row = -1
+            mockk<Cursor>(relaxed = true) {
+                every { extras } returns null
+                every { moveToNext() } answers { ++row == 0 }
+                every { getColumnIndexOrThrow(any()) } answers {
+                    when (firstArg<String>()) {
+                        DocumentsContract.Document.COLUMN_DOCUMENT_ID -> 0
+                        DocumentsContract.Document.COLUMN_DISPLAY_NAME -> 1
+                        DocumentsContract.Document.COLUMN_MIME_TYPE -> 2
+                        else -> 3
+                    }
+                }
+                every { getColumnIndex(DocumentsContract.Document.COLUMN_LAST_MODIFIED) } returns 4
+                every { getString(0) } returns "anchor-doc"
+                every { getString(1) } returns "anchor.txt"
+                every { getString(2) } returns "text/plain"
+                every { getLong(3) } returns 6L
+                every { getLong(4) } returns 1_700_000_000_000L
+            }
+        }
+        every { resolver.openInputStream(any()) } answers {
+            java.io.ByteArrayInputStream("anchor".toByteArray())
+        }
+        every { DocumentsContract.createDocument(any(), any(), any(), any()) } answers {
+            stored += arg<String>(3).replace(':', '_')
+            createdUri
+        }
+        val device = ByteArrayOutputStream()
+        every { resolver.openOutputStream(any(), "wt") } returns device
+        try {
+            runBlocking { engine.initialSync(treeUri, workspace) { _, _ -> } }
+            assertFalse(File(workspace, "a:b").exists())
+            assertEquals("nested content", File(workspace, "a_b/c_d/notes.txt").readText())
+            assertEquals("nested content", device.toString())
+            assertEquals(listOf("a_b", "c_d", "notes.txt"), stored)
+            assertTrue(record.readLines().any { it.startsWith("a_b/c_d/notes.txt\t") })
+            assertFalse(record.readLines().any { it.startsWith("a:b/") })
+            assertTrue(engine.holdsOnlyVouchedCopies(workspace), "the normalized upload lost its delivery receipt")
+        } finally {
+            record.delete()
+        }
+    }
+
+    @Test
+    fun `a rewritten directory keeps its descendants reachable under the stored name`() {
+        val directory = File(workspace, "a:b")
+        File(directory, "c:d/notes.txt").apply { parentFile!!.mkdirs() }.writeText("nested content")
+        every { DocumentsContract.createDocument(any(), any(), any(), any()) } answers {
+            stored += arg<String>(3).replace(':', '_')
+            createdUri
+        }
+        SafSyncEngine::class.java.declaredMethods.single { it.name == "createInSaf" }
+            .apply { isAccessible = true }.invoke(engine, directory, parentUri, treeUri, workspace, null)
+        assertFalse(directory.exists(), "the refused directory name would be created again on reopen")
+        assertEquals("nested content", File(workspace, "a_b/c_d/notes.txt").readText())
+        assertEquals(listOf("a_b", "c_d", "notes.txt"), stored)
+    }
+
     @Test
     fun `a Kotlin source file is stored under its own name`() {
         create("Main.kt")

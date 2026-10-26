@@ -225,7 +225,7 @@ class ToolchainRegistryTest {
 
         @Test
         fun `contains Java toolchain`() {
-            val java = ToolchainRegistry.available.find { it.shortLabel == "Java 17" }
+            val java = ToolchainRegistry.available.find { it.shortLabel == "Java 21" }
             assertNotNull(java)
             assertEquals("toolchain_java", java!!.packName)
         }

@@ -1,5 +1,10 @@
 package com.vscodroid.setup
 
+import android.content.Context
+import com.vscodroid.R
+import com.vscodroid.setupFailureMessage
+import io.mockk.every
+import io.mockk.mockk
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -20,6 +25,32 @@ import java.io.IOException
  * screen. The wiring that carries it there is one branch in `SplashActivity`.
  */
 class SetupFailureCauseTest {
+
+    private fun messageContext(): Context = mockk<Context>().also { context ->
+        every { context.getString(R.string.error_setup_failed) } returns "Setup failed"
+        every {
+            context.getString(R.string.error_setup_failed_at, "Tools", "IOException: disk full")
+        } returns "Failed at Tools: IOException: disk full"
+    }
+
+    @Test
+    fun `a failure without a step retains its cause without an empty label`() {
+        val failure = FirstRunSetup.describeFailure(null, IOException("early dependency failed"))
+        assertEquals("Setup failed\nIOException: early dependency failed",
+            setupFailureMessage(messageContext(), failure))
+    }
+
+    @Test
+    fun `a named failure uses its localized step and detail`() {
+        val failure = FirstRunSetup.Failure("Tools", "IOException: disk full")
+        assertEquals("Failed at Tools: IOException: disk full",
+            setupFailureMessage(messageContext(), failure))
+    }
+
+    @Test
+    fun `an absent failure uses only the generic message`() {
+        assertEquals("Setup failed", setupFailureMessage(messageContext(), null))
+    }
 
     /**
      * The message is kept, not just the type. It is the half that names something

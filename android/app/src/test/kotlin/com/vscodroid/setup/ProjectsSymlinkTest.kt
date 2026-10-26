@@ -15,7 +15,9 @@ import io.mockk.unmockkAll
 import io.mockk.verify
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Assumptions.assumeFalse
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -23,6 +25,7 @@ import java.io.File
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
+import java.nio.file.attribute.PosixFilePermissions
 
 /**
  * `~/projects`, the link the bundled terminal starts in.
@@ -179,5 +182,81 @@ class ProjectsSymlinkTest {
 
         assertEquals(target.absolutePath, linkTarget())
         verify(exactly = 0) { Os.symlink(any(), any()) }
+    }
+
+    private fun previousDirectory(): File = File(filesDir, "previous/projects").apply {
+        assertTrue(mkdirs())
+        File(this, "notes.txt").writeText("previous workspace bytes")
+        Files.createSymbolicLink(link.toPath(), toPath())
+    }
+
+    @Test
+    fun `a regular file at the new target keeps the previous usable projects link`() {
+        val previous = previousDirectory()
+        target.parentFile!!.mkdirs()
+        target.writeText("target occupant")
+        val setup = FirstRunSetup(context)
+
+        setup.ensureProjectsDir()
+        setup.createStorageSymlinks()
+
+        assertEquals(previous.absolutePath, linkTarget())
+        assertTrue(link.isDirectory)
+        assertEquals("previous workspace bytes", File(link, "notes.txt").readText())
+        assertEquals("target occupant", target.readText())
+        verify(exactly = 0) { Os.symlink(any(), any()) }
+    }
+
+    @Test
+    fun `a regular file at the target does not become a new projects link`() {
+        target.parentFile!!.mkdirs()
+        target.writeText("target occupant")
+        val setup = FirstRunSetup(context)
+        setup.ensureProjectsDir()
+
+        setup.createStorageSymlinks()
+
+        assertFalse(Files.exists(link.toPath(), LinkOption.NOFOLLOW_LINKS))
+        assertEquals("target occupant", target.readText())
+        verify(exactly = 0) { Os.symlink(any(), any()) }
+    }
+
+    @Test
+    fun `repointing a usable link once preserves both project directories`() {
+        val previous = previousDirectory()
+        assertTrue(target.mkdirs())
+        File(target, "current.txt").writeText("current workspace bytes")
+        val setup = FirstRunSetup(context)
+
+        setup.createStorageSymlinks()
+        setup.createStorageSymlinks()
+
+        assertEquals(target.absolutePath, linkTarget())
+        assertEquals("current workspace bytes", File(link, "current.txt").readText())
+        assertEquals("previous workspace bytes", File(previous, "notes.txt").readText())
+        verify(exactly = 1) { Os.symlink(target.absolutePath, link.absolutePath) }
+    }
+
+    @Test
+    fun `a refused stale unlink keeps the old target and reports the refusal`() {
+        val previous = previousDirectory()
+        assertTrue(target.mkdirs())
+        val home = link.parentFile!!
+        val permissions = Files.getPosixFilePermissions(home.toPath())
+        try {
+            Files.setPosixFilePermissions(home.toPath(), PosixFilePermissions.fromString("r-xr-xr-x"))
+            assumeFalse(home.canWrite(), "this process can bypass the directory permission fixture")
+
+            FirstRunSetup(context).createStorageSymlinks()
+
+            assertEquals(previous.absolutePath, linkTarget())
+            assertEquals("previous workspace bytes", File(link, "notes.txt").readText())
+            verify(exactly = 0) { Os.symlink(any(), any()) }
+            verify(atLeast = 1) {
+                Logger.w(any(), match { it.contains("Could not remove the stale projects symlink") })
+            }
+        } finally {
+            Files.setPosixFilePermissions(home.toPath(), permissions)
+        }
     }
 }

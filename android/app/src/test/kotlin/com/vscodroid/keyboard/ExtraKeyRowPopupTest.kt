@@ -85,7 +85,7 @@ class ExtraKeyRowPopupTest {
 
         val body = lines.drop(start).take(12)
         val dismiss = body.indexOfFirst { it.contains("longPressPopup?.dismiss()") }
-        val earlyReturn = body.indexOfFirst { it.contains("if (repacked == pages) return") }
+        val earlyReturn = body.indexOfFirst { it.contains("if (repacked == pages && !densityChanged) return") }
 
         // The control. Both landmarks have to be in the window this reads, or a
         // renamed guard would leave the case passing on an empty comparison.

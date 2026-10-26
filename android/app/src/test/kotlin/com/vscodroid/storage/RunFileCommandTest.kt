@@ -120,4 +120,26 @@ class RunFileCommandTest {
             "the palette entry and the title bar button must be shown for the same files",
         )
     }
+
+    /**
+     * The path of the open file goes into a shell line, and a file in a cloned repository can be
+     * called anything: `a;cmd;.js` must reach the shell as one word. Everything the runner builds
+     * is given the quoted path and never the raw one.
+     */
+    @Test
+    fun `the path reaches the shell quoted as one word`() {
+        assertTrue(
+            source.contains("terminal.sendText(runner.command(shellQuote(document.uri.path)));"),
+            "the run line must be built from the quoted path, not document.uri.path itself",
+        )
+        val body = source.substringAfter("function shellQuote").substringBefore("\n}")
+        assertTrue(
+            Regex("""path\.replace\(/'/g, `'\\\\''`\)""").containsMatchIn(body),
+            "shellQuote must close and reopen the single quotes around each one inside the path: $body",
+        )
+        assertTrue(
+            table().lines().filter { it.contains("command:") }.none { it.contains("document.uri") },
+            "a table entry reached for the raw document path",
+        )
+    }
 }

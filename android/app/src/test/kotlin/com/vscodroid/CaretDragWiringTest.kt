@@ -107,7 +107,13 @@ class CaretDragWiringTest {
                 "scripts/package-assets.sh to check the names against the shipped bundle",
         )
         val bundle = workbench.readText()
-        for (name in listOf("-monaco-gesturetap", "lines-content", "cursors-layer", "selected-text", "editor-scrollable")) {
+        val script = SourceScan.body(mainActivity(), "private fun injectCaretDrag(")
+        val selectors = Regex("""querySelector(?:All)?\('([^']+)'\)""")
+            .findAll(script).joinToString(" ") { it.groupValues[1] }
+        val classes = Regex("""\.([a-zA-Z][\w-]*)""")
+            .findAll(selectors).map { it.groupValues[1] }.toSet()
+        assertTrue(classes.isNotEmpty(), "no caret drag selectors were read")
+        for (name in classes + "-monaco-gesturetap") {
             assertTrue(
                 bundle.contains(name),
                 "the shipped workbench no longer contains `$name`, which the caret drag script " +

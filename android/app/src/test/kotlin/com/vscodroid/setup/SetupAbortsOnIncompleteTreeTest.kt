@@ -289,4 +289,72 @@ class SetupAbortsOnIncompleteTreeTest {
         /** The completion record, as [FirstRunSetup] spells it. */
         const val SETUP_VERSION_KEY = "setup_version"
     }
+
+    @Test
+    fun `a listed server asset that cannot be opened prevents completion`() {
+        every { assets.open("vscode-reh/server-main.js") } throws java.io.IOException("unreadable listed asset")
+        val setup = FirstRunSetup(context, 0, 0, 0, 0)
+
+        assertEquals(FirstRunSetup.SetupResult.ERROR, runBlocking { setup.runSetup() })
+        assertFalse(File(filesDir, "server/vscode-reh/server-main.js").exists())
+        verify(exactly = 0) { editor.putString(SETUP_VERSION_KEY, any()) }
+
+        every { assets.open("vscode-reh/server-main.js") } answers {
+            ByteArrayInputStream("// the server".toByteArray())
+        }
+        assertEquals(FirstRunSetup.SetupResult.SUCCESS, runBlocking { setup.runSetup() })
+        assertEquals("// the server", File(filesDir, "server/vscode-reh/server-main.js").readText())
+    }
+
+    @Test
+    fun `a listed server asset that fails during reading prevents completion`() {
+        every { assets.open("vscode-reh/server-main.js") } answers {
+            object : java.io.InputStream() {
+                var first = true
+                override fun read(): Int {
+                    if (first) { first = false; return '/'.code }
+                    throw java.io.IOException("asset read failed")
+                }
+            }
+        }
+        val setup = FirstRunSetup(context, 0, 0, 0, 0)
+
+        assertEquals(FirstRunSetup.SetupResult.ERROR, runBlocking { setup.runSetup() })
+        assertFalse(File(filesDir, "server/vscode-reh/server-main.js").exists())
+        verify(exactly = 0) { editor.putString(SETUP_VERSION_KEY, any()) }
+    }
+
+    @Test
+    fun `a listed leaf remains required when its directory listing throws`() {
+        every { assets.list("vscode-reh/server-main.js") } throws java.io.IOException("not a directory")
+        every { assets.open("vscode-reh/server-main.js") } throws java.io.IOException("unreadable listed asset")
+
+        assertEquals(FirstRunSetup.SetupResult.ERROR, runBlocking { FirstRunSetup(context, 0, 0, 0, 0).runSetup() })
+        verify(exactly = 0) { editor.putString(SETUP_VERSION_KEY, any()) }
+    }
+
+    @Test
+    fun `a reduced build can omit an optional asset root`() {
+        every { assets.list("vscode-reh") } returns emptyArray()
+        every { assets.open("vscode-reh") } throws java.io.IOException("absent")
+
+        assertEquals(FirstRunSetup.SetupResult.SUCCESS, runBlocking { FirstRunSetup(context, 0, 0, 0, 0).runSetup() })
+        verify { editor.putString(SETUP_VERSION_KEY, any()) }
+    }
+
+    @Test
+    fun `an early retry failure does not retain the previous progress step`() {
+        blockTheServerWrite()
+        val setup = FirstRunSetup(context, 0, 0, 0, 0)
+        assertEquals(FirstRunSetup.SetupResult.ERROR, runBlocking { setup.runSetup() })
+        assertEquals(SetupStepStrings.text("setup_step_tools").trimEnd('.', ' ', '\u2026'),
+            setup.lastFailure!!.step)
+        every { assets.list("usr") } throws IllegalStateException("asset listing unavailable")
+
+        assertEquals(FirstRunSetup.SetupResult.ERROR, runBlocking { setup.runSetup() })
+
+        assertEquals("", setup.lastFailure!!.step)
+        assertEquals("IllegalStateException: asset listing unavailable", setup.lastFailure!!.detail)
+    }
+
 }

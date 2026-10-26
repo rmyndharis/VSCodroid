@@ -238,7 +238,7 @@ class SafOpenShortfallTest {
     @Test
     fun `a document that could not be copied is announced`() {
         withRoomToSpare()
-        deviceHolding(Doc("notes.md", 64, readable = false), Doc("readme.md", 64))
+        deviceHolding(Doc("notes.md", 64, readable = false), doc("readme.md", "device contents"))
 
         runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
 
@@ -253,7 +253,7 @@ class SafOpenShortfallTest {
     @Test
     fun `a folder that opens whole announces nothing`() {
         withRoomToSpare()
-        deviceHolding(Doc("notes.md", 64), Doc("readme.md", 64))
+        deviceHolding(doc("notes.md", "device contents"), doc("readme.md", "device contents"))
 
         runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
 
@@ -269,7 +269,7 @@ class SafOpenShortfallTest {
     @Test
     fun `a document skipped for size is not announced`() {
         withRoomToSpare()
-        deviceHolding(Doc("big.zip", SafSyncEngine.MAX_FILE_SIZE + 1), Doc("readme.md", 64))
+        deviceHolding(Doc("big.zip", SafSyncEngine.MAX_FILE_SIZE + 1), doc("readme.md", "device contents"))
 
         runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
 
@@ -284,7 +284,7 @@ class SafOpenShortfallTest {
     @Test
     fun `a shortfall with no room left says so`() {
         preflightSees(8)
-        deviceHolding(Doc("notes.md", 64, readable = false), Doc("readme.md", 64))
+        deviceHolding(Doc("notes.md", 64, readable = false), doc("readme.md", "device contents"))
 
         runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
 
@@ -300,7 +300,7 @@ class SafOpenShortfallTest {
     @Test
     fun `the pre-flight estimate does not stop the copy`() {
         preflightSees(0)
-        deviceHolding(Doc("readme.md", 64))
+        deviceHolding(doc("readme.md", "device contents"))
 
         runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
 
@@ -320,7 +320,7 @@ class SafOpenShortfallTest {
             if (File(mirror, "a.md").exists()) SafSyncEngine.OPEN_SPACE_FLOOR_BYTES - 1
             else Long.MAX_VALUE
         }
-        deviceHolding(Doc("a.md", 64), Doc("b.md", 64), Doc("c.md", 64))
+        deviceHolding(doc("a.md", "device contents"), doc("b.md", "device contents"), doc("c.md", "device contents"))
 
         runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
 

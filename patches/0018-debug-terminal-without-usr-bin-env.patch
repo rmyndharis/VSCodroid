@@ -14,11 +14,9 @@ appears, the status bar names the configuration, and the only sign that nothing
 ran is one line in the terminal panel. That is worse than an error, because
 every visible indicator says it is working.
 
-Inline assignments and unset do the same job with no binary. `A=1 B=2 cmd` is
-POSIX and is what a shell is for; the removals become `unset A B ; ` ahead of
-the command. The one behavioural difference is that unset affects the shell
-that runs the command rather than only the child, which matters only if the
-terminal is reused for something else afterwards, and a debug terminal is not.
+Inline assignments and unset do the same job with no binary. A subshell keeps
+those changes local to the debuggee when the terminal is reused. Empty commands
+remain valid, and the child exit status passes through.
 
 A name a shell cannot assign to is skipped rather than emitted, which is the
 one place this cannot match what env does. env takes NAME=VALUE as a single
@@ -46,10 +44,11 @@ diff --git a/src/vs/workbench/contrib/debug/node/terminals.ts b/src/vs/workbench
 index b3b5a84..a2b294b 100644
 --- a/src/vs/workbench/contrib/debug/node/terminals.ts
 +++ b/src/vs/workbench/contrib/debug/node/terminals.ts
-@@ -173,16 +173,43 @@ export function prepareCommand(shell: string, args: string[], argsCanBeInterpret
+@@ -173,16 +173,44 @@ export function prepareCommand(shell: string, args: string[], argsCanBeInterpret
  				command += `cd ${quote(cwd)} ; `;
  			}
  			if (env) {
++				command += '( ';
 -				command += '/usr/bin/env';
 +				// Android has no /usr/bin, so naming that path produces
 +				// "/usr/bin/env: No such file or directory" and the debug
@@ -94,3 +93,13 @@ index b3b5a84..a2b294b 100644
  			}
  			for (const a of args) {
  				command += (a === '<' || a === '>' || argsCanBeInterpretedByShell) ? a : quote(a);
+@@ -189,6 +217,9 @@
+ 				command += ' ';
+ 			}
++			if (env) {
++				command += args.length > 0 ? '\n)' : ': )';
++			}
+ 			break;
+ 		}
+ 	}
+ 

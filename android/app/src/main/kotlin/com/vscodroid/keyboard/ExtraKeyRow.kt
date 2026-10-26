@@ -373,8 +373,10 @@ class ExtraKeyRow @JvmOverloads constructor(
      * so this copy cannot drift from the row it is describing without a test
      * saying so.
      */
-    val rowHeightPx: Int =
-        dpToPx(PAGER_HEIGHT_DP) + dotContainer.minimumHeight + dpToPx(2) + dpToPx(4)
+    val rowHeightPx: Int
+        get() = dpToPx(PAGER_HEIGHT_DP) + dotContainer.minimumHeight + dpToPx(2) + dpToPx(4)
+
+    private var densityDpi = resources.configuration.densityDpi
 
     /**
      * Whether the row has stood down because the page had no height to spare.
@@ -719,11 +721,11 @@ class ExtraKeyRow @JvmOverloads constructor(
      *
      * Decided on the packing rather than on the width. Every change in that
      * `configChanges` list arrives here, rotation and `uiMode` among them, and a
-     * rebuild is not free: it resets the pager to page 1, which a user reading
-     * the function keys would pay for turning the phone over or switching to
-     * dark mode. Comparing the packed pages returns from all of those, since the
-     * packer is a pure function of the width and its result is value-comparable.
-     * A font-scale change is not on the list at all and recreates the activity.
+     * rebuild is not free. Comparing the packed pages returns from unchanged
+     * packing, except for density changes when moving to another display: those
+     * must rebuild the keys and their pixel sizes even at the same logical width.
+     * The selected page and latched modifiers survive that rebuild. A font-scale
+     * change still recreates the activity to resolve its text resources again.
      *
      * When it does rebuild, the latched modifiers have to be carried across by
      * hand: the toggle map lives on [KeyPageAdapter] and the replacement starts
@@ -752,11 +754,27 @@ class ExtraKeyRow @JvmOverloads constructor(
         // nothing else still moves the key out from under it.
         longPressPopup?.dismiss()
         longPressPopup = null
+        val densityChanged = densityDpi != newConfig.densityDpi
+        densityDpi = newConfig.densityDpi
         val repacked = KeyPages.forSmallestWidthDp(newConfig.smallestScreenWidthDp)
-        if (repacked == pages) return
+        if (repacked == pages && !densityChanged) return
+        val selectedPage = viewPager.currentItem
         pages = repacked
+        if (densityChanged) {
+            viewPager.layoutParams.height = dpToPx(PAGER_HEIGHT_DP)
+            modifierBadge.setTextSize(TypedValue.COMPLEX_UNIT_SP, 11f)
+            val metrics = modifierBadge.paint.fontMetricsInt
+            dotContainer.minimumHeight = maxOf(dpToPx(DOT_SIZE_DP), metrics.descent - metrics.ascent)
+            dotContainer.layoutParams = (dotContainer.layoutParams as LayoutParams).apply {
+                topMargin = dpToPx(2)
+                bottomMargin = dpToPx(4)
+            }
+        }
         setupAdapter()
         setupDots()
+        viewPager.setCurrentItem(selectedPage.coerceAtMost(pages.lastIndex), false)
+        requestLayout()
+        ViewCompat.requestApplyInsets(this)
         Logger.d(tag, "Repacked into ${pages.size} pages for ${newConfig.smallestScreenWidthDp}dp")
     }
 

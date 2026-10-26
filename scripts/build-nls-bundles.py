@@ -29,9 +29,11 @@ did before this script existed.
 
 from __future__ import annotations
 
+import http.client
 import json
 import re
 import sys
+import time
 import urllib.error
 import urllib.request
 from pathlib import Path
@@ -96,8 +98,23 @@ TRADEMARK = re.compile(
 
 
 def fetch(url: str) -> bytes:
-    with urllib.request.urlopen(url, timeout=120) as response:
-        return response.read()
+    # raw.githubusercontent.com answers a CI runner's shared address with a 429 now
+    # and then; the same host failed an unretried download elsewhere in the build.
+    # Backs off 1, 2, 4, 8 and 16 seconds, and retries only what a repeat can fix.
+    for attempt in range(6):
+        try:
+            with urllib.request.urlopen(url, timeout=120) as response:
+                return response.read()
+        except urllib.error.HTTPError as err:
+            if err.code not in (429, 500, 502, 503, 504) or attempt == 5:
+                raise
+        except (OSError, http.client.HTTPException):
+            # A refused or reset connection, a timeout (an OSError before Python 3.10 as well)
+            # and a body cut short, which urlopen reports while read() runs.
+            if attempt == 5:
+                raise
+        time.sleep(2 ** attempt)
+    raise AssertionError("unreachable")
 
 
 def load_source_order() -> tuple[list[str], list[tuple[str, list[str]]]]:

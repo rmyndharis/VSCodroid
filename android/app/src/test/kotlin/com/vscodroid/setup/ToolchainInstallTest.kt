@@ -110,7 +110,7 @@ class ToolchainInstallTest {
     fun tearDown() = unmockkAll()
 
     private fun manager() = ToolchainManager(context).apply {
-        onStateChange = { pack, status, pct, why ->
+        onStateChange = { pack, status, pct, why, _ ->
             if (why != null) reasons.add(why)
             events.add(Triple(pack, status, pct))
             if (status == AssetPackStatus.FAILED) failed.countDown()
@@ -153,6 +153,8 @@ class ToolchainInstallTest {
         "Not enough disk space: 0 MB available, ${requiredBytes / 1_000_000} MB required"
 
     private val javaUnpacked = ToolchainRegistry.find("toolchain_java")!!.estimatedSize
+
+    private val javaName = ToolchainRegistry.find("toolchain_java")!!.displayName
 
     /**
      * The other half of the reservation, and it has to come from the registry
@@ -296,7 +298,7 @@ class ToolchainInstallTest {
         installedBy("com.example.sideloader")
         val alreadyThere = 40_000_000L
         File(filesDir, "home/.vscodroid/toolchains.json").writeText(
-            """[{"name":"java","installRoot":"usr/opt/java"}]"""
+            """[{"name":"java","displayName":"$javaName","installRoot":"usr/opt/java"}]"""
         )
         sparseFile("usr/opt/java/lib/modules", alreadyThere)
 
@@ -323,6 +325,28 @@ class ToolchainInstallTest {
     @Test
     fun `a device with no record is charged for both copies`() {
         installedBy("com.example.sideloader")
+        sparseFile("usr/opt/java/lib/modules", 40_000_000L)
+
+        manager().install("toolchain_java")
+
+        assertTrue(failed.await(10, TimeUnit.SECONDS), "the HTTP task never reported an outcome")
+        verify { Logger.e(any(), refusalNaming(toolchainInstallBytes(javaUnpacked, javaDownload, 0L)), any()) }
+    }
+
+    /**
+     * A record written by another build of the same toolchain credits nothing.
+     *
+     * Java 17 and 21 share the pack name `java` and not the install root, so the
+     * Java 17 tree on disk is beside the one the download will write, not under it.
+     * Credited anyway it took 155 MB off a reservation the copy then needs in full.
+     * A record that names no build at all is treated the same way.
+     */
+    @Test
+    fun `a record from another build of the toolchain credits nothing`() {
+        installedBy("com.example.sideloader")
+        File(filesDir, "home/.vscodroid/toolchains.json").writeText(
+            """[{"name":"java","displayName":"Java 17","installRoot":"usr/opt/java"}]"""
+        )
         sparseFile("usr/opt/java/lib/modules", 40_000_000L)
 
         manager().install("toolchain_java")
@@ -482,7 +506,7 @@ class ToolchainInstallTest {
      * What a failed copy already wrote is taken back.
      *
      * The install record is written last, so a copy that throws leaves up to the
-     * whole unpacked tree -- about 155 MB for Java 17 -- under no manifest at
+     * whole unpacked tree -- about 180 MB for Java 21 -- under no manifest at
      * all: `getInstalledToolchains` does not name it, the Toolchains screen
      * offers no Remove, the uninstall has no record to work from, and the repair
      * pass only visits records that exist. Clearing app data was the only way
@@ -523,7 +547,7 @@ class ToolchainInstallTest {
      * An install whose record does not survive is not an install, and saying
      * COMPLETED over it is the part that makes the loss silent.
      *
-     * `toolchains.json` is four lines written after ~160 MB has already been
+     * `toolchains.json` is four lines written after ~180 MB has already been
      * copied, so it is exactly the write a device that has just filled up fails.
      * What follows from losing it: `getInstalledToolchains()` does not name the
      * toolchain, `toolchain-env.sh` is regenerated from a record that predates it

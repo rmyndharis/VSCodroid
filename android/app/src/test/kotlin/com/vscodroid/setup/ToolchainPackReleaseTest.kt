@@ -1,6 +1,8 @@
 package com.vscodroid.setup
 
 import android.content.Context
+import android.content.pm.InstallSourceInfo
+import android.content.pm.PackageManager
 import com.google.android.gms.tasks.OnCompleteListener
 import com.google.android.gms.tasks.Task
 import com.google.android.play.core.assetpacks.AssetPackManager
@@ -14,6 +16,7 @@ import io.mockk.mockk
 import io.mockk.mockkObject
 import io.mockk.mockkStatic
 import io.mockk.unmockkAll
+import io.mockk.verify
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -53,7 +56,19 @@ class ToolchainPackReleaseTest {
         every { context.filesDir } returns filesDir
         every { context.cacheDir } returns File(filesDir, "cache")
         every { context.packageName } returns "com.vscodroid"
+        every { context.packageManager } returns packageManager
+        // Play's own delivery is what these cases are about, and cancel only releases
+        // a pack on an install Play delivers to.
+        installedBy("com.android.vending")
         File(filesDir, "home/.vscodroid").mkdirs()
+    }
+
+    private val packageManager = mockk<PackageManager>(relaxed = true)
+
+    private fun installedBy(installer: String?) {
+        val info = mockk<InstallSourceInfo>()
+        every { info.installingPackageName } returns installer
+        every { packageManager.getInstallSourceInfo(any()) } returns info
     }
 
     @AfterEach
@@ -61,6 +76,9 @@ class ToolchainPackReleaseTest {
         proceed.countDown()
         installer?.join(TimeUnit.SECONDS.toMillis(10))
         removalCompletions.toList().forEach { it() }
+        // Process-wide, and a removal whose Task never completes (a mock that answers
+        // nothing) would otherwise stay in flight for every test that follows.
+        removalsInFlight().clear()
         unmockkAll()
         assertFalse(installer?.isAlive == true, "the install did not settle")
     }
@@ -96,6 +114,12 @@ class ToolchainPackReleaseTest {
             .apply { isAccessible = true }
             .invoke(manager, pack, dir)
 
+    @Suppress("UNCHECKED_CAST")
+    private fun removalsInFlight() =
+        ToolchainManager::class.java.getDeclaredField("packRemovalsInFlight")
+            .apply { isAccessible = true }
+            .get(null) as MutableSet<String>
+
     private fun executor(manager: ToolchainManager) =
         ToolchainManager::class.java.getDeclaredField("ioExecutor")
             .apply { isAccessible = true }.get(manager) as ExecutorService
@@ -116,7 +140,7 @@ class ToolchainPackReleaseTest {
         }
         val events = Collections.synchronizedList(mutableListOf<Int>())
         val owner = ToolchainManager(context).apply {
-            onStateChange = { _, status, _, _ -> events.add(status) }
+            onStateChange = { _, status, _, _, _ -> events.add(status) }
         }
         val canceller = ToolchainManager(context)
         installer = Thread { install(owner, dir) }.apply { start() }
@@ -148,7 +172,7 @@ class ToolchainPackReleaseTest {
         executor(canceller).submit {}.get(10, TimeUnit.SECONDS)
         val events = mutableListOf<Int>()
         val owner = ToolchainManager(context).apply {
-            onStateChange = { _, status, _, _ -> events.add(status) }
+            onStateChange = { _, status, _, _, _ -> events.add(status) }
         }
 
         install(owner, dir)
@@ -164,5 +188,15 @@ class ToolchainPackReleaseTest {
         install(owner, redelivered)
         assertEquals(listOf(AssetPackStatus.COMPLETED), events)
         assertEquals("ruby payload", File(filesDir, "usr/bin/ruby").readText())
+    }
+    @Test
+    fun `cancelling a download on a sideloaded install asks Play to remove nothing`() {
+        installedBy("com.example.sideloader")
+        val manager = ToolchainManager(context)
+
+        manager.cancel(pack)
+        executor(manager).submit {}.get(10, TimeUnit.SECONDS)
+
+        verify(exactly = 0) { packManager.removePack(any()) }
     }
 }
