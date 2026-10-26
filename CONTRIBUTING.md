@@ -35,7 +35,7 @@ This project follows the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.
 | Android NDK       | r27+                           | For cross-compiling native modules           |
 | CMake             | 3.x or 4.x                     | Builds libzmq for the zeromq addon. On PATH, or the Android SDK's `cmake` package |
 | JDK               | 17+                            | Required by Gradle                           |
-| Node.js           | 20 or newer                    | `setup.sh` refuses anything older. The Code - OSS server build does not use this one: it takes its Node from upstream's `.nvmrc` at the pinned commit. The `scripts/test-*.js` self-checks run on 24 in CI; `test-auth-callback-provider.js` and `test-bridge-relay.js` need 22.13 or newer and exit saying so on an older one |
+| Node.js           | 20 or newer                    | `setup.sh` refuses anything older. The Code - OSS server build does not use this one: it takes its Node from upstream's `.nvmrc` at the pinned commit. TypeScript-based self-checks (`test-auth-callback-provider.js`, `test-bridge-relay.js`, `test-saf-mirror-usage.js` and `test-server-startup.js`) require `node:module.stripTypeScriptTypes` and exit with a diagnostic when it is unavailable; CI runs on Node 24 |
 | Python            | 3.x                            | For node-gyp, and for every `scripts/*.py` the build and the Gradle verification tasks run |
 | Git               | Any recent version             | -                                            |
 | GnuPG (`gpg`)     | Any recent version             | `brew install gnupg` / `apt-get install gnupg`. The bundled-tool download scripts verify the Termux package index against its signature and refuse to run without it |

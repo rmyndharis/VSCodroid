@@ -11,6 +11,18 @@ const { stripTypeScriptTypes } = require('node:module');
 const { EventEmitter } = require('node:events');
 const { createHash } = require('node:crypto');
 
+// Added to node:module in 22.13 and 23.2. On anything older the destructured name
+// is undefined and the first call below dies with "stripTypeScriptTypes is not a
+// function", which says nothing about the Node that is missing it. scripts/setup.sh
+// accepts Node 20, so a contributor on a version it allows reaches this. CI runs 24.
+if (typeof stripTypeScriptTypes !== 'function') {
+    console.error(
+        `${path.basename(__filename)}: needs node:module.stripTypeScriptTypes, `
+        + `which Node 22.13+ or 23.2+ has (this is ${process.version}). CI runs Node 24.`,
+    );
+    process.exit(1);
+}
+
 const root = path.join(__dirname, '..');
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'server-startup-'));
 function loadFixture(fixture, relative, patch, globals, exported, prepareSource = source => source) {

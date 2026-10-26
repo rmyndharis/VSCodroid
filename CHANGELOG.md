@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Report the required Node.js version before running TypeScript-based self-checks.
 - Load the language-detection CPU backend in browser workers without requiring CommonJS.
 - Detect a stopped adopted editor even when another process answers its health URL.
 - Reload the editor when an adopted server changes during readiness checks.

@@ -9,6 +9,8 @@ on:
     paths:
       - scripts/test-auth-callback-provider.js
       - scripts/test-bridge-relay.js
+      - scripts/test-saf-mirror-usage.js
+      - scripts/test-server-startup.js
       - .github/workflows/self-check-node-compat.yml
   workflow_dispatch:
 
@@ -33,11 +35,11 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 20.20.2
-      - name: Assert both affected scripts explain the missing API
+      - name: Assert all four affected scripts explain the missing API
         shell: bash
         run: |
           set -euo pipefail
-          for script in scripts/test-auth-callback-provider.js scripts/test-bridge-relay.js; do
+          for script in scripts/test-auth-callback-provider.js scripts/test-bridge-relay.js scripts/test-saf-mirror-usage.js scripts/test-server-startup.js; do
             output_file="$(mktemp)"
             if node "$script" >"$output_file" 2>&1; then
               cat "$output_file"
@@ -67,7 +69,9 @@ jobs:
         uses: actions/setup-node@949feb2413d6458794dcd2491c4babbbce0c15c1 # v7.1.0
         with:
           node-version: 24.22.1
-      - name: Run both affected self-checks
+      - name: Run all four affected self-checks
         run: |
           node scripts/test-auth-callback-provider.js
           node scripts/test-bridge-relay.js
+          node scripts/test-saf-mirror-usage.js
+          node scripts/test-server-startup.js

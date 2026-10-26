@@ -9,6 +9,18 @@ const assert = require('node:assert/strict');
 const { execFileSync } = require('node:child_process');
 const { stripTypeScriptTypes } = require('node:module');
 
+// Added to node:module in 22.13 and 23.2. On anything older the destructured name
+// is undefined and the first call below dies with "stripTypeScriptTypes is not a
+// function", which says nothing about the Node that is missing it. scripts/setup.sh
+// accepts Node 20, so a contributor on a version it allows reaches this. CI runs 24.
+if (typeof stripTypeScriptTypes !== 'function') {
+    console.error(
+        `${hostPath.basename(__filename)}: needs node:module.stripTypeScriptTypes, `
+        + `which Node 22.13+ or 23.2+ has (this is ${process.version}). CI runs Node 24.`,
+    );
+    process.exit(1);
+}
+
 const root = hostPath.join(__dirname, '..');
 const temporary = fs.mkdtempSync(hostPath.join(os.tmpdir(), 'saf-mirror-usage-'));
 let helperSource;
