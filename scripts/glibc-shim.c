@@ -27,6 +27,7 @@
 #include <pthread.h>
 #include <signal.h>
 #include <spawn.h>
+#include <stdint.h>
 #include <stdio.h>
 #include <stdlib.h>
 #include <string.h>
@@ -240,19 +241,17 @@ const char *gnu_get_libc_release(void) { return "stable"; }
  * there is nothing to do and success is the honest answer. */
 int __res_init(void) { return 0; }
 
-/*
- * The XPG variant returns int and always writes into the caller's buffer. Bionic
- * follows the GNU shape instead, returning a pointer that may be a static string
- * it never copied, so the copy has to happen here.
- */
-int __xpg_strerror_r(int code, char *buf, size_t len) {
-    const char *msg = strerror_r(code, buf, len);
-    if (msg != buf) {
-        if (len == 0) return 34; /* ERANGE */
-        strncpy(buf, msg, len - 1);
-        buf[len - 1] = '\0';
-    }
-    return 0;
+/* Linux/AArch64 leaves slots 41 and 58 unused in its errno number range. */
+static int glibc_errno_known(int code) {
+    return code >= 0 && code <= EHWPOISON && code != 41 && code != 58;
+}
+
+/* GNU keeps a full message for known errors even when the supplied buffer is short. */
+char *__shim_strerror_r(int code, char *buf, size_t len) {
+    int saved_errno = errno;
+    char *result = glibc_errno_known(code) ? strerror(code) : strerror_r(code, buf, len);
+    errno = saved_errno;
+    return result;
 }
 
 /* glibc's internal atfork registration. Bionic's public one covers the same
@@ -326,6 +325,8 @@ void *__shim_resolve(const char *name) {
     if (!__builtin_strcmp(name, "dladdr")) return (void *)&dladdr;
     if (!__builtin_strcmp(name, "dl_iterate_phdr")) return (void *)&dl_iterate_phdr;
 
+    if (!__builtin_strcmp(name, "strerror_r")) return (void *)&__shim_strerror_r;
+
     void *p = shim_libc ? dlsym(shim_libc, name) : 0;
     if (!p && shim_libdl) p = dlsym(shim_libdl, name);
     /* This library's own definitions, and they have to be asked for by handle.
@@ -342,6 +343,19 @@ void *__shim_resolve(const char *name) {
     if (!p && shim_self) p = dlsym(shim_self, name);
     if (!p) p = dlsym(RTLD_NEXT, name);
     return p;
+}
+
+/* glibc's XPG entry returns error numbers; older Bionic uses -1 and errno. */
+int __xpg_strerror_r(int code, char *buf, size_t len) {
+    int saved_errno = errno;
+    if (!shim_libc) shim_open_handles();
+    int (*posix_strerror)(int, char *, size_t) = shim_libc
+        ? (int (*)(int, char *, size_t))dlsym(shim_libc, "strerror_r") : 0;
+    int result = posix_strerror ? posix_strerror(code, buf, len) : ENOSYS;
+    if (posix_strerror && !glibc_errno_known(code)) result = EINVAL;
+    else if (result < 0) result = errno;
+    errno = saved_errno;
+    return result;
 }
 
 /*
@@ -482,6 +496,18 @@ int posix_spawn_file_actions_addchdir(posix_spawn_file_actions_t *acts,
 static ssize_t copy_file_range_fallback(int fd_in, off64_t *off_in, int fd_out,
                                         off64_t *off_out, size_t len, unsigned flags) {
     if (flags) { errno = EINVAL; return -1; }
+
+    struct stat input_stat, output_stat;
+    if (fstat(fd_in, &input_stat) || fstat(fd_out, &output_stat)) return -1;
+    if (input_stat.st_dev == output_stat.st_dev && input_stat.st_ino == output_stat.st_ino) {
+        off64_t input = off_in ? *off_in : lseek(fd_in, 0, SEEK_CUR);
+        off64_t output = off_out ? *off_out : lseek(fd_out, 0, SEEK_CUR);
+        if (input < 0 || output < 0) { errno = EINVAL; return -1; }
+        uint64_t available = input < input_stat.st_size ? (uint64_t)(input_stat.st_size - input) : 0;
+        uint64_t count = len < available ? len : available;
+        uint64_t distance = input <= output ? (uint64_t)(output - input) : (uint64_t)(input - output);
+        if (distance < count) { errno = EINVAL; return -1; }
+    }
 
     /* 16 KB rather than the 64 KB a copy loop would normally take: this runs on
      * whatever thread the addon calls from, including Node worker threads, and a

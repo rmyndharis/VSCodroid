@@ -643,11 +643,12 @@ function start(log) {
             }
             const port = Number(target.port) || 80;
             upstream = net.connect(port, bareHost(target.hostname), () => {
-                const lines = [`${req.method} ${target.pathname}${target.search} HTTP/1.1`];
+                const lines = [`${req.method} ${target.pathname}${target.search} HTTP/1.1`, `Host: ${target.host}`];
                 for (let i = 0; i < req.rawHeaders.length; i += 2) {
                     // The same list the plain-HTTP leg deletes from, read from
                     // the same place: see HOP_BY_HOP_HEADERS.
-                    if (HOP_BY_HOP_HEADERS.includes(req.rawHeaders[i].toLowerCase())) continue;
+                    const name = req.rawHeaders[i].toLowerCase();
+                    if (name === 'host' || HOP_BY_HOP_HEADERS.includes(name)) continue;
                     lines.push(`${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}`);
                 }
                 // latin1, which is the encoding a header block is bytes in and

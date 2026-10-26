@@ -805,6 +805,10 @@ async function main() {
     let wsSeen = null;
     wsOrigin.on('upgrade', (req, socket) => {
         wsSeen = req.headers;
+        if (req.headers.host !== `127.0.0.1:${wsPort}`) {
+            socket.end('HTTP/1.1 400 Bad Request\r\nConnection: close\r\n\r\n');
+            return;
+        }
         socket.write(
             'HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n',
         );
@@ -820,7 +824,7 @@ async function main() {
             // assertion after the handshake would be measuring the harness
             // rather than the proxy.
             socket.write(Buffer.from(
-                `GET http://127.0.0.1:${wsPort}/socket HTTP/1.1\r\nHost: 127.0.0.1:${wsPort}\r\n` +
+                `GET http://127.0.0.1:${wsPort}/socket HTTP/1.1\r\nHost: 127.0.0.1:${proxyPort}\r\n` +
                     `Upgrade: websocket\r\nConnection: Upgrade\r\n` +
                     `Cookie: session=\xe9\r\n` +
                     `Proxy-Connection: Keep-Alive\r\n` +
@@ -858,6 +862,7 @@ async function main() {
         `the upgrade was answered but the sockets were never spliced: ${JSON.stringify(upgraded)}`,
     );
     assert.ok(wsSeen, 'the upgrade never reached the origin, so its headers were never compared');
+    assert.strictEqual(wsSeen.host, `127.0.0.1:${wsPort}`);
     for (const header of ['proxy-authorization', 'proxy-connection']) {
         assert.ok(
             !(header in wsSeen),

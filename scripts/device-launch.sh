@@ -46,6 +46,13 @@ if [ "${1:-}" = "install" ]; then
     "$ADB" install -r "$APK" | tail -1 | sed 's/^/  /'
 fi
 
+app_uid=$("$ADB" shell pm list packages -U "$PKG" 2>/dev/null | tr -d '\r' |
+    awk -v package="package:$PKG" '$1 == package && $2 ~ /^uid:[0-9]+$/ { sub(/^uid:/, "", $2); print $2; exit }')
+if [[ ! "$app_uid" =~ ^[0-9]+$ ]]; then
+    echo "  could not resolve the UID for $PKG" >&2
+    exit 1
+fi
+
 echo "=== Launching ==="
 "$ADB" shell am force-stop "$PKG" || true
 "$ADB" shell am start -n "$PKG/com.vscodroid.SplashActivity" >/dev/null
@@ -60,7 +67,8 @@ for attempt in $(seq 1 40); do
         tap_by_text "$button" 2>/dev/null || true
     done
 
-    nodes=$("$ADB" shell ps -A 2>/dev/null | tr -d '\r' | grep -c libnode || true)
+    nodes=$("$ADB" shell ps -A -o UID,ARGS 2>/dev/null | tr -d '\r' |
+        awk -v app_uid="$app_uid" '$1 == app_uid && $2 ~ /(^|\/)libnode(\.so)?$/ { count++ } END { print count+0 }' || true)
     if [ "${nodes:-0}" -ge 2 ]; then
         echo "  server up after ~$((attempt * 5))s ($nodes node processes)"
         exit 0
