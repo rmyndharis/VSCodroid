@@ -264,19 +264,16 @@
     <!-- A directory deleted in the editor that holds such a file, and no file the editor
          never had, which is what saf_directory_kept says. -->
     <string name="saf_directory_changed_kept">%1$s cihaz klasöründe tutuldu: düzenleyici içindeki bir dosyayı en son okuduğundan veya kaydettiğinden beri başka bir uygulama o dosyayı değiştirmiş olabilir. Buna artık ihtiyacınız yoksa orada silin.</string>
-    <string name="saf_delete_refused">%1$s cihaz klasöründen silinemedi, bu yüzden klasör bir dahaki açılışta yeniden görünecek. Cihazınızdaki dosya yöneticisinden silin.</string>
+    <string name="saf_delete_refused">%1$s cihaz klasöründen silinemedi ve klasör yeniden açıldığında tekrar görünecek. Bu öğeyi cihazınızdaki dosya yöneticisinden silin.</string>
 
     <!-- Removing the local copy of a device folder, from the storage screen. The
          mirror named by a hash the screen holds no longer exists: the user picked it
          from a list this app built a moment earlier, so this means the folder was
          removed or re-synced in between rather than that they typed something wrong. -->
     <string name="saf_mirror_unknown">Bu klasörün kaldırılacak bir yerel kopyası yok.</string>
-    <!-- The reclaim gate declining. Worded as what is at stake rather than as a
-         refusal, because the user's next step is to confirm and remove it anyway: the
-         mirrors that hold unsynced files are exactly the ones worth the disk, since a
-         folder gets large by being worked in and working in one creates files the sync
-         excludes by construction. -->
-    <string name="saf_mirror_not_a_copy">Bu klasördeki bazı dosyalar cihaz klasöründe yok. Yerel kopyayı kaldırmak bu dosyaları siler.</string>
+    <!-- Native confirmation and unconfirmed-removal refusal. A snapshot cannot
+         exclude files added directly after the check. -->
+    <string name="saf_mirror_not_a_copy">Bu yerel kopya, cihaz klasörüne hiç aktarılmamış dosyalar içerebilir. Devam etmeden önce gereken dosyaları başka bir yere kaydedin ve bu kopyayı kullanan işleri durdurun. Kaldırma işlemi geri alınamaz.</string>
     <!-- The rename that commits a removal was refused by the filesystem. Separate from
          saf_mirror_unknown, which says there was nothing to remove: here the copy is
          still there, whole, and trying again is worth something. -->
@@ -602,4 +599,5 @@
          tls_unknown_host stands in for an address. Written in Kotlin before, so
          one English word survived inside an otherwise translated About dialog. -->
     <string name="about_version_unknown">bilinmiyor</string>
+    <string name="saf_folder_unavailable">Bu cihaz klasörünün yerel kopyası artık kullanılamıyor. Klasörü cihazdan yeniden açın.</string>
 </resources>

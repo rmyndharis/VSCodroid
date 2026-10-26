@@ -16,11 +16,11 @@ class SafRecordSafetyTest : SafInitialSyncTestBase() {
         val engine = sync()
         val local = mirrorFile("notes.txt").apply { writeText("delivered edit") }
         val method = SafSyncEngine::class.java.getDeclaredMethod(
-            "recordDeliveredCopy", File::class.java, Long::class.javaPrimitiveType,
+            "recordDeliveredCopy", File::class.java, File::class.java, Long::class.javaPrimitiveType,
             Long::class.javaPrimitiveType, ByteArray::class.java,
         ).apply { isAccessible = true }
         method.invoke(
-            engine, local, local.lastModified(), local.length(),
+            engine, local, mirror, local.lastModified(), local.length(),
             MessageDigest.getInstance("SHA-256").digest(local.readBytes()),
         )
         deviceTree(mapOf("root" to listOf(Child("keep.txt", contents = "k"))))

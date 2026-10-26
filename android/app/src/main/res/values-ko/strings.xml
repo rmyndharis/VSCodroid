@@ -262,19 +262,16 @@
     <!-- A directory deleted in the editor that holds such a file, and no file the editor
          never had, which is what saf_directory_kept says. -->
     <string name="saf_directory_changed_kept">%1$s은(는) 기기 폴더에 남겨 두었습니다. 편집기가 그 안의 파일을 마지막으로 읽거나 저장한 뒤에 다른 앱이 그 파일을 변경했을 수 있기 때문입니다. 더 이상 필요하지 않으면 기기 폴더에서 삭제하세요.</string>
-    <string name="saf_delete_refused">%1$s 을(를) 기기 폴더에서 삭제하지 못했습니다. 폴더를 다시 열면 파일이 다시 나타납니다. 기기의 파일 관리자에서 삭제하세요.</string>
+    <string name="saf_delete_refused">%1$s 을(를) 기기 폴더에서 삭제하지 못했습니다. 폴더를 다시 열면 해당 항목이 다시 나타납니다. 기기의 파일 관리자에서 삭제하세요.</string>
 
     <!-- Removing the local copy of a device folder, from the storage screen. The
          mirror named by a hash the screen holds no longer exists: the user picked it
          from a list this app built a moment earlier, so this means the folder was
          removed or re-synced in between rather than that they typed something wrong. -->
     <string name="saf_mirror_unknown">제거할 해당 폴더의 로컬 사본이 없습니다.</string>
-    <!-- The reclaim gate declining. Worded as what is at stake rather than as a
-         refusal, because the user's next step is to confirm and remove it anyway: the
-         mirrors that hold unsynced files are exactly the ones worth the disk, since a
-         folder gets large by being worked in and working in one creates files the sync
-         excludes by construction. -->
-    <string name="saf_mirror_not_a_copy">해당 폴더의 일부 파일은 기기 폴더에 없습니다. 로컬 사본을 제거하면 그 파일도 삭제됩니다.</string>
+    <!-- Native confirmation and unconfirmed-removal refusal. A snapshot cannot
+         exclude files added directly after the check. -->
+    <string name="saf_mirror_not_a_copy">이 로컬 사본에는 기기 폴더로 전송되지 않은 파일이 있을 수 있습니다. 계속하기 전에 필요한 파일을 다른 곳에 저장하고 이 사본을 사용하는 작업을 중지하세요. 제거한 후에는 되돌릴 수 없습니다.</string>
     <!-- The rename that commits a removal was refused by the filesystem. Separate from
          saf_mirror_unknown, which says there was nothing to remove: here the copy is
          still there, whole, and trying again is worth something. -->
@@ -598,4 +595,5 @@
          tls_unknown_host stands in for an address. Written in Kotlin before, so
          one English word survived inside an otherwise translated About dialog. -->
     <string name="about_version_unknown">알 수 없음</string>
+    <string name="saf_folder_unavailable">이 기기 폴더의 로컬 복사본을 더 이상 사용할 수 없습니다. 기기에서 폴더를 다시 여세요.</string>
 </resources>

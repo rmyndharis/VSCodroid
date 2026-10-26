@@ -150,4 +150,58 @@ class PythonReclaimTest {
         assertTrue(staleRuntime.exists(), "an APK with no Python was read as every version being stale")
         assertTrue(stalePayload.exists(), "an APK with no Python was read as every version being stale")
     }
+
+    @Test
+    fun `a failed stdlib copy keeps Python repair pending`() {
+        every { assets.list(any()) } returns emptyArray()
+        every { assets.list("usr/lib") } returns arrayOf(shipped, "python3.13")
+        every { assets.list("usr/lib/python3.13") } returns arrayOf("encodings")
+        every { assets.list("usr/lib/python3.13/encodings") } returns arrayOf("__init__.py")
+        every { assets.open("usr/lib/python3.13/encodings/__init__.py") } answers {
+            java.io.ByteArrayInputStream("# encodings".toByteArray())
+        }
+        every { assets.open("usr/lib/$shipped") } answers {
+            java.io.ByteArrayInputStream("runtime".toByteArray())
+        }
+        val leaf = File(libDir, "python3.13/encodings/__init__.py")
+        val blocker = File(leaf.parentFile, "${leaf.name}.tmp~")
+        assertTrue(blocker.mkdirs())
+        File(blocker, "occupied").writeText("x")
+        val setup = FirstRunSetup(contextWith(512L * 1_048_576))
+
+        kotlinx.coroutines.runBlocking { setup.reconcilePythonRuntime() }
+
+        assertFalse(File(libDir, shipped).exists(), "the runtime was published before its stdlib")
+        assertTrue(setup.pythonRuntimeNeedsWork(), "the failed stdlib no longer has a retry trigger")
+        assertTrue(blocker.deleteRecursively())
+        kotlinx.coroutines.runBlocking { setup.reconcilePythonRuntime() }
+        org.junit.jupiter.api.Assertions.assertEquals("# encodings", leaf.readText())
+        assertTrue(File(libDir, shipped).isFile)
+        assertFalse(setup.pythonRuntimeNeedsWork())
+    }
+
+    @Test
+    fun `an unavailable stdlib root keeps runtime repair pending until a complete retry`() {
+        every { assets.list(any()) } returns emptyArray()
+        every { assets.list("usr/lib") } returns arrayOf(shipped, "python3.13")
+        every { assets.open("usr/lib/python3.13") } throws java.io.IOException("stdlib root unavailable")
+        every { assets.open("usr/lib/$shipped") } answers {
+            java.io.ByteArrayInputStream("runtime".toByteArray())
+        }
+        val setup = FirstRunSetup(contextWith(512L * 1_048_576))
+        kotlinx.coroutines.runBlocking { setup.reconcilePythonRuntime() }
+        assertFalse(File(libDir, shipped).exists(), "runtime accepted an unavailable stdlib root")
+        assertTrue(setup.pythonRuntimeNeedsWork())
+
+        every { assets.list("usr/lib/python3.13") } returns arrayOf("encodings")
+        every { assets.list("usr/lib/python3.13/encodings") } returns arrayOf("__init__.py")
+        every { assets.open("usr/lib/python3.13/encodings/__init__.py") } answers {
+            java.io.ByteArrayInputStream("# encodings".toByteArray())
+        }
+        kotlinx.coroutines.runBlocking { setup.reconcilePythonRuntime() }
+        assertTrue(File(libDir, "python3.13/encodings/__init__.py").isFile)
+        assertTrue(File(libDir, shipped).isFile)
+        assertFalse(setup.pythonRuntimeNeedsWork())
+    }
+
 }

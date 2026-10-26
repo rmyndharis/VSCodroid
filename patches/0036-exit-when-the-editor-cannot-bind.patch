@@ -1,0 +1,18 @@
+Exit when the editor cannot bind its listener
+
+Report an unbound EADDRINUSE as a failed server process so the bootstrap and
+watchdog can retry. Other errors retain the existing remote service handler.
+
+--- a/src/server-main.ts
++++ b/src/server-main.ts
+@@ -106,6 +106,10 @@
+ 		return remoteExtensionHostAgentServer.handleUpgrade(req, socket);
+ 	});
+ 	server.on('error', async (err) => {
++		if (!server.listening && (err as NodeJS.ErrnoException).code === 'EADDRINUSE') {
++			console.error(err);
++			process.exit(1);
++		}
+ 		const remoteExtensionHostAgentServer = await getRemoteExtensionHostAgentServer();
+ 		return remoteExtensionHostAgentServer.handleServerError(err);
+ 	});

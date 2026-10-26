@@ -19,6 +19,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.withTimeout
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
@@ -66,6 +67,10 @@ class NodeServiceCrashEpochTest {
             isAccessible = true
             setBoolean(manager, true)
         }
+        ProcessManager::class.java.getDeclaredField("heapOverrideAskedMb").apply {
+            isAccessible = true
+            set(manager, 640)
+        }
 
         // Bypass Android constructors while retaining the service's real crash handler.
         val service = spyk(mockk<NodeService>(relaxed = true))
@@ -98,6 +103,7 @@ class NodeServiceCrashEpochTest {
         }
         val prefs = mockk<SharedPreferences>()
         every { prefs.getInt(PREF_HEAP_KILLS, 0) } answers { kills.get() }
+        every { prefs.getInt(PREF_HEAP_VALUE_SEEN, 0) } returns 640
         every { prefs.edit() } returns editor
         every { service.getSharedPreferences(HEAP_PREFS_NAME, Context.MODE_PRIVATE) } returns prefs
         val crash = NodeService::class.java.getDeclaredMethod(
@@ -126,7 +132,11 @@ class NodeServiceCrashEpochTest {
         } finally {
             finishCommit.countDown()
             withTimeout(5_000) { handled.join() }
+            val watchdog = ProcessManager::class.java.getDeclaredField("watchdogThread")
+                .apply { isAccessible = true }.get(manager) as Thread?
             manager.stopServer()
+            watchdog?.join(5_000)
+            assertFalse(watchdog?.isAlive == true, "the replacement watchdog outlived the test")
             unmockkAll()
         }
     }

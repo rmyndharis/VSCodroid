@@ -273,12 +273,9 @@
          from a list this app built a moment earlier, so this means the folder was
          removed or re-synced in between rather than that they typed something wrong. -->
     <string name="saf_mirror_unknown">There is no local copy of that folder to remove.</string>
-    <!-- The reclaim gate declining. Worded as what is at stake rather than as a
-         refusal, because the user's next step is to confirm and remove it anyway: the
-         mirrors that hold unsynced files are exactly the ones worth the disk, since a
-         folder gets large by being worked in and working in one creates files the sync
-         excludes by construction. -->
-    <string name="saf_mirror_not_a_copy">Some files in that folder are not in the device folder. Removing the local copy would delete them.</string>
+    <!-- Native confirmation and unconfirmed-removal refusal. A snapshot cannot
+         exclude files added directly after the check. -->
+    <string name="saf_mirror_not_a_copy">This local copy may contain files that never reached the device folder. Save anything needed elsewhere and stop work using it before continuing. Removal cannot be undone.</string>
     <!-- The rename that commits a removal was refused by the filesystem. Separate from
          saf_mirror_unknown, which says there was nothing to remove: here the copy is
          still there, whole, and trying again is worth something. -->
@@ -405,6 +402,7 @@
          grant it could not use, which let a caller put the chooser in front of
          the user without asking for it, so the sentence has to carry the next
          step itself. -->
+    <string name="saf_folder_unavailable">The local copy of this device folder is no longer available. Open the folder from the device again.</string>
     <string name="saf_permission_expired">Permission expired. Please select the folder again.</string>
 
     <!-- A device folder that did not open. Said as one sentence per case, with the

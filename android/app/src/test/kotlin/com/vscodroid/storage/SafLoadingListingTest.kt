@@ -74,9 +74,9 @@ class SafLoadingListingTest : SafInitialSyncTestBase() {
         deviceTree(
             mapOf(
                 "root" to listOf(
-                    Child("x.txt", contents = "older document"),
+                    Child("x.txt", contents = "older document", id = "older-x"),
                     Child("y.txt", contents = "y"),
-                    Child("x.txt", contents = "newer document"),
+                    Child("x.txt", contents = "newer document", id = "newer-x"),
                 ),
             )
         )

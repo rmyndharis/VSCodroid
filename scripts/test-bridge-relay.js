@@ -251,6 +251,7 @@ let infoChoice = null;
 // they may edit before choosing anything.
 const openedDocs = [];
 const shownDocs = [];
+const runLines = [];
 const clipboard = [];
 // The status bar items the extension makes, each marked while it shows, and who
 // listens for a document closing.
@@ -267,6 +268,10 @@ let notebookDocuments = [];
 let tabGroups = { all: [], activeTabGroup: undefined };
 let terminals = [];
 let directories = new Map();
+let directoryRead;
+let storageUpdate;
+let documentShow;
+let commandRun;
 class TabInputText { constructor(uri) { this.uri = uri; } }
 /** A Uri with the one method the extension calls on it. */
 function uriOf(scheme, authority, p) {
@@ -276,7 +281,10 @@ const commands = new Map();
 const vscodeStub = {
     commands: {
         registerCommand: (id, fn) => { commands.set(id, fn); return { dispose() {} }; },
-        executeCommand: async (id, ...args) => { executed.push(id); ranWith.push([id, ...args]); },
+        executeCommand: async (id, ...args) => {
+            executed.push(id); ranWith.push([id, ...args]);
+            if (commandRun) return commandRun(id, ...args);
+        },
     },
     window: {
         showInputBox: async () => inputBoxAnswer,
@@ -284,7 +292,7 @@ const vscodeStub = {
             shown.info.push(m);
             return infoChoice ? infoChoice(items) : undefined;
         },
-        showTextDocument: async (doc) => { shownDocs.push(doc); return {}; },
+        showTextDocument: async (doc) => { shownDocs.push(doc); if (documentShow) await documentShow(doc); return {}; },
         showErrorMessage: (m) => { shown.error.push(m); },
         // Answers only with a button the call offered, as the workbench does, so a
         // warning that loses its button loses the action behind it too. The
@@ -302,11 +310,18 @@ const vscodeStub = {
         },
         get tabGroups() { return tabGroups; },
         get terminals() { return terminals; },
+        createTerminal(options) {
+            const terminal = { name: options.name, show() {}, sendText(line) { runLines.push(line); },
+                dispose() { terminals = terminals.filter(item => item !== this); } };
+            terminals.push(terminal);
+            return terminal;
+        },
     },
     workspace: {
         get workspaceFolders() { return workspaceFolders; },
         get workspaceFile() { return workspaceFile; },
         get textDocuments() { return textDocuments; },
+        getWorkspaceFolder() { return undefined; },
         get notebookDocuments() { return notebookDocuments; },
         openTextDocument: async (options) => {
             const doc = { options, text: options.content, getText() { return this.text; } };
@@ -324,6 +339,7 @@ const vscodeStub = {
                 return new TextEncoder().encode(serverNote);
             },
             readDirectory: async (uri) => {
+                if (directoryRead) await directoryRead(uri);
                 const listing = directories.get(uri.path);
                 if (listing instanceof Error) throw listing;
                 if (!listing) throw Object.assign(new Error(`ENOENT: ${uri.path}`), { code: 'FileNotFound' });
@@ -332,10 +348,10 @@ const vscodeStub = {
         },
     },
     env: { clipboard: { writeText: async (text) => { clipboard.push(text); } } },
-    Uri: {
-        parse: (s) => ({ toString: () => s }),
+    Uri: class {
+        static parse(s) { return { toString: () => s }; }
         // Resolves `..` the way the API documents for joinPath.
-        joinPath: (uri, ...parts) => ({ ...uri, path: path.posix.join(uri.path, ...parts) }),
+        static joinPath(uri, ...parts) { return { ...uri, path: path.posix.join(uri.path, ...parts) }; }
     },
     StatusBarAlignment: { Left: 1, Right: 2 },
     FileType: { Unknown: 0, File: 1, Directory: 2, SymbolicLink: 64 },
@@ -505,7 +521,10 @@ async function main() {
             extensionUri,
             globalState: {
                 get: (key, fallback) => (state.has(key) ? state.get(key) : fallback),
-                update: async (key, value) => { state.set(key, value); },
+                update: async (key, value) => {
+                    state.set(key, value !== null && typeof value === 'object' ? JSON.parse(JSON.stringify(value)) : value);
+                    if (storageUpdate) await storageUpdate(key, value);
+                },
             },
         });
         await settle();
@@ -924,6 +943,7 @@ async function main() {
     /** Starts the command and reports whether it has finished. */
     function start() {
         shown.info.length = 0; shown.error.length = 0;
+        warnings.length = 0;
         listCalls.length = 0; reclaimCalls.length = 0;
         const state = { done: false };
         state.running = manageDeviceFolders().then(() => { state.done = true; });
@@ -1000,46 +1020,120 @@ async function main() {
     );
     listAnswer = '';
 
-    // The removal, end to end: the confirmed removal is sent with its hash, its
-    // force flag and a reply id, and the refusal that comes back by id is the
-    // sentence the user is shown.
-    quickPickChoice = (items) => items[0];
-    warningChoice = 'Remove';
-    const removal = start();
-    await settle();
-    relayWindow.__vscodroidBridgeReply(
-        listCalls[0].replyId, true,
-        JSON.stringify([{ hash: 'abc123', name: 'Notes', bytes: 12, reclaimable: false }]),
-    );
-    await settle();
-    assert.strictEqual(reclaimCalls.length, 1, 'the confirmed removal never reached the bridge');
-    assert.deepStrictEqual(
-        { token: reclaimCalls[0].token, hash: reclaimCalls[0].hash, force: reclaimCalls[0].force },
-        { token: 'test-token', hash: 'abc123', force: true },
-        'the relay passed the wrong arguments to reclaimSafMirror. The reply id is LAST ' +
-        'here and first nowhere, so an argument out of place hands the hash to the token ' +
-        'check or deletes with the wrong force flag: ' + JSON.stringify(reclaimCalls[0]),
-    );
-    assert.ok(
-        typeof reclaimCalls[0].replyId === 'string' && reclaimCalls[0].replyId.length > 0,
-        'the removal was sent without a reply id: ' + JSON.stringify(reclaimCalls[0]),
-    );
-    assert.strictEqual(
-        removal.done, false,
-        'the removal settled before its outcome was posted, so a refusal could not have ' +
-        'been reported and the user is told nothing about a copy that is still there',
-    );
+    // Legacy reclaimable=true rows need the same warning and consent as current rows.
+    for (const reclaimable of [false, true]) {
+        let offeredCopy;
+        quickPickChoice = (items) => { [offeredCopy] = items; return offeredCopy; };
+        warningChoice = 'Remove';
+        const removal = start();
+        await settle();
+        relayWindow.__vscodroidBridgeReply(
+            listCalls[0].replyId, true,
+            JSON.stringify([{ hash: 'abc123', name: 'Notes', bytes: 12, reclaimable, granted: false }]),
+        );
+        await settle();
+        assert.ok(
+            /may hold files/i.test(offeredCopy.detail) && !/unchanged copy/i.test(offeredCopy.detail),
+            'the listed copy was described as safe to remove: ' + JSON.stringify(offeredCopy),
+        );
+        assert.ok(
+            warnings.length === 1 && warnings[0].options.modal === true &&
+                /THIS DELETES FILES/.test(warnings[0].message) &&
+                /may hold files that have not reached the device folder/.test(warnings[0].message) &&
+                /Stop terminals/.test(warnings[0].message),
+            'a removal did not warn about unique files and active work: ' + JSON.stringify(warnings),
+        );
+        assert.strictEqual(reclaimCalls.length, 1, 'the confirmed removal never reached the bridge');
+        assert.deepStrictEqual(
+            { token: reclaimCalls[0].token, hash: reclaimCalls[0].hash, force: reclaimCalls[0].force },
+            { token: 'test-token', hash: 'abc123', force: true },
+            'the relay passed the wrong arguments to reclaimSafMirror. The reply id is LAST ' +
+            'here and first nowhere, so an argument out of place hands the hash to the token ' +
+            'check or deletes with the wrong force flag: ' + JSON.stringify(reclaimCalls[0]),
+        );
+        assert.ok(
+            typeof reclaimCalls[0].replyId === 'string' && reclaimCalls[0].replyId.length > 0,
+            'the removal was sent without a reply id: ' + JSON.stringify(reclaimCalls[0]),
+        );
+        assert.strictEqual(
+            removal.done, false,
+            'the removal settled before its outcome was posted, so a refusal could not have ' +
+            'been reported and the user is told nothing about a copy that is still there',
+        );
 
-    const IN_USE = 'That folder is open in the editor.';
-    relayWindow.__vscodroidBridgeReply(reclaimCalls[0].replyId, false, IN_USE);
-    await removal.running;
-    assert.ok(
-        shown.error.length === 1 && shown.error[0].includes(IN_USE),
-        'a refused removal did not reach the user in the words Android chose, so the ' +
-        'thing that has to change first is never named. Saw: ' + JSON.stringify(shown.error),
-    );
+        const IN_USE = 'That folder is open in the editor.';
+        relayWindow.__vscodroidBridgeReply(reclaimCalls[0].replyId, false, IN_USE);
+        await removal.running;
+        assert.ok(
+            shown.error.length === 1 && shown.error[0].includes(IN_USE),
+            'a refused removal did not reach the user in the words Android chose, so the ' +
+            'thing that has to change first is never named. Saw: ' + JSON.stringify(shown.error),
+        );
+    }
     quickPickChoice = null;
     warningChoice = null;
+
+    quickPickChoice = (items) => items[0];
+    const cancelledRemoval = start();
+    await settle();
+    relayWindow.__vscodroidBridgeReply(listCalls[0].replyId, true,
+        JSON.stringify([{ hash: 'abc123', name: 'Notes', bytes: 12, reclaimable: true, granted: true }]));
+    await cancelledRemoval.running;
+    assert.strictEqual(warnings.length, 1, 'the selected legacy row was never confirmed');
+    assert.strictEqual(reclaimCalls.length, 0, 'a dismissed confirmation still sent a removal');
+    quickPickChoice = null;
+
+    // Expire the actual extension timer without waiting two minutes. Posted replies
+    // still pass through the real relay and BroadcastChannel in this harness.
+    const realSetTimeout = global.setTimeout;
+    const diskTimers = [];
+    global.setTimeout = (callback, delay, ...args) => {
+        if (delay === 120000) {
+            const timer = { callback, args };
+            diskTimers.push(timer);
+            return timer;
+        }
+        return realSetTimeout(callback, delay, ...args);
+    };
+    try {
+        const missingList = start();
+        await settle();
+        assert.strictEqual(diskTimers.length, 1, 'the listing did not use the bounded storage timer');
+        diskTimers[0].callback(...diskTimers[0].args);
+        await missingList.running;
+        assert.ok(
+            shown.error.length === 1 && /Could not read the list/.test(shown.error[0]) && warnings.length === 0,
+            'a listing timeout was described as a removal outcome: ' + JSON.stringify({ shown, warnings }),
+        );
+
+        quickPickChoice = (items) => items[0];
+        warningChoice = 'Remove';
+        const unknownRemoval = start();
+        await settle();
+        relayWindow.__vscodroidBridgeReply(listCalls[0].replyId, true,
+            JSON.stringify([{ hash: 'abc123', name: 'Notes', bytes: 12, reclaimable: true, granted: true }]));
+        await settle();
+        assert.strictEqual(reclaimCalls.length, 1, 'the removal never reached its actual relay branch');
+        assert.strictEqual(diskTimers.length, 3, 'the removal did not keep a bounded result wait');
+        const removalTimer = diskTimers[2];
+        removalTimer.callback(...removalTimer.args);
+        await unknownRemoval.running;
+        assert.ok(
+            shown.error.length === 0 && shown.info.length === 0 && warnings.length === 2 &&
+                /not reported the removal result/.test(warnings[1].message) &&
+                /may still finish/.test(warnings[1].message) && /before trying again/.test(warnings[1].message),
+            'an expired result wait claimed that removal failed or completed: ' + JSON.stringify({ shown, warnings }),
+        );
+        const commandCount = executed.length;
+        relayWindow.__vscodroidBridgeReply(reclaimCalls[0].replyId, true, '');
+        await settle();
+        assert.strictEqual(executed.length, commandCount, 'a late result reopened the command after its outcome warning');
+        assert.strictEqual(shown.error.length, 0, 'a late result produced a second outcome');
+    } finally {
+        global.setTimeout = realSetTimeout;
+        quickPickChoice = null;
+        warningChoice = null;
+    }
 
     // The storage screen's Total row, which is the first and largest thing a
     // person sees on the screen they open because they are out of disk.
@@ -1297,7 +1391,10 @@ async function main() {
             storageUri: STORAGE,
             globalState: {
                 get: (key, fallback) => (state.has(key) ? state.get(key) : fallback),
-                update: async (key, value) => { state.set(key, value); },
+                update: async (key, value) => {
+                    state.set(key, value !== null && typeof value === 'object' ? JSON.parse(JSON.stringify(value)) : value);
+                    if (storageUpdate) await storageUpdate(key, value);
+                },
             },
         });
         await settle();
@@ -1345,7 +1442,7 @@ async function main() {
         'the page reached by name kept the carried editors or was offered a move again',
     );
 
-    // Carried editors are for the page they were carried to, and not long after.
+    // Expired records retire; a live record for another page belongs to that page.
     for (const [why, carried] of [
         ['long ago', { to: NAMED, root: NAMED, files: ['README.md'], at: Date.now() - 600000 }],
         ['to another page', { to: `${NAMES}/other`, root: `${NAMES}/other`, files: ['README.md'], at: Date.now() }],
@@ -1353,7 +1450,7 @@ async function main() {
         state.set(CARRIED, carried);
         await namedPageLoad({ folders: [{ uri: remote(NAMED), name: 'recipes' }] });
         assert.ok(
-            shownDocs.length === 0 && state.get(CARRIED) === undefined,
+            shownDocs.length === 0 && (why === 'long ago' ? state.get(CARRIED) === undefined : state.get(CARRIED) === carried),
             `editors carried ${why} were opened here, or kept: ` + JSON.stringify(shownDocs),
         );
     }
@@ -1428,6 +1525,153 @@ async function main() {
         'Don\'t Ask Again was not kept for the copy, or the move was offered again: ' +
         JSON.stringify({ declinedNow, info: shown.info }),
     );
+    function deferred() {
+        let resolve;
+        const promise = new Promise(answer => { resolve = answer; });
+        return { promise, resolve };
+    }
+    const clone = value => JSON.parse(JSON.stringify(value));
+    const newerCarried = () => ({ id: 'new-window-record', to: '/other/page', root: '/other', files: ['new.txt'], at: Date.now() });
+    let asyncNamedCases = 0;
+    async function interruptedNamed(gate, mutate, answer = 'Reopen') {
+        state.delete(DECLINED); state.delete(CARRIED);
+        directories = new Map([[NAMES, [['recipes', LINK]]]]);
+        const release = deferred();
+        let entered = false;
+        let backupReads = 0;
+        const wait = async () => { entered = true; await release.promise; };
+        directoryRead = async uri => {
+            if (uri.path === BACKUPS) backupReads++;
+            if (!entered && ((gate === 'lookup' && uri.path === NAMES) ||
+                (gate === 'backups' && uri.path === BACKUPS) ||
+                (gate === 'final-backups' && uri.path === BACKUPS && backupReads === 2))) await wait();
+        };
+        storageUpdate = async (key, value) => {
+            if (!entered && gate === 'carry' && key === CARRIED && value) await wait();
+        };
+        infoChoice = items => items.includes('Reopen') ? (gate === 'dialog' ? wait().then(() => answer) : answer) : undefined;
+        try {
+            await namedPageLoad({ folders: onCopy });
+            assert.ok(entered, 'named-path schedule did not reach ' + gate);
+            await mutate();
+            release.resolve(); await settle();
+            assert.strictEqual(moved().length, 0, 'a stale named-path operation reopened after ' + gate);
+            asyncNamedCases++;
+        } finally {
+            release.resolve(); directoryRead = undefined; storageUpdate = undefined; infoChoice = null;
+        }
+    }
+    await interruptedNamed('lookup', () => { workspaceFolders = [{ uri: remote('/work/other'), name: 'other' }]; });
+    assert.strictEqual(shown.info.length, 0, 'a stale directory lookup still offered its old workspace');
+    await interruptedNamed('dialog', () => { workspaceFolders = [{ uri: remote('/work/other'), name: 'other' }]; }, "Don't Ask Again");
+    assert.strictEqual(state.get(DECLINED), undefined, 'a stale dialog persisted its choice for an abandoned workspace');
+    await interruptedNamed('backups', () => { textDocuments = [{ isDirty: true }]; });
+    for (const [why, mutate] of [
+        ['dirty document', () => { textDocuments = [{ isDirty: true }]; }],
+        ['terminal', () => { terminals = [{}]; }],
+        ['workspace path', () => { workspaceFolders = [{ uri: remote('/work/other'), name: 'other' }]; }],
+        ['remote authority', () => { workspaceFolders = [{ uri: uriOf('vscode-remote', 'other', COPY), name: 'other' }]; }],
+        ['query', () => { workspaceFolders = [{ uri: { ...remote(COPY), query: 'other' }, name: 'other' }]; }],
+        ['fragment', () => { workspaceFolders = [{ uri: { ...remote(COPY), fragment: 'other' }, name: 'other' }]; }],
+        ['deactivation', () => { require(bridgeExtension()).deactivate(); }],
+    ]) {
+        await interruptedNamed('carry', () => {
+            assert.ok(state.get(CARRIED).id, 'published carry record has no ownership token');
+            mutate();
+        });
+        assert.strictEqual(state.get(CARRIED), undefined, 'abandoned cloned record was retained after ' + why);
+    }
+    await interruptedNamed('final-backups', () => { directories.set(BACKUPS, [['pending', vscodeStub.FileType.File]]); });
+    assert.strictEqual(state.get(CARRIED), undefined, 'a newly appearing backup left a stale carried record');
+    const newer = newerCarried();
+    await interruptedNamed('carry', () => { state.set(CARRIED, clone(newer)); });
+    assert.deepStrictEqual(state.get(CARRIED), newer, 'old publication cleanup erased the observed newer window record');
+    {
+        const saving = deferred();
+        let running;
+        await interruptedNamed('carry', () => {
+            const document = { uri: remote('/work/new.js'), languageId: 'javascript', isUntitled: false, isDirty: false,
+                async save() { await saving.promise; return true; } };
+            vscodeStub.window.activeTextEditor = { document };
+            running = commands.get('vscodroid.runFile')();
+        });
+        assert.strictEqual(state.get(CARRIED), undefined, 'a newer run intent left the old carried record');
+        saving.resolve(); await running;
+        assert.strictEqual(runLines.at(-1), "node '/work/new.js'", 'the accepted newer run was canceled with the old offer');
+        vscodeStub.window.activeTextEditor = undefined;
+    }
+    for (const replacement of [undefined, newerCarried()]) {
+        state.delete(CARRIED); state.delete(DECLINED);
+        directories = new Map([[NAMES, [['recipes', LINK]]]]);
+        infoChoice = reopen;
+        commandRun = async id => {
+            if (id !== 'vscode.openFolder') return;
+            if (replacement) state.set(CARRIED, clone(replacement));
+            throw new Error('folder command declined');
+        };
+        try {
+            await namedPageLoad({ folders: onCopy });
+            assert.strictEqual(moved().length, 1, 'the clean control did not dispatch its folder command');
+            assert.deepStrictEqual(state.get(CARRIED), replacement, 'failed folder command cleanup removed a newer record or retained its own');
+            asyncNamedCases++;
+        } finally { commandRun = undefined; infoChoice = null; }
+    }
+    for (const replacement of [false, true]) {
+        const carried = { id: 'arriving-record', to: NAMED, root: NAMED, files: ['one.txt'], at: Date.now() };
+        state.set(CARRIED, clone(carried));
+        const release = deferred();
+        let entered = false;
+        storageUpdate = async (key, value) => { if (key === CARRIED && value === undefined) { entered = true; await release.promise; } };
+        try {
+            await namedPageLoad({ folders: [{ uri: remote(NAMED), name: 'recipes' }] });
+            assert.ok(entered, 'arrival did not reach record consumption');
+            if (replacement) state.set(CARRIED, clone(newer));
+            else workspaceFolders = onCopy;
+            release.resolve(); await settle();
+            if (replacement) assert.deepStrictEqual(state.get(CARRIED), newer, 'old arrival cleanup erased a newer observed record');
+            else {
+                assert.strictEqual(shownDocs.length, 0, 'arrival reopened files after leaving its workspace');
+                assert.strictEqual(moved().length, 0, 'old arrival completion offered a different workspace');
+            }
+            asyncNamedCases++;
+        } finally { release.resolve(); storageUpdate = undefined; }
+    }
+    for (const deactivate of [false, true]) {
+        state.set(CARRIED, { id: 'arriving-files', to: NAMED, root: NAMED, files: ['one.txt', 'two.txt'], at: Date.now() });
+        const release = deferred();
+        let entered = false;
+        documentShow = async () => { if (!entered) { entered = true; await release.promise; } };
+        try {
+            await namedPageLoad({ folders: [{ uri: remote(NAMED), name: 'recipes' }] });
+            assert.ok(entered, 'arrival did not reach its first editor');
+            if (deactivate) require(bridgeExtension()).deactivate();
+            else workspaceFolders = [{ uri: remote('/work/other'), name: 'other' }];
+            release.resolve(); await settle();
+            assert.deepStrictEqual(shownDocs.map(uri => uri.path), [NAMED + '/one.txt'], 'late restoration opened another editor after its page was retired');
+            asyncNamedCases++;
+        } finally { release.resolve(); documentShow = undefined; }
+    }
+    assert.strictEqual(asyncNamedCases, 19, 'an asynchronous named-path schedule was skipped');
+    {
+        state.delete(DECLINED); state.delete(CARRIED);
+        directories = new Map([[NAMES, [['recipes', LINK]]]]);
+        infoChoice = items => items.includes("Don't Ask Again") ? "Don't Ask Again" : undefined;
+        const unhandled = [];
+        const recordRejection = error => unhandled.push(error);
+        process.on('unhandledRejection', recordRejection);
+        storageUpdate = async key => { if (key === DECLINED) throw new Error('storage unavailable'); };
+        try {
+            await namedPageLoad({ folders: onCopy });
+            await settle();
+            assert.deepStrictEqual(unhandled, [], 'a failed preference update escaped the named-path handler');
+            assert.strictEqual(moved().length, 0);
+        } finally {
+            process.off('unhandledRejection', recordRejection);
+            storageUpdate = undefined; infoChoice = null;
+        }
+    }
+
+
     state.delete(DECLINED); state.delete(CARRIED);
     infoChoice = null; directories = new Map(); tabGroups = { all: [], activeTabGroup: undefined };
 
@@ -1444,6 +1688,7 @@ async function main() {
         'later sessions; the bug report opens in an editor before Copy takes what it holds; ' +
         'a page on a device folder copy\'s hash is offered the folder\'s name and moved there ' +
         'only with nothing unsaved and no terminal, its editors following; ' +
+        `${asyncNamedCases} delayed named-path schedules preserve newer intent and carried records; ` +
         `all ${coverage.sent} commands sent by an extension have a relay branch${unused}\n`,
     );
 }

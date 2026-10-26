@@ -22,6 +22,8 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.util.concurrent.ExecutorService
+import java.util.concurrent.TimeUnit
 
 /**
  * A Play delivery of a toolchain this build no longer offers is handed back.
@@ -45,6 +47,7 @@ class ToolchainRetiredPackReclaimTest {
 
     private lateinit var context: Context
     private lateinit var packManager: AssetPackManager
+    private val managers = mutableListOf<ToolchainManager>()
 
     /** Every pack name the registry has withdrawn, in the form Play knows. */
     private val retiredPacks = RETIRED_TOOLCHAINS.keys.map { "toolchain_$it" }
@@ -81,7 +84,20 @@ class ToolchainRetiredPackReclaimTest {
     }
 
     @AfterEach
-    fun tearDown() = unmockkAll()
+    fun tearDown() {
+        try {
+            managers.forEach { manager ->
+                val executor = ToolchainManager::class.java.getDeclaredField("ioExecutor")
+                    .apply { isAccessible = true }.get(manager) as ExecutorService
+                executor.shutdown()
+                assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS), "the reconcile pass did not finish")
+            }
+        } finally {
+            unmockkAll()
+        }
+    }
+
+    private fun manager() = ToolchainManager(context).also { managers.add(it) }
 
     /** Makes Play answer that it is still holding a delivered [pack]. */
     private fun playHolds(pack: String) {
@@ -95,7 +111,7 @@ class ToolchainRetiredPackReclaimTest {
         assertTrue(retiredPacks.isNotEmpty(), "nothing is retired, so this test proves nothing")
         retiredPacks.forEach(::playHolds)
 
-        ToolchainManager(context).reconcileDeliveredPacks()
+        manager().reconcileDeliveredPacks()
 
         // Timed rather than immediate: reconcile runs on the manager's io executor.
         for (pack in retiredPacks) {
@@ -109,7 +125,7 @@ class ToolchainRetiredPackReclaimTest {
      */
     @Test
     fun `a retired pack Play holds nothing for is left alone`() {
-        ToolchainManager(context).reconcileDeliveredPacks()
+        manager().reconcileDeliveredPacks()
 
         for (pack in retiredPacks) {
             verify(timeout = 10_000) { packManager.getPackLocation(pack) }
@@ -133,7 +149,7 @@ class ToolchainRetiredPackReclaimTest {
         File(dir, "usr/opt/$name/bin").mkdirs()
         File(dir, "usr/opt/$name/bin/$name").writeText("payload")
 
-        ToolchainManager(context).reconcileDeliveredPacks()
+        manager().reconcileDeliveredPacks()
 
         verify(timeout = 10_000, exactly = 1) { packManager.removePack(pack) }
         assertFalse(

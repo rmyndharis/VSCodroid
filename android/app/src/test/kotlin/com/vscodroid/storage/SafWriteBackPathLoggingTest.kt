@@ -136,7 +136,7 @@ class SafWriteBackPathLoggingTest {
 
     /** Puts one job through the real write-back, the way the drain does. */
     private fun writeBack(job: SyncJob) {
-        engine.session.queue.offer(job)
+        engine.session.queue.offer(job.copy(mirrorRoot = mirror))
         engine.runWriteBackLoop { false }
     }
 
@@ -175,6 +175,10 @@ class SafWriteBackPathLoggingTest {
 
     @Test
     fun `a delete the provider refuses does not repeat its message`() {
+        val file = File(mirror, "notes.txt")
+        deliverFileBaseline(engine, resolver, file, docUri, mirror)
+        assertTrue(file.delete())
+        emitted.clear()
         every { DocumentsContract.deleteDocument(any(), any()) } throws providerRefusal
 
         writeBack(

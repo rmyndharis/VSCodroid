@@ -339,8 +339,10 @@ class TextContrastTest {
         }
     }
 
-    private fun measure(text: Painted, ground: Rgb): Double =
-        contrast(over(resolve(text.colorRef).first, ground, text.alpha), ground)
+    private fun measure(text: Painted, ground: Rgb): Double {
+        val (foreground, colorAlpha) = resolve(text.colorRef)
+        return contrast(over(foreground, ground, text.alpha * colorAlpha), ground)
+    }
 
     // Locale.ROOT, so a failure message reads the same on a machine whose default locale
     // writes a decimal comma. Nothing here compares the string, but a reader comparing it
@@ -348,6 +350,16 @@ class TextContrastTest {
     private fun Double.two() = String.format(java.util.Locale.ROOT, "%.2f", this)
 
     // -- The cases --
+
+    @Test
+    fun `foreground color alpha combines with view alpha`() {
+        val ground = Rgb(0, 0, 0)
+        fun text(color: String, alpha: Double) = Painted("control", color, alpha, AA_NORMAL, emptyList())
+        assertEquals(1.0, measure(text("#00CCCCCC", 1.0), ground))
+        assertEquals(measure(text("#CCCCCC", 1.0), ground), measure(text("#FFCCCCCC", 1.0), ground))
+        assertEquals(contrast(over(Rgb(204, 204, 204), ground, 128.0 / 255.0 * 0.5), ground),
+            measure(text("#80CCCCCC", 0.5), ground))
+    }
 
     /**
      * Every text these layouts paint, on every ground it can be painted on.

@@ -239,6 +239,15 @@ internal fun resourceRootsInForce(
     return published + listOfNotNull(workspace)
 }
 
+/** An acknowledged member set replaces the URL fallback, including an empty window. */
+internal fun workspaceResourceRootsInForce(
+    published: List<String>, sensitive: List<String>, workspaceRoot: String?, members: List<String>?,
+): List<String> = if (members == null) {
+    resourceRootsInForce(published, sensitive, workspaceRoot)
+} else {
+    (published + members.mapNotNull { workspaceRootOrNull(it, sensitive) }).distinct()
+}
+
 /**
  * Whether two canonical paths name the same place or one holds the other.
  *
@@ -862,6 +871,7 @@ class VSCodroidWebViewClient(
      * class have no page to tell.
      */
     private val onNavigationDeclined: () -> Unit = { },
+    private val workspaceMembers: () -> List<String>? = { null },
 ) : WebViewClient() {
     // MissingOnRenderProcessGone: overridden below, and what it does there is the
     // reason the class exists in one piece. The check misses the override on a
@@ -1147,7 +1157,8 @@ class VSCodroidWebViewClient(
             return interfaceBundleResponse(requested)
         }
         return interceptCdnRequest(
-            request, allowedPort, connectionToken, resourceRoots, sensitiveLocations, openFolder
+            request, allowedPort, connectionToken, resourceRoots, sensitiveLocations, openFolder,
+            workspaceMembers = workspaceMembers,
         )
     }
 
@@ -1538,10 +1549,16 @@ class VSCodroidWebViewClient(
          * so there is one rule and not two copies of one.
          */
         fun setupServiceWorkerInterception(
+            port: Int, resourceRoots: List<String>, sensitiveLocations: List<String>,
+            openFolder: () -> String?, connectionToken: () -> String?
+        ) = setupServiceWorkerInterception(port, resourceRoots, sensitiveLocations, openFolder, { null }, connectionToken)
+
+        fun setupServiceWorkerInterception(
             port: Int,
             resourceRoots: List<String>,
             sensitiveLocations: List<String>,
             openFolder: () -> String?,
+            workspaceMembers: () -> List<String>?,
             connectionToken: () -> String?
         ) {
             try {
@@ -1550,7 +1567,7 @@ class VSCodroidWebViewClient(
                     override fun shouldInterceptRequest(request: WebResourceRequest): WebResourceResponse? {
                         return interceptCdnRequest(
                             request, port, connectionToken,
-                            resourceRoots, sensitiveLocations, openFolder
+                            resourceRoots, sensitiveLocations, openFolder, workspaceMembers = workspaceMembers,
                         )
                     }
                 })
@@ -1580,6 +1597,7 @@ class VSCodroidWebViewClient(
             sensitiveLocations: List<String>,
             openFolder: () -> String?,
             tokenWaitMs: Long = TOKEN_WAIT_MS,
+            workspaceMembers: () -> List<String>? = { null },
         ): WebResourceResponse? {
             val uri = request.url
             val host = uri.host ?: return null
@@ -1651,7 +1669,7 @@ class VSCodroidWebViewClient(
                 val headers = request.requestHeaders
                 return interceptResourceRequest(
                     uri, host, port,
-                    resourceRootsInForce(resourceRoots, sensitiveLocations, openFolder()),
+                    workspaceResourceRootsInForce(resourceRoots, sensitiveLocations, openFolder(), workspaceMembers()),
                     headerValue(headers, "Origin"),
                     headerValue(headers, "Range"),
                     headerValue(headers, "Referer"),
@@ -2606,7 +2624,10 @@ class VSCodroidWebViewClient(
          * MIME type for a response that carries none of its own, had quietly
          * stopped being reachable.
          */
-        private fun assetPathOf(pathOrUrl: String): String = pathOrUrl.substringBefore('?')
+        private fun assetPathOf(pathOrUrl: String): String =
+            if (pathOrUrl.startsWith("http://", ignoreCase = true) ||
+                pathOrUrl.startsWith("https://", ignoreCase = true)
+            ) pathOrUrl.substringBefore('?') else pathOrUrl
 
         /**
          * What each file extension this app serves is, by MIME type.

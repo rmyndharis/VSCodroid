@@ -19,7 +19,6 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
-import java.util.concurrent.TimeUnit
 
 /**
  * What `toolchain-env.sh` has to contain for a downloaded toolchain to run at
@@ -346,9 +345,7 @@ class ToolchainEnvFileTest {
             remove("SSH_CLIENT")
             remove("SSH2_CLIENT")
         }
-        val process = builder.start()
-        val out = process.inputStream.bufferedReader().readText()
-        assertTrue(process.waitFor(30, TimeUnit.SECONDS), "bash did not finish")
+        val out = finishTestProcess(builder.start()).second
         return out.lines().filter { it.isNotEmpty() }
     }
 
@@ -765,7 +762,7 @@ class ToolchainEnvFileTest {
             putAll(env)
             put("PREFIX", "${filesDir.absolutePath}/usr")
         }
-        val out = builder.start().let { p -> p.inputStream.bufferedReader().readText().also { p.waitFor() } }
+        val out = finishTestProcess(builder.start()).second
         return out.lines().filter { '=' in it }.associate { it.substringBefore('=') to it.substringAfter('=') }
     }
 
@@ -832,8 +829,7 @@ class ToolchainEnvFileTest {
             """for d in "${'$'}PREFIX/../usr/opt/ruby/bin"; do""",
             pathLine().substringBefore("; do") + "; do",
         )
-        val check = ProcessBuilder("bash", "-n", envFile.absolutePath).redirectErrorStream(true).start()
-        val out = check.inputStream.bufferedReader().readText()
-        assertEquals(0, check.waitFor(), "the generated file does not parse:\n$out")
+        val check = finishTestProcess(ProcessBuilder("bash", "-n", envFile.absolutePath).redirectErrorStream(true).start())
+        assertEquals(0, check.first, "the generated file does not parse:\n${check.second}")
     }
 }

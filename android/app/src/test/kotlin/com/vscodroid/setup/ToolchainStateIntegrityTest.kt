@@ -194,7 +194,7 @@ class ToolchainStateIntegrityTest {
     /** Every state a removal reported, in order, with the reason each carried. */
     private fun reportsFrom(name: String): List<Pair<Int, ToolchainFailure?>> {
         val seen = mutableListOf<Pair<Int, ToolchainFailure?>>()
-        val m = manager().apply { onStateChange = { _, status, _, why -> seen.add(status to why) } }
+        val m = manager().apply { onStateChange = { _, status, _, why, _ -> seen.add(status to why) } }
         uninstallSync(name, m)
         return seen
     }

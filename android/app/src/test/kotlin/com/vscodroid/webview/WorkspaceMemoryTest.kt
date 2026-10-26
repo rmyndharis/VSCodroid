@@ -237,10 +237,11 @@ class WorkspaceMemoryTest {
     }
 
     @Test
-    fun `every site that records the open folder records it for the next launch`() {
+    fun `every accepted folder is recorded for the next launch`() {
         val assignments = withoutComments(source.readText())
             .lines()
             .filter { Regex("""^\s*openWorkspaceFolder = """).containsMatchIn(it) }
+            .filterNot { it.trim() == "openWorkspaceFolder = null" }
 
         assertEquals(1, assignments.size) {
             "the open folder is assigned in more than one place, so a site that set the " +

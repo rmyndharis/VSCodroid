@@ -95,13 +95,13 @@ class ToolchainPickerAdapter(
      * item list is fixed ([ToolchainCardState.items] is the registry), so nothing
      * here can add or remove a row.
      */
-    fun setDownloading(percentByPack: Map<String, Int>) {
+    fun setDownloading(percentByPack: Map<String, ToolchainDownloadProgress>) {
         cards.setDownloading(percentByPack)
         notifyItemRangeChanged(0, itemCount, PAYLOAD_REBIND)
     }
 
-    fun updateState(packName: String, status: Int, percent: Int) {
-        val pos = cards.updateState(packName, status, percent)
+    fun updateState(packName: String, status: Int, percent: Int, transferId: Long? = null) {
+        val pos = cards.updateState(packName, status, percent, transferId)
         // With a payload, exactly as the selection tap below rebinds: this is the
         // channel that fires hardest. A download reports once per 8 KB read, so a
         // 55 MB toolchain rebinds this card thousands of times, and without a

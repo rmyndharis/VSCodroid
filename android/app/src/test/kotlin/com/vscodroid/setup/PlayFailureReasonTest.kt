@@ -192,7 +192,7 @@ class PlayFailureWiringTest {
     /** The listener the manager gave Play, with the callback recorder behind it. */
     private fun playListener(): AssetPackStateUpdateListener {
         val manager = ToolchainManager(context)
-        manager.onStateChange = { pack, status, _, why ->
+        manager.onStateChange = { pack, status, _, why, _ ->
             events.add(Triple(pack, status, why))
         }
         manager.registerListener()

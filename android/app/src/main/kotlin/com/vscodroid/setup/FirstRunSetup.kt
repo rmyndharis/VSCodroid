@@ -16,7 +16,10 @@ import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
+import java.io.OutputStream
 import java.nio.file.Files
+import java.nio.file.LinkOption
+import java.nio.file.StandardOpenOption
 import java.security.KeyStore
 import java.security.MessageDigest
 import java.security.cert.Certificate
@@ -159,6 +162,8 @@ class FirstRunSetup(
         prefs.getInt(KEY_VERSION_CODE, 0),
         getCurrentVersion(),
         getCurrentVersionCode(),
+        prefs.getLong(KEY_PACKAGE_UPDATE_TIME, 0),
+        packageUpdateTime(),
     )
 
     /**
@@ -316,11 +321,14 @@ class FirstRunSetup(
         // 810 MiB although v2 is the only build that ever wrote a byte, which is
         // exactly the user the skip exists for: someone who frees space in two
         // goes.
-        val attempt = "${getCurrentVersion()}/$currentVersionCode"
+        val updatedAt = packageUpdateTime()
+        val attempt = "${getCurrentVersion()}/$currentVersionCode" +
+            if (updatedAt > 0) "/$updatedAt" else ""
         val nothingCompletedHere =
             prefs.getString(KEY_VERSION, null) == null && previousVersionCode == 0
         val storedAttempt = prefs.getString(KEY_EXTRACTION_ATTEMPT, null)
         resumeSameBuild = nothingCompletedHere && storedAttempt == attempt
+        currentStep = null
         firstWriteFailure = null
 
         if (isUpgrade) {
@@ -509,7 +517,7 @@ class FirstRunSetup(
             //  - the retry is cheap in space, and cheap in time only on a fresh
             //    install. [extractAssetFile] skips a destination that already
             //    holds the asset's own length, but only when the previous attempt
-            //    was this versionName and versionCode ([KEY_EXTRACTION_ATTEMPT])
+            //    was this package ([KEY_EXTRACTION_ATTEMPT])
             //    and no earlier build ever completed here, because equal length is
             //    not equal content and an upgrade's marker stands over the
             //    previous release's files. Every upgrade attempt re-copies the
@@ -740,6 +748,7 @@ class FirstRunSetup(
         assetPath: String,
         destPath: String,
         onBytes: ((Long) -> Unit)? = null,
+        required: Boolean = false,
     ): Boolean {
         val destDir = File(context.filesDir, destPath)
         return try {
@@ -759,9 +768,8 @@ class FirstRunSetup(
             // install just as a null for `vscode-reh` does. Falling through to
             // [extractAssetFile] instead would be harmless only while the asset
             // can still be opened, and would be the original defect when it
-            // cannot: an asset that fails to open is reported as absent, which
-            // answers true, so the file would be skipped and the tree certified
-            // without it. The IOException below is a different signal and is
+            // cannot. Positively listed children remain required when opened.
+            // The IOException below is a different signal and is
             // degraded rather than refused, because that is how the platform
             // says "this path is a file, not a directory".
             val assets = context.assets.list(assetPath) ?: run {
@@ -769,19 +777,23 @@ class FirstRunSetup(
                 return false
             }
             if (assets.isEmpty()) {
-                return extractAssetFile(assetPath, destPath, onBytes)
+                return extractAssetFile(assetPath, destPath, onBytes, required = required)
+            }
+            if (!hasUnredirectedParent(destDir) || Files.isSymbolicLink(destDir.toPath())) {
+                Logger.w(tag, "Not extracting assets through a redirected directory")
+                return false
             }
             destDir.mkdirs()
             // Every child is attempted even after one fails, so the log names
             // all of them rather than only the first.
             var ok = true
             for (asset in assets) {
-                if (!extractAssetDir("$assetPath/$asset", "$destPath/$asset", onBytes)) ok = false
+                if (!extractAssetDir("$assetPath/$asset", "$destPath/$asset", onBytes, required = true)) ok = false
             }
             ok
         } catch (e: IOException) {
             Logger.d(tag, "Treating $assetPath as file (not directory)")
-            extractAssetFile(assetPath, destPath, onBytes)
+            extractAssetFile(assetPath, destPath, onBytes, required = required)
         }
     }
 
@@ -791,32 +803,44 @@ class FirstRunSetup(
      *   interrupted run. Equal length is not equal content, so the caller
      *   answers for the rest: [ensureExecPreload] passes it only for a file
      *   written since the package was last installed or updated.
-     * @return false only when the asset existed and its copy failed.
+     * @param required the asset was positively listed by its parent, so failure
+     *   to open it is a failed extraction rather than an absent optional asset.
+     * @return false when a required asset cannot be opened or a copy fails.
      */
     private fun extractAssetFile(
         assetPath: String,
         destPath: String,
         onBytes: ((Long) -> Unit)? = null,
         sameLengthIsCurrent: Boolean = false,
+        required: Boolean = false,
     ): Boolean {
         val destFile = File(context.filesDir, destPath)
-        destFile.parentFile?.mkdirs()
 
         // Opening the asset is separated from writing it so the two failures can
-        // be told apart. They are not the same event: an absent asset is routine
-        // -- several are absent in builds that skip a download script -- while a
+        // be told apart. They are not the same event: an absent optional asset
+        // is routine in builds that skip a download script, while a
         // copy that starts and then fails is not, and the single catch this
         // replaced reported both as "Asset not found".
         val input =
             try {
                 context.assets.open(assetPath)
             } catch (e: IOException) {
+                if (required) {
+                    if (firstWriteFailure == null) firstWriteFailure = e.message
+                    Logger.w(tag, "Could not open listed asset $assetPath: ${e.message}")
+                    return false
+                }
                 Logger.d(tag, "Asset not found: $assetPath (will be available after build)")
                 return true
             }
 
         var cause: String? = null
         val written = input.use { stream ->
+            if (!hasUnredirectedParent(destFile)) {
+                Logger.w(tag, "Not extracting an asset through a redirected parent")
+                return false
+            }
+            destFile.parentFile?.mkdirs()
             // A retry of an interrupted run of the same build leaves the file
             // where it is when it already has the asset's own length.
             //
@@ -831,8 +855,8 @@ class FirstRunSetup(
             // that guard is the whole of what makes it safe: equal length is not
             // equal content, and an upgrade whose new asset happens to weigh what
             // the old one did HAS to be written. The fast path is taken only by a
-            // run whose predecessor was interrupted over the same versionName and
-            // versionCode AND on an install no earlier build ever completed under,
+            // run whose predecessor was interrupted under the same package
+            // identity AND on an install no earlier build ever completed under,
             // which is what makes the file under it this build's own rather than
             // the previous release's.
             //
@@ -841,7 +865,9 @@ class FirstRunSetup(
             // passes it over and the copy runs.
             if (resumeSameBuild || sameLengthIsCurrent) {
                 val assetLength = stream.available().toLong()
-                if (assetLength > 0 && destFile.isFile && destFile.length() == assetLength) {
+                if (assetLength > 0 && destFile.isFile && !Files.isSymbolicLink(destFile.toPath()) &&
+                    destFile.length() == assetLength
+                ) {
                     onBytes?.invoke(assetLength)
                     return true
                 }
@@ -960,13 +986,12 @@ class FirstRunSetup(
             // alternative ordering can leave an interpreter that starts and then
             // fails on import, which is a worse thing to debug than one that
             // does not start at all.
-            extractAssetDir("usr/lib/python$version", "usr/lib/python$version")
-            extractAssetFile("usr/lib/$runtime", "usr/lib/$runtime")
-            // extractAssetFile swallows an IOException and logs at debug, which
-            // is right for an asset that is simply absent in some build shapes
-            // but wrong to stay quiet about here: the check that brought us in
-            // will be true again next launch, and the 23 MB will be attempted
-            // again every time. Say so once, at a level someone will see.
+            if (!extractAssetDir("usr/lib/python$version", "usr/lib/python$version", required = true)) {
+                Logger.w(tag, "Python stdlib extraction did not finish; leaving the runtime pending")
+                return
+            }
+            extractAssetFile("usr/lib/$runtime", "usr/lib/$runtime", required = true)
+            // The missing runtime keeps the next launch's repair trigger true.
             if (!File(libDir, runtime).exists()) {
                 Logger.w(tag, "Python runtime $runtime still missing after extraction; the APK assets look incomplete")
             }
@@ -1075,25 +1100,29 @@ class FirstRunSetup(
      * copying it kept trusting what the rest of the phone no longer does.
      */
     fun setupGitCaBundle() {
-        val caDir = systemCaCertificateDirs
-            .map { File(it) }
-            .firstOrNull { it.isDirectory } ?: return
-
         val bundle = File(context.filesDir, "usr/etc/tls/cert.pem")
         val marker = File(context.filesDir, "usr/etc/tls/.user-ca-fingerprint")
-        val storePems = deviceCertificatePems()
-        val fingerprint = sha256HexOf(storePems.joinToString(""))
-
-        if (bundle.exists() && bundle.length() > 0 &&
-            bundle.lastModified() >= caDir.lastModified() &&
-            runCatching { marker.readText() }.getOrNull() == fingerprint
-        ) {
-            return
-        }
-
         try {
+            val storePems = deviceCertificatePems()
+            val caDir = systemCaCertificateDirs
+                .map { File(it) }
+                .firstOrNull { it.isDirectory }
+            if (storePems == null && caDir == null) return
+            // Include the source to invalidate older empty-store fallback bundles.
+            val fingerprint = sha256HexOf(
+                if (storePems == null) "system-directory-v2:${caDir?.path}"
+                else "android-ca-store-v2:${storePems.joinToString("")}",
+            )
+            if (bundle.isFile && (bundle.length() > 0 || storePems?.isEmpty() == true) &&
+                bundle.lastModified() >= (caDir?.lastModified() ?: 0) &&
+                runCatching { marker.readText() }.getOrNull() == fingerprint
+            ) {
+                return
+            }
+
             bundle.parentFile?.mkdirs()
-            val certs = caDir.listFiles()?.sortedBy { it.name } ?: return
+            val certs = if (storePems == null) caDir?.listFiles()?.sortedBy { it.name } ?: return
+                else emptyList()
             // Atomic, and the guard above is why. Writing straight to the final
             // path leaves a half-written bundle behind on any failure -- a full
             // disk, a kill mid-copy -- carrying a fresh mtime, and the freshness
@@ -1103,25 +1132,16 @@ class FirstRunSetup(
             // the wrong side of the cut, with nothing to suggest the file is the
             // problem. An interrupted write now leaves the previous bundle, or
             // no bundle at all, and either one gets rebuilt next time.
-            // The merged store when it answered, the directory when it did not.
-            //
-            // The store is the platform's own view and is the only one of the two
-            // that reflects a root the owner turned off, so where it answers it is
-            // the whole bundle and the directory is not read at all. Where it
-            // answers with nothing -- a provider that threw, a device without it --
-            // the directory is the fallback that keeps HTTPS working at all, which
-            // is worth more than honouring a removal. That is the same trade the
-            // freshness check above makes, and the reason caDir is still resolved
-            // before any of this: its mtime remains the cheap signal that the
-            // system half moved.
+            // A successful empty store is authoritative: copying raw roots would
+            // restore trust the owner removed. Only an unavailable provider falls back.
             val written = writeAtomically(bundle) { out ->
-                if (storePems.isNotEmpty()) {
+                if (storePems != null) {
                     for (pem in storePems) out.write(pem.toByteArray())
                 } else {
                     Logger.w(
                         tag,
-                        "The device CA store answered with nothing; falling back to " +
-                            "${caDir.path}, which cannot see a root the owner removed",
+                        "The device CA store is unavailable; falling back to " +
+                            "${caDir?.path}, which cannot see a root the owner removed",
                     )
                     for (cert in certs) {
                         if (cert.isFile) cert.inputStream().use { it.copyTo(out) }
@@ -1145,10 +1165,10 @@ class FirstRunSetup(
             }
             Logger.i(
                 tag,
-                if (storePems.isNotEmpty()) {
+                if (storePems != null) {
                     "CA bundle: ${storePems.size} certificates from the device trust store"
                 } else {
-                    "CA bundle: ${certs.size} certificates from ${caDir.path}, " +
+                    "CA bundle: ${certs.size} certificates from ${caDir?.path}, " +
                         "with no device trust store to read"
                 },
             )
@@ -1158,20 +1178,17 @@ class FirstRunSetup(
     }
 
     /**
-     * The CAs the device owner installed themselves, PEM-encoded and sorted.
+     * The device's merged trusted CAs, PEM-encoded and sorted.
      *
      * Sorted because [KeyStore.aliases] promises no order, and an order that
      * varies between launches would change the fingerprint without the trust
      * having changed, rebuilding the whole bundle on the main thread every time
      * the app starts.
      *
-     * Degrades to an empty list rather than throwing, at both levels. This runs
-     * inside SplashActivity's per-launch repair block, where an exception costs
-     * the repairs that follow it, and the whole feature is worth less than
-     * [setupToolSymlinks]. So a provider that is absent or refuses to load
-     * yields no user CAs and today's system-only bundle, and one certificate
-     * whose encoding cannot be read is skipped rather than costing the other
-     * entries the store holds.
+     * Null means the provider could not be read; an empty list means it trusts
+     * no roots. Unencodable certificates are skipped while usable entries remain.
+     * If none can be encoded, the caller preserves the previous bundle rather
+     * than treating an encoding failure as empty trust or provider unavailability.
      *
      * The cost is paid on every launch and it is not free. Measured on an API 33
      * emulator with one CA installed, five launches: 28 ms in the steady state,
@@ -1195,12 +1212,18 @@ class FirstRunSetup(
      * there, rather than weakening the fingerprint until the store's changes go
      * unnoticed again.
      */
-    private fun deviceCertificatePems(): List<String> =
-        runCatching { deviceTrustedCertificates() }
+    private fun deviceCertificatePems(): List<String>? {
+        val certs = runCatching { deviceTrustedCertificates() }
             .onFailure { Logger.w(tag, "Could not read the device CA store: ${it.message}") }
-            .getOrDefault(emptyList())
+            .getOrNull() ?: return null
+        val pems = certs
             .mapNotNull { cert -> runCatching { pemOf(cert) }.getOrNull() }
             .sorted()
+        if (certs.isNotEmpty() && pems.isEmpty()) {
+            throw IOException("No device CA certificate could be encoded")
+        }
+        return pems
+    }
 
     /**
      * Where the system trust store lives, as an injectable list so the bundle
@@ -1540,7 +1563,8 @@ class FirstRunSetup(
 
     /**
      * When this package was last installed or updated, or 0 when that cannot be
-     * read, which leaves [ensureExecPreload] to the length check alone.
+     * read. An unknown current timestamp retains the version-based decision and
+     * leaves [ensureExecPreload] to the length check alone.
      */
     private fun packageUpdateTime(): Long =
         try {
@@ -1736,9 +1760,11 @@ class FirstRunSetup(
             // replaced appendText, which never read the file at all, and
             // carrying the bytes through is what keeps that property.
             val existing = bashrc.readBytes()
-            val content = String(existing, Charsets.ISO_8859_1)
+            val original = String(existing, Charsets.ISO_8859_1)
+            val content = original.replace(legacyClaudeBlock, claudeBashFunction())
             val additions = StringBuilder()
             val added = mutableListOf<String>()
+            if (content != original) added += "claude"
             // [npmBlockMarker], not `npm()`, and the difference is what lets this
             // block ever change again: every install that already has the pair
             // matches `npm()`, so that guard froze whatever the release which
@@ -1747,11 +1773,8 @@ class FirstRunSetup(
                 additions.append(npmBashFunctions())
                 added += "npm/npx"
             }
-            // Guarded separately from the npm block rather than added to it: an
-            // install that predates this already has npm(), so a shared guard
-            // would skip the new function forever, and a widened one would append
-            // npm() a second time.
-            if (!content.contains("claude()")) {
+            // Migrate only the exact older block; keep any custom function.
+            if (!CLAUDE_DEFINITION.containsMatchIn(content)) {
                 additions.append(claudeBashFunction())
                 added += "claude"
             }
@@ -1776,12 +1799,15 @@ class FirstRunSetup(
             // certifies a partial append: `claude()` is there, its body is not,
             // and no later launch adds the rest. The two decisions stay
             // separate; only the write is shared.
-            if (additions.isNotEmpty()) {
+            if (content != original || additions.isNotEmpty()) {
                 val names = added.joinToString(" and ")
-                if (writeAtomically(bashrc) { it.write(existing); it.write(additions.toString().toByteArray()) }) {
-                    Logger.i(tag, "Appended $names to .bashrc")
+                if (writeAtomically(bashrc) {
+                    it.write(content.toByteArray(Charsets.ISO_8859_1))
+                    it.write(additions.toString().toByteArray())
+                }) {
+                    Logger.i(tag, "Updated $names in .bashrc")
                 } else {
-                    Logger.w(tag, "Could not append $names; .bashrc is unchanged")
+                    Logger.w(tag, "Could not update $names; .bashrc is unchanged")
                 }
             }
         }
@@ -2629,6 +2655,34 @@ __vscodroid_pip_explain() {
     /** The same for `pip3`, which every pip block this app writes also defines. */
     private val PIP3_DEFINITION = Regex("""(?m)^\s*(?:function\s+pip3(?=[\s({]|$)|pip3\s*\(\s*\))""")
 
+    private val CLAUDE_DEFINITION = Regex("""(?m)^\s*(?:function\s+claude(?=[\s({]|$)|claude\s*\(\s*\))""")
+
+    /** Only the complete block shipped by earlier releases is replaced. */
+    private val legacyClaudeBlock = """
+
+# claude: the CLI the Claude Code extension brings with it. Started through
+# musl's loader: the CLI is a musl binary under filesDir, which SELinux will not
+# execve but will let a loader map. libldmusl.so is found on PATH, which already
+# includes nativeLibraryDir.
+claude() {
+    local cli="" c
+    # An update can leave two versioned directories side by side, which made the
+    # old echo-glob expand to two space-joined paths and fail the -f test. Take
+    # the most recently installed candidate; -nt is a bash builtin, so this
+    # leans on nothing external. [Aa] covers a gallery serving the publisher
+    # name lowercased.
+    for c in "${'$'}HOME"/.vscodroid/extensions/[Aa]nthropic.claude-code-*/resources/native-binary/claude; do
+        [ -f "${'$'}c" ] || continue
+        if [ -z "${'$'}cli" ] || [ "${'$'}c" -nt "${'$'}cli" ]; then cli="${'$'}c"; fi
+    done
+    if [ ! -f "${'$'}cli" ]; then
+        echo "claude: install the Claude Code extension first" >&2
+        return 127
+    fi
+    libldmusl.so "${'$'}cli" "${'$'}@"
+}
+"""
+
     /**
      * `claude` in the terminal, which the extension's own login screen suggests.
      *
@@ -2908,7 +2962,7 @@ claude() {
         // immediately before this in both call paths, so the window is narrow,
         // but this method is public and per-launch and the ordering was all that
         // held it shut.
-        if (!File(projectsDir).exists()) return
+        if (!File(projectsDir).isDirectory) return
         val present = try { Os.lstat(link.absolutePath); true } catch (e: Exception) { false }
         if (present) {
             val current = runCatching { Os.readlink(link.absolutePath) }.getOrNull()
@@ -3466,7 +3520,7 @@ claude() {
                         "would leave it looking installed",
                 )
             }
-            if (!extractAssetDir("extensions/$name", "home/.vscodroid/extensions/$name", progress)) {
+            if (!extractAssetDir("extensions/$name", "home/.vscodroid/extensions/$name", progress, required = true)) {
                 if (failedUnpackMustBeRemoved(name, existedBefore, marker.isFile) &&
                     !removeExtensionDir(dest)
                 ) {
@@ -3518,8 +3572,8 @@ claude() {
         // reconcileExtensionsManifest drops any entry whose directory is gone,
         // so removing the directory here is also what unlists it.
         // Once per id, not once per update. See [retiredIdsToSweep]: this
-        // cannot distinguish a leftover from a deliberate reinstall, so running
-        // it every time takes the extension away from a user who chose it.
+        // cannot distinguish bare legacy names from a deliberate reinstall.
+        // Gallery names with a target-platform suffix are always preserved.
         val sweptAlready = prefs.getStringSet(KEY_RETIRED_SWEPT, emptySet()) ?: emptySet()
         val owed = retiredIdsToSweep(sweptAlready)
         if (owed.isNotEmpty()) {
@@ -3853,6 +3907,7 @@ claude() {
             val keptIds = mutableSetOf<String>()
             val droppedIds = mutableSetOf<String>()
             var dropped = 0
+            var metadataUpdated = false
 
             for (i in 0 until entries.length()) {
                 val entry = entries.getJSONObject(i)
@@ -3866,6 +3921,7 @@ claude() {
                     entry.optJSONObject("identifier")?.optString("id")?.let { droppedIds.add(it) }
                     continue
                 }
+                if (markOwnExtensionBuiltin(entry, dirName)) metadataUpdated = true
                 kept.put(entry)
                 entry.optJSONObject("identifier")?.optString("id")?.let { keptIds.add(it) }
             }
@@ -3892,7 +3948,7 @@ claude() {
                 added++
             }
 
-            if (dropped > 0 || added > 0) {
+            if (dropped > 0 || added > 0 || metadataUpdated) {
                 // Same exposure as settings.json above: a truncated manifest
                 // is read as an empty extension list, so every bundled
                 // extension disappears rather than the write visibly failing.
@@ -3970,6 +4026,12 @@ claude() {
      * removal would make that permanent.
      */
     private fun runPreExtractionMigrations(fromVersionCode: Int) {
+        if (!hasUnredirectedParent(File(context.filesDir, "server/vscode-reh")) ||
+            !hasUnredirectedParent(File(context.filesDir, "server/vscode-web"))
+        ) {
+            Logger.w(tag, "Keeping the previous server files: their parent directory is redirected")
+            return
+        }
         if (fromVersionCode < PIVOT_VERSION_CODE && !prefs.getBoolean(KEY_PIVOT_MIGRATED, false)) {
             var reclaimed = true
             // The server tree changed origin, not just version: what was there is a
@@ -3980,9 +4042,9 @@ claude() {
             // that nothing overwrites and nothing loads, with no visible symptom
             // beyond behaviour nobody can account for.
             val serverTree = File(context.filesDir, "server/vscode-reh")
-            if (serverTree.exists()) {
-                val freed = serverTree.walkBottomUp().filter { it.isFile }.sumOf { it.length() }
-                if (serverTree.deleteRecursively()) {
+            if (serverTree.exists() || Files.isSymbolicLink(serverTree.toPath())) {
+                val freed = StorageManager.deleteRecursive(serverTree)
+                if (!serverTree.exists() && !Files.isSymbolicLink(serverTree.toPath())) {
                     Logger.i(tag, "Removed the previous server tree (${freed / 1_048_576} MB)")
                 } else {
                     // Not fatal on its own: extraction still writes the new tree over
@@ -3999,9 +4061,9 @@ claude() {
             // path anymore. Without this, tens of MB ride along on every phone
             // forever, counted into the storage figure the app reports.
             val webTree = File(context.filesDir, "server/vscode-web")
-            if (webTree.exists()) {
-                val freed = webTree.walkBottomUp().filter { it.isFile }.sumOf { it.length() }
-                if (webTree.deleteRecursively()) {
+            if (webTree.exists() || Files.isSymbolicLink(webTree.toPath())) {
+                val freed = StorageManager.deleteRecursive(webTree)
+                if (!webTree.exists() && !Files.isSymbolicLink(webTree.toPath())) {
                     Logger.i(tag, "Removed the orphaned web client tree (${freed / 1_048_576} MB)")
                 } else {
                     reclaimed = false
@@ -4084,19 +4146,28 @@ claude() {
      * never descends it, so an alias goes without whatever it points at.
      */
     private fun pruneUnshippedServerEntries(assetDir: String) {
+        val directory = File(context.filesDir, "server/$assetDir")
+        if (!hasUnredirectedParent(directory) || Files.isSymbolicLink(directory.toPath())) return
         val shipped = try {
             context.assets.list(assetDir)?.toSet()
         } catch (e: IOException) {
             null
         }
         if (shipped.isNullOrEmpty()) return
-        File(context.filesDir, "server/$assetDir").listFiles()
+        directory.listFiles()
             ?.filter { it.name !in shipped }
             ?.forEach {
                 Logger.i(tag, "Removing server/$assetDir/${it.name}, which this build no longer ships")
                 StorageManager.deleteRecursive(it)
             }
     }
+
+    private fun hasUnredirectedParent(file: File): Boolean = runCatching {
+        val base = context.filesDir.canonicalFile
+        val expected = File(base, file.relativeTo(context.filesDir).path).absoluteFile
+        expected == expected.normalize() && expected.path.startsWith(base.path + File.separator) &&
+            expected.parentFile.canonicalFile == expected.parentFile
+    }.getOrDefault(false)
 
     /**
      * Records the setup that has just completed, and retires the attempt marker.
@@ -4116,6 +4187,7 @@ claude() {
         prefs.edit(commit = true) {
             putString(KEY_VERSION, getCurrentVersion())
             putInt(KEY_VERSION_CODE, getCurrentVersionCode())
+            putLong(KEY_PACKAGE_UPDATE_TIME, packageUpdateTime())
             remove(KEY_EXTRACTION_ATTEMPT)
         }
     }
@@ -4254,6 +4326,7 @@ claude() {
 
         private const val KEY_VERSION = "setup_version"
         private const val KEY_VERSION_CODE = "setup_version_code"
+        private const val KEY_PACKAGE_UPDATE_TIME = "setup_package_update_time"
 
         /**
          * That the pre-pivot server tree has been reclaimed on this device.
@@ -4271,7 +4344,9 @@ claude() {
         private const val KEY_PIVOT_MIGRATED = "pivot_tree_reclaimed"
 
         /**
-         * The build whose extraction is in flight, as `versionName/versionCode`.
+         * The package whose extraction is in flight, as
+         * `versionName/versionCode/lastUpdateTime`. The timestamp is omitted
+         * when unavailable, retaining the legacy identity for that case.
          *
          * Written below the storage pre-flight and before the first byte is
          * copied, and removed by [markSetupComplete], so its presence means an
@@ -4291,15 +4366,14 @@ claude() {
          * and why replacing this marker with one naming a different build poisons
          * it with [MIXED_TREE] instead. See where [resumeSameBuild] is set.
          *
-         * Both halves of the version, not just the code, because either can move
-         * on its own and either moving means different assets. Absent on every
+         * Both halves of the version and the package timestamp, because each
+         * can move independently and identify different assets. Absent on every
          * install that predates it, which reads as "not this build" and rewrites,
          * so an existing install is never handed a skip it did not earn.
          *
-         * What it deliberately does not cover: a rebuilt APK installed over a
-         * failed run at the SAME versionName and versionCode, which is `adb
-         * install -r` during development and nothing a user meets. Covering it
-         * needs a per-file digest the build does not produce.
+         * The package timestamp also distinguishes a rebuilt APK installed at
+         * the same versionName and versionCode, so its files cannot inherit an
+         * interrupted package's length-based skip.
          */
         private const val KEY_EXTRACTION_ATTEMPT = "extraction_attempt"
 
@@ -4884,12 +4958,24 @@ private class SettingPin(val key: String, valuePattern: String, val value: Strin
     private val managed = Regex("""($quotedKey\s*:\s*)$valuePattern""")
     private val present = Regex("""$quotedKey\s*:""")
 
-    fun applyTo(content: String): String = when {
-        managed.containsMatchIn(content) ->
-            managed.replace(content) { "${it.groupValues[1]}$value" }
-        present.containsMatchIn(content) -> content
-        else -> insertSetting(content, key, value)
+    fun applyTo(content: String): String {
+        val masked = commentsBlanked(content)
+        return when {
+            managed.containsMatchIn(masked) -> replaceSettingValues(content, managed, value)
+            present.containsMatchIn(masked) -> content
+            else -> insertSetting(content, key, value)
+        }
     }
+}
+
+/** Match without comments, then replace only the value in the original text. */
+private fun replaceSettingValues(content: String, pattern: Regex, value: String): String {
+    val updated = StringBuilder(content)
+    for (match in pattern.findAll(commentsBlanked(content)).toList().asReversed()) {
+        val valueStart = match.range.first + match.groupValues[1].length
+        updated.replace(valueStart, match.range.last + 1, value)
+    }
+    return updated.toString()
 }
 
 /**
@@ -4987,7 +5073,8 @@ internal fun retiredFetchedExtensionDirs(
     present: List<String>,
     retiredIds: List<String> = RETIRED_FETCHED_IDS,
 ): List<String> = present.filter { name ->
-    retiredIds.any { id -> name == id || name.startsWith("$id-") }
+    !TARGET_PLATFORM_SUFFIX.containsMatchIn(name) &&
+        retiredIds.any { id -> name == id || name.startsWith("$id-") }
 }
 
 /**
@@ -5303,16 +5390,20 @@ internal fun orphanedBundledCopies(
  * recorded. Those are treated as stale, which redoes an extraction that is
  * idempotent, rather than trusting a record that was never made.
  *
- * Pure, and takes the four values rather than a Context, so the decision can be
- * pinned by a unit test; the reads themselves are one call each and have no
- * branch to get wrong.
+ * Package replacement can retain both version labels, so a known current
+ * timestamp must match the completed record. A legacy record with no timestamp
+ * is refreshed once to record the current package identity. An unknown current
+ * timestamp retains the version-based decision.
  */
 internal fun setupIsStale(
     storedName: String?,
     storedCode: Int,
     currentName: String,
     currentCode: Int,
-): Boolean = storedName != currentName || storedCode != currentCode
+    storedUpdateTime: Long = 0,
+    currentUpdateTime: Long = 0,
+): Boolean = storedName != currentName || storedCode != currentCode ||
+    (currentUpdateTime > 0 && storedUpdateTime != currentUpdateTime)
 
 /**
  * The manifest rewrite failed, as distinct from the manifest being unreadable.
@@ -5445,7 +5536,7 @@ internal fun isSymlinkMode(stMode: Int): Boolean = (stMode and 0xF000) == 0xA000
 internal fun writeAtomically(
     dest: File,
     onError: ((String) -> Unit)? = null,
-    write: (FileOutputStream) -> Unit,
+    write: (OutputStream) -> Unit,
 ): Boolean {
     val tmp = File(dest.parentFile, "${dest.name}.tmp~")
     val path = tmp.absolutePath
@@ -5453,7 +5544,16 @@ internal fun writeAtomically(
     try {
         synchronized(lock) {
             try {
-                FileOutputStream(tmp).use(write)
+                val temporaryPath = tmp.toPath()
+                if (Files.isDirectory(temporaryPath, LinkOption.NOFOLLOW_LINKS)) {
+                    throw IOException("temporary path is a directory: ${tmp.name}")
+                }
+                // Reclaim the name without truncating an inode linked to another file.
+                Files.deleteIfExists(temporaryPath)
+                Files.newOutputStream(
+                    temporaryPath, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE,
+                    LinkOption.NOFOLLOW_LINKS,
+                ).use(write)
             } catch (e: IOException) {
                 // The message, not just the failure. "No space left on device" is
                 // the one sentence this whole subsystem is built around, and it
@@ -5892,6 +5992,7 @@ internal fun repointOwnExtensionEntries(
     for (i in 0 until entries.length()) {
         val entry = entries.optJSONObject(i)
         val directory = entry?.let(::directoryOf).orEmpty()
+        if (entry != null && markOwnExtensionBuiltin(entry, directory)) changed = true
         val replacement = if (entry != null && directory in superseded && directory.startsWith(OWN_EXTENSION_PREFIX)) {
             splitExtensionDir(directory)?.first?.let(current::get)
         } else {
@@ -5911,6 +6012,15 @@ internal fun repointOwnExtensionEntries(
         }
     }
     return if (changed) result.toString(2) else null
+}
+
+private fun markOwnExtensionBuiltin(entry: JSONObject, directory: String): Boolean {
+    if (!directory.startsWith(OWN_EXTENSION_PREFIX)) return false
+    val metadata = entry.optJSONObject("metadata")
+    if (metadata?.optBoolean("isBuiltin", false) == true) return false
+    if (metadata == null && entry.has("metadata") && !entry.isNull("metadata")) return false
+    entry.put("metadata", (metadata ?: JSONObject()).put("isBuiltin", true))
+    return true
 }
 
 /**
@@ -6002,13 +6112,13 @@ internal fun refreshManagedPaths(
     gitPath: String,
     claudeWrapper: String,
 ): String? {
-    var updated = GIT_PATH.replace(content) { "${it.groupValues[1]}\"$gitPath\"" }
+    var updated = replaceSettingValues(content, GIT_PATH, "\"$gitPath\"")
 
     val movedProfile =
-        LEGACY_BASH_PROFILE_PATH.replace(updated) { "${it.groupValues[1]}\"$shellPath\"" }
+        replaceSettingValues(updated, LEGACY_BASH_PROFILE_PATH, "\"$shellPath\"")
     if (movedProfile != updated) {
-        updated = LEGACY_PROFILE_ARGS.replace(movedProfile) { "${it.groupValues[1]}[]" }
-        updated = SHELL_INTEGRATION_OFF.replace(updated) { "${it.groupValues[1]}true" }
+        updated = replaceSettingValues(movedProfile, LEGACY_PROFILE_ARGS, "[]")
+        updated = replaceSettingValues(updated, SHELL_INTEGRATION_OFF, "true")
     }
 
     // Without this setting the Claude Code extension refuses to start at all:
@@ -6018,11 +6128,11 @@ internal fun refreshManagedPaths(
     // two paths above it moves on every reinstall and has to be rewritten here.
     updated = when {
         // A managed value: refresh it, since nativeLibraryDir moves.
-        CLAUDE_WRAPPER.containsMatchIn(updated) ->
-            CLAUDE_WRAPPER.replace(updated) { "${it.groupValues[1]}\"$claudeWrapper\"" }
+        CLAUDE_WRAPPER.containsMatchIn(commentsBlanked(updated)) ->
+            replaceSettingValues(updated, CLAUDE_WRAPPER, "\"$claudeWrapper\"")
         // Present, but pointing somewhere the user chose. Leave it, and do not
         // insert beside it.
-        CLAUDE_WRAPPER_KEY.containsMatchIn(updated) -> updated
+        CLAUDE_WRAPPER_KEY.containsMatchIn(commentsBlanked(updated)) -> updated
         else -> insertSetting(updated, "claudeCode.claudeProcessWrapper", "\"$claudeWrapper\"")
     }
 
@@ -6036,7 +6146,7 @@ internal fun refreshManagedPaths(
     // Added for installs that predate it rather than only written at first run,
     // and skipped when the key is already present in either state, because
     // switching it back on is a decision worth keeping.
-    if (!VERIFY_SIGNATURE.containsMatchIn(updated)) {
+    if (!VERIFY_SIGNATURE.containsMatchIn(commentsBlanked(updated))) {
         updated = insertSetting(updated, "extensions.verifySignature", "false")
     }
 
@@ -6133,14 +6243,13 @@ private val MOVED_DEFAULTS = listOf(
  *
  * The only destructive edit this app makes to a file the user also owns, so it
  * is deliberately unable to touch anything it did not write. A line is removed
- * only when all four of these hold: the key is one of [MOVED_DEFAULTS], the
+ * only at the root when all four of these hold: the key is one of [MOVED_DEFAULTS], the
  * value is byte-for-byte the one this app wrote, the indentation is the
  * document's own first-property indent, and the line ends in a comma. A value
  * the user changed is theirs and stays, and it goes on outranking their local
  * settings, which is the honest outcome: they set it, in a file the app hands
  * them, and silently deleting it would be the same defect pointed the other way.
- * A nested override such as `"[markdown]": { "editor.wordWrap": "off" }` sits at
- * a deeper indent and cannot be hit.
+ * Structural depth keeps nested overrides regardless of their indentation.
  *
  * Returns null when nothing matched, so a document that never had these keys
  * costs no write.
@@ -6165,6 +6274,20 @@ internal fun pruneMovedDefaults(content: String, autoHideSideBar: Boolean): Stri
     // lesson reading a value; this is the writing half of it, and the blanks are
     // length-preserving so the two texts share one index space.
     val masked = commentsBlanked(content)
+    val rootStrings = mutableSetOf<Int>()
+    var depth = 0
+    var cursor = brace
+    while (cursor < masked.length) {
+        when (masked[cursor]) {
+            '"' -> {
+                if (depth == 1) rootStrings.add(cursor)
+                cursor = JSON_STRING.matchAt(masked, cursor)?.range?.last ?: masked.length
+            }
+            '{', '[' -> depth++
+            '}', ']' -> if (--depth == 0) break
+        }
+        cursor++
+    }
     val moved = MOVED_DEFAULTS +
         ("vscodroid.layout.autoHideSideBar" to autoHideSideBar.toString())
     val cuts = mutableListOf<IntRange>()
@@ -6172,7 +6295,7 @@ internal fun pruneMovedDefaults(content: String, autoHideSideBar: Boolean): Stri
         val needle = "\n$indent\"$key\": $value,"
         var at = masked.indexOf(needle)
         while (at >= 0) {
-            cuts.add(at until at + needle.length)
+            if (at + 1 + indent.length in rootStrings) cuts.add(at until at + needle.length)
             at = masked.indexOf(needle, at + needle.length)
         }
     }

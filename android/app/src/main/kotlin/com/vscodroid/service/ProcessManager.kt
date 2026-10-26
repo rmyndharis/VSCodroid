@@ -237,12 +237,11 @@ class ProcessManager(private val context: Context) {
      * The user's number, as [heapCeilingForDevice] took it, or null when the
      * ceiling was derived.
      *
-     * Kept only so the start summary can name what was asked for beside what was
-     * given. Not volatile, and deliberately not: it is written and read on the
-     * one thread that is inside [startServer], a few statements apart, and giving
-     * it the annotation would tell the next reader that some other thread looks
-     * at it.
+     * The start summary names it beside the derived ceiling, and the service
+     * captures it before charging a death on IO. Volatile because the service
+     * reads it from a different thread than the one performing the start.
      */
+    @Volatile
     private var heapOverrideAskedMb: Int? = null
 
     /**
@@ -296,6 +295,11 @@ class ProcessManager(private val context: Context) {
      */
     fun heapOverrideInEffect(): Boolean = heapOverrideActive
 
+    /** The requested value used by the process whose kill is being charged. */
+    internal fun heapOverrideValueInEffect(epoch: Int): Int? = synchronized(readinessLock) {
+        if (readinessEpoch.get() == epoch && heapOverrideActive) heapOverrideAskedMb else null
+    }
+
     /**
      * Whether the ceiling in `settings.json` is currently being ignored.
      *
@@ -321,21 +325,24 @@ class ProcessManager(private val context: Context) {
      */
     fun isAdopted(): Boolean = adopted
 
-    /** The editor server pid the note named when readiness was last announced, 0 before. */
+    /** The editor server note readiness was last announced for, null before. */
     @Volatile
-    private var announcedEditorPid = 0
+    private var announcedEditorNote: String? = null
 
-    /** Whether the last adoption found the editor server [announcedEditorPid] names. */
+    /** Whether the last adoption found the editor server [announcedEditorNote] names. */
     @Volatile
     private var adoptedAnnouncedServer = false
 
     /**
      * Records which editor server readiness is being announced for. `NodeService`
      * calls it on every announcement, spawned or adopted, so the next adoption can
-     * tell a survivor of the page's own server from some other child.
+     * tell a survivor of the page's own server from some other child. Use the
+     * identity published with readiness, since the disk note may already name a replacement.
      */
     fun markReadyAnnounced() {
-        announcedEditorPid = recordedEditorPid()
+        synchronized(readinessLock) {
+            if (_isReady) announcedEditorNote = serverEditorNote
+        }
     }
 
     /**
@@ -345,17 +352,17 @@ class ProcessManager(private val context: Context) {
      * The page loaded against that server is still connected to it: a SIGKILLed
      * `server.js` takes nothing of its child with it. Reloading there restarts the
      * extension host and drops what has not been backed up, for a connection that
-     * never broke. A different pid, which is an adopted child of a restart the page
+     * never broke. A different note, which names a child of a restart the page
      * never saw, answers false, because the page's own server is gone.
      */
     fun continuesAnnouncedServer(): Boolean = adopted && adoptedAnnouncedServer
 
-    /** The pid the bootstrap's note names, or 0 when there is no readable note. */
-    private fun recordedEditorPid(): Int = try {
+    /** The bootstrap's note, or null when it cannot be read. */
+    private fun recordedEditorNote(): String? = try {
         val note = File(Environment.getServerDir(context), EDITOR_PID_FILE)
-        if (note.isFile) JSONObject(note.readText()).optInt("pid", 0) else 0
+        if (note.isFile) note.readText() else null
     } catch (_: Exception) {
-        0
+        null
     }
 
     /**
@@ -416,6 +423,9 @@ class ProcessManager(private val context: Context) {
 
     @Volatile
     private var cachedToken: String? = null
+
+    /** The current epoch's editor identity, guarded by [readinessLock]. */
+    private var serverEditorNote: String? = null
 
     /**
      * Where `/proc` is mounted. A constant in production, and a `var` only so the
@@ -601,7 +611,8 @@ class ProcessManager(private val context: Context) {
         } else {
             PortFinder.isPortAvailable(_port)
         }
-        if (!portIsFree && portHeldByOurEditorServer() && recordedServerIsServing()) {
+        val editorNote = if (portIsFree) null else recordedEditorNote()
+        if (editorNote != null && portHeldByOurEditorServer(editorNote) && recordedServerIsServing()) {
             // A server of ours is already on the port. Serve it instead of
             // spawning a second one that cannot bind.
             //
@@ -654,53 +665,58 @@ class ProcessManager(private val context: Context) {
             // untracked. Placed before every assignment below, because a return
             // taken after any of them would publish state describing a server this
             // start is not going to serve.
-            if (isShuttingDown) {
-                Logger.i(tag, "A stop landed while the server was being adopted; ending it instead")
-                reapRecordedEditorServer("a stop landed while it was being adopted")
-                return false
+            synchronized(readinessLock) {
+                if (isShuttingDown) {
+                    Logger.i(tag, "A stop landed while the server was being adopted; ending it instead")
+                    reapRecordedEditorServer("a stop landed while it was being adopted")
+                    return false
+                }
+                // Nothing is warned about here, and that is a change rather than an
+                // omission. An adopted server is by construction one whose bootstrap
+                // is gone, and while the DNS proxy was bound by that bootstrap the
+                // survivor kept pointing HTTPS_PROXY at a closed port that no running
+                // process can be made to forget: the Open VSX gallery, the agent host,
+                // and git, npm and curl in every terminal (they inherit the same
+                // environment) all failed to reach the network for the rest of the
+                // session, while the workbench itself looked perfectly healthy.
+                // `assets/server.js` now preloads `assets/dns-proxy.js` into the child
+                // it forks and the child binds its own listener, so the proxy has
+                // exactly the lifetime of the server that uses it and a survivor
+                // carries a working one. Read those two files before putting any
+                // warning back here.
+                adopted = true
+                adoptedAnnouncedServer = recordedEditorNote().let {
+                    it == editorNote && it == announcedEditorNote
+                }
+                clearReadiness()
+                serverEditorNote = editorNote
+                // Nothing was spawned, so the flag describes nothing. Cleared rather
+                // than left, because it survives in this instance across attempts and
+                // a value left over from a previous one is not about this server.
+                spawnedOntoHeldPort = false
+                // Nothing was spawned, so there is no listen to wait for either. The
+                // note vouched for this holder before it was adopted, which is the
+                // ownership test this branch rests on; a flag left set from an
+                // earlier spawn in this instance would refuse readiness to a server
+                // that is serving, and nothing would ever clear it.
+                listenUnreported = false
+                // The same reasoning, and a sharper consequence. An adopted server was
+                // spawned by a bootstrap that is gone, and it carries whatever ceiling
+                // that bootstrap gave it -- which is unknowable from here and is not
+                // whatever this instance last read out of settings.json. Left set, the
+                // user's number would be charged for a kill of a process that never
+                // ran with it, and three of those disable a value that was never tried.
+                heapOverrideActive = false
+                // And the same for the suspension, which [heapOverrideSuspendedNow]
+                // documents as derived at every spawn: this branch is the one start
+                // that spawns nothing, so a value left standing here describes some
+                // earlier process rather than the one being served, and the running
+                // card would tell the user their ceiling had just been turned off on
+                // a start that never read it.
+                heapOverrideSuspendedNow = false
+                startAdoptionWatch(editorNote)
+                return true
             }
-            // Nothing is warned about here, and that is a change rather than an
-            // omission. An adopted server is by construction one whose bootstrap
-            // is gone, and while the DNS proxy was bound by that bootstrap the
-            // survivor kept pointing HTTPS_PROXY at a closed port that no running
-            // process can be made to forget: the Open VSX gallery, the agent host,
-            // and git, npm and curl in every terminal (they inherit the same
-            // environment) all failed to reach the network for the rest of the
-            // session, while the workbench itself looked perfectly healthy.
-            // `assets/server.js` now preloads `assets/dns-proxy.js` into the child
-            // it forks and the child binds its own listener, so the proxy has
-            // exactly the lifetime of the server that uses it and a survivor
-            // carries a working one. Read those two files before putting any
-            // warning back here.
-            adopted = true
-            adoptedAnnouncedServer = recordedEditorPid().let { it > 0 && it == announcedEditorPid }
-            clearReadiness()
-            // Nothing was spawned, so the flag describes nothing. Cleared rather
-            // than left, because it survives in this instance across attempts and
-            // a value left over from a previous one is not about this server.
-            spawnedOntoHeldPort = false
-            // Nothing was spawned, so there is no listen to wait for either. The
-            // note vouched for this holder before it was adopted, which is the
-            // ownership test this branch rests on; a flag left set from an
-            // earlier spawn in this instance would refuse readiness to a server
-            // that is serving, and nothing would ever clear it.
-            listenUnreported = false
-            // The same reasoning, and a sharper consequence. An adopted server was
-            // spawned by a bootstrap that is gone, and it carries whatever ceiling
-            // that bootstrap gave it -- which is unknowable from here and is not
-            // whatever this instance last read out of settings.json. Left set, the
-            // user's number would be charged for a kill of a process that never
-            // ran with it, and three of those disable a value that was never tried.
-            heapOverrideActive = false
-            // And the same for the suspension, which [heapOverrideSuspendedNow]
-            // documents as derived at every spawn: this branch is the one start
-            // that spawns nothing, so a value left standing here describes some
-            // earlier process rather than the one being served, and the running
-            // card would tell the user their ceiling had just been turned off on
-            // a start that never read it.
-            heapOverrideSuspendedNow = false
-            startAdoptionWatch()
-            return true
         }
         // An editor server of ours that is alive, holds the port, and is not one this
         // start can adopt is the one shape worth ending before spawning over it. Adoption
@@ -1121,11 +1137,13 @@ class ProcessManager(private val context: Context) {
      * it reports the server lost, the restart adopts the same note again, and the
      * budget is spent on a loop. Neither question is sufficient alone.
      */
-    fun portHeldByOurEditorServer(): Boolean {
+    fun portHeldByOurEditorServer(capturedNote: String? = null): Boolean {
         val note = File(Environment.getServerDir(context), EDITOR_PID_FILE)
         val recorded = try {
             if (!note.isFile) return false
-            JSONObject(note.readText())
+            val contents = note.readText()
+            if (capturedNote != null && contents != capturedNote) return false
+            JSONObject(contents)
         } catch (e: Exception) {
             Logger.w(tag, "Could not read the editor server note: ${e.message}")
             return false
@@ -1427,8 +1445,8 @@ class ProcessManager(private val context: Context) {
      * readiness check that counts 403 as healthy reports a successful startup for
      * a server that will serve the user nothing but Forbidden.
      *
-     * Liveness only, deliberately, which is what [startAdoptionWatch] wants of a
-     * heartbeat over a server whose identity was settled when it was adopted.
+     * Liveness only, deliberately. [startAdoptionWatch] checks the adopted
+     * process's identity separately before asking whether the port answers.
      * Which build answered is [probeVersion]'s business, and only adoption asks
      * it; [probeReadiness] settles ownership from the spawned process's own
      * output instead. An ordinary readiness poll runs every 200 ms for thirty
@@ -1748,11 +1766,14 @@ class ProcessManager(private val context: Context) {
             // the record kept for a value that can.
             asked
         } else {
-            val prefs = context.getSharedPreferences(HEAP_PREFS_NAME, Context.MODE_PRIVATE)
-            val kills = heapKillsForValue(
-                prefs.getInt(PREF_HEAP_VALUE_SEEN, 0), prefs.getInt(PREF_HEAP_KILLS, 0), asked
-            )
-            prefs.edit(commit = true) { putInt(PREF_HEAP_VALUE_SEEN, asked).putInt(PREF_HEAP_KILLS, kills) }
+            val kills = synchronized(heapOverridePrefsLock) {
+                val prefs = context.getSharedPreferences(HEAP_PREFS_NAME, Context.MODE_PRIVATE)
+                val count = heapKillsForValue(
+                    prefs.getInt(PREF_HEAP_VALUE_SEEN, 0), prefs.getInt(PREF_HEAP_KILLS, 0), asked
+                )
+                prefs.edit(commit = true) { putInt(PREF_HEAP_VALUE_SEEN, asked).putInt(PREF_HEAP_KILLS, count) }
+                count
+            }
             if (heapOverrideSuspended(kills)) {
                 heapOverrideSuspendedNow = true
                 Logger.w(
@@ -1865,6 +1886,7 @@ class ProcessManager(private val context: Context) {
         synchronized(readinessLock) {
             readinessEpoch.incrementAndGet()
             _isReady = false
+            serverEditorNote = null
         }
     }
 
@@ -1898,6 +1920,9 @@ class ProcessManager(private val context: Context) {
         // Read before the request goes out, so the comparison at the foot of this
         // function covers the whole of it.
         val epoch = readinessEpoch.get()
+        val editorNote = synchronized(readinessLock) {
+            if (adopted) serverEditorNote ?: return false else null
+        }
         val served = probeVersion() ?: return false
         // A port answering is not a server of ours answering. Binding a loopback
         // port on Android needs no permission, and readiness is what navigates:
@@ -1919,9 +1944,9 @@ class ProcessManager(private val context: Context) {
         // it says. A start that never clears it ends the way a held port always
         // has: the poll gives up and the service reads [spawnedOntoHeldPort].
         //
-        // An adopted server spawned nothing and is exempt by construction; the
-        // note vouched for it before it was adopted. And a tree that records no
-        // commit is no longer refused here, which is the case the old guard had to
+        // An adopted server uses its captured note, checked after the request
+        // below. A tree that records no commit is no longer refused here, which
+        // is the case the old guard had to
         // confine itself to one path to avoid: the line does not depend on one.
         if (listenUnreported) {
             if (!unboundRefusalLogged) {
@@ -1963,8 +1988,12 @@ class ProcessManager(private val context: Context) {
         // run after a new start's rotation and hand the next server's token to
         // the port before that server is ready.
         val token = readTokenFile()
+        val readyNote = editorNote ?: recordedEditorNote()
+        // The request and token read must still belong to the adopted run.
+        if (editorNote != null && !portHeldByOurEditorServer(editorNote)) return false
         synchronized(readinessLock) {
             if (epoch != readinessEpoch.get()) return false
+            serverEditorNote = readyNote
             cachedToken = token
             _isReady = true
         }
@@ -2022,9 +2051,9 @@ class ProcessManager(private val context: Context) {
      * one is what the removal of the port refusal was avoiding, and adopting
      * without this would have reintroduced it from the other side.
      *
-     * Polling because there is nothing else available. The signal a `Process`
-     * gives for free has to be asked for here, and asking is what
-     * [isServerHealthy] already does.
+     * The captured note must still name a live editor, and its port must answer.
+     * A healthy listener alone can outlive the editor that was adopted. Pinning
+     * the note also keeps a newer run from inheriting the old run's readiness.
      *
      * Two consecutive failures rather than one, because a single refused
      * connection is not evidence of death, the same reasoning [probeReadiness]
@@ -2033,11 +2062,10 @@ class ProcessManager(private val context: Context) {
      * editor that stopped working with nothing said.
      *
      * Reports through [onServerCrashed] rather than a channel of its own, so the
-     * recovery is the one that already exists. By the time it fires the port is
-     * free, so the restart it triggers spawns a real server rather than another
-     * one that cannot bind.
+     * recovery uses the existing restart policy even if another listener holds
+     * the port after the adopted editor exits.
      */
-    private fun startAdoptionWatch() {
+    private fun startAdoptionWatch(editorNote: String) {
         val epoch = readinessEpoch.get()
         watchdogThread = thread(name = "adopted-watch", isDaemon = true) {
             var misses = 0
@@ -2045,7 +2073,7 @@ class ProcessManager(private val context: Context) {
                 while (!isShuttingDown && adopted) {
                     Thread.sleep(ADOPTED_WATCH_INTERVAL_MS)
                     if (isShuttingDown || !adopted) return@thread
-                    if (isServerHealthy()) {
+                    if (portHeldByOurEditorServer(editorNote) && isServerHealthy()) {
                         misses = 0
                         continue
                     }
@@ -2057,7 +2085,7 @@ class ProcessManager(private val context: Context) {
                         adopted = false
                         readinessEpoch.get()
                     }
-                    Logger.w(tag, "Adopted server stopped answering; treating it as gone")
+                    Logger.w(tag, "Adopted editor is gone or stopped answering; treating it as lost")
                     synchronized(readinessLock) {
                         if (!isShuttingDown && readinessEpoch.get() == exitEpoch) {
                             onServerCrashed?.invoke(ADOPTED_SERVER_LOST)
@@ -2343,6 +2371,9 @@ internal const val PREF_HEAP_VALUE_SEEN = "heap_override_value_seen"
 
 /** The preferences file `PortFinder` and `SplashActivity` already share. */
 internal const val HEAP_PREFS_NAME = "vscodroid"
+
+/** Serializes value resets with charges for a process that has already ended. */
+internal val heapOverridePrefsLock = Any()
 
 /**
  * The largest ceiling a user may ask for on a device of this size.

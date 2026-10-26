@@ -494,6 +494,7 @@ class SafLiveDeviceEditTest {
                     true
                 } else false
             }
+            assertTrue(Thread.currentThread().isInterrupted, "the drain lost the pending interrupt")
         } finally {
             Thread.interrupted()
         }
@@ -814,7 +815,10 @@ class SafLiveDeviceEditTest {
 
         open()
 
-        assertEquals(1_200L, hashed, "the open did not read the newer copy alone within its budget")
+        assertEquals(
+            2_400L, hashed,
+            "only the newer local copy and its matching provider bytes should be hashed",
+        )
     }
 
     /**
@@ -1808,15 +1812,12 @@ class SafLiveDeviceEditTest {
     }
 
     /**
-     * A delete of a file whose save is held back, meeting a stamp query the provider does not
-     * answer. The guard had seen the device move past what it read, and the unanswered query
-     * let the delete take that version unread. Where the loop's idle turn found the file gone
-     * before the delete's event arrived, it dropped the hold first, so the hold could not say
-     * so either.
+     * A delete must read the device bytes even when metadata cannot answer. The failed read
+     * keeps a held save's foreign version, including after the idle turn dropped its hold.
      */
     @ParameterizedTest(name = "the idle turn dropped the hold first: {0}")
     @ValueSource(booleans = [false, true])
-    fun `a delete of a file whose save is held back is declined when its stamp goes unanswered`(
+    fun `a delete of a file whose save is held back reads bytes before it is declined`(
         holdDropped: Boolean,
     ) {
         open()
@@ -1831,11 +1832,14 @@ class SafLiveDeviceEditTest {
         }
         engine.handleMirrorEvent(FileObserver.DELETE, file, mirror, treeUri)
         failStampQuery = true
+        val readsBeforeDelete = reads
 
         engine.runWriteBackLoop { false }
 
-        assertEquals(false, failStampQuery, "precondition: the delete asked the provider for the stamp")
+        assertEquals(readsBeforeDelete + 1, reads, "the delete did not try to read the device bytes")
+        assertTrue(failStampQuery, "the delete queried metadata instead of relying on fresh bytes")
         assertTrue(deviceHasDocument, "the delete took another app's edit with the file")
+        assertEquals("changed by another app", deviceText)
         assertEquals(listOf(file.absolutePath), kept.map { it.absolutePath }, "nothing said it was kept")
         assertEquals(listOf(true), keptAsChanged)
     }
@@ -2110,10 +2114,10 @@ class SafLiveDeviceEditTest {
         assertEquals("typed after the reopen", deviceText)
     }
 
-    /** A delete meeting the unanswered stamp, which the bytes decide as they decide a save. */
+    /** A delete reads the vouched bytes directly, without depending on a metadata answer. */
     @ParameterizedTest(name = "another app changed the file: {0}")
     @ValueSource(booleans = [true, false])
-    fun `a delete after a reopen with no clock reads the device copy when its stamp goes unanswered`(
+    fun `a delete after a reopen with no clock reads bytes without a metadata query`(
         anotherApp: Boolean,
     ) {
         deviceHasClock = false
@@ -2131,6 +2135,7 @@ class SafLiveDeviceEditTest {
         )
         val file = File(mirror, "notes.txt").apply { delete() }
         failNextQuery = true
+        val readsBeforeDelete = reads
 
         engine.handleMirrorEvent(FileObserver.DELETE, file, mirror, treeUri)
         engine.runWriteBackLoop { false }
@@ -2139,7 +2144,10 @@ class SafLiveDeviceEditTest {
             false, deviceHasDocument,
             "the delete was declined over bytes the reopen already read or vouched for",
         )
-        assertEquals(false, failNextQuery, "precondition: the delete asked the provider for the stamp")
+        assertEquals(readsBeforeDelete + 1, reads, "the delete did not read the device bytes")
+        assertTrue(failNextQuery, "the delete depended on a metadata query")
+        assertTrue(kept.isEmpty())
+        assertTrue(keptAsChanged.isEmpty())
     }
 
     /**

@@ -3,6 +3,7 @@ package com.vscodroid.setup
 import android.content.Context
 import android.content.ContextWrapper
 import android.content.SharedPreferences
+import android.system.Os
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
 import org.junit.After
@@ -11,6 +12,7 @@ import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Assert.fail
+import org.junit.Assume.assumeTrue
 import org.junit.Before
 import org.junit.Test
 import org.junit.runner.RunWith
@@ -33,18 +35,15 @@ import java.lang.reflect.InvocationTargetException
  *    different call, in a different process, under a different uid, in a
  *    different place.
  *
- * The last test drives the failure itself, on a filesystem taken to nearly full,
- * which is the condition the whole abort-and-retry design exists for and the one
- * no stub reproduces.
+ * The pressure case requires an explicitly selected disposable filesystem.
  *
  * ## What this needs
  *
  * The APK's own `assets/extensions`, and nothing else -- no server tree, no
  * binaries, no first-run setup. `getFilesDir()` is redirected into a sandbox so
  * the real AssetManager stays in play while nothing touches the app's actual
- * data. There is no `assumeTrue` here and there must not be one: every
- * precondition below is asserted, so a fixture that failed to materialise fails
- * the test rather than skipping it.
+ * data. Only the pressure case skips when its isolated storage prerequisites
+ * are absent or pressure cannot be created within its byte and time budgets.
  */
 @RunWith(AndroidJUnit4::class)
 class ExtractionOnDeviceTest {
@@ -84,10 +83,7 @@ class ExtractionOnDeviceTest {
     @Before
     fun setUp() {
         appContext = InstrumentationRegistry.getInstrumentation().targetContext
-        // filesDir, not cacheDir. The last test deliberately runs the partition
-        // to nearly full, and that is exactly when the platform reclaims cache
-        // directories -- the fixture would be deleted by the condition it exists
-        // to create.
+        // filesDir keeps extraction fixtures outside reclaimable cache storage.
         sandbox = File(appContext.filesDir, "extraction-on-device")
         sandbox.deleteRecursively()
         assertTrue("could not create the sandbox", sandbox.mkdirs())
@@ -226,7 +222,7 @@ class ExtractionOnDeviceTest {
     }
 
     /**
-     * A1 itself, on the class the defect is specific to.
+     * Failed copies must be removed so the next extraction retries them.
      *
      * A fetched extension is selected for unpacking only while its directory is
      * absent, so a copy that failed partway used to leave exactly the evidence
@@ -235,23 +231,36 @@ class ExtractionOnDeviceTest {
      * the extension directory, which creates it, which makes it the
      * already-there case instead.
      *
-     * So the disk is taken to nearly full. Directory creation still succeeds --
-     * it needs almost nothing -- and the 29 MB of file copies inside it do not.
+     * This requires a separate disposable filesystem, never the shared data
+     * partition. Allocation is capped even if capacity reporting stops changing.
      */
     @Test
     fun aFetchedExtensionWhoseUnpackRanOutOfSpaceIsRetriedNotSkipped() {
+        val path = InstrumentationRegistry.getArguments().getString("isolatedStoragePressureRoot")
+        assumeTrue("supply an app-writable disposable filesystem through isolatedStoragePressureRoot", !path.isNullOrBlank())
+        val root = File(path!!).canonicalFile
+        assumeTrue("the isolated storage root must be an existing absolute directory",
+            File(path).isAbsolute && root.isDirectory)
+        val separateDevice = Os.stat(root.path).st_dev != Os.stat(appContext.filesDir.path).st_dev
+        assumeTrue("storage pressure requires a separate filesystem of at most 128 MiB",
+            separateDevice && root.totalSpace in 1..128L * 1024 * 1024)
+        sandbox.deleteRecursively()
+        sandbox = File(root, "extraction-on-device-pressure")
+        sandbox.deleteRecursively()
+        assertTrue("could not create isolated extraction sandbox", sandbox.mkdirs())
         val filler = File(sandbox, "filler.bin")
         try {
-            fillNearlyFull(filler)
-            assertTrue(
-                "could not take the filesystem low enough to fail a copy; " +
-                    "${sandbox.usableSpace} bytes still free",
-                // At most, not under: the loop stops once the space is no longer above 4 MiB,
-                // and on a data partition whose free space is a multiple of the chunk it lands
-                // on exactly 4 MiB. That is as full as this case needs, since the copies it
-                // has to fail are tens of MB.
-                sandbox.usableSpace <= 4L * 1024 * 1024,
-            )
+            val pressureCreated = filler.outputStream().use { out ->
+                createBoundedStoragePressure(
+                    enabled = true,
+                    sameDeviceAsAppData = !separateDevice,
+                    volumeBytes = root.totalSpace,
+                    availableBytes = { sandbox.usableSpace },
+                    write = { out.write(it) },
+                )
+            }
+            assumeTrue("isolated pressure was not reached within 64 MiB and 10 seconds; " +
+                "${sandbox.usableSpace} bytes remain", pressureCreated)
 
             try {
                 extractBundledExtensions()
@@ -269,7 +278,7 @@ class ExtractionOnDeviceTest {
                 File(extensionsDir, fetched).exists(),
             )
         } finally {
-            filler.delete()
+            assertTrue("could not release the pressure fixture", !filler.exists() || filler.delete())
         }
 
         // With room again, the attempt that was aborted has to actually happen.
@@ -278,20 +287,5 @@ class ExtractionOnDeviceTest {
             "the retry did not re-unpack the extension whose copy had failed",
             File(extensionsDir, "$fetched/package.json").isFile,
         )
-    }
-
-    /** Writes until the filesystem refuses, leaving under a few MB free. */
-    private fun fillNearlyFull(filler: File) {
-        val chunk = ByteArray(4 * 1024 * 1024)
-        try {
-            filler.outputStream().use { out ->
-                while (sandbox.usableSpace > 4L * 1024 * 1024) {
-                    out.write(chunk)
-                    out.flush()
-                }
-            }
-        } catch (e: IOException) {
-            // The filesystem got there first, which is the point.
-        }
     }
 }

@@ -144,6 +144,7 @@ class SafDirectoryRenameTest {
      * id, so a case can decide from what has already been asked.
      */
     private fun deviceTree(children: (String) -> List<String>) {
+        val resolvedDirectories = mutableSetOf<String>()
         every { DocumentsContract.buildChildDocumentsUriUsingTree(any(), any()) } answers {
             val parent = secondArg<String>()
             mockk<Uri>(relaxed = true).also { every { it.toString() } returns "children:$parent" }
@@ -161,8 +162,18 @@ class SafDirectoryRenameTest {
             firstArg<Uri>().toString().removePrefix("doc-uri:")
         }
         every { resolver.query(any(), any(), any(), any(), any()) } answers {
+            val queried = firstArg<Uri>().toString()
+            if (queried.startsWith("doc-uri:")) {
+                val directoryId = queried.removePrefix("doc-uri:")
+                return@answers mockk<Cursor>(relaxed = true) {
+                    every { moveToFirst() } returns (directoryId in resolvedDirectories)
+                    every { getColumnIndex(DocumentsContract.Document.COLUMN_MIME_TYPE) } returns 0
+                    every { getString(0) } returns DocumentsContract.Document.MIME_TYPE_DIR
+                }
+            }
             val parent = firstArg<Uri>().toString().removePrefix("children:")
             val names = children(parent)
+            names.forEach { resolvedDirectories.add("doc:$it") }
             val cursor = mockk<Cursor>(relaxed = true)
             var row = -1
             every { cursor.moveToNext() } answers { ++row < names.size }
@@ -801,7 +812,11 @@ class SafDirectoryRenameTest {
         // the new name. Only a directory's subtree is unrecoverable, so only a directory
         // is spared.
         deviceFolderHolding("notes.txt")
-        assertTrue(!File(mirror, "notes.txt").isDirectory, "fixture check: the old name is gone")
+        val file = File(mirror, "notes.txt")
+        val document = DocumentsContract.buildDocumentUriUsingTree(treeUri, "doc:notes.txt")
+        deliverFileBaseline(engine, resolver, file, document, mirror)
+        assertTrue(file.delete(), "the delivered mirror file must leave before MOVED_FROM")
+        assertTrue(!file.isDirectory, "fixture check: the old name is gone")
 
         deliver(FileObserver.MOVED_FROM, "notes.txt")
 

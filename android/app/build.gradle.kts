@@ -535,6 +535,8 @@ dependencies {
 
 tasks.withType<Test> {
     useJUnitPlatform()
+    // MockK needs reflective access to Files internals for publication failure tests.
+    jvmArgs("--add-opens=java.base/java.nio.file=ALL-UNNAMED")
 
     // This build script is a genuine input to the unit tests, because one of
     // them reads it: NoticesTest parses the `bundleNotices` task to check that

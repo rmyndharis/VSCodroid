@@ -1,10 +1,10 @@
 package com.vscodroid
 
+import com.vscodroid.setup.finishTestProcess
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Test
 import java.io.File
-import java.util.concurrent.TimeUnit
 
 class AuthBootstrapTest {
     @Test
@@ -24,9 +24,8 @@ class AuthBootstrapTest {
      */
     @Test
     fun `a failed registration keeps the page injections and a missing answer does not`() {
-        val process = ProcessBuilder("node", "scripts/test-auth-bootstrap.js")
-            .directory(File("../..")).redirectErrorStream(true).start()
-        check(process.waitFor(20, TimeUnit.SECONDS)) { "bootstrap completion check timed out" }
-        assertEquals(0, process.exitValue(), process.inputStream.bufferedReader().readText())
+        val result = finishTestProcess(ProcessBuilder("node", "scripts/test-auth-bootstrap.js")
+            .directory(File("../..")).redirectErrorStream(true).start(), timeoutMillis = 20_000)
+        assertEquals(0, result.first, result.second)
     }
 }

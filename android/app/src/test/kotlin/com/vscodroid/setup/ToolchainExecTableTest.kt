@@ -888,9 +888,9 @@ class ToolchainExecTableTest {
                 remove("NODE_OPTIONS")
                 if (nodeOptions != null) put("NODE_OPTIONS", nodeOptions)
             }
-            val process = builder.start()
-            val out = process.inputStream.bufferedReader().readLines()
-            assertEquals(0, process.waitFor(), out.joinToString("\n"))
+            val result = finishTestProcess(builder.start())
+            val out = result.second.reader().readLines()
+            assertEquals(0, result.first, result.second)
             return out
         }
         val preload = "--require=${filesDir.absolutePath}/server/platform-fix.js"

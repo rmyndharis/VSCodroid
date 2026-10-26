@@ -3,6 +3,7 @@ package com.vscodroid.storage
 import android.content.ContentResolver
 import android.content.Context
 import android.net.Uri
+import android.os.SystemClock
 import com.vscodroid.SourceScan
 import com.vscodroid.util.Logger
 import io.mockk.Runs
@@ -10,6 +11,7 @@ import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
 import io.mockk.mockkObject
+import io.mockk.mockkStatic
 import io.mockk.unmockkAll
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -65,6 +67,8 @@ class SafWatchLifecycleTest {
 
     @BeforeEach
     fun setUp() {
+        mockkStatic(SystemClock::class)
+        every { SystemClock.elapsedRealtime() } returns 0L
         mockkObject(Logger)
         every { Logger.i(any(), any()) } just Runs
         every { Logger.d(any(), any()) } just Runs

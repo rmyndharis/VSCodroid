@@ -82,7 +82,7 @@ class ToolchainReinstallTest {
     }
 
     private fun manager() = ToolchainManager(context).apply {
-        onStateChange = { _, status, _, _ -> statuses.add(status) }
+        onStateChange = { _, status, _, _, _ -> statuses.add(status) }
     }
 
     private fun record(body: String) =

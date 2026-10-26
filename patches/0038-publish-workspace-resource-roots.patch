@@ -1,0 +1,68 @@
+Publish the current workspace resource roots
+
+Publish resolved members for the current document separately from mirror
+usage claims, replacing the complete set on workspace changes and close.
+
+diff --git a/src/vs/workbench/browser/safMirrorUsage.ts b/src/vs/workbench/browser/safMirrorUsage.ts
+--- a/src/vs/workbench/browser/safMirrorUsage.ts
++++ b/src/vs/workbench/browser/safMirrorUsage.ts
+@@ -13,26 +13,34 @@
+ import { localize } from '../../nls.js';
+ 
+ type AndroidWindow = typeof mainWindow & {
+-	AndroidBridge?: { claimWorkspacePaths(token: string, pathsJson: string): boolean };
+-	__vscodroid?: { authToken?: string };
++	AndroidBridge?: {
++		claimWorkspacePaths(token: string, pathsJson: string): boolean;
++		publishWorkspaceRoots?(token: string, generation: number, pathsJson: string): boolean;
++	};
++	__vscodroid?: { authToken?: string; pageGeneration?: number };
+ };
+ 
+ /** Claims resolved members before publication and mirror paths before filesystem access. */
+-export async function claimSafMirrorPaths(resources: readonly URI[]): Promise<void> {
++export async function claimSafMirrorPaths(resources: readonly URI[], publishRoots = false): Promise<void> {
+ 	const browser = mainWindow as AndroidWindow;
+ 	if (!browser.AndroidBridge) return;
+ 	const paths = [...new Set(resources.filter(resource =>
+ 		resource.scheme === Schemas.file || resource.scheme === Schemas.vscodeRemote
+ 	).map(resource => resource.path))];
+-	if (!paths.length) return;
++	if (!paths.length && !publishRoots) return;
+ 	const unavailable = () => new Error(localize('deviceFolderUnavailable', 'The local copy of this device folder is unavailable. Open the folder from the device again.'));
+ 	const claim = (): boolean => {
+ 		const token = browser.__vscodroid?.authToken;
+ 		if (!token) return false;
+-		if (typeof browser.AndroidBridge?.claimWorkspacePaths !== 'function' ||
+-			!browser.AndroidBridge.claimWorkspacePaths(token, JSON.stringify(paths))) {
++		if (paths.length && (typeof browser.AndroidBridge?.claimWorkspacePaths !== 'function' ||
++			!browser.AndroidBridge.claimWorkspacePaths(token, JSON.stringify(paths)))) {
+ 			throw unavailable();
+ 		}
++		if (publishRoots) {
++			const generation = browser.__vscodroid?.pageGeneration;
++			if (typeof generation !== 'number' || typeof browser.AndroidBridge?.publishWorkspaceRoots !== 'function' ||
++				!browser.AndroidBridge.publishWorkspaceRoots(token, generation, JSON.stringify(paths))) throw unavailable();
++		}
+ 		return true;
+ 	};
+ 	if (claim()) return;
+diff --git a/src/vs/workbench/services/configuration/browser/configurationService.ts b/src/vs/workbench/services/configuration/browser/configurationService.ts
+--- a/src/vs/workbench/services/configuration/browser/configurationService.ts
++++ b/src/vs/workbench/services/configuration/browser/configurationService.ts
+@@ -456,6 +456,7 @@
+ 		const workspace = await this.createWorkspace(arg);
+ 		await claimSafMirrorPaths([...workspace.folders.map(folder => folder.uri), ...(workspace.configuration ? [workspace.configuration] : [])]);
+ 		await this.updateWorkspaceAndInitializeConfiguration(workspace, trigger);
++		await claimSafMirrorPaths([...this.workspace.folders.map(folder => folder.uri), ...(this.workspace.configuration ? [this.workspace.configuration] : [])], true);
+ 		this.checkAndMarkWorkspaceComplete(false);
+ 		// Read for the workspace the page opened, so for no other.
+ 		this.initialWorkspaceSettings = undefined;
+@@ -916,6 +917,7 @@
+ 		const changes = this.compareFolders(this.workspace.folders, workspaceFolders);
+ 		if (changes.added.length || changes.removed.length || changes.changed.length) {
+ 			this.workspace.folders = workspaceFolders;
++			await claimSafMirrorPaths([...workspaceFolders.map(folder => folder.uri), ...(this.workspace.configuration ? [this.workspace.configuration] : [])], true);
+ 			const change = await this.onFoldersChanged();
+ 			await this.handleWillChangeWorkspaceFolders(changes, fromCache);
+ 			this.triggerConfigurationChange(change, previous, ConfigurationTarget.WORKSPACE_FOLDER);

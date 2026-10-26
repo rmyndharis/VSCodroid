@@ -53,6 +53,16 @@ class ToolchainCardLayoutTest {
         error("no view with android:id=$id in ${layout.name}")
     }
 
+    @Test
+    fun `manager actions provide at least a 48dp target in both dimensions`() {
+        val button = view("actionButton")
+        for (attribute in listOf("layout_height", "minWidth")) {
+            val value = button.getAttributeNS(androidNs, attribute)
+            assertTrue(value.endsWith("dp") && value.removeSuffix("dp").toFloat() >= 48f,
+                "actionButton $attribute must provide at least 48dp, got $value")
+        }
+    }
+
     /** Whichever of `@+id/x` and `@id/x` the attribute was written as, as `x`. */
     private fun target(element: Element, attribute: String): String? =
         element.getAttributeNS(res, attribute)

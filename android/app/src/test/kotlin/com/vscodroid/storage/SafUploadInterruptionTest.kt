@@ -644,8 +644,8 @@ class SafUploadInterruptionTest {
             val second = SafSyncEngine(context)
             // Exercise the writer independently of the event's per-mirror admission.
             SafSyncEngine::class.java.getDeclaredMethod(
-                "writeLocalToSaf", File::class.java, Uri::class.java,
-            ).apply { isAccessible = true }.invoke(second, file, otherDocument)
+                "writeLocalToSaf", File::class.java, Uri::class.java, File::class.java,
+            ).apply { isAccessible = true }.invoke(second, file, otherDocument, mirror)
 
             assertEquals(2, opens, "both document writes must reach the provider")
             assertEquals(

@@ -66,25 +66,7 @@ function getChannel() {
  */
 const BRIDGE_TIMEOUT_MS = 5000;
 
-/**
- * How long to wait for a command whose cost is the size of the user's disk.
- *
- * Four of the bridge methods walk directory trees before they can answer:
- * `getStorageBreakdown` sizes every component of the app's storage and the whole
- * of `filesDir` on top; `listSafMirrors` walks every copied device folder twice,
- * once to size it and once to ask whether the device folder holds everything in
- * it; `reclaimSafMirror` re-asks that second question and sizes the copy before
- * removing it; and `clearCaches` deletes trees. The app's own extracted tree is
- * around 875 MB before a single project is opened, so on any real install those
- * walks run for far longer than the deadline above, and until this existed they
- * were all given it: the storage screen and the device-folder screen, the only
- * two places in the app that can reclaim disk, answered "Bridge timeout: is the
- * app running on Android?" for every user who had enough files to need them.
- *
- * The number is not a guess about how long a walk takes; it cannot be, since it
- * is the user's disk. It is the point at which "still working" stops being a
- * plausible explanation and a relay that is not answering at all becomes one.
- */
+/** Non-destructive storage calls may traverse the user's complete directory trees. */
 const DISK_WALK_TIMEOUT_MS = 120000;
 
 /**
@@ -110,7 +92,9 @@ function sendBridgeCommand(cmd, extra = {}, timeoutMs = BRIDGE_TIMEOUT_MS) {
         setTimeout(() => {
             if (_pending[id]) {
                 delete _pending[id];
-                reject(new Error('Bridge timeout: is the app running on Android?'));
+                const error = new Error('Bridge timeout: is the app running on Android?');
+                error.name = 'BridgeTimeoutError';
+                reject(error);
             }
         }, timeoutMs);
     });
@@ -118,6 +102,7 @@ function sendBridgeCommand(cmd, extra = {}, timeoutMs = BRIDGE_TIMEOUT_MS) {
 
 /** The terminal the Run button reuses, so that a second run replaces the first. */
 const RUN_TERMINAL = 'VSCodroid Run';
+let actionGeneration = 0;
 
 /** The record of installed on-demand toolchains, from this extension's own directory. */
 const TOOLCHAIN_STATE = ['..', '..', 'toolchains.json'];
@@ -163,6 +148,7 @@ async function installedToolchains(context) {
  * @param {vscode.ExtensionContext} context
  */
 function activate(context) {
+    const activation = ++actionGeneration;
 
     // -- Open Folder from Device --
 
@@ -422,16 +408,9 @@ function activate(context) {
     // -- Device folder storage --
 
     /**
-     * Lists the local copy of every device folder and offers to remove one.
-     *
-     * This is the only place in the app that can name them. Opening a device
-     * folder copies it under the app's own storage, and the app keeps a grant for
-     * the ten most recently opened folders; the eleventh releases its grant, and
-     * with it the entry that carried the folder's name. The copy stays on disk.
-     * The automatic cleanup then declines to remove it whenever it holds a file
-     * the device folder does not, which is the ordinary state of any folder
-     * somebody has run a build or a clone in, so the largest copies are exactly
-     * the ones that are never reclaimed and never named anywhere else.
+     * Lists local copies, including those without a current device-folder permission.
+     * Ordinary copies stay on disk until explicitly removed. Each removal warns about
+     * potentially unsynced files and obtains a separate native confirmation.
      */
     const manageDeviceFoldersCmd = vscode.commands.registerCommand(
         'vscodroid.manageDeviceFolders',
@@ -473,9 +452,7 @@ function activate(context) {
                     description:
                         formatBytes(Number(m.bytes) || 0) +
                         (m.granted ? '' : ' · no longer accessible'),
-                    detail: m.reclaimable
-                        ? 'Every file here is also in the device folder'
-                        : 'Holds files that are NOT in the device folder'
+                    detail: 'May hold files that have not reached the device folder'
                 }));
 
                 const picked = await vscode.window.showQuickPick(items, {
@@ -486,18 +463,10 @@ function activate(context) {
                 const m = picked.mirror;
                 const name = m.name || 'this folder';
                 const size = formatBytes(Number(m.bytes) || 0);
-                // Two different warnings, because the two cases cost the user
-                // different things and a single wording would have to be wrong
-                // about one of them. Modal in both, since neither is undoable.
-                const message = m.reclaimable
-                    ? `Remove VSCodroid's local copy of ${name} and free ${size}? ` +
-                      'The device folder itself is not touched, and every file in ' +
-                      'the copy is already there.'
-                    : `Remove VSCodroid's local copy of ${name} and free ${size}? ` +
-                      'THIS DELETES FILES. Some files in the copy are not in the ' +
-                      'device folder, including anything under node_modules, .git, ' +
-                      '__pycache__ or .gradle, and they exist nowhere else. This ' +
-                      'cannot be undone.';
+                const message = `Remove VSCodroid's local copy of ${name} and free ${size}? ` +
+                    'THIS DELETES FILES. The copy may hold files that have not reached ' +
+                    'the device folder. Stop terminals and other work using it, and ' +
+                    'save anything you need elsewhere before continuing. This cannot be undone.';
                 const confirm = await vscode.window.showWarningMessage(
                     message, { modal: true }, 'Remove'
                 );
@@ -505,12 +474,19 @@ function activate(context) {
 
                 await sendBridgeCommand('reclaimSafMirror', {
                     hash: m.hash,
-                    force: !m.reclaimable
+                    force: true
                 }, DISK_WALK_TIMEOUT_MS);
                 // Straight back to the list: the usual reason for opening this is
                 // to free space, and one folder is rarely the whole answer.
                 vscode.commands.executeCommand('vscodroid.manageDeviceFolders');
             } catch (/** @type {*} */ err) {
+                if (err.name === 'BridgeTimeoutError') {
+                    vscode.window.showWarningMessage(
+                        'Android has not reported the removal result yet. The request may ' +
+                        'still finish. Check Manage Device Folder Storage before trying again.'
+                    );
+                    return;
+                }
                 // The refusal reasons arrive here, and each names something that
                 // has to change before the removal can happen: a folder that is
                 // open, one still syncing, or one this session has had open,
@@ -806,26 +782,41 @@ function activate(context) {
     // under the hash would stay there, out of sight. So the move is offered, and
     // made once nothing unsaved is held and no terminal is open; the editors
     // that were open are opened again under the new path.
+    const copyAtActivation = copyOpenByHash();
+    const ownsCarriedEditors = (/** @type {{ id?: string }} */ carried) => {
+        const current = /** @type {{ id?: string } | undefined} */ (context.globalState.get(CARRIED_EDITORS));
+        return carried.id ? current?.id === carried.id : JSON.stringify(current) === JSON.stringify(carried);
+    };
+    const forgetCarriedEditors = (/** @type {{ id?: string }} */ carried) => {
+        if (ownsCarriedEditors(carried)) return context.globalState.update(CARRIED_EDITORS, undefined);
+        return Promise.resolve();
+    };
     const offerNamedPath = async () => {
-        const open = copyOpenByHash();
+        if (activation !== actionGeneration) return;
+        const open = copyAtActivation;
         if (!open) return;
+        const sameWorkspace = () => activation === actionGeneration && sameUri(copyOpenByHash()?.uri, open.uri);
+        if (!sameWorkspace()) return;
         const hash = open.copy.slice(open.copy.lastIndexOf('/') + 1);
         const declined = /** @type {string[]} */ (context.globalState.get(DECLINED_NAMED_PATH, []));
         if (declined.includes(hash)) return;
         const named = await namedPathOf(open);
-        if (!named) return;
+        if (!sameWorkspace() || !named) return;
         const name = named.slice(named.lastIndexOf('/') + 1);
         const action = await vscode.window.showInformationMessage(
             `This device folder is shown as ${hash}, the name of its copy in VSCodroid. ` +
                 `Reopen it as ${name}?`,
             REOPEN, DONT_ASK_AGAIN
         );
+        if (!sameWorkspace()) return;
         if (action === DONT_ASK_AGAIN) {
-            context.globalState.update(DECLINED_NAMED_PATH, [...declined, hash]);
+            await context.globalState.update(DECLINED_NAMED_PATH, [...declined, hash]);
             return;
         }
         if (action !== REOPEN) return;
-        if (moveWouldLose() || (await holdsBackups(context))) {
+        const hasBackups = await holdsBackups(context);
+        if (!sameWorkspace()) return;
+        if (moveWouldLose() || hasBackups) {
             vscode.window.showWarningMessage(
                 `Save or close the files with unsaved changes and close the terminals first, ` +
                     `or they stay behind with ${hash}. The folder offers this again the next ` +
@@ -834,20 +825,38 @@ function activate(context) {
             return;
         }
         const target = open.uri.with({ path: open.file ? `${named}/${open.file}` : named });
-        await context.globalState.update(CARRIED_EDITORS, {
+        const carried = {
+            id: `${Date.now()}:${Math.random()}`,
             to: target.path, root: named, files: editorsUnder(open.copy), at: Date.now()
-        });
-        await vscode.commands.executeCommand('vscode.openFolder', target, { forceReuseWindow: true });
+        };
+        let opened = false;
+        try {
+            await context.globalState.update(CARRIED_EDITORS, carried);
+            if (!sameWorkspace() || !ownsCarriedEditors(carried)) return;
+            const backupsNow = await holdsBackups(context);
+            if (!sameWorkspace() || !ownsCarriedEditors(carried) || moveWouldLose() || backupsNow) return;
+            await vscode.commands.executeCommand('vscode.openFolder', target, { forceReuseWindow: true });
+            opened = true;
+        } finally {
+            if (!opened) await forgetCarriedEditors(carried);
+        }
     };
     // The page the move lands on opens the editors carried to it.
     const reopenCarriedEditors = async () => {
+        if (activation !== actionGeneration) return;
         const carried = context.globalState.get(CARRIED_EDITORS);
         if (!carried) return;
-        await context.globalState.update(CARRIED_EDITORS, undefined);
-        const here = vscode.workspace.workspaceFile ||
+        if (!(Date.now() - carried.at < CARRY_MS)) {
+            await forgetCarriedEditors(carried);
+            return;
+        }
+        const currentWorkspace = () => vscode.workspace.workspaceFile ||
             ((vscode.workspace.workspaceFolders || [])[0] || {}).uri;
-        if (!here || here.path !== carried.to || !(Date.now() - carried.at < CARRY_MS)) return;
+        const here = currentWorkspace();
+        if (!here || here.path !== carried.to) return;
+        await forgetCarriedEditors(carried);
         for (const file of carried.files) {
+            if (activation !== actionGeneration || !sameUri(currentWorkspace(), here)) return;
             try {
                 await vscode.window.showTextDocument(
                     here.with({ path: `${carried.root}/${file}` }), { preview: false }
@@ -880,14 +889,18 @@ function activate(context) {
             return;
         }
 
+        const generation = ++actionGeneration;
+
         // Unknown (undefined) counts as installed: a record that cannot be read is no
         // reason to refuse, and the shell says plainly when a program is missing.
         const installed = runner.toolchain && await installedToolchains(context);
+        if (generation !== actionGeneration) return;
         if (installed && !installed.includes(runner.toolchain)) {
             const manage = 'Manage Toolchains';
             const choice = await vscode.window.showInformationMessage(
                 `${runner.label} is not installed. Add it from the toolchains screen.`, manage
             );
+            if (generation !== actionGeneration) return;
             if (choice === manage) {
                 await vscode.commands.executeCommand('vscodroid.manageToolchains');
             }
@@ -897,6 +910,7 @@ function activate(context) {
         // save() answers false for a document that was not dirty, so the outcome is read
         // from the document: a failed save must not run the older file on disk.
         await document.save();
+        if (generation !== actionGeneration) return;
         if (document.isDirty) {
             vscode.window.showErrorMessage('Could not save the file, so it was not run.');
             return;
@@ -934,6 +948,7 @@ function activate(context) {
 }
 
 function deactivate() {
+    actionGeneration++;
     if (_channel) {
         _channel.close();
         _channel = undefined;
@@ -1061,8 +1076,8 @@ const DECLINED_NAMED_PATH = 'namedPath.declined';
 
 /**
  * The globalState key carrying the open editors across that move:
- * `{ to, root, files, at }`, the path moved to, the named path the files are
- * relative to, the files, the active one last, and when.
+ * `{ id, to, root, files, at }`: record token, destination, named root, relative
+ * editor paths (active last), and publication time.
  */
 const CARRIED_EDITORS = 'namedPath.carried';
 
@@ -1071,6 +1086,12 @@ const CARRY_MS = 120000;
 
 /** Where the copies' named paths live under saf-mirrors: SafStorageManager.NAMED_DIR. */
 const NAMED_DIR = 'by-name';
+
+/** Whether two workspace URIs still name the same page. */
+function sameUri(/** @type {*} */ left, /** @type {*} */ right) {
+    return !!left && !!right && left.scheme === right.scheme && left.authority === right.authority &&
+        left.path === right.path && left.query === right.query && left.fragment === right.fragment;
+}
 
 /**
  * The device folder copy this page has open by its hash: the folder itself, or

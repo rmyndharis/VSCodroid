@@ -1,0 +1,235 @@
+Retain current configuration and close canceled host startup
+
+Keep accepted configuration generations monotonic and stop extension-host
+startup after disposal, including pipe ownership before worker creation.
+
+diff --git a/src/vs/workbench/services/configuration/browser/configuration.ts b/src/vs/workbench/services/configuration/browser/configuration.ts
+--- a/src/vs/workbench/services/configuration/browser/configuration.ts
++++ b/src/vs/workbench/services/configuration/browser/configuration.ts
+@@ -650,6 +650,7 @@
+ 	public readonly onDidUpdateConfiguration = this._onDidUpdateConfiguration.event;
+ 
+ 	private _initialized: boolean = false;
++	private initializationGeneration = 0;
+ 	get initialized(): boolean { return this._initialized; }
+ 	constructor(
+ 		private readonly configurationCache: IConfigurationCache,
+@@ -663,13 +664,14 @@
+ 	}
+ 
+ 	async initialize(workspaceIdentifier: IWorkspaceIdentifier, workspaceTrusted: boolean, initialContents?: string | null): Promise<void> {
++		const generation = ++this.initializationGeneration;
+ 		this._workspaceIdentifier = workspaceIdentifier;
+ 		this._isWorkspaceTrusted = workspaceTrusted;
+ 		if (!this._initialized) {
+ 			if (this.configurationCache.needsCaching(this._workspaceIdentifier.configPath)) {
+ 				this._workspaceConfiguration = this._cachedConfiguration;
+ 				this._cachedConfiguration.initialContents = initialContents;
+-				this.waitAndInitialize(this._workspaceIdentifier);
++				this.waitAndInitialize(this._workspaceIdentifier, generation);
+ 			} else {
+ 				this.doInitialize(new FileServiceBasedWorkspaceConfiguration(this.fileService, this.uriIdentityService, this.logService));
+ 			}
+@@ -717,11 +719,16 @@
+ 		return this._workspaceConfiguration.getRestrictedSettings();
+ 	}
+ 
+-	private async waitAndInitialize(workspaceIdentifier: IWorkspaceIdentifier): Promise<void> {
++	private async waitAndInitialize(workspaceIdentifier: IWorkspaceIdentifier, generation: number): Promise<void> {
+ 		await whenProviderRegistered(workspaceIdentifier.configPath, this.fileService);
++		if (generation !== this.initializationGeneration) return;
+ 		if (!(this._workspaceConfiguration instanceof FileServiceBasedWorkspaceConfiguration)) {
+ 			const fileServiceBasedWorkspaceConfiguration = this._register(new FileServiceBasedWorkspaceConfiguration(this.fileService, this.uriIdentityService, this.logService));
+ 			await fileServiceBasedWorkspaceConfiguration.load(workspaceIdentifier, { scopes: WORKSPACE_SCOPES, skipRestricted: this.isUntrusted() });
++			if (generation !== this.initializationGeneration) {
++				fileServiceBasedWorkspaceConfiguration.dispose();
++				return;
++			}
+ 			this.doInitialize(fileServiceBasedWorkspaceConfiguration);
+ 			this.onDidWorkspaceConfigurationChange(false, true);
+ 		}
+@@ -1032,6 +1039,8 @@
+ 
+ 	private folderConfiguration: CachedFolderConfiguration | FileServiceBasedConfiguration;
+ 	private loadedFolderConfiguration: CachedFolderConfiguration | FileServiceBasedConfiguration | undefined;
++	private configurationLoadGeneration = 0;
++	private loadedConfigurationGeneration = 0;
+ 	private readonly scopes: ConfigurationScope[];
+ 	private readonly configurationFolder: URI;
+ 	private cachedFolderConfiguration: CachedFolderConfiguration;
+@@ -1069,7 +1078,12 @@
+ 
+ 	loadConfiguration(): Promise<ConfigurationModel> {
+ 		const folderConfiguration = this.folderConfiguration;
++		const generation = ++this.configurationLoadGeneration;
+ 		return folderConfiguration.loadConfiguration().then(configurationModel => {
++			if (generation < this.loadedConfigurationGeneration) {
++				return this.reparse();
++			}
++			this.loadedConfigurationGeneration = generation;
+ 			this.loadedFolderConfiguration = folderConfiguration;
+ 			return configurationModel;
+ 		});
+diff --git a/src/vs/server/node/extensionHostConnection.ts b/src/vs/server/node/extensionHostConnection.ts
+--- a/src/vs/server/node/extensionHostConnection.ts
++++ b/src/vs/server/node/extensionHostConnection.ts
+@@ -453,6 +453,7 @@
+ 	}
+ 
+ 	public async start(startParams: IRemoteExtensionHostStartParams): Promise<void> {
++		if (this._disposed) return;
+ 		try {
+ 			let execArgv: string[] = process.execArgv ? process.execArgv.filter(a => !/^--inspect(-brk)?=/.test(a)) : [];
+ 			// eslint-disable-next-line local/code-no-any-casts, @typescript-eslint/no-explicit-any
+@@ -466,6 +467,7 @@
+ 			this._log(`Starting extension host process...`);
+ 
+ 			const env = await buildUserEnvironment(startParams.env, true, startParams.language, this._environmentService, this._logService, this._configurationService);
++			if (this._disposed) return;
+ 			removeDangerousEnvVariables(env);
+ 
+ 			let extHostNamedPipeServer: net.Server | null;
+@@ -475,6 +477,11 @@
+ 				extHostNamedPipeServer = null;
+ 			} else {
+ 				const { namedPipeServer, pipeName } = await this._listenOnPipe();
++				if (this._disposed) {
++					namedPipeServer.close();
++					return;
++				}
++				this._extHostNamedPipeServer = namedPipeServer;
+ 				writeExtHostConnection(new IPCExtHostConnection(pipeName), env);
+ 				extHostNamedPipeServer = namedPipeServer;
+ 			}
+@@ -529,7 +536,6 @@
+ 				// re-dials this pipe every time a client goes away, which is how it
+ 				// survives a reconnection without a socket handle ever crossing the
+ 				// worker boundary.
+-				this._extHostNamedPipeServer = extHostNamedPipeServer;
+ 				extHostNamedPipeServer.on('connection', (socket) => {
+ 					this._acceptExtHostPipe(socket);
+ 				});
+diff --git a/src/vs/workbench/services/configuration/test/browser/configurationStartup.test.ts b/src/vs/workbench/services/configuration/test/browser/configurationStartup.test.ts
+new file mode 100644
+--- /dev/null
++++ b/src/vs/workbench/services/configuration/test/browser/configurationStartup.test.ts
+@@ -0,0 +1,119 @@
++/*---------------------------------------------------------------------------------------------
++ * Copyright (c) Microsoft Corporation. All rights reserved.
++ * Licensed under the MIT License. See License.txt in the project root for license information.
++ *--------------------------------------------------------------------------------------------*/
++
++import assert from 'assert';
++import * as sinon from 'sinon';
++import { DeferredPromise } from '../../../../../base/common/async.js';
++import { VSBuffer } from '../../../../../base/common/buffer.js';
++import { Event } from '../../../../../base/common/event.js';
++import { joinPath } from '../../../../../base/common/resources.js';
++import { URI } from '../../../../../base/common/uri.js';
++import { ensureNoDisposablesAreLeakedInTestSuite } from '../../../../../base/test/common/utils.js';
++import { ConfigurationScope, Extensions, IConfigurationRegistry } from '../../../../../platform/configuration/common/configurationRegistry.js';
++import { FileService } from '../../../../../platform/files/common/fileService.js';
++import { InMemoryFileSystemProvider } from '../../../../../platform/files/common/inMemoryFilesystemProvider.js';
++import { NullLogService } from '../../../../../platform/log/common/log.js';
++import { Registry } from '../../../../../platform/registry/common/platform.js';
++import { UriIdentityService } from '../../../../../platform/uriIdentity/common/uriIdentityService.js';
++import { IWorkspaceIdentifier, WorkbenchState, WorkspaceFolder } from '../../../../../platform/workspace/common/workspace.js';
++import { FolderConfiguration, WorkspaceConfiguration } from '../../browser/configuration.js';
++import { IConfigurationCache } from '../../common/configuration.js';
++
++suite('Remote configuration completion order', () => {
++    const store = ensureNoDisposablesAreLeakedInTestSuite();
++    const registry = Registry.as<IConfigurationRegistry>(Extensions.Configuration);
++    const probe = 'test.remoteCompletion';
++    setup(() => registry.registerConfiguration({ id: probe, properties: {
++        [probe]: { type: 'string', scope: ConfigurationScope.RESOURCE, default: 'default' }
++    } }));
++    teardown(() => registry.deregisterConfigurations(registry.getConfigurations().filter(c => c.id === probe)));
++
++    async function files() {
++        const log = new NullLogService();
++        const fileService = store.add(new FileService(log));
++        const provider = store.add(new InMemoryFileSystemProvider());
++        const scheme = 'vscode-remote';
++        const root = URI.from({ scheme, authority: 'test', path: '/project' });
++        const registration = fileService.registerProvider(scheme, provider);
++        await fileService.createFolder(joinPath(root, '.vscode'));
++        await fileService.writeFile(joinPath(root, '.vscode/settings.json'), VSBuffer.fromString(JSON.stringify({ [probe]: 'file' })));
++        for (const name of ['a', 'b']) {
++            await fileService.writeFile(joinPath(root, name + '.code-workspace'), VSBuffer.fromString(JSON.stringify({ folders: [{ path: name }], settings: { [probe]: name } })));
++        }
++        registration.dispose();
++        const identity = store.add(new UriIdentityService(fileService));
++        return { log, fileService, provider, root, identity, scheme };
++    }
++
++    for (const initial of [undefined, null, JSON.stringify({ [probe]: 'page' })]) {
++        test('a late folder cache cannot replace an accepted file model: ' + String(initial), async () => {
++            const f = await files();
++            const cached = new DeferredPromise<string>();
++            const cache: IConfigurationCache = { needsCaching: () => true, read: () => cached.p, write: async () => {}, remove: async () => {} };
++            const folder = new WorkspaceFolder({ uri: f.root, name: 'project', index: 0 });
++            const subject = store.add(new FolderConfiguration(true, folder, '.vscode', WorkbenchState.FOLDER, true,
++                f.fileService, f.identity, f.log, cache, initial));
++            const old = subject.loadConfiguration();
++            const changed = Event.toPromise(subject.onDidChange);
++            store.add(f.fileService.registerProvider(f.scheme, f.provider));
++            await changed;
++            const current = await subject.loadConfiguration();
++            assert.strictEqual(current.getValue(probe), 'file');
++            await cached.complete(JSON.stringify({ content: { settings: JSON.stringify({ [probe]: 'cache' }) } }));
++            assert.strictEqual((await old).getValue(probe), 'file', 'the older caller received a stale model');
++            assert.strictEqual(subject.reparse().getValue(probe), 'file', 'reparse selected the old backing object');
++        });
++    }
++
++    test('a folder cache is usable before a pending provider read completes', async () => {
++        const f = await files();
++        const cache: IConfigurationCache = { needsCaching: () => true,
++            read: async () => JSON.stringify({ content: { settings: JSON.stringify({ [probe]: 'cache' }) } }),
++            write: async () => {}, remove: async () => {} };
++        const subject = store.add(new FolderConfiguration(true, new WorkspaceFolder({ uri: f.root, name: 'project', index: 0 }),
++            '.vscode', WorkbenchState.FOLDER, true, f.fileService, f.identity, f.log, cache));
++        assert.strictEqual((await subject.loadConfiguration()).getValue(probe), 'cache');
++        assert.strictEqual(subject.reparse().getValue(probe), 'cache');
++        const changed = Event.toPromise(subject.onDidChange);
++        store.add(f.fileService.registerProvider(f.scheme, f.provider));
++        await changed;
++        assert.strictEqual((await subject.loadConfiguration()).getValue(probe), 'file');
++    });
++
++    for (const emptyB of [false, true]) {
++        test('an older provider initialization cannot install after another workspace: empty=' + emptyB, async () => {
++            const f = await files();
++            const a: IWorkspaceIdentifier = { id: 'a', configPath: joinPath(f.root, 'a.code-workspace') };
++            const b: IWorkspaceIdentifier = { id: 'b', configPath: joinPath(f.root, 'b.code-workspace') };
++            const cache: IConfigurationCache = { needsCaching: () => true,
++                read: async key => JSON.stringify({ content: key.key === 'b' && emptyB ? '' : JSON.stringify({ folders: [{ path: key.key }], settings: { [probe]: 'cached-' + key.key } }) }),
++                write: async () => {}, remove: async () => {} };
++            const subject = store.add(new WorkspaceConfiguration(cache, f.fileService, f.identity, f.log));
++            const waiting = sinon.spy(subject as unknown as { waitAndInitialize(identifier: IWorkspaceIdentifier, generation?: number): Promise<void> }, 'waitAndInitialize');
++            const entered = new DeferredPromise<void>(), release = new DeferredPromise<void>();
++            const realRead = f.provider.readFile.bind(f.provider);
++            const reads = sinon.stub(f.provider, 'readFile').callsFake(async resource => {
++                if (resource.toString() === a.configPath.toString()) { await entered.complete(); await release.p; }
++                return realRead(resource);
++            });
++            try {
++                await subject.initialize(a, true);
++                store.add(f.fileService.registerProvider(f.scheme, f.provider));
++                await entered.p;
++                const bInstalled = Event.toPromise(Event.filter(subject.onDidUpdateConfiguration, () => subject.getConfiguration().getValue(probe) === 'b'));
++                await subject.initialize(b, true);
++                await bInstalled;
++                assert.strictEqual(subject.getConfiguration().getValue(probe), 'b');
++                const updates: string[] = [];
++                store.add(subject.onDidUpdateConfiguration(() => updates.push(subject.getConfiguration().getValue(probe)!)));
++                await release.complete();
++                await waiting.returnValues[0];
++                assert.strictEqual(subject.getConfiguration().getValue(probe), 'b');
++                assert.deepStrictEqual(subject.getFolders(), [{ path: 'b' }]);
++                assert.deepStrictEqual(updates, [], 'a stale provider completion emitted a configuration update');
++            } finally { if (!release.isSettled) await release.complete(); reads.restore(); waiting.restore(); }
++        });
++    }
++});

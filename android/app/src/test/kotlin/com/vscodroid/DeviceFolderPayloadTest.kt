@@ -13,13 +13,9 @@ import java.io.File
  * nothing a compiler or a lint pass can check. Measured before this file
  * existed: renaming a key in the producer left the whole unit suite green.
  *
- * What that costs is not cosmetic. The quick pick's `detail` and its
- * confirmation both branch on `reclaimable`, and the removal it sends carries
- * `force: !m.reclaimable`. A key the consumer cannot find is `undefined`, so
- * every copy would be described as holding files the device folder does not,
- * and every confirmed removal would go out with `force` set, which is precisely
- * the flag that skips the at-removal-time re-check `SafStorageManager` performs
- * because a write-back can strand a file while the confirmation is on screen.
+ * A missing identity or display field can describe the wrong folder or send a
+ * removal without its hash. Every removal requires confirmation; the compatibility
+ * field `reclaimable` no longer decides whether consent is needed.
  *
  * The producer is allowed to send more than is read: `lastOpened` is sent and
  * nothing uses it today. The direction that costs something is a key the
@@ -90,21 +86,18 @@ class DeviceFolderPayloadTest {
         // Controls, both directions. A regex that matched nothing would make the
         // subset check below pass by comparing two empty sets, and this file
         // would go on reporting green over a payload nobody was reading.
-        assertTrue(sent.size >= 5) {
-            "only found ${sent.size} key(s) in deviceFolderCopiesAsJson ($sent); the " +
-                "producer scan is not reading the payload any more"
+        val required = setOf("hash", "name", "bytes", "granted")
+        assertTrue(sent.containsAll(required)) {
+            "required payload fields are missing from deviceFolderCopiesAsJson: ${required - sent}"
         }
-        assertTrue(read.size >= 5) {
-            "only found ${read.size} field read(s) in the bridge extension ($read); the " +
-                "consumer scan is not reading manageDeviceFolders any more"
+        assertTrue(read.containsAll(required)) {
+            "required field reads are missing from manageDeviceFolders: ${required - read}"
         }
 
         assertEquals(
             emptySet<String>(), read - sent,
             "the storage screen reads fields the app does not send. Each one arrives as " +
-                "undefined: `reclaimable` missing describes every copy as holding files " +
-                "the device folder does not and sends every removal with force set, " +
-                "which skips the check that keeps a stranded file from being deleted. " +
+                "undefined and cannot identify or describe the selected copy reliably. " +
                 "Producer: ${producerSource.path}; consumer: ${consumerSource().path}.",
         )
     }

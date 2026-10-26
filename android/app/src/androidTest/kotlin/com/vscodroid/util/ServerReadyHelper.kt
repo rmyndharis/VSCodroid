@@ -8,7 +8,7 @@ import java.net.URL
  * Shared helper for instrumented tests that need the VS Code server to be running.
  *
  * Provides:
- * - [markSetupComplete] writes the setup_version and setup_version_code prefs so
+ * - [markSetupComplete] writes the setup version and package timestamp prefs so
  *   SplashActivity skips extraction.
  * - [clearSetupState] removes them again, plus the toolchain picker flag.
  * - [healthCheck] asks the server for /version on a port and says whether it answered.
@@ -38,6 +38,7 @@ object ServerReadyHelper {
      * two, and that is exactly what a clean instrumented run starts from.
      */
     private const val KEY_SETUP_VERSION_CODE = "setup_version_code"
+    private const val KEY_SETUP_PACKAGE_UPDATE_TIME = "setup_package_update_time"
     private const val KEY_PICKER_SHOWN = "toolchain_picker_shown"
 
     /**
@@ -45,12 +46,12 @@ object ServerReadyHelper {
      * first-run setup already done and jumps straight to [com.vscodroid.MainActivity].
      *
      * Writes to both prefs files to match how the production code uses them:
-     * - `vscodroid_setup` for `setup_version` and `setup_version_code`
-     *   (both read by [com.vscodroid.setup.FirstRunSetup])
+     * - `vscodroid_setup` for the version and package timestamp identity
+     *   (read by [com.vscodroid.setup.FirstRunSetup])
      * - `vscodroid` for `toolchain_picker_shown` (read by [com.vscodroid.SplashActivity])
      *
-     * Both version keys, because the production test is an OR over the pair. See
-     * [KEY_SETUP_VERSION_CODE].
+     * All identity fields match a completed setup so this helper also skips the
+     * one-time timestamp initialization required for legacy completion records.
      *
      * Call this in a @Before method for tests that only need MainActivity.
      */
@@ -66,6 +67,7 @@ object ServerReadyHelper {
             // Read back with getInt, and narrowed the same way FirstRunSetup
             // narrows it, so the two comparands are the same number.
             .putInt(KEY_SETUP_VERSION_CODE, info?.longVersionCode?.toInt() ?: 0)
+            .putLong(KEY_SETUP_PACKAGE_UPDATE_TIME, info?.lastUpdateTime ?: 0)
             .commit()
         context.getSharedPreferences(APP_PREFS, Context.MODE_PRIVATE)
             .edit()
@@ -74,19 +76,18 @@ object ServerReadyHelper {
     }
 
     /**
-     * Clears the setup_version and setup_version_code prefs so the next
+     * Clears the setup version and package timestamp prefs so the next
      * SplashActivity launch runs first-run extraction. Useful for SplashActivity
      * tests.
      *
-     * Removing only one of the pair would still force extraction, because the
-     * staleness test is an OR, but it would leave the other behind for the next
-     * test in the same run to read.
+     * Clear the entire identity so later tests cannot inherit a partial record.
      */
     fun clearSetupState(context: Context) {
         context.getSharedPreferences(SETUP_PREFS, Context.MODE_PRIVATE)
             .edit()
             .remove(KEY_SETUP_VERSION)
             .remove(KEY_SETUP_VERSION_CODE)
+            .remove(KEY_SETUP_PACKAGE_UPDATE_TIME)
             .commit()
         context.getSharedPreferences(APP_PREFS, Context.MODE_PRIVATE)
             .edit()

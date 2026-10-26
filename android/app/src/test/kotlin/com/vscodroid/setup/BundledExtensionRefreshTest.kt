@@ -382,4 +382,65 @@ class BundledExtensionRefreshTest {
             "extraction deleted a file it does not ship; it is documented as a merge",
         )
     }
+
+    @Test
+    fun `a listed fetched extension asset that cannot be opened remains retryable`() {
+        val fetched = "sample.language-1.0.0"
+        every { assets.list("extensions") } returns arrayOf(fetched)
+        every { assets.list("extensions/$fetched") } returns arrayOf("extension.js", "package.json")
+        every { assets.list("extensions/$fetched/extension.js") } returns emptyArray()
+        every { assets.list("extensions/$fetched/package.json") } returns emptyArray()
+        every { assets.open("extensions/$fetched/extension.js") } throws IOException("unreadable listed asset")
+        every { assets.open("extensions/$fetched/package.json") } answers {
+            ByteArrayInputStream("""{"publisher":"sample","name":"language","version":"1.0.0"}""".toByteArray())
+        }
+
+        val failure = assertThrows(InvocationTargetException::class.java) { extractBundledExtensions() }
+
+        assertTrue(failure.cause is IOException)
+        val dir = File(extensionsDir, fetched)
+        assertTrue(!dir.exists() || unpackWasAbandoned(dir))
+        every { assets.open("extensions/$fetched/extension.js") } answers {
+            ByteArrayInputStream(shippedSource.toByteArray())
+        }
+        extractBundledExtensions()
+        assertEquals(shippedSource, File(dir, "extension.js").readText())
+        assertFalse(unpackWasAbandoned(dir))
+    }
+
+    @Test
+    fun `a kept own entry gains builtin metadata while keeping profile metadata`() {
+        installed.mkdirs()
+        File(installed, "extension.js").writeText(installedSource)
+        File(installed, "package.json").writeText(shippedManifest)
+        val entry = org.json.JSONObject()
+            .put("identifier", org.json.JSONObject().put("id", "vscodroid.vscodroid-process-monitor"))
+            .put("version", "1.0.0")
+            .put("relativeLocation", dirName)
+            .put("location", org.json.JSONObject().put("path", installed.absolutePath).put("scheme", "file"))
+            .put("metadata", org.json.JSONObject().put("source", "bundled").put("pinned", true))
+        val manifest = File(extensionsDir, "extensions.json")
+        manifest.writeText(org.json.JSONArray().put(entry).toString())
+
+        extractBundledExtensions()
+
+        val kept = org.json.JSONArray(manifest.readText()).getJSONObject(0)
+        assertTrue(kept.getJSONObject("metadata").optBoolean("isBuiltin", false))
+        assertTrue(kept.getJSONObject("metadata").getBoolean("pinned"))
+    }
+
+    @Test
+    fun `an extension named by the bundle listing cannot be treated as an absent root`() {
+        val fetched = "sample.language-1.0.0"
+        every { assets.list("extensions") } returns arrayOf(fetched)
+        every { assets.list("extensions/$fetched") } returns emptyArray()
+        every { assets.open("extensions/$fetched") } throws IOException("unreadable listed root")
+
+        val failure = assertThrows(InvocationTargetException::class.java) { extractBundledExtensions() }
+
+        assertTrue(failure.cause is IOException)
+        val dir = File(extensionsDir, fetched)
+        assertTrue(!dir.exists() || unpackWasAbandoned(dir))
+    }
+
 }

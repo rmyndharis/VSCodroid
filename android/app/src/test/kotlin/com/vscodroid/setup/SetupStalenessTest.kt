@@ -51,4 +51,22 @@ class SetupStalenessTest {
     fun `a downgrade is an upgrade, because the tree still has to change`() {
         assertTrue(setupIsStale("1.1.0", 12, "1.0.0", 11))
     }
+
+    @Test
+    fun `a package replacement is stale at unchanged version labels`() {
+        assertTrue(setupIsStale("1.1.0", 12, "1.1.0", 12, 1_000, 2_000))
+        assertFalse(setupIsStale("1.1.0", 12, "1.1.0", 12, 2_000, 2_000))
+    }
+
+    @Test
+    fun `a known package timestamp initializes a legacy completion record`() {
+        assertTrue(setupIsStale("1.1.0", 12, "1.1.0", 12, 0, 2_000))
+    }
+
+    @Test
+    fun `an unknown current package timestamp retains the version decision`() {
+        assertFalse(setupIsStale("1.1.0", 12, "1.1.0", 12, 2_000, 0))
+        assertFalse(setupIsStale("1.1.0", 12, "1.1.0", 12, 0, 0))
+        assertTrue(setupIsStale("1.1.0", 11, "1.1.0", 12, 0, 0))
+    }
 }

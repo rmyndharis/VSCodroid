@@ -436,7 +436,7 @@ class ToolchainDigestInstallTest {
             .newInstance()
 
     private fun manager() = ToolchainManager(context).apply {
-        onStateChange = { pack, status, pct, why ->
+        onStateChange = { pack, status, pct, why, _ ->
             if (why != null) reasons.add(why)
             events.add(Triple(pack, status, pct))
             if (status == AssetPackStatus.COMPLETED || status == AssetPackStatus.FAILED) {
@@ -1089,7 +1089,7 @@ class ToolchainDigestInstallTest {
         publishManifest("$zipDigest  toolchain_test.zip\n")
 
         val manager = ToolchainManager(context)
-        manager.onStateChange = { pack, status, percent, why ->
+        manager.onStateChange = { pack, status, percent, why, _ ->
             if (why != null) reasons.add(why)
             events.add(Triple(pack, status, percent))
             // The user's own tap, through the same call the Cancel button makes.

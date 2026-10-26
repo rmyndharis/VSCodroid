@@ -89,6 +89,7 @@ class BridgeTokenUniformityTest {
         // being touched at all under a rejected token is the method having acted.
         val onAsyncAnswer: (String, Boolean, String) -> Unit = mockk(relaxed = true)
         val diskWork: Executor = mockk(relaxed = true)
+        val onWorkspaceRoots: (Long, List<String>) -> Boolean = mockk(relaxed = true)
 
         val bridge = AndroidBridge(
             context = context,
@@ -108,6 +109,7 @@ class BridgeTokenUniformityTest {
             onReclaimMirror = onReclaimMirror,
             onAsyncAnswer = onAsyncAnswer,
             diskWork = diskWork,
+            onWorkspaceRoots = onWorkspaceRoots,
         )
 
         /** Everything the bridge can reach except the validator it is allowed to consult. */
@@ -115,7 +117,7 @@ class BridgeTokenUniformityTest {
             context, clipboard, onBackPressed, onMinimize,
             onOpenFolderPicker, onOpenRecentFolder, onShowAbout, onToggleExtraKeyRow, safManager,
             onDownloadNamed, onDownloadChunk, onDownloadComplete,
-            onListMirrors, onReclaimMirror, onAsyncAnswer, diskWork,
+            onListMirrors, onReclaimMirror, onAsyncAnswer, diskWork, onWorkspaceRoots,
         )
 
         init {
@@ -149,7 +151,7 @@ class BridgeTokenUniformityTest {
         every { Logger.d(any(), any()) } just Runs
         every { Logger.e(any(), any(), any()) } just Runs
 
-        // Three methods do their work through these singletons rather than through anything
+        // Some methods do their work through these singletons rather than through anything
         // injected, so a bridge that ran on past a rejected token would touch neither the
         // context nor a collaborator and would look identical to one that refused. They are
         // stubbed so the real implementations cannot run, but the detection below is not

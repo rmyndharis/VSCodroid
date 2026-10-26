@@ -273,12 +273,9 @@
          from a list this app built a moment earlier, so this means the folder was
          removed or re-synced in between rather than that they typed something wrong. -->
     <string name="saf_mirror_unknown">Il n\'y a aucune copie locale de ce dossier à supprimer.</string>
-    <!-- The reclaim gate declining. Worded as what is at stake rather than as a
-         refusal, because the user's next step is to confirm and remove it anyway: the
-         mirrors that hold unsynced files are exactly the ones worth the disk, since a
-         folder gets large by being worked in and working in one creates files the sync
-         excludes by construction. -->
-    <string name="saf_mirror_not_a_copy">Certains fichiers de ce dossier ne sont pas dans le dossier de l\'appareil. Supprimer la copie locale les supprimerait.</string>
+    <!-- Native confirmation and unconfirmed-removal refusal. A snapshot cannot
+         exclude files added directly after the check. -->
+    <string name="saf_mirror_not_a_copy">Cette copie locale peut contenir des fichiers qui n\'ont jamais été transférés dans le dossier de l\'appareil. Enregistrez les fichiers nécessaires ailleurs et cessez d\'utiliser cette copie avant de continuer. La suppression est irréversible.</string>
     <!-- The rename that commits a removal was refused by the filesystem. Separate from
          saf_mirror_unknown, which says there was nothing to remove: here the copy is
          still there, whole, and trying again is worth something. -->
@@ -606,4 +603,5 @@
          tls_unknown_host stands in for an address. Written in Kotlin before, so
          one English word survived inside an otherwise translated About dialog. -->
     <string name="about_version_unknown">inconnue</string>
+    <string name="saf_folder_unavailable">La copie locale de ce dossier de l\'appareil n\'est plus disponible. Ouvrez de nouveau le dossier depuis l\'appareil.</string>
 </resources>

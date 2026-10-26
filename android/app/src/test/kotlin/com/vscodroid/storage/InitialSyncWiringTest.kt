@@ -804,27 +804,16 @@ class InitialSyncWiringTest {
         )
     }
 
-    /**
-     * And nothing is set aside when there is no record to be silent about.
-     *
-     * The record is the only evidence that a mirror file is not this app's own copy, so
-     * without one every file in the mirror looks diverged, the ordinary stale copy a
-     * previous sync wrote included. A record that is absent, unreadable or in a format
-     * this build does not know all arrive as null, which is not the same as a record
-     * that parsed and names nothing, and each has to mean the pre-existing behaviour
-     * rather than a workspace full of spare copies.
-     */
     @Test
-    fun `with no record behind it a stale mirror copy is replaced, not set aside`() {
+    fun `unknown history retains distinct mirror bytes before refreshing`() {
         mirrorHolding("notes.txt", "stale copy", 1_700_000_000_000)
         deviceFolderHolding("notes.txt", "changed on the phone", 1_700_000_060_000)
 
         sync()
 
-        assertEquals(
-            listOf("notes.txt"), mirror.list()?.sorted(),
-            "a mirror with no record behind it left a spare copy of every stale file",
-        )
+        assertEquals("changed on the phone", File(mirror, "notes.txt").readText())
+        val retained = mirror.listFiles()!!.single { it.name.startsWith("notes.txt.local-") }
+        assertEquals("stale copy", retained.readText())
     }
 
     @Test

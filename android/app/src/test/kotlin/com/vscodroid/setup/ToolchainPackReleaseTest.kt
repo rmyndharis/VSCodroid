@@ -140,7 +140,7 @@ class ToolchainPackReleaseTest {
         }
         val events = Collections.synchronizedList(mutableListOf<Int>())
         val owner = ToolchainManager(context).apply {
-            onStateChange = { _, status, _, _ -> events.add(status) }
+            onStateChange = { _, status, _, _, _ -> events.add(status) }
         }
         val canceller = ToolchainManager(context)
         installer = Thread { install(owner, dir) }.apply { start() }
@@ -172,7 +172,7 @@ class ToolchainPackReleaseTest {
         executor(canceller).submit {}.get(10, TimeUnit.SECONDS)
         val events = mutableListOf<Int>()
         val owner = ToolchainManager(context).apply {
-            onStateChange = { _, status, _, _ -> events.add(status) }
+            onStateChange = { _, status, _, _, _ -> events.add(status) }
         }
 
         install(owner, dir)

@@ -120,7 +120,7 @@ class SafCreateIdempotencyTest {
         SafSyncEngine::class.java.declaredMethods
             .single { it.name == "createInSaf" }
             .apply { isAccessible = true }
-            .invoke(engine, localFile, parentUri, treeUri, null)
+            .invoke(engine, localFile, parentUri, treeUri, workspace, null)
     }
 
     @Test
@@ -302,7 +302,7 @@ class SafCreateIdempotencyTest {
         val lost = mutableListOf<File>()
         engine.onWriteBackFailed = { lost += it }
         SafSyncEngine::class.java.declaredMethods.single { it.name == "createInSaf" }
-            .apply { isAccessible = true }.invoke(engine, link, parentUri, treeUri, null)
+            .apply { isAccessible = true }.invoke(engine, link, parentUri, treeUri, workspace, null)
         assertTrue(lost.isEmpty())
         assertEquals("", written.toString())
     }

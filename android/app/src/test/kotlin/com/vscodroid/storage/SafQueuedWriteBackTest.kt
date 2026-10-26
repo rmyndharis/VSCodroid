@@ -224,6 +224,21 @@ class SafQueuedWriteBackTest {
         unmockkAll()
     }
 
+    /** Completes the real upload path before exercising deletion of these bytes. */
+    private fun deliverKnownFile(path: String) {
+        val file = File(mirror, path)
+        file.parentFile!!.mkdirs()
+        file.writeBytes(checkNotNull(device[path]))
+        SafSyncEngine::class.java
+            .getDeclaredMethod("writeLocalToSaf", File::class.java, Uri::class.java, File::class.java)
+            .apply { isAccessible = true }
+            .invoke(engine, file, docUri(docId(path)), mirror)
+        assertEquals(file.readText(), text(path), "the provider did not receive the baseline")
+        assertTrue(writes.contains(path), "the baseline upload did not reach the provider")
+        writes.clear()
+        attempts.clear()
+    }
+
     /** Puts a file or, with null text, a directory on the device folder. */
     private fun onDevice(path: String, text: String? = null) {
         device[path] = text?.toByteArray()
@@ -328,11 +343,13 @@ class SafQueuedWriteBackTest {
         onDevice("old_dir")
         onDevice("old_dir/existing.txt", "old")
         onDevice("notes.txt", "notes")
+        deliverKnownFile("notes.txt")
 
         // mv old_dir lib && mv notes.txt lib/notes.txt, inside one poll. The rename has
         // not run when the second event resolves lib/, so the device has no such folder.
         observe(FileObserver.MOVED_FROM or isDirFlag, "old_dir")
         observe(FileObserver.MOVED_TO or isDirFlag, "lib")
+        assertTrue(File(mirror, "notes.txt").delete())
         observe(FileObserver.MOVED_FROM, "notes.txt")
         inMirror("lib/existing.txt", "old")
         inMirror("lib/notes.txt", "notes")
@@ -367,11 +384,13 @@ class SafQueuedWriteBackTest {
         onDevice("old_dir")
         onDevice("old_dir/existing.txt", "old")
         onDevice("notes.txt", "notes")
+        deliverKnownFile("notes.txt")
 
         observe(FileObserver.MOVED_FROM or isDirFlag, "old_dir")
         observe(FileObserver.MOVED_TO or isDirFlag, "lib")
         inMirror("lib/existing.txt", "old")
         drain()
+        assertTrue(File(mirror, "notes.txt").delete())
         observe(FileObserver.MOVED_FROM, "notes.txt")
         inMirror("lib/notes.txt", "notes")
         observe(FileObserver.MOVED_TO, "lib/notes.txt")
@@ -521,6 +540,8 @@ class SafQueuedWriteBackTest {
     @Test
     fun `a file replaced by a folder before the drain is deleted and the folder created`() {
         onDevice("foo", "hi")
+        deliverKnownFile("foo")
+        assertTrue(File(mirror, "foo").delete())
 
         // rm foo && mkdir foo. The directory event arrives while the directory is not yet on
         // disk, as a JVM test can only deliver one, and appears before the drain.

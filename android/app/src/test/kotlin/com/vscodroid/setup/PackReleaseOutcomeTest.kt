@@ -169,7 +169,7 @@ class PackReleaseOutcomeTest {
 
     /** A manager whose reports this test can wait on. */
     private fun watchedManager() = manager().apply {
-        onStateChange = { _, status, _, _ ->
+        onStateChange = { _, status, _, _, _ ->
             outcomes.add(status)
             if (status == AssetPackStatus.COMPLETED || status == AssetPackStatus.FAILED) {
                 settled.countDown()
@@ -339,7 +339,7 @@ class PackReleaseOutcomeTest {
         val reported = Collections.synchronizedList(mutableListOf<Int>())
         val answered = CountDownLatch(1)
         manager().apply {
-            onStateChange = { _, status, _, _ ->
+            onStateChange = { _, status, _, _, _ ->
                 reported.add(status)
                 answered.countDown()
             }
@@ -370,7 +370,7 @@ class PackReleaseOutcomeTest {
             val reported = Collections.synchronizedList(mutableListOf<Int>())
             val answered = CountDownLatch(1)
             manager().apply {
-                onStateChange = { _, status, _, _ ->
+                onStateChange = { _, status, _, _, _ ->
                     reported.add(status)
                     answered.countDown()
                 }
@@ -409,7 +409,7 @@ class PackReleaseOutcomeTest {
     /** A manager reporting into [sink], settling [latch] on a terminal status. */
     private fun managerReporting(latch: CountDownLatch, sink: MutableList<Int>) =
         manager().apply {
-            onStateChange = { _, status, _, _ ->
+            onStateChange = { _, status, _, _, _ ->
                 sink.add(status)
                 if (status == AssetPackStatus.COMPLETED || status == AssetPackStatus.FAILED) {
                     latch.countDown()

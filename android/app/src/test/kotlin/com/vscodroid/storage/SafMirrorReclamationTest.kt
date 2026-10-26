@@ -2,17 +2,18 @@ package com.vscodroid.storage
 
 import android.content.ContentResolver
 import android.content.Context
+import android.content.SharedPreferences
 import android.content.UriPermission
 import android.net.Uri
 import com.vscodroid.util.Logger
+import com.vscodroid.util.StorageManager
 import io.mockk.Runs
 import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
-import io.mockk.mockkConstructor
 import io.mockk.mockkObject
 import io.mockk.unmockkAll
-import io.mockk.verify
+import io.mockk.unmockkObject
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -24,16 +25,9 @@ import java.io.File
 import java.security.MessageDigest
 
 /**
- * Reclaiming the mirrors of folders the user no longer grants.
- *
- * This deletes recursively, and it used to run inside [SafStorageManager.getPersistedFolders]
- * -- the method the workbench calls whenever it wants the recent folder list, and which
- * three of this class's own write paths call as well. A permission that read as absent
- * for a moment was enough to take the mirror of the folder open in the editor with it.
- *
- * Splitting the query from the reclamation is what fixes that, so what matters here is
- * not only that a stale mirror goes: it is that a live one stays, measured in the same
- * run so that "it stayed" cannot be explained by nothing having happened.
+ * Automatic cleanup retains ordinary copies and their metadata, finishes committed
+ * removals, and removes orphan records. Positive deletion controls ensure that a
+ * retained copy cannot pass solely because cleanup never ran.
  */
 class SafMirrorReclamationTest {
 
@@ -70,6 +64,9 @@ class SafMirrorReclamationTest {
         // filesDir that is not the one below.
         every { context.applicationContext } returns context
         every { context.contentResolver } returns resolver
+        val prefs = mockk<SharedPreferences>(relaxed = true)
+        every { prefs.getString(any(), any()) } returns "[]"
+        every { context.getSharedPreferences(any(), any()) } returns prefs
 
         manager = SafStorageManager(context)
         mirrorsDir = File(filesDir, "saf-mirrors").apply { mkdirs() }
@@ -173,11 +170,8 @@ class SafMirrorReclamationTest {
     }
 
     /**
-     * The mirror is a copy and the device folder is the original, which is what
-     * makes reclaiming safe. It stops being a copy when a write-back gave up, or
-     * was refused with a SecurityException, which is exactly what a permission
-     * withdrawn mid-session produces, and is also what puts the mirror in front
-     * of this pass. The two arrive together.
+     * A refused write may leave the mirror holding the only complete edit. Revoked
+     * permission cannot authorize cleanup to discard that local copy.
      */
     @Test
     fun `a mirror holding a write that never reached the device is kept`() {
@@ -196,17 +190,19 @@ class SafMirrorReclamationTest {
         assertEquals(0, removed, "nothing should have been reclaimed in this pass")
     }
 
-    /** The control: without a record, the same mirror is reclaimed as before. */
+    /** A matching snapshot still requires consent to remove the ordinary copy. */
     @Test
-    fun `the same mirror with nothing stranded is still reclaimed`() {
-        val (staleDir, _) = mirrorFor(revokedUri)
+    fun `the same mirror with nothing stranded is retained`() {
+        val (staleDir, record) = mirrorFor(revokedUri)
+        val savedRecord = record.readBytes()
         mirrorFor(liveUri)
         every { resolver.persistedUriPermissions } returns listOf(permissionFor(liveUri))
 
         val removed = manager.reclaimRevokedMirrorsSync()
 
-        assertFalse(staleDir.exists(), "unreachable disk was kept for no reason")
-        assertTrue(removed > 0)
+        assertEquals("fun main() {}", File(staleDir, "src/main.kt").readText())
+        org.junit.jupiter.api.Assertions.assertArrayEquals(savedRecord, record.readBytes())
+        assertEquals(0, removed)
     }
 
     @Test
@@ -228,7 +224,7 @@ class SafMirrorReclamationTest {
     }
 
     @Test
-    fun `a recorded file with the partial suffix follows the ordinary reclaim gate`() {
+    fun `a recorded file with the partial suffix remains in its ordinary copy`() {
         val (staleDir, record) = mirrorFor(revokedUri)
         mirrorFor(liveUri)
         val local = File(staleDir, "src/notes.txt" + SafSyncEngine.PARTIAL_SUFFIX)
@@ -240,19 +236,21 @@ class SafMirrorReclamationTest {
             )
         )
         every { resolver.persistedUriPermissions } returns listOf(permissionFor(liveUri))
+        val savedRecord = record.readBytes()
+        assertTrue(SafSyncEngine(context).holdsOnlyVouchedCopies(staleDir))
 
         val removed = manager.reclaimRevokedMirrorsSync()
 
-        assertFalse(staleDir.exists(), "a recorded copy was kept solely because of its suffix")
-        assertFalse(record.exists())
-        assertTrue(removed > 0)
+        assertEquals("a copy the device already holds", local.readText())
+        org.junit.jupiter.api.Assertions.assertArrayEquals(savedRecord, record.readBytes())
+        assertEquals(0, removed)
     }
 
     /**
      * `.tmp` and `~` are temporary to the writer that made them and nothing else, and
      * the write-back declines both names, so a file a terminal left in the mirror under
      * one is on no device folder anywhere. It is the user's only copy, and reclaiming
-     * over it would be the deletion the walk exists to refuse.
+     * over it would lose data absent from the device folder.
      */
     @Test
     fun `a mirror holding a temporary file of the user's own is kept`() {
@@ -280,7 +278,7 @@ class SafMirrorReclamationTest {
      * of the install, in a directory every terminal is handed as SAF_MIRRORS_DIR.
      */
     @Test
-    fun `a record's leftover scratch file goes with the mirror it belonged to`() {
+    fun `a record's scratch file remains while its ordinary mirror exists`() {
         val (staleDir, _) = mirrorFor(revokedUri)
         val (liveDir, _) = mirrorFor(liveUri)
         val orphan = File(
@@ -298,11 +296,7 @@ class SafMirrorReclamationTest {
 
         manager.reclaimRevokedMirrorsSync()
 
-        assertFalse(
-            orphan.exists(),
-            "the scratch file outlived the mirror and the record it was written for, " +
-                "where nothing can ever reach it again",
-        )
+        assertTrue(orphan.isFile, "a retained ordinary copy lost its scratch record")
         assertTrue(inUse.isFile, "a live folder's own scratch file was taken with it")
     }
 
@@ -310,8 +304,7 @@ class SafMirrorReclamationTest {
      * Builds the mirror directory and the sync record the engine keeps beside it,
      * which is what the pair it returns holds.
      *
-     * A mirror the reclaim pass is entitled to delete: every file in it is one the
-     * record vouches for, in the format [SafSyncEngine.recordIdentity] writes.
+     * Every file matches a delivered snapshot, in the format the engine writes.
      *
      * The identity is read back off the disk rather than predicted, for the reason
      * that function gives: a filesystem that truncates the timestamp would otherwise
@@ -342,66 +335,23 @@ class SafMirrorReclamationTest {
         return dir to record
     }
 
-    /**
-     * The two entries of one mirror are decided together, whatever order they arrive in.
-     *
-     * A mirror is a directory and a `<hash>.synced` record beside it, and `listFiles()`
-     * promises no order: ext4 and APFS disagree, which is how this shipped green on one
-     * and red on the other. With the record visited first it was deleted, and the
-     * directory behind it was then judged with its record already gone, answered
-     * "nothing vouches for this", and was kept -- leaving a mixed state the pass can
-     * never reach again, because the evidence that would license the delete is what the
-     * delete removed.
-     *
-     * Asserted as **one verdict per mirror**, not as an outcome, and that is deliberate.
-     * The outcome depends on the order `listFiles()` happens to return, so an
-     * outcome-only test passes on the filesystem whose order is favourable and says
-     * nothing on the other. This repository's own history is exactly that. Counting the
-     * calls is the property the memo actually provides and is the same on every
-     * filesystem: two entries, one question.
-     *
-     * The previous version of this test was named for the reclaim and asserted the
-     * keep, drove the pass once while its prose described twice, and deleted the record
-     * before the pass so the two-entries-present state it exists for never arose. It
-     * duplicated `a mirror with no record at all is kept`, which is the case it was
-     * really testing.
-     */
+    /** Both actual enumeration orders must preserve the directory and its record. */
     @Test
-    fun `one mirror is one verdict, however its two entries are ordered`() {
-        // The fixture is built first, on purpose. `mirrorFor` validates the record it
-        // writes by asking the engine to accept it, so arming the constructor mock
-        // before this point counts those calls too and "exactly one" then fails against
-        // a correct implementation. Measured: six engine calls land before the pass
-        // begins.
+    fun `an ordinary pair stays intact in either enumeration order`() {
         val (staleDir, staleRecord) = mirrorFor(revokedUri)
-        mirrorFor(liveUri)
-        every { resolver.persistedUriPermissions } returns listOf(permissionFor(liveUri))
-
-        // The fixture's own control: both entries have to be there, or "one call" is
-        // just the one entry that existed.
-        assertTrue(staleDir.isDirectory, "fixture did not create the mirror directory")
-        assertTrue(staleRecord.isFile, "fixture did not create the mirror's record")
-
-        mockkConstructor(SafSyncEngine::class)
-        // callOriginal, so the pass still behaves; only the count is observed. A stub
-        // returning a constant would decide the outcome and prove nothing about it.
-        every { anyConstructed<SafSyncEngine>().holdsOnlyVouchedCopies(any()) } answers { callOriginal() }
-
-        // Built after the constructor is armed, or this manager's engine predates it.
-        val watched = SafStorageManager(context)
-
-        watched.reclaimRevokedMirrorsSync()
-
-        verify(exactly = 1) { anyConstructed<SafSyncEngine>().holdsOnlyVouchedCopies(staleDir) }
-
-        // And the consequence, which is what the count is for: the pair moved together.
-        // The state this refuses is the mixed one, so both are named.
-        assertFalse(
-            staleDir.exists() || staleRecord.exists(),
-            "the mirror and its record did not go together: dir=${staleDir.exists()} " +
-                "record=${staleRecord.exists()}. A directory left behind with its record " +
-                "deleted can never be reclaimed again.",
-        )
+        val savedRecord = staleRecord.readBytes()
+        every { resolver.persistedUriPermissions } returns emptyList()
+        for (recordFirst in listOf(false, true)) {
+            assertEquals(0, manager.reclaimRevokedMirrorsSync { root ->
+                val entries = root.listFiles() ?: error("the actual mirrors directory was unreadable")
+                assertEquals(setOf(staleDir.name, staleRecord.name), entries.map { it.name }.toSet())
+                entries.sortedBy {
+                    if (it.name.endsWith(SafSyncEngine.SYNCED_RECORD_SUFFIX) == recordFirst) 0 else 1
+                }.toTypedArray()
+            })
+            assertEquals("fun main() {}", File(staleDir, "src/main.kt").readText())
+            org.junit.jupiter.api.Assertions.assertArrayEquals(savedRecord, staleRecord.readBytes())
+        }
     }
 
     /**
@@ -450,9 +400,7 @@ class SafMirrorReclamationTest {
     }
 
     /**
-     * And the negative control for both: a mirror with no record at all cannot be
-     * vouched for either, so it is kept. Without this the gate could be satisfied by
-     * an empty `vouched` set matching an empty walk.
+     * A directory without any sync record still belongs to the user and is retained.
      */
     @Test
     fun `a mirror with no record at all is kept`() {
@@ -468,22 +416,26 @@ class SafMirrorReclamationTest {
     }
 
     @Test
-    fun `a stale mirror goes and a live one stays, in the same pass`() {
+    fun `revoked and granted ordinary copies stay while orphan metadata goes`() {
         val (staleDir, staleRecord) = mirrorFor(revokedUri)
         val (liveDir, liveRecord) = mirrorFor(liveUri)
         every { resolver.persistedUriPermissions } returns listOf(permissionFor(liveUri))
+        val orphan = File(mirrorsDir, "0123456789ab" + SafSyncEngine.SYNCED_RECORD_SUFFIX)
+            .apply { writeText(SafSyncEngine.RECORD_HEADER) }
+        val staleBytes = staleRecord.readBytes()
 
         val removed = manager.reclaimRevokedMirrorsSync()
 
-        assertFalse(staleDir.exists(), "a mirror with no permission behind it is unreachable disk")
-        assertFalse(staleRecord.exists(), "the record is named after the same hash and goes with it")
+        assertEquals("fun main() {}", File(staleDir, "src/main.kt").readText())
+        org.junit.jupiter.api.Assertions.assertArrayEquals(staleBytes, staleRecord.readBytes())
         assertTrue(liveDir.isDirectory, "the granted folder's mirror must survive")
         assertTrue(
             File(liveDir, "src/main.kt").isFile,
             "surviving means its contents too, not just the directory"
         )
         assertTrue(liveRecord.isFile, "the surviving mirror keeps the record it needs")
-        assertEquals(2, removed, "the directory and its record are the two entries removed")
+        assertFalse(orphan.exists(), "the orphan record must still be removed")
+        assertEquals(1, removed)
     }
 
     @Test
@@ -509,17 +461,19 @@ class SafMirrorReclamationTest {
         // terminal as SAF_MIRRORS_DIR, and the WebView publishes it as a resource root.
         // Deleting whatever is not a live mirror there reaches a person's own files, and
         // it is a widening -- the version this replaced only ever deleted mirrors the
-        // recent list named. The stale mirror is the control: without it, "the file
-        // survived" is also what a pass that did nothing produces.
+        // recent list named. An orphan record proves cleanup actually ran.
         val (staleDir, _) = mirrorFor(revokedUri)
         val note = File(mirrorsDir, "notes.md").apply { writeText("mine") }
         val scratch = File(mirrorsDir, "scratch").apply { mkdirs() }
         File(scratch, "wip.txt").writeText("also mine")
         every { resolver.persistedUriPermissions } returns emptyList()
+        val orphan = File(mirrorsDir, "0123456789ab" + SafSyncEngine.SYNCED_RECORD_SUFFIX)
+            .apply { writeText(SafSyncEngine.RECORD_HEADER) }
 
         manager.reclaimRevokedMirrorsSync()
 
-        assertFalse(staleDir.exists(), "the stale mirror should still have gone")
+        assertTrue(staleDir.isDirectory, "the ordinary copy must remain")
+        assertFalse(orphan.exists(), "the orphan record should still have gone")
         assertTrue(note.isFile, "a file this app did not create was deleted")
         assertTrue(File(scratch, "wip.txt").isFile, "a directory this app did not create was deleted")
     }
@@ -558,15 +512,40 @@ class SafMirrorReclamationTest {
     }
 
     @Test
+    fun `a committed directory whose deletion fails is retried by a fresh manager`() {
+        val (dir, _) = mirrorFor(revokedUri)
+        every { resolver.persistedUriPermissions } returns emptyList()
+        assertTrue(manager.reclaimMirror(dir.name, force = true) >= 0)
+        val committed = File(mirrorsDir, SafStorageManager.DISCARD_PREFIX + dir.name)
+        assertEquals("fun main() {}", File(committed, "src/main.kt").readText())
+        mockkObject(StorageManager)
+        every { StorageManager.deleteRecursive(any()) } answers {
+            if (firstArg<File>().absolutePath == committed.absolutePath) 0L else callOriginal()
+        }
+        try {
+            assertEquals(1, manager.reclaimRevokedMirrorsSync(), "only the committed record was deleted")
+            assertEquals("fun main() {}", File(committed, "src/main.kt").readText())
+        } finally {
+            unmockkObject(StorageManager)
+        }
+
+        assertEquals(1, SafStorageManager(context).reclaimRevokedMirrorsSync())
+        assertFalse(committed.exists())
+    }
+
+    @Test
     fun `the dispatch actually runs the pass`() {
         // reclaimRevokedMirrors() hands the work to a thread and returns, so "the
         // dispatch never calls the body" is a mutation every other case here survives.
         val (staleDir, _) = mirrorFor(revokedUri)
         every { resolver.persistedUriPermissions } returns emptyList()
+        assertTrue(manager.reclaimMirror(staleDir.name, force = true) >= 0)
+        val committed = File(mirrorsDir, SafStorageManager.DISCARD_PREFIX + staleDir.name)
+        assertTrue(committed.isDirectory)
 
         manager.reclaimRevokedMirrors()
 
-        assertTrue(awaitTrue { !staleDir.exists() }, "the background pass never ran")
+        assertTrue(awaitTrue { !committed.exists() }, "the background pass never ran")
     }
 
     private fun awaitTrue(timeoutMs: Long = 5_000, condition: () -> Boolean): Boolean {

@@ -19,7 +19,6 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
-import java.util.concurrent.TimeUnit
 
 /**
  * That `.bashrc` moves a shell only when nobody chose where it should start.
@@ -101,9 +100,7 @@ class StartupDirGuardTest {
             remove("SSH2_CLIENT")
             put("HOME", home.path)
         }
-        val process = builder.start()
-        val out = process.inputStream.bufferedReader().readText()
-        assertTrue(process.waitFor(30, TimeUnit.SECONDS), "bash did not finish")
+        val out = finishTestProcess(builder.start()).second
         val lines = out.lines().map { it.trim() }.filter { it.isNotEmpty() }
         assertEquals(
             1, lines.size,

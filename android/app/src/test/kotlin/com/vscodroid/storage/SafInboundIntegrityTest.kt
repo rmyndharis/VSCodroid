@@ -436,6 +436,7 @@ class SafInboundIntegrityTest : SafInitialSyncTestBase() {
             SyncJob(
                 SyncType.MODIFY, file.absolutePath, named("doc-uri:doc:$relative"),
                 null, null, System.currentTimeMillis(), relativePath = relative,
+                mirrorRoot = mirror,
             ),
         )
     }

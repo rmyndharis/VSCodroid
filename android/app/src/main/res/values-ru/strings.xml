@@ -268,19 +268,16 @@
     <!-- A directory deleted in the editor that holds such a file, and no file the editor
          never had, which is what saf_directory_kept says. -->
     <string name="saf_directory_changed_kept">Папка %1$s оставлена в папке на устройстве: другое приложение могло изменить файл в ней с тех пор, как редактор в последний раз прочитал или сохранил этот файл. Удалите её там, если она больше не нужна.</string>
-    <string name="saf_delete_refused">Не удалось удалить %1$s из папки на устройстве, поэтому файл появится снова при следующем открытии папки. Удалите его в файловом менеджере устройства.</string>
+    <string name="saf_delete_refused">Не удалось удалить %1$s из папки на устройстве, поэтому этот элемент появится снова при следующем открытии папки. Удалите его в файловом менеджере устройства.</string>
 
     <!-- Removing the local copy of a device folder, from the storage screen. The
          mirror named by a hash the screen holds no longer exists: the user picked it
          from a list this app built a moment earlier, so this means the folder was
          removed or re-synced in between rather than that they typed something wrong. -->
     <string name="saf_mirror_unknown">Локальной копии этой папки нет.</string>
-    <!-- The reclaim gate declining. Worded as what is at stake rather than as a
-         refusal, because the user's next step is to confirm and remove it anyway: the
-         mirrors that hold unsynced files are exactly the ones worth the disk, since a
-         folder gets large by being worked in and working in one creates files the sync
-         excludes by construction. -->
-    <string name="saf_mirror_not_a_copy">Некоторых файлов из этой папки нет в папке на устройстве. Если удалить локальную копию, эти файлы будут потеряны.</string>
+    <!-- Native confirmation and unconfirmed-removal refusal. A snapshot cannot
+         exclude files added directly after the check. -->
+    <string name="saf_mirror_not_a_copy">Эта локальная копия может содержать файлы, которые не попали в папку на устройстве. Перед продолжением сохраните нужные файлы в другом месте и завершите работу с этой копией. Удаление нельзя отменить.</string>
     <!-- The rename that commits a removal was refused by the filesystem. Separate from
          saf_mirror_unknown, which says there was nothing to remove: here the copy is
          still there, whole, and trying again is worth something. -->
@@ -610,4 +607,5 @@
          tls_unknown_host stands in for an address. Written in Kotlin before, so
          one English word survived inside an otherwise translated About dialog. -->
     <string name="about_version_unknown">неизвестно</string>
+    <string name="saf_folder_unavailable">Локальная копия этой папки на устройстве больше недоступна. Откройте папку с устройства снова.</string>
 </resources>

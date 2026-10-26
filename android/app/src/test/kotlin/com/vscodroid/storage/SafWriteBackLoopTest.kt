@@ -1,5 +1,6 @@
 package com.vscodroid.storage
 
+import android.content.ContentResolver
 import android.content.Context
 import android.net.Uri
 import android.provider.DocumentsContract
@@ -18,6 +19,8 @@ import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
+import java.io.File
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
@@ -35,8 +38,12 @@ import java.util.concurrent.atomic.AtomicReference
  */
 class SafWriteBackLoopTest {
 
+    @TempDir lateinit var mirror: File
+    @TempDir lateinit var filesDir: File
+
     private lateinit var engine: SafSyncEngine
     private lateinit var context: Context
+    private lateinit var resolver: ContentResolver
 
     @BeforeEach
     fun setUp() {
@@ -48,7 +55,10 @@ class SafWriteBackLoopTest {
         every { Logger.e(any(), any()) } just Runs
         every { Logger.e(any(), any(), any()) } just Runs
 
+        resolver = mockk(relaxed = true)
         context = mockk(relaxed = true)
+        every { context.contentResolver } returns resolver
+        every { context.filesDir } returns filesDir
         engine = SafSyncEngine(context)
     }
 
@@ -97,11 +107,15 @@ class SafWriteBackLoopTest {
         mockkStatic(DocumentsContract::class)
         every { DocumentsContract.deleteDocument(any(), any()) } returns true
 
+        val file = File(mirror, "notes.txt")
+        val document = mockk<Uri>(relaxed = true)
+        deliverFileBaseline(engine, resolver, file, document, mirror)
+        assertTrue(file.delete())
         enqueue(
             SyncJob(
                 type = SyncType.DELETE,
-                localPath = "/mirror/notes.txt",
-                safDocUri = mockk<Uri>(relaxed = true),
+                localPath = file.absolutePath,
+                safDocUri = document,
                 safParentUri = null,
                 safTreeUri = null,
                 timestamp = 1_700_000_000_000
@@ -129,11 +143,15 @@ class SafWriteBackLoopTest {
             true
         }
 
+        val file = File(mirror, "notes.txt")
+        val document = mockk<Uri>(relaxed = true)
+        deliverFileBaseline(engine, resolver, file, document, mirror)
+        assertTrue(file.delete())
         enqueue(
             SyncJob(
                 type = SyncType.DELETE,
-                localPath = "/mirror/notes.txt",
-                safDocUri = mockk<Uri>(relaxed = true),
+                localPath = file.absolutePath,
+                safDocUri = document,
                 safParentUri = null,
                 safTreeUri = null,
                 timestamp = 1_700_000_000_000
@@ -143,6 +161,7 @@ class SafWriteBackLoopTest {
         Thread.currentThread().interrupt()
         engine.runWriteBackLoop { false }
 
+        verify(exactly = 1) { DocumentsContract.deleteDocument(any(), document) }
         assertFalse(flagDuringDrain.get(), "the drain ran on an interrupted thread")
         // Also clears it, which is what keeps the flag out of the next test.
         assertTrue(Thread.interrupted(), "the interrupt status was swallowed rather than restored")

@@ -268,19 +268,16 @@
     <!-- A directory deleted in the editor that holds such a file, and no file the editor
          never had, which is what saf_directory_kept says. -->
     <string name="saf_directory_changed_kept">Adresář %1$s zůstal ve složce v zařízení: jiná aplikace mohla změnit soubor v něm od chvíle, kdy ho editor naposledy načetl nebo uložil. Pokud ho už nepotřebujete, odstraňte ho tam.</string>
-    <string name="saf_delete_refused">Soubor %1$s se nepodařilo smazat ze složky v zařízení, takže se při příštím otevření složky objeví znovu. Smažte jej ve správci souborů v zařízení.</string>
+    <string name="saf_delete_refused">%1$s se nepodařilo smazat ze složky v zařízení, takže se při příštím otevření složky objeví znovu. Smažte tuto položku ve správci souborů v zařízení.</string>
 
     <!-- Removing the local copy of a device folder, from the storage screen. The
          mirror named by a hash the screen holds no longer exists: the user picked it
          from a list this app built a moment earlier, so this means the folder was
          removed or re-synced in between rather than that they typed something wrong. -->
     <string name="saf_mirror_unknown">Tato složka nemá místní kopii, kterou by šlo odebrat.</string>
-    <!-- The reclaim gate declining. Worded as what is at stake rather than as a
-         refusal, because the user's next step is to confirm and remove it anyway: the
-         mirrors that hold unsynced files are exactly the ones worth the disk, since a
-         folder gets large by being worked in and working in one creates files the sync
-         excludes by construction. -->
-    <string name="saf_mirror_not_a_copy">Některé soubory v této složce nejsou ve složce v zařízení. Odebráním místní kopie o ně přijdete.</string>
+    <!-- Native confirmation and unconfirmed-removal refusal. A snapshot cannot
+         exclude files added directly after the check. -->
+    <string name="saf_mirror_not_a_copy">Tato místní kopie může obsahovat soubory, které se nedostaly do složky v zařízení. Než budete pokračovat, uložte potřebné soubory jinam a ukončete práci s touto kopií. Odebrání nelze vrátit zpět.</string>
     <!-- The rename that commits a removal was refused by the filesystem. Separate from
          saf_mirror_unknown, which says there was nothing to remove: here the copy is
          still there, whole, and trying again is worth something. -->
@@ -610,4 +607,5 @@
          tls_unknown_host stands in for an address. Written in Kotlin before, so
          one English word survived inside an otherwise translated About dialog. -->
     <string name="about_version_unknown">neznámá</string>
+    <string name="saf_folder_unavailable">Místní kopie této složky v zařízení už není dostupná. Otevřete složku ze zařízení znovu.</string>
 </resources>

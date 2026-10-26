@@ -9,6 +9,7 @@ import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.play.core.assetpacks.model.AssetPackStatus
 import com.vscodroid.setup.ToolchainManager
+import com.vscodroid.setup.ToolchainDownloadProgress
 import com.vscodroid.util.drawBehindSystemBars
 import com.vscodroid.util.padForSystemBars
 import com.vscodroid.setup.ToolchainAction
@@ -53,7 +54,7 @@ class ToolchainActivity : AppCompatActivity() {
      * unchanged snapshot costs a full rebind of every card once a second, and a
      * rebind is what takes accessibility focus off a button someone is on.
      */
-    private var lastSeenDownloads: Map<String, Int> = emptyMap()
+    private var lastSeenDownloads: Map<String, ToolchainDownloadProgress> = emptyMap()
 
     /**
      * The "Remove Ruby?" confirmation, while one is on screen.
@@ -192,6 +193,7 @@ class ToolchainActivity : AppCompatActivity() {
                     showRemoveConfirmation(packName)
                 }
                 ToolchainAction.CANCEL -> {
+                    val transferId = ToolchainManager.downloadProgress()[packName]?.transferId
                     toolchainManager.cancel(packName)
                     // Dropped here as well as on the report the download now
                     // makes, because the two answer different moments. This one
@@ -219,7 +221,7 @@ class ToolchainActivity : AppCompatActivity() {
                     // Remove button until the screen was reopened. CANCELED
                     // carries no such meaning, so the card falls back to what the
                     // install record says.
-                    adapter.updateState(packName, AssetPackStatus.CANCELED, 0)
+                    adapter.updateState(packName, AssetPackStatus.CANCELED, 0, transferId)
                 }
             }
         }
@@ -238,7 +240,7 @@ class ToolchainActivity : AppCompatActivity() {
         val screen = WeakReference(this)
         val pending = outstanding
         val screenGone = destroyed
-        manager.onStateChange = { packName, status, percent, why ->
+        manager.onStateChange = { packName, status, percent, why, transferId ->
             // Read here and not in showPackState, because the call below takes a
             // settled pack out of the set. Asked afterwards this is false for
             // every terminal status, and a decline is terminal, so the one
@@ -261,7 +263,7 @@ class ToolchainActivity : AppCompatActivity() {
             // download ending after the user closed this screen put a toolchain
             // message over the editor.
             screen.get()?.let { live ->
-                live.runOnUiThread { live.showPackState(packName, status, percent, why, asked) }
+                live.runOnUiThread { live.showPackState(packName, status, percent, why, asked, transferId) }
             }
         }
     }
@@ -282,11 +284,13 @@ class ToolchainActivity : AppCompatActivity() {
         percent: Int,
         why: ToolchainFailure?,
         asked: Boolean,
+        transferId: Long? = null,
     ) {
         // Outside the gate below, deliberately. This is this screen's own card,
         // it costs one row rebind, and it is what has to be right the moment the
         // user comes back. Only the half that interrupts them is gated.
-        adapter.updateState(packName, status, percent)
+        if (transferId == null) refreshDownloads()
+        adapter.updateState(packName, status, percent, transferId)
 
         // Everything past here puts something in front of whoever is looking at
         // the device, and that is no longer necessarily this screen. `onStop`
@@ -472,7 +476,7 @@ class ToolchainActivity : AppCompatActivity() {
      * changed since the last one.
      */
     private fun refreshDownloads() {
-        val downloading = ToolchainManager.packsDownloading()
+        val downloading = ToolchainManager.downloadProgress()
         val refresh = downloadRefreshFor(lastSeenDownloads, downloading)
         if (!refresh.push) return
         lastSeenDownloads = downloading
@@ -637,8 +641,8 @@ internal data class DownloadRefresh(val push: Boolean, val rereadInstalled: Bool
  * is worth re-reading the install record from disk.
  */
 internal fun downloadRefreshFor(
-    previous: Map<String, Int>,
-    current: Map<String, Int>,
+    previous: Map<String, ToolchainDownloadProgress>,
+    current: Map<String, ToolchainDownloadProgress>,
 ): DownloadRefresh = DownloadRefresh(
     push = current != previous,
     rereadInstalled = (previous.keys - current.keys).isNotEmpty(),

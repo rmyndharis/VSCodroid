@@ -35,9 +35,8 @@ import java.security.MessageDigest
  * matter most the app had stopped being able to say. `addToRecentFolders` keeps ten
  * folders and releases the grant of the one that falls off; the recent-list entry that
  * carried the folder's name goes with it, and the copy stays on disk. The launch pass
- * then declines to reclaim it whenever it holds a file the device does not, which one
- * `npm install` guarantees for ever, because `SKIP_DIRECTORIES` keeps `node_modules`
- * out of the sync record by construction.
+ * keeps every ordinary copy until the user explicitly removes it, including files
+ * written directly by a terminal and directories excluded from synchronization.
  *
  * So the row that is invisible, nameless and unreclaimable is exactly the row worth
  * showing, and the first case here is that one.
@@ -194,8 +193,7 @@ class MirrorListingTest {
      *
      * `MIRROR_ENTRY` matches both names on purpose, because the reclaim pass has to
      * recognise both. What separates them here is that the record is a file: it sits
-     * beside the mirror rather than inside it, which is also why it does not defeat the
-     * gate that walks the mirror. The fixture asserts that shape before relying on it,
+     * beside the mirror rather than inside it. The fixture asserts that shape before relying on it,
      * because a test that only counted rows would pass just as happily against a filter
      * that had stopped seeing the record at all.
      */
@@ -248,11 +246,8 @@ class MirrorListingTest {
     }
 
     /**
-     * The case that pins the root cause of the whole feature. `node_modules` is in
-     * [SafSyncEngine.SKIP_DIRECTORIES], so nothing under it is ever copied down, ever
-     * written back, or ever recorded. It is therefore invisible to the upload journal
-     * and visible to the record walk, which is what makes the mirror permanently
-     * unreclaimable the moment a user runs an install in the folder they are working in.
+     * Excluded directories such as `node_modules` may exist only inside this copy.
+     * Their rows retain the same destructive-confirmation compatibility field.
      */
     @Test
     fun `a copy holding files the device folder lacks is listed as not reclaimable`() {
@@ -267,19 +262,17 @@ class MirrorListingTest {
         )
     }
 
-    /** The control for the case above: the same mirror without the install. */
+    /** Matching recorded bytes still cannot rule out a later direct write. */
     @Test
-    fun `a copy the device folder fully holds is listed as reclaimable`() {
+    fun `a copy the device folder fully holds is listed as not reclaimable`() {
         vouchedMirror(liveUri)
         every { resolver.persistedUriPermissions } returns listOf(permissionFor(liveUri))
 
-        assertTrue(manager.listMirrors().single().reclaimable)
+        assertFalse(manager.listMirrors().single().reclaimable)
     }
 
     /**
-     * The other half of the gate, and it is a separate question: the journal records a
-     * write-back this app ATTEMPTED and could not deliver, which is a file the device
-     * does not have under a name it does.
+     * A refused upload can leave a local edit absent from the device folder.
      */
     @Test
     fun `a copy holding an undelivered write is listed as not reclaimable`() {

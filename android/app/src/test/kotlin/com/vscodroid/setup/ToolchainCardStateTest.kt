@@ -341,7 +341,7 @@ class ToolchainCardStateTest {
         @Test
         fun `a download begun elsewhere is drawn as running, with a way to stop it`() {
             val state = manager()
-            state.setDownloading(mapOf(ruby to 42))
+            state.setDownloading(mapOf(ruby to ToolchainDownloadProgress(1, 42)))
 
             val card = state.card(ruby)
             assertEquals(
@@ -356,8 +356,8 @@ class ToolchainCardStateTest {
             // The report keeps arriving; the seed is a single snapshot taken when
             // the screen opened. Letting the stale one win freezes the bar.
             val state = manager()
-            state.setDownloading(mapOf(ruby to 42))
-            state.updateState(ruby, AssetPackStatus.DOWNLOADING, 77)
+            state.setDownloading(mapOf(ruby to ToolchainDownloadProgress(1, 42)))
+            state.updateState(ruby, AssetPackStatus.DOWNLOADING, 77, 1)
 
             assertEquals(77, state.card(ruby).progressPercent)
         }
@@ -368,7 +368,7 @@ class ToolchainCardStateTest {
             // accumulated would leave the card offering Cancel for a transfer
             // that is over, and Cancel is destructive.
             val state = manager()
-            state.setDownloading(mapOf(ruby to 42))
+            state.setDownloading(mapOf(ruby to ToolchainDownloadProgress(1, 42)))
             state.setDownloading(emptyMap())
             state.setInstalled(listOf("ruby"))
 
@@ -379,8 +379,8 @@ class ToolchainCardStateTest {
         @Test
         fun `a completed report ends the seed as well`() {
             val state = manager()
-            state.setDownloading(mapOf(ruby to 42))
-            state.updateState(ruby, AssetPackStatus.COMPLETED, 100)
+            state.setDownloading(mapOf(ruby to ToolchainDownloadProgress(1, 42)))
+            state.updateState(ruby, AssetPackStatus.COMPLETED, 100, 1)
 
             val card = state.card(ruby)
             assertEquals(ToolchainAction.REMOVE, card.action)
@@ -447,7 +447,7 @@ class ToolchainCardStateTest {
             // First-run cards carry a tick and nothing else. A Cancel button
             // there would take the tap that selects the toolchain.
             val state = picker()
-            state.setDownloading(mapOf(ruby to 42))
+            state.setDownloading(mapOf(ruby to ToolchainDownloadProgress(1, 42)))
 
             val card = state.card(ruby)
             assertNull(card.action)

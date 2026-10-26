@@ -240,11 +240,12 @@ class SafInterveningLocalEditTest {
     }
 
     @Test
-    fun `an unchanged stale mirror without a record is refreshed`() {
+    fun `an unproved mirror is retained while the device copy is refreshed`() {
         existingMirror()
         sync()
-        assertEquals(listOf("notes.txt"), mirror.list()!!.toList())
         assertEquals("DEVICE", local.readText())
+        val retained = mirror.listFiles()!!.single { it.name.startsWith("notes.txt.local-") }
+        assertEquals("BEFORE", retained.readText())
     }
 
     @Test

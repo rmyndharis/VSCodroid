@@ -113,7 +113,7 @@ class ToolchainQueuedCancelTest {
             .get(m) as MutableMap<String, Any>
 
     private fun manager() = ToolchainManager(context).apply {
-        onStateChange = { _, status, _, why ->
+        onStateChange = { _, status, _, why, _ ->
             events.add(status to why)
             if (status == AssetPackStatus.FAILED || status == AssetPackStatus.CANCELED) {
                 settled.countDown()

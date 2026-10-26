@@ -1,5 +1,6 @@
 package com.vscodroid
 
+import android.content.res.Configuration
 import android.os.Build
 import android.view.View
 import android.webkit.WebView
@@ -25,6 +26,7 @@ import org.junit.Test
 import org.junit.rules.RuleChain
 import org.junit.rules.TestRule
 import org.junit.runner.RunWith
+import java.util.Locale
 
 /**
  * Instrumented tests for [MainActivity].
@@ -116,52 +118,49 @@ class MainActivityTest {
 
     @Test
     fun aboutDialog_showsTitle() {
-        val scenario = ActivityScenario.launch(MainActivity::class.java)
-        val aboutTitle = context.getString(R.string.about_title)
-        assertTrue(
-            "About title should be 'About VSCodroid'",
-            aboutTitle.contains("About VSCodroid")
-        )
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            lateinit var aboutTitle: String
+            scenario.onActivity {
+                aboutTitle = it.getString(R.string.about_title)
+                assertTrue("About title must not be blank", aboutTitle.isNotBlank())
+                it.showAboutDialog()
+            }
 
-        scenario.onActivity { it.showAboutDialog() }
-
-        // Looked up in the dialog's own window, because that is the only handle
-        // there is: the builder's show() discards the dialog it made. The check
-        // that stood here posted a runnable that set a flag without reading any
-        // window, and was green with the dialog removed.
-        onView(withText(aboutTitle))
-            .inRoot(isDialog())
-            .check(matches(isDisplayed()))
-        scenario.close()
+            onView(withText(aboutTitle))
+                .inRoot(isDialog())
+                .check(matches(isDisplayed()))
+        }
     }
 
     @Test
     fun aboutDialog_containsDisclaimer() {
-        val scenario = ActivityScenario.launch(MainActivity::class.java)
-        val disclaimer = context.getString(R.string.legal_disclaimer)
+        val english = context.createConfigurationContext(
+            Configuration(context.resources.configuration).apply { setLocale(Locale.ENGLISH) },
+        ).getString(R.string.legal_disclaimer)
 
-        // The wording first. The sentences are the requirement, so a dialog that
-        // faithfully shows a disclaimer no longer naming the trademark has to fail
-        // here rather than pass below.
+        // English wording is checked independently of the active dialog language.
         assertTrue(
             "Disclaimer should mention MIT-licensed",
-            disclaimer.contains("MIT-licensed")
+            english.contains("MIT-licensed")
         )
         assertTrue(
-            "Disclaimer should name the trademark and the disaffiliation: $disclaimer",
-            disclaimer.contains("trademarks of Microsoft") &&
-                disclaimer.contains("Not affiliated with or endorsed by Microsoft")
+            "Disclaimer should name the trademark and the disaffiliation: $english",
+            english.contains("trademarks of Microsoft") &&
+                english.contains("Not affiliated with or endorsed by Microsoft")
         )
 
-        scenario.onActivity { it.showAboutDialog() }
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            lateinit var disclaimer: String
+            scenario.onActivity {
+                disclaimer = it.getString(R.string.legal_disclaimer)
+                assertTrue("Disclaimer must not be blank", disclaimer.isNotBlank())
+                it.showAboutDialog()
+            }
 
-        // Then the dialog. Its message is the version line and the disclaimer
-        // together, so the disclaimer is looked for inside the message view rather
-        // than as the whole of it; a dialog with an empty message, which this check
-        // used to accept by never opening one, fails here.
-        onView(withId(android.R.id.message))
-            .inRoot(isDialog())
-            .check(matches(withText(containsString(disclaimer))))
-        scenario.close()
+            // The message combines version text with the localized disclaimer.
+            onView(withId(android.R.id.message))
+                .inRoot(isDialog())
+                .check(matches(withText(containsString(disclaimer))))
+        }
     }
 }

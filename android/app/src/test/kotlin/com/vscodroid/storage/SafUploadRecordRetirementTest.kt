@@ -32,13 +32,8 @@ import java.io.IOException
  * write-back as a delete of the old name, so one refused save followed by renaming the
  * file in the editor stranded a line for ever.
  *
- * A stranded line is not inert. [SafStorageManager.mayReclaim] reads any line under a
- * mirror as that mirror holding a write the device never received, so from then on the
- * launch pass keeps the mirror and the device-folder screen describes it as holding work
- * that exists nowhere else, on the strength of a file that is not there. The removal is
- * not refused: the bridge extension forces exactly these rows, so what the user gets is
- * that warning and then the deletion. What is pinned here is the consequence rather than
- * the bookkeeping: the gate that reads the journal.
+ * A line must follow its file while that file exists and retire when no write can
+ * consume it. These cases observe the real journal independently of removal consent.
  */
 class SafUploadRecordRetirementTest {
 
@@ -136,8 +131,8 @@ class SafUploadRecordRetirementTest {
         engine.runWriteBackLoop { false }
     }
 
-    private fun mayReclaim(): Boolean =
-        SafStorageManager.mayReclaim(hash, engine.uploadsInFlight(), mirrorsRoot.absolutePath)
+    private fun noUploadsUnderMirror(): Boolean =
+        engine.uploadsInFlight().none { it.startsWith(mirror.absolutePath + File.separator) }
 
     /** A save the provider refuses, which is what puts a line in the journal at all. */
     private fun strandOneWrite() {
@@ -149,21 +144,19 @@ class SafUploadRecordRetirementTest {
             File(mirror, "App.kt").absolutePath in engine.uploadsInFlight(),
             "no record was stranded, so nothing below is being tested",
         )
-        assertFalse(mayReclaim(), "the stranded record did not reach the gate")
+        assertFalse(noUploadsUnderMirror(), "the stranded record did not reach the mirror's journal prefix")
     }
 
     @Test
-    fun `deleting the file a stranded record names lets its mirror be reclaimed again`() {
+    fun `deleting the file a stranded record names retires that record`() {
         strandOneWrite()
 
         File(mirror, "App.kt").delete()
         deliver(FileObserver.DELETE, "App.kt")
 
         assertTrue(
-            mayReclaim(),
-            "the record outlived the file it names, so this mirror can never be " +
-                "reclaimed and the storage screen reports it as holding work the " +
-                "device folder does not",
+            noUploadsUnderMirror(),
+            "the record outlived the deleted file it names, so no later write can consume it",
         )
     }
 
@@ -173,13 +166,13 @@ class SafUploadRecordRetirementTest {
      * ordinary route into the stranded state rather than an exotic one.
      */
     @Test
-    fun `renaming the file away lets its mirror be reclaimed again`() {
+    fun `renaming the file away retires the record under its old name`() {
         strandOneWrite()
 
         File(mirror, "App.kt").renameTo(File(mirror, "App2.kt"))
         deliver(FileObserver.MOVED_FROM, "App.kt")
 
-        assertTrue(mayReclaim(), "the record survived the rename that emptied its path")
+        assertTrue(noUploadsUnderMirror(), "the record survived the rename that emptied its path")
     }
 
     /**
@@ -197,7 +190,7 @@ class SafUploadRecordRetirementTest {
         deliver(FileObserver.DELETE, "other.txt")
 
         assertFalse(
-            mayReclaim(),
+            noUploadsUnderMirror(),
             "an unrelated delete retired a record that still names a file holding the " +
                 "user's only copy",
         )
@@ -215,7 +208,7 @@ class SafUploadRecordRetirementTest {
             file.absolutePath in engine.uploadsInFlight(),
             "no record was stranded, so nothing below is being tested",
         )
-        assertFalse(mayReclaim(), "the stranded record did not reach the gate")
+        assertFalse(noUploadsUnderMirror(), "the stranded record did not reach the mirror's journal prefix")
     }
 
     /**
@@ -224,16 +217,14 @@ class SafUploadRecordRetirementTest {
      * A directory that leaves the mirror is held back for a rename to claim rather than
      * queued as a delete, and inotify raises nothing at all for the entries beneath it, so
      * the one live retirement point is never reached for any of them. Nothing else could
-     * reach them either, and a line that outlives the mirror path it names is not inert:
-     * every launch from then on keeps that mirror and the device-folder screen reports it
-     * as holding work the device folder does not have.
+     * reach them either, so a line could survive permanently under a departed path.
      *
      * NEGATIVE CONTROL: drop the `dropVanished { true }` from `stopWatching` back to
      * `synchronized(vanishedLock) { vanishedDirectories.clear() }` and this goes red,
      * while the two cases below it stay green.
      */
     @Test
-    fun `moving a directory away lets its mirror be reclaimed again`() {
+    fun `moving a directory away retires records beneath its departed path`() {
         strandOneWriteUnder("src/util", "helper.ts")
 
         File(mirror, "src/util").deleteRecursively()
@@ -243,9 +234,8 @@ class SafUploadRecordRetirementTest {
         engine.stopWatching()
 
         assertTrue(
-            mayReclaim(),
-            "the records under a departed directory stand for ever, so this mirror can " +
-                "never be reclaimed and its row is permanently mislabelled",
+            noUploadsUnderMirror(),
+            "the records under a departed directory survived with no file left to retry",
         )
     }
 
@@ -272,14 +262,14 @@ class SafUploadRecordRetirementTest {
         // as SafVanishedCandidateWindowTest records measuring it.
         val stampedBy = System.currentTimeMillis()
         assertFalse(
-            mayReclaim(),
+            noUploadsUnderMirror(),
             "the records were retired while a rename could still have claimed the " +
                 "directory, so nothing would have moved them to its new path",
         )
 
         engine.hasVanishedCandidate(stampedBy + SafSyncEngine.RENAME_PAIR_WINDOW_MS + 1)
 
-        assertTrue(mayReclaim(), "the expired departure left its records standing")
+        assertTrue(noUploadsUnderMirror(), "the expired departure left its records standing")
     }
 
     /**
@@ -300,7 +290,7 @@ class SafUploadRecordRetirementTest {
         engine.stopWatching()
 
         assertFalse(
-            mayReclaim(),
+            noUploadsUnderMirror(),
             "a record naming a file that is still in the mirror was retired, so the " +
                 "next sync will copy the device's own interrupted upload over it",
         )
@@ -318,14 +308,9 @@ class SafUploadRecordRetirementTest {
      * the file holding that edit has gone, there is no edit to retry, and by then the
      * vanished entry has been dropped too, so no later pass revisits the prefix.
      *
-     * What that costs is bounded but real. The device still holds its own copy of the
-     * document, because an unclaimed departure is never propagated, so reopening the
-     * folder copies it back and the reopen after that consumes the line through the
-     * initial sync's repair. Until then, and for ever where that copy cannot come back
-     * (the folder is not opened again, the document is past the size cap or outside the
-     * enumeration cap, the user deleted the stale old-named copy first), the launch pass
-     * keeps this mirror and the storage screen reports it as holding work the device
-     * folder does not have.
+     * A later sync could consume the stale line after copying the device document
+     * back. When that document is not enumerated or the folder is never reopened,
+     * nothing else can retire the line, so the writer must do it when its file is gone.
      *
      * NEGATIVE CONTROL, measured both ways: put `releaseUploadClaim` back to
      * `uploadClaims.remove` alone and this case is the only one of the eight here that
@@ -374,11 +359,8 @@ class SafUploadRecordRetirementTest {
                 "to fails",
         )
         assertTrue(
-            mayReclaim(),
-            "the write that failed onto a path its file had left kept its record, and " +
-                "nothing else can reach that record now: this mirror is refused every " +
-                "reclaim and mislabelled on the storage screen until the device copy " +
-                "happens to be downloaded again",
+            noUploadsUnderMirror(),
+            "the failed write kept a record under a departed path that no later write can consume",
         )
     }
 

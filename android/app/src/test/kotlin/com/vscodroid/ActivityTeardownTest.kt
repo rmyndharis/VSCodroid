@@ -186,7 +186,7 @@ class ActivityTeardownTest {
         // The folder switch must keep the restartable stop: the next folder's
         // watcher starts on this same engine, and a shutdown there would leave the
         // user editing a folder nothing writes back.
-        val switching = code(body("private fun openSafFolder(uri: Uri, navigate: Boolean)")) +
+        val switching = code(body("private fun openSafFolder(")) +
             code(body("private suspend fun restoreWatcherAfterFailure("))
 
         assertEquals(

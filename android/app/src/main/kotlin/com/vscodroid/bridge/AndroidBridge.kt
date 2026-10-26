@@ -26,6 +26,10 @@ import com.vscodroid.webview.urlLogLabel
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.IOException
+import java.nio.file.FileAlreadyExistsException
+import java.nio.file.Files
+import java.nio.file.LinkOption
 import java.lang.ref.WeakReference
 import java.net.URLEncoder
 import java.util.concurrent.Executor
@@ -60,7 +64,8 @@ private const val KEYGEN_TIMEOUT_SECONDS = 4L
  * this is used, so the only thing outstanding is whatever sits in the pipe
  * buffer. It is a bound on principle: the point of draining on a separate thread
  * is that no unbounded wait remains on the bridge thread, and an unbounded join
- * would put one straight back.
+ * would put one straight back. The same finishing budget bounds waiting for a
+ * failed child to stop before its temporary output is removed.
  */
 private const val DRAIN_JOIN_MILLIS = 1_000L
 
@@ -541,6 +546,7 @@ class AndroidBridge(
     private val diskWork: Executor = Executors.newSingleThreadExecutor { r ->
         Thread(r, "bridge-disk").apply { isDaemon = true }
     },
+    private val onWorkspaceRoots: (Long, List<String>) -> Boolean = { _, _ -> false },
 ) {
     private val tag = "AndroidBridge"
 
@@ -572,12 +578,18 @@ class AndroidBridge(
      * out, and a relay cannot tell that apart from a listing that happens to be
      * empty.
      *
-     * @return whether the work was accepted. False when [MAX_QUEUED_DISK_COMMANDS]
-     *   are already outstanding, and then nothing was started and nothing will be
-     *   posted, so the caller has to answer on its own thread instead.
+     * @return whether the work was accepted. False when the queue is full, or when
+     *   [requireIdle] was requested while other work remains. No work or delayed reply
+     *   follows a refusal, so the caller answers on its own thread.
      */
-    private fun answerLater(replyId: String, work: () -> Pair<Boolean, String>): Boolean {
-        if (queuedDiskWork.incrementAndGet() > MAX_QUEUED_DISK_COMMANDS) {
+    private fun answerLater(
+        replyId: String,
+        requireIdle: Boolean = false,
+        work: () -> Pair<Boolean, String>,
+    ): Boolean {
+        // Do not leave destructive consent requests queued after their caller moves on.
+        if (requireIdle && !queuedDiskWork.compareAndSet(0, 1)) return false
+        if (!requireIdle && queuedDiskWork.incrementAndGet() > MAX_QUEUED_DISK_COMMANDS) {
             queuedDiskWork.decrementAndGet()
             Logger.w(tag, "Refusing a storage command: $MAX_QUEUED_DISK_COMMANDS are already " +
                 "queued on the one disk thread")
@@ -615,6 +627,13 @@ class AndroidBridge(
     fun hasClipboardText(authToken: String): Boolean {
         if (!security.validateToken(authToken)) return false
         return clipboard.hasClipboardText()
+    }
+
+    /** Refuses a queued bootstrap before it can change a replacement document. */
+    @JavascriptInterface
+    fun isAuthPageCurrent(authToken: String, pageGeneration: Long): Boolean {
+        if (!security.validateToken(authToken)) return false
+        return pageGeneration == AuthTabWindow.pageGeneration()
     }
 
     /**
@@ -871,6 +890,42 @@ class AndroidBridge(
         }.toString()
     }
 
+    @JavascriptInterface
+    fun publishWorkspaceRoots(authToken: String, pageGeneration: Long, pathsJson: String): Boolean {
+        if (!security.validateToken(authToken)) return false
+        if (pageGeneration != AuthTabWindow.pageGeneration()) return false
+        if (pathsJson.length > 262144) return false
+        return try {
+            val array = JSONArray(pathsJson)
+            val paths = (0 until array.length()).map { index ->
+                val path = array.opt(index) as? String ?: return false
+                if (!path.startsWith('/')) return false
+                path
+            }
+            onWorkspaceRoots(pageGeneration, paths)
+        } catch (_: Exception) {
+            false
+        }
+    }
+
+    @JavascriptInterface
+    fun claimWorkspacePaths(authToken: String, pathsJson: String): Boolean {
+        if (!security.validateToken(authToken)) return false
+        if (pathsJson.length > 262144) return false
+        val manager = safManager ?: return false
+        return try {
+            val array = JSONArray(pathsJson)
+            val paths = (0 until array.length()).map { index ->
+                val path = array.opt(index) as? String ?: return false
+                if (!path.startsWith('/')) return false
+                path
+            }
+            manager.claimWorkspacePaths(paths)
+        } catch (_: Exception) {
+            false
+        }
+    }
+
     /**
      * Opens a previously selected SAF folder by its URI string.
      *
@@ -888,6 +943,7 @@ class AndroidBridge(
     fun openRecentFolder(authToken: String, uriString: String) {
         if (!security.validateToken(authToken)) return
         val uri = uriString.toUri()
+        safManager?.let { it.claimMirrorOpen(it.getMirrorDir(uri)) }
         // Null, and printed as such, only for a bridge built with no SAF manager,
         // which is also a bridge whose open callback defaults to doing nothing.
         // Production has no such caller: `MainActivity` passes both together.
@@ -1028,35 +1084,20 @@ class AndroidBridge(
     }
 
     /**
-     * Removes the local copy of one device folder and says whether it went.
+     * Requests removal of a local copy that may contain files absent on the device.
      *
-     * ⚠️ **This deletes files, and with [force] it deletes files that exist nowhere
-     * else.** A mirror the app can vouch for is a copy of the device folder and
-     * removing it loses nothing. A mirror it cannot vouch for holds work the app never
-     * delivered to the device: anything under `node_modules`, `.git`, `__pycache__`,
-     * `.gradle`, `.idea`, `venv` or a `.env` directory, which the sync excludes by
-     * construction, and anything written while no watcher was running. [force] is the
-     * user's own decision to remove it anyway, and the caller must have said what is
-     * at stake in a modal the user had to accept. It is not a retry flag.
+     * [force] requires explicit consent and is never a retry flag. The Activity asks
+     * the user itself before removal and the manager still refuses an in-use copy.
+     * Destructive requests are admitted only while this bridge's disk worker is idle.
      *
-     * Without [force] the copy is walked to re-ask the gate and walked again to
-     * report the bytes freed, so this takes as long as the disk is big; see
-     * [answerLater].
-     *
-     * The empty string means two different things here, one on each road back,
-     * and they do not conflict. The RETURN says only that the removal was
-     * accepted and its outcome will follow. The POSTED answer is the outcome:
-     * empty when the mirror was removed, and otherwise the sentence naming why
-     * it was not, which is decided into `ok: false` before it leaves.
-     *
-     * @return the empty string once the removal is under way, and otherwise the
-     *   reason it was refused before starting. Success is the falsy value on
-     *   both roads, so a truthiness test reads backwards on either.
+     * Empty return means accepted, with the outcome posted later against [replyId].
+     * A non-empty return is an immediate refusal and starts no work. Posted empty
+     * payloads mean removal or user cancellation; refusals are posted with `ok: false`.
      */
     @JavascriptInterface
     fun reclaimSafMirror(authToken: String, hash: String, force: Boolean, replyId: String): String {
         if (!security.validateToken(authToken)) return context.getString(RECLAIM_STALE_SESSION)
-        val started = answerLater(replyId) {
+        val started = answerLater(replyId, requireIdle = true) {
             val answer = onReclaimMirror(hash, force)
             answer.isEmpty() to answer
         }
@@ -1178,24 +1219,13 @@ class AndroidBridge(
         //    Activity is now collectable while the download runs.
         val bridge = WeakReference(this)
         ToolchainManager(context.applicationContext).also { manager ->
-            manager.onStateChange = { packName, status, _, _ ->
+            manager.onStateChange = { packName, status, _, _, _ ->
                 when (status) {
-                    // The other half of a pair that had no other half: `install()`
-                    // calls `registerListener()` before every Play fetch and nothing
-                    // undid it, so this instance stayed subscribed for the life of
-                    // the process. After COMPLETED, FAILED or CANCELED there is
-                    // nothing further to hear, and the next `install()` subscribes
-                    // again. Harmless on the HTTP path, which never registers: the
-                    // unregister is guarded and does nothing.
-                    //
-                    // Spelled out rather than delegated to `isTerminalPackStatus`,
-                    // which answers a different question. That predicate defaults an
-                    // unknown status to true so the first-run queue advances rather
-                    // than stalls; here an unknown status is one still to come, and
-                    // unregistering on it would drop the install that finishes it.
+                    // Only the manager knows whether another requested pack still needs Play.
                     AssetPackStatus.COMPLETED,
                     AssetPackStatus.FAILED,
-                    AssetPackStatus.CANCELED -> manager.unregisterListener()
+                    AssetPackStatus.CANCELED,
+                    AssetPackStatus.UNKNOWN -> manager.unregisterListenerIfIdle()
                     AssetPackStatus.REQUIRES_USER_CONFIRMATION ->
                         bridge.get()?.confirmLargeDownload(packName)
                             // A literal, NOT the `tag` property. That property belongs
@@ -1347,6 +1377,9 @@ class AndroidBridge(
     fun generateSshKey(authToken: String, comment: String): String {
         if (!security.validateToken(authToken)) return """{"success":false,"error":"unauthorized"}"""
         val result = JSONObject()
+        var child: Process? = null
+        var stage: File? = null
+        var interrupted = false
         try {
             val nativeLibDir = context.applicationInfo.nativeLibraryDir
             val homeDir = "${context.filesDir}/home"
@@ -1373,40 +1406,34 @@ class AndroidBridge(
                 )
                 return result.toString()
             }
+            if (Files.exists(pubFile.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+                result.put("success", false)
+                result.put(
+                    "error",
+                    "An SSH public file already exists without its private key. " +
+                        "Keep it, or move ~/.ssh/id_ed25519.pub aside before generating a new pair."
+                )
+                return result.toString()
+            }
 
             val keyComment = if (comment.isBlank()) "vscodroid@android" else comment
-            // The private key cannot be there (returned above), but a public file can be: it is
-            // the user's, so a failed generation leaves it and removes only what it made.
-            val publicWasThere = pubFile.exists()
-
+            val temporary = Files.createTempDirectory(context.filesDir.toPath(), ".ssh-keygen-").toFile()
+            stage = temporary
+            val stagedKey = File(temporary, "id_ed25519")
+            val stagedPublic = File(temporary, "id_ed25519.pub")
             val process = ProcessBuilder(
                 "$nativeLibDir/libssh-keygen.so",
                 "-t", "ed25519",
-                "-f", keyFile.absolutePath,
-                "-N", "",  // empty passphrase
+                "-f", stagedKey.absolutePath,
+                "-N", "",
                 "-C", keyComment
             ).apply {
                 environment()["HOME"] = homeDir
                 environment()["LD_LIBRARY_PATH"] = "$nativeLibDir:${context.filesDir}/usr/lib"
                 redirectErrorStream(true)
             }.start()
+            child = process
 
-            // Drained on its own thread, and that ordering is the guarantee
-            // rather than a detail. readText() returns at EOF, and EOF on a
-            // child's stdout arrives when the child exits -- so reading before
-            // the wait makes the wait unreachable in precisely the case it was
-            // written for. A ssh-keygen that hangs while holding stdout open
-            // parked this thread with no bound at all, and this thread is the
-            // WebView's bridge thread: every other bridge call queues behind it,
-            // so one stuck key generation freezes clipboard, storage and
-            // toolchain calls too. The timeout below was already here, already
-            // documented as protecting the caller, and simply never got to run.
-            //
-            // Draining concurrently is also what keeps the wait honest in the
-            // other direction: with waitFor first and no reader, a child that
-            // filled the ~64 KB pipe buffer would block on write and never
-            // exit, turning the same hang into a guaranteed timeout instead of
-            // a completed key.
             var output = ""
             val drain = Thread {
                 output = try {
@@ -1414,57 +1441,107 @@ class AndroidBridge(
                 } catch (e: Exception) {
                     ""
                 }
-            }
-            drain.isDaemon = true
+            }.apply { isDaemon = true }
             drain.start()
 
-            // Bounded, and bounded under the relay's own five seconds so this
-            // side gives up first. An unbounded wait parks the bridge thread,
-            // which every other bridge call queues behind, and the JavaScript
-            // caller has already rejected by then, so the extra time buys a
-            // frozen clipboard and storage rather than a key.
             if (!process.waitFor(KEYGEN_TIMEOUT_SECONDS, java.util.concurrent.TimeUnit.SECONDS)) {
-                process.destroyForcibly()
-                Logger.e(tag, "ssh-keygen did not finish within ${KEYGEN_TIMEOUT_SECONDS}s; killed")
-                keyFile.delete()
-                if (!publicWasThere) pubFile.delete()
-                result.put("success", false)
-                result.put("error", "ssh-keygen did not finish within ${KEYGEN_TIMEOUT_SECONDS}s")
-                return result.toString()
+                throw IOException("ssh-keygen did not finish within ${KEYGEN_TIMEOUT_SECONDS}s")
             }
-            // The child has exited, so its end of the pipe is closed and the
-            // drain is at most one buffer from EOF. The join publishes what it
-            // read; it is bounded so that this line cannot quietly become the
-            // unbounded wait the lines above exist to remove. Overrunning it
-            // costs the diagnostic text in the error message, nothing else.
             drain.join(DRAIN_JOIN_MILLIS)
             val exitCode = process.exitValue()
 
-            // A successful generation must leave both key files before the public key can be returned.
-            if (exitCode == 0 && keyFile.exists() && pubFile.isFile) {
-                // Set correct permissions (600 for private key, 644 for public)
+            if (exitCode == 0 &&
+                Files.isRegularFile(stagedKey.toPath(), LinkOption.NOFOLLOW_LINKS) &&
+                Files.isRegularFile(stagedPublic.toPath(), LinkOption.NOFOLLOW_LINKS)
+            ) {
                 try {
-                    android.system.Os.chmod(keyFile.absolutePath, 384)  // 0600
-                    android.system.Os.chmod(pubFile.absolutePath, 420)  // 0644
+                    android.system.Os.chmod(stagedKey.absolutePath, 384)
+                    android.system.Os.chmod(stagedPublic.absolutePath, 420)
                 } catch (e: Exception) {
                     Logger.d(tag, "Failed to chmod SSH key: ${e.message}")
                 }
-
-                val pubKey = pubFile.readText().trim()
-                result.put("success", true)
-                result.put("publicKey", pubKey)
+                val pubKey = stagedPublic.readText().trim()
+                // A concurrent import must not be replaced by the generated pair.
+                if (Files.exists(keyFile.toPath(), LinkOption.NOFOLLOW_LINKS) ||
+                    Files.exists(pubFile.toPath(), LinkOption.NOFOLLOW_LINKS)
+                ) {
+                    throw IOException("An SSH key file appeared during generation. Existing files were kept.")
+                }
+                try {
+                    Files.createLink(keyFile.toPath(), stagedKey.toPath())
+                } catch (e: FileAlreadyExistsException) {
+                    throw IOException("An SSH private key appeared during generation. It was kept.", e)
+                }
+                try {
+                    Files.createLink(pubFile.toPath(), stagedPublic.toPath())
+                    result.put("success", true)
+                    result.put("publicKey", pubKey)
+                } catch (e: Exception) {
+                    // Keep the published private key rather than rolling back a pathname.
+                    result.put("success", false)
+                    result.put(
+                        "error",
+                        "An SSH private key was created, but its public file could not be installed. " +
+                            "Existing files were kept. Recover its public key with " +
+                            "ssh-keygen -y -f ~/.ssh/id_ed25519, then inspect " +
+                            "~/.ssh/id_ed25519.pub before replacing it."
+                    )
+                }
             } else {
-                keyFile.delete()
-                if (!publicWasThere) pubFile.delete()
                 result.put("success", false)
                 result.put("error", output.trim().ifEmpty { "ssh-keygen exited with code $exitCode" })
             }
         } catch (e: Exception) {
+            interrupted = e is InterruptedException
             Logger.e(tag, "SSH key generation failed", e)
             result.put("success", false)
-            result.put("error", e.message ?: "unknown error")
+            result.put("error", if (interrupted) "SSH key generation was interrupted" else e.message ?: "unknown error")
+        } finally {
+            try {
+                val stopped = child?.let { !it.isAlive || stopSshKeygen(it) } ?: true
+                if (stopped) {
+                    stage?.let { temporary ->
+                        try {
+                            Files.deleteIfExists(File(temporary, "id_ed25519").toPath())
+                            Files.deleteIfExists(File(temporary, "id_ed25519.pub").toPath())
+                            Files.deleteIfExists(temporary.toPath())
+                        } catch (e: Exception) {
+                            Logger.w(tag, "Could not remove temporary SSH files: ${e.javaClass.simpleName}")
+                        }
+                    }
+                } else {
+                    result.put("success", false)
+                    result.put("error", "ssh-keygen could not be stopped within the cleanup deadline; temporary output was kept")
+                }
+            } finally {
+                if (interrupted) Thread.currentThread().interrupt()
+            }
         }
         return result.toString()
+    }
+
+    private fun stopSshKeygen(process: Process): Boolean {
+        var interrupted = Thread.interrupted()
+        try {
+            process.destroyForcibly()
+            val deadline = System.nanoTime() +
+                java.util.concurrent.TimeUnit.MILLISECONDS.toNanos(DRAIN_JOIN_MILLIS)
+            while (process.isAlive) {
+                val remaining = deadline - System.nanoTime()
+                if (remaining <= 0L) return false
+                try {
+                    if (process.waitFor(remaining, java.util.concurrent.TimeUnit.NANOSECONDS)) return true
+                } catch (_: InterruptedException) {
+                    interrupted = true
+                }
+            }
+            return true
+        } catch (e: Exception) {
+            Logger.w(tag, "Could not stop SSH key generation: ${e.javaClass.simpleName}")
+            return !process.isAlive
+        } finally {
+            if (interrupted) Thread.currentThread().interrupt()
+        }
     }
 
     /**

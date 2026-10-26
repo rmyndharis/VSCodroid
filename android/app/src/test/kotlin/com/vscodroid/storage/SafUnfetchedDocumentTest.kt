@@ -65,6 +65,7 @@ class SafUnfetchedDocumentTest {
     private lateinit var engine: SafSyncEngine
     private lateinit var treeUri: Uri
     private val uris = mutableMapOf<String, Uri>()
+    private val renamedDirectoryNames = mutableMapOf<String, String>()
 
     @BeforeEach
     fun setUp() {
@@ -96,7 +97,12 @@ class SafUnfetchedDocumentTest {
         // `deleteFromSaf` swallows the throw, so a control asserting the delete went
         // through would be asserting on a call that never completed.
         every { DocumentsContract.deleteDocument(any(), any()) } returns true
-        every { DocumentsContract.renameDocument(any(), any(), any()) } returns mockk(relaxed = true)
+        every { DocumentsContract.renameDocument(any(), any(), any()) } answers {
+            val name = thirdArg<String>()
+            val id = "doc:$name"
+            renamedDirectoryNames[id] = name
+            uris.getOrPut(id) { mockk(relaxed = true) }
+        }
 
         resolver = mockk(relaxed = true)
         context = mockk<Context>(relaxed = true)
@@ -177,7 +183,14 @@ class SafUnfetchedDocumentTest {
             mockk<Uri>(relaxed = true).also { every { it.toString() } returns "children:$parent" }
         }
         every { resolver.query(any(), any(), any(), any(), any()) } answers {
-            val parent = firstArg<Uri>().toString().removePrefix("children:")
+            val queried = firstArg<Uri>()
+            val documentId = uris.entries.firstOrNull { it.value === queried }?.key
+            if (documentId != null) {
+                val entry = renamedDirectoryNames[documentId]?.let { Entry(it, isDirectory = true) }
+                    ?: tree.values.flatten().firstOrNull { "doc:${it.name}" == documentId }
+                return@answers cursorOver(listOfNotNull(entry))
+            }
+            val parent = queried.toString().removePrefix("children:")
             // A parent the provider answers for and then will not list: a cloud or SMB
             // provider momentarily offline, or an MTP bridge hiccup. The walk carries
             // on from it, which is what leaves the directory in the mirror empty.
@@ -193,6 +206,17 @@ class SafUnfetchedDocumentTest {
         var row = -1
         return mockk<Cursor>(relaxed = true) {
             every { moveToNext() } answers { ++row < entries.size }
+            every { moveToFirst() } answers { row = 0; entries.isNotEmpty() }
+            every { getColumnIndex(any()) } answers {
+                when (firstArg<String>()) {
+                    DocumentsContract.Document.COLUMN_DOCUMENT_ID -> 0
+                    DocumentsContract.Document.COLUMN_DISPLAY_NAME -> 1
+                    DocumentsContract.Document.COLUMN_MIME_TYPE -> 2
+                    DocumentsContract.Document.COLUMN_SIZE -> 3
+                    DocumentsContract.Document.COLUMN_LAST_MODIFIED -> 4
+                    else -> -1
+                }
+            }
             every { getColumnIndexOrThrow(any()) } answers {
                 when (firstArg<String>()) {
                     DocumentsContract.Document.COLUMN_DOCUMENT_ID -> 0
@@ -232,40 +256,40 @@ class SafUnfetchedDocumentTest {
 
     @Test
     fun `a save checking an old device stamp cannot cross a reopen that could not read the document`() {
-        reopenDuringOutboundStampCheck(FileObserver.MODIFY)
+        reopenAroundOutboundAdmission(FileObserver.MODIFY)
     }
 
     @Test
-    fun `a delete checking an old device stamp cannot cross a reopen that could not read the document`() {
-        reopenDuringOutboundStampCheck(FileObserver.DELETE)
+    fun `a queued delete cannot cross a reopen that could not read the document`() {
+        reopenAroundOutboundAdmission(FileObserver.DELETE)
     }
 
     @Test
-    fun `a create reusing a document cannot cross a reopen that could not read it`() {
-        reopenDuringOutboundStampCheck(FileObserver.CREATE)
+    fun `a reopen refuses while a create checks the existing document and succeeds afterwards`() {
+        reopenAroundOutboundAdmission(FileObserver.CREATE)
     }
 
     @Test
     fun `a replacement engine reopening the mirror invalidates an older engine save`() {
-        reopenDuringOutboundStampCheck(FileObserver.MODIFY, replacementEngine = true)
+        reopenAroundOutboundAdmission(FileObserver.MODIFY, replacementEngine = true)
     }
 
     @Test
     fun `a replacement engine reopening the mirror invalidates an older engine delete`() {
-        reopenDuringOutboundStampCheck(FileObserver.DELETE, replacementEngine = true)
+        reopenAroundOutboundAdmission(FileObserver.DELETE, replacementEngine = true)
     }
 
     @Test
     fun `opening another mirror leaves a valid save able to finish`() {
-        reopenDuringOutboundStampCheck(FileObserver.MODIFY, anotherMirror = true)
+        reopenAroundOutboundAdmission(FileObserver.MODIFY, anotherMirror = true)
     }
 
     @Test
     fun `opening another mirror leaves a valid delete able to finish`() {
-        reopenDuringOutboundStampCheck(FileObserver.DELETE, anotherMirror = true)
+        reopenAroundOutboundAdmission(FileObserver.DELETE, anotherMirror = true)
     }
 
-    private fun reopenDuringOutboundStampCheck(
+    private fun reopenAroundOutboundAdmission(
         event: Int,
         replacementEngine: Boolean = false,
         anotherMirror: Boolean = false,
@@ -277,8 +301,9 @@ class SafUnfetchedDocumentTest {
         val writes = AtomicInteger()
         val deletes = AtomicInteger()
         val failedReads = AtomicInteger()
-        val checkingStamp = CountDownLatch(1)
-        val releaseStamp = CountDownLatch(1)
+        val reads = AtomicInteger()
+        val outboundPaused = CountDownLatch(1)
+        val releaseOutbound = CountDownLatch(1)
         val pauseNextStamp = AtomicBoolean(true)
         val failure = AtomicReference<Throwable?>()
         var outbound: Thread? = null
@@ -290,8 +315,8 @@ class SafUnfetchedDocumentTest {
             if (document) {
                 // A provider cursor is a snapshot, even if its binder call returns later.
                 if (Thread.currentThread() === outbound && pauseNextStamp.compareAndSet(true, false)) {
-                    checkingStamp.countDown()
-                    check(releaseStamp.await(10, TimeUnit.SECONDS)) { "the stamp query was not released" }
+                    outboundPaused.countDown()
+                    check(releaseOutbound.await(10, TimeUnit.SECONDS)) { "the outbound checkpoint was not released" }
                 }
                 mockk<Cursor>(relaxed = true) {
                     every { moveToFirst() } returns true
@@ -308,6 +333,7 @@ class SafUnfetchedDocumentTest {
             }
         }
         every { resolver.openInputStream(any()) } answers {
+            reads.incrementAndGet()
             if (!readable.get()) {
                 failedReads.incrementAndGet()
                 throw IOException("the provider refused the read")
@@ -337,33 +363,75 @@ class SafUnfetchedDocumentTest {
         engine.handleMirrorEvent(event, local, mirror, treeUri)
         val drain = Thread {
             try {
+                if (event == FileObserver.DELETE) {
+                    // DELETE proves bytes inside admission, so reopen before the queued job starts.
+                    outboundPaused.countDown()
+                    check(releaseOutbound.await(10, TimeUnit.SECONDS)) { "the queued delete was not released" }
+                }
                 engine.runWriteBackLoop { false }
             } catch (error: Throwable) {
                 failure.set(error)
             }
         }
         outbound = drain
+        val openingEngine = if (replacementEngine) SafSyncEngine(context) else engine
+        val openingMirror = if (anotherMirror) File(filesDir, "other-mirror").apply { mkdirs() } else mirror
+        val admittedCreate = event == FileObserver.CREATE && !anotherMirror
+        var readsBeforeRelease = 0
         drain.start()
         try {
-            assertTrue(checkingStamp.await(5, TimeUnit.SECONDS), "the outbound job never checked its device stamp")
-            if (!anotherMirror) {
-                contents.set("changed by another app")
-                modified.set(System.currentTimeMillis() + 60_000)
-                readable.set(false)
+            assertTrue(outboundPaused.await(5, TimeUnit.SECONDS), "the outbound job never reached its checkpoint")
+            if (admittedCreate) {
+                val error = runCatching {
+                    runBlocking { openingEngine.initialSync(treeUri, openingMirror) { _, _ -> } }
+                }.exceptionOrNull()
+                assertTrue(error is FolderBusyException, "the admitted create did not keep the mirror busy: $error")
+                assertEquals("saved in the editor", local.readText(), "the busy open changed the mirror")
+                assertEquals("device contents", contents.get())
+                assertEquals(0, writes.get())
+                assertEquals(0, deletes.get())
+            } else {
+                if (!anotherMirror) {
+                    contents.set("changed by another app")
+                    modified.set(System.currentTimeMillis() + 60_000)
+                    readable.set(false)
+                }
+                runBlocking { openingEngine.initialSync(treeUri, openingMirror) { _, _ -> } }
+                if (anotherMirror) assertEquals("device contents", File(openingMirror, "notes.md").readText())
+                else assertTrue(failedReads.get() > 0, "the reopen did not try to read the changed document")
             }
-            val openingEngine = if (replacementEngine) SafSyncEngine(context) else engine
-            val openingMirror = if (anotherMirror) File(filesDir, "other-mirror").apply { mkdirs() } else mirror
-
-            runBlocking { openingEngine.initialSync(treeUri, openingMirror) { _, _ -> } }
-
-            if (anotherMirror) assertEquals("device contents", File(openingMirror, "notes.md").readText())
-            else assertTrue(failedReads.get() > 0, "the reopen did not try to read the changed document")
+            readsBeforeRelease = reads.get()
         } finally {
-            releaseStamp.countDown()
+            releaseOutbound.countDown()
             drain.join(5_000)
         }
         assertFalse(drain.isAlive, "the outbound job did not finish after its provider call returned")
         failure.get()?.let { throw AssertionError("the outbound job failed", it) }
+        if (admittedCreate) {
+            assertTrue(exists.get())
+            assertEquals("saved in the editor", contents.get())
+            assertEquals(1, writes.get())
+            assertEquals(0, deletes.get())
+            verify(exactly = 0) { DocumentsContract.createDocument(any(), any(), any(), any()) }
+
+            contents.set("changed by another app")
+            modified.set(System.currentTimeMillis() + 60_000)
+            readable.set(false)
+            runBlocking { openingEngine.initialSync(treeUri, openingMirror) { _, _ -> } }
+
+            assertTrue(failedReads.get() > 0, "the later reopen did not try to read the changed document")
+            assertTrue(exists.get())
+            assertEquals("changed by another app", contents.get())
+            assertEquals(1, writes.get(), "the later unreadable reopen replaced the device copy")
+            assertEquals(0, deletes.get())
+            return
+        }
+        if (event == FileObserver.DELETE) {
+            assertEquals(
+                readsBeforeRelease + if (anotherMirror) 1 else 0, reads.get(),
+                "the delete did not respect generation admission and fresh byte proof",
+            )
+        }
         if (anotherMirror) {
             assertEquals(event != FileObserver.DELETE, exists.get(), "opening another mirror cancelled the valid delete")
             assertEquals(if (event == FileObserver.DELETE) "device contents" else "saved in the editor", contents.get())
@@ -375,9 +443,6 @@ class SafUnfetchedDocumentTest {
         assertEquals("changed by another app", contents.get(), "the queued save replaced unread device bytes")
         assertEquals(0, writes.get(), "the stale save opened the device document with truncation")
         assertEquals(0, deletes.get(), "the stale delete reached the provider")
-        if (event == FileObserver.CREATE) {
-            verify(exactly = 0) { DocumentsContract.createDocument(any(), any(), any(), any()) }
-        }
     }
 
     @Test
@@ -679,7 +744,7 @@ class SafUnfetchedDocumentTest {
     /**
      * The set is a memory of what this sync could not read, not a fact about the
      * device. When the directory is no longer there, there is nothing to keep, and the
-     * delete goes through exactly as it did before the guard existed.
+     * no provider delete or kept-content notice is needed.
      */
     @Test
     fun `a directory the device no longer holds is not kept`() {
@@ -693,7 +758,7 @@ class SafUnfetchedDocumentTest {
         deviceTree(mapOf("root" to emptyList()))
         deleteDirectory("docs")
 
-        verify(exactly = 1) { DocumentsContract.deleteDocument(any(), uris.getValue("doc:docs")) }
+        verify(exactly = 0) { DocumentsContract.deleteDocument(any(), any()) }
         assertTrue(
             kept.isEmpty(),
             "a directory the device had already lost was announced as kept: $kept",
@@ -787,8 +852,8 @@ class SafUnfetchedDocumentTest {
     /**
      * A directory delete the closing folder's drain sends after a reopen, its queue having
      * outlived the stop behind a slow provider. The reopen could not read what the directory
-     * holds, which the delete takes with it, and the guard was asked only when the delete
-     * was queued, before the reopen.
+     * holds. The queued delete belongs to the earlier generation, so it is declined before
+     * consulting the reopened folder's memory and announced as a changed device copy.
      */
     @Test
     fun `a directory delete sent after a reopen that could not read what it holds is declined`() {
@@ -804,7 +869,10 @@ class SafUnfetchedDocumentTest {
         engine.runWriteBackLoop { false }
 
         verify(exactly = 0) { DocumentsContract.deleteDocument(any(), any()) }
-        assertEquals(listOf(Triple("docs", true, false)), kept)
+        assertEquals(
+            listOf(Triple("docs", true, true)), kept,
+            "the stale delete must not describe the reopened generation's unread state as its own",
+        )
     }
 
     /**
@@ -871,8 +939,9 @@ class SafUnfetchedDocumentTest {
      */
     private fun renameDirectory(from: String, to: String) {
         engine.handleMirrorEvent(FileObserver.MOVED_FROM or isDirFlag, File(mirror, from), mirror, treeUri)
-        deliver(FileObserver.MOVED_TO or isDirFlag, to)
-        File(mirror, from).renameTo(File(mirror, to))
+        engine.handleMirrorEvent(FileObserver.MOVED_TO or isDirFlag, File(mirror, to), mirror, treeUri)
+        assertTrue(File(mirror, from).renameTo(File(mirror, to)))
+        engine.runWriteBackLoop { false }
     }
 
     /**
@@ -1160,12 +1229,30 @@ class SafUnfetchedDocumentTest {
         val remaining = docsHoldingNotes.toMutableMap()
         deviceTree(remaining)
         runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
-        changedByAnotherApp("doc:notes.md")
+        val notesUri = uris.getValue("doc:notes.md")
+        var deviceContents = "changed by another app"
+        remaining["doc:docs"] = listOf(Entry("notes.md", deviceContents.toByteArray().size.toLong()))
+        every { resolver.openInputStream(notesUri) } answers {
+            ByteArrayInputStream(deviceContents.toByteArray())
+        }
+        every { resolver.openOutputStream(notesUri, "wt") } answers {
+            deviceContents = ""
+            remaining["doc:docs"] = listOf(Entry("notes.md", 0))
+            object : ByteArrayOutputStream() {
+                override fun close() {
+                    deviceContents = toString("UTF-8")
+                    remaining["doc:docs"] = listOf(Entry("notes.md", size().toLong()))
+                    super.close()
+                }
+            }
+        }
         val notes = File(mirror, "docs/notes.md").apply { delete() }
         deliver(FileObserver.DELETE, "docs/notes.md")
         assertEquals(listOf("notes.md"), kept, "setup: the file's delete went through")
         notes.writeText("made again in the editor")
         deliver(FileObserver.CREATE, "docs/notes.md")
+        assertEquals("made again in the editor", deviceContents, "setup: the recreated file did not land")
+        assertEquals(listOf("changed by another app"), deviceCopiesIn("docs"))
         val gone = File(mirror, "docs").listFiles()!!.map { it.name }
         assertTrue(
             gone.any { it.startsWith("notes.md" + SafSyncEngine.DEVICE_COPY_SUFFIX) },

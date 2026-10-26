@@ -380,11 +380,13 @@ class SafDataPreservationInstrumentedTest {
     }
 
     @Test
-    fun recordedMirrorIsReclaimedAfterItsGrantIsRevoked() = runBlocking {
+    fun recordedMirrorRequiresConfirmationAfterItsGrantIsRevoked() = runBlocking {
         persistFixtureGrant()
         val manager = SafStorageManager(context)
         val savedMirror = manager.getMirrorDir(treeUri)
         engine.initialSync(treeUri, savedMirror) { _, _ -> }
+        val record = File(savedMirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX)
+        val originalRecord = record.readBytes()
         assertArrayEquals(ORIGINAL, File(savedMirror, SafDocumentsProvider.FILE_NAME).readBytes())
         assertEquals("A live persistent grant must keep its mirror", 0, manager.reclaimRevokedMirrorsSync())
         assertTrue(savedMirror.exists())
@@ -394,10 +396,20 @@ class SafDataPreservationInstrumentedTest {
             treeUri, Process.myPid(), Process.myUid(), Intent.FLAG_GRANT_READ_URI_PERMISSION,
         ))
 
-        assertTrue(manager.reclaimRevokedMirrorsSync() > 0)
+        assertEquals(0, manager.reclaimRevokedMirrorsSync())
+        assertArrayEquals(ORIGINAL, File(savedMirror, SafDocumentsProvider.FILE_NAME).readBytes())
+        assertArrayEquals(originalRecord, record.readBytes())
+        assertFalse(manager.listMirrors().single { it.hash == savedMirror.name }.reclaimable)
+        assertEquals(SafStorageManager.RECLAIM_REFUSED,
+            manager.reclaimMirror(savedMirror.name, force = false))
+        assertArrayEquals(ORIGINAL, File(savedMirror, SafDocumentsProvider.FILE_NAME).readBytes())
+        assertArrayEquals(originalRecord, record.readBytes())
+
+        assertTrue(manager.reclaimMirror(savedMirror.name, force = true) >= 0)
+        assertEquals(2, manager.sweepDiscardedMirrors())
 
         assertFalse(savedMirror.exists())
-        assertFalse(File(savedMirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX).exists())
+        assertFalse(record.exists())
     }
 
     private fun persistFixtureGrant() {

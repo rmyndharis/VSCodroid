@@ -77,7 +77,7 @@ class TerminalTrustStoreTest {
     private fun env(): Map<String, String> = Environment.buildProcessEnvironment(context, 1234)
 
     @Test
-    fun `the bundle reaches everything that speaks TLS, not only git`() {
+    fun `the bundle reaches git and OpenSSL clients`() {
         val environment = env()
         val bundle = "${filesDir.absolutePath}/usr/etc/tls/cert.pem"
 
@@ -101,15 +101,17 @@ class TerminalTrustStoreTest {
      * the device owner installed reaches git and never reaches a private index.
      */
     @Test
-    fun `pip is given the bundle under the name it reads`() {
+    fun `requests and curl use the generated bundle when present`() {
         File(filesDir, "usr/etc/tls").mkdirs()
         File(filesDir, "usr/etc/tls/cert.pem").writeText("-----BEGIN CERTIFICATE-----\n")
+        val environment = env()
 
         assertEquals(
-            "${filesDir.absolutePath}/usr/etc/tls/cert.pem", env()["REQUESTS_CA_BUNDLE"],
+            "${filesDir.absolutePath}/usr/etc/tls/cert.pem", environment["REQUESTS_CA_BUNDLE"],
             "pip and a user's own requests code are back on the vendored certifi, so a CA " +
                 "the device owner installed does not reach a private index",
         )
+        assertEquals("${filesDir.absolutePath}/usr/etc/tls/cert.pem", environment["CURL_CA_BUNDLE"])
     }
 
     /**
@@ -121,36 +123,41 @@ class TerminalTrustStoreTest {
      * it away to improve trust would be the worse trade.
      */
     @Test
-    fun `no bundle on disk means the variable is not set at all`() {
+    fun `requests and curl bundle overrides are absent when no bundle exists`() {
         assertTrue(
             !File(filesDir, "usr/etc/tls/cert.pem").exists(),
             "this case has to run with no bundle written, or it proves nothing",
         )
 
+        val environment = env()
         assertTrue(
-            env()["REQUESTS_CA_BUNDLE"] == null,
+            environment["REQUESTS_CA_BUNDLE"] == null,
             "pip is pointed at a bundle that does not exist, which it treats as fatal: " +
                 "every install stops with \"Could not find a suitable TLS CA certificate " +
                 "bundle\" instead of falling back to the one vendored inside it",
         )
+        assertTrue(environment["CURL_CA_BUNDLE"] == null, "a missing bundle disables curl's own trust store")
     }
 
-    /**
-     * The directory stays. It costs nothing, and a client that does resolve the
-     * old hashes keeps working; dropping it would be a change nobody measured.
-     */
     @Test
-    fun `the system store is still offered alongside the bundle`() {
+    fun `an empty bundle remains explicit for requests and curl`() {
+        val bundle = File(filesDir, "usr/etc/tls/cert.pem")
+        bundle.parentFile?.mkdirs()
+        bundle.writeText("")
+
         val environment = env()
 
-        assertTrue(
-            environment["SSL_CERT_DIR"]?.startsWith("/") == true,
-            "SSL_CERT_DIR no longer names an absolute system path: ${environment["SSL_CERT_DIR"]}",
-        )
-        assertTrue(
-            environment["SSL_CERT_DIR"] != environment["SSL_CERT_FILE"],
-            "the directory and the file variables now name the same thing, so one of them " +
-                "is being used for something it is not",
-        )
+        assertEquals(bundle.absolutePath, environment["REQUESTS_CA_BUNDLE"])
+        assertEquals(bundle.absolutePath, environment["CURL_CA_BUNDLE"])
+    }
+
+    /** Directory lookup must not bypass the platform store's excluded roots. */
+    @Test
+    fun `directory trust stays inside the managed bundle directory`() {
+        val environment = env()
+        val managed = "${filesDir.absolutePath}/usr/etc/tls"
+
+        assertEquals(managed, environment["SSL_CERT_DIR"], "raw roots can override bundle removals")
+        assertEquals(managed, environment["GIT_SSL_CAPATH"], "raw roots can override git's CA bundle")
     }
 }
