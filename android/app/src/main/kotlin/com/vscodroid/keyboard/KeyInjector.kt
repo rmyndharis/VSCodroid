@@ -353,8 +353,8 @@ class KeyInjector(
      * `beforeinput`, and `p` was typed with Ctrl still lit. A fourth is the soft
      * keyboard's Enter when a keybinding accepts it.
      * `MainActivity.injectComposingEnter` spends a lone Shift on the Enter whose
-     * empty `code` it fills, without applying it, as here; an Enter that arrives
-     * with a `code` is not covered.
+     * empty `code` it fills and on a trusted plain Enter with a `code`, without
+     * applying that latch to either event.
      *
      * Spending is all the composition hook can do, and a keyboard that composes
      * every word made the latch useless: Gboard 12.4 types each letter on the
@@ -389,9 +389,10 @@ class KeyInjector(
      * of the text, the chord's letter stayed in it, and Gboard 12.4 on the same
      * emulator built its next word from that copy, so `ab`, Ctrl, `s` and `c`
      * left `ababsc`.
-     * What it costs: text committed in one piece while Ctrl or Alt is latched, a
-     * suggestion chip say, has no chord, spends the latch and is lost with the
-     * empty EditContext, where the `beforeinput` path leaves it to the page.
+     * A commit containing several code units has no single-key chord. It
+     * replaces the editor's current selection through its own EditContext,
+     * then spends the latch and restarts input. A real `beforeinput` keeps its
+     * ordinary insertion path instead.
      *
      * The same script guards Left and Right, the only arrows pressed for real,
      * at the edge of a text box. A real arrow turns WebView spatial navigation
@@ -429,9 +430,10 @@ class KeyInjector(
      * workbench's keybinding service listens on the window, after the box, and
      * does not read `defaultPrevented`. It covers this document only, so a text
      * box inside an extension webview, a frame of another origin, is not
-     * guarded. It applies to a hardware keyboard's Left and Right too. The
-     * edges are read in logical order, which is the screen's order for
-     * left-to-right text.
+     * guarded. It applies to a hardware keyboard's Left and Right too. For a
+     * collapsed caret, Blink's Selection.modify performs the visual move and
+     * the native default is cancelled, including where that move ends. Logical
+     * offsets cannot identify visual edges in right-to-left or mixed text.
      *
      * Call once after the page finishes loading.
      */
@@ -582,8 +584,8 @@ class KeyInjector(
                     // The only other things that clear it while the keyboard is
                     // up are the two hooks below, for a composition and for
                     // focus entering a frame, and the soft keyboard Enter script
-                    // in MainActivity, on the code-less Enter it fills, which a
-                    // keybinding may accept with no beforeinput to follow. A
+                    // in MainActivity, on a filled or trusted plain Enter, which
+                    // a keybinding may accept with no beforeinput to follow. A
                     // latch that survives no longer produces nothing: injectKey
                     // resolves it into a DIFFERENT character, so a Shift the
                     // user has forgotten turns a later tap on `/` into `?`,
@@ -863,6 +865,26 @@ class KeyInjector(
                         // A selection-only update is not the character, and an
                         // EditContext already given back takes nothing.
                         if (!e.text || !lent || lent.empty !== empty) return;
+                        if (e.text.length !== 1) {
+                            var own = lent.own;
+                            var start = own.selectionStart;
+                            var end = own.selectionEnd;
+                            var nextStart = start + e.selectionStart;
+                            var nextEnd = start + e.selectionEnd;
+                            // A synthetic beforeinput has no insertion default.
+                            own.updateText(start, end, e.text);
+                            own.updateSelection(nextStart, nextEnd);
+                            own.dispatchEvent(new TextUpdateEvent('textupdate', {
+                                text: e.text, updateRangeStart: start, updateRangeEnd: end,
+                                selectionStart: nextStart, selectionEnd: nextEnd
+                            }));
+                            var mod = window.__vscodroid;
+                            mod.ctrl = false;
+                            mod.alt = false;
+                            mod.shift = false;
+                            giveBack();
+                            return;
+                        }
                         // The chord first, so that the keyboard reads the text
                         // again after the chord has changed it.
                         host.dispatchEvent(new InputEvent('beforeinput', {
@@ -962,7 +984,7 @@ class KeyInjector(
                 // a lost line move costs less than lost focus.
                 var version = /Chrome\/(\d+)/.exec(navigator.userAgent);
                 var altUnhandled = !version || +version[1] < 149;
-                // Whether the press goes on to spatial navigation from `t`. A
+                // Handle the renderer's visual move before spatial navigation. A
                 // number or email box takes text but reports no caret, so any
                 // press there may be the one at its edge.
                 function leaves(e, t) {
@@ -970,6 +992,14 @@ class KeyInjector(
                     var box = t.tagName === 'TEXTAREA' || (t.tagName === 'INPUT' && at !== null);
                     var blind = t.tagName === 'INPUT' && (t.type === 'number' || t.type === 'email');
                     if (e.altKey) return altUnhandled && (box || blind || !!t.editContext);
+                    if (box && at === t.selectionEnd) {
+                        var selection = window.getSelection && window.getSelection();
+                        if (selection && typeof selection.modify === 'function') {
+                            if (!t.matches(':focus')) return false;
+                            selection.modify('move', EDGE[e.key] < 0 ? 'left' : 'right', 'character');
+                            return true;
+                        }
+                    }
                     return blind || (box && at === t.selectionEnd && at === (EDGE[e.key] < 0 ? 0 : t.value.length));
                 }
                 // Decided on the innermost target, by a listener added there

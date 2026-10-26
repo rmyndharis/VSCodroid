@@ -40,8 +40,7 @@
  * Shift and cleared no `isComposing`, those last six fail and eighteen pass.
  * Writing `e.code = 'Enter'` in place of the `defineProperty` fails the three
  * and the Shift case; defining `shiftKey` on the filled Enter, or leaving the
- * latch standing, fails the Shift case; spending the latch on an Enter that
- * already has a code fails the case that expects it kept; assigning
+ * latch standing, fails the Shift case; assigning
  * `isComposing` instead of defining it fails the five; and dropping the
  * editor exclusion from the quick input's keys fails the Quick Chat case.
  *
@@ -202,9 +201,9 @@ const cases = [
         outcome({ latch: { ...CLEAR, ctrl: true, shift: true } })],
     ['an Enter that already has code Enter is left alone',
         press({ key: 'Enter', code: 'Enter' }, { latched: NO_LATCH }), outcome({ code: 'Enter' })],
-    ['so is one with Shift latched, latch and all',
+    ['a trusted code-bearing Enter spends the row Shift without applying it',
         press({ key: 'Enter', code: 'Enter' }, { latched: { shift: true } }),
-        outcome({ code: 'Enter', latch: { ...CLEAR, shift: true } })],
+        outcome({ code: 'Enter' })],
     ['a code-less key that is not Enter is left alone',
         press({ key: 'Unidentified', code: '', keyCode: 229 }, { latched: NO_LATCH }), outcome({})],
 ];

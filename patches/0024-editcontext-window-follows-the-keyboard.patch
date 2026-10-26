@@ -626,16 +626,16 @@ index c654033..7f8af73 100644
  			const characterModelRange = Range.fromPositions(characterStartPosition, characterEndPosition);
  			const characterViewRange = this._context.viewModel.coordinatesConverter.convertModelRangeToViewRange(characterModelRange);
 diff --git a/src/vs/editor/common/cursor/cursorTypeEditOperations.ts b/src/vs/editor/common/cursor/cursorTypeEditOperations.ts
-index 45284b3..78bdb3e 100644
 --- a/src/vs/editor/common/cursor/cursorTypeEditOperations.ts
 +++ b/src/vs/editor/common/cursor/cursorTypeEditOperations.ts
-@@ -762,11 +762,44 @@ export class CompositionOperation {
+@@ -762,13 +762,61 @@
  			return null;
  		}
  		const pos = selection.getPosition();
 -		const startColumn = Math.max(1, pos.column - replacePrevCharCnt);
 -		const endColumn = Math.min(model.getLineMaxColumn(pos.lineNumber), pos.column + replaceNextCharCnt);
 -		const range = new Range(pos.lineNumber, startColumn, pos.lineNumber, endColumn);
+-		return new ReplaceCommandWithOffsetCursorState(range, text, 0, positionDelta);
 +		// The EditContext buffer can hold lines before the caret's, and lines after it once the input
 +		// method has set its selection on an earlier line, so what an input method replaces can reach
 +		// across line breaks on either side of the caret: a Backspace at the start of a line joins it
@@ -644,8 +644,8 @@ index 45284b3..78bdb3e 100644
 +		const start = CompositionOperation.positionBefore(model, pos, replacePrevCharCnt);
 +		const end = CompositionOperation.positionAfter(model, pos, replaceNextCharCnt);
 +		const range = Range.fromPositions(start, end);
- 		return new ReplaceCommandWithOffsetCursorState(range, text, 0, positionDelta);
- 	}
++		return new CompositionCommand(range, text, positionDelta);
++	}
 +
 +	/**
 +	 * The position `count` characters before `position`, a line break counting as one character as
@@ -673,7 +673,85 @@ index 45284b3..78bdb3e 100644
 +			lineNumber++;
 +		}
 +		return new Position(lineNumber, Math.min(model.getLineMaxColumn(lineNumber), column));
-+	}
+ 	}
  }
  
++class CompositionCommand extends ReplaceCommand {
++
++	constructor(range: Range, text: string, private readonly positionDelta: number) {
++		super(range, text);
++	}
++
++	public override computeCursorState(model: ITextModel, helper: ICursorStateComputerData): Selection {
++		const end = helper.getInverseEditOperations()[0].range.getEndPosition();
++		const position = this.positionDelta < 0
++			? CompositionOperation.positionBefore(model, end, -this.positionDelta)
++			: CompositionOperation.positionAfter(model, end, this.positionDelta);
++		return Selection.fromPositions(position);
++	}
++}
++
  export class TypeWithoutInterceptorsOperation {
+ 
+ 	public static getEdits(prevEditOperationType: EditOperationType, selections: Selection[], str: string): EditOperationResult {
+diff --git a/src/vs/editor/test/browser/controller/cursor.test.ts b/src/vs/editor/test/browser/controller/cursor.test.ts
+--- a/src/vs/editor/test/browser/controller/cursor.test.ts
++++ b/src/vs/editor/test/browser/controller/cursor.test.ts
+@@ -2549,6 +2549,57 @@
+ 		});
+ 	});
+ 
++	test('composition caret offsets cross inserted line breaks', () => {
++		for (const eol of [EndOfLineSequence.LF, EndOfLineSequence.CRLF]) {
++			withTestCodeEditor([], {}, (editor, viewModel) => {
++				const model = editor.getModel()!;
++				model.setEOL(eol);
++				viewModel.compositionType('x\ny', 0, 0, -2, 'keyboard');
++				assert.strictEqual(model.getValue(EndOfLinePreference.LF), 'x\ny');
++				assertCursor(viewModel, new Position(1, 2));
++				viewModel.type('z', 'keyboard');
++				assert.strictEqual(model.getValue(EndOfLinePreference.LF), 'xz\ny');
++			});
++		}
++	});
++
++	test('composition caret offsets retain UTF-16 character counts', () => {
++		withTestCodeEditor([], {}, (editor, viewModel) => {
++			viewModel.compositionType('\ud83d\ude00\nq', 0, 0, -2, 'keyboard');
++			assertCursor(viewModel, new Position(1, 3));
++			viewModel.type('z', 'keyboard');
++			assert.strictEqual(editor.getModel()!.getValue(), '\ud83d\ude00z\nq');
++		});
++	});
++
++	test('composition caret offsets can reach existing text after the edit', () => {
++		withTestCodeEditor(['', 'rest'], {}, (editor, viewModel) => {
++			viewModel.compositionType('x', 0, 0, 2, 'keyboard');
++			assertCursor(viewModel, new Position(2, 2));
++			viewModel.type('z', 'keyboard');
++			assert.strictEqual(editor.getModel()!.getValue(), 'x\nrzest');
++		});
++	});
++
++	test('composition caret offsets can reach existing text before the edit', () => {
++		withTestCodeEditor(['p', 'q'], {}, (editor, viewModel) => {
++			viewModel.setSelections('test', [new Selection(2, 1, 2, 1)]);
++			viewModel.compositionType('y', 0, 0, -3, 'keyboard');
++			assertCursor(viewModel, new Position(1, 1));
++			viewModel.type('z', 'keyboard');
++			assert.strictEqual(editor.getModel()!.getValue(), 'zp\nyq');
++		});
++	});
++
++	test('composition caret offsets on one line keep their existing meaning', () => {
++		withTestCodeEditor([], {}, (editor, viewModel) => {
++			viewModel.compositionType('abc', 0, 0, -2, 'keyboard');
++			assertCursor(viewModel, new Position(1, 2));
++			viewModel.type('z', 'keyboard');
++			assert.strictEqual(editor.getModel()!.getValue(), 'azbc');
++		});
++	});
++
+ 	test('issue #23983: Calling model.setEOL does not reset cursor position', () => {
+ 		usingCursor({
+ 			text: [

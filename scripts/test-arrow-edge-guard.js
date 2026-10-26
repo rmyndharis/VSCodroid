@@ -129,8 +129,9 @@ class Node {
 const own = (name, fn) => Object.assign(fn, { owner: name });
 
 /** A page with the interceptor installed, and a shadow host to put boxes in. */
-function newPage(userAgent = BELOW_149, { keybindings = false } = {}) {
+function newPage(userAgent = BELOW_149, { keybindings = false, selection } = {}) {
     const window = new Node(null);
+    if (selection) window.getSelection = () => selection;
     const document = new Node(window, { activeElement: null });
     const body = new Node(document, { tagName: 'BODY' });
     const page = { window, document, host: new Node(body, { tagName: 'DIV' }), log: [], timers: [], microtasks: [] };
@@ -294,6 +295,22 @@ const cases = [
     ['a target that takes no text', cancels('ArrowLeft', { tagName: 'DIV' }), false],
 ];
 
+// The renderer owns visual movement, including bidi runs and caret affinity.
+// Cancelling after that move prevents both a second step and spatial focus.
+for (const tag of ['INPUT', 'TEXTAREA']) {
+    for (const [key, direction, offset] of [['ArrowLeft', 'left', 0], ['ArrowRight', 'right', 3]]) {
+        const calls = [];
+        const selection = { modify: (...args) => calls.push(args) };
+        const page = newPage(LATER, { selection, keybindings: true });
+        const field = new Node(page.host, { ...box('\u05d0\u05d1\u05d2', offset, offset, tag), matches: () => true });
+        const cancelled = press(page, field, key);
+        cases.push([`${tag} delegates ${direction} at a logical endpoint to the renderer`,
+            JSON.stringify(calls) === JSON.stringify([['move', direction, 'character']]), true]);
+        cases.push([`${tag} consumes the native default after the renderer move`, cancelled.includes('guard'), true]);
+        cases.push([`${tag} keeps the workbench binding after the renderer move`, page.log.includes(`keybinding ${key}`), true]);
+    }
+}
+
 // Cancelling stops no binding: the keybinding service on the window still
 // gets the key, after the guard.
 {
@@ -418,9 +435,29 @@ const cases = [
             return !event.defaultPrevented;
         }
         class FakeEditContext {
-            constructor(name = 'empty') { this.name = name; listen(this); }
+            constructor(name = 'empty') {
+                this.name = name;
+                this.text = '';
+                this.selectionStart = 0;
+                this.selectionEnd = 0;
+                listen(this);
+            }
+            updateText(start, end, text) { this.text = this.text.slice(0, start) + text + this.text.slice(end); }
+            updateSelection(start, end) { this.selectionStart = start; this.selectionEnd = end; }
+            dispatchEvent(event) {
+                for (const l of this.listeners.slice()) if (l.type === event.type) l.fn(event);
+                return true;
+            }
             fire(type, init = {}) {
-                for (const l of this.listeners.slice()) if (l.type === type) l.fn({ type, ...init });
+                if (type === 'textupdate') {
+                    const start = init.updateRangeStart === undefined ? this.selectionStart : init.updateRangeStart;
+                    const end = init.updateRangeEnd === undefined ? this.selectionEnd : init.updateRangeEnd;
+                    const caret = start + init.text.length;
+                    init = { updateRangeStart: start, updateRangeEnd: end, selectionStart: caret, selectionEnd: caret, ...init };
+                    this.updateText(start, end, init.text);
+                    this.updateSelection(init.selectionStart, init.selectionEnd);
+                }
+                return this.dispatchEvent({ type, ...init });
             }
         }
         const own = new FakeEditContext('editor');
@@ -472,6 +509,7 @@ const cases = [
         vm.runInContext(LATCH_INTERCEPTOR, vm.createContext({
             window, document, navigator: { userAgent: AT_149 },
             EditContext: FakeEditContext,
+            TextUpdateEvent: event,
             InputEvent: event,
             KeyboardEvent: event,
             setTimeout: (fn) => { timers.push(fn); },
@@ -521,6 +559,31 @@ const cases = [
         cases.push([name, JSON.stringify(got), JSON.stringify(want)]);
     };
     const state = (p) => ({ log: p.log, editContext: p.host.editContext.name, ctrl: p.mods().ctrl, alt: p.mods().alt });
+
+    for (const [modifier, text] of [['ctrl', 'hello'], ['alt', 'world'], ['ctrl', '\ud83d\ude00'], ['ctrl', 'e\u0301'], ['alt', 'first\nsecond']]) {
+        const p = latchPage();
+        const before = 'left OLD right';
+        const from = 5;
+        const to = 8;
+        p.own.updateText(0, 0, before);
+        p.own.updateSelection(from, to);
+        const received = [];
+        p.own.addEventListener('textupdate', (event) => received.push(event));
+        p.latch({ [modifier]: true });
+        const borrowed = p.host.editContext;
+        p.commit(text);
+        const expected = before.slice(0, from) + text + before.slice(to);
+        const event = received[0];
+        const got = { text: p.own.text, count: received.length,
+            range: event && [event.updateRangeStart, event.updateRangeEnd, event.selectionStart, event.selectionEnd],
+            restored: p.host.editContext === p.own, latched: !!(p.mods().ctrl || p.mods().alt || p.mods().shift),
+            chords: p.log.filter((line) => line.startsWith('chord ')).length };
+        cases.push([`${modifier} preserves the complete ${JSON.stringify(text)} commit`, JSON.stringify(got),
+            JSON.stringify({ text: expected, count: 1, range: [from, to, from + text.length, from + text.length],
+                restored: true, latched: false, chords: 0 })]);
+        borrowed.fire('textupdate', { text });
+        cases.push([`a returned ${modifier} context cannot insert ${JSON.stringify(text)} again`, received.length, 1]);
+    }
 
     latchCase('Ctrl latched, a composing keyboard\'s p is Ctrl+P and reaches no text',
         (p) => { p.latch({ ctrl: true }); p.compose('p'); return state(p); },

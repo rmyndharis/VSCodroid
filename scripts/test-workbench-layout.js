@@ -70,6 +70,128 @@ function activity() {
   }
 }
 
+function activityLifecycle() {
+  const text = source('0030');
+  const constants = Object.fromEntries([...text.matchAll(/static readonly (\w+) = (\d+);/g)].map(match => [match[1], Number(match[2])]));
+  let coarse = false;
+  const listeners = new Set(), disposables = [], created = [];
+  const media = {
+    get matches() { return coarse; },
+    addEventListener(type, listener) { assert.equal(type, 'change'); listeners.add(listener); },
+    removeEventListener(type, listener) { assert.equal(type, 'change'); listeners.delete(listener); },
+  };
+  const scope = {
+    ActivitybarPart: constants, ActivityBarCompositeBar: class {},
+    mainWindow: { matchMedia: query => { assert.equal(query, '(pointer: coarse)'); return media; } },
+    ActionsOrientation: { VERTICAL: 0 }, Parts: { ACTIVITYBAR_PART: 'activitybar' },
+    Position: { LEFT: 0 }, HoverPosition: { RIGHT: 1, LEFT: 0 },
+    clearNode: content => { content.children.length = 0; },
+    addDisposableListener(target, type, listener) {
+      target.addEventListener(type, listener);
+      return { dispose: () => target.removeEventListener(type, listener) };
+    },
+  };
+  const compile = declaration => vm.runInNewContext(`(function() ${body(text, declaration)
+    .replace(/: IColorTheme/g, '').replace(/e\?: MouseEvent \| GestureEvent/g, 'e')})`, scope);
+  const part = {
+    _isCompact: true, actionHeight: 28, actionGap: 0, location: 'sidebar', paneCompositePart: {},
+    content: { children: [] }, dimension: { width: 36, height: 200 },
+    layoutService: { getSideBarPosition: () => 0 },
+    compositeBar: { value: undefined, clear() { this.value?.dispose(); this.value = undefined; } },
+    _register(disposable) { disposables.push(disposable); return disposable; },
+    layout(width, height) { this.compositeBar.value?.layout(width, height); },
+    instantiationService: { createInstance(_, location, options, kind, pane, globalActivities) {
+      const value = { options, globalActivities, disposed: false, dispose() { this.disposed = true; }, create() {}, layout() {} };
+      created.push(value);
+      return value;
+    } },
+  };
+  Object.defineProperty(part, 'drawnActionHeight', { get: compile('private get drawnActionHeight()').bind(part) });
+  Object.defineProperty(part, 'compositeSize', { get: compile('private get compositeSize()').bind(part) });
+  part.createCompositeBar = compile('private createCompositeBar(');
+  part.recreateCompositeBar = compile('private recreateCompositeBar(');
+  part.compositeBar.value = part.createCompositeBar();
+  const registration = text.split('\n').find(line => line.includes("addDisposableListener(mainWindow.matchMedia('(pointer: coarse)'), 'change'"));
+  if (registration) vm.runInNewContext(`(function() { ${registration} })`, scope).call(part);
+  const sizes = () => {
+    const value = part.compositeBar.value;
+    return [value.options.compositeSize, value.options.overflowActionSize, value.globalActivities.actionHeight];
+  };
+  assert.deepEqual(sizes(), [28, 28, 28]);
+  for (const [next, expected] of [[true, 44], [false, 28]]) {
+    const previous = part.compositeBar.value;
+    coarse = next;
+    for (const listener of listeners) listener({ matches: coarse });
+    assert.deepEqual(sizes(), [expected, expected, expected]);
+    assert.equal(previous.disposed, true);
+    assert.equal(listeners.size, 1, 'recreation must not duplicate the media subscription');
+  }
+  part.compositeBar.clear();
+  coarse = true;
+  const count = created.length;
+  for (const listener of listeners) listener({ matches: coarse });
+  assert.equal(created.length, count, 'a hidden bar stays lazy');
+  part.compositeBar.value = part.createCompositeBar();
+  assert.deepEqual(sizes(), [44, 44, 44], 'showing it uses the current pointer');
+  disposables.forEach(disposable => disposable.dispose());
+  assert.equal(listeners.size, 0, 'disposing the owner removes the media subscription');
+}
+
+function activityOverflow() {
+  const text = source('0008');
+  const code = body(text, 'private updateCompositeSwitcher(')
+    .replace(/ as HTMLElement/g, '').replace(/: number\[\]/g, '').replace(/: number \| undefined/g, '')
+    .replace(/([)\]])!(?=[;,.\]])/g, '$1').replace(/\b(\w+)!(?=[),;.\]])/g, '$1');
+  function run({ height, item = 44, gap = 8, inset = 3, global = 96, horizontal = false, active, count = 2, hidden = false }) {
+    const style = (marginTop, marginBottom, display = 'block') => ({
+      marginTop: String(marginTop), marginBottom: String(marginBottom), display,
+      getPropertyValue: name => name === '--activity-bar-action-gap' ? String(gap) : '',
+    });
+    const bar = { style: style(inset, 900) };
+    const sibling = { offsetHeight: global, style: style(0, inset, hidden ? 'none' : 'block') };
+    bar.parentElement = { clientHeight: height, children: [bar, sibling] };
+    const scope = {
+      document: { querySelector: () => bar }, getComputedStyle: node => node.style,
+      ActionsOrientation: { VERTICAL: 0 }, CompositeOverflowActivityAction: class {},
+      CompositeOverflowActivityActionViewItem: class {},
+    };
+    const items = Array.from({ length: count }, (_, index) => ({ id: String(index), pinned: true, activityAction: { id: String(index) } }));
+    const actions = [];
+    const model = { visibleItems: items, activeItem: items.find(item => item.id === active), findItem: id => items.find(item => item.id === id) };
+    const owner = {
+      model, dimension: { width: 2 * (item + gap), height: 2 * (item + gap) },
+      options: { orientation: horizontal ? 1 : 0, overflowActionSize: item + gap },
+      compositeSizeInBar: new Map(items.map(value => [value.id, item + gap])), visibleComposites: [],
+      compositeOverflowAction: {}, compositeOverflowActionViewItem: {},
+      compositeSwitcherBar: { push(action, options) { actions.splice(options?.index ?? actions.length, 0, action); }, pull(index) { actions.splice(index, 1); }, length: () => actions.length },
+      instantiationService: { createInstance: () => ({}) }, _onDidChange: { fire() {} },
+    };
+    vm.runInNewContext(`(function(donotTrigger) ${code})`, scope).call(owner, true);
+    return { visible: owner.visibleComposites, overflow: !!owner.compositeOverflowAction.value };
+  }
+  for (const fixture of [
+    { height: 198 },
+    { height: 166, item: 36, global: 80 },
+    { height: 186, gap: 4, inset: 1, global: 92 },
+    { height: 154, item: 36, gap: 4, inset: 1, global: 76 },
+    { height: 182, gap: 0, global: 88 },
+    { height: 192, item: 48, gap: 0, inset: 0, global: 96 },
+    { height: 146, global: 44 },
+    { height: 99, hidden: true },
+  ]) {
+    const result = run(fixture);
+    assert.deepEqual(result.visible, ['0', '1'], JSON.stringify(fixture));
+    assert.equal(result.overflow, false, JSON.stringify(fixture));
+  }
+  for (const height of [197, 196]) {
+    const result = run({ height });
+    assert.deepEqual(result.visible, [], `height=${height} cannot fit an item and overflow with their insets`);
+    assert.equal(result.overflow, true);
+  }
+  assert.deepEqual(run({ height: 1, horizontal: true }).visible, ['0', '1'], 'horizontal bars keep the width budget');
+  assert.deepEqual(run({ height: 198, count: 3, active: '2' }).visible, ['2'], 'overflow admission still reserves the active item');
+}
+
 function modal() {
   const text = source('0032');
   const constraints = text.slice(text.indexOf('const minWidth ='), text.indexOf('// On first layout'));
@@ -340,7 +462,7 @@ function panelRoundTrip() {
   assert.equal(remembered.layout.panelHeightBeforeShort, 176, 'a short move must keep an earlier unsqueezed height');
 }
 
-const sections = { activity, modal, bars, panel, sash, 'status-toggle': statusToggle, 'panel-save': panelSave, 'panel-round-trip': panelRoundTrip };
+const sections = { activity, 'activity-lifecycle': activityLifecycle, 'activity-overflow': activityOverflow, modal, bars, panel, sash, 'status-toggle': statusToggle, 'panel-save': panelSave, 'panel-round-trip': panelRoundTrip };
 for (const name of process.argv.slice(2).length ? process.argv.slice(2) : Object.keys(sections)) {
   assert.ok(sections[name], `Unknown section ${name}`);
   sections[name]();

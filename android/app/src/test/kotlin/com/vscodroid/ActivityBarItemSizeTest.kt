@@ -30,6 +30,16 @@ class ActivityBarItemSizeTest {
         WorkbenchPatchBehavior.run("activity")
     }
 
+    @Test
+    fun `pointer changes recapture view overflow and global action sizes`() {
+        WorkbenchPatchBehavior.run("activity-lifecycle")
+    }
+
+    @Test
+    fun `live overflow budgets preserve the first gap and explicit insets`() {
+        WorkbenchPatchBehavior.run("activity-overflow")
+    }
+
     private val stylesheet: String =
         SourceScan.body(
             SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt"),
