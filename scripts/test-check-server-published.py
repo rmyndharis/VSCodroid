@@ -170,6 +170,29 @@ class ServerPublishedTest(unittest.TestCase):
         self.assertTrue(ran, "build-vscode-oss.sh runs no script by that pattern; update this test")
         self.assertEqual(ran - set(INPUTS), set(), "run by the build, absent from its cache key")
 
+    def test_language_detection_inputs_cannot_be_removed(self):
+        workflow = (ROOT / WORKFLOW).read_text()
+        for name in ("scripts/patch-language-detection.py", "scripts/test-language-detection.py"):
+            with self.subTest(name=name):
+                self.assertIn(name, INPUTS)
+                without = workflow.replace(f"'{name}', ", "")
+                self.assertNotEqual(without, workflow)
+                with self.assertRaisesRegex(ValueError, name):
+                    checker.server_inputs(without)
+
+    def test_language_detection_inputs_invalidate_each_server_cache(self):
+        keys = []
+        for workflow in ("build.yml", "release.yml", "codeoss-build.yml"):
+            source = (ROOT / ".github/workflows" / workflow).read_text()
+            for line in source.splitlines():
+                if re.match(r"\s+key: (downloads|assets|codeoss)-", line) and "hashFiles(" in line:
+                    keys.append((workflow, line))
+        self.assertEqual(len(keys), 4)
+        for workflow, key in keys:
+            for name in ("scripts/patch-language-detection.py", "scripts/test-language-detection.py"):
+                with self.subTest(workflow=workflow, name=name):
+                    self.assertIn(f"'{name}'", key)
+
     def test_a_tag_built_at_another_pin_is_refused(self):
         repo = Repo(self)
         repo.write("VSCODE_VERSION", "1.2.2\n")

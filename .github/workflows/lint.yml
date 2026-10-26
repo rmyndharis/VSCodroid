@@ -141,6 +141,7 @@ jobs:
           python3 scripts/check-editcontext-sync.py --self-test
           python3 scripts/patch-venv-home.py --self-test
           python3 scripts/gen-glibc-forwarders.py --self-test
+          python3 scripts/test-language-detection.py
 
       # The same question asked of the build tool itself, which the step above
       # cannot reach: `uses:` pinning covers the actions, and the wrapper
@@ -233,6 +234,12 @@ jobs:
       - name: Check release version declarations are read exactly
         run: python3 scripts/test-release-versions.py
 
+      - name: Check packaging and device maintenance commands offline
+        run: python3 scripts/test-maintenance-scripts.py
+
+      - name: Check native shim behavior
+        run: python3 scripts/test-native-shims.py
+
       # The release preflight reads this repository's real server tag, which differs
       # whenever a server input changed since the last publish, so lint does not run
       # it. This builds throwaway repositories from a copy of the real cache key and
@@ -322,6 +329,8 @@ jobs:
           node scripts/test-process-monitor-extension.js
           node scripts/test-bridge-relay.js
           node scripts/test-auth-callback-provider.js
+          node scripts/test-saf-mirror-usage.js
+          node scripts/test-server-startup.js
           node scripts/test-ui-scale.js
           node scripts/test-plain-text-page.js
           node scripts/test-download-capture.js

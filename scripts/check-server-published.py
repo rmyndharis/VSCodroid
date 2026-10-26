@@ -39,7 +39,8 @@ WORKFLOW = ".github/workflows/codeoss-build.yml"
 # What the cache key must still name for this check to mean anything. A parse that came back
 # short would wave through every change to the files it missed.
 MUST_NAME = ("VSCODE_VERSION", "VSCODE_COMMIT", "patches/**", "branding/**",
-             "scripts/build-vscode-oss.sh", WORKFLOW)
+             "scripts/build-vscode-oss.sh", "scripts/patch-language-detection.py",
+             "scripts/test-language-detection.py", WORKFLOW)
 
 REPUBLISH = ('Dispatch the "Build Code - OSS server" workflow (build-vscode-oss.yml) from '
              "this ref, wait for it to finish, and run this again.")
