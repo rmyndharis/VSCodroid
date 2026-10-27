@@ -39,6 +39,8 @@ WORK_DIR="$ROOT_DIR/toolchains/extensions"
 # update the pattern, which is what a pin bump most often needs.
 apply_tree_rewrites() {
     local dir_name="$1" dest="$2"
+    # Upstream repository configuration is not part of an extension's runtime.
+    rm -rf "$dest/.claude" "$dest/_claude" "$dest/CLAUDE.md" "$dest/agents.md" || return 1
     case "$dir_name" in
         ms-python.python-*)
             python3 "$SCRIPT_DIR/patch-python-platform.py" "$dest" || return 1

@@ -18,7 +18,7 @@ ROOT = Path(__file__).resolve().parent.parent
 
 
 class ExtensionExtractionTest(unittest.TestCase):
-    def test_interrupted_copy_cannot_reuse_an_old_verification_stamp(self):
+    def test_extraction_and_cache_recovery_preserve_runtime_files(self):
         with tempfile.TemporaryDirectory(prefix="vscodroid-extensions-") as temporary:
             root = Path(temporary)
             scripts = root / "scripts"
@@ -52,6 +52,10 @@ class ExtensionExtractionTest(unittest.TestCase):
                 with zipfile.ZipFile(work / f"{name}.vsix", "w") as archive:
                     archive.writestr("extension/package.json", manifest)
                     archive.writestr("extension/dist/extension.js", payload)
+                    archive.writestr("extension/LICENSE", "license fixture\n")
+                    archive.writestr("extension/assets/prompts/agents.md", "product fixture\n")
+                    for metadata in ("CLAUDE.md", "agents.md", ".claude/settings.json"):
+                        archive.writestr(f"extension/{metadata}", "development fixture\n")
 
             identifier, version, digest = pins[0]
             name = f"{identifier}-{version}"
@@ -110,6 +114,26 @@ shutil.copytree(source, destination, dirs_exist_ok=True)
             self.assertEqual(activation.read_text(), payload)
             self.assertFalse(stamped_after_failure, "failed extraction kept an old verification stamp")
             self.assertEqual(stamp.read_text().strip(), digest)
+
+            def assert_runtime_tree(tree):
+                for metadata in ("CLAUDE.md", "agents.md", ".claude", "_claude"):
+                    self.assertFalse((tree / metadata).exists(), f"packaged {metadata}")
+                self.assertEqual((tree / "dist/extension.js").read_text(), payload)
+                self.assertEqual((tree / "LICENSE").read_text(), "license fixture\n")
+                self.assertEqual((tree / "assets/prompts/agents.md").read_text(), "product fixture\n")
+
+            for identifier, version, _ in pins:
+                tree = assets / f"{identifier}-{version}"
+                assert_runtime_tree(tree)
+                (tree / "CLAUDE.md").write_text("cached development fixture\n")
+                (tree / "agents.md").write_text("cached development fixture\n")
+                (tree / "_claude").mkdir()
+                (tree / "_claude/settings.json").write_text("{}\n")
+
+            cached = run()
+            self.assertEqual(cached.returncode, 0, cached.stdout + cached.stderr)
+            for identifier, version, _ in pins:
+                assert_runtime_tree(assets / f"{identifier}-{version}")
 
 
 if __name__ == "__main__":
