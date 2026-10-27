@@ -1,0 +1,57 @@
+Keep horizontal panels within narrow Android viewports.
+
+A fixed 300px panel minimum can exceed the space left beside the activity bar
+and side bars. Toggling a side bar then expands the grid beyond the viewport,
+and hiding the panel does not necessarily shrink the parent branch again.
+
+Use the same shared width budget as the editor for top and bottom panels.
+Clamp exhausted budgets to zero. Desktop and vertical panels retain their
+300px minimum; querying editor dimensions for a vertical panel would recurse
+through this getter. Panel height and stored sizes are unchanged.
+
+diff --git a/src/vs/workbench/browser/parts/panel/panelPart.ts b/src/vs/workbench/browser/parts/panel/panelPart.ts
+--- a/src/vs/workbench/browser/parts/panel/panelPart.ts
++++ b/src/vs/workbench/browser/parts/panel/panelPart.ts
+@@ -5,13 +5,13 @@
+ 
+ import './media/panelpart.css';
+ import { localize } from '../../../../nls.js';
+ import { IAction, Separator, SubmenuAction, toAction } from '../../../../base/common/actions.js';
+ import { ActionsOrientation } from '../../../../base/browser/ui/actionbar/actionbar.js';
+ import { ActivePanelContext, PanelFocusContext } from '../../../common/contextkeys.js';
+-import { IWorkbenchLayoutService, Parts, Position } from '../../../services/layout/browser/layoutService.js';
++import { IWorkbenchLayoutService, Parts, Position, isHorizontal } from '../../../services/layout/browser/layoutService.js';
+ import { IStorageService } from '../../../../platform/storage/common/storage.js';
+ import { IContextMenuService } from '../../../../platform/contextview/browser/contextView.js';
+ import { IKeybindingService } from '../../../../platform/keybinding/common/keybinding.js';
+ import { IInstantiationService } from '../../../../platform/instantiation/common/instantiation.js';
+ import { TogglePanelAction } from './panelActions.js';
+ import { IThemeService } from '../../../../platform/theme/common/themeService.js';
+@@ -29,18 +29,26 @@
+ import { ICommandService } from '../../../../platform/commands/common/commands.js';
+ import { getContextMenuActions } from '../../../../platform/actions/browser/menuEntryActionViewItem.js';
+ import { IPaneCompositeBarOptions } from '../paneCompositeBar.js';
+ import { IHoverService } from '../../../../platform/hover/browser/hover.js';
+ import { IConfigurationService } from '../../../../platform/configuration/common/configuration.js';
+ import { Extensions } from '../../panecomposite.js';
++import { isAndroid } from '../../../../base/common/platform.js';
+ 
+ export class PanelPart extends AbstractPaneCompositePart {
+ 
+ 	//#region IView
+ 
+-	readonly minimumWidth: number = 300;
++	get minimumWidth(): number {
++		if (!isAndroid || !isHorizontal(this.layoutService.getPanelPosition())) {
++			return 300;
++		}
++		// Share the narrow width budget with the editor so side bars remain resizable.
++		const available = this.layoutService.getMaximumEditorDimensions(this.layoutService.mainContainer).width;
++		return available < 300 ? Math.max(0, available) / 2 : 300;
++	}
+ 	readonly maximumWidth: number = Number.POSITIVE_INFINITY;
+ 	readonly minimumHeight: number = 77;
+ 	readonly maximumHeight: number = Number.POSITIVE_INFINITY;
+ 
+ 	get preferredHeight(): number | undefined {
+ 		// Don't worry about titlebar or statusbar visibility

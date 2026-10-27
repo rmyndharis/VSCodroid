@@ -354,3 +354,4 @@
 0038 workspace resource publication|out/vs/code/browser/workbench/workbench.js x2|publishWorkspaceRoots
 0039 editor listener run proof|out/server-main.js|vscodroid-server-proof
 0040 wrapped terminal link row end|out/vs/code/browser/workbench/workbench.js|end.x : this._terminal.cols
+0041 narrow horizontal panel width|out/vs/code/browser/workbench/workbench.js|getMaximumEditorDimensions(this.layoutService.mainContainer).width

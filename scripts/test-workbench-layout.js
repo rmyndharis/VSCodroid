@@ -462,6 +462,30 @@ function panelRoundTrip() {
   assert.equal(remembered.layout.panelHeightBeforeShort, 176, 'a short move must keep an earlier unsqueezed height');
 }
 
+function panelMinimumWidth() {
+  const text = source('0041');
+  for (const android of [false, true]) {
+    const minimum = vm.runInNewContext(`(function() ${body(text, 'get minimumWidth()')})`, {
+      isAndroid: android, isHorizontal: position => position === 'top' || position === 'bottom',
+    });
+    for (const position of ['top', 'bottom', 'left', 'right']) {
+      for (const [available, expected] of [[800, 300], [300, 300], [299, 149.5], [261, 130.5], [91, 45.5], [0, 0], [-79, 0]]) {
+        const adaptive = android && (position === 'top' || position === 'bottom');
+        const mainContainer = {};
+        const panel = { layoutService: {
+          mainContainer, getPanelPosition: () => position,
+          getMaximumEditorDimensions(container) {
+            assert.ok(adaptive, 'vertical panels must not recurse through their own minimum');
+            assert.equal(container, mainContainer);
+            return { width: available };
+          },
+        } };
+        assert.equal(minimum.call(panel), adaptive ? expected : 300, `${android}/${position}/${available}`);
+      }
+    }
+  }
+}
+
 function terminalRanges() {
   const text = source('0040');
   const highlight = vm.runInNewContext(`(function(range) ${body(text, 'private _highlightBufferRange(')
@@ -502,7 +526,7 @@ function terminalRanges() {
   highlight.call({ _terminal: undefined, _resetNavigationDecorations() { assert.fail('missing terminal must be a no-op'); } }, {});
 }
 
-const sections = { activity, 'activity-lifecycle': activityLifecycle, 'activity-overflow': activityOverflow, modal, bars, panel, sash, 'status-toggle': statusToggle, 'panel-save': panelSave, 'panel-round-trip': panelRoundTrip, 'terminal-ranges': terminalRanges };
+const sections = { activity, 'activity-lifecycle': activityLifecycle, 'activity-overflow': activityOverflow, modal, bars, panel, sash, 'status-toggle': statusToggle, 'panel-save': panelSave, 'panel-round-trip': panelRoundTrip, 'panel-minimum-width': panelMinimumWidth, 'terminal-ranges': terminalRanges };
 for (const name of process.argv.slice(2).length ? process.argv.slice(2) : Object.keys(sections)) {
   assert.ok(sections[name], `Unknown section ${name}`);
   sections[name]();
