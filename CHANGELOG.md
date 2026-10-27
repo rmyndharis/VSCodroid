@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.6.0] - 2026-10-27
+
 ### Added
 
 - A play button in the editor's title bar runs the open JavaScript, TypeScript, Ruby, Java, C, C++, `.sh` or `.bash` file in a terminal, as Python files already had.
@@ -1308,7 +1310,8 @@ This release represents the cumulative work across milestones M0 through M5, bri
 - Health check polling for server readiness
 - Android intent handling for "Open with VSCodroid"
 
-[Unreleased]: https://github.com/rmyndharis/VSCodroid/compare/v1.5.0...HEAD
+[Unreleased]: https://github.com/rmyndharis/VSCodroid/compare/v1.6.0...HEAD
+[1.6.0]: https://github.com/rmyndharis/VSCodroid/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/rmyndharis/VSCodroid/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/rmyndharis/VSCodroid/compare/v1.3.0...v1.4.0
 [1.3.0]: https://github.com/rmyndharis/VSCodroid/compare/v1.2.0...v1.3.0

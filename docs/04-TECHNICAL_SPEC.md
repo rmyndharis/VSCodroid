@@ -259,8 +259,8 @@ android {
         applicationId = "com.vscodroid"
         minSdk = 30
         targetSdk = 36
-        versionCode = 16            // moves every release; read build.gradle.kts, never this block
-        versionName = "1.5.0"      // both are persisted by markSetupComplete() and either one
+        versionCode = 17            // moves every release; read build.gradle.kts, never this block
+        versionName = "1.6.0"      // both are persisted by markSetupComplete() and either one
                                    // changing re-runs the whole of first-run extraction
 
         ndk {
