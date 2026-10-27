@@ -111,6 +111,10 @@ def shell_function(text, name):
 
 SETUP_ADB = '''#!/bin/bash
 printf '%s\n' "$*" >> "$CALL_LOG"
+if [ "${1:-}" = -s ]; then
+    [ "${2:-}" = fixture-device ] || exit 97
+    shift 2
+fi
 case "$*" in
     devices) printf 'List of devices attached\nfixture-device\tdevice\n' ;;
     'devices -l') printf 'fixture-device device product:fixture\n' ;;
@@ -134,9 +138,12 @@ def device_setup(source, root):
     begin = text.index("DEVICE_COUNT=$(")
     end = text.index("# TEST 5: launch_app", begin)
     phase = text[begin:end]
+    selection_begin = text.index('ADB="adb"\n')
+    selection_end = text.index('\nfi\n', selection_begin) + len('\nfi\n')
+    selection = text[selection_begin:selection_end]
     functions = "\n".join(shell_function(text, name) for name in ("pass", "fail", "skip", "vlog"))
     cases = {}
-    for label in ("install-fail", "build-fail", "missing-apk", "install-nonzero-success", "success", "skip-install"):
+    for label in ("install-fail", "build-fail", "missing-apk", "install-nonzero-success", "success", "selected-device", "skip-install"):
         case = root / label
         case.mkdir()
         apk = case / "app.apk"
@@ -149,7 +156,8 @@ set -uo pipefail
 ROOT_DIR="$PWD"
 APK_PATH="$PWD/app.apk"
 PKG=com.vscodroid.debug
-ADB="$PWD/adb"
+DEVICE=""
+[ "$SCENARIO" = selected-device ] && DEVICE=fixture-device
 PASS=0 FAIL=0 SKIP=0 FAILURES=""
 RED="" GREEN="" YELLOW="" BOLD="" RESET=""
 VERBOSE=false
@@ -158,19 +166,25 @@ SKIP_INSTALL=false
 [ "$SCENARIO" = build-fail ] && SKIP_BUILD=false
 if [ "$SCENARIO" = skip-install ]; then SKIP_BUILD=false; SKIP_INSTALL=true; fi
 '''
-        script = preamble + functions + "\n" + phase
+        script = preamble + selection + functions + "\n" + phase
         script += '\nprintf completed > "$PWD/continued"\n[ "$FAIL" -eq 0 ]\n'
         write(case / "setup.sh", script)
         observed = run(["/bin/bash", str(case / "setup.sh")], case,
-                       {"SCENARIO": label, "CALL_LOG": str(case / "calls.txt")})
+                       {"SCENARIO": label, "CALL_LOG": str(case / "calls.txt"),
+                        "PATH": str(case) + ":/usr/bin:/bin"})
         calls = (case / "calls.txt").read_text().splitlines()
+        commands = [line.removeprefix("-s fixture-device ") for line in calls]
         observed.update({"calls": calls, "continued": (case / "continued").exists(),
-                         "clears": sum(line.startswith("shell pm clear ") for line in calls),
-                         "installs": sum(line.startswith("install ") for line in calls)})
+                         "clears": sum(line.startswith("shell pm clear ") for line in commands),
+                         "installs": sum(line.startswith("install ") for line in commands)})
         cases[label] = observed
     controls = (cases["success"]["status"] == 0 and cases["success"]["clears"] == 1
                 and cases["success"]["installs"] == 1 and cases["skip-install"]["status"] == 0
                 and cases["skip-install"]["clears"] == 0 and cases["skip-install"]["installs"] == 0)
+    selected = cases["selected-device"]
+    controls = (controls and selected["status"] == 0 and selected["installs"] == 1
+                and selected["clears"] == 1
+                and all(line.startswith("-s fixture-device ") for line in selected["calls"]))
     failing = ("install-fail", "build-fail", "missing-apk", "install-nonzero-success")
 
     fixed = controls and all(cases[label]["status"] != 0 and cases[label]["clears"] == 0

@@ -796,7 +796,7 @@ fi
 if $SKIP_INSTALL; then
     skip "install_apk" "--skip-install"
 else
-    if INSTALL_OUT=$("$ADB" install -r "$APK_PATH" 2>&1) &&
+    if INSTALL_OUT=$($ADB install -r "$APK_PATH" 2>&1) &&
         printf '%s\n' "$INSTALL_OUT" | grep -q "Success"; then
         pass "install_apk"
     else
