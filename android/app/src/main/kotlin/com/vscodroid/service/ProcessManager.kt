@@ -15,14 +15,18 @@ import java.io.IOException
 import java.io.InputStreamReader
 import java.io.RandomAccessFile
 import java.io.Reader
-import java.net.HttpURLConnection
-import java.net.URL
+import java.net.InetSocketAddress
+import java.net.Socket
+import java.net.SocketTimeoutException
 import java.nio.file.Files
 import java.nio.file.LinkOption
+import java.security.MessageDigest
 import java.util.UUID
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 import kotlin.concurrent.thread
+import javax.crypto.Mac
+import javax.crypto.spec.SecretKeySpec
 import androidx.core.content.edit
 
 /**
@@ -384,27 +388,18 @@ class ProcessManager(private val context: Context) {
     fun hasLiveServer(): Boolean = isRunning() || adopted
 
     /**
-     * Whether the running process was spawned onto a port that was already taken,
-     * and therefore cannot ever serve.
-     *
-     * The editor server it forks prints `EADDRINUSE` and then does **not** exit,
-     * measured on an API 36 emulator, same pids at 0, 5, 15, 30 and 60 seconds,
-     * so the bootstrap does not exit either and [isRunning] answers true for as
-     * long as nothing kills it. Liveness therefore says nothing here, and the
-     * caller that waits on liveness would wait forever: see
-     * `NodeService.awaitLateReadiness`, whose loop is bounded by exactly that.
-     *
-     * Answered from what was true at the spawn rather than from a fresh probe,
-     * because a fresh probe cannot separate the two things it would have to: a
-     * held port looks the same whether the holder is the server we started or the
-     * stranger our server lost the race to.
+     * Whether this start selected a port already held by another listener.
+     * Current servers exit on EADDRINUSE; the timeout path also handles older
+     * payloads that stayed alive without binding. A fresh probe cannot recover
+     * which process held the port when this start selected it.
      */
     fun spawnedOntoHeldPort(): Boolean = spawnedOntoHeldPort
 
     /**
      * The connection token the server requires on every route except `/version`,
-     * `/delay-shutdown` and `/callback`, as held by the server this instance last
-     * saw become ready, or null whenever it is not ready.
+     * `/delay-shutdown`, `/callback` and the bounded `/vscodroid-server-proof/<nonce>`
+     * challenge route, as held by the server this instance last saw become ready,
+     * or null whenever it is not ready.
      *
      * Null while not ready because the port may be anyone's then: binding a
      * loopback port needs no permission, and everything that reads this sends the
@@ -612,7 +607,7 @@ class ProcessManager(private val context: Context) {
             PortFinder.isPortAvailable(_port)
         }
         val editorNote = if (portIsFree) null else recordedEditorNote()
-        if (editorNote != null && portHeldByOurEditorServer(editorNote) && recordedServerIsServing()) {
+        if (editorNote != null && portHeldByOurEditorServer(editorNote) && recordedServerIsServing(editorNote)) {
             // A server of ours is already on the port. Serve it instead of
             // spawning a second one that cannot bind.
             //
@@ -986,18 +981,23 @@ class ProcessManager(private val context: Context) {
             //
             // Read after the spawn rather than before it, because before it the
             // answer is meaningless: the window this closes opens at the spawn.
-            synchronized(readinessLock) {
+            val accepted = synchronized(readinessLock) {
                 if (isShuttingDown) {
-                    Logger.i(tag, "A stop landed while the server was spawning; ending it again")
-                    spawned.destroyForcibly()
-                    return false
+                    false
+                } else {
+                    serverRunId = runId
+                    serverProcess = spawned
+                    // Publish the owner and its readers together so Stop captures one run.
+                    listenUnreported = true
+                    startOutputReader()
+                    startWatchdog()
+                    true
                 }
-                serverRunId = runId
-                serverProcess = spawned
-                // Publish the owner and its readers together so Stop captures one run.
-                listenUnreported = true
-                startOutputReader()
-                startWatchdog()
+            }
+            if (!accepted) {
+                Logger.i(tag, "A stop landed while the server was spawning; ending it again")
+                stopOwnedProcess(spawned, runId, rejected = true)
+                return false
             }
             // The source is named, not only the number. A ceiling in a bug report
             // that could be either a derived value or a user's is a number nobody
@@ -1319,62 +1319,12 @@ class ProcessManager(private val context: Context) {
     }
 
     /**
-     * Whether the port is answering, and answering as this build.
-     *
-     * The second half of the adoption test, and it is not a restatement of the
-     * first. [portHeldByOurEditorServer] proves the recorded process is alive and
-     * is still an editor server of ours; nothing in the note says it ever bound
-     * the port, because `assets/server.js` writes it at the fork.
-     *
-     * That gap has a process that fits it exactly. A server spawned onto a port
-     * something else holds prints `EADDRINUSE` and then does not exit, measured
-     * on an API 36 emulator, same pids at 0, 5, 15, 30 and 60 seconds, so a
-     * bootstrap SIGKILLed by the OOM killer or the phantom-process limit, which
-     * is the case adoption exists for, can leave behind a child that is alive,
-     * is an editor server, matches the note, and has never held the port. Adopting
-     * it produces a session that never answers: [startAdoptionWatch] calls it lost
-     * after two missed probes, the restart reads the same note and adopts the same
-     * process, and five rounds later the app is in the terminal state having never
-     * attempted the spawn that would have worked. Nothing clears that note, so it
-     * survives cold starts too, for as long as the orphan does.
-     *
-     * Asking the port is safe in the way the ownership test that preceded it was
-     * not: `/version` is answered before the connection-token check, so the probe
-     * carries no token and discloses nothing to whoever is on the other end. That
-     * direction is not negotiable. The credential is what the WebView is about to
-     * carry to this port, and handing it to the party the test exists to identify
-     * is the mistake that was taken out of here once already.
-     *
-     * What the port is asked for is its identity, not merely a status line. The
-     * route answers `productService.commit` as `text/plain`, so a holder that is
-     * this build's editor server returns the commit
-     * `<server-dir>/vscode-reh/product.json` records, and one that is not returns
-     * something else, or nothing, or 403. A bare 200 was the whole test until now,
-     * which every process that accepts a connection and answers anything at all
-     * satisfies, and binding a loopback port on Android needs no permission.
-     *
-     * Read what this does and does not settle, because the difference decides
-     * what may be built on it. It settles which VS Code source the holder was
-     * built from, and no more than that: the value is `microsoft/vscode`'s tag SHA
-     * for the pinned version, the same one the tracked `VSCODE_COMMIT` file
-     * records, so every VSCodroid build at that pin answers identically and the
-     * value is app-private in no sense at all. That excludes an ordinary stranger
-     * on the port, which is what adoption needs, and nothing stronger may be built
-     * on it: it does not tell two builds of this app apart. It does NOT settle
-     * that the holder is the recorded pid either: the commit is public, so a
-     * process written to imitate this app can answer it, and attributing a socket
-     * to a pid would need the `/proc/net/tcp` read SELinux refuses an app
-     * outright. The two halves therefore still narrow rather than prove, and the
-     * note stays the ownership half.
-     *
-     * Refusing here is not the end of the recorded server, but the reap that
-     * follows in [startServer] is: a holder of ours that was merely slow to
-     * answer is ended and replaced on the same port rather than adopted by a
-     * later attempt. Being wrong in this direction therefore costs one server
-     * start, a few seconds of a launch the user is already waiting on; being
-     * wrong in the other costs the session.
+     * Check build compatibility, then authenticate the current listener with a
+     * fresh challenge keyed by the private run identity. A public version string
+     * and a live recorded process alone do not establish ownership of a socket.
+     * Older servers without the proof route decline adoption and are restarted.
      */
-    private fun recordedServerIsServing(): Boolean {
+    private fun recordedServerIsServing(editorNote: String): Boolean {
         // Answered first, because a build that cannot say what it is cannot
         // recognise itself on a port either. That is the fail-closed direction:
         // adoption is an optimisation, and declining it costs a spawn.
@@ -1405,7 +1355,7 @@ class ProcessManager(private val context: Context) {
             )
             return false
         }
-        return true
+        return provesRecordedRun(editorNote)
     }
 
     /**
@@ -1462,41 +1412,96 @@ class ProcessManager(private val context: Context) {
      * know which build answered, and reading it costs one more read on a socket
      * that is already open.
      *
-     * The body is taken up to [VERSION_BODY_MAX_CHARS] and no further. The read
-     * timeout bounds each read rather than the total, so an unbounded reader would
-     * let whatever holds the port keep this thread as long as it kept sending, and
-     * the point of the call is that the holder may be a stranger.
+     * Both headers and body share one monotonic deadline. A stranger holding the
+     * port cannot extend a startup poll by sending a little before each timeout.
      */
-    private fun probeVersion(): String? = try {
-        val connection = (URL("http://127.0.0.1:$_port/version").openConnection()
-            as HttpURLConnection).apply {
-            connectTimeout = 1000
-            readTimeout = 1000
-            requestMethod = "GET"
-            instanceFollowRedirects = false
-        }
-        try {
-            if (connection.responseCode == 200) {
-                connection.inputStream.reader().use { readBounded(it) }
-            } else {
-                null
+    private fun probeVersion(): String? = probeBody("/version")?.trim()
+
+    private fun probeBody(path: String): String? {
+        return try {
+            val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(PROBE_TIMEOUT_MS)
+            fun remainingMillis(): Int {
+                val remaining = deadline - System.nanoTime()
+                if (remaining <= 0) throw SocketTimeoutException("Probe deadline reached")
+                return ((remaining + 999_999) / 1_000_000).toInt()
             }
-        } finally {
-            connection.disconnect()
+            Socket().use { socket ->
+                socket.connect(InetSocketAddress("127.0.0.1", _port), remainingMillis())
+                // HTTP/1.0 asks Node for a close-delimited response, avoiding chunk framing.
+                socket.getOutputStream().write(
+                    "GET $path HTTP/1.0\r\nHost: 127.0.0.1:$_port\r\nConnection: close\r\n\r\n"
+                        .toByteArray(Charsets.US_ASCII),
+                )
+                val input = socket.getInputStream()
+                fun read(): Int {
+                    socket.soTimeout = remainingMillis()
+                    return input.read()
+                }
+                val header = StringBuilder()
+                while (!header.endsWith("\r\n\r\n")) {
+                    if (header.length >= 4096) return null
+                    val byte = read()
+                    if (byte < 0) return null
+                    header.append(byte.toChar())
+                }
+                val lines = header.toString().split("\r\n")
+                if (!Regex("HTTP/1\\.[01] 200(?: .*)?").matches(lines.first())) return null
+                // Neither fixed route uses transfer encoding for an HTTP/1.0 request.
+                if (lines.any { it.startsWith("Transfer-Encoding:", ignoreCase = true) }) return null
+                val lengths = lines.filter { it.startsWith("Content-Length:", ignoreCase = true) }
+                if (lengths.size > 1) return null
+                val length = lengths.singleOrNull()?.substringAfter(':')?.trim()?.let {
+                    it.toIntOrNull()?.takeIf { size -> size >= 0 } ?: return null
+                }
+                val body = ByteArray(VERSION_BODY_MAX_CHARS)
+                var filled = 0
+                val wanted = minOf(length ?: body.size, body.size)
+                while (filled < wanted) {
+                    val byte = read()
+                    if (byte < 0) {
+                        if (length != null) return null
+                        break
+                    }
+                    body[filled++] = byte.toByte()
+                }
+                String(body, 0, filled, Charsets.US_ASCII)
+            }
+        } catch (_: Exception) {
+            null
         }
-    } catch (e: Exception) {
-        null
     }
 
-    private fun readBounded(reader: Reader): String {
-        val buffer = CharArray(VERSION_BODY_MAX_CHARS)
+    private fun readBounded(reader: Reader, maxChars: Int = VERSION_BODY_MAX_CHARS): String {
+        val buffer = CharArray(maxChars)
         var filled = 0
         while (filled < buffer.size) {
             val read = reader.read(buffer, filled, buffer.size - filled)
             if (read < 0) break
             filled += read
         }
-        return String(buffer, 0, filled).trim()
+        return String(buffer, 0, filled)
+    }
+
+    private fun provesRecordedRun(editorNote: String): Boolean = try {
+        provesRun(JSONObject(editorNote).optString("runId", ""))
+    } catch (_: Exception) {
+        false
+    }
+
+    private fun provesRun(runId: String): Boolean {
+        return try {
+            if (runId.length !in 1..128) false else {
+                val challenge = UUID.randomUUID().toString().replace("-", "")
+                val actual = probeBody("/vscodroid-server-proof/$challenge")?.trim() ?: return false
+                val mac = Mac.getInstance("HmacSHA256")
+                mac.init(SecretKeySpec(runId.toByteArray(Charsets.US_ASCII), "HmacSHA256"))
+                val expected = mac.doFinal(challenge.toByteArray(Charsets.US_ASCII))
+                    .joinToString("") { "%02x".format(it) }
+                MessageDigest.isEqual(expected.toByteArray(Charsets.US_ASCII), actual.toByteArray(Charsets.US_ASCII))
+            }
+        } catch (_: Exception) {
+            false
+        }
     }
 
     /**
@@ -1582,38 +1587,7 @@ class ProcessManager(private val context: Context) {
             adopted = false
         }
         Logger.i(tag, "Stopping server...")
-        stoppingProcess?.let { process ->
-            // Capture ownership before signalling; a later note may name a replacement.
-            val capturedNote = try {
-                File(Environment.getServerDir(context), EDITOR_PID_FILE).readText().takeIf {
-                    stoppingRunId != null && JSONObject(it).optString("runId", "") == stoppingRunId
-                }
-            } catch (_: Exception) {
-                null
-            }
-            val wasAlive = process.isAlive
-            var bootstrapExited = false
-            try {
-                process.destroy()
-                val exited = process.waitFor(GRACEFUL_STOP_TIMEOUT_MS, TimeUnit.MILLISECONDS)
-                if (exited) {
-                    bootstrapExited = true
-                    Logger.i(tag, "Server stopped with exit code ${process.exitValue()}")
-                } else {
-                    Logger.w(tag, "Graceful shutdown timed out, force killing")
-                    killBootstrap(process)
-                }
-            } catch (e: Exception) {
-                Logger.w(tag, "Shutdown failed, force killing", e)
-                killBootstrap(process)
-            }
-            // A wait on an already dead bootstrap says nothing about its child's exit.
-            if ((!wasAlive || !bootstrapExited) && capturedNote != null) {
-                if (!reapRecordedEditorServer("its bootstrap could not stop it", capturedNote)) {
-                    Logger.w(tag, "The recorded editor server could not be ended for this stop")
-                }
-            }
-        }
+        stoppingProcess?.let { stopOwnedProcess(it, stoppingRunId, rejected = false) }
         synchronized(readinessLock) {
             if (serverProcess === stoppingProcess && serverRunId == stoppingRunId) {
                 serverProcess = null
@@ -1622,6 +1596,83 @@ class ProcessManager(private val context: Context) {
             if (watchdogThread === stoppingWatchdog) watchdogThread = null
         }
         stoppingWatchdog?.interrupt()
+    }
+
+    private fun stopOwnedProcess(process: Process, runId: String?, rejected: Boolean) {
+        val wasAlive = process.isAlive
+        var bootstrapExited = false
+        try {
+            process.destroy()
+            val exited = process.waitFor(GRACEFUL_STOP_TIMEOUT_MS, TimeUnit.MILLISECONDS)
+            if (exited) {
+                bootstrapExited = true
+                Logger.i(tag, "Server stopped with exit code ${process.exitValue()}")
+            } else {
+                Logger.w(tag, "Graceful shutdown timed out, force killing")
+                killBootstrap(process)
+            }
+        } catch (e: Exception) {
+            Logger.w(tag, "Shutdown failed, force killing", e)
+            killBootstrap(process)
+        }
+        // A signal can arrive after the fork but before the note or shutdown handler exists.
+        val noteMatchesRun = recordedEditorNote()?.let {
+            runCatching { JSONObject(it).optString("runId", "") == runId }.getOrDefault(false)
+        } == true
+        if (rejected || !wasAlive || !bootstrapExited || !noteMatchesRun) reapOwnedEditor(runId)
+    }
+
+    private fun reapOwnedEditor(runId: String?) {
+        if (runId == null) return
+        // The note may first appear while the bounded bootstrap wait is running.
+        val capturedNote = recordedEditorNote()?.takeIf {
+            runCatching { JSONObject(it).optString("runId", "") == runId }.getOrDefault(false)
+        }
+        if (capturedNote != null && reapRecordedEditorServer("its bootstrap could not stop it", capturedNote)) return
+        reapUnrecordedEditor(runId)
+    }
+
+    private fun readProcFile(file: File, maxChars: Int): String? = try {
+        file.reader().use { reader ->
+            val text = readBounded(reader, maxChars)
+            if (reader.read() < 0) text else null
+        }
+    } catch (_: Exception) {
+        null
+    }
+
+    private fun reapUnrecordedEditor(runId: String) {
+        try {
+            val uid = context.applicationInfo.uid
+            if (uid <= 0) return
+            val node = File(Environment.getNodePath(context)).canonicalPath
+            val entry = File(Environment.getServerDir(context), "vscode-reh/out/server-main.js").canonicalPath
+            val uidPattern = Regex("(?m)^Uid:\\s+(\\d+)")
+            val started = System.nanoTime()
+            Files.newDirectoryStream(procDir.toPath()).use { processes ->
+                for (directory in processes) {
+                    if (System.nanoTime() - started >= TimeUnit.MILLISECONDS.toNanos(REAP_SCAN_BUDGET_MS)) {
+                        Logger.w(tag, "The owned editor check reached its time limit")
+                        break
+                    }
+                    val pid = directory.fileName.toString().toIntOrNull()?.takeIf { it > 0 } ?: continue
+                    val status = readProcFile(directory.resolve("status").toFile(), 4096) ?: continue
+                    if (uidPattern.find(status)?.groupValues?.get(1)?.toIntOrNull() != uid) continue
+                    val environment = readProcFile(directory.resolve("environ").toFile(), 131072) ?: continue
+                    if ("VSCODROID_SERVER_RUN_ID=$runId" !in environment.split('\u0000')) continue
+                    val arguments = readProcFile(directory.resolve("cmdline").toFile(), 16384)
+                        ?.split('\u0000') ?: continue
+                    if (arguments.firstOrNull()?.let { File(it).canonicalPath } != node ||
+                        arguments.drop(1).firstOrNull { !it.startsWith('-') }
+                            ?.let { File(it).canonicalPath } != entry
+                    ) continue
+                    killRecordedProcess(pid)
+                    Logger.i(tag, "Ended the owned editor $pid whose bootstrap left no usable note")
+                }
+            }
+        } catch (e: Exception) {
+            Logger.w(tag, "Could not complete the owned editor check: ${e.javaClass.simpleName}")
+        }
     }
 
     /**
@@ -1920,34 +1971,13 @@ class ProcessManager(private val context: Context) {
         // Read before the request goes out, so the comparison at the foot of this
         // function covers the whole of it.
         val epoch = readinessEpoch.get()
-        val editorNote = synchronized(readinessLock) {
-            if (adopted) serverEditorNote ?: return false else null
+        val (editorNote, runId) = synchronized(readinessLock) {
+            (if (adopted) serverEditorNote ?: return false else null) to serverRunId
         }
         val served = probeVersion() ?: return false
-        // A port answering is not a server of ours answering. Binding a loopback
-        // port on Android needs no permission, and readiness is what navigates:
-        // the URL `MainActivity` builds carries the credential that authenticates
-        // every route of the editor server, so whoever is believed here is handed
-        // it. The guard that stood here asked the holder which build it was, and
-        // that answered the wrong question twice over. The commit `/version`
-        // reports is microsoft/vscode's public tag SHA, [recordedServerIsServing]
-        // says so at length, so a process written to imitate this app passes it;
-        // and it was asked only on a start that recorded [spawnedOntoHeldPort], so
-        // a holder that took the port between the free check and the child's
-        // listen was never asked anything and passed on a bare 200.
-        //
-        // So the question is put to our own process instead. The editor server
-        // prints [SERVER_LISTENING_LINE] from its listen callback and from nowhere
-        // else, a child that lost the port prints EADDRINUSE and wedges, and
-        // [startOutputReader] clears [listenUnreported] on that line and on no
-        // other evidence. Until then the port's answer is somebody else's whatever
-        // it says. A start that never clears it ends the way a held port always
-        // has: the poll gives up and the service reads [spawnedOntoHeldPort].
-        //
-        // An adopted server uses its captured note, checked after the request
-        // below. A tree that records no commit is no longer refused here, which
-        // is the case the old guard had to
-        // confine itself to one path to avoid: the line does not depend on one.
+        // The listening line must come from this spawn, but can outlive its socket.
+        // Authenticate the current listener with the captured run identity before
+        // publishing the private token. Adoption uses its captured note instead.
         if (listenUnreported) {
             if (!unboundRefusalLogged) {
                 unboundRefusalLogged = true
@@ -1962,7 +1992,7 @@ class ProcessManager(private val context: Context) {
         // Checked and set as one step, which is the ordering and not a
         // belt-and-braces re-read.
         //
-        // [probeVersion] blocks for a little over two seconds at worst and the
+        // Each HTTP request shares a two-second monotonic deadline and the
         // server can stop anywhere inside that window. An unguarded write would
         // land AFTER the clear the watchdog or [stopServer] issued inside it, and
         // [isReady] would answer true over a dead port until the next
@@ -1987,6 +2017,8 @@ class ProcessManager(private val context: Context) {
         // predate the readiness it belongs to; a lazy read in the getter could
         // run after a new start's rotation and hand the next server's token to
         // the port before that server is ready.
+        if (editorNote != null && !provesRecordedRun(editorNote)) return false
+        if (editorNote == null && runId != null && !provesRun(runId)) return false
         val token = readTokenFile()
         val readyNote = editorNote ?: recordedEditorNote()
         // The request and token read must still belong to the adopted run.
@@ -2008,10 +2040,9 @@ class ProcessManager(private val context: Context) {
      * debug log.
      *
      * It is also where [listenUnreported] is cleared, and that placement is the
-     * whole reason readiness may trust the flag: the line is read off a pipe only
-     * a process this class spawned can write to, so nothing on the port can forge
-     * it. Cleared before [onServerOutput] is invoked, so a consumer told about the
-     * line finds the flag already down.
+     * reason the flag identifies this spawn's startup progress: only a process
+     * this class spawned can write to the pipe. The fresh run proof separately
+     * authenticates the current listener. Cleared before [onServerOutput] runs.
      */
     private fun startOutputReader() {
         val process = serverProcess ?: return
@@ -2073,7 +2104,7 @@ class ProcessManager(private val context: Context) {
                 while (!isShuttingDown && adopted) {
                     Thread.sleep(ADOPTED_WATCH_INTERVAL_MS)
                     if (isShuttingDown || !adopted) return@thread
-                    if (portHeldByOurEditorServer(editorNote) && isServerHealthy()) {
+                    if (portHeldByOurEditorServer(editorNote) && isServerHealthy() && provesRecordedRun(editorNote)) {
                         misses = 0
                         continue
                     }
@@ -2206,6 +2237,8 @@ internal const val GRACEFUL_STOP_TIMEOUT_MS = 1_000L
  */
 internal const val REAP_PORT_RELEASE_GRACE_MS = 500L
 
+internal const val REAP_SCAN_BUDGET_MS = 500L
+
 /** How often the port is asked inside that grace. */
 internal const val REAP_PORT_POLL_MS = 100L
 
@@ -2307,11 +2340,10 @@ internal const val REH_PRODUCT_FILE = "vscode-reh/product.json"
  * How much of a `/version` answer is read before the reader stops.
  *
  * A commit is forty characters; this is room for that and a newline several times
- * over. It is a bound rather than a size because the party answering may be the
- * one adoption is trying to rule out, and the socket's read timeout limits each
- * read rather than the total, so nothing else stops a holder that keeps sending.
+ * over. The total request deadline also bounds a peer that keeps sending slowly.
  */
 internal const val VERSION_BODY_MAX_CHARS = 128
+internal const val PROBE_TIMEOUT_MS = 2_000L
 
 /** What every device ran before the ceiling was derived, and the fallback. */
 internal const val HEAP_CEILING_DEFAULT_MB = 512

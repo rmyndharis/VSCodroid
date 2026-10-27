@@ -432,6 +432,7 @@ class ServerLogTest {
             "<4242><stderr> AWS_SECRET_ACCESS_KEY=wJalrXUtnFEMI/K7MDENG/bPxRfi" to
                 "wJalrXUtnFEMI/K7MDENG/bPxRfi",
             "<4242><stderr> VSCODE_AGENT_TOKEN=1234567890abcdef" to "1234567890abcdef",
+            "<4242><stderr> VSCODROID_SERVER_RUN_ID=private-run-identity" to "private-run-identity",
             "<4242><stderr> export user_token=abc123def456" to "abc123def456",
         )
         secrets.keys.forEach { log.append(it) }

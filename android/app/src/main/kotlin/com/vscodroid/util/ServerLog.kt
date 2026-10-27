@@ -353,7 +353,7 @@ private fun redactNamedSecrets(line: String): String = buildString {
  * is one word rather than one line, but is more than the name alone suggests.
  */
 private val NAMED_SECRET_PREFIX = Regex(
-    """(?i)(?<![A-Za-z0-9])(?:api[_-]?key|apikey|access[_-]?token|refresh[_-]?token""" +
+    """(?i)(?<![A-Za-z0-9])(?:vscodroid_server_run_id|api[_-]?key|apikey|access[_-]?token|refresh[_-]?token""" +
         """|auth[_-]?token|client[_-]?secret|private[_-]?key|pgpassword|password""" +
         """|passwd|secret|token)(?:[_-][A-Za-z0-9_-]*)?\s*(?:\\?["'])?\s*[:=]\s*"""
 )

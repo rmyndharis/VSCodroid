@@ -1647,6 +1647,52 @@ class ServerReadinessTest {
         StubServer(status).also { stub = it; manager.portField = it.port }
 
     @Test
+    fun `a dripping response body cannot extend the readiness deadline`() {
+        val holder = serving(200)
+        holder.body = "x".repeat(20)
+        holder.bodyDelayMs = 150
+        val began = System.nanoTime()
+
+        assertFalse(manager.probeReadiness(), "a peer extended the probe by keeping individual reads alive")
+
+        assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - began) < 2500)
+    }
+
+    @Test
+    fun `dripping headers cannot extend the readiness deadline`() {
+        val holder = serving(200)
+        holder.body = "x"
+        holder.headerDelayMs = 50
+        val began = System.nanoTime()
+
+        assertFalse(manager.probeReadiness(), "a peer extended the probe while response headers were parsed")
+
+        assertTrue(TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - began) < 2500)
+    }
+
+    @Test
+    fun `a probe accepts the fixed routes close delimited framing`() {
+        serving(200).rawResponse = "HTTP/1.1 200 OK\r\nConnection: close\r\n\r\ncommit\n"
+        assertTrue(manager.isServerHealthy())
+    }
+
+    @Test
+    fun `a probe refuses incomplete oversized and unsupported response framing`() {
+        val holder = serving(200)
+        for (response in listOf(
+            "HTTP/1.1 200 OK\r\n",
+            "HTTP/1.1 200 OK\r\nContent-Length: 10\r\n\r\nshort",
+            "HTTP/1.1 200 OK\r\nX-Large: " + "x".repeat(4096) + "\r\n\r\nbody",
+            "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n1\r\nx\r\n0\r\n\r\n",
+            "HTTP/1.1 200 OK\r\nContent-Length: 1\r\nContent-Length: 2\r\n\r\nx",
+            "HTTP/1.1 200 OK\r\nContent-Length: -1\r\n\r\nx",
+        )) {
+            holder.rawResponse = response
+            assertFalse(manager.isServerHealthy(), "invalid framing was accepted: ${response.take(80)}")
+        }
+    }
+
+    @Test
     fun `readiness comes from the probe answering, not from the process existing`() {
         // Kills: moving `_isReady = true` out of the `if (isServerHealthy())`
         // branch in waitForReady, or deriving readiness from process liveness
@@ -2146,6 +2192,7 @@ class HeldPortReadinessTest {
         listening?.let {
             assertTrue(it.await(5, TimeUnit.SECONDS), "the listening line never reached the reader")
         }
+        stub?.proofKey = field("serverRunId").get(manager) as String?
     }
 
     @Test
@@ -2196,7 +2243,7 @@ class HeldPortReadinessTest {
     }
 
     @Test
-    fun `a server the spawned process reports bound is ready, held port or not`() {
+    fun `a server authenticated as the spawned run is ready after its listening line`() {
         // The complement, and the reason the guard waits rather than refusing a
         // held port outright. Kills: turning the guard into `if
         // (spawnedOntoHeldPort) return false`. One real start lands exactly here,
@@ -2228,6 +2275,7 @@ class HeldPortReadinessTest {
         childReportsListening()
         spawnOnFreePort()
         val elsewhere = StubServer(200, stranger).also { stub = it }
+        elsewhere.proofKey = field("serverRunId").get(manager) as String?
         manager.portField = elsewhere.port
 
         assertTrue(
@@ -2254,6 +2302,24 @@ class HeldPortReadinessTest {
             "a 200 from a port the spawned process has not reported binding is somebody else's",
         )
         assertFalse(manager.isReady(), "and nothing may record it as ready")
+    }
+
+    @Test
+    fun `a historical listening line cannot authenticate a replacement listener`() {
+        manager.portField = PortFinder.findAvailablePort()
+        childReportsListening()
+        spawnOnFreePort()
+        // spawn waits for both the exit watchdog and the trusted stdout reader.
+        assertFalse(manager.isRunning())
+        val holder = StubServer(200, commit).also { stub = it }
+        manager.portField = holder.port
+        val token = File(tempDir, "private-token").apply { writeText("private-previous-server-token") }
+        every { Environment.getConnectionTokenPath(any()) } returns token.path
+
+        val ready = manager.probeReadiness()
+        assertFalse(ready, "a stopped listener's output vouched for the new holder; token published: ${manager.connectionToken != null}")
+        assertFalse(manager.isReady())
+        assertNull(manager.connectionToken)
     }
 
     @Test
@@ -2551,6 +2617,7 @@ class AdoptionTest {
         File(tempDir, "proc/$pid/cmdline")
             .writeText("/lib/libnode.so\u0000/data/server/vscode-reh/out/$entry\u0000")
         manager.procDirField = File(tempDir, "proc")
+        stub?.proofKey = runId
     }
 
     /** Holds the port without answering, so any HTTP probe would fail. */
@@ -2558,17 +2625,51 @@ class AdoptionTest {
         StubServer(null).also { stub = it; manager.portField = it.port }
 
     @Test
+    fun `a listener returning the public commit without a run proof is not adopted`() {
+        val holder = serving(200)
+        recordEditorServer(4242, holder.port)
+        holder.proofKey = null
+
+        assertTrue(manager.startServer())
+
+        assertFalse(manager.isAdopted())
+        assertFalse(manager.probeReadiness())
+        assertNull(manager.connectionToken)
+    }
+
+    @Test
+    fun `a listener signing with a different run key is not adopted`() {
+        val holder = serving(200)
+        recordEditorServer(4242, holder.port)
+        holder.proofKey = "another-private-run"
+
+        assertTrue(manager.startServer())
+
+        assertFalse(manager.isAdopted())
+        assertFalse(manager.probeReadiness())
+        assertNull(manager.connectionToken)
+    }
+
+    @Test
+    fun `an adopted listener cannot replay an earlier challenge response`() {
+        val holder = serving(200)
+        recordEditorServer(4242, holder.port)
+        assertTrue(manager.startServer())
+        assertTrue(manager.isAdopted())
+        holder.replayProof = true
+
+        assertFalse(manager.probeReadiness())
+        assertNull(manager.connectionToken)
+    }
+
+    @Test
     fun `a live editor server of ours on the port is adopted rather than spawned over`() {
         // Two things have to be true before a start hands the user someone else's
         // process: the note says the holder is an editor server of ours, and the
         // port answers. This fixture supplies both.
         //
-        // The ownership half is still decided from the note and never by asking
-        // the holder, `the ownership test never sends the connection token to
-        // the port holder` pins that at the socket. What the start adds is a
-        // liveness question, and the assertions below pin exactly what it may ask:
-        // /version, which the server answers before it checks the token, and
-        // nothing else.
+        // The listener must prove its private run identity without receiving
+        // either that key or the connection token in the request.
         val holder = serving(200)
         recordEditorServer(pid = 4242, port = holder.port)
 
@@ -2579,11 +2680,11 @@ class AdoptionTest {
             "adoption must not spawn a second server onto a port the first still holds",
         )
         val asked = holder.lastRequestLine()
-        assertEquals(
-            "GET /version", asked?.substringBeforeLast(' '),
-            "adoption may ask the port whether it serves, on the one route that is " +
-                "answered before the token check, and ask nothing else",
+        assertTrue(
+            Regex("GET /vscodroid-server-proof/[a-f0-9]{32} HTTP/1\\.0").matches(asked.orEmpty()),
+            "adoption must send only a fresh challenge to the listener: $asked",
         )
+        assertFalse(asked.orEmpty().contains("run-4242"), "the challenge disclosed the private run identity")
         assertFalse(
             asked!!.contains("tkn"),
             "the liveness probe must not carry the connection token: $asked",
@@ -3764,6 +3865,13 @@ class AdoptionTest {
  */
 private class StubServer(initialStatus: Int?, initialBody: String = "") {
 
+    @Volatile var proofKey: String? = null
+    @Volatile var replayProof = false
+    private var previousProof: String? = null
+    @Volatile var bodyDelayMs = 0L
+    @Volatile var headerDelayMs = 0L
+    @Volatile var rawResponse: String? = null
+
     /**
      * What this answers with, or null for a port it holds without serving on.
      *
@@ -3829,14 +3937,31 @@ private class StubServer(initialStatus: Int?, initialBody: String = "") {
                             if (line.isNullOrEmpty()) break
                         }
                         beforeAnswer?.invoke()
-                        val payload = body.toByteArray()
+                        val challenge = requestLine.get()?.substringAfter("/vscodroid-server-proof/", "")
+                            ?.substringBefore(' ')
+                        val proof = if (proofKey != null && !challenge.isNullOrEmpty()) {
+                            if (replayProof && previousProof != null) previousProof else {
+                                val mac = javax.crypto.Mac.getInstance("HmacSHA256")
+                                mac.init(javax.crypto.spec.SecretKeySpec(proofKey!!.toByteArray(), "HmacSHA256"))
+                                mac.doFinal(challenge.toByteArray()).joinToString("") { "%02x".format(it) }
+                                    .also { previousProof = it }
+                            }
+                        } else null
+                        val payload = (proof ?: body).toByteArray()
                         client.getOutputStream().apply {
-                            write(
-                                ("HTTP/1.1 $status Stub\r\n" +
+                            fun bytes(data: ByteArray, delay: Long) {
+                                if (delay == 0L) write(data) else for (byte in data) {
+                                    write(byte.toInt())
+                                    flush()
+                                    Thread.sleep(delay)
+                                }
+                            }
+                            bytes(
+                                (rawResponse ?: ("HTTP/1.1 $status Stub\r\n" +
                                     "Content-Length: ${payload.size}\r\n" +
-                                    "Connection: close\r\n\r\n").toByteArray()
+                                    "Connection: close\r\n\r\n")).toByteArray(), headerDelayMs,
                             )
-                            write(payload)
+                            if (rawResponse == null) bytes(payload, bodyDelayMs)
                             flush()
                         }
                     }

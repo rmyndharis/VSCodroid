@@ -126,6 +126,20 @@ const PAGE_COLOR_OBJECT = (() => {
 
 const UPSTREAM = JSON.stringify({ nameShort: 'Code - OSS', version: '1.133.0', quality: 'oss' }, null, 2);
 
+{
+    const dir = fixture(UPSTREAM, { serverMain: "require('fs').writeFileSync(require('path').join(__dirname, '../../child-run-id'), process.env.VSCODROID_SERVER_RUN_ID || '');\n" });
+    try {
+        const result = spawnSync(process.execPath, [path.join(dir, 'server.js')], {
+            encoding: 'utf8', timeout: 20_000,
+            env: { ...process.env, VSCODROID_SERVER_RUN_ID: 'fixture-private-run-id' },
+        });
+        assert.strictEqual(result.status, 0, result.stderr);
+        assert.strictEqual(fs.readFileSync(path.join(dir, 'child-run-id'), 'utf8'), 'fixture-private-run-id');
+    } finally {
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+}
+
 // 1. A valid file is rewritten with the overrides, and nothing is left beside it.
 {
     const dir = fixture(UPSTREAM);
@@ -1683,6 +1697,7 @@ async function exitingBootstrapPreservesReplacementNote() {
 }
 
 preloadRidesAsOneToken()
+    .then(() => require('./test-server-run-proof.js'))
     .then(proxySurvivesTheBootstrap)
     .then(exitingBootstrapPreservesReplacementNote)
     .then(stoppingTakesTheEditorServerWithIt)

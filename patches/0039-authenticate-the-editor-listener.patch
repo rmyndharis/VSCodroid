@@ -1,0 +1,20 @@
+Authenticate an editor listener before adopting it
+
+Answer a bounded fresh challenge with a per-run keyed digest without sending
+the private run key or connection token to an unverified port holder.
+
+--- a/src/server-main.ts
++++ b/src/server-main.ts
+@@ -9,2 +9,3 @@
+ import * as http from 'node:http';
++import { createHmac } from 'node:crypto';
+ import type { AddressInfo } from 'node:net';
+@@ -91,2 +92,8 @@
+ 	const server = http.createServer(async (req, res) => {
++		const challenge = req.method === 'GET' && /^\/vscodroid-server-proof\/([a-f0-9]{32})$/.exec(req.url || '');
++		if (challenge) {
++			const runId = process.env['VSCODROID_SERVER_RUN_ID'];
++			res.writeHead(runId ? 200 : 404, { 'Content-Type': 'text/plain', 'Cache-Control': 'no-store' });
++			return res.end(runId ? createHmac('sha256', runId).update(challenge[1]).digest('hex') : '');
++		}
+ 		if (firstRequest) {

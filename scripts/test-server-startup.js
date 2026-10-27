@@ -189,10 +189,26 @@ function hostFixture(mode) {
     const callbacks = new Map();
     const calls = { exits: [], delegated: [] };
     const exited = Symbol('exit');
+    let listenerSource;
     const install = loadFixture('server-listener-errors.ts', 'src/server-main.ts',
         '0036-exit-when-the-editor-cannot-bind.patch',
         { console: { error() {} }, process: { exit(code) { calls.exits.push(code); throw exited; } } },
-        'installListenerErrors');
+        'installListenerErrors', source => { listenerSource = source; return source; });
+    execFileSync('python3', ['-c', `
+import importlib.util, pathlib, sys
+root = pathlib.Path(sys.argv[1])
+spec = importlib.util.spec_from_file_location('fingerprints', root / 'scripts/check-patch-fingerprints.py')
+checker = importlib.util.module_from_spec(spec)
+spec.loader.exec_module(checker)
+rows = checker.read_table(root / 'patches/fingerprints.txt')['0036']
+unpatched = (root / 'scripts/fixtures/server-listener-errors.ts').read_text() + '\\nconst unrelated = "EADDRINUSE";'
+patched = sys.stdin.read()
+for label, bundle, pattern, times in rows:
+    assert bundle == 'out/server-main.js', bundle
+    assert not checker.tolerant(pattern).search(unpatched), 'bind-failure fingerprint matches an unrelated error string'
+    assert len(checker.tolerant(pattern).findall(patched)) >= times, 'patched listener lost its fingerprint'
+`, root], { input: listenerSource, encoding: 'utf8' });
+    cases++;
     async function checkError(server, error, expectedExit) {
         calls.exits.length = 0;
         calls.delegated.length = 0;

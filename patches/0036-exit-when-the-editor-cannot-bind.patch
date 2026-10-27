@@ -10,7 +10,7 @@ watchdog can retry. Other errors retain the existing remote service handler.
  	});
  	server.on('error', async (err) => {
 +		if (!server.listening && (err as NodeJS.ErrnoException).code === 'EADDRINUSE') {
-+			console.error(err);
++			console.error('Editor failed to bind its port', err);
 +			process.exit(1);
 +		}
  		const remoteExtensionHostAgentServer = await getRemoteExtensionHostAgentServer();

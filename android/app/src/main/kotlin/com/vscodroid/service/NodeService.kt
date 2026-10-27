@@ -316,9 +316,7 @@ class NodeService : Service() {
     fun getPort(): Int = processManager.port
 
     /**
-     * The token the server requires on every route except `/version`,
-     * `/delay-shutdown` and `/callback`, or null
-     * while the server is not reported ready.
+     * The token for authenticated editor routes, or null while the server is not ready.
      */
     fun getConnectionToken(): String? = processManager.connectionToken
 

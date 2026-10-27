@@ -1,6 +1,7 @@
 package com.vscodroid.service
 
 import android.content.Context
+import android.content.pm.ApplicationInfo
 import com.vscodroid.setup.finishTestProcess
 import com.vscodroid.util.Environment
 import com.vscodroid.util.Logger
@@ -9,6 +10,7 @@ import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
 import io.mockk.mockkObject
+import io.mockk.mockkConstructor
 import io.mockk.unmockkAll
 import org.json.JSONObject
 import org.junit.jupiter.api.AfterEach
@@ -23,6 +25,8 @@ import org.junit.jupiter.api.Timeout
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
 import java.io.FileOutputStream
+import java.io.ByteArrayInputStream
+import java.io.ByteArrayOutputStream
 import java.io.InputStream
 import java.io.OutputStream
 import java.util.concurrent.CountDownLatch
@@ -31,6 +35,7 @@ import java.util.concurrent.TimeUnit
 class EditorShutdownTest {
     @TempDir lateinit var temp: File
     private lateinit var manager: ProcessManager
+    private lateinit var context: Context
     private val killed = mutableListOf<Int>()
     private val note get() = File(temp, "server/editor-server.pid")
     private val runId get() = File(temp, "run-id").readText()
@@ -56,9 +61,10 @@ class EditorShutdownTest {
         every { Environment.getUserDataDir(any()) } returns "data"
         every { Environment.getLogsDir(any()) } returns File(temp, "logs").path
         every { Environment.getServerDir(any()) } returns File(temp, "server").path
-        val context = mockk<Context>(relaxed = true)
+        context = mockk<Context>(relaxed = true)
         every { context.filesDir } returns temp
         every { context.cacheDir } returns temp
+        every { context.applicationInfo } returns ApplicationInfo().apply { uid = 12345 }
         manager = ProcessManager(context)
         set("procDir", File(temp, "proc"))
         manager.killRecordedProcess = { killed += it }
@@ -143,6 +149,126 @@ class EditorShutdownTest {
         set("serverProcess", PidProcess(0L))
         manager.stopServer()
         assertEquals(listOf(8123), killed)
+    }
+
+    @Test
+    fun `a stop before spawn publication still kills an unresponsive bootstrap`() {
+        set("serverProcess", null)
+        val rejected = PidProcess(4242L)
+        mockkConstructor(ProcessBuilder::class)
+        every { anyConstructed<ProcessBuilder>().start() } returns rejected
+        every { Environment.buildProcessEnvironment(any(), any()) } answers {
+            manager.stopServer()
+            emptyMap()
+        }
+
+        assertFalse(manager.startServer())
+
+        assertEquals(listOf(4242), killed)
+        assertFalse(manager.hasLiveServer())
+    }
+
+    @Test
+    fun `a rejected spawn reaps its editor note written during the stop wait`() {
+        set("serverProcess", null)
+        var rejectedRun = ""
+        val rejected = PidProcess(4242L) {
+            record(8123, owner = rejectedRun)
+        }
+        mockkConstructor(ProcessBuilder::class)
+        val environment = mutableMapOf<String, String>()
+        every { anyConstructed<ProcessBuilder>().environment() } returns environment
+        every { anyConstructed<ProcessBuilder>().start() } answers {
+            rejectedRun = environment.getValue("VSCODROID_SERVER_RUN_ID")
+            rejected
+        }
+        every { Environment.buildProcessEnvironment(any(), any()) } answers {
+            manager.stopServer()
+            emptyMap()
+        }
+
+        assertFalse(manager.startServer())
+
+        assertTrue(rejectedRun.isNotEmpty(), "the fixture must reach the actual spawn boundary")
+        assertEquals(listOf(4242, 8123), killed)
+        assertFalse(note.exists())
+    }
+
+    @Test
+    fun `a rejected spawn ends only its owned editor when no note was written`() {
+        set("serverProcess", null)
+        var rejectedRun = ""
+        val rejected = PidProcess(4242L) {
+            unrecordedChild(8123, rejectedRun)
+            unrecordedChild(8124, "replacement-run")
+            unrecordedChild(8125, rejectedRun, entry = "user-script.js")
+            unrecordedChild(8126, rejectedRun, uid = 12346)
+            unrecordedChild(8127, rejectedRun, executable = "/different-node")
+            unrecordedChild(8128, rejectedRun)
+            File(temp, "proc/8128/environ").appendText("X".repeat(131073))
+            unrecordedChild(8129, rejectedRun)
+            File(temp, "proc/8129/cmdline").appendText("X".repeat(16385))
+            unrecordedChild(8130, rejectedRun, entry = "server-main.js ")
+            File(temp, "proc/8130/cmdline").let { it.writeText(it.readText().dropLast(1)) }
+            unrecordedChild(8131, rejectedRun, entry = "server-main.js ")
+        }
+        mockkConstructor(ProcessBuilder::class)
+        val environment = mutableMapOf<String, String>()
+        every { anyConstructed<ProcessBuilder>().environment() } returns environment
+        every { anyConstructed<ProcessBuilder>().start() } answers {
+            rejectedRun = environment.getValue("VSCODROID_SERVER_RUN_ID")
+            rejected
+        }
+        every { Environment.buildProcessEnvironment(any(), any()) } answers {
+            manager.stopServer()
+            emptyMap()
+        }
+
+        assertFalse(manager.startServer())
+
+        assertTrue(rejectedRun.isNotEmpty())
+        assertEquals(listOf(4242, 8123), killed)
+        assertFalse(note.exists())
+    }
+
+    @Test
+    fun `a published bootstrap exiting before its note still leaves no owned editor`() {
+        val owner = runId
+        bootstrap(alive = true, exits = true) { unrecordedChild(8123, owner) }
+
+        manager.stopServer()
+
+        assertEquals(listOf(8123), killed)
+        assertFalse(note.exists())
+    }
+
+    @Test
+    fun `an unrelated note cannot hide an owned editor left before its note`() {
+        record(8124, owner = "replacement")
+        val replacement = note.readText()
+        val owner = runId
+        bootstrap(alive = true, exits = true) { unrecordedChild(8123, owner) }
+
+        manager.stopServer()
+
+        assertEquals(listOf(8123), killed)
+        assertEquals(replacement, note.readText())
+    }
+
+    private fun unrecordedChild(
+        pid: Int,
+        owner: String,
+        uid: Int = 12345,
+        entry: String = "server-main.js",
+        executable: String = Environment.getNodePath(context),
+    ) {
+        val directory = File(temp, "proc/$pid").apply { mkdirs() }
+        File(directory, "status").writeText("Uid:\t$uid\t$uid\t$uid\t$uid\n")
+        File(directory, "environ").writeText("VSCODROID_SERVER_RUN_ID=$owner\u0000")
+        File(directory, "cmdline").writeText(
+            executable + "\u0000--max-old-space-size=512\u0000" +
+                File(temp, "server/vscode-reh/out/$entry").path + "\u0000",
+        )
     }
 
     @Test
@@ -284,20 +410,20 @@ class EditorShutdownTest {
      * A bootstrap that never leaves, whose `pid()` the reflective read in `ProcessManager`
      * can reach: a public class, which a mock or an anonymous object is not.
      */
-    class PidProcess(private val bootstrapPid: Long) : Process() {
+    class PidProcess(private val bootstrapPid: Long, private val waiting: () -> Unit = {}) : Process() {
         fun pid(): Long = bootstrapPid
-        override fun getOutputStream(): OutputStream = throw UnsupportedOperationException()
-        override fun getInputStream(): InputStream = throw UnsupportedOperationException()
-        override fun getErrorStream(): InputStream = throw UnsupportedOperationException()
+        override fun getOutputStream(): OutputStream = ByteArrayOutputStream()
+        override fun getInputStream(): InputStream = ByteArrayInputStream(byteArrayOf())
+        override fun getErrorStream(): InputStream = ByteArrayInputStream(byteArrayOf())
         override fun waitFor(): Int = throw UnsupportedOperationException()
-        override fun waitFor(timeout: Long, unit: TimeUnit): Boolean = false
+        override fun waitFor(timeout: Long, unit: TimeUnit): Boolean { waiting(); return false }
         override fun exitValue(): Int = throw IllegalThreadStateException()
         override fun destroy() {}
         override fun destroyForcibly(): Process = this
         override fun isAlive(): Boolean = true
     }
 
-    private fun set(name: String, value: Any) {
+    private fun set(name: String, value: Any?) {
         ProcessManager::class.java.getDeclaredField(name).apply {
             isAccessible = true
             set(manager, value)

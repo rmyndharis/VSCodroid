@@ -349,6 +349,7 @@
 # The same patch's second flag, the height a panel that stayed in a short window had before it.
 0034 short window panel height is remembered|out/vs/code/browser/workbench/workbench.js x10|panelHeightBeforeShort
 0035 mirror usage acknowledgement|out/vs/code/browser/workbench/workbench.js|claimWorkspacePaths
-0036 editor bind failure exits|out/server-main.js|EADDRINUSE
+0036 editor bind failure exits|out/server-main.js|Editor failed to bind its port
 0037 current startup state|out/vs/code/browser/workbench/workbench.js x3|loadedConfigurationGeneration
 0038 workspace resource publication|out/vs/code/browser/workbench/workbench.js x2|publishWorkspaceRoots
+0039 editor listener run proof|out/server-main.js|vscodroid-server-proof
