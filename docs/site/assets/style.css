@@ -21,7 +21,7 @@
   --border-strong: #cfd4da;
   --text: #16191d;
   --text-dim: #5a626c;
-  --text-faint: #858d97;
+  --text-faint: var(--text-dim);
   --accent: #0a63c9;
   --accent-hover: #084d9e;
   --accent-quiet: #e8f0fb;
@@ -49,7 +49,6 @@
     --border-strong: #333c48;
     --text: #e6eaf0;
     --text-dim: #a2acba;
-    --text-faint: #6e7885;
     --accent: #4da3ff;
     --accent-hover: #7bbcff;
     --accent-quiet: #14243a;
