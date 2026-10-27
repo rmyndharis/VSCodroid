@@ -23,6 +23,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Open terminal links that wrap across rows without failing during highlight preview.
 - Exclude upstream development metadata from bundled extensions while preserving runtime files and licenses.
 - Preserve external device-folder edits when provider metadata is missing or unchanged.
 - Serialize saves reached through overlapping device-folder grants.
