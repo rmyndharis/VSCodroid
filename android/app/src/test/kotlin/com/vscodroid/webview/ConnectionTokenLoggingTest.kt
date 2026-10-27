@@ -35,8 +35,7 @@ import kotlin.concurrent.thread
  * paths this layer owns: the CDN interception, the proxy, the page callbacks and
  * the console relay.
  *
- * The token is the whole of the server's authentication: it is required on every
- * route but `/version`, `/delay-shutdown` and `/callback`, so anything holding it
+ * The token grants authenticated editor access, so anything holding it
  * can drive the editor: read any file the server can read, and open a terminal.
  * `MainActivity.navigateToFolder` keeps its own URL out of the log, and the
  * comment there once claimed that line was the only place the token could

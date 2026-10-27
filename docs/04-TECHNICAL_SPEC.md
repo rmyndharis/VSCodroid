@@ -1325,6 +1325,11 @@ flowchart TD
   P --> P32["0032 settings list and modal editor shrink to a phone-width window"]
   P --> P33["0033 title bar and status bar put away while the keyboard is up in landscape"]
   P --> P34["0034 bottom panel taken out of the layout while the keyboard is up in landscape"]
+  P --> P35["0035 claim device-folder copies before filesystem access"]
+  P --> P36["0036 exit when the editor cannot bind its listener"]
+  P --> P37["0037 retain current configuration and extension-host startup state"]
+  P --> P38["0038 publish resource roots from every active workspace member"]
+  P --> P39["0039 authenticate the editor listener with a private run challenge"]
 ```
 
 Five of these are load-bearing in ways their titles understate:

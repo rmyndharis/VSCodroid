@@ -277,8 +277,7 @@ private val TOKEN_PARAMETER = Regex("""tkn=[^&\s"']*""", RegexOption.IGNORE_CASE
 /**
  * [text] with the server's connection token taken out of it.
  *
- * The token authenticates every route but `/version`, `/delay-shutdown` and
- * `/callback`, so anything holding it can read what the server can read and open
+ * The token authenticates editor routes, so anything holding it can read what the server can read and open
  * a terminal. logcat is readable by anything holding `READ_LOGS`, which makes a
  * log line a disclosure rather than a diagnostic.
  *

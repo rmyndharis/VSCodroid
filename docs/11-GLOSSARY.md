@@ -139,7 +139,7 @@ A terminal multiplexer. Allows multiple terminal sessions to run within a single
 ### V
 
 **vscode-reh (Remote Extension Host)**
-A VS Code build target. Produces the server component that runs the Extension Host, terminal service, file system service, and search service. Communicates with the web client over WebSocket. Readiness is `GET /version`, which the server answers before it checks the connection token, and only a `200` counts.
+A VS Code build target. Produces the server component that runs the Extension Host, terminal service, file system service, and search service. Communicates with the web client over WebSocket. Liveness uses `GET /version`, which the server answers before it checks the connection token, and requires HTTP 200. Readiness also authenticates the current listener with a fresh challenge under the run identity before publishing its connection token; adoption checks the packaged commit and process ownership too.
 
 **vscode-web**
 A VS Code build target. Produces the web client (HTML, JavaScript, CSS) that renders the VS Code Workbench UI in a browser or WebView. VSCodroid builds the `reh-web` target, which carries the client inside the server tree, so the app ships one directory, `assets/vscode-reh/`, and there is no separate `vscode-web` to copy.

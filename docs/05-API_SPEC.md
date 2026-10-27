@@ -36,8 +36,8 @@ wv.addJavascriptInterface(bridge, "AndroidBridge")
 ```
 
 The injected name is `AndroidBridge` and that part was always right. The construction
-was not: `AndroidBridge(this)` does not compile. The real constructor takes seventeen
-parameters, five of them required:
+was not: `AndroidBridge(this)` does not compile. Five constructor arguments are
+required; the remaining callbacks and executor have defaults:
 
 ```kotlin
 AndroidBridge(
@@ -51,10 +51,11 @@ AndroidBridge(
     onListMirrors = { "[]" }, onReclaimMirror = { _, _ -> "..." },
     onAsyncAnswer = { _, _, _ -> },        // posts a late answer by replyId
     diskWork = <single daemon executor>,   // the one thread the four walks run on
+    onWorkspaceRoots = { _, _ -> false },  // generation and current workspace paths
 )
 ```
 
-The last two are what the commands that answer by `replyId` are built on, and they are
+`onAsyncAnswer` and `diskWork` support commands that answer by `replyId` and are
 defaulted so that a test can supply its own: `onAsyncAnswer` posts the value back into
 the page under the id the caller sent, and `diskWork` is the single thread every disk
 walk runs on. See §2.4.
@@ -200,7 +201,7 @@ testing `if (!result)` reads a refusal as success; test its `success` field.
 `listSafMirrors` return the refusal sentence itself,
 because for those five the EMPTY string is the success value, so the polarity is
 reversed and a truthiness test reads backwards in the other direction. Empty is not falsy
-for five of the twenty-nine either: `getDeviceInfo` refuses with `"{}"`, and
+for five methods either: `getDeviceInfo` refuses with `"{}"`, and
 `getRecentFolders`, `listSshKeys`, `getAvailableToolchains` and `getInstalledToolchains`
 with `"[]"`, and both are non-empty strings, so truthy until parsed. Read the token from
 `window.__vscodroid.authToken`, which MainActivity sets once the bridge is installed.
@@ -945,19 +946,23 @@ interface ProcessManager {
 ```
 GET http://127.0.0.1:PORT/version
 
-Response 200        : ready, and ONLY 200
-Anything else       : not ready. 403 in particular means the server is up and
-                      demanding its connection token, which is not readiness
-Response timeout/err: not ready or crashed
+Response 200        : liveness probe succeeds
+Anything else       : liveness probe fails, including 403
+Response timeout/err: liveness probe fails
 ```
 
-Two details that are the whole reason this endpoint and not another. `/version` is
-answered **before** the token check, so it stays a pure liveness probe and needs no
-token. And the accepted set is exactly `200`: it was once "anything below 500",
-which was correct while every route answered 200 and became wrong the moment the
-server began requiring a token; `/` then answers 403, and a readiness check
-counting 403 as healthy reports a successful start for a server that will serve the
-user nothing but Forbidden.
+`/version` is answered before the connection-token check, so it needs no token.
+The response must be HTTP 200 with valid framing within one two-second monotonic
+deadline shared by connection, headers and body. `isServerHealthy()` uses this
+liveness check; HTTP success alone does not establish readiness.
+
+Before publishing the private connection token, `probeReadiness()` also requires
+the current spawn's listening announcement and a fresh response from
+`/vscodroid-server-proof/<challenge>`. The response must be the HMAC-SHA256 of the
+challenge under that run's private identity. An adopted server additionally needs
+a matching packaged commit and a current process-ownership record. The readiness
+epoch must remain current through the probes and token read, so a concurrent stop
+or restart prevents publication.
 
 **Polling strategy**:
 

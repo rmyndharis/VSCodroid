@@ -1088,8 +1088,7 @@ class AuthCallbackCallSiteTest {
 /**
  * That the workbench URL and the redactor agree about where the token lives.
  *
- * The connection token is the whole of the server's authentication: it is
- * required on every route but `/version`, `/delay-shutdown` and `/callback`, so
+ * The connection token grants authenticated editor access, so
  * anything holding it can read what the server can read and open a terminal.
  * `Logger.i` is not gated on a debuggable build, so a token printed here reaches
  * a release build's logcat.

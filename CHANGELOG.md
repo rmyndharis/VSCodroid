@@ -21,6 +21,17 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Preserve external device-folder edits when provider metadata is missing or unchanged.
+- Serialize saves reached through overlapping device-folder grants.
+- Preserve newer local files when applying device-folder deletions.
+- Authenticate the editor listener before sending its connection token or adopting a saved session.
+- Bound editor health checks even when a listener sends headers or body bytes slowly.
+- Stop editor processes that finish spawning after shutdown begins or lose their bootstrap before recording ownership.
+- Keep named device-folder aliases and cleanup inside their original mirror directory.
+- Redact editor ownership secrets from diagnostic output.
+- Preserve musl signal validation, handler output, and errno in the CLI compatibility preload.
+- Honor the selected device when the test harness installs an APK.
+- Improve contrast for small text on the documentation site.
 - Report the required Node.js version before running TypeScript-based self-checks.
 - Load the language-detection CPU backend in browser workers without requiring CommonJS.
 - Detect a stopped adopted editor even when another process answers its health URL.

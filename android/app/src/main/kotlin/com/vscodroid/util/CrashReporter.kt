@@ -139,8 +139,7 @@ object CrashReporter {
      *
      * The report is copied to the clipboard and handed back across the JS
      * bridge, so everything read off disk goes through [redactToken] first: the
-     * server's connection token authenticates every route but `/version`,
-     * `/delay-shutdown` and `/callback`. The containment stops where that
+     * server's connection token authenticates editor access. The containment stops where that
      * function's does, at the literal `tkn=` parameter, so a bare token in no
      * parameter at all still passes through.
      *

@@ -23,7 +23,7 @@ VSCodroid has unique testing challenges: it's a hybrid app (Kotlin + WebView + N
 ```mermaid
 flowchart TD
   E2E["Manual / E2E Tests<br/>Real devices, UX testing<br/>14 scenarios"] --> INT["Instrumented Tests<br/>WebView + Node.js + Kotlin<br/>run by hand on a device"]
-  INT --> UNIT["Unit Tests<br/>Kotlin on the JVM, sized by the run's own XML<br/>13 node:assert scripts for the bundled JavaScript"]
+  INT --> UNIT["Unit Tests<br/>Kotlin on the JVM, sized by the run's own XML<br/>node:assert scripts for the bundled JavaScript"]
 ```
 
 ---
@@ -46,7 +46,7 @@ flowchart TD
 | SafSyncEngine | Mirror reconciliation, write-back filtering, rename pairing | `SafSyncEngineTest`, `SafWriteBackFilterTest`, `SafRenamePairingTest` |
 | VSCodroidWebViewClient | CDN interception, `vscode-remote` resource serving, downloads | `ResourceInterceptionWiringTest`, `WebviewResourceRootsTest`, `WebviewOriginTrustTest`, `DownloadCoordinatorTest` |
 
-The suite is green. Its size is deliberately not written down here: both
+Use a fresh run to determine the suite result and size. Both
 figures, tests and classes, come from the XML a run writes under
 `app/build/test-results/testDebugUnitTest/`, one file per class. This
 paragraph used to carry the pair as well, and the pyramid above carried a
@@ -72,7 +72,10 @@ that figure, `android/app/src/androidTest/README.md`, is held to the same grep
 by `scripts/check-instrumented-inventory.py`, which lint runs.
 
 A test that needs a filesystem builds its tree under a JUnit `@TempDir` rather
-than touching the checkout.
+than touching the checkout. The complete storage suite requires a filesystem
+provider with `SecureDirectoryStream`, as available on the Linux CI JVM. A macOS
+JVM without that capability cannot validate those descriptor-rooted operations.
+Run permission-denial controls as an ordinary user, since root can bypass them.
 
 **Run**: `./gradlew testDebugUnitTest` from `android/`. CI runs it in the
 `Unit Tests` job of `build.yml`, on every pull request and on every push to
@@ -105,7 +108,7 @@ temporary directory where it needs files, and is executed directly by `node`.
 | Welcome | That the walkthrough and side bar markers are written only after the command they record actually ran | `scripts/test-welcome.js` |
 | xdg-open | The `openExternal` message `xdg-open.js` sends over the editor's CLI socket, and that anything but an `http` or `https` address is refused rather than sent | `scripts/test-xdg-open.js` |
 
-**Run**: all nineteen, one `node` invocation each, in the `Check the bundled
+**Run**: one `node` invocation per script listed in the `Check the bundled
 JavaScript runtime` step of `lint.yml`, and again in `release.yml`, on Node 24,
 the major the APK ships (`check-build-steps.py` holds the pins there). `lint.yml`
 also runs the `--self-test` entry points of `check-workflow-steps.py`,
@@ -316,7 +319,7 @@ flowchart TD
 
   PR --> LINT["lint.yml: Lint job"]
   LINT --> L1["./gradlew lint, plus the committed baseline check"]
-  LINT --> L2["node scripts/test-*.js (14 self-checks, one per script)"]
+  LINT --> L2["Bundled JavaScript checks listed in the workflow"]
   LINT --> L3["python3 scripts/check-*.py repository gates"]
   LINT --> L4["git apply --stat on every patch, and device-test.sh --self-check"]
 

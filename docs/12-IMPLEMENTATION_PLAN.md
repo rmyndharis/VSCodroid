@@ -9,8 +9,8 @@
 > The server is built from the MIT Code - OSS source by `.github/workflows/build-vscode-oss.yml`,
 > which runs `scripts/build-vscode-oss.sh`: it applies the numbered unified diffs in `patches/`
 > with `git apply`, and release and local builds fetch the built server with
-> `scripts/fetch-vscode-oss.sh`. There is no pre-built server download and no `scripts/download-vscode-server.sh`, so where the
-> plan below names either, read the code instead: `scripts/build-vscode-oss.sh`, `patches/`, and
+> `scripts/fetch-vscode-oss.sh`. The former `scripts/download-vscode-server.sh` path is absent,
+> so where the plan below names it, read the code instead: `scripts/build-vscode-oss.sh`, `patches/`, and
 > the Kotlin under `android/app/src/main/kotlin/com/vscodroid/`. `CONTRIBUTING.md` is the prose
 > kept current alongside it.
 >
@@ -33,9 +33,12 @@
 >   server healthy that serves nothing. `assets/server.js` no longer stands anything up when
 >   `vscode-reh` is missing either: it logs the missing entry point and exits 1, so a broken install
 >   reports a failed start rather than a healthy one.
+>   Readiness and adoption also verify a fresh nonce response signed with the private server run
+>   identifier; a version response alone does not establish listener ownership.
 > - **A GitHub OAuth flow owned by Kotlin** (`vscodroid://oauth/github`, `startGitHubOAuth`).
 >   No such method exists in the Kotlin. What ships is one opaque relay on `vscodroid://callback`,
->   gated by whether this app itself opened a browser in the last ten minutes
+>   gated by an issued callback identity, the current workbench navigation generation, and whether
+>   this app itself opened that sign-in in the last ten minutes
 >   (`AndroidBridge.AUTH_TAB_WINDOW_MILLIS`); `docs/05-API_SPEC.md` §2.5 describes the shipped
 >   flow.
 

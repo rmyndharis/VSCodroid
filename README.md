@@ -204,7 +204,7 @@ flowchart TD
 
 ### Prerequisites
 
-- **Android Studio** latest stable version with Android API 36 support.
+- **Android Studio** with Android API 37 SDK installed.
 - **Android NDK** r27+ (for cross-compiling the native addons).
 - **CMake** (on PATH, or the Android SDK's `cmake` package; builds libzmq for the Jupyter extension's addon).
 - **Python** 3.x (used by the download and verification scripts).

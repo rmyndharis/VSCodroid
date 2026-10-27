@@ -299,7 +299,7 @@ owning extension is what frees a slot.
 **Decision**: Use Foreground Service with `specialUse` type (Android 14+ requirement). The manifest declares the type for every release; `ServiceCompat.startForeground` (androidx.core 1.19.0, read from its bytecode) masks the type with `0xFF` below Android 14, so there the platform is told none.
 
 **Rationale**:
-- Foreground Service prevents process killing
+- Foreground Service raises process priority; Android can still kill the app or its child processes
 - `specialUse` type is correct for our use case (local dev server)
 - Must provide justification to Play Store review: "Runs local development server for code editor"
 - Shows persistent notification (expected for dev tool)
@@ -386,9 +386,13 @@ sequenceDiagram
   participant N as Node.js Process
   K->>N: ProcessBuilder.start() (launch)
   K->>N: HTTP GET /version (polling, 200 only)
+  K->>N: Fresh nonce challenge for listener ownership
+  N-->>K: HMAC using the private server run identifier
   K->>N: Process.destroy() (graceful shutdown)
   N-->>K: Process.exitValue() (death detection)
 ```
+
+Readiness and adoption also require a valid listener proof. A compatible version response alone does not identify the process that owns the port. Existing server adoption repeats the proof before token recovery and while monitoring the adopted listener.
 
 ---
 

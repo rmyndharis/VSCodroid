@@ -1,7 +1,7 @@
 # VSCodroid Privacy Policy
 
 **Effective Date: February 13, 2026**
-**Last Updated: October 23, 2026**
+**Last Updated: October 27, 2026**
 
 ## Summary
 
@@ -131,17 +131,17 @@ To turn it off entirely, use Android's own control: **Settings → Google → Ba
 
 ## Data Stored on Your Device
 
-The following data is stored locally on your device within the app's private sandbox:
+The following data is stored locally on your device:
 
 - **Your project files**: Stored in the app's private internal storage on a new install (which other apps cannot read and which Clear Data wipes), or in a folder you granted access to. An install that already kept its projects in the app's own area of shared storage (`Android/data/com.vscodroid/files/projects`) keeps them there; new installs no longer use that location because shared storage cannot hold the symbolic links that tools such as `npm install` write
-- **Copies of folders you open from device storage**: When you open a folder through the Android file picker, VSCodroid does not edit it in place. It copies the folder into the app's own storage, works on that copy, and writes your changes back to the original. So a second copy of that folder exists inside the app for as long as it stays open to you, and it is removed when you uninstall or clear app data along with everything else. Nothing about the copy leaves the device (it is excluded from backup), but you should know it is made
+- **Copies of folders you open from device storage**: When you open a folder through the Android file picker, VSCodroid does not edit it in place. It copies the folder into the app's own storage, works on that copy, and writes your changes back to the original. Closing a folder or revoking its permission retains the local copy and pending saves. You can remove an unused copy through the app; uninstalling or clearing app data also removes it. Nothing about the copy leaves the device (it is excluded from backup), but you should know it is made
 - **Editor settings and preferences**: Stored locally as JSON configuration files
 - **Installed extensions**: Downloaded from Open VSX and stored locally
 - **SSH keys**: If you generate SSH keys using the built-in tool, they are stored in the app's private `~/.ssh/` directory. They never leave your device unless you explicitly copy or use them
 - **Terminal history**: Stored locally within the app
 - **Extension data**: Any data created by installed extensions is stored locally
 
-All of this data is removed when you uninstall the app or clear the app's data through Android Settings.
+Uninstalling the app or clearing its data through Android Settings removes its private files and local copies of device folders. Original files in folders you granted access to remain in those folders.
 
 ## Third-Party Services
 

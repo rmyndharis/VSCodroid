@@ -98,8 +98,7 @@ object ServerReadyHelper {
     /**
      * Polls the server's `/version` endpoint until it responds with 200.
      *
-     * `/version` is answered before the connection-token check -- as are
-     * `/delay-shutdown` and `/callback` -- so
+     * `/version` is answered before the connection-token check, so
      * it stays a pure liveness probe. Probing `/` instead would report a healthy
      * server on the strength of a 403.
      *

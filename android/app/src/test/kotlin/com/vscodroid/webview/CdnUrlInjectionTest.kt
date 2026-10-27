@@ -32,8 +32,7 @@ import kotlin.concurrent.thread
  * through, so the whole of the path and the query belong to whatever document is
  * on screen. That includes an extension webview, notebook output and any site
  * open in the bundled Simple Browser. `withToken` then signs the result with the
- * server's connection token, which authenticates every route but `/version`,
- * `/delay-shutdown` and `/callback`.
+ * server's connection token, which authenticates editor access.
  *
  * `Uri.getPath()` hands this code the DECODED path, so `%3F` arrives as a real
  * `?` and `%2E%2E%2F` as a real `../`. Concatenated into a URL string, both stop

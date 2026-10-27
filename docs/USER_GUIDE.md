@@ -25,7 +25,7 @@ A practical guide to using VSCodroid -- the full VS Code IDE running natively on
 ### What Happens on First Open
 
 1. **Install**. Download from the [Play Store](https://play.google.com/store/apps/details?id=com.vscodroid) or [GitHub Releases](https://github.com/rmyndharis/VSCodroid/releases). The core download is roughly 270 MB, and you need about 738 MB free for the extraction that follows.
-2. **Binary extraction** -- On first launch, VSCodroid extracts bundled tools (Node.js, Python, Git, Bash, and others) to internal storage. About 603 MB lands on disk, unpacked one file at a time behind a progress bar, so allow minutes rather than seconds on a slower device. The ~738 MB above is that payload plus the working room setup insists on before it will start. It happens on the first launch and again after every app update, because the extraction is keyed on the app version rather than on what is already unpacked. An update needs far less free space than a fresh install (the app credits what it already holds, so roughly 230 MB rather than 738 MB), but it does re-copy the files and it does take minutes. A first run that is interrupted and retried on the same version is the one case that does not start over: files already the right size are left alone.
+2. **Binary extraction** -- On first launch, VSCodroid extracts bundled tools (Node.js, Python, Git, Bash, and others) to internal storage. About 603 MB lands on disk, unpacked one file at a time behind a progress bar, so allow minutes rather than seconds on a slower device. The ~738 MB above is that payload plus the working room setup insists on before it will start. It happens on the first launch and again after every app update or reinstall, because extraction follows the installed package's version and update timestamp rather than only what is already unpacked. An update needs far less free space than a fresh install (the app credits what it already holds, so roughly 230 MB rather than 738 MB), but it does re-copy the files and it does take minutes. A first run that is interrupted and retried with the same installed package is the one case that does not start over: files already the right size are left alone.
 3. **Language Picker** -- A prompt asks "What do you code in?" with options for Ruby, Java and C/C++. It comes back at each launch until you answer it with Continue or Skip, and your answer is not final: touch and hold the app icon and pick **Manage toolchains** to add or remove them later. Whatever you select downloads there on the setup screen, one at a time; a download that fails is skipped and the rest continue. Skip goes straight to the editor.
 4. **Ready** -- The VS Code editor loads with terminal, file explorer, and all bundled tools available immediately.
 
@@ -79,14 +79,13 @@ VSCodroid is VS Code. If you have used VS Code on desktop, everything works the 
   save a file that another app changed since you opened the folder or last saved
   that file, the other app's version is normally kept beside yours as
   `<name>.device-<time>`, in the editor and in the device folder. The check goes
-  by the time and size the device folder reports for the file: in a folder that
-  reports no times, or keeps a file's old time when the file changes, as some
-  USB and network folders do, a change that keeps the file's size goes
-  unnoticed, and a folder over 64 MB that changes a file's time on its own can
-  occasionally leave such a copy holding the file as you opened it, until
-  VSCodroid has read each of its files once after an update from version 1.4.0
-  or earlier. It checks up to 64 MB per opening of local copies and reads the
-  corresponding provider bytes before recording them as synchronized. A folder that
+  beyond the time and size the device folder reports: before replacing an
+  existing device file, VSCodroid reads its bytes and compares them with the
+  version it last read or delivered. This also protects edits that keep the
+  same time and size, including folders that report no times. If that comparison
+  cannot finish, the save waits inside VSCodroid. It checks up to 64 MB per opening
+  of retained local copies and reads the corresponding provider bytes before
+  recording them as synchronized. A folder that
   reports no times cannot say which copy is newer when yours and the device
   folder's differ as you open it, as when another app changed a file you saved
   there in an earlier session: the editor keeps showing your version, and your
@@ -1541,7 +1540,7 @@ If `node`, `python3`, `git`, or other tools show "command not found":
 
 1. Check your internet connection -- extension search and download require connectivity.
 2. Search directly on [open-vsx.org](https://open-vsx.org) to verify the extension exists there.
-3. Some extensions require a newer editor than the one you have. Run **About** from the Command Palette (`Ctrl+Shift+P`) to see which version VSCodroid is built on, compare it with the extension's requirement on open-vsx.org, and try an older version of the extension if it asks for more. An extension that needs a newer editor does not report an error -- it installs, never activates, and logs nothing, so this is worth checking whenever a freshly installed extension appears to do nothing.
+3. Some extensions require a newer editor than the one you have. Run **About** from the Command Palette (`Ctrl+Shift+P`) to see which version VSCodroid is built on and compare it with the extension's requirement on open-vsx.org. Marketplace installation selects a compatible release when one is available and refuses the install otherwise. A VSIX requiring a newer editor is also refused; choose an older compatible version.
 
 ### npm Install Fails
 

@@ -31,11 +31,11 @@ This project follows the [Contributor Covenant Code of Conduct](CODE_OF_CONDUCT.
 | Tool              | Version                        | Notes                                        |
 | ----------------- | ------------------------------ | -------------------------------------------- |
 | macOS or Linux    | -                              | Windows is not supported for building        |
-| Android Studio    | Latest stable                  | With Android API 36 SDK                      |
+| Android Studio    | Latest stable                  | With Android API 37 SDK                      |
 | Android NDK       | r27+                           | For cross-compiling native modules           |
 | CMake             | 3.x or 4.x                     | Builds libzmq for the zeromq addon. On PATH, or the Android SDK's `cmake` package |
 | JDK               | 17+                            | Required by Gradle                           |
-| Node.js           | 20 or newer                    | `setup.sh` refuses anything older. The Code - OSS server build does not use this one: it takes its Node from upstream's `.nvmrc` at the pinned commit. TypeScript-based self-checks (`test-auth-callback-provider.js`, `test-bridge-relay.js`, `test-saf-mirror-usage.js` and `test-server-startup.js`) require `node:module.stripTypeScriptTypes` and exit with a diagnostic when it is unavailable; CI runs on Node 24 |
+| Node.js           | 20 or newer                    | `setup.sh` refuses anything older. The Code - OSS server build does not use this one: it takes its Node from upstream's `.nvmrc` at the pinned commit. TypeScript-based self-checks (`test-auth-callback-provider.js`, `test-bridge-relay.js`, `test-saf-mirror-usage.js`, `test-server-startup.js` and `test-server-run-proof.js`) require `node:module.stripTypeScriptTypes` and exit with a diagnostic when it is unavailable; CI runs on Node 24 |
 | Python            | 3.x                            | For node-gyp, and for every `scripts/*.py` the build and the Gradle verification tasks run |
 | Git               | Any recent version             | -                                            |
 | GnuPG (`gpg`)     | Any recent version             | `brew install gnupg` / `apt-get install gnupg`. The bundled-tool download scripts verify the Termux package index against its signature and refuse to run without it |
@@ -610,7 +610,7 @@ is downloaded with the app and none counts against the base module's size cap.
 
 ## Continuous Integration
 
-Eight workflows, and what triggers each is worth knowing before assuming a change was checked.
+Nine workflows, and what triggers each is worth knowing before assuming a change was checked.
 Read the triggers from `.github/workflows/` rather than from here if the answer matters.
 
 | Workflow | Runs on | What it does |
@@ -623,6 +623,7 @@ Read the triggers from `.github/workflows/` rather than from here if the answer 
 | `codeoss-build.yml` | `workflow_call` only | The reusable build behind the two rows above: resolves the pinned version and commit, builds the server tree with `build-vscode-oss.sh`, checks it with `fetch-vscode-oss.sh` and uploads it as an artifact for the caller. When none of the files that decide the tree changed since a build, it restores that tarball from the cache and builds nothing, unless the caller passes `fresh: true`, which `build-vscode-oss.yml` does so that a publish always builds. The files that decide the tree are the ones hashed into that cache key, and `check-server-published.py` reads the same list |
 | `patch-drift.yml` | a Monday 04:00 UTC cron, and `workflow_dispatch` | Applies `patches/` to the newest upstream stable tag. Expected to fail between an upstream move and the bump that answers it, so it is not a gate and must not be added to branch protection |
 | `pages.yml` | pushes to `main` touching `docs/site/**`, `docs/USER_GUIDE.md`, `docs/PRIVACY_POLICY.md`, `scripts/build-docs-site.py` or the workflow itself, and `workflow_dispatch` | Builds and deploys the documentation site |
+| `self-check-node-compat.yml` | pull requests to `main` touching the four named TypeScript fixture checks or the workflow, pushes to `fix/self-check-node-version-message`, and `workflow_dispatch` | Confirms the four checks explain the missing API on Node 20 and pass on Node 24 |
 
 Two consequences of the push triggers. Most of this history landed straight on `main` rather than
 through a pull request, which is why `build.yml`, `lint.yml` and `r8.yml` all carry one: a gate
@@ -740,9 +741,10 @@ adb forward --remove tcp:$PORT
 ```
 
 `/version` specifically, and only a `200` counts. There is no `/healthz`. `/` is not a
-substitute: the server requires a connection token on every route but `/version`,
-`/delay-shutdown` and `/callback`, so an unauthenticated `/` answers 403, and a check that
-accepts anything below 500 calls a server healthy while it refuses every request it gets.
+substitute: it requires a connection token, so an unauthenticated request answers 403,
+and a check that accepts anything below 500 calls a server healthy without establishing
+that authenticated editor requests will succeed. Adoption additionally verifies a fresh challenge at
+`/vscodroid-server-proof/<nonce>` before trusting the listener.
 `scripts/device-test.sh` probes it exactly this way.
 
 ## How to Add a New Bundled Tool

@@ -52,7 +52,7 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 ### 2.4 Constraints
 
 - ARM64 Android only (API 30+)
-- Every binary the app installs must arrive in the APK as .so or in a Play asset pack (Android W^X enforcement). Programs a user builds or installs under the app's storage cannot be exec'd directly and run through the system dynamic linker instead
+- Core binaries arrive in the APK as .so files. Play installs receive optional toolchains through asset packs; non-Play installs fetch verified toolchain ZIPs over HTTPS. Programs under the app's storage cannot be exec'd directly and run through the system dynamic linker instead
 - Open VSX only: Microsoft Marketplace ToS prohibits third-party access
 - Android phantom process limit (32 system-wide) constrains child process count
 - See [Section 5: System Constraints](#5-system-constraints) for detailed list
