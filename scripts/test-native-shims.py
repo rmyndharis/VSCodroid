@@ -45,6 +45,9 @@ def strerror_fixture():
 #include <stdio.h>
 #include <string.h>
 #include <stdint.h>
+#ifndef EHWPOISON
+#define EHWPOISON 133
+#endif
 static int api, provider_known;
 static const struct { int code, known; } errors[] = {
     {0, 1}, {1, 1}, {5, 1}, {34, 1}, {35, 1}, {40, 1}, {42, 1}, {57, 1}, {59, 1}, {133, 1},
@@ -98,7 +101,113 @@ XPG
 '''.replace("HELPERS", helpers).replace("RESOLVER", resolver).replace("XPG", xpg)
 
 
+def sigaction_fixture():
+    source = (ROOT / "scripts/seccomp-shim.c").read_text()
+    structures = "\n".join(
+        function("scripts/seccomp-shim.c", f"struct {name} {{", "\n};") + "\n};"
+        for name in ("kernel_sigaction", "musl_sigaction")
+    )
+    start = source.index("int shim_sigaction(", source.index('__asm__("sigaction")'))
+    body = source[start:source.index('\n__attribute__((constructor))', start)]
+    return r'''
+#include <assert.h>
+#include <errno.h>
+#include <string.h>
+#define SIGSYS 31
+#define SYS_rt_sigaction 134
+typedef struct { int code; } siginfo_t;
+STRUCTURES
+static long result;
+static int calls, signal_seen, has_action;
+static struct kernel_sigaction action_seen;
+static void handler(int sig, siginfo_t *info, void *context) {
+    (void)sig; (void)info; (void)context;
+}
+static void restorer(void) {}
+int *fixture_errno_location(void) { return &errno; }
+#define __errno_location fixture_errno_location
+static long sys6(long nr, long sig, long act, long old, long size, long e, long f) {
+    assert(nr == SYS_rt_sigaction && size == 8 && e == 0 && f == 0);
+    calls++; signal_seen = (int)sig;
+    has_action = act != 0;
+    if (act) action_seen = *(struct kernel_sigaction *)act;
+    if (old && result == 0) {
+        struct kernel_sigaction *saved = (void *)old;
+        saved->handler = handler; saved->flags = 4; saved->mask = 16;
+        saved->restorer = restorer;
+    }
+    return result;
+}
+BODY
+'''.replace("STRUCTURES", structures).replace("BODY", body)
+
+
 class NativeShimTest(unittest.TestCase):
+    def test_reserved_and_out_of_range_signals_leave_the_action_unchanged(self):
+        compile_and_run(sigaction_fixture() + r'''
+#include <limits.h>
+int main(void) {
+    const int invalid[] = {32, 33, 34, 0, 65, INT_MIN, INT_MAX};
+    for (unsigned i = 0; i < sizeof(invalid) / sizeof(invalid[0]); i++) {
+        struct musl_sigaction old, before;
+        memset(&old, 0x55, sizeof(old)); before = old;
+        errno = E2BIG;
+        assert(shim_sigaction(invalid[i], NULL, &old) == -1);
+        assert(errno == EINVAL && memcmp(&old, &before, sizeof(old)) == 0);
+        assert(calls == 0);
+    }
+    assert(shim_sigaction(35, NULL, NULL) == 0 && calls == 1);
+    assert(shim_sigaction(64, NULL, NULL) == 0 && calls == 2);
+    return 0;
+}
+''')
+
+    def test_protected_signal_returns_the_installed_action(self):
+        compile_and_run(sigaction_fixture() + r'''
+int main(void) {
+    struct musl_sigaction action = {0}, old;
+    action.handler = (void *)1;
+    memset(&old, 0x55, sizeof(old));
+    errno = E2BIG;
+    assert(shim_sigaction(SIGSYS, &action, &old) == 0);
+    assert(calls == 1 && signal_seen == SIGSYS && !has_action);
+    assert(old.handler == (void *)handler && old.flags == 4 && old.mask[0] == 16);
+    assert(old.restorer == restorer && errno == E2BIG);
+    for (int i = 1; i < 16; i++) assert(old.mask[i] == 0);
+    return 0;
+}
+''')
+
+    def test_signal_errors_set_errno_without_changing_the_old_action(self):
+        compile_and_run(sigaction_fixture() + r'''
+int main(void) {
+    struct musl_sigaction action = {0}, old, before;
+    action.handler = (void *)handler;
+    memset(&old, 0x55, sizeof(old)); before = old;
+    result = -EINVAL; errno = E2BIG;
+    assert(shim_sigaction(9, &action, &old) == -1);
+    assert(errno == EINVAL && memcmp(&old, &before, sizeof(old)) == 0);
+    assert(calls == 1 && signal_seen == 9);
+    return 0;
+}
+''')
+
+    def test_ordinary_signal_preserves_the_kernel_action(self):
+        compile_and_run(sigaction_fixture() + r'''
+int main(void) {
+    struct musl_sigaction action = {0}, old;
+    action.handler = (void *)handler; action.mask[0] = 8;
+    action.flags = (int)0x80000004U; action.restorer = restorer;
+    errno = E2BIG;
+    assert(shim_sigaction(10, &action, &old) == 0);
+    assert(calls == 1 && signal_seen == 10 && errno == E2BIG);
+    assert(action_seen.handler == handler && action_seen.flags == 0x80000004UL);
+    assert(action_seen.mask == 8 && action_seen.restorer == restorer);
+    assert(old.handler == (void *)handler && old.flags == 4 && old.mask[0] == 16);
+    return 0;
+}
+''')
+
     def test_gnu_strerror_resolver(self):
         compile_and_run(strerror_fixture() + r'''
 int main(void) {
@@ -176,6 +285,10 @@ int main(void) {
 #include <string.h>
 #include <sys/stat.h>
 #include <unistd.h>
+#ifdef __APPLE__
+typedef off_t off64_t;
+_Static_assert(sizeof(off64_t) == 8, "The fixture requires 64-bit offsets");
+#endif
 BODY
 static int seed(const char *name) {
     int fd = open(name, O_RDWR | O_CREAT | O_TRUNC, 0600);

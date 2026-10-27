@@ -19,8 +19,9 @@
 //
 // Freestanding on purpose. It is preloaded into a musl process by musl's own
 // loader, so it must not drag bionic's libc in behind it: there are no library
-// calls here, only `svc #0`, and it is linked with -nostdlib. The kernel ABI
-// structures it does use (siginfo, ucontext, epoll_event, timespec) are the same
+// dependencies here, and it is linked with -nostdlib. System calls use `svc #0`;
+// the errno accessor resolves to the musl already loaded by the process. The
+// kernel ABI structures it uses (siginfo, ucontext, epoll_event, timespec) are the same
 // for either libc, which is why the NDK headers can describe them.
 //
 // The one behaviour it does not preserve is resolution. epoll_pwait2 takes a
@@ -42,6 +43,8 @@
 #ifndef __NR_epoll_pwait2
 #define __NR_epoll_pwait2 441
 #endif
+
+extern int *__errno_location(void);
 
 static inline long sys6(long nr, long a, long b, long c, long d, long e, long f) {
     register long x8 __asm__("x8") = nr;
@@ -162,8 +165,13 @@ __attribute__((visibility("default")))
 int shim_sigaction(int sig, const struct musl_sigaction *act, struct musl_sigaction *oact)
     __asm__("sigaction");
 int shim_sigaction(int sig, const struct musl_sigaction *act, struct musl_sigaction *oact) {
+    // musl reserves 32-34 for its thread implementation and exposes signals 1-64.
+    if ((unsigned)sig - 32U < 3 || (unsigned)sig - 1U >= 64) {
+        *__errno_location() = EINVAL;
+        return -1;
+    }
     if (sig == SIGSYS && act) {
-        return 0;   // answered as done; ours stays
+        act = NULL; // Keep our handler while still returning the installed action.
     }
     // Both directions are translated. The caller's buffer is musl's shape and
     // the kernel's is not, so handing the kernel `oact` directly would have it
@@ -180,6 +188,10 @@ int shim_sigaction(int sig, const struct musl_sigaction *act, struct musl_sigact
         k.mask = act->mask[0];
     }
     long r = sys6(SYS_rt_sigaction, sig, act ? (long)&k : 0, oact ? (long)&old : 0, 8, 0, 0);
+    if (r < 0) {
+        *__errno_location() = (int)-r;
+        return -1;
+    }
     if (oact && r == 0) {
         for (unsigned i = 0; i < 16; i++) oact->mask[i] = 0;
         oact->handler = (void *)old.handler;

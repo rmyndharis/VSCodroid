@@ -67,7 +67,8 @@ BUILD_ID_FLAG=(-Wl,--build-id=sha1)
 
 # -nostdlib because this is loaded beside musl, not beside Bionic: linking
 # Bionic's libc into it would put a second libc in a musl process. Everything it
-# does is a raw `svc #0`, so it needs none.
+# calls at the system boundary is a raw `svc #0`; its errno accessor resolves
+# against the musl already loaded in the process, without a library dependency.
 #
 # --pack-dyn-relocs=none is the one flag here that is not a preference, and it
 # cost an afternoon. Targeting API 30 or newer, lld emits relative relocations in
