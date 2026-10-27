@@ -882,7 +882,7 @@ class SafSyncEngine(private val context: Context) {
                         // so, which for a persistent cause is indistinguishable from the
                         // save never happening.
                         val deviceChanged =
-                            previouslyRecorded?.let { deviceChangedSinceRecord(it, doc) } != false
+                            previousRecord?.let { deviceChangedSinceRecord(it, doc) } != false
                         val deviceCopy =
                             if (deviceChanged) setAsideDeviceCopy(doc, localPath, mirrorDir) else null
                         if (deviceCopy == DeviceCopyOutcome.UNAVAILABLE &&
@@ -1500,13 +1500,15 @@ class SafSyncEngine(private val context: Context) {
      * No record gives no evidence for an overwrite either. The caller preserves the
      * device copy first, while a completed upload can record the stable bytes it delivered.
      */
-    private fun deviceChangedSinceRecord(recorded: Set<String>, doc: DocumentInfo): Boolean {
+    private fun deviceChangedSinceRecord(recorded: Map<String, ByteArray?>, doc: DocumentInfo): Boolean {
         val prefix = escapeRecordPath(doc.relativePath) + '\t'
-        val line = recorded.firstOrNull { it.startsWith(prefix) } ?: return true
+        val line = recorded.keys.firstOrNull { it.startsWith(prefix) } ?: return true
         val parts = line.split('\t')
         val recordedModified = parts.getOrNull(1)?.toLongOrNull() ?: return true
         val recordedSize = parts.getOrNull(2)?.toLongOrNull() ?: return true
-        return recordedModified != doc.lastModified || (doc.size > 0 && recordedSize != doc.size)
+        if (recordedModified != doc.lastModified || (doc.size > 0 && recordedSize != doc.size)) return true
+        val digest = recorded[line] ?: return true
+        return !digest.contentEquals(deviceSha256(doc.uri, recordedSize))
     }
 
     /**
@@ -1629,89 +1631,15 @@ class SafSyncEngine(private val context: Context) {
     }
 
     /**
-     * Keeps the device copy of [localFile] before a save replaces it, when the device
-     * moved since this engine last read or wrote that document, and answers whether the
-     * save has to be held back instead.
+     * Preserves device bytes that do not match the last delivered or imported digest.
+     * Missing, equal, and changed metadata all require byte proof before replacement.
+     * An unavailable preservation copy holds the save for [retryHeldBack]; unknown
+     * documents are preserved when [preserveUnknown] is requested.
      *
-     * The live counterpart of phase 2's guard: while the folder is open the device is not
-     * read again, and a save opens the document with `"wt"`, so an edit another app made
-     * in the meantime was destroyed with no copy anywhere. The answer here is the one
-     * phase 2 gives: the device copy goes to `.device-<time>` beside the mirror file, in a
-     * watched directory, so the watcher uploads it as a CREATE.
-     *
-     * - An existing document reached through a create is preserved even without a
-     *   [deviceSeen] entry, because another app may have created it since the open.
-     * - A preserved copy takes a free name, so a provider with no clock cannot replace
-     *   the first `.device-0` copy with a later edit.
-     * - A copy that cannot be made holds the save back without arming [unfetched], so the
-     *   next save asks again, and so does [retryHeldBack] once the save's wait is over.
-     *
-     * A moved stamp is not yet another app's edit. Several providers finish what they
-     * report for a write after its stream has closed: MTP rewrites its row once the object
-     * reaches the device, Nextcloud stamps the close and later stores the server's whole
-     * seconds, a FAT card behind the FUSE cache reports a rounded time once its cached
-     * inode is evicted, and Round Sync answers from a cache. The stamp read right after
-     * this app's write is then not the one a save sees once the provider has settled, and a
-     * stamp alone kept a `.device-` copy of the previous save: at every save after the
-     * first on MTP and Nextcloud, and on the other two at a save made after they settled.
-     * The same holds for a copy phase 2 fetched while its provider was still settling a
-     * write, which a stamp alone set aside at the first save of the session, and for a
-     * copy phase 2 kept whose stamp moves later. So a landed write leaves the SHA-256 of
-     * what it streamed beside its stamp, phase 2's fetch the SHA-256 of what it copied, and
-     * [digestKeptCopies] that of a copy kept, and a device copy that reads back as exactly
-     * that is the version the mirror was made from: the stamp is re-baselined and the save
-     * goes ahead. Hashed as it is read rather than fetched, so it spends no disk and neither
-     * the free-space floor nor the size cap a fetch obeys can hold such a save back. That
-     * costs one read per save whose stamp moved, of no more than the digested length and a
-     * buffer, and none for a document reported past [MAX_FILE_SIZE] at another length,
-     * which a set-aside could not keep either. Where the read fails, as a Nextcloud read
-     * does offline, nothing tells that version from another app's edit, and the save goes
-     * on to the set-aside, which holds it back while its own fetch fails too. A save held
-     * back is tried again by itself while the folder is watched, so it lands once the
-     * device copy can be read and, where it is another version, kept, decided by the bytes
-     * like any other. A device copy is kept as phase 2 fetches one: not where the provider
-     * reports it past [MAX_FILE_SIZE], whole where it reports no size, and no further than
-     * that limit where the stamp query went unanswered.
-     *
-     * An open that cannot place what the device holds, on a provider with no clock a device
-     * copy that differs from the mirror copy, leaves no stamp at all, so the first save reads
-     * the device copy whatever stamp the provider reports. The digest it is read against is
-     * the previous record's for that path, the copy the open before fetched or kept. An edit
-     * the watcher never delivered goes out over that copy without a copy kept, and another
-     * app's edit made before the open is kept like one made after it. That needs the edit to
-     * have been made from that copy. A stable completed save updates the record with its
-     * delivered identity and digest. A later no-clock open can refresh that unchanged
-     * delivered mirror from the device; an undelivered mirror edit remains protected.
-     * When the mirror changes during upload or the receipt cannot be written, the older
-     * record remains conservative: a later save can keep one spare copy of delivered
-     * bytes. A record without a digest can also cost one spare copy.
-     *
-     * Ceilings: a provider reporting neither column; a same-size edit inside one clock tick,
-     * or at any time on a provider with no clock or one that keeps a document's old time, as
-     * an Android phone attached over MTP does; a foreign edit in the window between a landed
-     * write and its refresh, or between this check and the write, which SAF has no
-     * conditional write to close; a stamp the provider will not report, which lets the save
-     * go ahead unguarded, except over a device copy this engine knows it has not read, one an
-     * open could not place or one whose stamp it has seen move past what it read, and after
-     * a write drops the entry so the next save fails open; a stamp a provider moves after the
-     * folder was opened, over a copy the open kept rather than fetched (its times agreed, or
-     * a read found the bytes equal) that no open has digested yet and this one's
-     * [KEPT_COPY_DIGEST_BYTES] did not reach, and not written by this app since, which keeps
-     * one spare copy of the unchanged document; a document reported past [MAX_FILE_SIZE] at
-     * a length other than the digested one, which is held back unread, even where it holds
-     * this app's own bytes, until it is reported at that length, and one past it whose stamp
-     * query goes unanswered, which each try reads that far before holding the save back
-     * again, until the provider answers; a held-back save whose
-     * folder is closed before a try lands, which waits for the next open (with no clock, for
-     * the tries after it where this engine makes that open, and for the next save of the
-     * file where the next activity's engine does), unless that open skips the document for
-     * its size, which refuses the file's saves until an open finds it smaller, or cannot
-     * list the folder or the directory holding the file, which blocks saves until a later
-     * open can read it; a held-back save whose directory is renamed,
-     * which is dropped and waits for the next save of the file or, with a clock, the next
-     * open; and on a provider with no clock, or where the stamp query went unanswered, a copy
-     * is named for the time 0, and every copy after the first carries its counter as a time,
-     * which is cosmetic.
+     * Comparison reads at most the baseline length and one buffer. Preservation follows
+     * the ordinary copy policy: reported oversize documents are refused, unknown sizes
+     * are copied whole, and unanswered metadata uses [MAX_FILE_SIZE]. A document changed
+     * by another app after preservation but before the write remains a provider race.
      */
     private fun keepsDeviceEdit(
         localFile: File,
@@ -1720,6 +1648,10 @@ class SafSyncEngine(private val context: Context) {
         access: OutboundAccess? = null,
         preserveUnknown: Boolean = false,
     ): Boolean {
+        if (withCurrentMemory(access) { true } != true) {
+            announceLost(localFile)
+            return true
+        }
         // Settled again by whatever this answers: a save that goes ahead ends the hold, and
         // one held back once more waits longer before it is tried again.
         val held = withCurrentMemory(access) { heldBack.remove(localFile.absolutePath) }
@@ -1750,27 +1682,11 @@ class SafSyncEngine(private val context: Context) {
         return true
     }
 
-    /**
-     * What the device reports for [docUri] now, where that has moved past what this engine
-     * last read or wrote at [localFile]'s path and the bytes do not show it to be the same
-     * version; null where it has not, and where nothing is known of the path or the
-     * provider will not say, unless the device copy is one this engine could not place,
-     * where only the bytes answer. A stamp that moved over the digested bytes becomes the
-     * one compared next, and one that moved past them leaves the path unplaced, as an open
-     * that cannot place the copy leaves it, until a read finds those bytes again or a write
-     * lands. [keepsDeviceEdit] says why the bytes are asked and what that costs.
-     */
+    /** Returns metadata for a version not proved equal to the last known device bytes. */
     private fun deviceMovedPast(localFile: File, docUri: Uri, access: OutboundAccess? = null): Pair<Long, Long>? {
         val seen = deviceSeen[localFile.absolutePath] ?: return null
-        // An unplaced copy has no stamp so that its bytes decide, and an unanswered query let
-        // a save, or a held-back save's try with nobody saving, go over it unread. Taken as a
-        // moved stamp instead, with no time and a length no answer carries,
-        // [UNANSWERED_SIZE]: a matching read re-baselines to it, so the next answer is checked
-        // against the bytes again, and a set-aside it leads to knows that nothing said how much
-        // the device holds; see [setAsideDeviceCopy].
-        val now = deviceStamp(docUri)
-            ?: if (seen.stamp == null) 0L to UNANSWERED_SIZE else return null
-        if (now == seen.stamp) return null
+        // A missing or unchanged timestamp cannot distinguish another application's bytes.
+        val now = deviceStamp(docUri) ?: (0L to UNANSWERED_SIZE)
         // Read at any length a set-aside could still keep, a missing size column's 0 and an
         // unanswered query's length included: a reported length can lag the bytes, as on a
         // provider that reports a write's new time before its new length, and skipping the
@@ -2261,16 +2177,6 @@ class SafSyncEngine(private val context: Context) {
         val present = documents.filterNot { it.isDirectory }.map { it.relativePath }.toSet()
         var removed = 0
 
-        // Resolved rather than checked lexically: a mirror is routinely a checked-out
-        // repository, so a link inside one is attacker-supplied in the ordinary case and
-        // `..` handling alone would follow it out.
-        val confine = try {
-            mirrorDir.canonicalPath + File.separator
-        } catch (e: Exception) {
-            Logger.w(tag, "Could not resolve the mirror's own path; removing nothing: ${e.message}")
-            return 0
-        }
-
         val lines = readSyncedRecord(record)
         val entries = if (lines.firstOrNull() == RECORD_HEADER) {
             lines.drop(1)
@@ -2285,26 +2191,49 @@ class SafSyncEngine(private val context: Context) {
             val path = unescapeRecordPath(line.substringBefore('\t'))
 
             if (path.isEmpty() || path in present) continue
-            val stale = File(mirrorDir, path)
-            if (!stale.isFile) continue
-            val resolved = try {
-                stale.canonicalPath
-            } catch (e: Exception) {
-                continue
-            }
-            if (!resolved.startsWith(confine)) {
-                Logger.w(tag, "Recorded path resolves outside the mirror, not touching it: $path")
-                continue
-            }
-            if (!matchesRecordedCopy(stale, path, line)) {
-                Logger.d(tag, "Kept a file that is no longer the copy recorded for it: $path")
-                continue
-            }
-            if (stale.delete()) removed++
+            if (removeRecordedCopy(mirrorDir, path, line)) removed++
         }
 
         writeSyncedRecord(record, recorded)
         return removed
+    }
+
+    private fun removeRecordedCopy(mirrorDir: File, relativePath: String, line: String): Boolean {
+        val (identity, digest) = splitRecordLine(line)
+        if (digest == null) return false
+        val file = File(mirrorDir, relativePath)
+        return try {
+            openOutboundPath(file, mirrorDir).use { selected ->
+                if (!matchesRecordedCopy(selected, relativePath, line)) return@use false
+                val before = selected.attributes()
+                if (!before.isRegularFile || identity != identityLine(
+                        relativePath, before.lastModifiedTime().toMillis(), before.size(),
+                    )) return@use false
+                val preserved = selected.sibling("removed$LOCAL_COPY_SUFFIX${UUID.randomUUID()}")
+                requireCurrentParent(selected, file, mirrorDir)
+                // Capture the entry before proving its bytes, so a replacement at its old name survives.
+                selected.parent.move(selected.leaf, selected.parent, preserved)
+                var removed = false
+                try {
+                    val captured = inboundEntry(selected, preserved)
+                    if (captured != null && sameInboundAttributes(before, captured.attributes) &&
+                        captured.digest?.contentEquals(digest) == true
+                    ) {
+                        requireCurrentParent(selected, file, mirrorDir)
+                        selected.parent.deleteFile(preserved)
+                        removed = true
+                    }
+                } finally {
+                    if (!removed && inboundAttributes(selected, preserved) != null) {
+                        Logger.w(tag, "Kept a changed copy of $relativePath as $preserved")
+                    }
+                }
+                removed
+            }
+        } catch (e: Exception) {
+            Logger.d(tag, "Kept $relativePath during deletion: ${e.javaClass.simpleName}")
+            false
+        }
     }
 
     /**
@@ -3086,7 +3015,7 @@ class SafSyncEngine(private val context: Context) {
 
     private fun inboundParent(dest: OutboundPath): InboundParent = InboundParent(dest.parentKey())
 
-    private fun parentIsCurrent(dest: OutboundPath, file: File, mirrorRoot: File): Boolean = try {
+    internal fun parentIsCurrent(dest: OutboundPath, file: File, mirrorRoot: File): Boolean = try {
         openOutboundPath(file, mirrorRoot).use { current ->
             current.rootKey == dest.rootKey && inboundParent(current) == inboundParent(dest)
         }
@@ -3571,12 +3500,14 @@ class SafSyncEngine(private val context: Context) {
             )
             return false
         }
-        val document = safDocUri.toString()
+        val document = safDocUri.authority?.let { it to DocumentsContract.getDocumentId(safDocUri) }
+            ?: (null to safDocUri.toString())
         if (!documentWritesInFlight.add(document)) {
             // Someone is streaming into this document now. Declining is what keeps the
             // two from interleaving, and it costs nothing the winner is not already
             // writing.
             Logger.d(tag, "Another write holds ${localFile.name}; leaving it to that one")
+            onWriteBackFailed(localFile)
             return false
         }
         try {
@@ -3691,14 +3622,13 @@ class SafSyncEngine(private val context: Context) {
             // A write cut short has no digest because its prefix is unknown.
             if (providerAttempted) {
                 val stamp = deviceStamp(safDocUri)
-                if (stamp != null) deviceSeen[localFile.absolutePath] = DeviceState(stamp, written, writtenLength)
-                else deviceSeen.remove(localFile.absolutePath)
+                deviceSeen[localFile.absolutePath] = DeviceState(stamp, written, writtenLength)
             }
         }
     }
 
     /** Opens a descendant's parent relative to the captured mirror without following links. */
-    private fun openOutboundPath(localFile: File, mirrorRoot: File): OutboundPath {
+    internal fun openOutboundPath(localFile: File, mirrorRoot: File): OutboundPath {
         val root = mirrorRoot.toPath().toAbsolutePath().normalize()
         val file = localFile.toPath().toAbsolutePath().normalize()
         if (file == root || !file.startsWith(root)) throw IOException("Source is outside its mirror")
@@ -4949,7 +4879,7 @@ class SafSyncEngine(private val context: Context) {
                         refuseUnreadDocument(localFile, localFile.name)
                     } else if (mirrorRoot == null) {
                         announceLost(localFile)
-                    } else if (!keepsDeviceEdit(localFile, job.safDocUri, mirrorRoot, access)) {
+                    } else if (!keepsDeviceEdit(localFile, job.safDocUri, mirrorRoot, access, preserveUnknown = true)) {
                         if (withCurrent(access) { writeLocalToSaf(localFile, job.safDocUri, mirrorRoot) } == null) {
                             announceLost(localFile)
                         }
@@ -5986,47 +5916,12 @@ class SafSyncEngine(private val context: Context) {
         private val uploadClaims = mutableListOf<UploadClaim>()
 
         /**
-         * Documents a write is streaming into right now, keyed by document URI.
-         *
-         * `openOutputStream(uri, "wt")` truncates at open, so two writers of one
-         * document produce a file that is neither of their inputs. Two writers are
-         * reachable: the mirror is named by a hash of the folder rather than by the
-         * session, so reopening a folder while the previous session's drain is still
-         * streaming puts [SafSyncEngine.initialSync] on the IO dispatcher and that
-         * drain on the same document.
-         *
-         * In this object rather than on the engine, next to [uploadJournalLock] and
-         * [uploadClaims] and for the reason those give: the engine is one per
-         * [SafStorageManager] and the manager one per activity, while
-         * [SafSyncEngine.stopWatching] waits [DRAIN_GRACE_MS] and then deliberately
-         * leaves a drain it could not join to finish on its own. The two writers above
-         * are therefore routinely in two different engines, an activity recreated while
-         * a drain is still streaming being the ordinary way there, and a set held per
-         * instance is empty in exactly the engine that has to see the departing drain's
-         * claim. Process scope is what makes the claim mean anything at all.
-         *
-         * A set rather than a lock, and that is the whole design. The obvious fix, a
-         * per-document lock the second writer waits on, was rejected for a measured
-         * reason: a `ContentResolver` stream to a network or MTP provider has no
-         * timeout, so waiting converts today's race into an unbounded stall of
-         * [SafSyncEngine.initialSync], behind a dialog built with
-         * `setCancelable(false)`. A trade of corruption for a hang is not a fix. `add`
-         * returns false when someone already holds the document, and the loser declines
-         * instead of waiting.
-         *
-         * What the loser gives up is one write, and both writers copy the same local
-         * file, so the bytes it would have written are the bytes the winner is writing.
-         * If the mirror changed in between, the watcher raises MODIFY again and the
-         * queue carries it; the write-back already drops a job a newer one supersedes.
-         *
-         * Keyed by document rather than by local path deliberately, though the two
-         * coincide today: the mirror is one directory per folder, so one local path
-         * resolves to one document and nothing distinguishes the keys. Measured, and
-         * stated because it is a coincidence rather than a guarantee. The thing being
-         * protected is the document that `"wt"` truncates, so that is what the key
-         * names; a local path is a proxy that happens to agree.
+         * Provider documents with a truncating stream open, shared across engine instances.
+         * Tree grants can spell one document differently, so identity is authority plus
+         * document ID. A contending writer declines and reports its undelivered save
+         * rather than waiting indefinitely for a provider stream.
          */
-        private val documentWritesInFlight = ConcurrentHashMap.newKeySet<String>()
+        private val documentWritesInFlight = ConcurrentHashMap.newKeySet<Pair<String?, String>>()
 
         /**
          * Mirror files a sync is streaming a device document into right now, keyed by
@@ -7013,7 +6908,7 @@ private class UploadClaim(var path: String)
 
 private data class InboundScratchKey(val parent: Any, val name: String)
 
-private class OutboundPath(
+internal class OutboundPath(
     val parent: SecureDirectoryStream<Path>,
     val leaf: Path,
     val directories: List<SecureDirectoryStream<Path>>,

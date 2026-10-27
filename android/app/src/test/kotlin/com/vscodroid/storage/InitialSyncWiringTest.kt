@@ -136,8 +136,14 @@ class InitialSyncWiringTest {
 
         mockkStatic(DocumentsContract::class)
         every { DocumentsContract.getTreeDocumentId(any()) } returns "root"
+        val documentIds = mutableMapOf<Uri, String>()
+        every { DocumentsContract.getDocumentId(any()) } answers {
+            documentIds.getValue(firstArg())
+        }
         every { DocumentsContract.buildChildDocumentsUriUsingTree(any(), any()) } returns mockk(relaxed = true)
-        every { DocumentsContract.buildDocumentUriUsingTree(any(), any()) } returns mockk(relaxed = true)
+        every { DocumentsContract.buildDocumentUriUsingTree(any(), any()) } answers {
+            mockk<Uri>(relaxed = true).also { documentIds[it] = secondArg() }
+        }
 
         resolver = mockk(relaxed = true)
         context = mockk(relaxed = true)
@@ -643,7 +649,7 @@ class InitialSyncWiringTest {
             listOf("notes.txt"), mirror.list()?.sorted(),
             "a device copy this app had already read was set aside as if it were an edit",
         )
-        assertEquals(emptyList<String>(), openedDocuments, "the device copy was read for nothing")
+        assertEquals(listOf("notes.txt"), openedDocuments, "equal metadata still requires proof of the device bytes")
     }
 
     /**

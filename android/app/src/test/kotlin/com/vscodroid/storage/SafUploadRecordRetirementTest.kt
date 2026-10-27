@@ -79,6 +79,9 @@ class SafUploadRecordRetirementTest {
         every { DocumentsContract.deleteDocument(any(), any()) } returns true
 
         resolver = mockk(relaxed = true)
+        every { resolver.openInputStream(any()) } answers {
+            java.io.ByteArrayInputStream(byteArrayOf())
+        }
         every { resolver.openOutputStream(any(), any()) } answers {
             if (refuseWrites) throw IOException("no space left on device")
             java.io.ByteArrayOutputStream()

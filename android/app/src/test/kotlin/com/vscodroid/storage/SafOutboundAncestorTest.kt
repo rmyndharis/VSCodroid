@@ -84,6 +84,7 @@ class SafOutboundAncestorTest : SafInitialSyncTestBase() {
         assertTrue(local.absolutePath.toByteArray(Charsets.UTF_8).size < 4096)
         val document = named("doc-uri:deep-notes")
         val provider = ByteArrayOutputStream()
+        every { resolver.openInputStream(document) } answers { ByteArrayInputStream(byteArrayOf()) }
         var opens = 0
         every { resolver.openOutputStream(document, "wt") } answers {
             opens++

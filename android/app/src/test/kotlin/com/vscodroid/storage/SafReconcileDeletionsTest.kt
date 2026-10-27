@@ -21,10 +21,14 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
+import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.ValueSource
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.IOException
 import java.nio.file.Files
+import java.security.MessageDigest
+import java.util.concurrent.atomic.AtomicBoolean
 
 /**
  * Deletions on the device, on their way into the mirror.
@@ -87,6 +91,9 @@ class SafReconcileDeletionsTest {
 
         mockkStatic(DocumentsContract::class)
         every { DocumentsContract.getTreeDocumentId(any()) } returns "root"
+        every { DocumentsContract.getDocumentId(any()) } answers {
+            uris.entries.first { it.value === firstArg<Uri>() }.key
+        }
         every { DocumentsContract.buildChildDocumentsUriUsingTree(any(), any()) } returns
             mockk(relaxed = true)
         every { DocumentsContract.buildDocumentUriUsingTree(any(), any()) } answers {
@@ -775,6 +782,68 @@ class SafReconcileDeletionsTest {
             listOf("a.txt"), mirror.list()?.sorted(),
             "the mirror must hold the workspace and nothing else"
         )
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = ["redirect", "edit", "replacement"])
+    fun `reconciliation retains a file changed during deletion verification`(shape: String) {
+        val directory = mirrored("nested").apply { assertTrue(mkdirs()) }
+        val local = File(directory, "notes.txt").apply { writeText("previously copied") }
+        val modified = local.lastModified()
+        val original = local.readBytes()
+        val edited = ByteArray(original.size) { 'z'.code.toByte() }
+        writeRecord(SafSyncEngine.recordLine(
+            "nested/notes.txt\t$modified\t${original.size}",
+            MessageDigest.getInstance("SHA-256").digest(original),
+        ))
+        val moved = File(filesDir, "outside-mirror")
+        val changed = AtomicBoolean()
+        mockkStatic(MessageDigest::class)
+        every { MessageDigest.getInstance("SHA-256") } answers {
+            val real = callOriginal()
+            object : MessageDigest("SHA-256") {
+                override fun engineUpdate(input: Byte) = real.update(input)
+                override fun engineUpdate(input: ByteArray, offset: Int, length: Int) = real.update(input, offset, length)
+                override fun engineReset() = real.reset()
+                override fun engineDigest(): ByteArray {
+                    val digest = real.digest()
+                    if (changed.compareAndSet(false, true)) {
+                        when (shape) {
+                            "redirect" -> {
+                                assertTrue(directory.renameTo(moved))
+                                Files.createSymbolicLink(directory.toPath(), moved.toPath())
+                                if (!File(moved, local.name).exists()) File(moved, local.name).writeBytes(edited)
+                            }
+                            "replacement" -> {
+                                val replacement = File(filesDir, "replacement").apply { writeBytes(edited) }
+                                Files.move(replacement.toPath(), local.toPath(), java.nio.file.StandardCopyOption.REPLACE_EXISTING)
+                            }
+                            else -> {
+                                local.writeBytes(edited)
+                                assertTrue(local.setLastModified(modified))
+                            }
+                        }
+                    }
+                    return digest
+                }
+            }
+        }
+        val reconcile = SafSyncEngine::class.java.getDeclaredMethod(
+            "reconcileDeletions", File::class.java, List::class.java,
+            Boolean::class.javaPrimitiveType, List::class.java,
+        ).apply { isAccessible = true }
+
+        reconcile.invoke(SafSyncEngine(context), mirror,
+            listOf(DocumentInfo(uriFor("keep"), "keep", "keep.txt", false, 1, DEVICE_TIME)), true, emptyList<String>())
+
+        assertTrue(changed.get(), "the deletion never verified the recorded copy")
+        if (shape == "redirect") {
+            assertTrue(File(moved, local.name).isFile, "deletion followed a redirected parent")
+        } else {
+            assertTrue(mirror.walkTopDown().filter { it.isFile }.any { edited.contentEquals(it.readBytes()) },
+                "deletion removed bytes changed while it verified the original copy")
+            if (shape == "replacement") assertTrue(edited.contentEquals(local.readBytes()))
+        }
     }
 
     private companion object {

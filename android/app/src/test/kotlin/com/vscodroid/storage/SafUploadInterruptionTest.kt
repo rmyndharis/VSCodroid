@@ -4,6 +4,7 @@ import android.content.ContentResolver
 import android.content.Context
 import android.database.Cursor
 import android.net.Uri
+import android.os.SystemClock
 import android.os.FileObserver
 import android.provider.DocumentsContract
 import com.vscodroid.util.Logger
@@ -85,6 +86,8 @@ class SafUploadInterruptionTest {
         every { Logger.e(any(), any()) } just Runs
         every { Logger.e(any(), any(), any()) } just Runs
 
+        mockkStatic(SystemClock::class)
+        every { SystemClock.elapsedRealtime() } returns 0L
         mockkStatic(DocumentsContract::class)
         every { DocumentsContract.getTreeDocumentId(any()) } returns "root"
         every { DocumentsContract.buildChildDocumentsUriUsingTree(any(), any()) } returns
@@ -641,6 +644,7 @@ class SafUploadInterruptionTest {
             // A different document permits both writers to hold this mirror path.
             val otherDocument = mockk<Uri>(relaxed = true)
             every { otherDocument.toString() } returns "content://test/other/notes.txt"
+            every { DocumentsContract.getDocumentId(otherDocument) } returns "other:notes.txt"
             val second = SafSyncEngine(context)
             // Exercise the writer independently of the event's per-mirror admission.
             SafSyncEngine::class.java.getDeclaredMethod(

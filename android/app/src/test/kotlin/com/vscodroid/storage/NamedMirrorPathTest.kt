@@ -22,6 +22,8 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
+import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.ValueSource
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.Paths
@@ -507,4 +509,63 @@ class NamedMirrorPathTest {
         assertFalse(Files.exists(File(named()).toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS))
         assertEquals("not ours", File(mirrors, "by-name/$hash/notes.txt").readText())
     }
+    @ParameterizedTest
+    @ValueSource(booleans = [false, true])
+    fun `a named path never follows a redirected reserved ancestor`(hashAncestor: Boolean) {
+        val mirror = copy()
+        val outside = File(filesDir, "outside-names").apply { mkdirs() }
+        val ancestor = if (hashAncestor) {
+            File(mirrors, "by-name").mkdirs()
+            File(mirrors, "by-name/$hash")
+        } else File(mirrors, "by-name")
+        Files.createSymbolicLink(ancestor.toPath(), outside.toPath())
+
+        assertNull(manager.namedPathFor(mirror, "recipes"))
+        assertTrue(outside.list()!!.isEmpty(), "naming created an entry outside the mirror root")
+    }
+
+    @Test
+    fun `an existing named path rejects a redirected names root`() {
+        val mirror = copy()
+        val outside = File(filesDir, "outside-names").apply { mkdirs() }
+        val aliases = File(outside, hash).apply { mkdirs() }
+        Files.createSymbolicLink(File(aliases, "recipes").toPath(), Paths.get("..", "..", hash))
+        Files.createSymbolicLink(File(mirrors, "by-name").toPath(), outside.toPath())
+
+        assertNull(manager.existingNamedPath(mirror))
+    }
+
+    @Test
+    fun `named cleanup rejects a redirected names root`() {
+        val outside = File(filesDir, "outside-names").apply { mkdirs() }
+        val marker = File(outside, "$hash.shown").apply { writeText("UNRELATED OUTSIDE BYTES") }
+        Files.createSymbolicLink(File(mirrors, "by-name").toPath(), outside.toPath())
+
+        manager.reclaimRevokedMirrorsSync()
+
+        assertEquals("UNRELATED OUTSIDE BYTES", marker.readText())
+    }
+
+    @Test
+    fun `a named opening never writes its marker through a redirected names root`() {
+        val mirror = copy()
+        val outside = File(filesDir, "outside-names").apply { mkdirs() }
+        Files.createSymbolicLink(File(mirrors, "by-name").toPath(), outside.toPath())
+
+        manager.noteOpened(named(), folder(mirror))
+
+        assertFalse(manager.wasShownByName(mirror))
+        assertTrue(outside.list()!!.isEmpty(), "the named opening wrote outside the mirrors root")
+    }
+
+    @Test
+    fun `named cleanup retains an occupied marker file`() {
+        val names = File(mirrors, "by-name").apply { mkdirs() }
+        val marker = File(names, "$hash.shown").apply { writeText("UNRELATED LOCAL BYTES") }
+
+        manager.reclaimRevokedMirrorsSync()
+
+        assertEquals("UNRELATED LOCAL BYTES", marker.readText())
+    }
+
 }

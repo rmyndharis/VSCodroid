@@ -498,17 +498,61 @@ class SafStorageManager(context: Context) {
      * reclaimed, since no disk to speak of comes back.
      */
     private fun forgetNamesOfGoneCopies(root: File, liveMirrorNames: () -> Set<String>) {
-        File(root, NAMED_DIR).listFiles()?.forEach { entry ->
-            val hash = entry.name.removeSuffix(SHOWN_SUFFIX)
-            synchronized(grantLifecycleLock) {
-                if (!isMirrorDirectoryName(hash) || File(root, hash).exists() || hash in liveMirrorNames()) {
-                    return@forEach
+        val names = File(root, NAMED_DIR)
+        try {
+            syncEngine.openOutboundPath(File(names, "entry"), root).use { directory ->
+                for (listed in directory.parent) {
+                    val entry = File(names, listed.fileName.toString())
+                    val hash = entry.name.removeSuffix(SHOWN_SUFFIX)
+                    synchronized(grantLifecycleLock) {
+                        if (!isMirrorDirectoryName(hash) || File(root, hash).exists() || hash in liveMirrorNames()) {
+                            return@synchronized
+                        }
+                        syncEngine.openOutboundPath(entry, root).use { selected ->
+                            val attributes = selected.attributes()
+                            if (entry.name == hash && attributes.isDirectory) {
+                                selected.parent.newDirectoryStream(selected.leaf, LinkOption.NOFOLLOW_LINKS).use { children ->
+                                    for (child in children) {
+                                        val name = child.fileName
+                                        val kind = children.getFileAttributeView(
+                                            name, java.nio.file.attribute.BasicFileAttributeView::class.java,
+                                            LinkOption.NOFOLLOW_LINKS,
+                                        )?.readAttributes()
+                                        if (kind?.isSymbolicLink == true) removeNamedFile(File(entry, name.toString()), root)
+                                    }
+                                }
+                                if (syncEngine.parentIsCurrent(selected, entry, root)) {
+                                    try { selected.parent.deleteDirectory(selected.leaf) } catch (_: java.nio.file.DirectoryNotEmptyException) { }
+                                }
+                            } else {
+                                removeNamedFile(entry, root)
+                            }
+                        }
+                    }
                 }
-                // Never follow a link put in place of the named directory.
-                if (entry.name == hash && !Files.isSymbolicLink(entry.toPath())) {
-                    entry.listFiles()?.filter { Files.isSymbolicLink(it.toPath()) }?.forEach { it.delete() }
-                }
-                entry.delete()
+            }
+        } catch (_: IOException) {
+            // Missing or redirected named paths do not authorize cleanup elsewhere.
+        }
+    }
+
+    private fun removeNamedFile(file: File, root: File) {
+        syncEngine.openOutboundPath(file, root).use { selected ->
+            val before = selected.attributes()
+            if (!before.isSymbolicLink &&
+                !(file.name.endsWith(SHOWN_SUFFIX) && before.isRegularFile && before.size() == 0L)
+            ) return
+            if (before.fileKey() == null || !syncEngine.parentIsCurrent(selected, file, root)) return
+            val captured = selected.sibling("removed${SafSyncEngine.LOCAL_COPY_SUFFIX}${java.util.UUID.randomUUID()}")
+            selected.parent.move(selected.leaf, selected.parent, captured)
+            val after = selected.attributes(captured)
+            if (before.fileKey() == after.fileKey() && before.size() == after.size() &&
+                before.isSymbolicLink == after.isSymbolicLink && before.isRegularFile == after.isRegularFile &&
+                syncEngine.parentIsCurrent(selected, file, root)
+            ) {
+                selected.parent.deleteFile(captured)
+            } else {
+                Logger.w(tag, "Kept a named-path entry whose directory or identity changed")
             }
         }
     }
@@ -861,30 +905,45 @@ class SafStorageManager(context: Context) {
      */
     fun namedPathFor(mirrorDir: File, displayName: String): File? {
         val name = nameSegment(displayName) ?: return null
-        val link = File(File(File(mirrorDir.parentFile, NAMED_DIR), mirrorDir.name), name)
-        val path = link.toPath()
+        val root = mirrorDir.parentFile ?: return null
+        val names = File(root, NAMED_DIR)
+        val directory = File(names, mirrorDir.name)
+        val link = File(directory, name)
         val target = Paths.get("..", "..", mirrorDir.name)
-        fun ours(): File? =
-            link.takeIf { Files.isSymbolicLink(path) && Files.readSymbolicLink(path) == target }
         return try {
-            when {
-                Files.isSymbolicLink(path) -> ours()
-                Files.exists(path, LinkOption.NOFOLLOW_LINKS) -> null
-                else -> {
-                    Files.createDirectories(path.parent)
+            ensureNamedDirectory(names, root)
+            ensureNamedDirectory(directory, root)
+            syncEngine.openOutboundPath(link, root).use { selected ->
+                val existing = try { selected.attributes() } catch (_: java.nio.file.NoSuchFileException) { null }
+                if (existing == null) {
+                    if (!syncEngine.parentIsCurrent(selected, link, root)) return null
                     try {
-                        Files.createSymbolicLink(path, target)
-                    } catch (e: FileAlreadyExistsException) {
-                        // A page load and a picked folder can name the same copy at once.
-                        return ours()
+                        Files.createSymbolicLink(link.toPath(), target)
+                    } catch (_: FileAlreadyExistsException) {
+                        // Another caller may have created the same alias.
                     }
-                    link
                 }
+                if (selected.attributes().isSymbolicLink &&
+                    Files.readSymbolicLink(link.toPath()) == target &&
+                    syncEngine.parentIsCurrent(selected, link, root)
+                ) link else null
             }
         } catch (e: Exception) {
-            // The digest and the exception's type only: the path holds the folder's name.
             Logger.w(tag, "Could not name the copy ${mirrorDir.name}: ${e.javaClass.simpleName}")
             null
+        }
+    }
+
+    private fun ensureNamedDirectory(directory: File, root: File) {
+        syncEngine.openOutboundPath(directory, root).use { selected ->
+            val existing = try { selected.attributes() } catch (_: java.nio.file.NoSuchFileException) { null }
+            if (existing == null) {
+                if (!syncEngine.parentIsCurrent(selected, directory, root)) throw IOException("The names directory changed")
+                try { Files.createDirectory(directory.toPath()) } catch (_: FileAlreadyExistsException) { }
+            }
+            if (!selected.attributes().isDirectory || !syncEngine.parentIsCurrent(selected, directory, root)) {
+                throw IOException("The names directory is redirected")
+            }
         }
     }
 
@@ -906,15 +965,20 @@ class SafStorageManager(context: Context) {
      * ⚠️ Disk work, so not on the main thread.
      */
     fun existingNamedPath(mirrorDir: File): File? {
-        val dir = File(File(mirrorDir.parentFile, NAMED_DIR), mirrorDir.name)
+        val root = mirrorDir.parentFile ?: return null
+        val directory = File(File(root, NAMED_DIR), mirrorDir.name)
         val target = Paths.get("..", "..", mirrorDir.name)
         return try {
-            if (!Files.isDirectory(dir.toPath(), LinkOption.NOFOLLOW_LINKS)) return null
-            val link = dir.listFiles()?.singleOrNull() ?: return null
-            val path = link.toPath()
-            link.takeIf { Files.isSymbolicLink(path) && Files.readSymbolicLink(path) == target }
+            syncEngine.openOutboundPath(File(directory, "entry"), root).use { selected ->
+                val entry = selected.parent.toList().singleOrNull() ?: return null
+                val link = File(directory, entry.fileName.toString())
+                val attributes = selected.attributes(entry.fileName)
+                link.takeIf {
+                    attributes.isSymbolicLink && Files.readSymbolicLink(link.toPath()) == target &&
+                        syncEngine.parentIsCurrent(selected, link, root)
+                }
+            }
         } catch (e: Exception) {
-            // The digest and the exception's type only: the path holds the folder's name.
             Logger.w(tag, "Could not read the names of ${mirrorDir.name}: ${e.javaClass.simpleName}")
             null
         }
@@ -938,7 +1002,17 @@ class SafStorageManager(context: Context) {
             return
         }
         try {
-            shownMark(mirror).createNewFile()
+            val mark = shownMark(mirror)
+            syncEngine.openOutboundPath(mark, mirror.parentFile).use { selected ->
+                if (!syncEngine.parentIsCurrent(selected, mark, mirror.parentFile)) throw IOException("The names directory changed")
+                try {
+                    selected.parent.newByteChannel(selected.leaf, setOf(
+                        java.nio.file.StandardOpenOption.CREATE_NEW,
+                        java.nio.file.StandardOpenOption.WRITE,
+                        LinkOption.NOFOLLOW_LINKS,
+                    )).close()
+                } catch (_: FileAlreadyExistsException) { }
+            }
         } catch (e: IOException) {
             Logger.w(tag, "Could not note that ${mirror.name} opened by name: ${e.javaClass.simpleName}")
         }
@@ -954,7 +1028,12 @@ class SafStorageManager(context: Context) {
      * to say so. This is what lets [com.vscodroid.MainActivity] open such a copy by its
      * hash, where the extension offers the move, until the folder has been seen by name.
      */
-    fun wasShownByName(mirrorDir: File): Boolean = shownMark(mirrorDir).exists()
+    fun wasShownByName(mirrorDir: File): Boolean = try {
+        val mark = shownMark(mirrorDir)
+        syncEngine.openOutboundPath(mark, mirrorDir.parentFile).use { selected ->
+            selected.attributes().isRegularFile && syncEngine.parentIsCurrent(selected, mark, mirrorDir.parentFile)
+        }
+    } catch (_: IOException) { false }
 
     private fun shownMark(mirrorDir: File): File =
         File(File(mirrorDir.parentFile, NAMED_DIR), mirrorDir.name + SHOWN_SUFFIX)

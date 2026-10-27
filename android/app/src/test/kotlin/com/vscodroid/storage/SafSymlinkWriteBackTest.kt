@@ -22,6 +22,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
+import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
 import java.io.OutputStream
@@ -86,6 +87,7 @@ class SafSymlinkWriteBackTest {
         every { DocumentsContract.deleteDocument(any(), any()) } returns true
 
         resolver = mockk(relaxed = true)
+        every { resolver.openInputStream(any()) } answers { ByteArrayInputStream(byteArrayOf()) }
         every { resolver.openOutputStream(any(), any()) } answers {
             ByteArrayOutputStream().also { written += it } as OutputStream
         }

@@ -133,6 +133,7 @@ class SafRenamedUploadRecordTest {
             mockk(relaxed = true)
 
         resolver = mockk(relaxed = true)
+        every { resolver.openInputStream(any()) } answers { ByteArrayInputStream(byteArrayOf()) }
         every { resolver.openOutputStream(any(), any()) } answers {
             if (refuseWrites) throw IOException("no space left on device")
             if (holdNextWrite) {

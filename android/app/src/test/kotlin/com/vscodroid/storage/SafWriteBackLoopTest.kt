@@ -105,6 +105,7 @@ class SafWriteBackLoopTest {
         // unreachable, and stopWatching() then cleared the queue -- so a save made a
         // moment before switching folders reached neither the device nor a log line.
         mockkStatic(DocumentsContract::class)
+        every { DocumentsContract.getDocumentId(any()) } returns "doc:notes.txt"
         every { DocumentsContract.deleteDocument(any(), any()) } returns true
 
         val file = File(mirror, "notes.txt")
@@ -137,6 +138,7 @@ class SafWriteBackLoopTest {
         // Driven on this thread with the flag set up front, because that is the one
         // arrangement where "was it cleared first" has a deterministic answer.
         mockkStatic(DocumentsContract::class)
+        every { DocumentsContract.getDocumentId(any()) } returns "doc:notes.txt"
         val flagDuringDrain = AtomicBoolean(true)
         every { DocumentsContract.deleteDocument(any(), any()) } answers {
             flagDuringDrain.set(Thread.currentThread().isInterrupted)

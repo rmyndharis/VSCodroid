@@ -15,6 +15,19 @@ import java.security.MessageDigest
 
 class SafReopenDataPreservationTest : SafInitialSyncTestBase() {
 
+    @Test
+    fun `a newer mirror preserves an external edit with unchanged device metadata`() {
+        deviceTree(mapOf("root" to listOf(Child("notes.txt", contents = "v1"))))
+        sync()
+        localAt("EDITOR", DEVICE_TIME + 1000)
+        deviceTree(mapOf("root" to listOf(Child("notes.txt", contents = "v2"))))
+
+        sync()
+
+        assertRetained("v2")
+        assertEquals("EDITOR", written["doc-uri:doc:notes.txt"]?.toString(Charsets.UTF_8))
+    }
+
     @ParameterizedTest
     @ValueSource(strings = ["absent", "unsupported"])
     fun `a newer device document retains an existing copy without usable history`(history: String) {

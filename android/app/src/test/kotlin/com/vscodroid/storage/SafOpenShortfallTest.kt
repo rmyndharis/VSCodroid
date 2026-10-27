@@ -105,6 +105,9 @@ class SafOpenShortfallTest {
 
         mockkStatic(DocumentsContract::class)
         every { DocumentsContract.getTreeDocumentId(any()) } returns "root"
+        every { DocumentsContract.getDocumentId(any()) } answers {
+            uris.entries.first { it.value === firstArg<Uri>() }.key
+        }
         every { DocumentsContract.buildChildDocumentsUriUsingTree(any(), any()) } returns
             mockk(relaxed = true)
         every { DocumentsContract.buildDocumentUriUsingTree(any(), any()) } answers {

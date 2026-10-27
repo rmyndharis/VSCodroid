@@ -68,6 +68,7 @@ class SafDeviceCopySetAsideTest {
         every { android.util.Log.e(any(), any()) } answers { emitted += secondArg<String>(); 0 }
 
         mockkStatic(DocumentsContract::class)
+        every { DocumentsContract.getDocumentId(any()) } returns "doc:notes.txt"
         every { DocumentsContract.getTreeDocumentId(any()) } returns "root"
         every { DocumentsContract.buildChildDocumentsUriUsingTree(any(), any()) } returns
             mockk(relaxed = true)

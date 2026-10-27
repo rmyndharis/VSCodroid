@@ -175,7 +175,15 @@ class SafWriterTurnTest {
 
     private fun bothSidesHold(name: String, onDevice: String, inMirror: String) {
         device[name] = onDevice.toByteArray()
-        File(mirror, name).writeText(inMirror)
+        val file = File(mirror, name).apply { writeText(onDevice) }
+        SafSyncEngine::class.java.getDeclaredMethod(
+            "writeLocalToSaf", File::class.java, Uri::class.java, File::class.java,
+        ).apply { isAccessible = true }.invoke(engine, file, docUri(docId(name)), mirror)
+        assertEquals(onDevice, text(name), "the provider did not receive the baseline")
+        opened.clear()
+        interruptedAtOpen.clear()
+        peak.set(0)
+        file.writeText(inMirror)
     }
 
     /**

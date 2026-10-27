@@ -5,6 +5,7 @@ import android.content.Context
 import android.database.Cursor
 import android.net.Uri
 import android.os.FileObserver
+import android.os.SystemClock
 import android.provider.DocumentsContract
 import com.vscodroid.util.Logger
 import io.mockk.Runs
@@ -23,6 +24,8 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
+import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.ValueSource
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
@@ -66,6 +69,9 @@ class SafConcurrentWriteTest {
 
     @TempDir
     lateinit var filesDir: File
+
+    @TempDir
+    lateinit var otherMirror: File
 
     private lateinit var resolver: ContentResolver
     private lateinit var context: Context
@@ -113,6 +119,9 @@ class SafConcurrentWriteTest {
         every { Logger.w(any(), any(), any()) } just Runs
         every { Logger.e(any(), any()) } just Runs
         every { Logger.e(any(), any(), any()) } just Runs
+
+        mockkStatic(SystemClock::class)
+        every { SystemClock.elapsedRealtime() } answers { System.nanoTime() / 1_000_000 }
 
         mockkStatic(DocumentsContract::class)
         every { DocumentsContract.getTreeDocumentId(any()) } returns "root"
@@ -190,6 +199,9 @@ class SafConcurrentWriteTest {
             row = -1
             cursor
         }
+        every { resolver.openInputStream(any()) } answers {
+            ByteArrayInputStream("previous provider bytes".toByteArray())
+        }
     }
 
     /**
@@ -249,6 +261,47 @@ class SafConcurrentWriteTest {
             2, everOpened.get(),
             "the second save was dropped for meeting the first instead of waiting its turn",
         )
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = ["overlap", "authority", "document"])
+    fun `provider document identity controls overlapping tree writers`(identity: String) {
+        deviceHolding("notes.md")
+        fun document(tree: String, authority: String = "test", id: String = "shared") = mockk<Uri>(relaxed = true).also {
+            every { it.toString() } returns "content://$authority/tree/$tree/document/$id"
+            every { it.authority } returns authority
+            every { DocumentsContract.getDocumentId(it) } returns id
+        }
+        val parentDocument = document("parent")
+        val childDocument = document("child", if (identity == "authority") "other" else "test",
+            if (identity == "document") "distinct" else "shared")
+        val otherTree = mockk<Uri>(relaxed = true)
+        every { DocumentsContract.buildDocumentUriUsingTree(any(), any()) } answers {
+            if (firstArg<Uri>() === treeUri) parentDocument else childDocument
+        }
+        val secondEngine = SafSyncEngine(context)
+        val refused = AtomicInteger()
+        secondEngine.onWriteBackFailed = { refused.incrementAndGet() }
+        val firstFile = File(mirror, "notes.md").apply { writeText("parent mirror") }
+        val secondFile = File(otherMirror, "notes.md").apply { writeText("child mirror") }
+        blockFirstWriter = true
+        val first = Thread {
+            engine.handleMirrorEvent(FileObserver.MODIFY, firstFile, mirror, treeUri)
+            engine.runWriteBackLoop { false }
+        }.apply { start() }
+        try {
+            assertTrue(firstWriterInside.await(5, TimeUnit.SECONDS), "the first writer never opened the document")
+            secondEngine.handleMirrorEvent(FileObserver.MODIFY, secondFile, otherMirror, otherTree)
+            secondEngine.runWriteBackLoop { false }
+            assertEquals(if (identity == "overlap") 1 else 2, peak.get(), "provider document exclusion used the wrong identity")
+            assertEquals(if (identity == "overlap") 1 else 0, refused.get(), "the undelivered child mirror save was not reported")
+        } finally {
+            releaseFirstWriter.countDown()
+            first.join(5_000)
+        }
+        secondEngine.handleMirrorEvent(FileObserver.MODIFY, secondFile, otherMirror, otherTree)
+        secondEngine.runWriteBackLoop { false }
+        assertEquals(if (identity == "overlap") 2 else 3, everOpened.get(), "the provider document remained claimed after the first writer finished")
     }
 
     /**

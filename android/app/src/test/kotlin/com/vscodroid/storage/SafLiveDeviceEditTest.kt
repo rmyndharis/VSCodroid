@@ -696,7 +696,7 @@ class SafLiveDeviceEditTest {
      * later save read the document again to match the same bytes.
      */
     @Test
-    fun `a device copy matched to this app's bytes is not read again at the same stamp`() {
+    fun `unchanged device bytes are compared again without preserving another copy`() {
         lateStamp = LateStamp.WHOLE_SECONDS
         open()
         save("first save")
@@ -713,7 +713,7 @@ class SafLiveDeviceEditTest {
 
         save("second save")
 
-        assertEquals(readsAfterMatch, reads, "the device copy was read again at a stamp it was matched at")
+        assertEquals(readsAfterMatch + 1, reads, "equal metadata must still be checked against the delivered bytes")
         assertEquals("second save", deviceText)
         assertEquals(emptyMap<String, String>(), deviceCopies())
     }
@@ -934,12 +934,7 @@ class SafLiveDeviceEditTest {
         assertNull(recordedDigest(), "a digest of more than the copy was recorded as the copy's")
     }
 
-    /**
-     * A write that lands while the open is digesting a kept copy, the closing folder's drain
-     * finishing a save: the entry that write leaves is what the next save has to compare
-     * against. Replaced by the digest of the copy the open kept, under the stamp the open
-     * listed, the next save found the stamp the write moved and kept a spare copy of it.
-     */
+    /** A completed internal write retains its baseline if a kept-copy digest finishes later. */
     @Test
     fun `a write landing while the open digests a kept copy keeps the entry it left`() {
         open()
@@ -948,11 +943,16 @@ class SafLiveDeviceEditTest {
         duringDigests(onDigest = {
             if (!landed) {
                 landed = true
-                save("saved as the folder opened")
+                val local = File(mirror, "notes.txt").apply { writeText("saved as the folder opened") }
+                SafSyncEngine::class.java.getDeclaredMethod(
+                    "writeLocalToSaf", File::class.java, Uri::class.java, File::class.java,
+                ).apply { isAccessible = true }.invoke(engine, local, uris.getValue(docId), mirror)
             }
         })
         open()
         assertTrue(landed, "the open did not read the kept copy")
+        assertEquals(1, writes, "the internal write must deliver the new baseline")
+        assertEquals("saved as the folder opened", deviceText)
 
         save("typed in the editor")
 
@@ -2186,6 +2186,51 @@ class SafLiveDeviceEditTest {
         save("typed in the editor")
 
         assertEquals(listOf("changed by another app"), deviceCopies().values.toList())
+    }
+
+    @ParameterizedTest
+    @CsvSource(
+        "no-clock,true", "no-clock,false", "no-columns,true", "no-columns,false",
+        "unchanged,true", "unchanged,false", "query,true", "query,false",
+        "postwrite,true", "postwrite,false",
+    )
+    fun `a save retains external bytes when metadata cannot distinguish them`(shape: String, readable: Boolean) {
+        deviceHasClock = shape != "no-clock" && shape != "no-columns"
+        deviceHasSize = shape != "no-columns"
+        open()
+        if (shape == "postwrite") {
+            failStampAfterNextWrite = true
+            save("first save")
+        }
+        val previousTime = deviceModified
+        val foreign = "v2"
+        editOnDevice(foreign)
+        if (shape == "unchanged") deviceModified = previousTime
+        failStampQuery = shape == "query"
+        deviceReadable = readable
+
+        save("editor save")
+
+        assertEquals(if (readable) "editor save" else foreign, deviceText)
+        assertEquals("editor save", File(mirror, "notes.txt").readText())
+        assertEquals(if (readable) listOf(foreign) else emptyList<String>(), deviceCopies().values.toList())
+        assertEquals(if (readable) 0 else 1, failed.size)
+    }
+
+    @Test
+    fun `an incomplete provider read cannot authorize a same metadata replacement`() {
+        open()
+        val previousTime = deviceModified
+        editOnDevice("v2")
+        deviceModified = previousTime
+        every { resolver.openInputStream(any()) } answers { ByteArrayInputStream(byteArrayOf('v'.code.toByte())) }
+
+        save("editor save")
+
+        assertEquals("v2", deviceText)
+        assertEquals("editor save", File(mirror, "notes.txt").readText())
+        assertTrue(deviceCopies().isEmpty())
+        assertEquals(1, failed.size)
     }
 
     private companion object {

@@ -3,12 +3,14 @@ package com.vscodroid.storage
 import android.content.ContentResolver
 import android.content.Context
 import android.net.Uri
+import android.provider.DocumentsContract
 import com.vscodroid.util.Logger
 import io.mockk.Runs
 import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
 import io.mockk.mockkObject
+import io.mockk.mockkStatic
 import io.mockk.unmockkAll
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -18,6 +20,7 @@ import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
+import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.OutputStream
 import java.util.Collections
@@ -66,7 +69,12 @@ class SafWatchSessionTest {
         every { Logger.e(any(), any()) } just Runs
         every { Logger.e(any(), any(), any()) } just Runs
 
+        mockkStatic(DocumentsContract::class)
+        every { DocumentsContract.getDocumentId(any()) } answers {
+            documentNames.getValue(firstArg())
+        }
         resolver = mockk(relaxed = true)
+        every { resolver.openInputStream(any()) } answers { ByteArrayInputStream(byteArrayOf()) }
         val context = mockk<Context>(relaxed = true)
         every { context.contentResolver } returns resolver
         every { context.filesDir } returns filesDir
