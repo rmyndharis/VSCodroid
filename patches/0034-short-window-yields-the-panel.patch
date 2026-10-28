@@ -145,7 +145,7 @@ index 59ca3d9c..dede8f40 100644
  				auxiliaryBarVisible: this.isVisible(Parts.AUXILIARYBAR_PART)
  			};
  			this.stateModel.setRuntimeValue(LayoutStateKeys.AUXILIARYBAR_WAS_LAST_MAXIMIZED, true);
-@@ -2394,16 +2426,100 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
+@@ -2394,16 +2426,103 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
  		return (targetWindow !== mainWindow || !this.shortWindow) && shouldShowCustomTitleBar(this.configurationService, targetWindow, targetWindow === mainWindow ? this.state.runtime.menuBar.toggled : undefined);
  	}
  
@@ -177,10 +177,11 @@ index 59ca3d9c..dede8f40 100644
 +
 +	/**
 +	 * VSCodroid: the height the panel had when the window turned short, taken before anything is hidden: the
-+	 * live height of a panel that is showing, the grid's memory of one that is closed. A panel that stays in a
-+	 * short window, because it holds the focus or because it was shown there, is squeezed to its minimum, and the
-+	 * grid gives the room the window gains to the editor. A maximized panel has no height of its own, so the one
-+	 * it returns to when it is un-maximized is remembered.
++	 * live height of a panel that is showing, the height an earlier short window kept for one that is closed,
++	 * or else the grid's memory of it. A panel that stays in a short window, because it holds the focus or
++	 * because it was shown there, is squeezed to its minimum, and the grid gives the room the window gains to
++	 * the editor. A maximized panel has no height of its own, so the one it returns to when it is un-maximized
++	 * is remembered.
 +	 */
 +	private rememberPanelHeight(): void {
 +		let height: number | undefined;
@@ -191,7 +192,9 @@ index 59ca3d9c..dede8f40 100644
 +					? this.workbenchGrid.getViewSize(this.panelPartView).height
 +					: this.workbenchGrid.getViewCachedVisibleSize(this.panelPartView);
 +		}
-+		this.panelHeightBeforeShort = height !== undefined && height > 0 ? height : undefined;
++		if (this.isVisible(Parts.PANEL_PART) || this.panelHeightBeforeShort === undefined) {
++			this.panelHeightBeforeShort = height !== undefined && height > 0 ? height : undefined;
++		}
 +	}
 +
 +	/**
@@ -248,7 +251,7 @@ index 59ca3d9c..dede8f40 100644
  		}
  	}
  
-@@ -2481,7 +2597,7 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
+@@ -2481,7 +2600,7 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
  			if (isHorizontal(position)) {
  				this.stateModel.setRuntimeValue(LayoutStateKeys.PANEL_LAST_NON_MAXIMIZED_WIDTH, size.width);
  			} else if (isHorizontal(positionFromString(oldPositionValue))) {
@@ -257,7 +260,7 @@ index 59ca3d9c..dede8f40 100644
  			}
  		}
  
-@@ -2497,6 +2613,11 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
+@@ -2497,6 +2616,11 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
  
  		const hadFocus = this.hasFocus(Parts.PANEL_PART);
  
@@ -269,7 +272,7 @@ index 59ca3d9c..dede8f40 100644
  		if (position === Position.BOTTOM) {
  			this.workbenchGrid.moveView(this.panelPartView, editorHidden ? size.height : this.stateModel.getRuntimeValue(LayoutStateKeys.PANEL_LAST_NON_MAXIMIZED_HEIGHT), this.editorPartView, Direction.Down);
  		} else if (position === Position.TOP) {
-@@ -2526,6 +2647,8 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
+@@ -2526,6 +2650,8 @@ export abstract class Layout extends Disposable implements IWorkbenchLayoutServi
  			this.adjustPartPositions(this.getSideBarPosition(), this.getPanelAlignment(), position);
  		}
  

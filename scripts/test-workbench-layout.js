@@ -460,6 +460,17 @@ function panelRoundTrip() {
   remembered.values.PANEL_LAST_NON_MAXIMIZED_HEIGHT = 90;
   remembered.layout.setPanelPosition('top');
   assert.equal(remembered.layout.panelHeightBeforeShort, 176, 'a short move must keep an earlier unsqueezed height');
+  // A panel closed while the window was short keeps the height it had before, through a second short episode.
+  const closed = create('after');
+  closed.layout.focused = true;
+  closed.resize(191);
+  assert.equal(closed.grid.height, 113, 'a focused panel stays in the short window, squeezed');
+  closed.layout.setPanelHidden(true);
+  closed.resize(428);
+  closed.resize(191);
+  closed.resize(428);
+  closed.layout.setPanelHidden(false);
+  assert.equal(closed.grid.height, 176, 'a second short window replaced the remembered height of a closed panel with its squeezed size');
 }
 
 function panelMinimumWidth() {
