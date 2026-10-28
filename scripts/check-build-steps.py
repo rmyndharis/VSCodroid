@@ -17,8 +17,9 @@ built without them, or shipped without them having run:
     job, so the build that gets signed and published is not a thinner version of
     the one every pull request gets. One direction: the release path runs more,
     on purpose;
-  * every scripts/test-*.js runs in both lint.yml and release.yml, so a
-    self-check cannot be added to the tree and then run by nothing;
+  * every scripts/test-*.js and scripts/test-*.py runs in both lint.yml and
+    release.yml, so a self-check cannot be added to the tree and then run by
+    nothing;
   * lint.yml runs them on the Node major the APK ships, the one
     build-native-addons.sh pairs the addons against, so a self-check green on
     a runner is a self-check green on the device's runtime;
@@ -76,7 +77,7 @@ IN_BUILD_ALL = re.compile(r"\$SCRIPT_DIR/([\w-]+\.sh)")
 # test-dns-proxy.js matters, so a substring test called it covered with its `node`
 # line deleted; and matching raw text called it covered with the line commented
 # out. executable_lines() closes the second, this pattern the first.
-RUNS_SELFCHECK = re.compile(r"node\s+scripts/(test-[\w.-]+\.js)")
+RUNS_SELFCHECK = re.compile(r"(?:node|python3)\s+scripts/(test-[\w.-]+\.(?:js|py))")
 
 # Every checker in the tree has to be run by something. The rule above asks
 # whether a named self-check is wired; this one asks the prior question -- whether
@@ -337,9 +338,9 @@ def _main() -> int:
     # vacuously true in exactly the way the ci_all guard above exists to prevent:
     # "all covered" prints identically whether every script is wired or the glob
     # matched nothing at all.
-    selfchecks = {p.name for p in (ROOT / "scripts").glob("test-*.js")}
+    selfchecks = {p.name for kind in ("js", "py") for p in (ROOT / "scripts").glob(f"test-*.{kind}")}
     if not selfchecks:
-        print("  FAIL   no scripts/test-*.js matched; the glob stopped matching")
+        print("  FAIL   no scripts/test-*.js or test-*.py matched; the glob stopped matching")
         return 1
 
     unrun = {}
@@ -354,12 +355,12 @@ def _main() -> int:
 
     if unrun:
         for wf_name, missing in sorted(unrun.items()):
-            report(f"JavaScript self-checks {wf_name} does not run",
+            report(f"self-checks {wf_name} does not run",
                    missing, wf_name,
                    "A self-check nothing runs is the same as no self-check.")
         failed = True
     else:
-        print(f"  ok     all {len(selfchecks)} JavaScript self-checks run in "
+        print(f"  ok     all {len(selfchecks)} self-checks run in "
               f"{' and '.join(SELFCHECK_WORKFLOWS)}")
 
     shipped = SHIPPED_NODE.search(NODE_MAJOR_SOURCE.read_text())

@@ -146,7 +146,7 @@ jobs:
           # a guarantee about the rest of the name.
           case "$TAG" in
             v[0-9]*) ;;
-            *) echo "::error::Refusing tag $TAG; expected vMAJOR.MINOR.PATCH"; exit 1 ;;
+            *) echo "::error::Refusing tag $TAG; expected v followed by the version, such as v1.6.0"; exit 1 ;;
           esac
 
           # A tag that already existed and now names a different commit satisfies
@@ -181,6 +181,23 @@ jobs:
                     "published, delete the tag and push it again."
                exit 1 ;;
           esac
+
+          # A tag publishes: it creates the release and moves what `releases/latest`
+          # resolves to, which every sideloaded install reads. Everything below
+          # describes the tree at the tag and none of it says the tree is on main, so
+          # a tag taken on a branch commit passed all of it. Compared against the
+          # remote-tracking ref, which a full-history checkout carries for each branch.
+          git rev-parse --verify -q refs/remotes/origin/main >/dev/null || {
+            echo "::error::This checkout has no origin/main, so whether $TAG is on main" \
+                 "was not checked."
+            exit 1
+          }
+          if ! git merge-base --is-ancestor HEAD refs/remotes/origin/main; then
+            echo "::error::$TAG is not on main. A tag publishes a release and moves" \
+                 "releases/latest for every sideloaded install; merge the commit to" \
+                 "main first, then tag it."
+            exit 1
+          fi
 
           gradle_file=android/app/build.gradle.kts
           # Anchored to the start of a line. That file is majority comment, and

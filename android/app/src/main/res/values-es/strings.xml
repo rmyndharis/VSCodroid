@@ -8,7 +8,7 @@
          rather than the server's, because no server is running yet and the whole
          point of the hold is that the process survives a user who leaves. -->
     <string name="notification_title_setup">VSCodroid se está configurando</string>
-    <string name="notification_text_setup">Se están descomprimiendo el editor y sus herramientas. Esto tarda unos minutos y solo ocurre una vez.</string>
+    <string name="notification_text_setup">Se están descomprimiendo el editor y sus herramientas. Esto tarda unos minutos.</string>
     <string name="notification_text">Servidor de desarrollo local activo</string>
     <!-- There was a second line here, shown when the server was adopted rather
          than started, telling the user the session had no network and to tap
@@ -414,6 +414,7 @@
          not translatable and is carried through as it stands. It is there because the
          alternative is a folder that failed to open for no stated reason. -->
     <string name="saf_sync_denied">Permiso denegado.</string>
+    <string name="saf_sync_busy">La carpeta todavía se está sincronizando. Vuelve a intentar abrirla en un momento.</string>
     <string name="saf_sync_failed">No se pudo abrir la carpeta: %1$s.</string>
     <string name="saf_sync_failed_other_folder_watched">%1$s La carpeta que ya estaba abierta no se ve afectada.</string>
     <string name="saf_sync_failed_no_write_back">%1$s Los cambios no se sincronizarán con esta carpeta hasta que la vuelvas a abrir.</string>

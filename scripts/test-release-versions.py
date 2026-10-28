@@ -73,6 +73,50 @@ class ReleaseVersionsTest(unittest.TestCase):
         refused = self.gate("16_000")
         self.assertNotEqual(0, refused.returncode, refused.stdout + refused.stderr)
 
+    def on_main(self, head, remote="B"):
+        """Run the on-main check with main at A then B, a branch off A holding X, and HEAD at `head`."""
+        start = SOURCE.index("          git rev-parse --verify -q refs/remotes/origin/main")
+        end = SOURCE.index("          gradle_file=android/app/build.gradle.kts", start)
+        program = "set -euo pipefail\n" + "\n".join(line[10:] for line in SOURCE[start:end].splitlines())
+        with tempfile.TemporaryDirectory() as directory:
+            def git(*args):
+                return subprocess.run(
+                    ["git", "-C", directory, *args], capture_output=True, text=True, check=True,
+                ).stdout.strip()
+            git("init", "-q")
+            git("config", "user.name", "Fixture")
+            git("config", "user.email", "fixture@example.invalid")
+            commits = {}
+            git("commit", "-q", "--allow-empty", "-m", "A")
+            commits["A"] = git("rev-parse", "HEAD")
+            git("commit", "-q", "--allow-empty", "-m", "B")
+            commits["B"] = git("rev-parse", "HEAD")
+            git("checkout", "-q", "-b", "branch", commits["A"])
+            git("commit", "-q", "--allow-empty", "-m", "X")
+            commits["X"] = git("rev-parse", "HEAD")
+            if remote:
+                git("update-ref", "refs/remotes/origin/main", commits[remote])
+            git("checkout", "-q", "--detach", commits[head])
+            return subprocess.run(
+                ["bash", "-c", program], cwd=directory, env={**os.environ, "TAG": "v1.5.1"},
+                capture_output=True, text=True,
+            )
+
+    def test_a_tag_on_main_or_behind_it_is_allowed(self):
+        for head in ("B", "A"):
+            result = self.on_main(head)
+            self.assertEqual(0, result.returncode, head + result.stdout + result.stderr)
+
+    def test_a_tag_on_a_branch_commit_is_refused(self):
+        result = self.on_main("X")
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("is not on main", result.stdout + result.stderr)
+
+    def test_a_checkout_without_origin_main_refuses_instead_of_passing(self):
+        result = self.on_main("B", remote=None)
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("no origin/main", result.stdout + result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -89,6 +89,29 @@ class ExtensionUpdatesTest(unittest.TestCase):
         self.git("commit", "-qm", "Restore extension")
         self.assertNotEqual(0, self.check_status().returncode)
 
+    def test_shallow_clone_is_refused_instead_of_passed(self):
+        # In a depth-1 clone the tip is the oldest commit git can see, so it reads as the
+        # one that added the extension and an edit made since compares equal to itself.
+        self.manifest.write_text('{"name":"example","version":"1.0.0","displayName":"Changed"}')
+        self.git("add", "--", str(self.manifest.relative_to(self.root)))
+        self.git("commit", "-qm", "Change title")
+        self.assertNotEqual(0, self.check_status().returncode)
+        clones = tempfile.TemporaryDirectory()
+        self.addCleanup(clones.cleanup)
+        clone = Path(clones.name) / "shallow"
+        subprocess.run(
+            ["git", "clone", "-q", "--depth", "1", self.root.as_uri(), str(clone)],
+            capture_output=True, check=True,
+        )
+        (clone / "scripts").mkdir()
+        shutil.copyfile(CHECK, clone / "scripts/check-extension-updates.py")
+        result = subprocess.run(
+            [sys.executable, str(clone / "scripts/check-extension-updates.py")],
+            capture_output=True, text=True,
+        )
+        self.assertNotEqual(0, result.returncode)
+        self.assertIn("shallow", result.stdout + result.stderr)
+
 
 if __name__ == "__main__":
     unittest.main()

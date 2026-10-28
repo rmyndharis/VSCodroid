@@ -76,6 +76,17 @@ class SplashActivity : AppCompatActivity() {
     /** The view reading the editor's last colour while it does; see [readSavedPageColor]. */
     private var colorProbe: WebView? = null
 
+    /**
+     * Between [onStop] and the next [onStart]: the user has left this screen.
+     *
+     * Not the lifecycle state, which reads CREATED inside `onCreate`, where a cold
+     * launch starts the editor and must keep doing so.
+     */
+    private var stopped = false
+
+    /** [launchMain] was asked while [stopped]; [onStart] runs it when the user is back. */
+    private var launchPending = false
+
     // Progress UI refs (only valid after setContentView to progress layout)
     private val progressRows = mutableMapOf<String, ProgressRow>()
 
@@ -513,16 +524,26 @@ class SplashActivity : AppCompatActivity() {
      * drawn from the older reading carries no badge and still takes a tick, and
      * ticking one spends a download that has already been paid for.
      *
-     * The only lifecycle callback this activity has beyond `onCreate` and
-     * `onDestroy`, and it exists for that one screen; [ToolchainActivity] re-reads
-     * in its own `onStart` for the same reason. Reading here costs one small JSON
-     * file and only while the picker is up.
+     * The re-read exists for that one screen; [ToolchainActivity] re-reads in its
+     * own `onStart` for the same reason. Reading here costs one small JSON file and
+     * only while the picker is up. It also runs a [launchMain] that was asked while
+     * the user was away.
      */
     override fun onStart() {
         super.onStart()
+        stopped = false
         ToolchainManager(applicationContext).let {
             pickerAdapter?.setInstalled(it.getInstalledToolchains(), it.installedLabels())
         }
+        if (launchPending) {
+            launchPending = false
+            launchMain()
+        }
+    }
+
+    override fun onStop() {
+        stopped = true
+        super.onStop()
     }
 
     override fun onDestroy() {
@@ -1052,8 +1073,16 @@ class SplashActivity : AppCompatActivity() {
         // for the session, which is a worse trade than the stray launch this guard
         // exists to stop.
         val gone = isFinishing || isDestroyed
+        // A stopped screen is one the user has left. Setup that ends then used to start
+        // the editor from the background, which the platform either drops or shows over
+        // whatever they are doing, and the finish() below closed the task with nothing
+        // started. [onStart] runs this again when they come back.
+        val away = !gone && stopped
         if (gone) {
             Logger.i(tag, "The splash screen is gone; not launching the editor behind the user")
+        } else if (away) {
+            Logger.i(tag, "The splash screen is in the background; the editor starts when it returns")
+            launchPending = true
         } else {
             startActivity(Intent(this, MainActivity::class.java).apply {
                 data = intent?.data
@@ -1075,7 +1104,7 @@ class SplashActivity : AppCompatActivity() {
         // Those are floor numbers. The devices this project exists for have a
         // busier system server than an idle emulator does.
         publishToolchainShortcut()
-        if (!gone) finish()
+        if (!gone && !away) finish()
     }
 
     /**

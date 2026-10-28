@@ -8,7 +8,7 @@
          rather than the server's, because no server is running yet and the whole
          point of the hold is that the process survives a user who leaves. -->
     <string name="notification_title_setup">Configurando o VSCodroid</string>
-    <string name="notification_text_setup">Descompactando o editor e suas ferramentas. Isso leva alguns minutos e acontece só uma vez.</string>
+    <string name="notification_text_setup">Descompactando o editor e suas ferramentas. Isso leva alguns minutos.</string>
     <string name="notification_text">Servidor de desenvolvimento local ativo</string>
     <!-- There was a second line here, shown when the server was adopted rather
          than started, telling the user the session had no network and to tap
@@ -414,6 +414,7 @@
          not translatable and is carried through as it stands. It is there because the
          alternative is a folder that failed to open for no stated reason. -->
     <string name="saf_sync_denied">Permissão negada.</string>
+    <string name="saf_sync_busy">A pasta ainda está sendo sincronizada. Tente abri-la de novo em instantes.</string>
     <string name="saf_sync_failed">Não foi possível abrir a pasta: %1$s.</string>
     <string name="saf_sync_failed_other_folder_watched">%1$s A pasta que já estava aberta não foi afetada.</string>
     <string name="saf_sync_failed_no_write_back">%1$s As alterações não serão sincronizadas com essa pasta até você abri-la de novo.</string>

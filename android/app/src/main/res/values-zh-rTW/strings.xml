@@ -8,7 +8,7 @@
          rather than the server's, because no server is running yet and the whole
          point of the hold is that the process survives a user who leaves. -->
     <string name="notification_title_setup">VSCodroid 正在初始設定</string>
-    <string name="notification_text_setup">正在解壓縮編輯器與相關工具。這需要幾分鐘，而且只會進行一次。</string>
+    <string name="notification_text_setup">正在解壓縮編輯器與相關工具。這需要幾分鐘。</string>
     <string name="notification_text">本機開發伺服器運作中</string>
     <!-- There was a second line here, shown when the server was adopted rather
          than started, telling the user the session had no network and to tap
@@ -406,6 +406,7 @@
          not translatable and is carried through as it stands. It is there because the
          alternative is a folder that failed to open for no stated reason. -->
     <string name="saf_sync_denied">權限遭拒。</string>
+    <string name="saf_sync_busy">資料夾仍在同步中。請稍後再試著開啟。</string>
     <string name="saf_sync_failed">無法開啟資料夾：%1$s。</string>
     <string name="saf_sync_failed_other_folder_watched">%1$s已開啟的資料夾不受影響。</string>
     <string name="saf_sync_failed_no_write_back">%1$s在你再次開啟這個資料夾之前，變更不會同步過去。</string>

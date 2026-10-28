@@ -8,7 +8,7 @@
          rather than the server's, because no server is running yet and the whole
          point of the hold is that the process survives a user who leaves. -->
     <string name="notification_title_setup">VSCodroid выполняет настройку</string>
-    <string name="notification_text_setup">Идёт распаковка редактора и его инструментов. Это занимает несколько минут и происходит только один раз.</string>
+    <string name="notification_text_setup">Идёт распаковка редактора и его инструментов. Это занимает несколько минут.</string>
     <string name="notification_text">Локальный сервер разработки активен</string>
     <!-- There was a second line here, shown when the server was adopted rather
          than started, telling the user the session had no network and to tap
@@ -418,6 +418,7 @@
          not translatable and is carried through as it stands. It is there because the
          alternative is a folder that failed to open for no stated reason. -->
     <string name="saf_sync_denied">Доступ запрещён.</string>
+    <string name="saf_sync_busy">Папка ещё синхронизируется. Попробуйте открыть её снова чуть позже.</string>
     <string name="saf_sync_failed">Не удалось открыть папку: %1$s.</string>
     <string name="saf_sync_failed_other_folder_watched">%1$s Уже открытая папка не затронута.</string>
     <string name="saf_sync_failed_no_write_back">%1$s Изменения не будут синхронизироваться с этой папкой, пока вы не откроете её снова.</string>

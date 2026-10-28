@@ -8,7 +8,7 @@
          rather than the server's, because no server is running yet and the whole
          point of the hold is that the process survives a user who leaves. -->
     <string name="notification_title_setup">VSCodroid se připravuje</string>
-    <string name="notification_text_setup">Rozbaluje se editor a jeho nástroje. Trvá to několik minut a proběhne jen jednou.</string>
+    <string name="notification_text_setup">Rozbaluje se editor a jeho nástroje. Trvá to několik minut.</string>
     <string name="notification_text">Místní vývojový server je aktivní</string>
     <!-- There was a second line here, shown when the server was adopted rather
          than started, telling the user the session had no network and to tap
@@ -418,6 +418,7 @@
          not translatable and is carried through as it stands. It is there because the
          alternative is a folder that failed to open for no stated reason. -->
     <string name="saf_sync_denied">Přístup byl odepřen.</string>
+    <string name="saf_sync_busy">Složka se stále synchronizuje. Zkuste ji za chvíli otevřít znovu.</string>
     <string name="saf_sync_failed">Složku se nepodařilo otevřít: %1$s.</string>
     <string name="saf_sync_failed_other_folder_watched">%1$s Již otevřená složka tím není dotčena.</string>
     <string name="saf_sync_failed_no_write_back">%1$s Změny se do této složky nebudou synchronizovat, dokud ji znovu neotevřete.</string>

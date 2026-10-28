@@ -95,6 +95,35 @@ class SplashLaunchGuardTest {
     }
 
     /**
+     * Setup that ends while the user is in another app.
+     *
+     * The screen is stopped but not finishing, so the liveness guard above lets the
+     * launch through: the platform drops a background `startActivity` or shows the
+     * editor over whatever the user is doing, and `finish()` then closes the task with
+     * nothing started. The launch is held instead and `onStart` runs it on return.
+     *
+     * The flag is not `lifecycle.currentState`, which reads CREATED inside `onCreate`,
+     * where a cold launch starts the editor and has to keep doing so.
+     */
+    @Test
+    fun `a stopped screen holds the launch until the user is back`() {
+        val body = code(bodyOf("private fun launchMain("))
+
+        val held = body.indexOf("stopped")
+        assertTrue(held in 0 until body.indexOf("startActivity("),
+            "launchMain no longer asks whether the user has left before it starts the editor")
+        assertTrue("launchPending = true" in body, "a launch asked for while away is not remembered")
+        assertTrue("if (!gone && !away) finish()" in body,
+            "launchMain finishes the screen on the path that held the launch back")
+
+        val onStart = code(SourceScan.body(source, "override fun onStart("))
+        assertTrue("stopped = false" in onStart && "launchPending" in onStart && "launchMain()" in onStart,
+            "onStart no longer replays a launch that was held while the user was away")
+        val onStop = code(SourceScan.body(source, "override fun onStop("))
+        assertTrue("stopped = true" in onStop, "onStop no longer records that the user has left")
+    }
+
+    /**
      * The queue that outlives the screen must not depend on when the collector
      * runs.
      *

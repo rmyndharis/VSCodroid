@@ -781,6 +781,9 @@ class FirstRunSetup(
             }
             if (!hasUnredirectedParent(destDir) || Files.isSymbolicLink(destDir.toPath())) {
                 Logger.w(tag, "Not extracting assets through a redirected directory")
+                // Named, because a link the user made is not cleared by Retry and
+                // the abort would otherwise print only which tree was incomplete.
+                if (firstWriteFailure == null) firstWriteFailure = "$destPath is, or sits behind, a symbolic link"
                 return false
             }
             destDir.mkdirs()
@@ -838,6 +841,7 @@ class FirstRunSetup(
         val written = input.use { stream ->
             if (!hasUnredirectedParent(destFile)) {
                 Logger.w(tag, "Not extracting an asset through a redirected parent")
+                if (firstWriteFailure == null) firstWriteFailure = "$destPath is, or sits behind, a symbolic link"
                 return false
             }
             destFile.parentFile?.mkdirs()

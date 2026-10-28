@@ -7,6 +7,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Setup that stops on a symbolic link in its way names the path, not only the tree that is incomplete.
+- The setup notification no longer says unpacking only happens once, in every language; it runs again after each update.
+- A device folder that is still syncing is reported in the app's language instead of an English sentence.
+- Setup that finishes while the app is in the background starts the editor when you come back, not from the background.
+
+### Changed
+
+- The extension version check refuses a shallow clone, and the build requires every `scripts/test-*.py` to run in both the lint and release workflows.
+- The release workflow refuses a tag whose commit is not on main.
+
 ## [1.6.0] - 2026-10-28
 
 ### Added

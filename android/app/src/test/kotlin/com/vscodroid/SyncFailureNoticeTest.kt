@@ -128,6 +128,24 @@ class SyncFailureNoticeTest {
         )
     }
 
+    @Test
+    fun `a folder refused as busy is reported from a resource and not from the exception message`() {
+        val source = mainActivity.readText()
+        val start = source.indexOf("catch (e: FolderBusyException)")
+        assertTrue(start >= 0) { "the busy branch is gone or renamed, so this measures nothing" }
+        val end = source.indexOf("} catch (e: Exception)", start)
+        assertTrue(end > start) { "could not bound the busy branch" }
+        val branch = source.substring(start, end).lines()
+            .filterNot { it.trimStart().startsWith("//") }.joinToString("\n")
+
+        assertTrue("R.string.saf_sync_busy" in branch) {
+            "the busy branch no longer names its own resource"
+        }
+        // FolderBusyException's message is an English sentence, so passing it on prints a
+        // translated lead-in with an English tail.
+        assertTrue(".message" !in branch) { "the busy branch reports the exception's own message" }
+    }
+
     /**
      * The cause half, which each caller supplies.
      *

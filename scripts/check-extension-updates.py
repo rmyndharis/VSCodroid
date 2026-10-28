@@ -14,6 +14,15 @@ def git(*args):
     return subprocess.check_output(["git", "-C", str(ROOT), *args], text=True).strip()
 
 
+def refuse_shallow():
+    if git("rev-parse", "--is-shallow-repository") == "true":
+        sys.exit(
+            "FAIL this is a shallow clone, where the tip reads as the commit that added every "
+            "extension and an edit compares equal to itself. Run this where checkout sets "
+            "fetch-depth: 0."
+        )
+
+
 def problems():
     failures = []
     for directory in sorted((ROOT / EXTENSIONS).glob("vscodroid.*")):
@@ -55,6 +64,7 @@ def problems():
 
 
 if __name__ == "__main__":
+    refuse_shallow()
     failures = problems()
     for failure in failures:
         print(failure)

@@ -8,7 +8,7 @@
          rather than the server's, because no server is running yet and the whole
          point of the hold is that the process survives a user who leaves. -->
     <string name="notification_title_setup">VSCodroid is setting up</string>
-    <string name="notification_text_setup">Unpacking the editor and its tools. This takes a few minutes and only happens once.</string>
+    <string name="notification_text_setup">Unpacking the editor and its tools. This takes a few minutes.</string>
     <string name="notification_text">Local development server active</string>
     <!-- There was a second line here, shown when the server was adopted rather
          than started, telling the user the session had no network and to tap
@@ -419,6 +419,9 @@
          not translatable and is carried through as it stands. It is there because the
          alternative is a folder that failed to open for no stated reason. -->
     <string name="saf_sync_denied">Permission denied.</string>
+    <!-- The reason when a save or another sync still holds the folder. A whole sentence,
+         like the one above, because it is joined to the consequence sentences below. -->
+    <string name="saf_sync_busy">The folder is still syncing. Try opening it again in a moment.</string>
     <string name="saf_sync_failed">Failed to open folder: %1$s.</string>
     <string name="saf_sync_failed_other_folder_watched">%1$s The folder already open is unaffected.</string>
     <string name="saf_sync_failed_no_write_back">%1$s Changes will not sync to this folder until you open it again.</string>

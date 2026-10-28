@@ -1598,8 +1598,9 @@ class MainActivity : AppCompatActivity() {
                 // again and was refused again. The saves that follow wait behind the
                 // write in flight; see [SafSyncEngine.outboundTurnWaitMs].
                 Logger.w(tag, "The device folder is busy; leaving it as it was")
+                // Its own resource: the exception's message is English and is for the log.
                 reportSyncFailure(
-                    getString(R.string.saf_sync_failed, e.message),
+                    getString(R.string.saf_sync_busy),
                     restoreWatcherAfterFailure(previouslyWatched, uri, mirrorUntouched = true)
                 )
             } catch (e: Exception) {

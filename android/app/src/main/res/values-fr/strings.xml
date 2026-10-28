@@ -8,7 +8,7 @@
          rather than the server's, because no server is running yet and the whole
          point of the hold is that the process survives a user who leaves. -->
     <string name="notification_title_setup">Configuration de VSCodroid</string>
-    <string name="notification_text_setup">Décompression de l\'éditeur et de ses outils. Cela prend quelques minutes et n\'a lieu qu\'une seule fois.</string>
+    <string name="notification_text_setup">Décompression de l\'éditeur et de ses outils. Cela prend quelques minutes.</string>
     <string name="notification_text">Serveur de développement local actif</string>
     <!-- There was a second line here, shown when the server was adopted rather
          than started, telling the user the session had no network and to tap
@@ -414,6 +414,7 @@
          not translatable and is carried through as it stands. It is there because the
          alternative is a folder that failed to open for no stated reason. -->
     <string name="saf_sync_denied">Autorisation refusée.</string>
+    <string name="saf_sync_busy">Le dossier est encore en cours de synchronisation. Réessayez de l\'ouvrir dans un instant.</string>
     <string name="saf_sync_failed">Impossible d\'ouvrir le dossier : %1$s.</string>
     <string name="saf_sync_failed_other_folder_watched">%1$s Le dossier déjà ouvert n\'est pas affecté.</string>
     <string name="saf_sync_failed_no_write_back">%1$s Les modifications ne seront pas synchronisées vers ce dossier tant que vous ne l\'aurez pas rouvert.</string>

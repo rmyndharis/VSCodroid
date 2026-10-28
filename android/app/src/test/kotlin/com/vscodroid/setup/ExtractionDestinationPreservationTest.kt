@@ -113,18 +113,27 @@ class ExtractionDestinationPreservationTest {
         Files.createSymbolicLink(toPath(), files.toPath())
     }
 
+    /** What the last extraction left in `firstWriteFailure`, which the abort quotes to the user. */
+    private var cause: String? = null
+
+    private fun causeOf(setup: FirstRunSetup): String? =
+        FirstRunSetup::class.java.getDeclaredField("firstWriteFailure")
+            .apply { isAccessible = true }.get(setup) as String?
+
     private fun extractTree(at: File = files): Boolean {
         val setup = FirstRunSetup(context(at), 0, 0, 0, 0)
-        return FirstRunSetup::class.java.declaredMethods.single {
+        return (FirstRunSetup::class.java.declaredMethods.single {
             it.name == "extractAssetDir" && it.parameterCount == 4
-        }.apply { isAccessible = true }.invoke(setup, "vscode-reh", "server/vscode-reh", null, false) as Boolean
+        }.apply { isAccessible = true }.invoke(setup, "vscode-reh", "server/vscode-reh", null, false) as Boolean)
+            .also { cause = causeOf(setup) }
     }
 
     private fun extractFile(asset: String, destination: String, at: File = files): Boolean {
         val setup = FirstRunSetup(context(at), 0, 0, 0, 0)
-        return FirstRunSetup::class.java.declaredMethods.single {
+        return (FirstRunSetup::class.java.declaredMethods.single {
             it.name == "extractAssetFile" && it.parameterCount == 5
-        }.apply { isAccessible = true }.invoke(setup, asset, destination, null, false, false) as Boolean
+        }.apply { isAccessible = true }.invoke(setup, asset, destination, null, false, false) as Boolean)
+            .also { cause = causeOf(setup) }
     }
 
     private fun install(at: File = files): Boolean {
@@ -161,6 +170,7 @@ class ExtractionDestinationPreservationTest {
             { assertFalse(result) },
             { assertEquals("unique project server", original.readText()) },
             { assertTrue(Files.isSymbolicLink(redirected.toPath())) },
+            { assertEquals("server/vscode-reh is, or sits behind, a symbolic link", cause) },
         )
     }
 
@@ -175,6 +185,7 @@ class ExtractionDestinationPreservationTest {
         assertAll(
             { assertFalse(result) },
             { assertEquals("unique project bootstrap", original.readText()) },
+            { assertEquals("server/server.js is, or sits behind, a symbolic link", cause) },
         )
     }
 
