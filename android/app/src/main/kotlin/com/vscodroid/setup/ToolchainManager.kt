@@ -32,6 +32,7 @@ import java.util.concurrent.Executor
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.locks.ReentrantLock
 import java.util.zip.ZipInputStream
 import android.annotation.SuppressLint
 
@@ -141,12 +142,13 @@ class ToolchainManager(private val context: Context) {
 
     /** Progress or success. Never a failure: those go through [fail]. */
     private fun report(packName: String, status: Int, percent: Int, transferId: Long? = null) {
-        synchronized(this) {
-            if (status == AssetPackStatus.COMPLETED || status == AssetPackStatus.CANCELED) {
-                playRequests.remove(packName)
-            }
-            onStateChange?.invoke(packName, status, percent, null, transferId)
+        if (status == AssetPackStatus.COMPLETED || status == AssetPackStatus.CANCELED) {
+            synchronized(this) { playRequests.remove(packName) }
         }
+        // Outside the monitor, like every call into [onStateChange]: a screen's callback lets go of
+        // its Play listener, and that must not happen while this thread holds what Play's own
+        // dispatch may be waiting for. See [applyListener].
+        onStateChange?.invoke(packName, status, percent, null, transferId)
     }
 
     /**
@@ -170,10 +172,8 @@ class ToolchainManager(private val context: Context) {
         // for its own line and hands the raw value on, so the asymmetry is paid
         // here. A registry pack name carries nothing for this to remove.
         Logger.e(tag, "Toolchain ${redactToken(packName)} failed: $why")
-        synchronized(this) {
-            playRequests.remove(packName)
-            onStateChange?.invoke(packName, AssetPackStatus.FAILED, 0, why, transferId)
-        }
+        synchronized(this) { playRequests.remove(packName) }
+        onStateChange?.invoke(packName, AssetPackStatus.FAILED, 0, why, transferId)
     }
 
     /**
@@ -596,26 +596,48 @@ class ToolchainManager(private val context: Context) {
      * the callers are not on one thread: the activities are on the main thread,
      * while the bridge reaches [install] from the WebView's own thread.
      */
-    private var listenerRegistered = false
+    @Volatile private var listenerRegistered = false
+    @Volatile private var listenerWanted = false
+    private val listenerLock = ReentrantLock()
     private val playRequests = mutableMapOf<String, Any>()
 
-    @Synchronized
     fun registerListener() {
-        if (listenerRegistered) return
-        assetPackManager.registerListener(listener)
-        listenerRegistered = true
+        listenerWanted = true
+        applyListener()
     }
 
-    @Synchronized
     fun unregisterListener() {
-        if (!listenerRegistered) return
-        assetPackManager.unregisterListener(listener)
-        listenerRegistered = false
+        listenerWanted = false
+        applyListener()
     }
 
-    @Synchronized
     fun unregisterListenerIfIdle() {
-        if (playRequests.isEmpty()) unregisterListener()
+        if (synchronized(this) { playRequests.isEmpty() }) unregisterListener()
+    }
+
+    /**
+     * Makes Play's registry agree with [listenerWanted], and never waits to do it.
+     *
+     * Play delivers a state update on the main thread while it holds the monitor of its
+     * listener registry, and registering or removing a listener takes that monitor. A thread
+     * that waited here for the lock while another thread, holding it, waited for that monitor,
+     * would be the main thread stuck for good when it is the one delivering. So a caller that
+     * finds the lock taken leaves its wish in [listenerWanted] and returns: the thread that
+     * holds the lock looks again before it lets go, and applies it.
+     */
+    private fun applyListener() {
+        do {
+            if (!listenerLock.tryLock()) return
+            try {
+                while (listenerRegistered != listenerWanted) {
+                    if (listenerWanted) assetPackManager.registerListener(listener)
+                    else assetPackManager.unregisterListener(listener)
+                    listenerRegistered = !listenerRegistered
+                }
+            } finally {
+                listenerLock.unlock()
+            }
+        } while (listenerRegistered != listenerWanted)
     }
 
     // -- Query state --
@@ -734,8 +756,13 @@ class ToolchainManager(private val context: Context) {
         } else {
             val request = synchronized(this) {
                 if (info.packName in playRequests) return
-                registerListener()
                 Any().also { playRequests[info.packName] = it }
+            }
+            try {
+                registerListener()
+            } catch (e: Throwable) {
+                synchronized(this) { playRequests.remove(info.packName) }
+                throw e
             }
             // The Task is answered rather than discarded. A fetch Play refuses
             // outright delivers no AssetPackState at all, so [handleDownloadState]
@@ -751,21 +778,22 @@ class ToolchainManager(private val context: Context) {
             try {
                 assetPackManager.fetch(listOf(info.packName))
                     .addOnFailureListener { e ->
-                        synchronized(this) {
-                            if (playRequests[info.packName] === request) {
-                                Logger.e(tag, "Play refused to fetch ${info.packName}: ${e.message}")
-                                fail(info.packName, playFetchFailure(e))
-                            }
+                        if (takeRequest(info.packName, request)) {
+                            Logger.e(tag, "Play refused to fetch ${info.packName}: ${e.message}")
+                            fail(info.packName, playFetchFailure(e))
                         }
                     }
             } catch (e: Exception) {
-                synchronized(this) {
-                    if (playRequests[info.packName] === request) {
-                        fail(info.packName, playFetchFailure(e))
-                    }
+                if (takeRequest(info.packName, request)) {
+                    fail(info.packName, playFetchFailure(e))
                 }
             }
         }
+    }
+
+    /** Takes the request out of the map if it is still [request], so one caller alone reports its failure. */
+    private fun takeRequest(packName: String, request: Any): Boolean = synchronized(this) {
+        (playRequests[packName] === request).also { if (it) playRequests.remove(packName) }
     }
 
     fun cancel(packName: String) {
@@ -1573,10 +1601,8 @@ class ToolchainManager(private val context: Context) {
             // COMPLETED reaches nothing, while this decline reaches the live card
             // and would leave it offering Install for a toolchain that is on its
             // way in. UNKNOWN carries no such meaning to any reader here.
-            synchronized(this) {
-                if (readsDeliveredPack) playRequests.remove(packName)
-                report(packName, AssetPackStatus.UNKNOWN, 0, transferId)
-            }
+            if (readsDeliveredPack) synchronized(this) { playRequests.remove(packName) }
+            report(packName, AssetPackStatus.UNKNOWN, 0, transferId)
             return false
         }
         return try {
