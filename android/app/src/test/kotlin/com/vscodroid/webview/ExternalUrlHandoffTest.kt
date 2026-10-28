@@ -293,6 +293,9 @@ class ExternalUrlHandoffTest {
      */
     @Test
     fun `the retry navigation is answered here, not handed to another app`() {
+        // The error page is loaded with no base address, so this is what the client sees
+        // when its control is tapped. The shared fixture's default is the editor's address.
+        every { view.url } returns "about:blank"
         retried = false
 
         val handled = client.shouldOverrideUrlLoading(
@@ -315,6 +318,9 @@ class ExternalUrlHandoffTest {
      */
     @Test
     fun `the copy-diagnostics navigation is answered here, not handed to another app`() {
+        // The error page is loaded with no base address, so this is what the client sees
+        // when its control is tapped. The shared fixture's default is the editor's address.
+        every { view.url } returns "about:blank"
         copied = false
 
         val handled = client.shouldOverrideUrlLoading(
@@ -323,6 +329,29 @@ class ExternalUrlHandoffTest {
 
         assertTrue(handled, "the navigation was allowed to proceed")
         assertTrue(copied, "the only route to the server log did nothing")
+        verify(exactly = 0) { context.startActivity(any()) }
+    }
+
+    /**
+     * The two controls belong to the pages the app puts up itself. A live editor is not one:
+     * the workbench opens any non-web address by assigning it to the page, so a link in a
+     * rendered README could replace a healthy editor with the starting page, which nothing
+     * replaces again while the server stays up.
+     */
+    @Test
+    fun `the retry and diagnostics navigations are not answered while the editor is the page`() {
+        every { view.url } returns "http://127.0.0.1:$ALLOWED_PORT/?folder=%2Fhome%2Fprojects"
+        retried = false
+        copied = false
+
+        val retry = client.shouldOverrideUrlLoading(view, request("vscodroid", "retry-server", -1, RETRY_URL))
+        val diagnostics = client.shouldOverrideUrlLoading(
+            view, request("vscodroid", "copy-diagnostics", -1, COPY_DIAGNOSTICS_URL),
+        )
+
+        assertTrue(retry && diagnostics, "the navigation was left to proceed")
+        assertFalse(retried, "a link replaced a live editor with the starting page")
+        assertFalse(copied, "a link copied the diagnostics from a live editor")
         verify(exactly = 0) { context.startActivity(any()) }
     }
 
@@ -1176,6 +1205,9 @@ class ExternalUrlHandoffTest {
      */
     @Test
     fun `the retry navigation announces nothing`() {
+        // The error page is loaded with no base address, so this is what the client sees
+        // when its control is tapped. The shared fixture's default is the editor's address.
+        every { view.url } returns "about:blank"
         retried = false
 
         client.shouldOverrideUrlLoading(

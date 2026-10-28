@@ -970,7 +970,17 @@ class VSCodroidWebViewClient(
         // any remote page could blank the editor and restart the server from a
         // hidden iframe. The comparison is the whole string, so a query appended
         // to the scheme and host does not qualify.
+        // Both controls are answered only when the page is not the editor. The workbench opens
+        // any non-web address by assigning it to the page, so a link in a rendered document
+        // could otherwise replace a healthy editor with the starting page, and nothing replaces
+        // that again while the server stays up. The error pages are `about:blank`, never an
+        // editor address.
+        val editorIsPage = isWorkbenchUrl(view.url, allowedPort)
         if (request.isForMainFrame && url.toString() == RETRY_URL) {
+            if (editorIsPage) {
+                Logger.d(tag, "Ignored the retry control: the editor is the page")
+                return true
+            }
             Logger.i(tag, "Retrying the server from the error page")
             onRetryServer()
             return true
@@ -982,6 +992,10 @@ class VSCodroidWebViewClient(
         // clipboard write rather than a disclosure, but the narrower rule is the
         // one this file already keeps.
         if (request.isForMainFrame && url.toString() == COPY_DIAGNOSTICS_URL) {
+            if (editorIsPage) {
+                Logger.d(tag, "Ignored the diagnostics control: the editor is the page")
+                return true
+            }
             Logger.i(tag, "Copying the diagnostics from the error page")
             onCopyDiagnostics()
             return true
