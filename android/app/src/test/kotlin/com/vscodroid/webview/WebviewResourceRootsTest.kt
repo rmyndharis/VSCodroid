@@ -233,9 +233,15 @@ class PublishedResourceRootsTest {
     @TempDir
     lateinit var externalDir: File
 
+    /** The app's data directory, which holds `files` as it does on a device. */
+    private val dataDir: File get() = filesDir.parentFile
+
     private fun contextWith(external: File?): Context {
         val context = mockk<Context>(relaxed = true)
         every { context.filesDir } returns filesDir
+        every { context.dataDir } returns dataDir
+        every { context.noBackupFilesDir } returns File(dataDir, "no_backup")
+        every { context.cacheDir } returns File(dataDir, "cache")
         every { context.getExternalFilesDir(null) } returns external
         return context
     }
@@ -335,18 +341,25 @@ class PublishedResourceRootsTest {
 
     /**
      * Catches: a sensitive set that drifts from the paths the rest of the app
-     * actually writes to. Both entries are taken from Environment's getters, so
-     * this fails if one is repointed out from under them or dropped.
+     * actually writes to. The first two entries are taken from Environment's
+     * getters, so this fails if one is repointed out from under them or dropped.
      */
     @Test
-    fun `the sensitive set names the connection token and the ssh directory`() {
+    fun `the sensitive set names the connection token, the ssh directory, the private stores and the credentials`() {
         val sensitive = sensitiveLocations(contextWith(externalDir))
 
         assertEquals(
             listOf(
-                File(filesDir, "home/.vscodroid/data/token").canonicalPath,
-                File(filesDir, "home/.ssh").canonicalPath,
-            ),
+                File(filesDir, "home/.vscodroid/data/token"),
+                File(filesDir, "home/.ssh"),
+                File(dataDir, "no_backup"),
+                File(dataDir, "app_webview_vscodroid"),
+                File(dataDir, "shared_prefs"),
+                File(dataDir, "databases"),
+                File(dataDir, "cache/webview_vscodroid"),
+            ).map { it.canonicalPath } + listOf(
+                ".aws", ".gnupg", ".config/gh", ".docker", ".kube", ".git-credentials", ".netrc", ".npmrc",
+            ).map { File(filesDir, "home/$it").canonicalPath },
             sensitive
         )
     }

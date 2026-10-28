@@ -148,10 +148,27 @@ internal fun resolveWebviewResource(requestedPath: String, roots: List<String>):
  * [workspaceRootOrNull] take them as a precondition instead of resolving them
  * itself.
  */
-internal fun sensitiveLocations(context: Context): List<String> = listOf(
-    Environment.getConnectionTokenPath(context),
-    Environment.getSshDir(context),
-).mapNotNull(::canonicalOrNull)
+internal fun sensitiveLocations(context: Context): List<String> {
+    val home = Environment.getHomeDir(context)
+    return (
+        listOf(
+            Environment.getConnectionTokenPath(context),
+            Environment.getSshDir(context),
+            // The key that opens the sealed extension secrets, and the WebView's own stores, which
+            // hold what it seals.
+            context.noBackupFilesDir.path,
+            File(context.dataDir, "app_webview_vscodroid").path,
+            File(context.dataDir, "shared_prefs").path,
+            File(context.dataDir, "databases").path,
+            File(context.cacheDir, "webview_vscodroid").path,
+        ) + CREDENTIAL_PATHS_IN_HOME.map { "$home/$it" }
+    ).mapNotNull(::canonicalOrNull)
+}
+
+/** Where the tools a developer signs in with keep their tokens, under the home directory. */
+private val CREDENTIAL_PATHS_IN_HOME = listOf(
+    ".aws", ".gnupg", ".config/gh", ".docker", ".kube", ".git-credentials", ".netrc", ".npmrc",
+)
 
 /**
  * The open folder as a resource root, or null if publishing it would publish
