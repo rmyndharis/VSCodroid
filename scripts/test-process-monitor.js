@@ -30,14 +30,14 @@ const UID = process.getuid();
  * and then indexes 11 and 12 for utime and stime, so the filler between ppid
  * and those two has to be exactly nine fields wide.
  */
-function writeProc(root, pid, argv, { uid = UID, ppid = 1 } = {}) {
+function writeProc(root, pid, argv, { uid = UID, ppid = 1, padding = 1 } = {}) {
     const dir = path.join(root, String(pid));
     fs.mkdirSync(dir, { recursive: true });
     fs.writeFileSync(
         path.join(dir, 'status'),
         `Name:\tnode\nPPid:\t${ppid}\nUid:\t${uid}\t${uid}\t${uid}\t${uid}\n`,
     );
-    fs.writeFileSync(path.join(dir, 'cmdline'), argv.join('\0') + '\0');
+    fs.writeFileSync(path.join(dir, 'cmdline'), argv.join('\0') + '\0'.repeat(padding));
     fs.writeFileSync(
         path.join(dir, 'stat'),
         `${pid} (node) S ${ppid} ${'0 '.repeat(9)}7 3\n`,
@@ -623,6 +623,8 @@ function run(tmp, proc, signals) {
 
     // The main Android process is not a phantom and must not reach the tree.
     writeProc(proc, 1100, ['com.vscodroid.debug']);
+    // Zygote leaves the app's cmdline padded with NULs well past the one that ends the name.
+    writeProc(proc, 1101, ['com.vscodroid'], { padding: 65 });
     // Another app's process, same device, different uid.
     writeProc(proc, 1200, [NODE, `${REH}/out/server-main.js`], { uid: UID + 1 });
 
@@ -639,6 +641,7 @@ function run(tmp, proc, signals) {
     }
 
     assert.ok(!byPid.has(1100), 'the main Android process was counted as a phantom');
+    assert.ok(!byPid.has(1101), 'the main Android process, NUL padded as zygote leaves it, was counted as a phantom');
     assert.ok(!byPid.has(1200), "another uid's process was counted against our budget");
 
     // Well past the 24 processes at which idle servers used to be signalled,

@@ -269,7 +269,8 @@ function readCmdline(pid) {
     const content = readFileQuiet(path.join(procRoot, String(pid), 'cmdline'));
     if (!content) return [];
     const parts = content.split('\0');
-    if (parts[parts.length - 1] === '') parts.pop();
+    // The app's own cmdline is padded with NULs well past the one ending its name.
+    while (parts.length && parts[parts.length - 1] === '') parts.pop();
     return parts;
 }
 
