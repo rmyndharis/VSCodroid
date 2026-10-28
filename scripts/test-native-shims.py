@@ -338,6 +338,14 @@ int main(void) {
     input = 8; output = 8;
     assert(copy_file_range_fallback(in, &input, in, &output, 4, 0) == 0);
     close(in);
+    /* Writing at the end of the file it reads from: only what the file held counts. */
+    in = seed("source");
+    input = 0; output = 8;
+    assert(copy_file_range_fallback(in, &input, in, &output, 100, 0) == 8);
+    assert(input == 8 && output == 16);
+    struct stat grown;
+    assert(fstat(in, &grown) == 0 && grown.st_size == 16);
+    close(in);
     return 0;
 }
 '''.replace("BODY", body))

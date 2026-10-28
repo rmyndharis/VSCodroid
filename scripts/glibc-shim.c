@@ -507,6 +507,9 @@ static ssize_t copy_file_range_fallback(int fd_in, off64_t *off_in, int fd_out,
         uint64_t count = len < available ? len : available;
         uint64_t distance = input <= output ? (uint64_t)(output - input) : (uint64_t)(input - output);
         if (distance < count) { errno = EINVAL; return -1; }
+        /* The kernel copies what the file held when the call began. Looping to `len`
+         * would re-read bytes this call has just appended. */
+        len = (size_t)count;
     }
 
     /* 16 KB rather than the 64 KB a copy loop would normally take: this runs on
