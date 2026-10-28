@@ -190,6 +190,10 @@ class ToolchainOwnershipLifecycleTest {
         assertEquals(damaged, stateFile.readText(), "install replaced unreadable ownership metadata")
         assertTrue(reports.none { it.first == AssetPackStatus.COMPLETED }, "install reported completion")
         assertTrue(reports.any { it.first == AssetPackStatus.FAILED }, "install did not report refusal")
+        assertEquals(
+            listOf(AssetPackStatus.FAILED to ToolchainFailure.INTERNAL), reports,
+            "an unreadable record was reported as something the user can fix by freeing space",
+        )
         assertEquals("old ruby bytes", rubyPayload.readText())
 
         stateFile.writeText("[$ruby]")
@@ -198,6 +202,18 @@ class ToolchainOwnershipLifecycleTest {
         assertEquals(setOf("ruby", "java"), m.getInstalledToolchains().toSet())
         assertEquals(listOf(AssetPackStatus.COMPLETED), reports.map { it.first })
         assertEquals("old ruby bytes", rubyPayload.readText())
+    }
+
+    @Test
+    fun `uninstall keeps an unreadable record and reports it as an internal failure`() {
+        stateFile.writeText(damaged)
+        val payload = file("usr/lib/ruby/kept.rb", "kept")
+
+        uninstall("ruby")
+
+        assertEquals(damaged, stateFile.readText())
+        assertEquals("kept", payload.readText())
+        assertEquals(listOf(AssetPackStatus.FAILED to ToolchainFailure.INTERNAL), reports)
     }
 
     @Test

@@ -176,6 +176,16 @@ class ToolchainManager(private val context: Context) {
         }
     }
 
+    /**
+     * The record exists and cannot be parsed. It is left as it is, because it still names the files
+     * an uninstall would remove, so this is not a storage problem and says so in the log with the
+     * file to look at. Deleting `toolchains.json` from a terminal is the way back.
+     */
+    private fun failUnreadableRecord(packName: String, transferId: Long? = null) {
+        Logger.e(tag, "${stateFile.path} exists but cannot be read; leaving it as it is")
+        fail(packName, ToolchainFailure.INTERNAL, transferId)
+    }
+
     // -- HTTP fallback state --
 
     /**
@@ -700,6 +710,13 @@ class ToolchainManager(private val context: Context) {
         }
         Logger.i(tag, "Requesting install of ${info.displayName} (${info.packName})")
 
+        // Before anything is downloaded: a ZIP fetched and verified only to be refused is paid for
+        // again on every try.
+        if (readableState() == null) {
+            failUnreadableRecord(info.packName)
+            return
+        }
+
         if (shouldUseHttpFallback()) {
             val url = info.downloadUrl
             if (url == null) {
@@ -886,7 +903,7 @@ class ToolchainManager(private val context: Context) {
      */
     private fun uninstallLocked(name: String) {
         val state = readableState() ?: run {
-            fail("toolchain_$name", ToolchainFailure.STORAGE)
+            failUnreadableRecord("toolchain_$name")
             return
         }
         var manifestObj: JSONObject? = null
@@ -1716,7 +1733,7 @@ class ToolchainManager(private val context: Context) {
         // that may never be needed.
         synchronized(stateLock) {
             if (readableState() == null) {
-                fail(packName, ToolchainFailure.STORAGE, transferId)
+                failUnreadableRecord(packName, transferId)
                 return false
             }
             val previousMarker = installMarker(packName)
@@ -1838,7 +1855,7 @@ class ToolchainManager(private val context: Context) {
         var replaced: JSONObject? = null
         synchronized(stateLock) {
             val state = readableState() ?: run {
-                fail(packName, ToolchainFailure.STORAGE, transferId)
+                failUnreadableRecord(packName, transferId)
                 return false
             }
             // Remove any existing entry for this toolchain

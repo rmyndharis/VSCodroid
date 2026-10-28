@@ -267,6 +267,36 @@ class ToolchainInstallTest {
         verify(exactly = 0) { packManager.fetch(any()) }
     }
 
+    /**
+     * A record that exists and cannot be parsed is kept as it is, because it still names the
+     * files an uninstall would remove. That is not a storage problem, so the user is not told
+     * to free space, and it is refused before a ZIP is downloaded, not after.
+     */
+    @Test
+    fun `an unreadable record refuses a Play install before it fetches anything`() {
+        installedBy("com.android.vending")
+        File(filesDir, "home/.vscodroid/toolchains.json").writeText("[{\"name\":")
+
+        manager().install("toolchain_java")
+
+        assertEquals(listOf(AssetPackStatus.FAILED), statuses())
+        assertEquals(listOf(ToolchainFailure.INTERNAL), synchronized(reasons) { reasons.toList() })
+        verify(exactly = 0) { packManager.fetch(any()) }
+    }
+
+    @Test
+    fun `an unreadable record refuses an HTTP install before it reports progress`() {
+        installedBy("com.example.sideloader")
+        val record = File(filesDir, "home/.vscodroid/toolchains.json").apply { writeText("[{\"name\":") }
+
+        manager().install("toolchain_java")
+
+        assertTrue(failed.await(10, TimeUnit.SECONDS), "the refusal was never reported")
+        assertEquals(listOf(AssetPackStatus.FAILED), statuses(), "the download was started: $events")
+        assertEquals(listOf(ToolchainFailure.INTERNAL), synchronized(reasons) { reasons.toList() })
+        assertEquals("[{\"name\":", record.readText(), "the unreadable record was replaced")
+    }
+
     @Test
     fun `an unknown toolchain reports FAILED instead of returning silently`() {
         installedBy("com.android.vending")
