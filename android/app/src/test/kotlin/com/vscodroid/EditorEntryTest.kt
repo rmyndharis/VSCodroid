@@ -168,6 +168,27 @@ class EditorEntryTest {
         }
     }
 
+    /**
+     * Both activities are exported, so the intent they receive is whatever another app builds.
+     * Copying its extras into the next intent unparcels them here, and a class this app does not
+     * have makes that throw: any app could crash the launch path. Nothing reads an extra; the
+     * sign-in travels in the data.
+     */
+    @Test
+    fun `neither exported activity copies the caller's extras into the next intent`() {
+        for (name in listOf("MainActivity.kt", "SplashActivity.kt")) {
+            val file = File("src/main/kotlin/com/vscodroid/$name")
+            check(file.isFile) { "$name not found at ${file.absolutePath}; this test would pass by looking at nothing" }
+            val lines = file.readLines().filterNot {
+                val t = it.trimStart()
+                t.startsWith("//") || t.startsWith("*") || t.startsWith("/*")
+            }
+            assertTrue(lines.none { it.contains("putExtras(") }) {
+                "$name copies the caller's extras: ${lines.filter { it.contains("putExtras(") }}"
+            }
+        }
+    }
+
     @Test
     fun `the callback filter stays on the editor`() {
         // The other control. Moving the filter to SplashActivity would satisfy

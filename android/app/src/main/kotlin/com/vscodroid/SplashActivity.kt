@@ -1057,7 +1057,6 @@ class SplashActivity : AppCompatActivity() {
         } else {
             startActivity(Intent(this, MainActivity::class.java).apply {
                 data = intent?.data
-                intent?.extras?.let { putExtras(it) }
             })
         }
         // After the editor is on its way, never before.

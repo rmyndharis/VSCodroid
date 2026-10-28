@@ -876,8 +876,9 @@ class MainActivity : AppCompatActivity() {
      * rather than for when it runs.
      *
      * The intent travels with the hand-off, so the sign-in this filter exists
-     * for is not lost: [SplashActivity] passes `data` and the extras on to the
-     * activity it launches once setup finishes.
+     * for is not lost: [SplashActivity] passes `data` on to the activity it launches
+     * once setup finishes. Not the extras: both activities are exported, and copying
+     * another app's extras unparcels them here, which a class this app lacks makes throw.
      *
      * It cannot loop. Every route from [SplashActivity] to this activity runs
      * after `markSetupComplete()`, which is what `isFirstRun()` reads, and the
@@ -890,7 +891,6 @@ class MainActivity : AppCompatActivity() {
         Logger.w(tag, "Started before setup had run; handing the launch to the splash screen")
         startActivity(Intent(this, SplashActivity::class.java).apply {
             data = intent?.data
-            intent?.extras?.let { putExtras(it) }
         })
         finish()
         return true
