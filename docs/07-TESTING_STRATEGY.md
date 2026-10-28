@@ -146,7 +146,7 @@ test source.
 
 ### 3.2 Instrumented Tests
 
-105 tests across eighteen classes, in `android/app/src/androidTest/`. They
+109 tests across twenty classes, in `android/app/src/androidTest/`. They
 need an `arm64-v8a` device or emulator, because the app ships that ABI alone.
 Counted from the sources (`grep -cE '^\s*@Test'` over the directory), because no
 run covers the whole set and none of it is scheduled. Nothing holds this figure
@@ -155,6 +155,8 @@ to the suite; `android/app/src/androidTest/README.md` states the total that
 
 | Test | Description | Setup |
 |------|-------------|-------|
+| **BoundedStoragePressureTest** | The allocation policy behind the disk-pressure tests, with no real disk filled: shared or large volumes are refused before any write, unchanged capacity cannot exceed the byte cap, the deadline stops allocation, and bounded simulated pressure can succeed | arm64 device or emulator |
+| **WebViewVisualArrowInstrumentedTest** | Native and guarded caret movement compared through the production WebView and key injector on right-to-left input and textarea fields. Skipped unless a fresh `visualCheckpointToken` is supplied and every checkpoint is viewed | arm64 device or emulator |
 | **KeyRowDensityInstrumentedTest** | Simulates a density change on the real key row, checks its new dimensions and inset cost, and retains the selected page and latched Ctrl | arm64 device or emulator |
 | **ServerHealthTest** | The server becomes reachable, answers its `GET /version` readiness probe with 200, and survives activity recreation | arm64 device, app launched once so the assets are extracted |
 | **SplashActivityTest** | First-run extraction, and that a later launch skips it | arm64 device |
