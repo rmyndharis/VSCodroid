@@ -148,6 +148,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - App updates install a bundled extension's new version for the default profile even when a named profile has its own copy of it.
 - App updates move a named profile's entries for the app's own extensions to the new version and remove the old copy.
 - Device-folder cleanup retains unrecorded workspace files, including names ending in `.vscodroid-partial`.
+- Device-folder opens remove a `.vscodroid-partial` entry that only repeats the start of the file beside it.
 - Device-folder imports preserve local edits made while the provider is being read.
 - Device-folder imports retain distinct local copies when sync history is missing or unreadable.
 - Device-folder cleanup verifies provider bytes before upgrading older sync records.

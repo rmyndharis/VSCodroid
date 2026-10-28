@@ -173,8 +173,8 @@ class SafReopenDataPreservationTest : SafInitialSyncTestBase() {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = ["hello", ""])
-    fun `an unrecorded local suffix entry keeps its filename and length`(contents: String) {
+    @ValueSource(strings = ["Hello", "hello world and more"])
+    fun `an unrecorded local suffix entry that is not the start of its neighbour keeps its filename and length`(contents: String) {
         openDeviceNotes()
         val local = mirrorFile("notes.md${SafSyncEngine.PARTIAL_SUFFIX}").apply { writeText(contents) }
 
@@ -189,7 +189,7 @@ class SafReopenDataPreservationTest : SafInitialSyncTestBase() {
     @Test
     fun `a reopen retains an unproved suffix entry or its replacement`() {
         openDeviceNotes()
-        val local = mirrorFile("notes.md${SafSyncEngine.PARTIAL_SUFFIX}").apply { writeText("hello") }
+        val local = mirrorFile("notes.md${SafSyncEngine.PARTIAL_SUFFIX}").apply { writeText("jello") }
         val originalKey = Files.readAttributes(local.toPath(), java.nio.file.attribute.BasicFileAttributes::class.java).fileKey()
         var closed = false
         var replacementKey: Any? = null
@@ -212,7 +212,7 @@ class SafReopenDataPreservationTest : SafInitialSyncTestBase() {
             assertTrue(originalKey != replacementKey, "the fixture did not replace the directory entry")
             assertEquals("UNIQUE USER EDIT", local.readText())
         } else {
-            assertEquals("hello", local.readText())
+            assertEquals("jello", local.readText())
         }
         assertEquals("hello world", mirrorFile("notes.md").readText())
     }

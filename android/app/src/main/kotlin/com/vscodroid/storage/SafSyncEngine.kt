@@ -1166,6 +1166,7 @@ class SafSyncEngine(private val context: Context) {
             mirrorDir, documents, enumerationComplete,
             recorded.map { recordLine(it, digests[it] ?: previousRecord?.get(it)) },
         )
+        val clearedPartials = removeRedundantPartials(mirrorDir, documents)
 
         val elapsed = System.currentTimeMillis() - startTime
         Logger.i(
@@ -1173,7 +1174,7 @@ class SafSyncEngine(private val context: Context) {
             "Initial sync complete: $filesDone files ($skippedLarge too large, " +
                 "$failedCopies could not be copied, $keptLocal kept, " +
                 "$uploadsDone written back, $setAside set aside, $putBack put back, " +
-                "${recorded.size} vouched for, $removed removed) in ${elapsed}ms"
+                "${recorded.size} vouched for, $removed removed, $clearedPartials partial copies cleared) in ${elapsed}ms"
         )
 
         // Only the copies that were attempted and failed. A document skipped for size is
@@ -1192,6 +1193,68 @@ class SafSyncEngine(private val context: Context) {
             onDocumentsNotCopied(failedCopies, outOfRoom || belowFloor)
         }
         if ("" !in skippedDirs) unfetched.remove(mirrorDir.absolutePath)
+    }
+
+    /**
+     * Removes a `<name>.vscodroid-partial` entry beside a document when every byte it holds is
+     * the start of that document's copy in the mirror.
+     *
+     * Builds up to 1.5.0 streamed a device document into that name before renaming it into place,
+     * and a copy cut short left it behind for good. This build neither writes that name nor
+     * writes such an entry back, so it only sat in the Explorer. A name alone does not make an
+     * entry ours: a workspace file can end the same way. So the test is the content. An entry
+     * that is the start of the file beside it adds nothing to that file, so dropping it loses
+     * nothing whoever made it; anything else, including a link, a directory, an entry longer
+     * than its neighbour or one with no neighbour, is kept.
+     *
+     * It runs after the copies of this open are in place, so the entry of a document that was
+     * not yet in the mirror is compared with the copy fetched a moment ago. Almost no document
+     * has one, so the common cost is one stat per document.
+     */
+    private fun removeRedundantPartials(mirrorDir: File, documents: List<DocumentInfo>): Int {
+        var removed = 0
+        for (document in documents) {
+            if (document.isDirectory) continue
+            val relative = document.relativePath
+            if (!File(mirrorDir, relative + PARTIAL_SUFFIX).exists()) continue
+            try {
+                openOutboundPath(File(mirrorDir, relative), mirrorDir).use { path ->
+                    val partial = path.sibling(path.leaf.toString() + PARTIAL_SUFFIX)
+                    val before = path.attributes(partial)
+                    if (isStartOfSibling(path, partial, path.leaf, before)) {
+                        // A last look: what was compared must still be what is removed.
+                        if (!sameInboundAttributes(before, path.attributes(partial))) return@use
+                        path.parent.deleteFile(partial)
+                        removed++
+                    }
+                }
+            } catch (e: Exception) {
+                Logger.w(tag, "Kept a partial copy beside $relative: ${e.message}")
+            }
+        }
+        return removed
+    }
+
+    private fun isStartOfSibling(
+        dest: OutboundPath, partial: Path, whole: Path, partialAttributes: BasicFileAttributes,
+    ): Boolean {
+        val wholeAttributes = dest.attributes(whole)
+        if (!partialAttributes.isRegularFile || !wholeAttributes.isRegularFile ||
+            partialAttributes.size() > wholeAttributes.size()) return false
+        return dest.input(partial).use { start ->
+            dest.input(whole).use { all ->
+                val one = ByteArray(COPY_BUFFER_SIZE)
+                val two = ByteArray(COPY_BUFFER_SIZE)
+                var left = partialAttributes.size()
+                while (left > 0) {
+                    val want = minOf(left, one.size.toLong()).toInt()
+                    if (readFully(start, one, want) != want || readFully(all, two, want) != want) return false
+                    if (!java.util.Arrays.equals(one, 0, want, two, 0, want)) return false
+                    left -= want
+                }
+                true
+            }
+        }
     }
 
     /**
