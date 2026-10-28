@@ -3302,7 +3302,7 @@ class ToolchainManager(private val context: Context) {
             sb.appendLine(
                 "for d in ${extraPaths.distinct().joinToString(" ") { "\"$it\"" }}; do " +
                     "case \":\$PATH:\" in *\":\$d:\"*) ;; *) PATH=\"\$PATH:\$d\" ;; esac; done; " +
-                    "export PATH"
+                    "export PATH; unset d"
             )
         }
 

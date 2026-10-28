@@ -754,7 +754,7 @@ class ToolchainEnvFileTest {
         val script = File(filesDir, "source.sh")
         script.writeText(
             ". '${envFile.absolutePath}'; . '${envFile.absolutePath}'; " +
-                "printf 'PATH=%s\\nRUBYOPT=%s\\n' \"\$PATH\" \"\${RUBYOPT-}\"",
+                "printf 'PATH=%s\\nRUBYOPT=%s\\nLOOPVAR=%s\\n' \"\$PATH\" \"\${RUBYOPT-}\" \"\${d+leaked}\"",
         )
         val builder = ProcessBuilder("bash", script.absolutePath).redirectErrorStream(true)
         builder.environment().apply {
@@ -783,6 +783,16 @@ class ToolchainEnvFileTest {
 
         assertEquals(1, path.count { it.endsWith("/usr/opt/ruby/bin") }, "PATH: $path")
         assertEquals(listOf("/bin", "/usr/bin"), path.take(2), "the existing PATH was reordered: $path")
+    }
+
+    @Test
+    fun `sourcing the file leaves no loop variable in the shell`() {
+        rubyWithOptions()
+        regenerate()
+
+        val shell = sourcedTwice(mapOf("PATH" to "/bin:/usr/bin"))
+
+        assertEquals("", shell["LOOPVAR"], "the PATH loop's variable d is left set in every terminal")
     }
 
     @Test
