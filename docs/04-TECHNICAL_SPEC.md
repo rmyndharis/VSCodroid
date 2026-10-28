@@ -1330,6 +1330,8 @@ flowchart TD
   P --> P37["0037 retain current configuration and extension-host startup state"]
   P --> P38["0038 publish resource roots from every active workspace member"]
   P --> P39["0039 authenticate the editor listener with a private run challenge"]
+  P --> P40["0040 wrapped terminal links highlighted within each physical row"]
+  P --> P41["0041 horizontal panels kept within a narrow viewport"]
 ```
 
 Five of these are load-bearing in ways their titles understate:

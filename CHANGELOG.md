@@ -28,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Open terminal links that wrap across rows without failing during highlight preview.
 - Exclude upstream development metadata from bundled extensions while preserving runtime files and licenses.
 - Preserve external device-folder edits when provider metadata is missing or unchanged.
-- Serialize saves reached through overlapping device-folder grants.
+- Decline a second save of one device document reached through overlapping device-folder grants, instead of letting two interleave.
 - Preserve newer local files when applying device-folder deletions.
 - Authenticate the editor listener before sending its connection token or adopting a saved session.
 - Bound editor health checks even when a listener sends headers or body bytes slowly.
@@ -93,7 +93,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Match the editor's final workspace URL selector before remembering or adopting a device folder.
 
-- Setup retries bundled files that were listed but could not be opened.
+- Setup reports a bundled file that is listed but cannot be opened, and offers Retry.
 - Managed settings preserve commented examples while updating active values.
 - Reinstalling an app with unchanged version labels refreshes bundled files.
 - Older app-owned Claude terminal wrappers receive the current compatibility launcher.
@@ -111,8 +111,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Setup file replacements preserve files linked through a leftover temporary path.
 - Python repair remains pending when its standard library cannot be copied.
 - Project shortcuts retain their previous directory when the replacement target is a file.
-- Older bundled extension entries gain builtin status while preserving profile metadata.
-- Automatic editor recovery preserves the unsaved-work confirmation.
+- Older entries of the app's own bundled extensions gain builtin status while preserving profile metadata.
+- A reload after the editor has been in the background keeps the unsaved-work confirmation.
 - Complete IME text commits survive latched Ctrl or Alt in the editor.
 - Plain Enter consumes the key row's Shift latch while preserving physical modifiers.
 - A stale navigation cancellation retains the newer loading cover.
@@ -194,7 +194,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Toolchain installation and cleanup preserve unreadable installation records.
 - Toolchain recovery retains installation markers until all named paths are settled.
 - Toolchain removal refuses paths reached through redirected parent directories.
-- Asset extraction and toolchain installation refuse redirected destination directories.
+- Asset extraction and toolchain file copies refuse a destination reached through a redirected directory.
 - App updates preserve nested user preferences when removing migrated defaults.
 - Retired extension cleanup preserves platform-specific gallery installations.
 - Legacy server cleanup unlinks symbolic links without deleting their targets.
@@ -222,11 +222,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - JDK commands started from terminals, extensions or build tools receive the app's directories and required JVM options.
 - Reinstalling Java removes its obsolete install root; existing Java 17 installs are labeled accurately.
 - Cancelling a sideloaded toolchain download no longer removes a Play pack; ZIP installs remain available while Play removes its copy.
-- Toolchain downloads check peak disk usage without counting an older install as reclaimable space.
+- Toolchain downloads check peak disk usage and give no credit for the files of an install that is a different build, such as Java 17 under 21.
 - Java toolchains omit commands unsupported on Android.
 - Uninstalling Java or Ruby removes their bundled notices.
 - Nested bash sessions preserve Bundler options and avoid duplicate toolchain PATH entries.
 - C/C++ programs resolve temporary files, home and shell through app paths.
+- Java, Ruby and C/C++ installed earlier get the fixes for unsupported commands, bundled notices and C/C++ headers after they are removed and installed again.
 - Sign-in attempts that never launch no longer occupy a request slot indefinitely.
 - Sign-in failures distinguish an editor that is not ready from a request that was never issued.
 - Release builds reject ambiguous version declarations.
