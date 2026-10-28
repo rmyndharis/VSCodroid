@@ -11,6 +11,7 @@ refusals when the header is not what the script was written against.
 
 import importlib.util
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 import tempfile
@@ -62,6 +63,30 @@ class PatchSysrootPaths(unittest.TestCase):
         # What follows the replaced block is untouched.
         self.assertIn('pw->pw_passwd = "*";', pwd)
         self.assertIn("open(__termux_path, O_RDWR)", stdio)
+
+    def test_the_pwd_replacement_compiles_as_c_and_as_c_plus_plus(self):
+        # A program that includes <pwd.h> compiles this function in its own language, and
+        # a conditional that mixes a char* with a string literal is only an error in C++.
+        source = (
+            "#include <stddef.h>\nstruct passwd { char* pw_shell; char* pw_dir; char* pw_passwd; };\n"
+            + mod.PWD_NEW
+            + "       pw->pw_passwd = (char*) \"*\";\n}\n"
+        )
+        tried = 0
+        for compiler, language in ((shutil.which("cc"), "c"), (shutil.which("c++"), "c++")):
+            if compiler is None:
+                continue
+            tried += 1
+            with tempfile.TemporaryDirectory() as scratch:
+                header = Path(scratch) / f"pwd.{language}"
+                header.write_text(source)
+                result = subprocess.run(
+                    [compiler, "-x", language, "-fsyntax-only", str(header)],
+                    capture_output=True, text=True,
+                )
+            self.assertEqual(result.returncode, 0, f"{language}: {result.stderr}")
+        if not tried:
+            self.skipTest("no C compiler on PATH")
 
     def test_a_second_run_changes_nothing(self):
         run(self.inc)

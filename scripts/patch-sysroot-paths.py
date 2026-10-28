@@ -79,9 +79,9 @@ PWD_NEW = (
     '\n'
     'static void android_setup_pwd(struct passwd* pw) {\n'
     '       char const* shell = getenv("SHELL");\n'
-    '       pw->pw_shell = (shell != NULL && *shell != \'\\0\') ? (char*) shell : "/system/bin/sh";\n'
+    '       pw->pw_shell = (shell != NULL && *shell != \'\\0\') ? (char*) shell : (char*) "/system/bin/sh";\n'
     '       char const* home = getenv("HOME");\n'
-    '       pw->pw_dir = (home != NULL && *home != \'\\0\') ? (char*) home : "/";\n'
+    '       pw->pw_dir = (home != NULL && *home != \'\\0\') ? (char*) home : (char*) "/";\n'
 )
 
 
