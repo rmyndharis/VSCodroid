@@ -178,12 +178,14 @@ internal fun authCallbackNonceIn(url: String): String? =
  * of `?`, `&` or `=`, and the workbench opener's round trip then escapes only
  * the `?`, twice over, to `%253F`. The provider echoes back only `state`, so the
  * callback arrives without its nonce, scheme and authority and `callback.html`
- * throws `Missing scheme`. The trailing parameters are the ones
+ * throws `Missing scheme`. The path before `/callback` is the commit's directory, so the loop over
+ * its segments is bounded: an unbounded one recursed once per segment and a link with tens of
+ * thousands overflowed the stack on the UI thread. The trailing parameters are the ones
  * `LocalStorageURLCallbackProvider.create` pushes, in its order; a callback with
  * any other key after them is a different shape and is left alone.
  */
 private val UNENCODED_CALLBACK_STATE = Regex(
-    """(?<=[?&])state=(http://127\.0\.0\.1:\d+(?:/[A-Za-z0-9._~-]+)*/callback)%253F""" +
+    """(?<=[?&])state=(http://127\.0\.0\.1:\d+(?:/[A-Za-z0-9._~-]+){0,8}/callback)%253F""" +
         """(vscode-reqid=\d+&vscodroid-nonce=[0-9a-f]{32}""" +
         """&vscode-scheme=[A-Za-z0-9._~-]+&vscode-authority=[A-Za-z0-9._~-]+)""" +
         """(?=$|#|&(?!vscode-))"""

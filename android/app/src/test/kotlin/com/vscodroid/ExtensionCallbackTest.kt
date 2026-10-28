@@ -548,6 +548,21 @@ class CallbackStateEncodingTest {
             assertEquals(link, encodeCallbackState(link), "rewrote: $link")
         }
     }
+
+    /**
+     * The matcher runs on the UI thread for every address the page navigates to that is not the
+     * editor's own, and a loop over path segments recursed once per segment: a link with tens of
+     * thousands of them ended in a StackOverflowError nothing caught. A real callback has the
+     * commit's directory and nothing else, so the loop is bounded and anything longer is a
+     * different address, left alone.
+     */
+    @Test
+    fun `an address with a very long path is left alone and the matcher survives it`() {
+        val long = "ssh://h/?state=http://127.0.0.1:13337" + "/a".repeat(200_000) + "/callback%253F$CALLBACK_QUERY"
+
+        assertEquals(long, encodeCallbackState(long))
+    }
+
 }
 
 /**
