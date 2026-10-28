@@ -96,9 +96,8 @@ class SafWatchSessionTest {
     /**
      * A provider stream that accepts the bytes only once the test says so.
      *
-     * Uninterruptible on purpose: `stopWatching()` interrupts the drain, and a wait that
-     * gave up on the interrupt would end the very write this has to keep in flight while
-     * the grace period expires.
+     * Uninterruptible on purpose: a wait that gave up on an interrupt would end the very
+     * write this has to keep in flight while the grace period expires.
      */
     private fun blockingStream(): OutputStream = object : OutputStream() {
         override fun write(b: Int) = write(byteArrayOf(b.toByte()), 0, 1)
@@ -108,8 +107,7 @@ class SafWatchSessionTest {
                 try {
                     Thread.sleep(10)
                 } catch (_: InterruptedException) {
-                    // Keep waiting: the interrupt is the stop ending the loop, not the
-                    // provider refusing the bytes.
+                    // Keep waiting: an interrupt is not the provider refusing the bytes.
                 }
             }
         }
@@ -171,6 +169,45 @@ class SafWatchSessionTest {
             "the departing drain opened a document of the folder opened after it",
         )
         assertEquals(1, opened.queue.size, "the departing drain took the next folder's job")
+    }
+
+    @Test
+    fun `a stop that lands in the middle of a save does not cut the save short`() {
+        val closing = engine.session
+        val delivered = java.io.ByteArrayOutputStream()
+        var failed = false
+        engine.onWriteBackFailed = { failed = true }
+        // A provider that is slow to take the first bytes and then takes the rest. It waits by
+        // spinning, which leaves the interrupt flag of the thread it holds alone, as a stream
+        // blocked in a native write does.
+        every { resolver.openOutputStream(any(), "wt") } answers {
+            openedForWrite.add(documentNames[firstArg<Uri>()] ?: "unknown")
+            object : OutputStream() {
+                private var waited = false
+                override fun write(b: Int) = delivered.write(b)
+                override fun write(b: ByteArray, off: Int, len: Int) {
+                    if (!waited) {
+                        waited = true
+                        while (!released.get()) Thread.onSpinWait()
+                    }
+                    delivered.write(b, off, len)
+                }
+            }
+        }
+        val job = saveOf("big.txt")
+        File(job.localPath).writeBytes(ByteArray(200_000) { (it % 251).toByte() })
+        closing.queue.offer(job)
+        val worker = thread(isDaemon = true) { engine.runWriteBackLoop(closing) { closing.running } }
+        closing.worker = worker
+        waitUntil("the first write reaches the provider") { openedForWrite.isNotEmpty() }
+
+        engine.stopWatching()
+        released.set(true)
+        worker.join(5_000)
+
+        assertFalse(worker.isAlive, "setup failed: the drain did not finish")
+        assertFalse(failed, "the save was reported lost")
+        assertEquals(200_000, delivered.size(), "the stop cut the save short on the device")
     }
 
     @Test

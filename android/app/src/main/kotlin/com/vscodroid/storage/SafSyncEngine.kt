@@ -35,6 +35,7 @@ import java.util.UUID
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.TimeUnit
+import java.util.concurrent.locks.LockSupport
 import java.util.concurrent.locks.ReentrantLock
 import kotlin.concurrent.thread
 
@@ -2633,15 +2634,17 @@ class SafSyncEngine(private val context: Context) {
                 if (job != null) {
                     processWriteBack(session, job)
                 } else if (!retryHeldBack(session)) {
-                    Thread.sleep(WRITEBACK_POLL_MS)
+                    // Parked, not slept: a stop wakes it with unpark. An interrupt lands in whatever the
+                    // thread is doing, and in the middle of a save the next read of the local file fails
+                    // on it, leaving the device document cut short.
+                    LockSupport.parkNanos(WRITEBACK_POLL_MS * 1_000_000L)
                 }
             }
         } catch (_: InterruptedException) {
-            // stopWatching() interrupts to wake this thread out of the sleep it spends
-            // nearly all of its idle time in, so this is the ordinary way the loop ends,
-            // not a fault. Letting it escape reaches the thread's uncaught handler, and
-            // Android's default handler ends the process: closing a folder, which
-            // happens on every folder switch and on destroy, would close the app.
+            // An interrupt from outside, which wakes a sleeping thread and ends the loop
+            // the way a stop does, is not a fault. Letting it escape reaches the thread's
+            // uncaught handler, and Android's default handler ends the process: closing a
+            // folder, which happens on every folder switch and on destroy, would close the app.
             interrupted = true
         }
         // Whichever way the loop ended, the queue can still hold writes the user is
@@ -2681,11 +2684,12 @@ class SafSyncEngine(private val context: Context) {
             session = WatchSession().apply { abandoned = true }
             closing.running = false
 
-            // Wake the thread out of its sleep, then wait for it to drain remaining writes.
+            // Wake the thread out of its wait, then wait for it to drain remaining writes.
             // An idle queue drains in microseconds, so this costs only what there is to lose.
+            // Not interrupted: a save in flight would fail its next read of the local file.
             val worker = closing.worker
             closing.worker = null
-            worker?.interrupt()
+            worker?.let { LockSupport.unpark(it) }
             try { worker?.join(DRAIN_GRACE_MS) } catch (_: InterruptedException) {}
 
             if (worker != null && worker.isAlive) {
@@ -7082,8 +7086,8 @@ private class OutboundAccess(
      * a provider call that never returns costs the waiting save its place and a notice
      * rather than a thread for good.
      *
-     * An interrupt, which is how a stop wakes a worker, does not cut the wait short: the
-     * job has been taken off its queue and a thrown wait would lose it. It is set aside
+     * An interrupt does not cut the wait short: the job has been taken off its queue and a
+     * thrown wait would lose it. It is set aside
      * for the action, which must not meet it (a stream copy fails on a thread carrying
      * one), and handed back after.
      */

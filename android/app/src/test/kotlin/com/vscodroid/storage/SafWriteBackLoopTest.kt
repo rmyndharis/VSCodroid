@@ -27,11 +27,12 @@ import java.util.concurrent.atomic.AtomicReference
 /**
  * How the write-back loop ends.
  *
- * It ends by being interrupted: `stopWatching()` clears the flag the loop tests and
- * then calls `interrupt()`, and an idle loop is almost always inside its 200 ms sleep
- * when that lands. The loop body carried no handler, so `InterruptedException` left the
- * thread lambda, reached the default uncaught handler, and on Android that ends the
- * process. `stopWatching()` runs on every folder switch and in `onDestroy`.
+ * It ends when `stopWatching()` clears the flag the loop tests and wakes the thread, and
+ * an interrupt from outside ends it the same way. An idle loop is almost always inside its
+ * 200 ms wait when that lands. The loop body carried no handler for the interrupt, so
+ * `InterruptedException` left the thread lambda, reached the default uncaught handler, and
+ * on Android that ends the process. `stopWatching()` runs on every folder switch and in
+ * `onDestroy`.
  *
  * The same escape also skipped the block that flushes whatever is still queued, so the
  * writes a user had just made were dropped on the way out.
