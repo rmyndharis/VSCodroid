@@ -1,6 +1,7 @@
 package com.vscodroid.webview
 
 import android.content.Context
+import com.vscodroid.service.EDITOR_PID_FILE
 import com.vscodroid.util.Logger
 import io.mockk.Runs
 import io.mockk.every
@@ -262,6 +263,18 @@ class PublishedResourceRootsTest {
 
         assertNull(resolveWebviewResource(File(filesDir, "home/.ssh/id_ed25519").path, roots))
         assertNull(resolveWebviewResource(File(filesDir, "home/.vscodroid/data/token").path, roots))
+    }
+
+    /**
+     * Catches: the server's run note being served. It sits directly under the
+     * server root, which is published, and carries the key the app checks a
+     * listener against before it adopts it.
+     */
+    @Test
+    fun `the server run note is not a webview resource`() {
+        val roots = publishedResourceRoots(contextWith(externalDir))
+
+        assertNull(resolveWebviewResource(File(filesDir, "server/$EDITOR_PID_FILE").path, roots))
     }
 
     /**

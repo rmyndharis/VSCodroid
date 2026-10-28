@@ -23,6 +23,7 @@ import com.vscodroid.bridge.authRequestIdsIn
 import com.vscodroid.bridge.encodeCallbackState
 import com.vscodroid.isExtensionCallback
 import com.vscodroid.isWorkbenchUrl
+import com.vscodroid.service.EDITOR_PID_FILE
 import com.vscodroid.service.RESTART_DELAY_MS
 import com.vscodroid.util.CrashReporter
 import com.vscodroid.util.EditorLocale
@@ -134,6 +135,10 @@ internal fun resourceOutcome(path: String, resourceRoots: List<String>): Resourc
  */
 internal fun resolveWebviewResource(requestedPath: String, roots: List<String>): File? {
     val canonical = canonicalOrNull(requestedPath) ?: return null
+    // The server's run note holds the key that authenticates its listener, and it
+    // sits under the server root. Refused by name rather than by path because a
+    // name needs no context; a workspace file of that name is not worth serving.
+    if (File(canonical).name == EDITOR_PID_FILE) return null
     // Compared with the separator appended: a root's name is also a prefix of
     // its siblings' names, and creating such a sibling is within reach of
     // anything running in the extension host.
