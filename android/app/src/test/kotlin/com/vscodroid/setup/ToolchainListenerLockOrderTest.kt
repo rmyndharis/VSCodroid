@@ -1,6 +1,8 @@
 package com.vscodroid.setup
 
 import android.content.Context
+import android.content.pm.InstallSourceInfo
+import android.content.pm.PackageManager
 import com.google.android.play.core.assetpacks.AssetPackManager
 import com.google.android.play.core.assetpacks.AssetPackManagerFactory
 import com.google.android.play.core.assetpacks.AssetPackState
@@ -132,5 +134,37 @@ class ToolchainListenerLockOrderTest {
         assertTrue(!stuck, "the report and the listener removal waited on each other")
         assertEquals(1, unregistered.get(), "the listener was not removed")
         assertEquals(listOf("toolchain_java" to AssetPackStatus.DOWNLOADING), synchronized(delivered) { delivered.toList() })
+    }
+
+    private fun installedByPlay(): ToolchainManager {
+        val source = mockk<InstallSourceInfo>()
+        every { source.installingPackageName } returns "com.android.vending"
+        val packages = mockk<PackageManager>(relaxed = true)
+        every { packages.getInstallSourceInfo(any()) } returns source
+        every { context.packageManager } returns packages
+        return ToolchainManager(context)
+    }
+
+    @Test
+    fun `an idle release lets go of the listener`() {
+        val manager = ToolchainManager(context)
+        manager.registerListener()
+
+        manager.unregisterListenerIfIdle()
+
+        assertEquals(1, unregistered.get())
+    }
+
+    @Test
+    fun `an idle release keeps the listener while a Play request is outstanding`() {
+        val manager = installedByPlay()
+
+        manager.install("toolchain_ruby")
+        manager.unregisterListenerIfIdle()
+
+        assertEquals(0, unregistered.get(), "the listener of a request still downloading was released")
+        report(manager, "toolchain_ruby", AssetPackStatus.COMPLETED)
+        manager.unregisterListenerIfIdle()
+        assertEquals(1, unregistered.get(), "the listener stayed after the request ended")
     }
 }
