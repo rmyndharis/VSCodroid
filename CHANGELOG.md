@@ -231,6 +231,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Sign-in attempts that never launch no longer occupy a request slot indefinitely.
 - Sign-in failures distinguish an editor that is not ready from a request that was never issued.
 - Release builds reject ambiguous version declarations.
+- A link in a rendered document that names the retry or copy-diagnostics control no longer replaces a running editor with the starting page.
+- A very long address no longer crashes the app while a Microsoft sign-in callback is restored.
+- An app that starts VSCodroid with an extra the app cannot read no longer crashes the launch.
+- `window.open` accepts a URL object as well as a string.
 
 ## [1.5.0] - 2026-10-14
 
