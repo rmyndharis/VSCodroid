@@ -5949,6 +5949,9 @@ class MainActivity : AppCompatActivity() {
                 window.__vscodroidOpenPatched = true;
                 var orig = window.open;
                 window.open = function(url) {
+                    // `new URL(...)` is a valid first argument and has no indexOf, so the
+                    // tests below would throw on it. Read it as the text it stands for.
+                    if (url != null) url = String(url);
                     // The editor asking for a second window, which on a device is
                     // this one. The workbench builds that URL from its own origin
                     // and pathname and puts no connection token on it, so handing

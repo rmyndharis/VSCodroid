@@ -904,6 +904,16 @@ async function main() {
         'navigation that is working',
     );
 
+    // A first argument the platform accepts that is not a string: an object that
+    // stringifies to a URL, which `new URL(...)` is. It has no indexOf, so the
+    // prefix test threw on every such call instead of reaching either branch.
+    const asObject = text => ({ toString() { return text; } });
+    const objectExternal = windowOpen('', asObject('https://example.com/docs'));
+    assert.strictEqual(objectExternal.calls.bridge, 1, 'an object naming an external URL never reached the bridge');
+    const objectOwn = windowOpen('', asObject(ORIGIN + '/?ew=true'));
+    assert.strictEqual(objectOwn.calls.navigated, ORIGIN + '/?ew=true', 'an object naming the editor itself was not navigated to');
+    assert.strictEqual(objectOwn.calls.bridge, 0, "an object naming the editor's own address reached the device browser");
+
     // And the other direction, which is what the prefix test protects: a dev
     // server on another port is a different origin and still belongs to the
     // browser. Written as a URL that CONTAINS our origin later on, the shape a
