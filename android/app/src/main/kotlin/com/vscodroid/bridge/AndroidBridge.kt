@@ -27,9 +27,13 @@ import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
 import java.io.IOException
+import java.nio.channels.Channels
 import java.nio.file.FileAlreadyExistsException
 import java.nio.file.Files
 import java.nio.file.LinkOption
+import java.nio.file.StandardOpenOption
+import java.nio.file.attribute.PosixFilePermission
+import java.nio.file.attribute.PosixFilePermissions
 import java.lang.ref.WeakReference
 import java.net.URLEncoder
 import java.util.concurrent.Executor
@@ -56,6 +60,11 @@ import androidx.core.net.toUri
  * by the layer that knows why.
  */
 private const val KEYGEN_TIMEOUT_SECONDS = 4L
+
+private val PRIVATE_KEY_MODE = setOf(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE)
+
+// The app's umask drops the group and other bits again, as it did for ssh-keygen writing here directly.
+private val PUBLIC_KEY_MODE = PRIVATE_KEY_MODE + setOf(PosixFilePermission.GROUP_READ, PosixFilePermission.OTHERS_READ)
 
 /**
  * How long generateSshKey waits for the stdout drain after the child has exited.
@@ -1454,12 +1463,6 @@ class AndroidBridge(
                 Files.isRegularFile(stagedKey.toPath(), LinkOption.NOFOLLOW_LINKS) &&
                 Files.isRegularFile(stagedPublic.toPath(), LinkOption.NOFOLLOW_LINKS)
             ) {
-                try {
-                    android.system.Os.chmod(stagedKey.absolutePath, 384)
-                    android.system.Os.chmod(stagedPublic.absolutePath, 420)
-                } catch (e: Exception) {
-                    Logger.d(tag, "Failed to chmod SSH key: ${e.message}")
-                }
                 val pubKey = stagedPublic.readText().trim()
                 // A concurrent import must not be replaced by the generated pair.
                 if (Files.exists(keyFile.toPath(), LinkOption.NOFOLLOW_LINKS) ||
@@ -1468,12 +1471,12 @@ class AndroidBridge(
                     throw IOException("An SSH key file appeared during generation. Existing files were kept.")
                 }
                 try {
-                    Files.createLink(keyFile.toPath(), stagedKey.toPath())
+                    installNewFile(stagedKey, keyFile, PRIVATE_KEY_MODE)
                 } catch (e: FileAlreadyExistsException) {
                     throw IOException("An SSH private key appeared during generation. It was kept.", e)
                 }
                 try {
-                    Files.createLink(pubFile.toPath(), stagedPublic.toPath())
+                    installNewFile(stagedPublic, pubFile, PUBLIC_KEY_MODE)
                     result.put("success", true)
                     result.put("publicKey", pubKey)
                 } catch (e: Exception) {
@@ -1518,6 +1521,31 @@ class AndroidBridge(
             }
         }
         return result.toString()
+    }
+
+    /**
+     * Copies [source] to [target], which must not exist. SELinux denies an app link(2),
+     * and a rename would replace a file imported since the check above; CREATE_NEW
+     * refuses an existing name in the call that creates it, and the mode is set by that
+     * call, not by a chmod after it.
+     */
+    private fun installNewFile(source: File, target: File, mode: Set<PosixFilePermission>) {
+        Files.newByteChannel(
+            target.toPath(),
+            setOf(StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE),
+            PosixFilePermissions.asFileAttribute(mode),
+        ).use { out ->
+            var copied = false
+            try {
+                Files.newInputStream(source.toPath(), LinkOption.NOFOLLOW_LINKS).use {
+                    it.copyTo(Channels.newOutputStream(out))
+                }
+                copied = true
+            } finally {
+                // CREATE_NEW refused every other creator, so a partial file here is ours.
+                if (!copied) Files.deleteIfExists(target.toPath())
+            }
+        }
     }
 
     private fun stopSshKeygen(process: Process): Boolean {

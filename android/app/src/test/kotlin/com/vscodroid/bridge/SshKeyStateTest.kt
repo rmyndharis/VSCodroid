@@ -19,6 +19,8 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.nio.file.Files
+import java.nio.file.attribute.PosixFilePermission
 
 /**
  * What `~/.ssh` may be left in, and what is handed back about what is there.
@@ -206,8 +208,6 @@ class SshKeyStateTest {
 
     @Test
     fun `a completed child returns the generated pair`() {
-        io.mockk.mockkStatic(android.system.Os::class)
-        every { android.system.Os.chmod(any(), any()) } just Runs
         val child = installChild(
             "printf '%s\n' 'DUMMY PRIVATE' > \"\$key_file\"\n" +
                 "printf '%s\n' '$PUBLIC_LINE' > \"\$key_file.pub\"\n" +
@@ -221,7 +221,28 @@ class SshKeyStateTest {
         assertEquals(PUBLIC_LINE, answer.getString("publicKey"))
         assertEquals("DUMMY PRIVATE\n", privateKey.readText())
         assertEquals("$PUBLIC_LINE\n", publicKey.readText())
+        assertEquals(
+            setOf(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE),
+            Files.getPosixFilePermissions(privateKey.toPath()),
+            "the private key is readable by someone other than its owner",
+        )
         assertStageRemoved(child)
+    }
+
+    @Test
+    fun `installing a key never replaces a file that is already there`() {
+        val source = File(files, "staged").apply { writeText("GENERATED\n") }
+        val target = File(sshDir, "taken").apply { writeText("IMPORTED\n") }
+        val install = AndroidBridge::class.java.getDeclaredMethod(
+            "installNewFile", File::class.java, File::class.java, Set::class.java,
+        ).apply { isAccessible = true }
+
+        val failure = org.junit.jupiter.api.Assertions.assertThrows(java.lang.reflect.InvocationTargetException::class.java) {
+            install.invoke(bridge, source, target, setOf(PosixFilePermission.OWNER_READ, PosixFilePermission.OWNER_WRITE))
+        }
+
+        assertTrue(failure.cause is java.nio.file.FileAlreadyExistsException, "wrong failure: ${failure.cause}")
+        assertEquals("IMPORTED\n", target.readText())
     }
 
     @Test
@@ -400,8 +421,6 @@ class SshKeyStateTest {
         successfulChildMeetsImport(importPublic = true)
 
     private fun successfulChildMeetsImport(importPublic: Boolean) {
-        io.mockk.mockkStatic(android.system.Os::class)
-        every { android.system.Os.chmod(any(), any()) } just Runs
         val childFile = installChild(
             "printf '%s\n' \"\$\$\" > \"\$0.pid\"\n" +
                 "printf '%s\n' 'DUMMY PRIVATE' > \"\$key_file\"\n" +
@@ -470,29 +489,24 @@ class SshKeyStateTest {
                 "touch \"\$0.ran\"\nexit 0\n",
         )
         var publicAttempts = 0
-        var boundaryArmed = false
-        io.mockk.mockkStatic(android.system.Os::class)
-        every { android.system.Os.chmod(any(), any()) } answers {
-            if (!boundaryArmed) {
-                assertTrue(File(child.path + ".ran").isFile,
-                    "the publication fault must be armed after the child completed")
-                io.mockk.mockkStatic(java.nio.file.Files::class)
-                every { java.nio.file.Files.createLink(publicKey.toPath(), any()) } answers {
-                    publicAttempts++
-                    assertTrue(privateKey.isFile, "the private file must be admitted before this I/O failure")
-                    assertEquals("DUMMY PRIVATE\n", privateKey.readText())
-                    assertFalse(publicKey.exists(), "this failure must not stand in for an imported public file")
-                    throw java.io.IOException("public publication failed")
-                }
-                boundaryArmed = true
-            }
-            Unit
+        io.mockk.mockkStatic(java.nio.file.Files::class)
+        every {
+            java.nio.file.Files.newByteChannel(
+                eq(publicKey.toPath()), any<Set<java.nio.file.OpenOption>>(),
+                *anyVararg<java.nio.file.attribute.FileAttribute<*>>(),
+            )
+        } answers {
+            publicAttempts++
+            assertTrue(File(child.path + ".ran").isFile, "the fault must come after the child completed")
+            assertTrue(privateKey.isFile, "the private file must be admitted before this I/O failure")
+            assertEquals("DUMMY PRIVATE\n", privateKey.readText())
+            assertFalse(publicKey.exists(), "this failure must not stand in for an imported public file")
+            throw java.io.IOException("public publication failed")
         }
 
         val answer = JSONObject(bridge.generateSshKey(security.getSessionToken(), ""))
 
         assertTrue(File(child.path + ".ran").isFile, "the controlled child never completed: $answer")
-        assertTrue(boundaryArmed, "the publication boundary was never armed: $answer")
         assertEquals(1, publicAttempts, "the public publication boundary was not reached: $answer")
         assertFalse(answer.getBoolean("success"))
         assertEquals("DUMMY PRIVATE\n", privateKey.readText())
