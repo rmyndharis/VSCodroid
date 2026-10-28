@@ -311,6 +311,24 @@ for (const tag of ['INPUT', 'TEXTAREA']) {
     }
 }
 
+// Left-to-right text needs no renderer move: its logical and visual edges agree, and
+// Selection.modify leaves the box unscrolled, which takes the caret of a long line out of sight.
+for (const tag of ['INPUT', 'TEXTAREA']) {
+    for (const [where, key, offset, cancelled] of [
+        ['in the middle', 'ArrowLeft', 2, false],
+        ['at the start', 'ArrowLeft', 0, true],
+        ['at the end', 'ArrowRight', 5, true],
+    ]) {
+        const calls = [];
+        const page = newPage(LATER, { selection: { modify: (...args) => calls.push(args) } });
+        const field = new Node(page.host, { ...box('abcde', offset, offset, tag), matches: () => true });
+        const by = press(page, field, key);
+        cases.push([`${tag} ${where} in left-to-right text never reaches the renderer move`, calls.length, 0]);
+        cases.push([`${tag} ${where} in left-to-right text ${cancelled ? 'is cancelled' : 'is left to the native move'}`,
+            by.includes('guard'), cancelled]);
+    }
+}
+
 // Cancelling stops no binding: the keybinding service on the window still
 // gets the key, after the guard.
 {

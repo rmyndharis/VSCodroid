@@ -431,9 +431,11 @@ class KeyInjector(
      * does not read `defaultPrevented`. It covers this document only, so a text
      * box inside an extension webview, a frame of another origin, is not
      * guarded. It applies to a hardware keyboard's Left and Right too. For a
-     * collapsed caret, Blink's Selection.modify performs the visual move and
-     * the native default is cancelled, including where that move ends. Logical
-     * offsets cannot identify visual edges in right-to-left or mixed text.
+     * collapsed caret in text with a right-to-left run, Blink's Selection.modify
+     * performs the visual move and the native default is cancelled, including
+     * where that move ends: logical offsets cannot identify visual edges there.
+     * It does not scroll the box, so left-to-right text keeps the native move and
+     * is cancelled only at its logical ends.
      *
      * Call once after the page finishes loading.
      */
@@ -984,6 +986,12 @@ class KeyInjector(
                 // a lost line move costs less than lost focus.
                 var version = /Chrome\/(\d+)/.exec(navigator.userAgent);
                 var altUnhandled = !version || +version[1] < 149;
+                // Only text with a right-to-left run has a visual edge that a logical
+                // offset does not name. Everywhere else the native move scrolls the
+                // box to its caret and Selection.modify does not.
+                // Scripts outside the BMP (Adlam) are not matched and keep the logical
+                // edge, until a Unicode-aware class is worth the cost.
+                var RTL = /[\u0590-\u08FF\u200F\u202B\u202E\u2067\uFB1D-\uFDFF\uFE70-\uFEFC]/;
                 // Handle the renderer's visual move before spatial navigation. A
                 // number or email box takes text but reports no caret, so any
                 // press there may be the one at its edge.
@@ -992,7 +1000,7 @@ class KeyInjector(
                     var box = t.tagName === 'TEXTAREA' || (t.tagName === 'INPUT' && at !== null);
                     var blind = t.tagName === 'INPUT' && (t.type === 'number' || t.type === 'email');
                     if (e.altKey) return altUnhandled && (box || blind || !!t.editContext);
-                    if (box && at === t.selectionEnd) {
+                    if (box && at === t.selectionEnd && RTL.test(t.value)) {
                         var selection = window.getSelection && window.getSelection();
                         if (selection && typeof selection.modify === 'function') {
                             if (!t.matches(':focus')) return false;
