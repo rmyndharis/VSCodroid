@@ -142,7 +142,7 @@ private fun fileNameFromContentDisposition(header: String?): String? {
     if (header.isNullOrEmpty()) return null
     CONTENT_DISPOSITION_EXTENDED.find(header)?.groupValues?.let { values ->
         val charset = try {
-            Charset.forName(values[1]).name()
+            Charset.forName(values[1].ifEmpty { "UTF-8" }).name()
         } catch (_: IllegalArgumentException) {
             null
         }

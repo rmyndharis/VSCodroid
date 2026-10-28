@@ -290,6 +290,14 @@ class DownloadNamingTest {
     }
 
     @Test
+    fun `an extended filename with no declared charset is read as UTF-8`() {
+        assertEquals(
+            "café.txt",
+            downloadFileName("https://host/other.txt", "attachment; filename*=''caf%C3%A9.txt", null),
+        )
+    }
+
+    @Test
     fun `an unsupported extended charset falls back to the plain filename`() {
         assertEquals(
             "plain.txt",
