@@ -379,11 +379,11 @@ node -v           # Node.js 24.x
 npm -v            # npm 11.x
 python3 --version # Python 3.14.x
 python3 -m pip --version   # pip, bundled inside Python's site-packages
-git --version     # Git 2.55.x
+git --version     # Git 2.x
 bash --version    # Bash 5.3.x
-tmux -V           # tmux 3.7c
+tmux -V           # tmux 3.x
 make --version    # GNU Make 4.4.1
-ssh -V            # OpenSSH 10.5p1 client
+ssh -V            # OpenSSH 10.x client
 rg --version      # ripgrep (powers VS Code search)
 ```
 
@@ -878,9 +878,9 @@ Beyond the bundled tools (Node.js, Python, Git, Bash), VSCodroid offers addition
 
 | Language | Download Size | Installed Size | Includes |
 |----------|--------------|----------------|----------|
-| Ruby 4.0 | 11 MB | 41 MB | ruby, gem, irb, bundler, rake, and the headers native gems build against |
+| Ruby | 11 MB | 41 MB | ruby, gem, irb, bundler, rake, and the headers native gems build against |
 | Java 21 (OpenJDK) | 64 MB | 186 MB | java, javac, jar, jshell |
-| C/C++ (clang 21) | 74 MB | 260 MB | cc, c++, gcc, g++, clang, clang++, ld, ar, ranlib, nm, strip, objdump, objcopy, readelf, size, and the C and C++ headers |
+| C/C++ (clang) | 74 MB | 260 MB | cc, c++, gcc, g++, clang, clang++, ld, ar, ranlib, nm, strip, objdump, objcopy, readelf, size, and the C and C++ headers |
 
 The C/C++ toolchain is the largest. Installing a toolchain holds the unpacked copy and the
 installed copy at once, so the install asks for roughly twice the installed size free while
@@ -895,7 +895,7 @@ beyond that differs a great deal, and this is the whole of it, so you can pick w
 |----------|------------|--------------------------------|----------|----------|
 | JavaScript and TypeScript (bundled) | `node file` | Yes, the editor's own | js-debug | npm; see the TypeScript note below |
 | Python (bundled) | Yes | Completion and hover from Jedi; no type checking | None | pip, including wheels built for Android (numpy installs and runs) |
-| Ruby | `ruby file` | None | None | gem and bundler; a gem with a compiled part needs the C/C++ toolchain as well (puma and nio4r build) |
+| Ruby | `ruby file` | None | None | gem and bundler; a gem with a compiled part needs the C/C++ toolchain as well (`bcrypt` builds) |
 | Java 21 | `java file` (a single source file) | None | None | None: no Maven or Gradle |
 | C and C++ | Compiles to a temporary file and runs it | None | None | None: no CMake or Ninja; `make` works |
 

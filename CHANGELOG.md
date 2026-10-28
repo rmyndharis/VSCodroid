@@ -11,7 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- A play button in the editor's title bar runs the open JavaScript, TypeScript, Ruby, Java, C, C++, `.sh` or `.bash` file in a terminal, as Python files already had.
+- A play button in the editor's title bar runs the open JavaScript, TypeScript that Node runs without a build, Ruby, Java, C, C++, `.sh` or `.bash` file in a terminal, as Python files already had.
 - Running a Ruby, Java, C or C++ file whose toolchain is not installed offers the toolchains screen.
 - A finger can drag the caret: touch it or just under it and drag sideways, and it follows, with the text scrolling at the editor's edge. A drag that starts up or down, or with text selected, scrolls as before.
 
@@ -26,25 +26,23 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Keep the editor and terminal within narrow screens after toggling the side bar.
 - Open terminal links that wrap across rows without failing during highlight preview.
-- Exclude upstream development metadata from bundled extensions while preserving runtime files and licenses.
+- Exclude upstream repository configuration files at the root of each bundled extension, keeping runtime files and licenses.
 - Preserve external device-folder edits when provider metadata is missing or unchanged.
 - Decline a second save of one device document reached through overlapping device-folder grants, instead of letting two interleave.
-- Preserve newer local files when applying device-folder deletions.
+- A device-folder deletion sets the file aside and checks its content first, so an edit made meanwhile is kept.
 - Authenticate the editor listener before sending its connection token or adopting a saved session.
 - Bound editor health checks even when a listener sends headers or body bytes slowly.
 - Stop editor processes that finish spawning after shutdown begins or lose their bootstrap before recording ownership.
 - Keep named device-folder aliases and cleanup inside their original mirror directory.
 - Redact editor ownership secrets from diagnostic output.
 - Preserve musl signal validation, handler output, and errno in the CLI compatibility preload.
-- Honor the selected device when the test harness installs an APK.
 - Improve contrast for small text on the documentation site.
 - Report the required Node.js version before running TypeScript-based self-checks.
 - Load the language-detection CPU backend in browser workers without requiring CommonJS.
 - Detect a stopped adopted editor even when another process answers its health URL.
 - Reload the editor when an adopted server changes during readiness checks.
 - Honor empty Android trust stores and keep raw system roots from overriding certificate removals.
-- Preserve curl's independent trust store when the managed CA bundle is unavailable.
-- Capture keyboard validation screenshots after WebView renders the current frame.
+- The terminal exports `REQUESTS_CA_BUNDLE` and `CURL_CA_BUNDLE` only when the managed CA bundle exists.
 - Preserve visual arrow-key movement in right-to-left and mixed text without moving focus out of text fields.
 - Preserve existing SSH public files and keys imported during key generation.
 - Stop failed or interrupted SSH generation before cleaning its temporary output.
@@ -52,30 +50,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Keep newer folder and workspace configuration when earlier reads finish.
 - Stop extension-host startup after its connection is disposed.
 - Load webview resources from every active workspace member.
-- Keep current resource roots when workspace folders change during initialization.
-- Keep deeply nested device-folder saves within the open-file limit.
 - Read startup settings for the final workspace selector in the page URL.
 - Refuse redirected device-folder upload sources before opening or truncating provider documents.
 - Keep Python runtime repair pending when the packaged standard-library root cannot be read.
 - Redact unfinished quoted passwords through the end of their diagnostic line.
-- Bound test subprocess output and cleanup, and require isolated storage for disk-pressure tests.
-- Make accessibility and About-dialog checks follow the configured language.
 - Reject stale sign-in bootstrap metadata before it reaches a replacement editor document.
 - Preserve GNU and XPG error-string return values and buffer limits in native compatibility libraries.
 - Prevent a delayed server-log page from replacing a newer editor or recovery screen.
 - Resolve device-folder filesystem aliases before selecting their synchronization watcher.
 - Keep the composition caret at the requested character offset across line breaks.
 - Account for activity-bar insets and item gaps when choosing overflow actions.
-- Refresh activity-bar item sizes when the pointer type changes.
 - Restore closed workspaces from either supported loopback host.
 
 - Use accurate device-folder recovery messages in every supported language.
 
-- Keep named-folder preference write failures inside the command error handler.
+- A failed write of the named-folder preference no longer raises an unhandled error.
 - Increase toolchain action buttons to a minimum 48dp touch target.
-- Correct backup, compiler-launch, build, and server-entry instructions.
+- Correct the backup wording in the privacy policy, the compiler card on the site and the build command in the README.
 
-- Keep delayed Run File requests from replacing a newer terminal or opening stale toolchain prompts.
 - Recheck unsaved work and workspace identity before reopening a device folder by name.
 - Preserve newer carried-editor records when an earlier reopen is canceled or fails.
 
@@ -123,7 +115,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Repeated crashes preserve existing logs when their filename budget is exhausted.
 - Recent-folder eviction retains permissions reacquired by a replacement screen.
 - Folder removal retires its sync records and permission before a new grant.
-- Interrupted mirror cleanup retains a recoverable directory and sync-record pair.
+- An interrupted removal of a device-folder copy is finished by the next launch.
 - Device-folder deletes retain replacement files and pending saves when document IDs are reused.
 - Pending child saves retry temporary failures after a directory rename without repeating completed uploads.
 - Mirror cleanup retains named paths and opening markers after folder permission is reacquired.
@@ -185,7 +177,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A device folder that is busy when it is opened again leaves the folder already open saving.
 - Device-folder saves, deletes and renames that arrive while another write to the folder is still going wait up to two minutes for their turn instead of being dropped.
 - A file and a folder that share a name between the device and the editor no longer make every open fail.
-- When a file and a folder share a name between the device and the editor, the device's keeps the name and the editor's is set aside as `.local-<time>` and sent across.
+- When a file and a folder share a name between the device and the editor, the device's keeps the name and the editor's is set aside as `.local-<time>` and, once the folder has a readable sync record, sent across.
 - An unchanged file in the editor that the device replaced with a folder is removed instead of set aside.
 - A device folder listing that the provider has not finished loading no longer removes files from the editor or creates them again on the device.
 - A device-folder import refuses to install a copy if a parent directory is redirected by a symbolic link during the read.
@@ -203,8 +195,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Native addon verification rejects scans containing only unsupported addons.
 - Wheelhouse generation accepts relative and external output paths.
 - Cancelling a toolchain install no longer deletes a pack during a copy.
-- A toolchain install is refused while a pack removal is pending.
-- Removing a toolchain works while Play is still clearing its download.
+- A Play-delivered toolchain install is refused while a pack removal is pending.
 - Late callbacks from an old editor server no longer clear its replacement's readiness, restart it or display obsolete heap warnings.
 - Building from source retries interrupted bundled-extension extraction instead of accepting a partial extension directory as verified.
 - Building from source stops when a Python dependency library's SONAME differs from the name the build ships it under.
@@ -213,26 +204,26 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The server built from source includes the Copilot SDK's definitions and builtin-skills directories, which it lacked.
 - A Ruby script can `require` a gem it installed, because the interpreter now starts with RubyGems loaded.
 - A Ruby installed earlier starts with RubyGems loaded from the next launch.
-- A gem with a native extension builds when the C/C++ toolchain is installed: the Ruby toolchain now carries the headers it compiles against.
+- A gem with a native extension that needs no other library, such as `bcrypt`, builds when the C/C++ toolchain is installed: the Ruby toolchain now carries the headers it compiles against.
 - A Ruby installed earlier must be removed and installed again to get the headers that native gem extensions compile against.
 - The terminal no longer pins the command line over the first lines of its output: terminal sticky scroll is off by default, and can be turned on in Settings.
 - Builds retry the downloads from raw.githubusercontent.com when it answers with a rate limit.
-- A device folder whose provider lists two documents under one name leaves both alone instead of copying the later over the earlier.
 - A device folder whose provider lists two documents under one name no longer uploads one document's bytes over the other's, with no copy kept, when the mirror copy is newer.
 - JDK commands started from terminals, extensions or build tools receive the app's directories and required JVM options.
 - Reinstalling Java removes its obsolete install root; existing Java 17 installs are labeled accurately.
 - Cancelling a sideloaded toolchain download no longer removes a Play pack; ZIP installs remain available while Play removes its copy.
-- Toolchain downloads check peak disk usage and give no credit for the files of an install that is a different build, such as Java 17 under 21.
+- Toolchain downloads give no disk credit for the files of an install that is a different build, such as Java 17 under 21.
 - Java toolchains omit commands unsupported on Android.
 - Uninstalling Java or Ruby removes their bundled notices.
 - Nested bash sessions preserve Bundler options and avoid duplicate toolchain PATH entries.
-- C/C++ programs resolve temporary files, home and shell through app paths.
+- C/C++ programs that call `tmpfile()`, `getpwuid()` or `getpwnam()` get app paths for temporary files, home and shell.
 - Java, Ruby and C/C++ installed earlier get the fixes for unsupported commands, bundled notices and C/C++ headers after they are removed and installed again.
 - Sign-in attempts that never launch no longer occupy a request slot indefinitely.
 - Sign-in failures distinguish an editor that is not ready from a request that was never issued.
 - Release builds reject ambiguous version declarations.
+- Webview resource requests refuse the app's private stores and the credential folders of common developer tools, and a workspace that is or contains one is not published to the webview.
 - A link in a rendered document that names the retry or copy-diagnostics control no longer replaces a running editor with the starting page.
-- A very long address no longer crashes the app while a Microsoft sign-in callback is restored.
+- A very long address no longer crashes the app when a Microsoft sign-in address is opened.
 - An app that starts VSCodroid with an extra the app cannot read no longer crashes the launch.
 - `window.open` accepts a URL object as well as a string.
 

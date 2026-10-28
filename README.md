@@ -230,16 +230,16 @@ adb install android/app/build/outputs/apk/debug/app-debug.apk
 > [!WARNING]
 > **The steps above build the Android shell only.** A runnable app also needs the server tree,
 > the Node runtime and the bundled tools, which the `scripts/download-*.sh` scripts fetch.
-> Four scripts cross-compile with the Android NDK: `scripts/build-native-addons.sh` (which also
-> needs CMake), `scripts/build-glibc-shim.sh`, `scripts/build-exec-trampoline.sh` and
-> `scripts/build-claude-shim.sh`. See [CONTRIBUTING.md](CONTRIBUTING.md) for the order to run them in.
+> Five scripts cross-compile with the Android NDK: `scripts/build-native-addons.sh` (which also
+> needs CMake), `scripts/build-glibc-shim.sh`, `scripts/build-exec-trampoline.sh`,
+> `scripts/build-claude-shim.sh` and `scripts/build-termux-exec.sh`. See [CONTRIBUTING.md](CONTRIBUTING.md) for the order to run them in.
 
 ## 📦 Size Estimates
 
 | Metric                                 | Size                 |
 | -------------------------------------- | -------------------- |
 | Play Store download (core)             | ~270 MB              |
-| + Each toolchain (on-demand)           | 10-74 MB per language |
+| + Each toolchain (on-demand)           | 11-74 MB per language |
 | Free space required to install         | ~738 MB              |
 | Extracted to internal storage (core)   | ~603 MB              |
 | Extracted, plus Ruby and Java          | ~830 MB              |
