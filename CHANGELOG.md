@@ -19,7 +19,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The Get Started walkthrough has two more steps, after the theme: opening a folder from the phone's storage and running a file.
 - On Android, File > Open Folder, Ctrl+K Ctrl+O and the Explorer's Open Folder button ask whether the folder is on the device (Android's picker) or in the app's storage (the path dialog).
-- The Java toolchain is OpenJDK 21 instead of 17: 64 MB to download and 186 MB installed, up from 56.5 and 160. A Java 17 installed earlier keeps working until it is removed and installed again.
+- The Java toolchain is OpenJDK 21 instead of 17, at 64 MB to download and 186 MB installed, up from 56.5 and 160.
+- A Java 17 installed earlier keeps working until it is removed and installed again.
 
 ### Fixed
 
@@ -130,9 +131,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Get Started walkthrough names C/C++ among the toolchains that install on demand.
 - The Settings editor fits a phone-width screen: its list no longer runs 131 px past the right edge at 411 px, and the window it opens in no longer ends past it either.
 - The Accounts and Manage buttons stay reachable in the activity bar on a phone in landscape: views that do not fit move into the overflow menu.
-- On a phone in landscape with the keyboard up, the title bar and the status bar are put away so the editor shows four lines of code instead of one; they come back when the keyboard goes down.
-- On a phone in landscape, an open terminal panel is put away when the keyboard comes up unless the panel has the focus, so the editor keeps its four lines; it comes back at its size when the keyboard goes down.
-- On a phone in landscape with the keyboard up, Ctrl+J and Ctrl+backtick show a panel that was put away instead of closing it unseen, and a panel shown or focused in that window is back at its height when the keyboard goes down instead of at its minimum.
+- On a phone in landscape, the title bar and the status bar are put away while the keyboard is up, so the editor shows four lines of code instead of one.
+- On a phone in landscape, an open terminal panel is put away when the keyboard comes up unless it has the focus, so the editor keeps its four lines.
+- On a phone in landscape, a terminal panel put away for the keyboard comes back at its size when the keyboard goes down.
+- On a phone in landscape with the keyboard up, Ctrl+J and Ctrl+backtick show a panel that was put away instead of closing it unseen.
+- On a phone in landscape, a panel shown or focused while the keyboard is up returns at its height when the keyboard goes down, not at its minimum.
 - The Python extension is allowed the editor APIs it declares, so it finishes activating instead of failing at its first test API.
 - The process count warning appears from 10 processes instead of 6, so one open file and a terminal no longer raise it.
 - The process count warning no longer calls the idle count a target.
@@ -178,7 +181,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Opening a device folder during an active save or delete reports that the folder is busy instead of waiting for the provider.
 - A device folder that is busy when it is opened again leaves the folder already open saving.
 - Device-folder saves, deletes and renames that arrive while another write to the folder is still going wait up to two minutes for their turn instead of being dropped.
-- A file and a folder that share a name between the device and the editor no longer fail at every open: the device's keeps the name and the editor's is set aside as `.local-<time>` and sent across.
+- A file and a folder that share a name between the device and the editor no longer make every open fail.
+- When a file and a folder share a name between the device and the editor, the device's keeps the name and the editor's is set aside as `.local-<time>` and sent across.
 - An unchanged file in the editor that the device replaced with a folder is removed instead of set aside.
 - A device folder listing that the provider has not finished loading no longer removes files from the editor or creates them again on the device.
 - A device-folder import refuses to install a copy if a parent directory is redirected by a symbolic link during the read.
@@ -204,11 +208,14 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Building from source no longer stops at a dangling Termux link in pip's CA bundle.
 - Building the server from source compiles the Copilot extension once more when the first run leaves its SDK entry missing, instead of failing at packaging.
 - The server built from source includes the Copilot SDK's definitions and builtin-skills directories, which it lacked.
-- A Ruby script can `require` a gem it installed: the interpreter starts with RubyGems loaded. A Ruby installed earlier gets this at the next launch.
-- A gem with a native extension builds when the C/C++ toolchain is installed, because the Ruby toolchain now carries the headers it compiles against. A Ruby installed earlier needs removing and installing again to get them.
+- A Ruby script can `require` a gem it installed, because the interpreter now starts with RubyGems loaded.
+- A Ruby installed earlier starts with RubyGems loaded from the next launch.
+- A gem with a native extension builds when the C/C++ toolchain is installed: the Ruby toolchain now carries the headers it compiles against.
+- A Ruby installed earlier must be removed and installed again to get the headers that native gem extensions compile against.
 - The terminal no longer pins the command line over the first lines of its output: terminal sticky scroll is off by default, and can be turned on in Settings.
 - Builds retry the downloads from raw.githubusercontent.com when it answers with a rate limit.
-- A device folder whose provider lists two documents under one name leaves both alone: it copied the later over the earlier and, with a newer mirror copy, uploaded one document's bytes over the other's with no copy kept.
+- A device folder whose provider lists two documents under one name leaves both alone instead of copying the later over the earlier.
+- A device folder whose provider lists two documents under one name no longer uploads one document's bytes over the other's, with no copy kept, when the mirror copy is newer.
 - JDK commands started from terminals, extensions or build tools receive the app's directories and required JVM options.
 - Reinstalling Java removes its obsolete install root; existing Java 17 installs are labeled accurately.
 - Cancelling a sideloaded toolchain download no longer removes a Play pack; ZIP installs remain available while Play removes its copy.
