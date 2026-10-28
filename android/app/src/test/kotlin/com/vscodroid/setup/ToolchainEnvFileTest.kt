@@ -162,7 +162,7 @@ class ToolchainEnvFileTest {
     }
 
     /** The one line that adds the toolchains' directories to PATH, in the form it is written. */
-    private fun pathLine() = envLines().single { it.startsWith("for d in ") }
+    private fun pathLine() = envLines().single { it.startsWith("for __vscodroid_d in ") }
 
     /**
      * Appended, never prepended, and the direction is the whole point.
@@ -186,12 +186,12 @@ class ToolchainEnvFileTest {
 
         val pathLine = pathLine()
         assertTrue(
-            pathLine.contains("""PATH="${'$'}PATH:${'$'}d""""),
+            pathLine.contains("""PATH="${'$'}PATH:${'$'}__vscodroid_d""""),
             "the raw, unexecutable payload directories were put back in front of the " +
                 "trampoline directory: $pathLine",
         )
         assertFalse(
-            pathLine.contains("""PATH="${'$'}d:"""),
+            pathLine.contains("""PATH="${'$'}__vscodroid_d:"""),
             "a directory is prepended: $pathLine",
         )
     }
@@ -754,7 +754,7 @@ class ToolchainEnvFileTest {
         val script = File(filesDir, "source.sh")
         script.writeText(
             ". '${envFile.absolutePath}'; . '${envFile.absolutePath}'; " +
-                "printf 'PATH=%s\\nRUBYOPT=%s\\nLOOPVAR=%s\\n' \"\$PATH\" \"\${RUBYOPT-}\" \"\${d+leaked}\"",
+                "printf 'PATH=%s\\nRUBYOPT=%s\\nLOOPVAR=%s\\nCALLERD=%s\\n' \"\$PATH\" \"\${RUBYOPT-}\" \"\${__vscodroid_d+leaked}\" \"\${d-unset}\"",
         )
         val builder = ProcessBuilder("bash", script.absolutePath).redirectErrorStream(true)
         builder.environment().apply {
@@ -792,7 +792,17 @@ class ToolchainEnvFileTest {
 
         val shell = sourcedTwice(mapOf("PATH" to "/bin:/usr/bin"))
 
-        assertEquals("", shell["LOOPVAR"], "the PATH loop's variable d is left set in every terminal")
+        assertEquals("", shell["LOOPVAR"], "the PATH loop's variable is left set in every terminal")
+    }
+
+    @Test
+    fun `sourcing the file leaves a d the caller already had as it was`() {
+        rubyWithOptions()
+        regenerate()
+
+        val shell = sourcedTwice(mapOf("PATH" to "/bin:/usr/bin", "d" to "mine"))
+
+        assertEquals("mine", shell["CALLERD"], "the PATH loop overwrote or removed the caller's d")
     }
 
     @Test
@@ -836,7 +846,7 @@ class ToolchainEnvFileTest {
             assertFalse(text.contains(bad), "$bad reached the file:\n$text")
         }
         assertEquals(
-            """for d in "${'$'}PREFIX/../usr/opt/ruby/bin"; do""",
+            """for __vscodroid_d in "${'$'}PREFIX/../usr/opt/ruby/bin"; do""",
             pathLine().substringBefore("; do") + "; do",
         )
         val check = finishTestProcess(ProcessBuilder("bash", "-n", envFile.absolutePath).redirectErrorStream(true).start())

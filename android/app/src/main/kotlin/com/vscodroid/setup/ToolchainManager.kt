@@ -3348,9 +3348,9 @@ class ToolchainManager(private val context: Context) {
             // sources it again, and a plain `export PATH="$PATH:..."` made a bash
             // started from a terminal's bash carry every directory twice.
             sb.appendLine(
-                "for d in ${extraPaths.distinct().joinToString(" ") { "\"$it\"" }}; do " +
-                    "case \":\$PATH:\" in *\":\$d:\"*) ;; *) PATH=\"\$PATH:\$d\" ;; esac; done; " +
-                    "export PATH; unset d"
+                "for __vscodroid_d in ${extraPaths.distinct().joinToString(" ") { "\"$it\"" }}; do " +
+                    "case \":\$PATH:\" in *\":\$__vscodroid_d:\"*) ;; *) PATH=\"\$PATH:\$__vscodroid_d\" ;; esac; done; " +
+                    "export PATH; unset __vscodroid_d"
             )
         }
 
