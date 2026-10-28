@@ -724,6 +724,31 @@ claude() {
         assertEquals(updated, bashrc.readText())
     }
 
+    /**
+     * What 1.1.0 wrote. It is the older block with a dash in the first line, as UTF-8 bytes, and
+     * no release since has had that spelling in the matcher.
+     */
+    @Test
+    fun `a Claude wrapper written by 1_1_0 receives the current launcher`() {
+        val npm = File(filesDir, "usr/lib/node_modules/npm/bin/npm-cli.js")
+        npm.parentFile.mkdirs()
+        npm.writeText("// npm")
+        val bashrc = File(filesDir, "home/.bashrc")
+        bashrc.parentFile.mkdirs()
+        val written = olderClaudeBlock.replace("# claude: the CLI", "# claude \u2014 the CLI")
+        assertTrue(written.contains("\u2014"), "the fixture does not carry the 1.1.0 spelling")
+        val alias = "alias keep_me='printf preserved'\n"
+        bashrc.writeBytes((alias + written).toByteArray(Charsets.UTF_8))
+
+        FirstRunSetup(context).createNpmWrappers()
+        val updated = bashrc.readText()
+
+        assertTrue(updated.contains("    libclaude-launch.so "))
+        assertFalse(updated.contains("    libldmusl.so "))
+        assertTrue(updated.contains(alias))
+        assertEquals(1, Regex("(?m)^claude\\(\\)").findAll(updated).count())
+    }
+
     @Test
     fun `a custom interactive Claude function remains unchanged`() {
         val npm = File(filesDir, "usr/lib/node_modules/npm/bin/npm-cli.js")

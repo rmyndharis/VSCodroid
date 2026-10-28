@@ -1762,6 +1762,7 @@ class FirstRunSetup(
             val existing = bashrc.readBytes()
             val original = String(existing, Charsets.ISO_8859_1)
             val content = original.replace(legacyClaudeBlock, claudeBashFunction())
+                .replace(legacyClaudeBlockFrom110, claudeBashFunction())
             val additions = StringBuilder()
             val added = mutableListOf<String>()
             if (content != original) added += "claude"
@@ -2682,6 +2683,14 @@ claude() {
     libldmusl.so "${'$'}cli" "${'$'}@"
 }
 """
+
+    /**
+     * The same block as release 1.1.0 wrote it, which spelled the first line with a dash. The file is
+     * searched as Latin-1 text, where the three UTF-8 bytes of that dash read as the three characters
+     * below, so the block above never matched a file from that release.
+     */
+    private val legacyClaudeBlockFrom110 =
+        legacyClaudeBlock.replace("# claude: the CLI", "# claude \u00E2\u0080\u0094 the CLI")
 
     /**
      * `claude` in the terminal, which the extension's own login screen suggests.
