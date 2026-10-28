@@ -888,6 +888,13 @@ function activate(context) {
             vscode.window.showInformationMessage('Save the file before running it.');
             return;
         }
+        // A control character reaches the terminal as a keystroke: Ctrl-U and Ctrl-C act on the line
+        // being typed, so the rest of the name would run as a command of its own, and quoting
+        // cannot stop that. Such a name is refused before anything is saved or started.
+        if (/[\u0000-\u001f\u007f]/.test(document.uri.path)) {
+            vscode.window.showErrorMessage('The file name has a control character, so it was not run.');
+            return;
+        }
 
         const generation = ++actionGeneration;
 

@@ -74,6 +74,14 @@ async function checks(code) {
         assert.equal(execFileSync('/bin/sh', ['-c', 'node() { printf "%s" "$1"; }; ' + line], { encoding: 'utf8' }), file);
         assert.ok(events.indexOf('save') < events.findIndex((event) => event[0] === 'terminal'));
     }
+    // A control character in a path reaches the terminal as a keystroke: Ctrl-U and Ctrl-C act
+    // on the line being typed, so the rest of the name would run as a command of its own, and
+    // quoting cannot stop that. Such a name is refused, and nothing is saved or started.
+    for (const name of ['/work/a\u0015touch x #.js', '/work/a\u0003b.js', '/work/a\nb.js', '/work/a\u007fb.js']) {
+        const events = await run(code, { file: name, dirty: true });
+        assert.ok(events.some((event) => event[0] === 'error'), 'a name with a control character was not refused: ' + JSON.stringify(name));
+        assert.ok(!events.some((event) => event[0] === 'terminal' || event[0] === 'line' || event === 'save'), 'a name with a control character reached the terminal: ' + JSON.stringify(name));
+    }
     const refused = await run(code, { dirty: true, saved: false });
     assert.ok(refused.some((event) => event[0] === 'error'));
     assert.ok(!refused.some((event) => event[0] === 'terminal'));

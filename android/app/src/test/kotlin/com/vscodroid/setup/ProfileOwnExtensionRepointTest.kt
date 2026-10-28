@@ -24,7 +24,7 @@ class ProfileOwnExtensionRepointTest {
 
     private val extensions = "/data/user/0/com.vscodroid/files/home/.vscodroid/extensions"
     private val oldBridge = "vscodroid.vscodroid-saf-bridge-1.11.0"
-    private val newBridge = "vscodroid.vscodroid-saf-bridge-1.12.2"
+    private val newBridge = "vscodroid.vscodroid-saf-bridge-1.12.3"
     private val oldWelcome = "vscodroid.vscodroid-welcome-1.8.1"
     private val newWelcome = "vscodroid.vscodroid-welcome-1.9.1"
     private val oldPython = "ms-python.python-2026.3.0"
@@ -57,7 +57,7 @@ class ProfileOwnExtensionRepointTest {
 
         val bridge = entriesOf(result).single()
         assertEquals(newBridge, bridge.getString("relativeLocation"))
-        assertEquals("1.12.2", bridge.getString("version"))
+        assertEquals("1.12.3", bridge.getString("version"))
         assertEquals("$extensions/$newBridge", bridge.getJSONObject("location").getString("path"))
     }
 
@@ -105,7 +105,7 @@ class ProfileOwnExtensionRepointTest {
 
     @Test
     fun `an entry already at the current copy is left alone`() {
-        val text = manifest(entry(newBridge, "1.12.2", "vscodroid.vscodroid-saf-bridge"))
+        val text = manifest(entry(newBridge, "1.12.3", "vscodroid.vscodroid-saf-bridge"))
 
         assertNull(repoint(text))
     }
@@ -115,7 +115,7 @@ class ProfileOwnExtensionRepointTest {
         val result = repoint(
             manifest(
                 entry(oldBridge, "1.11.0", "vscodroid.vscodroid-saf-bridge"),
-                entry(newBridge, "1.12.2", "vscodroid.vscodroid-saf-bridge"),
+                entry(newBridge, "1.12.3", "vscodroid.vscodroid-saf-bridge"),
             ),
         )
 
@@ -192,7 +192,7 @@ class ProfileOwnExtensionRepointTest {
 
     @Test
     fun `a current own entry gains builtin metadata without moving it`() {
-        val current = entry(newBridge, "1.12.2", "vscodroid.vscodroid-saf-bridge")
+        val current = entry(newBridge, "1.12.3", "vscodroid.vscodroid-saf-bridge")
         current.getJSONObject("metadata").remove("isBuiltin")
         val text = manifest(current)
 
