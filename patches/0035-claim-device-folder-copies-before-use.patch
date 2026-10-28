@@ -4,6 +4,9 @@ Claim resolved workspace members before publication and remote filesystem
 paths before dispatch. Forward refused claims through the existing operation
 and stream error paths, and order watch teardown after registration.
 
+Workspace initialization catches a refused claim so that the page still opens;
+each filesystem call claims again and reports the error where it is made.
+
 diff --git a/src/vs/workbench/browser/safMirrorUsage.ts b/src/vs/workbench/browser/safMirrorUsage.ts
 new file mode 100644
 --- /dev/null
@@ -128,7 +131,7 @@ diff --git a/src/vs/workbench/services/configuration/browser/configurationServic
  		const trigger = this.initialized;
  		this.initialized = false;
  		const workspace = await this.createWorkspace(arg);
-+		await claimSafMirrorPaths([...workspace.folders.map(folder => folder.uri), ...(workspace.configuration ? [workspace.configuration] : [])]);
++		await claimSafMirrorPaths([...workspace.folders.map(folder => folder.uri), ...(workspace.configuration ? [workspace.configuration] : [])]).catch(error => this.logService.warn(error));
  		await this.updateWorkspaceAndInitializeConfiguration(workspace, trigger);
  		this.checkAndMarkWorkspaceComplete(false);
  		// Read for the workspace the page opened, so for no other.

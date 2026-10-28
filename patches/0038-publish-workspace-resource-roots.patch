@@ -52,9 +52,9 @@ diff --git a/src/vs/workbench/services/configuration/browser/configurationServic
 +++ b/src/vs/workbench/services/configuration/browser/configurationService.ts
 @@ -456,6 +456,7 @@
  		const workspace = await this.createWorkspace(arg);
- 		await claimSafMirrorPaths([...workspace.folders.map(folder => folder.uri), ...(workspace.configuration ? [workspace.configuration] : [])]);
+ 		await claimSafMirrorPaths([...workspace.folders.map(folder => folder.uri), ...(workspace.configuration ? [workspace.configuration] : [])]).catch(error => this.logService.warn(error));
  		await this.updateWorkspaceAndInitializeConfiguration(workspace, trigger);
-+		await claimSafMirrorPaths([...this.workspace.folders.map(folder => folder.uri), ...(this.workspace.configuration ? [this.workspace.configuration] : [])], true);
++		await claimSafMirrorPaths([...this.workspace.folders.map(folder => folder.uri), ...(this.workspace.configuration ? [this.workspace.configuration] : [])], true).catch(error => this.logService.warn(error));
  		this.checkAndMarkWorkspaceComplete(false);
  		// Read for the workspace the page opened, so for no other.
  		this.initialWorkspaceSettings = undefined;

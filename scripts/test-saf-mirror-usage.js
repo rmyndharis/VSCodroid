@@ -116,13 +116,14 @@ function browserFixture(nativeAnswer = true) {
         expire() { [...timers.values()].forEach(callback => callback()); },
         ready() { browser.__vscodroid = { authToken: 'session', pageGeneration: 7 }; [...listeners].forEach(callback => callback()); } };
 }
-function serviceFixture(helper, workspace, publish) {
+function serviceFixture(helper, workspace, publish, warnings = []) {
     const context = { claimSafMirrorPaths: helper.claimSafMirrorPaths, mark() {},
         ConfigurationTarget: { WORKSPACE_FOLDER: 1, WORKSPACE: 2 } };
     vm.runInNewContext(transpile(configurationSource, 'configurationService.ts') + '\nglobalThis.SelectedWorkspaceService = WorkspaceService;', context);
     return Object.assign(new context.SelectedWorkspaceService(), {
         initialized: false,
         initialWorkspaceSettings: undefined,
+        logService: { warn: error => warnings.push(error) },
         workspace: { folders: [], configuration: undefined },
         _configuration: { toData: () => ({}), compareAndUpdateWorkspaceConfiguration: () => ({}) },
         _onDidChangeWorkspaceFolders: { fire: () => publish('member-event') },
@@ -357,13 +358,20 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
         cases++;
     }
     {
+        // A copy the native side refuses, one that is gone for instance, must not leave the workspace
+        // unset: the page would stay blank. Each filesystem call is refused on its own.
         const fixture = browserFixture(false);
+        const warnings = [];
         const service = serviceFixture(fixture.helper, { folders: [{ uri: remote(memberB) }] },
-            type => fixture.events.push({ type }));
+            type => fixture.events.push({ type }), warnings);
         const previous = service.workspace;
-        await assert.rejects(service.initialize({}), /local copy/i);
-        assert.equal(service.workspace, previous);
-        assert(fixture.events.every(event => event.type === 'claim'));
+        await service.initialize({});
+        assert.notEqual(service.workspace, previous, 'a refused claim left the workspace unset');
+        assert.deepEqual(fixture.events.map(event => event.type), ['claim', 'initial-publication', 'claim']);
+        assert.deepEqual(fixture.publications, [], 'the roots of a refused copy were published');
+        assert.equal(warnings.length, 2);
+        warnings.forEach(warning => assert.match(warning.message, /local copy/i));
+        await assert.rejects(fixture.helper.protectSafMirrorChannel(fixture.channel).call('stat', [remote(memberB)]), /local copy/i);
         cases++;
     }
     {
