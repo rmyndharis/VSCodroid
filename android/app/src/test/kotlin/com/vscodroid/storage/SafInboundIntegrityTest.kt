@@ -165,6 +165,22 @@ class SafInboundIntegrityTest : SafInitialSyncTestBase() {
     }
 
     @ParameterizedTest
+    @ValueSource(strings = ["missing", "invalid"])
+    fun `a copy kept for want of a digest is not sent back to the device on a later reopen`(proof: String) {
+        deviceTree(mapOf("root" to listOf(Child("keep.txt", contents = "k"), Child("notes.txt", contents = "old"))))
+        val engine = sync()
+        val local = mirrorFile("notes.txt").apply { writeText("delivered") }
+        write(engine, local, "notes.txt")
+        alterReceiptProof(local, proof)
+        deviceTree(mapOf("root" to listOf(Child("keep.txt", contents = "k"))))
+
+        repeat(3) { sync() }
+
+        assertTrue(created.isEmpty(), "a later reopen recreated a document the device deleted")
+        assertEquals("delivered", local.readText(), "the unproven copy changed")
+    }
+
+    @ParameterizedTest
     @ValueSource(strings = ["matching", "changed", "missing", "invalid"])
     fun `mirror reclaim requires stable digest proof for every file`(proof: String) {
         deviceTree(mapOf("root" to listOf(Child("notes.txt", contents = "old"))))

@@ -2187,15 +2187,40 @@ class SafSyncEngine(private val context: Context) {
             emptyList()
         }
 
+        val carried = ArrayList<String>()
         for (line in entries) {
             val path = unescapeRecordPath(line.substringBefore('\t'))
 
             if (path.isEmpty() || path in present) continue
             if (removeRecordedCopy(mirrorDir, path, line)) removed++
+            else if (isUnprovenCopyOfRecord(mirrorDir, path, line)) carried += line
         }
 
-        writeSyncedRecord(record, recorded)
+        writeSyncedRecord(record, recorded + carried)
         return removed
+    }
+
+    /**
+     * A row with no digest, written before digests existed or past the budget that reads them, cannot
+     * prove the mirror copy is the device's old bytes, so [removeRecordedCopy] keeps the copy. The row has
+     * to stay with it: without one the copy reads as new local work, and the next open sends a document the
+     * device deleted back to it. A copy that no longer matches its row is work of the user's and is let go.
+     */
+    private fun isUnprovenCopyOfRecord(mirrorDir: File, relativePath: String, line: String): Boolean {
+        val (whole, digest) = splitRecordLine(line)
+        if (digest != null) return false
+        // A fourth field this build cannot read leaves the identity in the first three.
+        val identity = line.split('\t').let { if (it.size == 4) it.take(3).joinToString("\t") else whole }
+        return try {
+            openOutboundPath(File(mirrorDir, relativePath), mirrorDir).use { selected ->
+                val attributes = selected.attributes()
+                attributes.isRegularFile && identity == identityLine(
+                    relativePath, attributes.lastModifiedTime().toMillis(), attributes.size(),
+                )
+            }
+        } catch (e: Exception) {
+            false
+        }
     }
 
     private fun removeRecordedCopy(mirrorDir: File, relativePath: String, line: String): Boolean {
