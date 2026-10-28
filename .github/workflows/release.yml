@@ -481,6 +481,30 @@ jobs:
           python3 scripts/check-extension-updates.py
           node scripts/test-xdg-open.js
 
+      # What lint.yml runs beyond the block above, for the reason its header gives: a tag may
+      # name a commit that reached main through neither pull_request nor push. These ask the
+      # gates this job relies on to refuse what they exist to refuse, and the build helpers to
+      # behave offline. Plain Python and the runner's own compiler, as they are there.
+      - name: Check the gates still refuse what they exist to refuse
+        run: |
+          python3 scripts/check-workflow-steps.py --self-test
+          python3 scripts/verify-android-elf.py --self-test
+          python3 scripts/verify-server-tree.py --self-test
+          python3 scripts/check-patch-fingerprints.py --self-test
+          python3 scripts/check-editcontext-sync.py --self-test
+          python3 scripts/patch-venv-home.py --self-test
+          python3 scripts/gen-glibc-forwarders.py --self-test
+          python3 scripts/test-language-detection.py
+
+      - name: Check the build helpers offline
+        run: |
+          python3 scripts/test-download-extensions.py
+          python3 scripts/test-copilot-compile-guard.py
+          python3 scripts/test-patch-sysroot-paths.py
+          python3 scripts/test-exec-trampoline.py
+          python3 scripts/test-check-server-published.py
+          python3 scripts/test-extension-updates.py
+
       - name: Install system dependencies
         # See build.yml: the runner's baked apt index goes stale as Ubuntu drops
         # superseded versions from the pool, so refresh it before installing.
