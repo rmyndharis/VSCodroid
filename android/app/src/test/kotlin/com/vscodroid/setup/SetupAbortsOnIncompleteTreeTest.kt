@@ -26,9 +26,10 @@ import java.io.ByteArrayInputStream
 import java.io.File
 
 /**
- * A setup that could not unpack the server tree must not report success.
+ * A setup that could not unpack the server tree, the bootstrap scripts or
+ * `usr/` must not report success.
  *
- * The server tree, the four bootstrap scripts and `usr/` are what start the
+ * The server tree, the four bootstrap scripts and `xdg-open.js`, and `usr/` are what start the
  * server and resolve everything on PATH. `extractAssetFile` logs a failed copy
  * and carries on, which is right when one file of a 390 MB unpack is missing
  * from the APK and wrong when the copy failed: the install reached the editor,
@@ -356,5 +357,124 @@ class SetupAbortsOnIncompleteTreeTest {
         assertEquals("", setup.lastFailure!!.step)
         assertEquals("IllegalStateException: asset listing unavailable", setup.lastFailure!!.detail)
     }
+
+    private fun blockWrite(relativePath: String) {
+        val dest = File(filesDir, relativePath)
+        assertTrue(dest.parentFile!!.isDirectory || dest.parentFile!!.mkdirs(), "could not stage $relativePath")
+        val blocker = File(dest.parentFile, "${dest.name}.tmp~")
+        assertTrue(blocker.mkdirs(), "could not stage the blocked temp path of $relativePath")
+        File(blocker, "occupied").writeText("x")
+    }
+
+    private fun stageUsrTool() {
+        every { assets.list("usr") } returns arrayOf("bin")
+        every { assets.list("usr/bin") } returns arrayOf("tool")
+        every { assets.list("usr/bin/tool") } returns emptyArray()
+        every { assets.open("usr/bin/tool") } answers { ByteArrayInputStream("// tool".toByteArray()) }
+    }
+
+    @Test
+    fun `a setup that cannot unpack usr reports an error and writes no completion record`() {
+        stageUsrTool()
+        blockWrite("usr/bin/tool")
+        val setup = FirstRunSetup(context, 0, 0, 0, 0)
+
+        assertEquals(FirstRunSetup.SetupResult.ERROR, runBlocking { setup.runSetup() })
+        assertTrue(
+            setup.lastFailure!!.detail.contains("could not unpack usr"),
+            "expected usr in the failure detail: ${setup.lastFailure!!.detail}",
+        )
+        assertFalse(File(filesDir, "usr/bin/tool").exists())
+        verify(exactly = 0) { editor.putString(SETUP_VERSION_KEY, any()) }
+
+        assertTrue(File(filesDir, "usr/bin/tool.tmp~").deleteRecursively())
+        assertEquals(FirstRunSetup.SetupResult.SUCCESS, runBlocking { setup.runSetup() })
+        assertEquals("// tool", File(filesDir, "usr/bin/tool").readText())
+    }
+
+    @Test
+    fun `an upgrade that cannot replace a file under usr keeps the old copy and writes no completion record`() {
+        val prefs = context.getSharedPreferences("vscodroid_setup", Context.MODE_PRIVATE)
+        var storedVersion = "1.0.0"
+        var storedCode = 50
+        every { prefs.getString(SETUP_VERSION_KEY, any()) } answers { storedVersion }
+        every { prefs.getInt("setup_version_code", any()) } answers { storedCode }
+        every { editor.putString(SETUP_VERSION_KEY, any()) } answers {
+            storedVersion = secondArg()
+            editor
+        }
+        every { editor.putInt("setup_version_code", any()) } answers {
+            storedCode = secondArg()
+            editor
+        }
+        stageUsrTool()
+        val existing = File(filesDir, "usr/bin/tool")
+        assertTrue(existing.parentFile!!.mkdirs())
+        existing.writeText("// old tool")
+        blockWrite("usr/bin/tool")
+        val setup = FirstRunSetup(context, 0, 0, 0, 0)
+
+        assertEquals(FirstRunSetup.SetupResult.ERROR, runBlocking { setup.runSetup() })
+        assertTrue(
+            setup.lastFailure!!.detail.contains("could not unpack usr"),
+            "expected usr in the failure detail: ${setup.lastFailure!!.detail}",
+        )
+        assertEquals("// old tool", existing.readText())
+        assertTrue(setup.isFirstRun(), "the old record must still read as stale")
+        verify(exactly = 0) { editor.putString(SETUP_VERSION_KEY, any()) }
+    }
+
+    @Test
+    fun `a listed usr asset that cannot be opened prevents completion`() {
+        stageUsrTool()
+        every { assets.open("usr/bin/tool") } throws java.io.IOException("unreadable listed asset")
+        val setup = FirstRunSetup(context, 0, 0, 0, 0)
+
+        assertEquals(FirstRunSetup.SetupResult.ERROR, runBlocking { setup.runSetup() })
+        assertTrue(
+            setup.lastFailure!!.detail.contains("could not unpack usr"),
+            "expected usr in the failure detail: ${setup.lastFailure!!.detail}",
+        )
+        assertFalse(File(filesDir, "usr/bin/tool").exists())
+        verify(exactly = 0) { editor.putString(SETUP_VERSION_KEY, any()) }
+    }
+
+    private fun assertBootstrapScriptWriteFailureAborts(script: String) {
+        every { assets.open(script) } answers { ByteArrayInputStream("// $script".toByteArray()) }
+        blockWrite("server/$script")
+        val setup = FirstRunSetup(context, 0, 0, 0, 0)
+
+        assertEquals(
+            FirstRunSetup.SetupResult.ERROR,
+            runBlocking { setup.runSetup() },
+            "failed write for $script did not abort setup",
+        )
+        assertTrue(
+            setup.lastFailure!!.detail.contains("could not unpack $script"),
+            "expected $script in the failure detail: ${setup.lastFailure!!.detail}",
+        )
+        assertFalse(File(filesDir, "server/$script").exists())
+        verify(exactly = 0) { editor.putString(SETUP_VERSION_KEY, any()) }
+    }
+
+    @Test
+    fun `a setup that cannot unpack server js reports an error and writes no completion record`() =
+        assertBootstrapScriptWriteFailureAborts("server.js")
+
+    @Test
+    fun `a setup that cannot unpack process-monitor js reports an error and writes no completion record`() =
+        assertBootstrapScriptWriteFailureAborts("process-monitor.js")
+
+    @Test
+    fun `a setup that cannot unpack platform-fix js reports an error and writes no completion record`() =
+        assertBootstrapScriptWriteFailureAborts("platform-fix.js")
+
+    @Test
+    fun `a setup that cannot unpack dns-proxy js reports an error and writes no completion record`() =
+        assertBootstrapScriptWriteFailureAborts("dns-proxy.js")
+
+    @Test
+    fun `a setup that cannot unpack xdg-open js reports an error and writes no completion record`() =
+        assertBootstrapScriptWriteFailureAborts("xdg-open.js")
 
 }
