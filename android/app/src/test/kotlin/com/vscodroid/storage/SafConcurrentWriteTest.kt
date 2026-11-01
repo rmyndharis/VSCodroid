@@ -151,6 +151,8 @@ class SafConcurrentWriteTest {
         releaseFirstWriter.countDown()
         releaseFirstFetch.countDown()
         File(mirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX).delete()
+        File(otherMirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX).delete()
+        File(filesDir, SafSyncEngine.UPLOADS_IN_FLIGHT_FILE).delete()
         unmockkAll()
     }
 
@@ -480,5 +482,400 @@ class SafConcurrentWriteTest {
             "the second save never reached the document, so the exclusion is claiming " +
                 "it and never letting go rather than serialising writers",
         )
+    }
+
+    @Test
+    fun `an overlapping tree save sets nothing aside while the first grant streams and retries once it finishes`() {
+        var nowMs = 1_000_000L
+        every { SystemClock.elapsedRealtime() } answers { nowMs }
+        deviceHolding("notes.md")
+        fun document(tree: String) = mockk<Uri>(relaxed = true).also {
+            every { it.toString() } returns "content://test/tree/$tree/document/shared"
+            every { it.authority } returns "test"
+            every { DocumentsContract.getDocumentId(it) } returns "shared"
+        }
+        val parentDocument = document("parent")
+        val childDocument = document("child")
+        val otherTree = mockk<Uri>(relaxed = true)
+        every { DocumentsContract.buildDocumentUriUsingTree(any(), any()) } answers {
+            if (firstArg<Uri>() === treeUri) parentDocument else childDocument
+        }
+        var providerBytes = "winner half-written"
+        every { resolver.openInputStream(any()) } answers {
+            ByteArrayInputStream(providerBytes.toByteArray())
+        }
+
+        val secondEngine = SafSyncEngine(context)
+        val refused = AtomicInteger()
+        secondEngine.onWriteBackFailed = { refused.incrementAndGet() }
+        val firstFile = File(mirror, "notes.md").apply { writeText("winner full text") }
+        val secondFile = File(otherMirror, "notes.md").apply { writeText("loser full text") }
+        blockFirstWriter = true
+        val first = Thread {
+            engine.handleMirrorEvent(FileObserver.MODIFY, firstFile, mirror, treeUri)
+            engine.runWriteBackLoop { false }
+        }.apply { start() }
+        val secondSession = WatchSession(otherMirror)
+        try {
+            assertTrue(firstWriterInside.await(5, TimeUnit.SECONDS), "the first writer never opened the document")
+            secondEngine.handleMirrorEvent(FileObserver.MODIFY, secondFile, otherMirror, otherTree)
+            secondEngine.runWriteBackLoop { false }
+
+            assertEquals(
+                listOf("notes.md"),
+                otherMirror.listFiles()?.map { it.name }?.sorted(),
+                "a contending save set aside the first grant's half-written bytes",
+            )
+            assertEquals(1, everOpened.get(), "the contending save opened a second output stream")
+            assertEquals(1, refused.get(), "the held-back save was not announced once")
+
+            // A retry while the first grant is still streaming re-holds with a doubled wait,
+            // creates no preserved copy, and raises no second notice.
+            nowMs += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+            assertTrue(secondEngine.retryHeldBack(secondSession), "the first retry was not due")
+            assertFalse(
+                secondEngine.retryHeldBack(secondSession),
+                "a retry that re-held the save stayed due with no time passing",
+            )
+            assertEquals(
+                listOf("notes.md"),
+                otherMirror.listFiles()?.map { it.name }?.sorted(),
+                "a retry while the first grant was still streaming set aside half-written bytes",
+            )
+            assertEquals(1, refused.get(), "re-holding the same path announced a second notice")
+        } finally {
+            providerBytes = "winner full text"
+            releaseFirstWriter.countDown()
+            first.join(5_000)
+        }
+
+        // Before the doubled wait elapses, nothing retries.
+        nowMs += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+        assertFalse(secondEngine.retryHeldBack(secondSession), "the retry did not double its wait")
+
+        // Once the doubled wait elapses, the retry sets the finished winner copy aside whole
+        // and delivers the loser's save.
+        nowMs += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+        assertTrue(secondEngine.retryHeldBack(secondSession), "the deferred save was not retried")
+        assertEquals(2, everOpened.get(), "the retry did not write the deferred save to the document")
+        val copies = otherMirror.listFiles()?.filter {
+            it.name.startsWith("notes.md${SafSyncEngine.DEVICE_COPY_SUFFIX}")
+        }.orEmpty()
+        assertEquals(1, copies.size, "expected one preserved copy of the finished first write")
+        assertEquals("winner full text", copies.single().readText())
+        assertEquals(1, refused.get(), "delivering the deferred save announced another failure")
+    }
+
+    @ParameterizedTest
+    @ValueSource(strings = ["newer-mirror", "repair"])
+    fun `an open arm meeting another grant's in-flight write defers without marking the document unread`(arm: String) {
+        deviceHolding("notes.md")
+        fun document(tree: String) = mockk<Uri>(relaxed = true).also {
+            every { it.toString() } returns "content://test/tree/$tree/document/shared"
+            every { it.authority } returns "test"
+            every { DocumentsContract.getDocumentId(it) } returns "shared"
+        }
+        val parentDocument = document("parent")
+        val childDocument = document("child")
+        val otherTree = mockk<Uri>(relaxed = true)
+        every { DocumentsContract.buildDocumentUriUsingTree(any(), any()) } answers {
+            if (firstArg<Uri>() === treeUri) parentDocument else childDocument
+        }
+
+        val firstFile = File(mirror, "notes.md").apply { writeText("winner full text") }
+        val secondFile = File(otherMirror, "notes.md").apply {
+            writeText("loser edit kept in mirror")
+            setLastModified(1_800_000_000_000L)
+        }
+        if (arm == "repair") {
+            File(filesDir, SafSyncEngine.UPLOADS_IN_FLIGHT_FILE).writeText(secondFile.absolutePath)
+        }
+
+        val secondEngine = SafSyncEngine(context)
+        blockFirstWriter = true
+        val first = Thread {
+            engine.handleMirrorEvent(FileObserver.MODIFY, firstFile, mirror, treeUri)
+            engine.runWriteBackLoop { false }
+        }.apply { start() }
+        try {
+            assertTrue(firstWriterInside.await(5, TimeUnit.SECONDS), "the first writer never opened the document")
+            runBlocking {
+                secondEngine.initialSync(otherTree, otherMirror) { _, _ -> }
+            }
+            assertEquals(
+                listOf("notes.md"),
+                otherMirror.listFiles()?.map { it.name }?.sorted(),
+                "the $arm open arm set aside another grant's half-written bytes",
+            )
+            if (arm == "repair") {
+                assertTrue(
+                    secondFile.absolutePath in secondEngine.uploadsInFlight(),
+                    "the repair arm consumed the upload journal line when its write was deferred",
+                )
+            }
+        } finally {
+            releaseFirstWriter.countDown()
+            first.join(5_000)
+        }
+
+        secondFile.writeText("saved again after the open")
+        secondEngine.handleMirrorEvent(FileObserver.MODIFY, secondFile, otherMirror, otherTree)
+        secondEngine.runWriteBackLoop { false }
+        assertEquals(
+            2, everOpened.get(),
+            "the $arm open arm marked the in-flight document unread and refused a later save",
+        )
+    }
+
+    @Test
+    fun `an open during another grant's stream does not copy or vouch for a half-written prefix`() {
+        deviceHolding("notes.md")
+        fun document(tree: String) = mockk<Uri>(relaxed = true).also {
+            every { it.toString() } returns "content://test/tree/$tree/document/shared"
+            every { it.authority } returns "test"
+            every { DocumentsContract.getDocumentId(it) } returns "shared"
+        }
+        val parentDocument = document("parent")
+        val childDocument = document("child")
+        val otherTree = mockk<Uri>(relaxed = true)
+        every { DocumentsContract.buildDocumentUriUsingTree(any(), any()) } answers {
+            if (firstArg<Uri>() === treeUri) parentDocument else childDocument
+        }
+        var providerBytes = "half-written prefix"
+        val inputStreamsOpened = AtomicInteger(0)
+        every { resolver.openInputStream(any()) } answers {
+            if (firstArg<Uri>() === childDocument) {
+                inputStreamsOpened.incrementAndGet()
+            }
+            ByteArrayInputStream(providerBytes.toByteArray())
+        }
+
+        val firstFile = File(mirror, "notes.md").apply { writeText("winner full text") }
+        val secondEngine = SafSyncEngine(context)
+        blockFirstWriter = true
+        val first = Thread {
+            engine.handleMirrorEvent(FileObserver.MODIFY, firstFile, mirror, treeUri)
+            engine.runWriteBackLoop { false }
+        }.apply { start() }
+        try {
+            assertTrue(firstWriterInside.await(5, TimeUnit.SECONDS), "the first writer never opened the document")
+            runBlocking {
+                secondEngine.initialSync(otherTree, otherMirror) { _, _ -> }
+            }
+            assertFalse(
+                File(otherMirror, "notes.md").exists(),
+                "an open during another grant's stream copied the half-written prefix into the mirror",
+            )
+            assertEquals(
+                0,
+                inputStreamsOpened.get(),
+                "an open during another grant's stream opened an input stream on the in-flight document",
+            )
+            val syncedRecord = File(otherMirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX)
+            assertFalse(
+                syncedRecord.isFile && syncedRecord.readText().contains("notes.md"),
+                "an open during another grant's stream vouched for the half-written prefix in .synced",
+            )
+        } finally {
+            providerBytes = "winner full text"
+            releaseFirstWriter.countDown()
+            first.join(5_000)
+        }
+
+        runBlocking {
+            secondEngine.initialSync(otherTree, otherMirror) { _, _ -> }
+        }
+        assertEquals("winner full text", File(otherMirror, "notes.md").readText())
+        val syncedAfter = File(otherMirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX)
+        assertTrue(syncedAfter.isFile && syncedAfter.readText().contains("notes.md"))
+    }
+
+    @Test
+    fun `a writer starting mid-read aborts setAsideDeviceCopy without leaving a partial copy or marking unread`() {
+        var nowMs = 1_000_000L
+        every { SystemClock.elapsedRealtime() } answers { nowMs }
+        deviceHolding("notes.md")
+        fun document(tree: String) = mockk<Uri>(relaxed = true).also {
+            every { it.toString() } returns "content://test/tree/$tree/document/shared"
+            every { it.authority } returns "test"
+            every { DocumentsContract.getDocumentId(it) } returns "shared"
+        }
+        val parentDocument = document("parent")
+        val childDocument = document("child")
+        val otherTree = mockk<Uri>(relaxed = true)
+        every { DocumentsContract.buildDocumentUriUsingTree(any(), any()) } answers {
+            if (firstArg<Uri>() === treeUri) parentDocument else childDocument
+        }
+
+        val firstFile = File(mirror, "notes.md").apply { writeText("winner full text") }
+        val secondFile = File(otherMirror, "notes.md").apply {
+            writeText("loser edit")
+            setLastModified(1_800_000_000_000L)
+        }
+        val secondEngine = SafSyncEngine(context)
+        blockFirstWriter = true
+        var writerThread: Thread? = null
+        var startedWriterMidRead = false
+        every { resolver.openInputStream(any()) } answers {
+            val uri = firstArg<Uri>()
+            val bytes = "truncated mid-read bytes".toByteArray()
+            if (uri === childDocument && !startedWriterMidRead) {
+                startedWriterMidRead = true
+                object : java.io.InputStream() {
+                    private var pos = 0
+                    override fun read(): Int {
+                        if (pos == 0) {
+                            writerThread = Thread {
+                                engine.handleMirrorEvent(FileObserver.MODIFY, firstFile, mirror, treeUri)
+                                engine.runWriteBackLoop { false }
+                            }.apply { start() }
+                            assertTrue(
+                                firstWriterInside.await(5, TimeUnit.SECONDS),
+                                "the contending writer did not enter its stream during the set-aside read",
+                            )
+                        }
+                        return if (pos < bytes.size) bytes[pos++].toInt() and 0xff else -1
+                    }
+                }
+            } else {
+                ByteArrayInputStream(bytes)
+            }
+        }
+
+        try {
+            secondEngine.handleMirrorEvent(FileObserver.MODIFY, secondFile, otherMirror, otherTree)
+            secondEngine.runWriteBackLoop { false }
+            assertEquals(
+                listOf("notes.md"),
+                otherMirror.listFiles()?.map { it.name }?.sorted(),
+                "a writer starting mid-read left a preserved or partial file behind",
+            )
+        } finally {
+            releaseFirstWriter.countDown()
+            writerThread?.join(5_000)
+        }
+
+        nowMs += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+        assertTrue(
+            secondEngine.retryHeldBack(WatchSession(otherMirror)),
+            "a mid-read abort did not hold the save back for retry",
+        )
+        assertEquals(2, everOpened.get(), "the retried save did not reach the document")
+    }
+
+    @Test
+    fun `a no-clock open during another grant's stream does not vouch for a matching prefix`() {
+        deviceHolding("notes.md")
+        fun document(tree: String) = mockk<Uri>(relaxed = true).also {
+            every { it.toString() } returns "content://test/tree/$tree/document/shared"
+            every { it.authority } returns "test"
+            every { DocumentsContract.getDocumentId(it) } returns "shared"
+        }
+        val parentDocument = document("parent")
+        val childDocument = document("child")
+        val otherTree = mockk<Uri>(relaxed = true)
+        every { DocumentsContract.buildDocumentUriUsingTree(any(), any()) } answers {
+            if (firstArg<Uri>() === treeUri) parentDocument else childDocument
+        }
+        val cursor = mockk<Cursor>(relaxed = true)
+        var row = -1
+        val prefix = "half-written"
+        every { cursor.moveToNext() } answers { ++row == 0 }
+        every { cursor.getColumnIndexOrThrow(any()) } answers {
+            when (firstArg<String>()) {
+                DocumentsContract.Document.COLUMN_DOCUMENT_ID -> 0
+                DocumentsContract.Document.COLUMN_DISPLAY_NAME -> 1
+                DocumentsContract.Document.COLUMN_MIME_TYPE -> 2
+                else -> 3
+            }
+        }
+        every { cursor.getColumnIndex(DocumentsContract.Document.COLUMN_LAST_MODIFIED) } returns -1
+        every { cursor.isNull(any()) } returns false
+        every { cursor.getString(0) } returns "shared"
+        every { cursor.getString(1) } returns "notes.md"
+        every { cursor.getString(2) } returns "text/plain"
+        every { cursor.getLong(3) } returns prefix.length.toLong()
+        every { resolver.query(any(), any(), any(), any(), any()) } answers {
+            row = -1
+            cursor
+        }
+        every { resolver.openInputStream(any()) } answers {
+            ByteArrayInputStream(prefix.toByteArray())
+        }
+
+        val firstFile = File(mirror, "notes.md").apply { writeText("winner full text") }
+        File(otherMirror, "notes.md").writeText(prefix)
+        val secondEngine = SafSyncEngine(context)
+        blockFirstWriter = true
+        val first = Thread {
+            engine.handleMirrorEvent(FileObserver.MODIFY, firstFile, mirror, treeUri)
+            engine.runWriteBackLoop { false }
+        }.apply { start() }
+        try {
+            assertTrue(firstWriterInside.await(5, TimeUnit.SECONDS), "the first writer never opened the document")
+            runBlocking {
+                secondEngine.initialSync(otherTree, otherMirror) { _, _ -> }
+            }
+            val syncedRecord = File(otherMirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX)
+            assertFalse(
+                syncedRecord.isFile && syncedRecord.readText().contains("notes.md"),
+                "deviceMatchesUnchangedMirror vouched for a document another grant was still writing",
+            )
+        } finally {
+            releaseFirstWriter.countDown()
+            first.join(5_000)
+        }
+    }
+
+    @Test
+    fun `writeLocalToSaf declining for an in-flight write after a prior hold doubles the wait`() {
+        var nowMs = 1_000_000L
+        every { SystemClock.elapsedRealtime() } answers { nowMs }
+        deviceHolding("notes.md")
+        fun document(tree: String) = mockk<Uri>(relaxed = true).also {
+            every { it.toString() } returns "content://test/tree/$tree/document/shared"
+            every { it.authority } returns "test"
+            every { DocumentsContract.getDocumentId(it) } returns "shared"
+        }
+        val parentDocument = document("parent")
+        val childDocument = document("child")
+        val otherTree = mockk<Uri>(relaxed = true)
+        every { DocumentsContract.buildDocumentUriUsingTree(any(), any()) } answers {
+            if (firstArg<Uri>() === treeUri) parentDocument else childDocument
+        }
+
+        val firstFile = File(mirror, "notes.md").apply { writeText("winner full text") }
+        val secondFile = File(otherMirror, "notes.md").apply { writeText("loser full text") }
+        val secondEngine = SafSyncEngine(context)
+        val secondSession = WatchSession(otherMirror)
+        blockFirstWriter = true
+        val first = Thread {
+            engine.handleMirrorEvent(FileObserver.MODIFY, firstFile, mirror, treeUri)
+            engine.runWriteBackLoop { false }
+        }.apply { start() }
+        try {
+            assertTrue(firstWriterInside.await(5, TimeUnit.SECONDS), "the first writer never opened the document")
+            // First hold (30s wait) via writeLocalToSaf directly, where keepsDeviceEdit has no
+            // deviceSeen entry and returns false before writeLocalToSaf declines on the in-flight write.
+            secondEngine.handleMirrorEvent(FileObserver.MODIFY, secondFile, otherMirror, otherTree)
+            secondEngine.runWriteBackLoop { false }
+
+            nowMs += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+            // First retry at +30s while the first writer is still streaming:
+            // retryHeldBack -> flushDirtyPaths -> writeLocalToSaf must double the
+            // wait to 60s rather than resetting it to 30s.
+            assertTrue(secondEngine.retryHeldBack(secondSession))
+
+            nowMs += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+            assertFalse(
+                secondEngine.retryHeldBack(secondSession),
+                "writeLocalToSaf reset a prior held-back wait to HELD_BACK_RETRY_FIRST_MS instead of doubling it",
+            )
+            nowMs += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+            assertTrue(secondEngine.retryHeldBack(secondSession), "the doubled wait did not become due at 60s")
+        } finally {
+            releaseFirstWriter.countDown()
+            first.join(5_000)
+        }
     }
 }

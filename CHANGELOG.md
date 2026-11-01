@@ -42,7 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Open terminal links that wrap across rows without failing during highlight preview.
 - Exclude upstream repository configuration files at the root of each bundled extension, keeping runtime files and licenses.
 - Preserve external device-folder edits when provider metadata is missing or unchanged.
-- Decline a second save of one device document reached through overlapping device-folder grants, instead of letting two interleave.
+- Hold back and retry a second save of one device document reached through overlapping device-folder grants, instead of setting aside an in-flight write or letting two interleave.
 - A device-folder deletion sets the file aside and checks its content first, so an edit made meanwhile is kept.
 - Authenticate the editor listener before sending its connection token or adopting a saved session.
 - Bound editor health checks even when a listener sends headers or body bytes slowly.
