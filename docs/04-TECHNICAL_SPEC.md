@@ -1331,6 +1331,7 @@ flowchart TD
   P --> P39["0039 authenticate the editor listener with a private run challenge"]
   P --> P40["0040 wrapped terminal links highlighted within each physical row"]
   P --> P41["0041 horizontal panels kept within a narrow viewport"]
+  P --> P42["0042 configuration: tolerate non-list folders in a workspace file"]
 ```
 
 Five of these are load-bearing in ways their titles understate:
