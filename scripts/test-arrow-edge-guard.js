@@ -214,8 +214,17 @@ function cancels(key, props, opts = {}) {
     return press(page, box, key, opts).includes('guard');
 }
 
-const box = (value, start, end = start, tagName = 'INPUT') =>
-    ({ tagName, type: tagName === 'INPUT' ? 'text' : 'textarea', value, selectionStart: start, selectionEnd: end });
+const box = (value, start, end = start, tagName = 'INPUT') => ({
+    tagName,
+    type: tagName === 'INPUT' ? 'text' : 'textarea',
+    value,
+    selectionStart: start,
+    selectionEnd: end,
+    setSelectionRange(s, e) {
+        this.selectionStart = s;
+        this.selectionEnd = e;
+    },
+});
 // An input with no selection API reports null, as Blink does for number,
 // email and checkbox alike.
 const input = (type, value) => ({ tagName: 'INPUT', type, value, selectionStart: null, selectionEnd: null });
@@ -295,20 +304,109 @@ const cases = [
     ['a target that takes no text', cancels('ArrowLeft', { tagName: 'DIV' }), false],
 ];
 
-// The renderer owns visual movement, including bidi runs and caret affinity.
-// Cancelling after that move prevents both a second step and spatial focus.
+// The renderer probes visual movement, including bidi runs and caret affinity:
+// when the probe does not move the caret the press is at a visual edge and is
+// cancelled; when it moves the caret the selection is restored so the native
+// move can advance the caret once and scroll the box to keep it in view.
+function runRtlProbe(value, start, key, rtlParagraph = false, tag = 'INPUT') {
+    const calls = [];
+    const restored = [];
+    const step = (key === 'ArrowLeft' ? -1 : 1) * (rtlParagraph ? -1 : 1);
+    let field;
+    const stepCaret = () => {
+        const next = Math.max(0, Math.min(field.value.length, field.selectionStart + step));
+        field.selectionStart = next;
+        field.selectionEnd = next;
+    };
+    const selection = {
+        modify: (...args) => {
+            calls.push(args);
+            stepCaret();
+        },
+    };
+    const page = newPage(LATER, { selection, keybindings: true });
+    field = new Node(page.host, {
+        ...box(value, start, start, tag),
+        matches: () => true,
+        setSelectionRange(s, e) {
+            restored.push([s, e]);
+            this.selectionStart = s;
+            this.selectionEnd = e;
+        },
+    });
+    const cancelled = press(page, field, key);
+    if (!cancelled.includes('guard')) stepCaret();
+    return { field, calls, restored, cancelled, log: page.log };
+}
+
 for (const tag of ['INPUT', 'TEXTAREA']) {
     for (const [key, direction, offset] of [['ArrowLeft', 'left', 0], ['ArrowRight', 'right', 3]]) {
-        const calls = [];
-        const selection = { modify: (...args) => calls.push(args) };
-        const page = newPage(LATER, { selection, keybindings: true });
-        const field = new Node(page.host, { ...box('\u05d0\u05d1\u05d2', offset, offset, tag), matches: () => true });
-        const cancelled = press(page, field, key);
-        cases.push([`${tag} delegates ${direction} at a logical endpoint to the renderer`,
-            JSON.stringify(calls) === JSON.stringify([['move', direction, 'character']]), true]);
-        cases.push([`${tag} consumes the native default after the renderer move`, cancelled.includes('guard'), true]);
-        cases.push([`${tag} keeps the workbench binding after the renderer move`, page.log.includes(`keybinding ${key}`), true]);
+        const moved = runRtlProbe('\u05d0\u05d1\u05d2', offset, key, true, tag);
+        const expectedNext = offset === 0 ? 1 : 2;
+        cases.push([`${tag} probes ${direction} at a logical endpoint with the renderer`,
+            JSON.stringify(moved.calls) === JSON.stringify([['move', direction, 'character']]), true]);
+        cases.push([`${tag} restores the caret after a moving renderer probe`,
+            JSON.stringify(moved.restored) === JSON.stringify([[offset, offset]]), true]);
+        cases.push([`${tag} leaves a moving press in right-to-left text to the native move`,
+            moved.cancelled.includes('guard'), false]);
+        cases.push([`${tag} steps once when the native move runs after the probe`,
+            moved.field.selectionStart === expectedNext && moved.field.selectionEnd === expectedNext, true]);
+        cases.push([`${tag} keeps the workbench binding after the renderer probe`,
+            moved.log.includes(`keybinding ${key}`), true]);
     }
+    for (const [key, direction, offset] of [['ArrowRight', 'right', 0], ['ArrowLeft', 'left', 3]]) {
+        const edge = runRtlProbe('\u05d0\u05d1\u05d2', offset, key, true, tag);
+        cases.push([`${tag} cancels ${direction} when the renderer probe stays at the visual edge`,
+            edge.cancelled.includes('guard'), true]);
+        cases.push([`${tag} puts nothing back when the renderer probe stays at the visual edge`,
+            edge.restored.length, 0]);
+        cases.push([`${tag} leaves the caret at the visual edge`,
+            edge.field.selectionStart === offset && edge.field.selectionEnd === offset, true]);
+    }
+}
+
+{
+    const mixedRight = runRtlProbe('ab\u05d0cd', 1, 'ArrowRight', false);
+    cases.push(['interior Right in a mixed value ends one step on', mixedRight.field.selectionStart, 2]);
+    cases.push(['interior Right in a mixed value is left to the native move', mixedRight.cancelled.includes('guard'), false]);
+    cases.push(['interior Right in a mixed value restores the caret before the native move',
+        JSON.stringify(mixedRight.restored), JSON.stringify([[1, 1]])]);
+
+    const mixedLeft = runRtlProbe('ab\u05d0cd', 1, 'ArrowLeft', false);
+    cases.push(['interior Left in a mixed value ends one step back', mixedLeft.field.selectionStart, 0]);
+    cases.push(['interior Left in a mixed value is left to the native move', mixedLeft.cancelled.includes('guard'), false]);
+
+    const mixedEdge = runRtlProbe('ab\u05d0cd', 0, 'ArrowLeft', false);
+    cases.push(['Left at the visual left edge of a mixed value is cancelled', mixedEdge.cancelled.includes('guard'), true]);
+    cases.push(['Left at the visual left edge of a mixed value leaves the caret', mixedEdge.field.selectionStart, 0]);
+    cases.push(['Left at the visual left edge of a mixed value puts nothing back', mixedEdge.restored.length, 0]);
+
+    // When a box cannot restore its selection after Selection.modify moved the caret,
+    // the guard cancels the native move so the caret steps once instead of twice.
+    let noRestoreField;
+    const noRestorePage = newPage(LATER, {
+        selection: {
+            modify: () => {
+                noRestoreField.selectionStart = 1;
+                noRestoreField.selectionEnd = 1;
+            },
+        },
+    });
+    noRestoreField = new Node(noRestorePage.host, {
+        tagName: 'INPUT',
+        type: 'text',
+        value: '\u05d0\u05d1\u05d2',
+        selectionStart: 0,
+        selectionEnd: 0,
+        matches: () => true,
+    });
+    const noRestoreCancelled = press(noRestorePage, noRestoreField, 'ArrowLeft');
+    if (!noRestoreCancelled.includes('guard')) {
+        noRestoreField.selectionStart += 1;
+        noRestoreField.selectionEnd += 1;
+    }
+    cases.push(['a box without setSelectionRange cancels the native move after Selection.modify moves the caret',
+        noRestoreCancelled.includes('guard') && noRestoreField.selectionStart === 1, true]);
 }
 
 // Left-to-right text needs no renderer move: its logical and visual edges agree, and

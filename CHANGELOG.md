@@ -13,6 +13,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The setup notification no longer says unpacking only happens once, in every language; it runs again after each update.
 - A device folder that is still syncing is reported in the app's language instead of an English sentence.
 - Setup that finishes while the app is in the background starts the editor when you come back, not from the background.
+- Keep the caret in view when arrow keys move it in a text box without moving focus out of right-to-left and mixed text.
 
 ### Changed
 

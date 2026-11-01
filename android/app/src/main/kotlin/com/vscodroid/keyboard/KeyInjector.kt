@@ -432,9 +432,10 @@ class KeyInjector(
      * box inside an extension webview, a frame of another origin, is not
      * guarded. It applies to a hardware keyboard's Left and Right too. For a
      * collapsed caret in text with a right-to-left run, Blink's Selection.modify
-     * performs the visual move and the native default is cancelled, including
-     * where that move ends: logical offsets cannot identify visual edges there.
-     * It does not scroll the box, so left-to-right text keeps the native move and
+     * probes the visual step: when the caret does not move, the press is at a
+     * visual edge and is cancelled; when it does, the selection is put back and
+     * the native move runs so the box still scrolls to its caret. Logical offsets
+     * cannot identify visual edges there; left-to-right text skips the probe and
      * is cancelled only at its logical ends.
      *
      * Call once after the page finishes loading.
@@ -987,12 +988,13 @@ class KeyInjector(
                 var version = /Chrome\/(\d+)/.exec(navigator.userAgent);
                 var altUnhandled = !version || +version[1] < 149;
                 // Only text with a right-to-left run has a visual edge that a logical
-                // offset does not name. Everywhere else the native move scrolls the
-                // box to its caret and Selection.modify does not.
+                // offset does not name. Selection.modify does not scroll the box, so
+                // when its probe moves the caret the selection is put back and the
+                // native move runs.
                 // Scripts outside the BMP (Adlam) are not matched and keep the logical
                 // edge, until a Unicode-aware class is worth the cost.
                 var RTL = /[\u0590-\u08FF\u200F\u202B\u202E\u2067\uFB1D-\uFDFF\uFE70-\uFEFC]/;
-                // Handle the renderer's visual move before spatial navigation. A
+                // Probe the renderer's visual move before spatial navigation. A
                 // number or email box takes text but reports no caret, so any
                 // press there may be the one at its edge.
                 function leaves(e, t) {
@@ -1005,7 +1007,10 @@ class KeyInjector(
                         if (selection && typeof selection.modify === 'function') {
                             if (!t.matches(':focus')) return false;
                             selection.modify('move', EDGE[e.key] < 0 ? 'left' : 'right', 'character');
-                            return true;
+                            if (t.selectionStart === at && t.selectionEnd === at) return true;
+                            if (typeof t.setSelectionRange !== 'function') return true;
+                            t.setSelectionRange(at, at);
+                            return false;
                         }
                     }
                     return blind || (box && at === t.selectionEnd && at === (EDGE[e.key] < 0 ? 0 : t.value.length));
