@@ -90,6 +90,9 @@
 0005 webview csp|out/vs/workbench/contrib/webview/browser/pre/index.html|script-src 'unsafe-inline'
 0006 callback relay|out/vs/code/browser/workbench/callback.html|intent://callback
 0006 callback URI decoding|out/vs/code/browser/workbench/callback.html|const path = params.get('vscode-path')
+0006 callback top-document check|out/vs/code/browser/workbench/callback.html|window.top === window.self
+0006 callback framing refusal|out/server-main.js|frame-ancestors 'none';
+0006 callback X-Frame-Options header|out/server-main.js|'X-Frame-Options': 'DENY'
 0008 activitybar height|out/vs/code/browser/workbench/workbench.js|.activitybar .composite-bar
 0008 activitybar first gap|out/vs/code/browser/workbench/workbench.js|.getPropertyValue('--activity-bar-action-gap')
 0009 alpine target|out/server-main.js|Android: requesting the alpine target platform

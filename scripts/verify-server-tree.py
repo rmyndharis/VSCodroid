@@ -781,6 +781,19 @@ def main(tree):
     if page is not None:
         check("Visual Studio Code" not in page, "callback.html is branded",
               "the sign-in page the system browser renders still names Microsoft's product")
+        check("window.top === window.self" in page,
+              "callback.html refuses to store or relay when framed",
+              "a framed /callback load can write to the editor origin's localStorage")
+
+    if server_main.exists():
+        try:
+            server_text = server_main.read_text(errors="replace")
+        except OSError as e:
+            check(False, "out/server-main.js is readable for callback policy", str(e))
+        else:
+            check("frame-ancestors 'none';" in server_text,
+                  "server-main.js refuses to frame the callback page",
+                  "_handleCallback is missing frame-ancestors 'none';")
 
     nls_bundle = tree / "out/nls.messages.js"
     messages = None
