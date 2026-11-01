@@ -1,13 +1,13 @@
 # VSCodroid Privacy Policy
 
 **Effective Date: February 13, 2026**
-**Last Updated: October 27, 2026**
+**Last Updated: November 1, 2026**
 
 ## Summary
 
 VSCodroid is a code editor that runs entirely on your Android device. **We** do not collect, transmit, or store any personal data, and there is no server of ours for anything to reach. Your code and files stay on your device unless you send them somewhere yourself, for example by pushing to a Git remote.
 
-Three exceptions to "nothing leaves the device", all under your control and none involving us. Android's own backup service copies your editor settings to your Google account if you have backup switched on (see **Android Backup** below). Anything you ask the app to fetch (an extension, a toolchain, an `npm install`) is a request you initiated, with two things the editor does on its own: it checks Open VSX for newer versions of your installed extensions and installs them, and when you open a Python file without Black Formatter installed it looks that extension up on Open VSX so it can suggest it (see **Network Access**).
+Three exceptions to "nothing leaves the device", all under your control and none involving us. Android's own backup service copies your editor settings to your Google account if you have backup switched on (see **Android Backup** below). Anything you ask the app to fetch (an extension, a toolchain, an `npm install`) is a request you initiated, alongside several online lookups the editor performs on its own: it checks Open VSX for newer versions of your installed extensions and installs them, when you open a Python file without Black Formatter installed it looks that extension up on Open VSX so it can suggest it, and its built-in language features fetch JSON schemas, `npm` package metadata, and TypeScript type definitions when you work with files that use them (see **Network Access**).
 
 The third is different in kind and worth reading before you use it: the app bundles **GitHub Copilot Chat**, and once you sign in to GitHub and use it, what you ask it and the code it attaches as context go to GitHub. That is the one feature here that sends your own work to someone else. It has no account and no chat until you sign in, though it does load and run in the background from the moment the editor starts, and it can be switched off.
 
@@ -24,7 +24,7 @@ VSCodroid runs a local code editor server entirely on your Android device. The e
 All code execution -- whether Node.js, Python, Bash, or any other bundled runtime -- happens 100% on your device.
 
 The app asks for four Android permissions of its own. `INTERNET` covers the
-user-initiated cases listed under **Network Access** below, and the loopback
+connections listed under **Network Access** below, and the loopback
 traffic between the editor page and the local server. `FOREGROUND_SERVICE` and
 `FOREGROUND_SERVICE_SPECIAL_USE` keep that local server alive while you are
 working. `POST_NOTIFICATIONS` is for the notification showing the server's
@@ -53,6 +53,16 @@ When you browse, search for, or install extensions, the app connects to **Open V
 Not every one of these connections is one you asked for, which is why this section is not headed "user-initiated" like the ones below it. The editor asks Open VSX for newer versions of the extensions you have installed when it starts and every 12 hours after that, whether or not you open the Extensions view, and it installs the updates it finds without asking. Both behaviours come from the editor and are on by default; you can turn them off in its settings, under `extensions.autoCheckUpdates` and `extensions.autoUpdate`. What goes out is the list of extensions to check, never anything from your files.
 
 The app also asks the editor to recommend the Black Formatter extension (`ms-python.black-formatter`) for Python files. When you open a Python file while that extension is not installed, the editor looks it up on Open VSX to show the suggestion. What goes out is that extension's identifier, never anything from your files. The setting `extensions.ignoreRecommendations` turns it off.
+
+### Built-in Language Features
+
+Several of the editor's built-in language extensions fetch public metadata over HTTPS when you open or edit matching files, without waiting for an explicit command:
+
+- **JSON schemas**: When you open a JSON file (such as `package.json` or `tsconfig.json`) or a file declaring a `$schema` URL, the built-in JSON language server fetches the schema from the domain the editor or the file names (by default `json.schemastore.org` and the other hosts listed under `json.schemaDownload.trustedDomains`). What goes out is the schema URL, not the contents of your JSON file. You can turn this off with `json.schemaDownload.enable`.
+- **`package.json` package metadata**: When you edit `package.json`, the built-in JSON language server queries `registry.npmjs.org` for package names, descriptions, and latest versions to power completions and hover text (controlled by `npm.fetchOnlinePackageInfo`), and when you hover a dependency inside a folder that contains `package.json`, the built-in `npm` extension runs `npm view` against the configured `npm` registry (`registry.npmjs.org` by default) for the package under the cursor. What goes out is the dependency name or prefix being completed or inspected. Set `npm.fetchOnlinePackageInfo` to `false` and disable the built-in `npm` extension from the Extensions view if you want to stop both lookups.
+- **TypeScript automatic type acquisition**: When you open a JavaScript or TypeScript project, the TypeScript language server can install missing `@types/*` packages from `registry.npmjs.org` into the editor's local cache so completions work for third-party libraries. What goes out is the package names imported or listed in your project. You can turn this off with `js/ts.tsserver.automaticTypeAcquisition.enabled` (set to `false`) or `typescript.disableAutomaticTypeAcquisition` (set to `true`).
+
+You can set these on either the **Remote** or **User** tab in Settings (settings on the **Remote** tab are included in Android Backup; see **Android Backup** below).
 
 ### Signing In to a Service From the Editor (User-Initiated)
 

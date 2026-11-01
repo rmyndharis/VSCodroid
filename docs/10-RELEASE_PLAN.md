@@ -343,7 +343,9 @@ stray value there declares sharing the app does not do.
 
 Everything else the app touches stays on the device or goes to a third party the
 user works with: Git remotes they configured, package registries they invoked,
-SSH hosts they named, and the extension registry. The registry is reached when
+SSH hosts they named, the extension registry, and the schema and package registries
+queried by the built-in JSON, npm, and TypeScript extensions (`json.schemastore.org`,
+the other schema hosts in `json.schemaDownload.trustedDomains`, and `registry.npmjs.org`). The extension registry is reached when
 the user browses it, and also without asking, when the editor checks it for
 updates to installed extensions and when opening a Python file looks up the
 Black Formatter extension the app recommends. None of that is
