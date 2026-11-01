@@ -56,7 +56,7 @@ data class StartupNotice(val message: String, val terminal: Boolean)
  * any bound clients because it is started as a foreground service.
  *
  * Threading: the state this service keeps for itself, namely [restartCount],
- * [isServiceRunning], [launchJob], [runId], [failureRaised] and
+ * [lastReadyAt], [isServiceRunning], [launchJob], [runId], [failureRaised] and
  * [startupNotice], is touched only from [serviceScope]'s dispatcher, which is
  * the main thread. Service lifecycle callbacks already arrive there; the one
  * caller that does not is the watchdog, and [setupProcessCallbacks] hands its
@@ -81,12 +81,12 @@ class NodeService : Service() {
     private var restartCount = 0
 
     /**
-     * When the server last reported ready, on [SystemClock.elapsedRealtime].
+     * When the currently running server reported ready, on [SystemClock.elapsedRealtime].
      *
-     * Written on every readiness and read at exactly one place, [handleServerCrash],
-     * because how long a server lasted is a quantity only at the moment it stops
-     * lasting. See [NEVER_READY_AT] for why a run with no readiness behind it
-     * parks this in the future rather than in the past.
+     * Written on every readiness and consumed at [handleServerCrash] when that
+     * server dies, because how long a server lasted is a quantity only for the
+     * process that achieved that readiness. See [NEVER_READY_AT] for why a process
+     * that has not reported ready parks this in the future rather than in the past.
      */
     private var lastReadyAt = NEVER_READY_AT
     private var isServiceRunning = false
@@ -1021,11 +1021,15 @@ class NodeService : Service() {
         //
         // Not in [retryOrGiveUp], for the same reason [chargeHeapOverride] is not
         // there either: two paths reach it for one death, and only this one is fed
-        // by a server that ever ran. A start that produced nothing has no uptime
-        // to credit, and [NEVER_READY_AT] is what makes it answer so.
+        // by a server that ever ran. Consuming [lastReadyAt] here, before
+        // [chargeHeapOverride] suspends, ensures a crash loop of replacements that
+        // never reach [announceReady] cannot inherit an earlier server's timestamp
+        // once the clock passes [READY_STABLE_MS], and cannot overwrite a
+        // replacement run's readiness recorded while preference I/O was in flight.
         if (readinessIsRecovery(SystemClock.elapsedRealtime(), lastReadyAt)) {
             endFailureEpisode()
         }
+        lastReadyAt = NEVER_READY_AT
         Logger.w(tag, "Server crashed (exit=$exitCode), restart #${restartCount + 1}")
         chargeHeapOverride(exitCode, epoch)
         // Preference I/O can outlive a stop and a replacement start.
@@ -1425,11 +1429,11 @@ internal const val MAX_BACKOFF_SHIFT = 4
 internal const val READY_STABLE_MS = 60_000L
 
 /**
- * What the last-ready instant holds while this run has never had a ready server.
+ * What [NodeService.lastReadyAt] holds while the current server has not reported ready.
  *
  * In the future rather than in the past, and that direction is the whole of it.
  * The one question asked of that instant is how long the server that just died
- * had been ready, so a run with no readiness behind it has to answer "not long
+ * had been ready, so a process with no readiness behind it has to answer "not long
  * enough". Parked in the past, which is where it sat while readiness itself
  * asked the question, every crash of a server that never answered would hand out
  * a fresh budget, and the terminal state would be unreachable for exactly the
