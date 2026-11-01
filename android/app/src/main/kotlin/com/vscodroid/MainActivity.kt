@@ -200,6 +200,7 @@ class MainActivity : AppCompatActivity() {
      * message was actually shown.
      */
     private val announcedHandoffFailures = mutableSetOf<HandoffFailure>()
+    private val announcedMultiMirrorGenerations = mutableSetOf<Long>()
 
     /**
      * Whether a workbench page is loaded and able to receive an auth callback.
@@ -3159,12 +3160,29 @@ class MainActivity : AppCompatActivity() {
             // runOnUiThread returns Unit.
             onListMirrors = { deviceFolderCopiesAsJson() },
             onReclaimMirror = { hash, force -> removeDeviceFolderCopy(hash, force) },
+            onWorkspaceRoots = { generation, paths ->
+                val resolved = paths.mapNotNull { workspaceDirectoryInForce(it) }
+                val published = workspaceResources.publish(generation, resolved)
+                if (published) {
+                    val mirrorCount = safManager.mirrorNamesForWorkspacePaths(
+                        paths + resolved.map { it.toString() },
+                    ).size
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed) return@runOnUiThread
+                        if (shouldAnnounceMultipleDeviceFolders(mirrorCount, generation, announcedMultiMirrorGenerations)) {
+                            Toast.makeText(
+                                applicationContext,
+                                R.string.saf_workspace_multiple_folders,
+                                Toast.LENGTH_LONG,
+                            ).show()
+                        }
+                    }
+                }
+                published
+            },
             // The answer's road back into the page. evaluateJavascript is a
             // WebView call and belongs to the thread the view was made on, which
             // is why this hops while the two above must not.
-            onWorkspaceRoots = { generation, paths ->
-                workspaceResources.publish(generation, paths.mapNotNull { workspaceDirectoryInForce(it) })
-            },
             onAsyncAnswer = { id, ok, payload ->
                 runOnUiThread { answerBridgeCommand(id, ok, payload) }
             },
@@ -8308,5 +8326,19 @@ internal fun authBootstrapVerdict(result: String?, generation: Long): Boolean? =
     }
 } catch (_: JSONException) {
     null
+}
+
+/**
+ * Whether a multi-root workspace spanning [mirrorCount] distinct device-folder
+ * copies should be announced for [generation], recording the generation so the
+ * notice appears at most once per workbench page load.
+ */
+internal fun shouldAnnounceMultipleDeviceFolders(
+    mirrorCount: Int,
+    generation: Long,
+    announcedGenerations: MutableSet<Long>,
+): Boolean {
+    if (mirrorCount < 2 || generation <= 0L) return false
+    return announcedGenerations.add(generation)
 }
 

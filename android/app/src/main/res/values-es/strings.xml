@@ -605,4 +605,5 @@
          one English word survived inside an otherwise translated About dialog. -->
     <string name="about_version_unknown">desconocida</string>
     <string name="saf_folder_unavailable">La copia local de esta carpeta del dispositivo ya no está disponible. Vuelve a abrir la carpeta desde el dispositivo.</string>
+    <string name="saf_workspace_multiple_folders">Este espacio de trabajo abarca más de una carpeta del dispositivo. Solo se sincroniza una carpeta del dispositivo a la vez; los cambios en las demás permanecen en VSCodroid hasta que abras esas carpetas directamente.</string>
 </resources>

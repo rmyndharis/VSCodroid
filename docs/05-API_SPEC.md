@@ -444,6 +444,8 @@ fun publishWorkspaceRoots(authToken: String, pageGeneration: Long, pathsJson: St
 // Replaces the current document's complete workspace resource-root set.
 // Empty input closes the set; stale sessions, generations, and relative paths are refused.
 // Resource requests retain their origin, referrer, sensitive-path, and containment checks.
+// When the published paths span two or more distinct device-folder copies under saf-mirrors/,
+// MainActivity shows saf_workspace_multiple_folders once for that pageGeneration.
 
 @JavascriptInterface
 fun openRecentFolder(authToken: String, uriString: String)

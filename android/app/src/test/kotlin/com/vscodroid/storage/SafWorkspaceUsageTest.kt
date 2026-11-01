@@ -232,6 +232,113 @@ class SafWorkspaceUsageTest : SafInitialSyncTestBase() {
         assertFalse(replacement.hasPersistedPermission(folder))
     }
 
+    @Test
+    fun `mirrorNamesForPaths counts distinct device folder copies across direct and named paths`() {
+        val root = File(filesDir, "saf-mirrors").absolutePath
+        val firstHash = "0123456789ab"
+        val secondHash = "fedcba987654"
+        assertEquals(
+            setOf(firstHash),
+            SafStorageManager.mirrorNamesForPaths(
+                listOf(
+                    "$root/$firstHash/a",
+                    "$root/by-name/$firstHash/Project/b",
+                    "$root/${firstHash}_extra/c",
+                    File(filesDir, "projects/local").absolutePath,
+                ),
+                root,
+            ),
+        )
+        assertEquals(
+            setOf(firstHash, secondHash),
+            SafStorageManager.mirrorNamesForPaths(
+                listOf(
+                    "$root/$firstHash/a",
+                    "$root/by-name/$secondHash/Other/b",
+                ),
+                root,
+            ),
+        )
+        val targetInFirst = File(root, "$firstHash/subdir").apply { mkdirs() }
+        val symlinkOutside = File(filesDir, "projects/linked-mirror").apply {
+            parentFile.mkdirs()
+            java.nio.file.Files.createSymbolicLink(toPath(), targetInFirst.toPath())
+        }
+        assertEquals(
+            setOf(firstHash),
+            SafStorageManager.mirrorNamesForPaths(
+                listOf(symlinkOutside.absolutePath),
+                root,
+            ),
+            "a symlink resolving into a mirror directory must count that mirror",
+        )
+        assertEquals(
+            setOf(firstHash),
+            SafStorageManager.mirrorNamesForPaths(
+                listOf(
+                    "/data/data/com.vscodroid.debug/files/saf-mirrors/$firstHash/a",
+                    "/data/user/0/com.vscodroid.debug/files/saf-mirrors/by-name/$firstHash/Project/b",
+                ),
+                "/data/user/0/com.vscodroid.debug/files/saf-mirrors",
+            ),
+            "/data/data and /data/user/0 aliases for the same mirror must count as one folder",
+        )
+    }
+
+    @Test
+    fun `shouldAnnounceMultipleDeviceFolders announces once per generation when two or more copies are open`() {
+        val announced = mutableSetOf<Long>()
+        assertFalse(com.vscodroid.shouldAnnounceMultipleDeviceFolders(0, 1L, announced))
+        assertFalse(com.vscodroid.shouldAnnounceMultipleDeviceFolders(1, 1L, announced))
+        assertFalse(com.vscodroid.shouldAnnounceMultipleDeviceFolders(2, 0L, announced))
+        assertTrue(com.vscodroid.shouldAnnounceMultipleDeviceFolders(2, 1L, announced))
+        assertFalse(
+            com.vscodroid.shouldAnnounceMultipleDeviceFolders(2, 1L, announced),
+            "same generation must not repeat the toast",
+        )
+        assertTrue(
+            com.vscodroid.shouldAnnounceMultipleDeviceFolders(3, 2L, announced),
+            "new generation must announce again",
+        )
+    }
+
+    @Test
+    fun `claimWorkspacePaths refuses a mixed intact and missing mirror list and claims both when intact`() {
+        val unclaimedMirror = File(mirror.parentFile, "aaaa11112222").apply { mkdirs() }
+        val secondMirror = File(mirror.parentFile, "fedcba987654").apply { mkdirs() }
+        val missingMirror = File(mirror.parentFile, "111122223333")
+        assertFalse(
+            replacement.claimWorkspacePaths(listOf(unclaimedMirror.absolutePath, missingMirror.absolutePath)),
+            "a list containing a missing mirror directory must be refused as a unit",
+        )
+        assertFalse(missingMirror.exists(), "refusing a missing mirror must not create its directory")
+        assertTrue(
+            manager.reclaimMirror(unclaimedMirror.name, force = true) >= 0L,
+            "refusing a mixed list must not leave the intact mirror claimed in usedMirrorsThisProcess",
+        )
+        assertTrue(
+            replacement.claimWorkspacePaths(listOf(mirror.absolutePath, secondMirror.absolutePath)),
+            "two intact synced mirrors in one workspace must both be claimed",
+        )
+        assertEquals(SafStorageManager.RECLAIM_IN_USE, manager.reclaimMirror(mirror.name, force = true))
+        assertEquals(SafStorageManager.RECLAIM_IN_USE, manager.reclaimMirror(secondMirror.name, force = true))
+    }
+
+    @Test
+    fun `onWorkspaceRoots counts distinct device folder copies and hops to the UI thread for the notice`() {
+        val source = File("src/main/kotlin/com/vscodroid/MainActivity.kt").readText()
+        val initBridgeBody = com.vscodroid.SourceScan.withoutComments(
+            com.vscodroid.SourceScan.body(source, "private fun initBridge("),
+        )
+        assertTrue(initBridgeBody.contains("safManager.mirrorNamesForWorkspacePaths("))
+        assertTrue(initBridgeBody.contains("paths + resolved.map { it.toString() }"))
+        assertTrue(initBridgeBody.contains("if (isFinishing || isDestroyed) return@runOnUiThread"))
+        assertTrue(initBridgeBody.contains("shouldAnnounceMultipleDeviceFolders(mirrorCount, generation, announcedMultiMirrorGenerations)"))
+        assertTrue(initBridgeBody.contains("applicationContext"))
+        assertTrue(initBridgeBody.contains("R.string.saf_workspace_multiple_folders"))
+        assertTrue(initBridgeBody.contains("published"))
+    }
+
     private fun finishWorkers() {
         workers.forEach { it.thread.join(5_000) }
         workers.filter { it.thread.isAlive }.forEach { it.thread.interrupt() }

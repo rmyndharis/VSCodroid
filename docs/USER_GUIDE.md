@@ -146,7 +146,10 @@ VSCodroid is VS Code. If you have used VS Code on desktop, everything works the 
   the code for that folder.
 - A `.code-workspace` file opens as a multi-root workspace: open the file and
   choose **Open Workspace**. On a device folder its roots have to sit inside the
-  folder you granted, because nothing outside that folder is reachable.
+  folder you granted, because nothing outside a granted folder is reachable. Only
+  one device folder is synced back to the device at a time; if a workspace spans
+  more than one copied device folder, VSCodroid shows a notice and edits in the
+  other folders stay inside VSCodroid until you open those folders directly.
 - Create new files with **Ctrl+N** or by right-clicking in the Explorer.
 - The default workspace is `~/projects/`. Create subdirectories there for each project.
 

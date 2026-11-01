@@ -609,4 +609,5 @@
          one English word survived inside an otherwise translated About dialog. -->
     <string name="about_version_unknown">неизвестно</string>
     <string name="saf_folder_unavailable">Локальная копия этой папки на устройстве больше недоступна. Откройте папку с устройства снова.</string>
+    <string name="saf_workspace_multiple_folders">Это рабочее пространство охватывает несколько папок устройства. Одновременно синхронизируется только одна папка устройства; изменения в остальных остаются внутри VSCodroid, пока эти папки не будут открыты напрямую.</string>
 </resources>

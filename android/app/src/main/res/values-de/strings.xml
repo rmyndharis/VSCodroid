@@ -601,4 +601,5 @@
          one English word survived inside an otherwise translated About dialog. -->
     <string name="about_version_unknown">unbekannt</string>
     <string name="saf_folder_unavailable">Die lokale Kopie dieses Geräteordners ist nicht mehr verfügbar. Öffnen Sie den Ordner erneut vom Gerät.</string>
+    <string name="saf_workspace_multiple_folders">Dieser Arbeitsbereich umfasst mehr als einen Geräteordner. Es wird jeweils nur ein Geräteordner synchronisiert; Änderungen in den anderen bleiben in VSCodroid, bis diese Ordner direkt geöffnet werden.</string>
 </resources>

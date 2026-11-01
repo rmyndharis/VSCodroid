@@ -196,14 +196,14 @@ class SafStorageManager(context: Context) {
     private val lastFailureAnnouncedAt = AtomicLong(NEVER_ANNOUNCED)
     private val lastKeptAnnouncedAt = AtomicLong(NEVER_ANNOUNCED)
 
+    /** Distinct device-folder copy names (`<hash>`) referenced by [paths]. */
+    fun mirrorNamesForWorkspacePaths(paths: List<String>): Set<String> =
+        mirrorNamesForPaths(paths, com.vscodroid.util.Environment.getSafMirrorsDir(context))
+
     /** Claims paths before workspace publication or a remote filesystem request. */
     fun claimWorkspacePaths(paths: List<String>): Boolean {
         val root = com.vscodroid.util.Environment.getSafMirrorsDir(context)
-        val mirrors = paths.flatMap { path ->
-            val file = File(path)
-            val spellings = listOf(file.toPath().normalize().toString(), runCatching { file.canonicalPath }.getOrNull())
-            spellings.mapNotNull { mirrorNameFor(it, root)?.takeIf(::isMirrorDirectoryName) }
-        }.map { File(root, it).absolutePath }.toSet()
+        val mirrors = mirrorNamesForPaths(paths, root).map { File(root, it).absolutePath }.toSet()
         return synchronized(mirrorUsageLock) {
             if (mirrors.any { it in mirrorsBeingRemoved || !File(it).isDirectory }) return@synchronized false
             mirrorsUsedThisProcess.addAll(mirrors)
@@ -1334,6 +1334,36 @@ class SafStorageManager(context: Context) {
             return mirrorSpelling(path, mirrorsRoot).removePrefix(prefix)
                 .substringBefore(File.separatorChar)
                 .takeIf { it.isNotEmpty() }
+        }
+
+        /**
+         * Distinct device-folder copy directory names (`<hash>`) referenced by [paths],
+         * resolving both direct mirror paths and `by-name/<hash>/<name>` spellings.
+         */
+        internal fun mirrorNamesForPaths(paths: List<String>, mirrorsRoot: String): Set<String> {
+            val normalizedRoot = File(mirrorsRoot).toPath().normalize().toString()
+            val canonicalRoot = runCatching { File(mirrorsRoot).canonicalPath }.getOrNull()
+            val aliasRoot = when {
+                normalizedRoot.startsWith("/data/user/0/") ->
+                    "/data/data/" + normalizedRoot.removePrefix("/data/user/0/")
+                normalizedRoot.startsWith("/data/data/") ->
+                    "/data/user/0/" + normalizedRoot.removePrefix("/data/data/")
+                else -> null
+            }
+            return paths.flatMap { path ->
+                val file = File(path)
+                val normalized = file.toPath().normalize().toString()
+                val canonical = runCatching { file.canonicalPath }.getOrNull()
+                listOfNotNull(
+                    mirrorNameFor(normalized, normalizedRoot),
+                    aliasRoot?.let { mirrorNameFor(normalized, it) },
+                    canonical?.let {
+                        mirrorNameFor(it, canonicalRoot ?: normalizedRoot)
+                            ?: mirrorNameFor(it, normalizedRoot)
+                            ?: aliasRoot?.let { alias -> mirrorNameFor(it, alias) }
+                    },
+                ).filter(::isMirrorDirectoryName)
+            }.toSet()
         }
 
         /**
