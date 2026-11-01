@@ -1185,12 +1185,17 @@ class MainActivity : AppCompatActivity() {
     /**
      * The manifest's `configChanges` keeps the activity across a turn of the phone,
      * a resize or a fold, so this is where one is seen. The keyboard is reported
-     * hidden with it and comes back by itself, and [keyboardDismissal] must not
-     * hold the page's editor down for that.
+     * hidden with it and comes back by itself, [keyboardDismissal] must not hold
+     * the page's editor down for that, and any word still composing in the page is
+     * ended before the keyboard restarts for the new orientation.
      */
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         keyboardDismissal.turned()
+        webView?.evaluateJavascript(
+            "if (window.__vscodroidFinishComposition) window.__vscodroidFinishComposition();",
+            null,
+        )
         // The keyboard the extra key row stood aside for is gone, a Bluetooth one
         // asleep or unpaired, and the soft keyboard is what is left. A touch would
         // bring the row back, but the person may well carry on typing on the screen.
@@ -4053,23 +4058,24 @@ class MainActivity : AppCompatActivity() {
      * with it.
      *
      * The same script ends a word the keyboard is still composing when a key or
-     * a tap moves the editor's caret. Chromium keeps an EditContext
-     * composition's range where it was when the page moves the selection
-     * (crbug 379170477), so with a keyboard that composes, moving the caret
-     * while a word was underlined made the keyboard's next edit land on the
-     * word's old range: End while `kiwi` was underlined in
+     * a tap moves the editor's caret, or when [onConfigurationChanged] calls
+     * `window.__vscodroidFinishComposition` on a turn of the screen. Chromium
+     * keeps an EditContext composition's range where it was when the page moves
+     * the selection (crbug 379170477), so with a keyboard that composes, moving
+     * the caret while a word was underlined made the keyboard's next edit land
+     * on the word's old range: End while `kiwi` was underlined in
      * `alpha delta kiwi charlie` left `alpha delta charlie charlie`, a tap on
      * an empty line followed by `cha` typed `cchcha`, and Tab accepting
      * `alpha3` over `alp` left `alpha3ha3`. Blurring and refocusing the host
      * ends the composition in the same task as the caret move, so the keyboard
      * starts again from the new caret. That runs for the arrows, Home, End,
      * PageUp, PageDown, Tab, Backspace and Delete from a window capture
-     * `keydown`, whatever sends them, and for the editor's own
+     * `keydown`, whatever sends them, for the editor's own
      * `-monaco-gesturetap` and `-monaco-gesturecontextmenu` (a long press)
-     * inside `.monaco-editor`; only for a focused host that has an
-     * `editContext` and is in the script's `composing` set, and with
-     * `reapplying` set, so the focus handler leaves the refocus and `inputmode`
-     * alone.
+     * inside `.monaco-editor`, and for `window.__vscodroidFinishComposition`;
+     * only for a focused host that has an `editContext` and is in the script's
+     * `composing` set, and with `reapplying` set, so the focus handler leaves
+     * the refocus and `inputmode` alone.
      *
      * It runs before the editor handles the key or the tap, except where an
      * open suggestion list takes a key without modifiers, or a tap. Ending a
@@ -4566,6 +4572,7 @@ class MainActivity : AppCompatActivity() {
                     element.focus();
                     reapplying = false;
                 }
+                window.__vscodroidFinishComposition = finishComposition;
                 // Ending a composition can make the editor refilter an open
                 // suggest list and focus its first item again, so a Tab or tap
                 // the list takes ends it only after the list has acted, still

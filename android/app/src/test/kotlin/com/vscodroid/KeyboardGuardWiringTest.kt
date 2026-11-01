@@ -245,6 +245,31 @@ class KeyboardGuardWiringTest {
                 "hold is written for the hide a turn of the phone brings and keeps the keyboard " +
                 "away on a device with no hardware keyboard.",
         )
+        assertTrue(
+            guard.contains("window.__vscodroidFinishComposition = finishComposition"),
+            "the guard no longer exposes __vscodroidFinishComposition on window",
+        )
+        assertTrue(
+            Regex(
+                """override fun onConfigurationChanged\(newConfig: Configuration\)[^}]*""" +
+                    """evaluateJavascript\(\s*"[^"]*__vscodroidFinishComposition\(\)""",
+            ).containsMatchIn(source),
+            "onConfigurationChanged no longer finishes an active IME composition on rotation",
+        )
+        val configBody = SourceScan.withoutComments(
+            SourceScan.body(source, "override fun onConfigurationChanged("),
+        )
+        assertTrue(
+            configBody.contains("if (window.__vscodroidFinishComposition) window.__vscodroidFinishComposition();"),
+            "onConfigurationChanged must guard __vscodroidFinishComposition() for pages before the guard has run",
+        )
+        val turnedIdx = configBody.indexOf("keyboardDismissal.turned()")
+        val finishIdx = configBody.indexOf("__vscodroidFinishComposition()")
+        val noKeysIdx = configBody.indexOf("Configuration.KEYBOARD_NOKEYS")
+        assertTrue(
+            turnedIdx in 0 until finishIdx && finishIdx < noKeysIdx,
+            "keyboardDismissal.turned() must precede __vscodroidFinishComposition(), before the KEYBOARD_NOKEYS branch",
+        )
     }
 
     @Test

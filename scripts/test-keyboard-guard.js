@@ -8,18 +8,21 @@
  * `MainActivity.injectKeyboardGuard()`, handed to `evaluateJavascript`, so
  * nothing compiles it and `KeyboardGuardWiringTest` can only match its text.
  * Part of it ends a soft keyboard's composition before the editor moves the
- * caret: Chromium keeps an EditContext composition's range where it was when
- * the page moves the selection (crbug 379170477), so a keyboard that
- * recomposes the word at the new caret writes it over the old range. What
- * makes the finish work is order and state, which text matching cannot see:
- * the blur and refocus run in the same dispatch as the key or the editor's
- * gesture and before the editor's own handler, only while the focused
- * EditContext host is composing, and without the guard's own focusin handler
- * answering the refocus by changing `inputmode`, which restarts input. An
- * open suggest list is the exception, because ending a composition makes the
- * editor refilter the list and focus its first item again: Tab accepting a
- * suggestion and a tap on a row are finished after the list has acted, and
- * Up, Down, PageUp and PageDown that move the list's focus not at all.
+ * caret or when the screen turns: Chromium keeps an EditContext composition's
+ * range where it was when the page moves the selection (crbug 379170477), so a
+ * keyboard that recomposes the word at the new caret writes it over the old
+ * range, and a turn of the phone leaves a composing word underlined in the page
+ * after the keyboard restarts for the new orientation. What makes the finish
+ * work is order and state, which text matching cannot see: the blur and refocus
+ * run in the same dispatch as the key, the editor's gesture or
+ * `window.__vscodroidFinishComposition()` and before the editor's own handler,
+ * only while the focused EditContext host is composing, and without the guard's
+ * own focusin handler answering the refocus by changing `inputmode`, which
+ * restarts input. An open suggest list is the exception, because ending a
+ * composition makes the editor refilter the list and focus its first item
+ * again: Tab accepting a suggestion and a tap on a row are finished after the
+ * list has acted, and Up, Down, PageUp and PageDown that move the list's focus
+ * not at all.
  *
  * This extracts the real script, runs it under `vm` against a small fake DOM
  * that dispatches events through the capture, target and bubble phases, and
@@ -460,6 +463,46 @@ check('a tap on a list outside the editor is left alone',
     ['explorer -monaco-gesturetap']);
 check('after a tap outside text, End finishes the word once and never writes inputmode',
     typing(), (p) => { touch(p, p.tabs, 100); press(p, 'End'); }, finished('editor End'));
+check('turning the screen while a word composes finishes it and never writes inputmode',
+    typing(), (p) => {
+        touch(p, p.tabs, 100);
+        p.window.__vscodroidImeVisible = false;
+        log = [];
+        task(p, () => { p.window.__vscodroidFinishComposition(); });
+    }, ['blur host', 'focus host']);
+check('a window resize event alone does not end a composing word',
+    typing(), (p) => {
+        dispatch(p, p.window, { type: 'resize' });
+    }, []);
+check('turning the screen with no word composing does nothing',
+    typing({ composing: false }), (p) => {
+        task(p, () => { p.window.__vscodroidFinishComposition(); });
+    }, []);
+check('turning the screen while the keyboard stays up ends a composing word without changing inputmode',
+    typing(), (p) => {
+        p.window.__vscodroidImeVisible = true;
+        task(p, () => { p.window.__vscodroidFinishComposition(); });
+    }, ['blur host', 'focus host']);
+check('turning the screen while a suggest list row has focus does not blur the editor host',
+    openList(typing()), (p) => {
+        p.rows[0].focus();
+        log = [];
+        task(p, () => { p.window.__vscodroidFinishComposition(); });
+    }, []);
+check('a word composed after a screen turn finishes on the next caret key',
+    typing(), (p) => {
+        task(p, () => { p.window.__vscodroidFinishComposition(); });
+        p.host.editContext.start();
+        log = [];
+        press(p, 'ArrowRight');
+    }, ['blur host', 'focus host', 'editor ArrowRight']);
+check('calling __vscodroidFinishComposition twice in a row blurs and focuses once',
+    typing(), (p) => {
+        task(p, () => {
+            p.window.__vscodroidFinishComposition();
+            p.window.__vscodroidFinishComposition();
+        });
+    }, ['blur host', 'focus host']);
 check('the textarea edit path, which has no EditContext, is left alone',
     typing({ textarea: true }), (p) => press(p, 'End'), ['editor End']);
 
