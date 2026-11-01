@@ -83,12 +83,24 @@ class MovedDefaultsOneShotTest {
             stored[firstArg()] = secondArg<Boolean>()
             editor
         }
+        every { editor.putInt(any(), any()) } answers {
+            stored[firstArg()] = secondArg<Int>()
+            editor
+        }
+        every { editor.putString(any(), any()) } answers {
+            val value = secondArg<String?>()
+            if (value == null) stored.remove(firstArg()) else stored[firstArg()] = value
+            editor
+        }
         val prefs = mockk<SharedPreferences>(relaxed = true)
         every { prefs.edit() } returns editor
         every { prefs.getBoolean(any(), any()) } answers {
             stored[firstArg()] as? Boolean ?: secondArg()
         }
         every { prefs.getInt(any(), any()) } answers { stored[firstArg()] as? Int ?: secondArg() }
+        every { prefs.getString(any(), any()) } answers {
+            stored[firstArg()] as? String ?: secondArg()
+        }
 
         context = mockk(relaxed = true)
         every { context.filesDir } returns filesDir
@@ -241,6 +253,212 @@ class MovedDefaultsOneShotTest {
             "a settings file this app just wrote was not recorded as needing no prune, so " +
                 "the next launch spends the one pass over a document that can only have " +
                 "gained one of those pairs from the user",
+        )
+    }
+
+    @Test
+    fun `a restored post-migration settings file keeps user preferences across launches`() {
+        stored.clear()
+        settingsFile.writeText(
+            """
+            {
+                "vscodroid.layout.compactScreen": false,
+                "vscodroid.layout.autoHideSideBar": true,
+                "editor.wordWrap": "on",
+                "workbench.statusBar.visible": false,
+                "git.path": "$oldNativeLibDir/libgit.so"
+            }
+            """.trimIndent(),
+        )
+
+        run()
+        run()
+
+        val text = settingsFile.readText()
+        assertTrue(
+            text.contains("\"vscodroid.layout.compactScreen\": true"),
+            "tablet-to-phone restore must update compactScreen to the target device's layout class",
+        )
+        assertTrue(
+            text.contains("\"vscodroid.layout.autoHideSideBar\": true"),
+            "tablet-to-phone restore must preserve user-chosen vscodroid.layout.autoHideSideBar",
+        )
+        assertTrue(
+            text.contains("\"editor.wordWrap\": \"on\""),
+            "cloud-restored post-migration settings lost user-chosen editor.wordWrap",
+        )
+        assertTrue(
+            text.contains("\"workbench.statusBar.visible\": false"),
+            "cloud-restored post-migration settings lost workbench.statusBar.visible",
+        )
+        assertTrue(
+            stored["moved_defaults_pruned"] as? Boolean ?: false,
+            "cloud-restored post-migration settings did not record moved_defaults_pruned",
+        )
+    }
+
+    @Test
+    fun `a refused first write of a restored post-migration settings file still preserves user preferences after setup completes`() {
+        stored.clear()
+        settingsFile.writeText(
+            """
+            {
+                "vscodroid.layout.compactScreen": false,
+                "editor.wordWrap": "on",
+                "git.path": "$oldNativeLibDir/libgit.so"
+            }
+            """.trimIndent(),
+        )
+        val tmpBlocker = File(settingsFile.parentFile, "${settingsFile.name}.tmp~").apply {
+            mkdirs()
+            File(this, "occupied").writeText("x")
+        }
+
+        run()
+
+        assertTrue(
+            stored["moved_defaults_pruned"] as? Boolean ?: false,
+            "a restored post-migration file must record moved_defaults_pruned even if refreshing managed paths fails on the first launch",
+        )
+        // First-run setup completes before the next launch and records the build identity.
+        stored["setup_version"] = "1.3.9"
+        stored["setup_version_code"] = 14
+        assertTrue(tmpBlocker.deleteRecursively())
+
+        run()
+
+        assertTrue(
+            settingsFile.readText().contains("\"editor.wordWrap\": \"on\""),
+            "the launch after a refused first write and setup completion pruned a restored post-migration settings file",
+        )
+    }
+
+    @Test
+    fun `an in-place upgrade still prunes even when compactScreen is present`() {
+        stored.clear()
+        stored["setup_version"] = "1.1.0"
+        stored["setup_version_code"] = 12
+        settingsFile.writeText(
+            """
+            {
+                "vscodroid.layout.compactScreen": false,
+                "editor.wordWrap": "on",
+                "git.path": "$oldNativeLibDir/libgit.so"
+            }
+            """.trimIndent(),
+        )
+
+        run()
+
+        assertFalse(
+            settingsFile.readText().contains("editor.wordWrap"),
+            "an in-place upgrade skipped the one-time prune",
+        )
+    }
+
+    @Test
+    fun `a restore of a pre-migration settings file without compactScreen still prunes moved defaults`() {
+        stored.clear()
+        settingsFile.writeText(
+            """
+            {
+                "editor.wordWrap": "on",
+                "gitlens.codeLens.enabled": false,
+                "git.path": "$oldNativeLibDir/libgit.so"
+            }
+            """.trimIndent(),
+        )
+
+        run()
+
+        val text = settingsFile.readText()
+        assertFalse(
+            text.contains("editor.wordWrap"),
+            "a restored v1.1.x/v1.2.x settings file without compactScreen kept the old machine default editor.wordWrap",
+        )
+        assertFalse(
+            text.contains("gitlens.codeLens.enabled"),
+            "a restored v1.1.x/v1.2.x settings file without compactScreen kept gitlens.codeLens.enabled",
+        )
+        assertTrue(
+            text.contains("\"vscodroid.layout.compactScreen\": true"),
+            "a restored pre-migration settings file did not receive the compactScreen layout default",
+        )
+        assertTrue(
+            stored["moved_defaults_pruned"] as? Boolean ?: false,
+            "a restored pre-migration settings file did not record moved_defaults_pruned after pruning",
+        )
+    }
+
+    @Test
+    fun `a refused first write followed by the setup record prunes on the next launch`() {
+        stored.clear()
+        settingsFile.writeText(
+            """
+            {
+                "editor.wordWrap": "on",
+                "git.path": "$oldNativeLibDir/libgit.so"
+            }
+            """.trimIndent(),
+        )
+        val tmpBlocker = File(settingsFile.parentFile, "${settingsFile.name}.tmp~").apply {
+            mkdirs()
+            File(this, "occupied").writeText("x")
+        }
+
+        run()
+
+        assertFalse(
+            stored["moved_defaults_pruned"] as? Boolean ?: false,
+            "a refused settings write still recorded moved_defaults_pruned",
+        )
+        assertTrue(settingsFile.readText().contains("editor.wordWrap"))
+
+        // First-run setup completes in the meantime and records the build identity.
+        stored["setup_version"] = "1.3.9"
+        stored["setup_version_code"] = 14
+        assertTrue(tmpBlocker.deleteRecursively())
+
+        run()
+
+        assertFalse(
+            settingsFile.readText().contains("editor.wordWrap"),
+            "the launch after a refused first write and setup completion failed to prune editor.wordWrap",
+        )
+        assertTrue(
+            stored["moved_defaults_pruned"] as? Boolean ?: false,
+            "the launch after a refused first write did not record moved_defaults_pruned",
+        )
+    }
+
+    @Test
+    fun `an interrupted first run of an old release followed by an update still prunes`() {
+        stored.clear()
+        // An old release wrote settings.json during an interrupted first run before markSetupComplete().
+        settingsFile.writeText(
+            """
+            {
+                "editor.wordWrap": "on",
+                "workbench.statusBar.visible": true,
+                "git.path": "$oldNativeLibDir/libgit.so"
+            }
+            """.trimIndent(),
+        )
+
+        run()
+
+        val text = settingsFile.readText()
+        assertFalse(
+            text.contains("editor.wordWrap"),
+            "an update after an interrupted old first run kept the old machine default editor.wordWrap",
+        )
+        assertTrue(
+            text.contains("$nativeLibDir/libgit.so"),
+            "managed native library path was not refreshed",
+        )
+        assertTrue(
+            stored["moved_defaults_pruned"] as? Boolean ?: false,
+            "moved_defaults_pruned was not recorded after pruning",
         )
     }
 }

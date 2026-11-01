@@ -2843,8 +2843,25 @@ claude() {
         // Recorded only after the write below succeeds, so a run that dies
         // first prunes again on the next launch, which is the direction to fail
         // in. That is what the versionCode form got right and is kept.
-        val shouldPrune = !prefs.getBoolean(KEY_MOVED_DEFAULTS_PRUNED, false)
+        //
+        // One case has a settings file on disk before any setup has ever been
+        // recorded in SharedPreferences: an Android Auto Backup restore onto a
+        // new device (backup_rules.xml includes home/.vscodroid/ and excludes
+        // shared_prefs/). When the restored document already carries
+        // `vscodroid.layout.compactScreen`, it was written by a post-migration
+        // build, so any pair in it matching [MOVED_DEFAULTS] was put there by
+        // the user and must not be stripped.
         val document = refreshed ?: current
+        val restoredPostMigration =
+            !prefs.getBoolean(KEY_MOVED_DEFAULTS_PRUNED, false) &&
+                prefs.getString(KEY_VERSION, null).isNullOrEmpty() &&
+                getPreviousVersionCode() == 0 &&
+                COMPACT_SCREEN_KEY.containsMatchIn(commentsBlanked(document)) &&
+                prunableMovedDefaults(document)
+        if (restoredPostMigration) {
+            markMovedDefaultsPruned()
+        }
+        val shouldPrune = !restoredPostMigration && !prefs.getBoolean(KEY_MOVED_DEFAULTS_PRUNED, false)
         // Whether it LOOKED, which is not the same as whether it changed anything.
         // A decline leaves the app's old preferences in the document, so recording
         // the pass as done for one would keep them there for ever.
@@ -6266,6 +6283,8 @@ internal fun refreshManagedPaths(
  * `vscodroid.layout.autoHideSideBar`, in their own settings file, where this
  * function never reaches.
  */
+private val COMPACT_SCREEN_KEY = Regex(""""vscodroid\.layout\.compactScreen"\s*:""")
+
 internal fun settingsWithLayoutDefaults(content: String, compactScreen: Boolean): String? =
     SettingPin("vscodroid.layout.compactScreen", """(?:true|false)""", compactScreen.toString())
         .applyTo(content)
