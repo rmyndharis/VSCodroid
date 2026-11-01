@@ -300,10 +300,24 @@ function namesProgram(name, needle) {
     return ['', '.js', '.mjs', '.cjs'].some((ext) => name === needle + ext);
 }
 
-/** Remove the bundled loader wrapper before reading the executable. */
+/** Remove the bundled loader wrapper and its options before reading the executable. */
 function programArguments(parts) {
-    return path.basename(parts[0] || '').toLowerCase() === 'libldmusl.so'
-        ? parts.slice(1) : parts;
+    if (path.basename(parts[0] || '').toLowerCase() !== 'libldmusl.so') return parts;
+    let i = 1;
+    while (i < parts.length) {
+        const arg = parts[i];
+        if (arg === '--') return parts.slice(i + 1);
+        if (arg === '--list' || /^--(preload|library-path|argv0)=/.test(arg)) {
+            i += 1;
+            continue;
+        }
+        if (arg === '--preload' || arg === '--library-path' || arg === '--argv0') {
+            i += 2;
+            continue;
+        }
+        break;
+    }
+    return parts.slice(i);
 }
 
 /**
