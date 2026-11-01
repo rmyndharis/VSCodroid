@@ -125,7 +125,7 @@ class SameVersionPackageReplacementTest {
     private fun interruptedPackage(): File {
         val blocker = File(second.parentFile, "${second.name}.tmp~")
         assertTrue(blocker.mkdirs())
-        File(blocker, "occupied").writeText("x")
+        File(blocker, "occupied").writeText("")
         assertEquals(FirstRunSetup.SetupResult.ERROR, launchSetupDecision())
         assertEquals("// alpha", first.readText())
         assertFalse(stored.containsKey("setup_version"))

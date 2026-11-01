@@ -144,9 +144,11 @@ class FirstRunSetup(
      * that no earlier build ever completed under is what makes the tree beneath
      * that marker this build's alone; on an upgrade the marker is written over
      * the previous release's files, so it cannot license anything. The marker
-     * carries the rest of it: replacing one that names a different build poisons
-     * it, so a tree written by more than one unfinished run can never match. See
-     * the comment where this is set.
+     * carries the rest of it: replacing one that names a different build, or
+     * starting with no marker over a non-empty uncompleted `server/` tree left
+     * by a build that predates the marker, poisons it with [MIXED_TREE], so a
+     * tree written by more than one unfinished run can never match. See the
+     * comment where this is set.
      *
      * Set from [KEY_EXTRACTION_ATTEMPT] at the top of [runSetupLocked] and
      * nowhere else, so the per-launch reconcile from SplashActivity, which
@@ -300,12 +302,13 @@ class FirstRunSetup(
         // gated on an upgrade this install does not look like.
         //
         // So the marker is poisoned rather than replaced when it names a
-        // different build: from then on it can never equal the attempt it is
-        // compared against, and no retry is licensed until markSetupComplete()
-        // clears it. The cost of the poison is one re-copy of a tree written by
-        // more than one build, which is the answer that was wanted anyway. An
-        // upgrade re-copies for the same reason, and there is no cheaper answer
-        // without a per-file digest the build does not produce.
+        // different build, or when no marker is stored over a non-empty
+        // uncompleted `server/` tree: from then on it can never equal the
+        // attempt it is compared against, and no retry is licensed until
+        // markSetupComplete() clears it. The cost of the poison is one re-copy
+        // of a tree written by more than one build, which is the answer that was
+        // wanted anyway. An upgrade re-copies for the same reason, and there is
+        // no cheaper answer without a per-file digest the build does not produce.
         //
         // Both keys, not the code alone, because the question is "has any build
         // ever completed here" and either key on its own answers something
@@ -383,11 +386,13 @@ class FirstRunSetup(
             // with a Retry button that measures the same thing for ever and a
             // MainActivity that never runs, so nothing the app offers can free a byte.
             var available = context.filesDir.usableSpace
-            // Kept on its own because two different questions read it. It counts
-            // toward what is already on disk, and it is also the only honest
-            // answer to "is the extracted tree here at all", which is what
-            // decides the rewrite headroom. `usr/` cannot answer the second: the
-            // per-launch repair block writes into it before this gate ever runs.
+            // Kept on its own because three different questions read it. It
+            // counts toward what is already on disk, it is the only honest
+            // answer to "is the extracted tree here at all" for the rewrite
+            // headroom, and below the pre-flight it tells the marker whether an
+            // uncompleted install already holds unattributed `server/` bytes.
+            // `usr/` cannot answer the second or third: the per-launch repair
+            // block writes into it before this gate ever runs.
             val extractedTreeBytes = installedExtractionBytes(File(context.filesDir, "server"))
             val installed = extractedTreeBytes +
                 sharedTreeCredit(
@@ -477,8 +482,18 @@ class FirstRunSetup(
             // commit(), not apply(): what follows is minutes of I/O and a kill in
             // the flush window would take the record with it, which is the same
             // reason markSetupComplete() commits.
+            //
+            // On an install where nothing has ever completed, a non-empty
+            // `server/` tree with no `KEY_EXTRACTION_ATTEMPT` record means a
+            // build that predates the marker (or lost its preference file)
+            // already wrote into `server/` without finishing. Treating that tree
+            // as mixed prevents a later retry from skipping equal-length files
+            // whose bytes came from the unrecorded build, while an upgrade from
+            // a completed install keeps a plain attempt marker.
+            val unattributedServerTree =
+                nothingCompletedHere && storedAttempt == null && extractedTreeBytes > 0L
             val marker =
-                if (storedAttempt == null || storedAttempt == attempt) {
+                if ((storedAttempt == null && !unattributedServerTree) || storedAttempt == attempt) {
                     attempt
                 } else {
                     "$attempt$MIXED_TREE"
@@ -4444,7 +4459,9 @@ claude() {
          * Both halves of the version and the package timestamp, because each
          * can move independently and identify different assets. Absent on every
          * install that predates it, which reads as "not this build" and rewrites,
-         * so an existing install is never handed a skip it did not earn.
+         * and when `server/` already holds unattributed bytes on an uncompleted
+         * install the first marker written over that tree is poisoned with
+         * [MIXED_TREE] so a later retry cannot skip files the older build wrote.
          *
          * The package timestamp also distinguishes a rebuilt APK installed at
          * the same versionName and versionCode, so its files cannot inherit an
@@ -4454,7 +4471,9 @@ claude() {
 
         /**
          * Appended to [KEY_EXTRACTION_ATTEMPT] once a second build has written
-         * into the same unfinished tree, which is what makes the record unusable.
+         * into the same unfinished tree, or when the first recorded attempt
+         * starts over a non-empty uncompleted `server/` tree with no prior
+         * marker, which is what makes the record unusable.
          *
          * The suffix, rather than a second preference key, because the question
          * the marker answers is already "did THIS build write everything below
