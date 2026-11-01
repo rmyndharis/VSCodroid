@@ -443,4 +443,18 @@ class BundledExtensionRefreshTest {
         assertTrue(!dir.exists() || unpackWasAbandoned(dir))
     }
 
+    @Test
+    fun `an extension unpack failure carries the underlying write cause`() {
+        every { assets.open("extensions/$dirName/extension.js") } throws
+            IOException("write failed: ENOSPC (No space left on device)")
+
+        val failure = assertThrows(InvocationTargetException::class.java) { extractBundledExtensions() }
+        val cause = failure.cause as IOException
+
+        assertTrue(
+            cause.message.orEmpty().contains("No space left on device"),
+            "extractBundledExtensions dropped firstWriteFailure from the thrown message: ${cause.message}",
+        )
+    }
+
 }

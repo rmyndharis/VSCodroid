@@ -3546,7 +3546,8 @@ claude() {
                             "that mark is ${if (marker.isFile) "there" else "not"}.",
                     )
                 }
-                throw IOException("could not unpack bundled extension $name")
+                val cause = firstWriteFailure?.let { ": $it" }.orEmpty()
+                throw IOException("could not unpack bundled extension $name$cause")
             }
             // Only now is the directory an install. A clear that fails costs
             // one wasted re-copy on the next run, never a broken extension,
@@ -4319,7 +4320,18 @@ claude() {
             val detail = when {
                 message.isEmpty() -> type
                 message.length <= DETAIL_LIMIT -> "$type: $message"
-                else -> "$type: " + message.take(DETAIL_LIMIT).trimEnd() + "\u2026"
+                else -> {
+                    val firstSeparator = message.indexOf(": ")
+                    val reasonSeparator = message.lastIndexOf(": ")
+                    val tail = if (reasonSeparator > 0) message.substring(reasonSeparator) else ""
+                    val minHead = if (firstSeparator >= 0) firstSeparator else 0
+                    val headBudget = DETAIL_LIMIT - 1 - tail.length
+                    if (tail.isNotEmpty() && headBudget > minHead) {
+                        "$type: " + message.take(headBudget).trimEnd() + "\u2026" + tail
+                    } else {
+                        "$type: " + message.take(DETAIL_LIMIT).trimEnd() + "\u2026"
+                    }
+                }
             }
             return Failure(step?.trimEnd('.', ' ', '\u2026').orEmpty(), detail)
         }
@@ -4420,21 +4432,23 @@ claude() {
          * scales with the file COUNT, not with the total size, and the count has
          * been stable across pins while the size has not.
          *
-         * 128 MiB, raised from 96, and 96 from 64, each time because the figure
-         * did not cover what it names. Measured at Code - OSS 1.133.0,
+         * 192 MiB, raised from 128, 96, and 64, each time because the figure
+         * did not cover what it names. Measured at Code - OSS 1.139.1,
          * counting the way BuildConfig.EXTRACTED_ASSET_BYTES counts (assets minus
-         * nls): 22,626 files, 5,102 directories, 774.0 MiB of logical length.
-         * Rounding every file to a 4 KiB block and charging a block per directory
-         * gives 854.0 MiB on ext4, which is 80.0 MiB of overhead, inside 96.
+         * nls): 22,653 files, 5,103 directories, 774.1 MiB of logical length,
+         * 834.3 MiB when each file is rounded to a 4 KiB data block (60.1 MiB of
+         * data-block rounding).
          *
-         * f2fs is the one that was over-passing, and this constant's own doc had
-         * it backwards: inline_data does not make a small file free, because the
-         * node block holding it is itself a 4 KiB allocation charged against the
-         * free space the gate reads. So f2fs costs roughly ext4 plus a block per
-         * file that is not inlined: 879.1 MiB for the same tree, 105.0 MiB of
-         * overhead, which 96 did not cover. A device with between 870 and 879 MiB
-         * free therefore passed the gate, unpacked for minutes and met ENOSPC,
-         * which is the failure this constant exists to prevent.
+         * Encrypted f2fs is the filesystem that binds. On Android's file-based
+         * encryption (`fscrypt`), f2fs disables `inline_data` for encrypted files,
+         * so every regular file allocates a 4 KiB data block in addition to its
+         * 4 KiB node block, and every directory allocates a 4 KiB node block too:
+         * `(22,653 + 5,103) * 4,096 = 108.4 MiB` of node blocks on top of the
+         * `60.1 MiB` of data-block rounding, or `168.6 MiB` of overhead in total.
+         * Charging node blocks only for the 6,343 files larger than ~3.4 KiB
+         * assumed `inline_data` was active and under-counted encrypted userdata by
+         * `16,310 * 4 KiB = 63.7 MiB`, letting a device with ~930 MiB free pass the
+         * pre-flight and hit ENOSPC while unpacking the bundled extensions.
          *
          * The same figure serves the upgrade path, which asks for far fewer bytes,
          * and that is not an oversight. Rounding on a rewrite is roughly neutral,
@@ -4444,7 +4458,7 @@ claude() {
          * other. One over-estimate covering another is worth more here than a
          * second constant nobody can measure either.
          */
-        private const val EXTRACTION_SLACK_BYTES = 128L * 1_048_576L
+        private const val EXTRACTION_SLACK_BYTES = 192L * 1_048_576L
 
         /**
          * How much the device was short the last time the pre-flight refused,

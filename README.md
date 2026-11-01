@@ -180,7 +180,7 @@ flowchart TD
 | Architecture | arm64-v8a                          |
 | WebView      | Chrome 125+                        |
 | RAM          | 4 GB recommended                   |
-| Storage      | ~738 MB free to install            |
+| Storage      | ~805 MB free to install            |
 
 ## 🚀 Getting Started
 
@@ -240,15 +240,16 @@ adb install android/app/build/outputs/apk/debug/app-debug.apk
 | -------------------------------------- | -------------------- |
 | Play Store download (core)             | ~270 MB              |
 | + Each toolchain (on-demand)           | 11-74 MB per language |
-| Free space required to install         | ~738 MB              |
+| Free space required to install         | ~805 MB              |
 | Extracted to internal storage (core)   | ~603 MB              |
 | Extracted, plus Ruby and Java          | ~830 MB              |
 | Extracted, plus all three toolchains   | ~1,090 MB            |
 | RAM usage (typical)                    | ~400-700 MB          |
 
 The install figure is larger than what the app ends up occupying because extraction
-needs room to work: it is the asset tree plus about 134 MB of headroom, which covers
-the filesystem block rounding a tree of over 23,000 files costs. When it refuses to
+needs room to work: it is the asset tree plus about 201 MB of headroom, which covers
+the filesystem block rounding and encrypted directory blocks a tree of over 23,000
+files costs. When it refuses to
 start for lack of space it asks for the shortfall it measured, not for the whole
 figure, so a device already holding part of the tree is asked only for what is
 missing. Freeing only what the extracted size suggests is what leaves setup
@@ -262,9 +263,9 @@ These move with every VS Code bump. Re-measure rather than trusting them:
 # and the version that shipped here failed on Linux by printing a plausible 0 MB.
 # This sums the way the gate itself does, in app/build.gradle.kts: decimal MB,
 # which is the unit the app asks in, and `nls/` left out, because those bundles are
-# served to the page straight from the APK and are never unpacked. The 134.2 is
-# EXTRACTION_SLACK_BYTES, 128 MiB, in the same unit.
-python3 -c "import os; b='android/app/src/main/assets'; s={os.path.join(r,f):os.path.getsize(os.path.join(r,f)) for r,_,fs in os.walk(b) for f in fs}; n=os.path.join(b,'nls')+os.sep; t=sum(v for k,v in s.items() if not k.startswith(n)); print(f'{t/1e6:.0f} MB extracted, gate demands {t/1e6+134.2:.0f} MB')"
+# served to the page straight from the APK and are never unpacked. The 201.3 is
+# EXTRACTION_SLACK_BYTES, 192 MiB, in the same unit.
+python3 -c "import os; b='android/app/src/main/assets'; s={os.path.join(r,f):os.path.getsize(os.path.join(r,f)) for r,_,fs in os.walk(b) for f in fs}; n=os.path.join(b,'nls')+os.sep; t=sum(v for k,v in s.items() if not k.startswith(n)); print(f'{t/1e6:.0f} MB extracted, gate demands {t/1e6+201.3:.0f} MB')"
 ```
 
 ## 🤝 Contributing
