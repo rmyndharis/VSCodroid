@@ -87,4 +87,34 @@ class SupersededPythonTest {
             supersededPythonEntries(present, runtime),
         )
     }
+
+    @Test
+    fun `names superseded bundled pip dist-info when the shipped one is on disk`() {
+        val present = listOf(
+            "pip",
+            "pip-25.0.1.dist-info",
+            "pip-26.2.1.dist-info",
+            "pip-26.2.2.dist-info",
+            "pip-26.3.0.dist-info",
+            "pip-tools-7.4.1.dist-info",
+            "pip_tools-7.4.1.dist-info",
+            "pipx-1.7.1.dist-info",
+            "pipdeptree-2.23.0.dist-info",
+            "requests-2.32.3.dist-info",
+            "README.txt",
+        )
+        val shipped = setOf("pip", "pip-26.2.2.dist-info")
+        assertEquals(
+            listOf("pip-25.0.1.dist-info", "pip-26.2.1.dist-info", "pip-26.3.0.dist-info"),
+            supersededBundledPipDistInfo(present, shipped),
+        )
+    }
+
+    @Test
+    fun `keeps existing pip dist-info when the shipped one is absent or unknown`() {
+        val present = listOf("pip", "pip-26.2.1.dist-info", "pip-26.3.0.dist-info")
+        assertTrue(supersededBundledPipDistInfo(present, null).isEmpty())
+        assertTrue(supersededBundledPipDistInfo(present, emptySet()).isEmpty())
+        assertTrue(supersededBundledPipDistInfo(present, setOf("pip", "pip-26.2.2.dist-info")).isEmpty())
+    }
 }

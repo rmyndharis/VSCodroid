@@ -587,9 +587,12 @@ class FirstRunSetup(
             }
             // Extraction merges; it never removes. An upgrade that changes the
             // bundled Python therefore writes the new stdlib beside the old one
-            // and leaves both. Here the runtime is already in place, so this is
-            // only the cleanup half.
+            // and leaves both, and an upgrade that bumps the bundled pip within
+            // the same Python minor writes the new `pip-<version>.dist-info`
+            // beside the old one. Here the runtime and `usr/` are already in
+            // place, so this is the cleanup half.
             reconcilePythonRuntimeLocked()
+            pruneSupersededBundledPipDistInfoLocked()
             if (isUpgrade) pruneDroppedBuiltInExtensions()
 
             reportProgress(context.getString(R.string.setup_step_git), 82)
@@ -899,14 +902,14 @@ class FirstRunSetup(
      * runtime in filesDir.
      *
      * The interpreter ships in the APK and every install replaces it. Its
-     * runtime library and stdlib travel in assets and reach filesDir only
-     * through first-run extraction, which [isFirstRun] gates on versionName or
-     * versionCode. An install that changes the bundled Python without moving
-     * either -- `adb install -r` of a rebuilt debug APK is the everyday case --
-     * therefore
-     * leaves a new interpreter next to the previous runtime. Python then dies
-     * with `CANNOT LINK EXECUTABLE ... library "libpython3.X.so" not found`,
-     * naming a missing file rather than the install that removed it.
+     * runtime library and stdlib travel in assets and reach filesDir through
+     * first-run extraction, which [isFirstRun] gates on versionName,
+     * versionCode, and `PackageInfo.lastUpdateTime`. If `lastUpdateTime` cannot
+     * be read or is unchanged when a rebuilt APK is installed in place without
+     * a version bump, the install leaves a new interpreter next to the previous
+     * runtime. Python then dies with
+     * `CANNOT LINK EXECUTABLE ... library "libpython3.X.so" not found`, naming a
+     * missing file rather than the install that removed it.
      *
      * The version is never hardcoded here. `scripts/download-python.sh` resolves
      * it from the Termux index at build time, so the only honest source is the
@@ -999,6 +1002,34 @@ class FirstRunSetup(
             if (!File(libDir, runtime).exists()) {
                 Logger.w(tag, "Python runtime $runtime still missing after extraction; the APK assets look incomplete")
             }
+        }
+    }
+
+    /**
+     * Removes `pip-<old>.dist-info` directories left behind in the current
+     * Python's `site-packages` when an update ships a newer bundled `pip` under
+     * the same Python `3.<minor>`.
+     *
+     * `extractAssetDir` merges the shipped `pip/` package in place and writes
+     * the new `pip-<new>.dist-info` alongside the previous release's
+     * `pip-<old>.dist-info`. Left on disk, `pip list` and `pip check` warn on
+     * every invocation that `pip` has multiple `.dist-info` directories.
+     *
+     * [supersededBundledPipDistInfo] refuses to remove anything unless the
+     * shipped `pip-*.dist-info` is already present on disk, so an incomplete or
+     * skipped extraction never deletes the only `pip` metadata directory left in
+     * `site-packages`.
+     */
+    internal fun pruneSupersededBundledPipDistInfoLocked() {
+        val runtime = pythonRuntimeInAssets() ?: return
+        val version = PYTHON_RUNTIME_NAME.find(runtime)?.groupValues?.get(1) ?: return
+        val assetPath = "usr/lib/python$version/site-packages"
+        val shipped = runCatching { context.assets.list(assetPath)?.toSet() }.getOrNull()
+        val sitePackages = File(context.filesDir, assetPath)
+        val present = sitePackages.listFiles()?.map { it.name } ?: return
+        for (name in supersededBundledPipDistInfo(present, shipped)) {
+            Logger.i(tag, "Removing superseded bundled pip metadata $name")
+            StorageManager.deleteRecursive(File(sitePackages, name))
         }
     }
 
@@ -5850,6 +5881,25 @@ internal fun supersededPythonEntries(present: List<String>, runtime: String): Li
 // day it was typed and the tree has already moved past two of them.
 internal val PYTHON_RUNTIME_NAME = Regex("""^libpython(3\.\d+)\.so$""")
 internal val PYTHON_STDLIB_NAME = Regex("""^python3\.\d+$""")
+internal val PIP_DIST_INFO = Regex("""^pip-\d[0-9A-Za-z._+]*\.dist-info$""")
+
+/**
+ * Names `pip-<version>.dist-info` directories in `site-packages` that do not
+ * match the `pip-*.dist-info` shipped in the APK's assets.
+ *
+ * Fails closed: returns an empty list when [shipped] is null or contains no
+ * `pip-*.dist-info` entry, or when the shipped entry is not present in
+ * [present] (so an incomplete install never deletes the only metadata on disk).
+ */
+internal fun supersededBundledPipDistInfo(
+    present: List<String>,
+    shipped: Set<String>?,
+): List<String> {
+    val shippedPip = shipped?.filter { PIP_DIST_INFO.matches(it) }?.toSet() ?: return emptyList()
+    if (shippedPip.isEmpty()) return emptyList()
+    if (present.none { it in shippedPip }) return emptyList()
+    return present.filter { PIP_DIST_INFO.matches(it) && it !in shippedPip }
+}
 
 /**
  * Which bundled extension identifiers need an entry written back into

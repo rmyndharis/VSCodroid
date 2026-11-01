@@ -135,6 +135,51 @@ class PythonReclaimTest {
         assertTrue(File(libDir, "python3.13").exists(), "the current stdlib was deleted")
     }
 
+    @Test
+    fun `prunes superseded bundled pip dist-info from the current site-packages`() {
+        File(libDir, shipped).writeText("the runtime this build ships")
+        val sitePackages = File(libDir, "python3.13/site-packages").apply { mkdirs() }
+        val oldDist = File(sitePackages, "pip-26.2.1.dist-info").apply {
+            mkdirs()
+            File(this, "METADATA").writeText("Version: 26.2.1\n")
+        }
+        val symlinkTarget = File(filesDir, "outside-pip-target").apply {
+            mkdirs()
+            File(this, "keep.txt").writeText("do not delete through symlink")
+        }
+        val symlinkedStaleDist = File(sitePackages, "pip-25.0.1.dist-info")
+        java.nio.file.Files.createSymbolicLink(symlinkedStaleDist.toPath(), symlinkTarget.toPath())
+        val newDist = File(sitePackages, "pip-26.2.2.dist-info").apply {
+            mkdirs()
+            File(this, "METADATA").writeText("Version: 26.2.2\n")
+        }
+        val otherDist = File(sitePackages, "pip_tools-7.4.1.dist-info").apply { mkdirs() }
+        val userPkg = File(sitePackages, "requests-2.32.3.dist-info").apply { mkdirs() }
+        every { assets.list("usr/lib/python3.13/site-packages") } returns
+            arrayOf("pip", "pip-26.2.2.dist-info")
+
+        FirstRunSetup(contextWith(freeBytes = 100_000_000L), 0L).pruneSupersededBundledPipDistInfoLocked()
+
+        assertFalse(oldDist.exists(), "superseded pip-26.2.1.dist-info survived in site-packages")
+        assertFalse(java.nio.file.Files.exists(symlinkedStaleDist.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS), "symlinked stale dist-info survived")
+        assertTrue(File(symlinkTarget, "keep.txt").isFile, "deleting symlinked dist-info followed the link into its target")
+        assertTrue(newDist.exists(), "current pip-26.2.2.dist-info was deleted")
+        assertTrue(otherDist.exists(), "unrelated pip_tools dist-info was deleted")
+        assertTrue(userPkg.exists(), "user-installed package dist-info was deleted")
+
+        val source = File("src/main/kotlin/com/vscodroid/setup/FirstRunSetup.kt").readText()
+        val setupBody = com.vscodroid.SourceScan.withoutComments(
+            com.vscodroid.SourceScan.body(source, "private suspend fun runSetupLocked("),
+        )
+        val incompleteIdx = setupBody.indexOf("if (incomplete.isNotEmpty())")
+        val pruneIdx = setupBody.indexOf("pruneSupersededBundledPipDistInfoLocked()")
+        val flushIdx = setupBody.indexOf("flushWritesToMedia()")
+        assertTrue(
+            incompleteIdx in 0 until pruneIdx && pruneIdx < flushIdx,
+            "pruneSupersededBundledPipDistInfoLocked() must run in runSetupLocked after the incomplete check and before flushWritesToMedia()",
+        )
+    }
+
     /**
      * An APK that carries no Python at all is a legitimate build shape, and it
      * must not be read as "everything installed is stale". Reordering the

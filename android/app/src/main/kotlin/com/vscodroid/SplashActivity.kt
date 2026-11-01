@@ -201,9 +201,10 @@ class SplashActivity : AppCompatActivity() {
 
         if (!setup.isFirstRun()) {
             // The interpreter ships in the APK and every install replaces it,
-            // while its runtime and stdlib are extracted only when versionName or
-            // versionCode changes. Reinstalling a rebuilt APK is exactly that gap,
-            // and it is the one case where "not first run" still has work to do.
+            // while its runtime and stdlib are extracted only when [isFirstRun]
+            // sees a changed versionName, versionCode, or lastUpdateTime. If the
+            // runtime in filesDir ever falls out of step with the packaged
+            // interpreter, "not first run" still has work to do.
             // The check is two directory listings; the work it gates is 23 MB, so
             // it runs off the main thread and holds this activity open while it
             // does: lifecycleScope is cancelled the moment we finish for
