@@ -117,6 +117,11 @@ class PackagingDeclarationTest {
      * which a download script writes and git ignores: a source checkout does not carry it,
      * and declaring it would hash a 150 MB tree on every run of every suite.
      *
+     * Suites that spawn a script under `scripts/` via `ProcessBuilder` pass a
+     * `"scripts/..."` literal without a `../` prefix (resolved against `repoRoot`
+     * at runtime). Those literals are collected separately in `spawned` below and
+     * must each be declared with a per-file `inputs.file(...)` entry.
+     *
      * A reader that keeps a base directory and resolves names off it is invisible
      * here, and `NoticesTest` is one; its paths are covered because another suite
      * opens them by literal. A new reader of that shape needs its declaration
@@ -199,6 +204,30 @@ class PackagingDeclarationTest {
             "a unit test opens a repository path that starts with these and ends in an " +
                 "interpolated name, and no string in the inputs block of build.gradle.kts " +
                 "starts with it. Declare each file the name can take."
+        )
+
+        val spawned = File("src/test/kotlin").walkTopDown()
+            .filter { it.isFile && it.extension == "kt" }
+            .flatMap { Regex("\"(scripts/[^\"$]+)\"").findAll(SourceScan.withoutComments(it.readText())) }
+            .map { it.groupValues[1] }
+            .filter { repoRoot.resolve(it).toFile().isFile }
+            .toSortedSet()
+        assertTrue(
+            spawned.isNotEmpty(),
+            "no unit test names a repository script under scripts/ any more, so this " +
+                "checked nothing"
+        )
+        val requiredStrictFiles = (spawned + "scripts/fixtures/workbench-panel-position.ts").toSortedSet()
+        val missingStrict = requiredStrictFiles.filterNot { path ->
+            Regex("""inputs\.file\([^\n"]*"${Regex.escape(path)}"\)""").containsMatchIn(inputs)
+        }.toSortedSet()
+        assertEquals(
+            emptySet<String>(),
+            missingStrict,
+            "a unit test spawns these repository scripts (or their fixture) and " +
+                "build.gradle.kts does not declare each one with inputs.file(...). " +
+                "Use per-file inputs.file declarations so a directory spelling does not " +
+                "disarm the scripts/ guard and a rename does not go silent."
         )
     }
 }
