@@ -187,12 +187,14 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
     }
     {
         const fixture = browserFixture(false);
-        const service = serviceFixture(fixture.helper, {}, type => fixture.events.push({ type }));
-        const previous = service.workspace.folders;
+        const warnings = [];
+        const service = serviceFixture(fixture.helper, {}, type => fixture.events.push({ type }), warnings);
         const folders = toWorkspaceFolders([{ path: memberB }], remote(`${filesRoot}/projects/team.code-workspace`), extUri);
-        await assert.rejects(service.updateWorkspaceConfiguration(folders, {}, false), /local copy/i);
-        assert.equal(service.workspace.folders, previous, 'rejected members were published');
-        assert(fixture.events.every(event => event.type === 'claim'));
+        await service.updateWorkspaceConfiguration(folders, {}, false);
+        assert.equal(service.workspace.folders, folders, 'updateWorkspaceConfiguration left folders unset when a copy was gone');
+        assert.deepEqual(fixture.publications, [], 'the roots of a refused copy were published during folder update');
+        assert.equal(warnings.length, 2);
+        warnings.forEach(warning => assert.match(warning.message, /local copy/i));
         cases++;
     }
     {
@@ -489,8 +491,31 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
                 return [];
             }
         };
-        async function runMultiFolderScenario({ initialText, cachedText, fileText, liveEdits = [] }) {
+        async function runMultiFolderScenario({ initialText, cachedText, fileText, liveEdits = [], onClaim, onPublish }) {
             const fixture = browserFixture();
+            const warnings = [];
+            let claimCount = 0;
+            let publishCount = 0;
+            if (onClaim) {
+                fixture.browser.AndroidBridge.claimWorkspacePaths = (token, json) => {
+                    assert.equal(token, 'session');
+                    claimCount++;
+                    const paths = JSON.parse(json);
+                    fixture.events.push({ type: 'claim', paths });
+                    return onClaim(claimCount, paths);
+                };
+            }
+            if (onPublish) {
+                fixture.browser.AndroidBridge.publishWorkspaceRoots = (token, generation, json) => {
+                    assert.equal(token, 'session');
+                    assert.equal(generation, 7);
+                    publishCount++;
+                    const paths = JSON.parse(json);
+                    const allowed = onPublish(publishCount, paths);
+                    if (allowed) fixture.publications.push(paths);
+                    return allowed;
+                };
+            }
             const unhandled = [];
             const onUnhandled = error => unhandled.push(error);
             process.on('unhandledRejection', onUnhandled);
@@ -501,7 +526,7 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
                 const folderEvents = [];
                 const service = serviceFixture(fixture.helper, null, type => {
                     if (type === 'member-event') folderEvents.push(Array.from(service.workspace.folders, f => f.uri.path));
-                });
+                }, warnings);
                 delete service.createWorkspace;
                 service.workspace = undefined;
                 service.isWorkspaceTrusted = true;
@@ -564,6 +589,8 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
                     unhandled,
                     folderEvents,
                     snapshots,
+                    warnings,
+                    publications: fixture.publications,
                 };
             } finally {
                 process.off('unhandledRejection', onUnhandled);
@@ -640,6 +667,40 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
             ['/c'],
         ]);
         assert.deepEqual(runningWindow.folderEvents, [['/c']]);
+        cases++;
+
+        const savedWithMissingCopy = JSON.stringify({ folders: [{ path: '/a' }, { path: '/b' }] });
+        const refusedHeadInUpdate = await runMultiFolderScenario({
+            initialText: undefined,
+            cachedText: JSON.stringify({ folders: [{ path: '/a' }] }),
+            fileText: savedWithMissingCopy,
+            onClaim: (_count, paths) => !paths.includes('/b'),
+            onPublish: (_count, _paths) => true,
+        });
+        assert.equal(refusedHeadInUpdate.workspaceDefined, true);
+        assert.equal(refusedHeadInUpdate.barrierOpen, true, 'complete-workspace barrier stayed closed when update head claim was refused');
+        assert.deepEqual(refusedHeadInUpdate.folders, ['/a', '/b']);
+        assert.deepEqual(refusedHeadInUpdate.unhandled, []);
+        assert.deepEqual(refusedHeadInUpdate.publications, [['/a', configPath.path]]);
+        cases++;
+        assert.equal(refusedHeadInUpdate.warnings.length, 2);
+        refusedHeadInUpdate.warnings.forEach(warning => assert.match(warning.message, /local copy/i));
+        cases++;
+
+        const refusedPublishInUpdate = await runMultiFolderScenario({
+            initialText: undefined,
+            cachedText: JSON.stringify({ folders: [{ path: '/a' }] }),
+            fileText: savedWithMissingCopy,
+            onClaim: () => true,
+            onPublish: (_count, paths) => !paths.includes('/b'),
+        });
+        assert.equal(refusedPublishInUpdate.workspaceDefined, true);
+        assert.equal(refusedPublishInUpdate.barrierOpen, true, 'complete-workspace barrier stayed closed when update publishing claim was refused');
+        assert.deepEqual(refusedPublishInUpdate.folders, ['/a', '/b']);
+        assert.deepEqual(refusedPublishInUpdate.unhandled, []);
+        assert.deepEqual(refusedPublishInUpdate.publications, [['/a', configPath.path]]);
+        assert.equal(refusedPublishInUpdate.warnings.length, 1);
+        assert.match(refusedPublishInUpdate.warnings[0].message, /local copy/i);
         cases++;
     }
     console.log(JSON.stringify({ cases, result: 'passed', scope: 'selected actual methods and functions with bounded dependency stubs' }));

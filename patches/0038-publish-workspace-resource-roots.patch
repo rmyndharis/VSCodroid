@@ -62,7 +62,7 @@ diff --git a/src/vs/workbench/services/configuration/browser/configurationServic
  		const changes = this.compareFolders(this.workspace.folders, workspaceFolders);
  		if (changes.added.length || changes.removed.length || changes.changed.length) {
  			this.workspace.folders = workspaceFolders;
-+			await claimSafMirrorPaths([...workspaceFolders.map(folder => folder.uri), ...(this.workspace.configuration ? [this.workspace.configuration] : [])], true);
++			await claimSafMirrorPaths([...workspaceFolders.map(folder => folder.uri), ...(this.workspace.configuration ? [this.workspace.configuration] : [])], true).catch(error => this.logService.warn(error));
  			const change = await this.onFoldersChanged();
  			await this.handleWillChangeWorkspaceFolders(changes, fromCache);
  			this.triggerConfigurationChange(change, previous, ConfigurationTarget.WORKSPACE_FOLDER);

@@ -139,7 +139,7 @@ diff --git a/src/vs/workbench/services/configuration/browser/configurationServic
  	}
  
  	private async updateWorkspaceConfiguration(workspaceFolders: WorkspaceFolder[], configuration: ConfigurationModel, fromCache: boolean): Promise<void> {
-+		await claimSafMirrorPaths(workspaceFolders.map(folder => folder.uri));
++		await claimSafMirrorPaths(workspaceFolders.map(folder => folder.uri)).catch(error => this.logService.warn(error));
  		const previous = { data: this._configuration.toData(), workspace: this.workspace };
  		const change = this._configuration.compareAndUpdateWorkspaceConfiguration(configuration);
  		const changes = this.compareFolders(this.workspace.folders, workspaceFolders);

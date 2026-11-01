@@ -109,6 +109,7 @@ temporary directory where it needs files, and is executed directly by `node`.
 | xdg-open | The `openExternal` message `xdg-open.js` sends over the editor's CLI socket, and that anything but an `http` or `https` address is refused rather than sent | `scripts/test-xdg-open.js` |
 | Page script syntax | That every JavaScript raw string in the Android shell (`MainActivity.kt`, `VSCodroidWebView.kt`, `KeyInjector.kt`) compiles cleanly as a classic script under `vm.Script` after Kotlin template substitution | `scripts/test-page-scripts.js` |
 | Static file serving | That `patches/0043-server-serve-file-regular-only.patch` applied to `webClientServer.ts` serves regular files with their ETag and 304 cache path intact while refusing FIFOs, sockets, and character devices with 404 before opening them | `scripts/test-server-serve-file.js` |
+| SAF mirror workspace claims | That `patches/0038-saf-mirror-workspace-claims.patch`, `patches/0041-saf-mirror-stale-member-tolerance.patch`, and `patches/0042-workspace-folders-non-array.patch` claim and publish SAF mirror workspace roots, keep opening a saved workspace when a device-folder copy is missing, and tolerate non-array `folders` values in `.code-workspace` files | `scripts/test-saf-mirror-usage.js` |
 
 **Run**: one `node` invocation per script listed in the `Check the bundled
 JavaScript runtime` step of `lint.yml`, and again in `release.yml`, on Node 24,
