@@ -36,6 +36,11 @@ class ToolchainPickerSkipTargetTest {
         throw AssertionError("no view with id $id in the picker layout; this test is measuring nothing")
     }
 
+    private fun meetsMinimumTouchHeight(button: Element): Boolean =
+        button.getAttribute("android:layout_height") == "48dp" ||
+            (button.getAttribute("android:layout_height") == "wrap_content" &&
+                button.getAttribute("android:minHeight") == "48dp")
+
     /**
      * NEGATIVE CONTROL: put the TextView back and both assertions go red.
      */
@@ -45,7 +50,7 @@ class ToolchainPickerSkipTargetTest {
         assertEquals("Button", skip.tagName) {
             "Skip is a ${skip.tagName}, which TalkBack announces without a control role"
         }
-        assertEquals("48dp", skip.getAttribute("android:layout_height")) {
+        org.junit.jupiter.api.Assertions.assertTrue(meetsMinimumTouchHeight(skip)) {
             "Skip is not held to the 48dp touch target Continue meets on the same screen"
         }
     }
@@ -54,6 +59,73 @@ class ToolchainPickerSkipTargetTest {
     fun `continue is held to the same standard`() {
         val cont = view("continueButton")
         assertEquals("Button", cont.tagName)
-        assertEquals("48dp", cont.getAttribute("android:layout_height"))
+        org.junit.jupiter.api.Assertions.assertTrue(meetsMinimumTouchHeight(cont))
+    }
+
+    @Test
+    fun `header grid and note sit inside a scroll container above the pinned action buttons`() {
+        val scroll = view("pickerScroll")
+        assertEquals("androidx.core.widget.NestedScrollView", scroll.tagName)
+        assertEquals("@+id/continueButton", scroll.getAttribute("app:layout_constraintBottom_toTopOf"))
+        assertEquals("true", scroll.getAttribute("android:fillViewport"))
+
+        for (childId in listOf("pickerTitle", "pickerSubtitle", "toolchainGrid", "includedNote")) {
+            var node = view(childId).parentNode
+            var insideScroll = false
+            while (node != null) {
+                if ((node as? Element)?.getAttribute("android:id") == "@+id/pickerScroll") {
+                    insideScroll = true
+                    break
+                }
+                node = node.parentNode
+            }
+            org.junit.jupiter.api.Assertions.assertTrue(
+                insideScroll,
+                "$childId must sit inside pickerScroll so short windows can scroll to every item",
+            )
+        }
+
+        val grid = view("toolchainGrid")
+        assertEquals("androidx.recyclerview.widget.RecyclerView", grid.tagName)
+        assertEquals("wrap_content", grid.getAttribute("android:layout_height"))
+        assertEquals("false", grid.getAttribute("android:nestedScrollingEnabled"))
+
+        for (buttonId in listOf("continueButton", "skipButton")) {
+            var node = view(buttonId).parentNode
+            while (node != null) {
+                org.junit.jupiter.api.Assertions.assertNotEquals(
+                    "@+id/pickerScroll",
+                    (node as? Element)?.getAttribute("android:id"),
+                    "$buttonId must stay pinned outside pickerScroll",
+                )
+                node = node.parentNode
+            }
+        }
+        assertEquals(
+            "@+id/skipButton",
+            view("continueButton").getAttribute("app:layout_constraintBottom_toTopOf"),
+        )
+        assertEquals(
+            "parent",
+            view("skipButton").getAttribute("app:layout_constraintBottom_toBottomOf"),
+        )
+
+        val splashSource = File("src/main/kotlin/com/vscodroid/SplashActivity.kt").readText()
+        val pickerBody = com.vscodroid.SourceScan.withoutComments(
+            com.vscodroid.SourceScan.body(splashSource, "private fun showToolchainPicker("),
+        )
+        org.junit.jupiter.api.Assertions.assertTrue(
+            pickerBody.contains("findViewById<View>(R.id.pickerRoot)") &&
+                pickerBody.contains(".padForSystemBars("),
+            "showToolchainPicker must still apply system-bar padding to pickerRoot",
+        )
+        val downloadsBody = com.vscodroid.SourceScan.withoutComments(
+            com.vscodroid.SourceScan.body(splashSource, "private fun startDownloads("),
+        )
+        org.junit.jupiter.api.Assertions.assertTrue(
+            downloadsBody.contains("findViewById<View>(R.id.progressRoot)") &&
+                downloadsBody.contains(".padForSystemBars("),
+            "startDownloads must still apply system-bar padding to progressRoot",
+        )
     }
 }
