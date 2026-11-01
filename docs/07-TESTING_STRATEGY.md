@@ -107,6 +107,7 @@ temporary directory where it needs files, and is executed directly by `node`.
 | Serve on Network | The port scan and its reachable/local split | `scripts/test-serve-network.js` |
 | Welcome | That the walkthrough and side bar markers are written only after the command they record actually ran | `scripts/test-welcome.js` |
 | xdg-open | The `openExternal` message `xdg-open.js` sends over the editor's CLI socket, and that anything but an `http` or `https` address is refused rather than sent | `scripts/test-xdg-open.js` |
+| Page script syntax | That every JavaScript raw string in the Android shell (`MainActivity.kt`, `VSCodroidWebView.kt`, `KeyInjector.kt`) compiles cleanly as a classic script under `vm.Script` after Kotlin template substitution | `scripts/test-page-scripts.js` |
 
 **Run**: one `node` invocation per script listed in the `Check the bundled
 JavaScript runtime` step of `lint.yml`, and again in `release.yml`, on Node 24,

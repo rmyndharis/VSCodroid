@@ -372,6 +372,7 @@ checkouts differed.
 | `test-exec-trampoline.py` | Compiles the trampoline parser with a host loader and checks target-only, script, JDK option, empty argument and argument-limit rows | exit status |
 | `test-release-versions.py` | Runs the release workflow's version extraction against literal declarations, comments and unsupported expressions | exit status |
 | `test-serve-network.js` | Exercises the Serve on Network port scan and its reachable versus local-only split, both halves of which cost the user something when wrong: a loopback-only server called reachable hands out an address that refuses, and a reachable one called local-only sends them to restart a working server. The classification is inferred from two probes because an app process cannot read `/proc/net/tcp` at all, and inference is what needs a test. `scanPorts` takes its connector, so nothing here opens a socket | exit status |
+| `test-page-scripts.js` | Walks the Kotlin source tree, collects every JavaScript raw string handed to `evaluateJavascript` or `addDocumentStartJavaScript` (along with the script-producer helpers and `KeyInjector.kt`), substitutes a valid JavaScript identifier for each Kotlin string template, and compiles every script as a classic script with `vm.Script` so a syntax error in an unharnessed page injector fails in CI instead of being dropped silently by WebView at runtime | exit status |
 
 **Important notes:**
 - Scripts are designed for macOS and Linux (macOS uses `bsdtar` for `.deb` extraction).

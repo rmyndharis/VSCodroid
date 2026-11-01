@@ -497,6 +497,7 @@ jobs:
           node scripts/test-auth-bootstrap.js
           python3 scripts/check-extension-updates.py
           node scripts/test-xdg-open.js
+          node scripts/test-page-scripts.js
 
       # What lint.yml runs beyond the block above, for the reason its header gives: a tag may
       # name a commit that reached main through neither pull_request nor push. These ask the

@@ -349,6 +349,7 @@ jobs:
           python3 scripts/test-extension-updates.py
           python3 scripts/check-extension-updates.py
           node scripts/test-xdg-open.js
+          node scripts/test-page-scripts.js
 
       - name: Run lint
         working-directory: android
