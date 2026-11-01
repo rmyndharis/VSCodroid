@@ -1332,6 +1332,7 @@ flowchart TD
   P --> P40["0040 wrapped terminal links highlighted within each physical row"]
   P --> P41["0041 horizontal panels kept within a narrow viewport"]
   P --> P42["0042 configuration: tolerate non-list folders in a workspace file"]
+  P --> P43["0043 server: serve only regular files from serveFile"]
 ```
 
 Five of these are load-bearing in ways their titles understate:

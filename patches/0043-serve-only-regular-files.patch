@@ -1,0 +1,21 @@
+Do not serve a device or pipe as a folder's settings file.
+
+serveFile follows symlinks and opens a read stream for any path whose stat
+succeeds. A folder settings file that links to /dev/zero or a named pipe blocks
+the page's synchronous settings read or holds libuv worker threads in open().
+Check stat.isFile() before opening the read stream so only regular files and
+symlinks to regular files are served.
+
+diff --git a/src/vs/server/node/webClientServer.ts b/src/vs/server/node/webClientServer.ts
+--- a/src/vs/server/node/webClientServer.ts
++++ b/src/vs/server/node/webClientServer.ts
+@@ -55,6 +55,9 @@ export const enum CacheControl {
+ export async function serveFile(filePath: string, cacheControl: CacheControl, logService: ILogService, req: http.IncomingMessage, res: http.ServerResponse, responseHeaders: Record<string, string>): Promise<void> {
+ 	try {
+ 		const stat = await promises.stat(filePath); // throws an error if file doesn't exist
++		if (!stat.isFile()) {
++			throw new Error(`Not a regular file: ${filePath}`);
++		}
+ 		if (cacheControl === CacheControl.ETAG) {
+ 
+ 			// Check if file modified since
