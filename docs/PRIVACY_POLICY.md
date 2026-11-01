@@ -9,7 +9,7 @@ VSCodroid is a code editor that runs entirely on your Android device. **We** do 
 
 Three exceptions to "nothing leaves the device", all under your control and none involving us. Android's own backup service copies your editor settings to your Google account if you have backup switched on (see **Android Backup** below). Anything you ask the app to fetch (an extension, a toolchain, an `npm install`) is a request you initiated, alongside several online lookups the editor performs on its own: it checks Open VSX for newer versions of your installed extensions and installs them, when you open a Python file without Black Formatter installed it looks that extension up on Open VSX so it can suggest it, and its built-in language features fetch JSON schemas, `npm` package metadata, and TypeScript type definitions when you work with files that use them (see **Network Access**).
 
-The third is different in kind and worth reading before you use it: the app bundles **GitHub Copilot Chat**, and once you sign in to GitHub and use it, what you ask it and the code it attaches as context go to GitHub. That is the one feature here that sends your own work to someone else. It has no account and no chat until you sign in, though it does load and run in the background from the moment the editor starts, and it can be switched off.
+The third is different in kind and worth reading before you use it: the app bundles **GitHub Copilot Chat**, and once you sign in to GitHub and use it, what you ask it and the code it attaches as context go to GitHub. That is the one feature here that sends your own work to someone else. It has no account and no chat until you sign in, though while it is enabled it loads and runs in the background from the moment the editor starts, and it can be switched off.
 
 ---
 
@@ -74,7 +74,7 @@ Any tokens the editor keeps afterwards are stored locally in the app's private s
 
 ### GitHub Copilot Chat (Bundled, User-Initiated)
 
-VSCodroid bundles **GitHub Copilot Chat**, published by GitHub, and the editor is configured to use it as its chat provider. The extension loads when the editor starts, and it is not something this app disables.
+VSCodroid bundles **GitHub Copilot Chat**, published by GitHub, and the editor is configured to use it as its chat provider. When the extension is enabled, it loads when the editor starts.
 
 It has no account to work against until you sign in to GitHub, which happens through the browser flow described above, and its features are unavailable until you do.
 
@@ -82,7 +82,7 @@ That sign-in does not have to be one you made for the chat. A GitHub session cre
 
 Once you are signed in and you use it, **what you send goes to GitHub**. That means the message you type and the material the extension decides to attach as context, which normally includes code from the file you are working in and can include other parts of the project. That exchange is between you and GitHub under GitHub's terms and privacy statement (https://docs.github.com/site-policy). It passes through the same on-device proxy described under Git Operations below, which tunnels the encrypted connection without reading it; VSCodroid does not read it or keep a copy, and this is the only feature in this app that sends anything you write to a service we did not have to name elsewhere in this policy.
 
-If you would rather it were not there, disable **GitHub Copilot Chat** from the Extensions view; the editor works without it. It ships inside the app rather than being downloaded, so the view offers Disable rather than Uninstall, and disabling it is what stops it loading.
+If you would rather it stayed off, use **Disable AI Features** on **GitHub Copilot Chat** in the Extensions view (or set `chat.disableAIFeatures` to `true`); the editor works without it. It ships inside the app rather than being downloaded, so the view offers **Disable AI Features** rather than Uninstall.
 
 ### Git Operations (User-Initiated)
 
@@ -157,7 +157,7 @@ Uninstalling the app or clearing its data through Android Settings removes its p
 
 VSCodroid itself includes no third-party analytics, advertising, or tracking SDKs. The third-party services it integrates are:
 
-- **GitHub Copilot Chat**: Bundled with the app and configured as the editor's chat provider. It has no account and offers you no chat until you sign in to GitHub, but it is not dormant before that: it starts with the editor whether or not you are signed in. Whether it sends anything before you sign in is not something we have established. Once you have signed in and used it, what you ask and the code it attaches as context go to GitHub, under GitHub's terms and privacy statement. It can be disabled from the Extensions view, but not uninstalled, because it ships as a built-in.
+- **GitHub Copilot Chat**: Bundled with the app and configured as the editor's chat provider. On a new profile the editor leaves it disabled until chat setup completes, and it has no account and offers you no chat until you sign in to GitHub. While it is enabled it starts with the editor whether or not you are signed in, and whether it sends anything before you sign in is not something we have established. Once you have signed in and used it, what you ask and the code it attaches as context go to GitHub, under GitHub's terms and privacy statement. It can be turned off from the Extensions view (**Disable AI Features**), but not uninstalled, because it ships as a built-in.
 - **Google Play Asset Delivery**: Used solely for downloading optional language toolchain packs on Play Store installs. This is a Google Play Store feature and is governed by Google's privacy policy.
 - **GitHub Releases and GitHub Pages**: Used for downloading those same toolchain packs on installs that did not come from the Play Store, and for the prebuilt Python packages `pip` is pointed at (see **Package Installation**). Governed by GitHub's privacy policy.
 
