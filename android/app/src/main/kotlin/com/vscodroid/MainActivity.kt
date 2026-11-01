@@ -7355,11 +7355,10 @@ internal fun callbackUriJson(data: String?): String? {
  * What binding to an already-running service should do about it.
  *
  * Extracted so the decision is a value rather than a shape in the source.
- * `ServerReadinessCallSiteTest` reads `MainActivity.kt` and checks *which* method
- * is called, which catches putting `isServerRunning` back and cannot catch
- * calling the right method and ignoring the answer -- both call sites were
- * mutated that way with the whole suite still green. A branch that returns one of
- * these can be tested for what it decides.
+ * `ServerReadinessDecisionTest` checks the pure decision logic, while
+ * `ServerReadinessCallSiteTest` reads `MainActivity.kt` to verify that
+ * `isServerReady()` is passed in and that the `Load` arm records `serverPort`
+ * and calls `loadVSCode`.
  */
 internal sealed interface BindDecision {
     /** The server said something about its start that predates this binding. */

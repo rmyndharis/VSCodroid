@@ -9,15 +9,15 @@ import org.junit.jupiter.api.Test
 /**
  * The two decisions `MainActivity` makes about a server that may not be serving.
  *
- * [ServerReadinessCallSiteTest] beside this one reads the source and checks which
- * *method* is called. That catches one regression (putting `isServerRunning`
- * back) and cannot catch the other: calling the right method and then ignoring
- * what it said. Both call sites were mutated that way and the whole suite stayed
- * green, because a source-reading test sees the token and not the branch.
+ * [ServerReadinessCallSiteTest] beside this one reads `MainActivity.kt` to
+ * verify that `isServerRunning` is not used, that `isServerReady()` is passed
+ * into both decisions, that `onStop` and `onStart` wire the resume handler, and
+ * that both call sites act on the returned verdict (`return` when
+ * `shouldActOnResume` is false, `loadVSCode(decision.port)` in `BindDecision.Load`).
  *
- * These are the branches, as values. A mutation that keeps the call and drops the
- * verdict has to change one of these functions to compile away, and changing
- * either one fails here.
+ * These are the pure decisions, as values. Changing either function's logic
+ * fails here, while [ServerReadinessCallSiteTest] fails if a call site drops
+ * `isServerReady()` or ignores the returned decision.
  *
  * What each protects, if it stops holding:
  *

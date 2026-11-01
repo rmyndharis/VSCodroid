@@ -16,21 +16,15 @@ import java.io.File
  *
  * This reads the source, which is a weaker kind of test than the rest of this
  * suite. It is one of two layers, and it is worth being exact about which half
- * each covers, because an earlier version of this comment claimed there was no
- * seam to extract and that turned out to be wrong.
+ * each covers:
  *
- * A source-reading test sees the token `isServerReady` and not the branch, so it
- * cannot tell a call whose answer is obeyed from one whose answer is discarded.
- * That mutation was applied to both call sites (keep the calls, drop the
- * verdicts) and all 632 tests stayed green. What could not be extracted is the
- * *identity* of the method, since a function handed a boolean cannot tell which
- * question produced it; what could be, and now is, are the branches themselves:
- * `bindDecision` and `shouldActOnResume`, covered by
- * [ServerReadinessDecisionTest], which fails on either mutation by name.
- *
- * So: that file owns "the answer is obeyed", this one owns "the right question
- * is asked". Neither subsumes the other, and only this one would notice
- * `isServerRunning` coming back.
+ *  - [ServerReadinessDecisionTest] covers the pure decision functions
+ *    (`bindDecision` and `shouldActOnResume`) as values.
+ *  - This file covers the call sites in `MainActivity`: that the right readiness
+ *    question (`isServerReady()`) is handed to both decisions, that `onStop` and
+ *    `onStart` wire the resume check, that `handleResumeFromBackground` returns
+ *    when `shouldActOnResume` answers false, and that the `BindDecision.Load` arm
+ *    records `serverPort` and calls `loadVSCode`.
  *
  * What neither catches: a third call site added later that asks the wrong
  * question through some other spelling, or the same mistake made in another file.
@@ -80,6 +74,28 @@ class ServerReadinessCallSiteTest {
     // nothing" and "found what I wanted" look identical from the same distance.
 
     @Test
+    fun `onStop records the background timestamp and onStart runs the resume handler`() {
+        val onStop = SourceScan.withoutComments(
+            SourceScan.body(source, "override fun onStop()"),
+        )
+        assertTrue(
+            Regex("""backgroundedAt\s*=\s*SystemClock\.elapsedRealtime\(\)""").containsMatchIn(onStop),
+            "onStop no longer records backgroundedAt, so handleResumeFromBackground always " +
+                "sees 0 and returns at its first line",
+        )
+
+        val onStart = SourceScan.withoutComments(
+            SourceScan.body(source, "override fun onStart()"),
+        )
+        assertTrue(
+            Regex("""\bhandleResumeFromBackground\s*\(\s*\)""").containsMatchIn(onStart),
+            "onStart no longer calls handleResumeFromBackground(); moving or dropping the " +
+                "call skips background recovery or runs it after an activity result has " +
+                "already cleared the pending picker flag",
+        )
+    }
+
+    @Test
     fun `the resume guard asks the readiness question and obeys it`() {
         val body = SourceScan.withoutComments(
             SourceScan.body(source, "private fun handleResumeFromBackground()"),
@@ -92,16 +108,7 @@ class ServerReadinessCallSiteTest {
                 "found $decisions. Two of them split the verdict this case pins, and " +
                 "zero means the guard is gone.",
         )
-        assertTrue(
-            body.contains("shouldActOnResume(nodeService?.isServerReady()"),
-            "the resume decision must be handed the readiness answer. A port that is " +
-                "merely allocated, or a process that is merely alive, reloads the page " +
-                "into a socket nothing is listening on yet.",
-        )
 
-        // The call and the branch are separate mutations: keeping the call and
-        // dropping its `return` leaves this file's token counts untouched and was
-        // one of the mutations the old floor passed.
         val decidedAt = body.indexOf("shouldActOnResume(")
         val actedAt = body.indexOf("resumeAction(")
         assertTrue(
@@ -109,16 +116,47 @@ class ServerReadinessCallSiteTest {
             "resumeAction( no longer follows the resume decision in this body, so the " +
                 "span this case reads for the verdict is not the one that guards it",
         )
+
+        val readyAt = body.indexOf("nodeService?.isServerReady()")
+        val decideCallEnd = body.indexOf(")", decidedAt)
+        val feedsDecision = when {
+            readyAt < 0 -> false
+            decideCallEnd > decidedAt && readyAt in decidedAt until decideCallEnd -> true
+            else -> {
+                val localMatch = Regex("""val\s+(\w+)\s*=\s*nodeService\?\.isServerReady\(\)""")
+                    .find(body.substring(0, decidedAt))
+                val localName = localMatch?.groupValues?.get(1)
+                localName != null &&
+                    Regex("""shouldActOnResume\(\s*$localName\b""")
+                        .containsMatchIn(body.substring(decidedAt, actedAt))
+            }
+        }
         assertTrue(
-            body.substring(decidedAt, actedAt).contains("return"),
+            feedsDecision,
+            "the resume decision must be handed the readiness answer. A port that is " +
+                "merely allocated, or a process that is merely alive, reloads the page " +
+                "into a socket nothing is listening on yet.",
+        )
+
+        val guardStart = body.lastIndexOf("if", decidedAt).coerceAtLeast(0)
+        val guardSpan = body.substring(guardStart, actedAt)
+        assertTrue(
+            guardSpan.contains("return"),
             "the resume decision's verdict must be obeyed before resumeAction( is " +
                 "reached; nothing returns between them, so the guard is computed and " +
                 "discarded",
         )
+        val negatedGuard = Regex("""!\s*shouldActOnResume\(""").containsMatchIn(guardSpan) ||
+            Regex("""shouldActOnResume\([\s\S]*?\)\s*==\s*false""").containsMatchIn(guardSpan)
+        assertTrue(
+            negatedGuard,
+            "handleResumeFromBackground must return when shouldActOnResume answers false, " +
+                "not when it answers true: $guardSpan",
+        )
     }
 
     @Test
-    fun `the binding decision is handed the readiness answer`() {
+    fun `the binding decision is handed the readiness answer and its Load arm loads the port`() {
         val body = SourceScan.withoutComments(
             SourceScan.body(source, "private fun setupServiceCallbacks()"),
         )
@@ -130,11 +168,33 @@ class ServerReadinessCallSiteTest {
                 "found $decisions",
         )
         assertTrue(
-            body.contains("ready = service.isServerReady()"),
+            body.contains("ready = service.isServerReady()") ||
+                Regex("""bindDecision\([\s\S]*?service\.isServerReady\(\)""").containsMatchIn(body),
             "the binding decision must be told what the health probe found. Handed " +
                 "`getPort() > 0` instead it navigates the WebView at a port that is " +
                 "allocated but not yet bound, and onReceivedError only logs, so the " +
                 "connection-refused page stays.",
+        )
+
+        val loadArmStart = body.indexOf("is BindDecision.Load ->")
+        val waitArmStart = body.indexOf("BindDecision.Wait ->", loadArmStart.coerceAtLeast(0))
+        assertTrue(
+            loadArmStart >= 0 && waitArmStart > loadArmStart,
+            "expected an `is BindDecision.Load ->` arm before `BindDecision.Wait ->` inside " +
+                "setupServiceCallbacks()",
+        )
+        val loadArm = body.substring(loadArmStart, waitArmStart)
+        val portRecordedAt = loadArm.indexOf("serverPort = decision.port")
+        val loadedAt = loadArm.indexOf("loadVSCode(decision.port)")
+        assertTrue(
+            portRecordedAt >= 0,
+            "the BindDecision.Load arm no longer records `serverPort = decision.port`, so a " +
+                "late-bound activity leaves serverPort at 0",
+        )
+        assertTrue(
+            loadedAt > portRecordedAt,
+            "the BindDecision.Load arm no longer calls `loadVSCode(decision.port)` after " +
+                "recording serverPort",
         )
     }
 }
