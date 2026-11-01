@@ -3411,11 +3411,12 @@ class MainActivity : AppCompatActivity() {
      * One case is deliberately not covered. A process killed between the close
      * navigation starting and the page finishing leaves the old folder in the
      * preference, so the next launch reopens it. That is true of every folder
-     * here, not only of a close: the record is written from the finished load,
-     * and moving it earlier would put a preference write on the interception
-     * path.
+     * here, not only of a close: the persistent record is written from the
+     * finished load (`persist = true`), while [navigateToFolder] seeds only the
+     * in-memory fields (`persist = false`) so a cancelled `beforeunload` prompt
+     * or an aborted navigation does not overwrite the remembered workspace.
      */
-    private fun rememberWorkspaceFolder(folderPath: String?): Boolean {
+    private fun rememberWorkspaceFolder(folderPath: String?, persist: Boolean = true): Boolean {
         if (folderPath != null && !safManager.claimWorkspacePaths(listOf(folderPath))) {
             Toast.makeText(this, R.string.saf_folder_unavailable, Toast.LENGTH_LONG).show()
             return false
@@ -3431,6 +3432,7 @@ class MainActivity : AppCompatActivity() {
         // root, so an empty string here would serve the app's own working
         // directory to the page.
         openWorkspaceRoot = folderPath?.let { workspaceDirectoryInForce(it) }
+        if (!persist) return true
         // Written only on a change: this runs on every main-frame load, and the
         // server redirects, so a folder switch alone reaches it twice.
         val stored = folderPath ?: NO_FOLDER
@@ -3547,12 +3549,13 @@ class MainActivity : AppCompatActivity() {
         // crash page is up navigates here directly, and a later self-restart's
         // readiness must not be refused over the workbench it would replace.
         rendererCrashLoopShown = false
-        // Seeded here and not only from the page-loaded callback. This method is
+        // Seeded in memory here, and persisted to SharedPreferences only from the
+        // page-loaded callback once the load actually completes. This method is
         // the one that knows the folder before the page exists, and between
         // loadUrl below and onPageFinished the workbench is already fetching
         // resources, against a supplier that would still be answering null, so
         // everything inside the workspace would 404 for the length of the load.
-        if (!rememberWorkspaceFolder(folderPath)) return
+        if (!rememberWorkspaceFolder(folderPath, persist = false)) return
         // The token rides in the query once. The server consumes it on `/`, turns
         // it into the vscode-tkn cookie and redirects with the folder intact;
         // everything after that authenticates itself: the cookie for pages, the
@@ -7680,9 +7683,7 @@ internal fun workbenchUrl(
     // read, and it answers one of those with an empty window and no message. That
     // exclusion was applied where the picker chooses a target and not here, where
     // the URL is actually built, so such a directory still went out as
-    // `?workspace=`, and it did not stay a one-off: [navigateToFolder] remembers
-    // the folder before it builds the URL, so every later launch reopened the same
-    // empty window. What the URL itself costs is separate and quieter:
+    // `?workspace=`. What the URL itself costs is separate and quieter:
     // [folderFromUrl] answers null for it, so a folder the workbench opens on its
     // own is never adopted.
     //
