@@ -14,13 +14,10 @@ We take security seriously. If you discover a security vulnerability in VSCodroi
 
 **Please DO NOT open a public GitHub issue for security vulnerabilities.**
 
-Instead, please report it by email:
+Please report it by email:
 
-📧 **Email**: yudhi@rmyndharis.com
-
-Private vulnerability reporting is switched off for this repository, so GitHub's
-"Report a vulnerability" form is not open to anyone outside the maintainers.
-Email is the channel that reaches us.
+- 📧 **Email**: yudhi@rmyndharis.com
+- 🔒 **GitHub Security Advisories**: Private vulnerability reporting is also enabled on https://github.com/rmyndharis/VSCodroid, and you can send an email alongside a report filed there so we see it right away.
 
 ### What to Include
 
