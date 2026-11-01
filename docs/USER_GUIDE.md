@@ -740,7 +740,8 @@ does not help for a page, and this is the one place where it makes a difference 
 part of the app is asking. Pages are rendered by the system WebView, which trusts the
 device's system roots and nothing else. The terminal does read a CA you installed,
 because the app builds a certificate bundle from both halves of the device trust store
-and hands it to git, to Python and to everything else there that speaks TLS. So the same
+and hands it to git, Python, pip, curl, Ruby and Node.js (`npm` included; Java 21 uses
+its own keystore, see [Git Push/Pull Fails](#git-pushpull-fails)). So the same
 certificate can clone or `pip install` fine in the terminal and still be refused in a
 preview tab.
 
@@ -1561,7 +1562,7 @@ If `npm install` fails with errors:
 ### Git Push/Pull Fails
 
 - **Permission denied (publickey)** -- generate an SSH key with `ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519` in the terminal and add it to your GitHub/GitLab account. The `-f` is required; see [Generating an SSH Key](#generating-an-ssh-key) for why.
-- **SSL certificate error** -- the CA bundle the terminal uses is built from your device's own trust store: the system roots, plus any certificate authority you installed yourself through Android Settings, under the CA-certificate flow in the device's security settings. git and Python are both given it, so a private or corporate CA works for `git clone` and for `pip install` alike, from the next time you open the app -- the bundle is rebuilt at launch, not while the app is running. If you would rather not install a CA on the device, an SSH remote (`git@`) instead of `https://` is still the shortest route to an internal host. Two things that bundle does not reach: npm, which has its own trust store, and pages loaded inside the editor, which use the system roots only.
+- **SSL certificate error** -- the CA bundle the terminal uses is built from your device's own trust store: the system roots, plus any certificate authority you installed yourself through Android Settings, under the CA-certificate flow in the device's security settings. git, Python, pip, curl, Ruby and Node.js (`npm` included, when the bundle file is present) are all given it, so a private or corporate CA works for `git clone`, `pip install` and `npm install` alike, from the next time you open the app -- the bundle is rebuilt at launch, not while the app is running. If you would rather not install a CA on the device, an SSH remote (`git@`) instead of `https://` is still the shortest route to an internal host. Two things that bundle does not reach: pages loaded inside the editor, which use the system roots only, and the optional Java 21 toolchain, which reads its own keystore at `$JAVA_HOME/lib/security/cacerts`. To add a private CA for Java, import its PEM file in the terminal with `keytool -importcert -cacerts -alias my-ca -file ~/ca.pem -storepass changeit -noprompt` (import one certificate per file under a distinct `-alias`; removing and reinstalling the Java 21 toolchain replaces `cacerts`, so repeat the import afterwards).
 
 ### App Uses Too Much Storage
 
