@@ -1263,7 +1263,9 @@ class FirstRunSetup(
      * `user:` and copying that directory for the rest meant the bundle kept
      * trusting a root the owner had distrusted, and every other app on the phone
      * had stopped. That mattered less when only git read the bundle; SSL_CERT_FILE
-     * and REQUESTS_CA_BUNDLE now put it in front of python, pip and curl too.
+     * and CURL_CA_BUNDLE now put it in front of python, ruby, node and curl too
+     * (pip also reads the bundle for added CAs, but preloads its vendored certifi
+     * snapshot alongside it, so a root still in that snapshot remains trusted by pip).
      *
      * The removal is recorded in `/data/misc/user/0/cacerts-removed`, which this
      * app cannot subtract for itself: the path is hardcoded, carries a user id,

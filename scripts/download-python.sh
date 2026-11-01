@@ -279,10 +279,11 @@ echo "  $EXPECTED_WHEEL ($(du -sh "$WHEEL_DST/$EXPECTED_WHEEL" | cut -f1))"
 # python-pip 26.2.2-2 ships pip/_vendor/certifi/cacert.pem as a link to
 # /data/data/com.termux/files/usr/etc/tls/cert.pem, which exists on no machine
 # but a Termux install. Gradle refuses to walk a link it cannot follow, so the
-# APK build died on the first look at assets/, and on a phone it would have taken
-# away the bundle pip falls back to when REQUESTS_CA_BUNDLE is not set (see
-# Environment.buildProcessEnvironment). The wheel placed above carries the same
-# file as a file.
+# APK build died on the first look at assets/, and on a phone a dangling link
+# breaks pip even for local wheel installs because pip's SSL context always loads
+# its vendored certifi file before adding SSL_CERT_FILE and REQUESTS_CA_BUNDLE
+# (see Environment.buildProcessEnvironment). The wheel placed above carries the
+# same file as a regular file.
 CACERT="$PIP_DST/pip/_vendor/certifi/cacert.pem"
 if [ -L "$CACERT" ]; then
     rm "$CACERT"
