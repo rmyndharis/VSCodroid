@@ -8,7 +8,9 @@ import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
 import io.mockk.mockkObject
+import io.mockk.mockkStatic
 import io.mockk.unmockkObject
+import io.mockk.unmockkAll
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -19,6 +21,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.nio.file.Files
 import java.io.IOException
 import java.lang.reflect.InvocationTargetException
 
@@ -40,8 +43,7 @@ import java.lang.reflect.InvocationTargetException
  * file closes it, because nothing appears under the real name until all of it
  * has. These pin the second, so the ordering inside the block stays free.
  *
- * The failure is arranged as in [UpdateSettingsPathsTest]: by occupying the
- * temporary path [writeAtomically] derives from the destination.
+ * The failure is injected at the temporary-file open in [writeAtomically].
  */
 class BashrcAtomicityTest {
 
@@ -70,6 +72,7 @@ class BashrcAtomicityTest {
 
     @BeforeEach
     fun setUp() {
+        mockkStatic(Files::class)
         mockkObject(Logger)
         every { Logger.d(any(), any()) } just Runs
         every { Logger.i(any(), any()) } just Runs
@@ -91,14 +94,9 @@ class BashrcAtomicityTest {
     }
 
     @AfterEach
-    fun tearDown() = unmockkObject(Logger)
+    fun tearDown() = unmockkAll()
 
-    /** Non-empty, so the cleanup `delete()` cannot quietly reclaim it. */
-    private fun blockTheWrite(): File =
-        File(bashrc.parentFile, "${bashrc.name}.tmp~").also {
-            assertTrue(it.mkdirs(), "could not stage the blocked temp path")
-            File(it, "occupied").writeText("x")
-        }
+    private fun blockTheWrite() = blockAtomicWritesTo(bashrc)
 
     /** What [FirstRunSetup.createNpmWrappers] needs on disk before it will do anything. */
     private fun bundleNpm() {
@@ -143,7 +141,7 @@ class BashrcAtomicityTest {
         val blocker = blockTheWrite()
         FirstRunSetup(context).ensurePromptFix()
 
-        blocker.deleteRecursively()
+        blocker.close()
         FirstRunSetup(context).ensurePromptFix()
 
         assertTrue(bashrc.readText().contains(currentMarker), "the rewrite never recovered")
@@ -659,12 +657,8 @@ __vscodroid_pip_note() {
         )
     }
 
-    /** Blocks only `.npmrc`, so the `.bashrc` append ahead of it still succeeds. */
-    private fun blockTheNpmrcWrite(): File =
-        File(filesDir, "home/.npmrc.tmp~").also {
-            assertTrue(it.mkdirs(), "could not stage the blocked temp path")
-            File(it, "occupied").writeText("x")
-        }
+    /** The `.bashrc` append ahead of `.npmrc` still succeeds. */
+    private fun blockTheNpmrcWrite() = blockAtomicWritesTo(File(filesDir, "home/.npmrc"))
 
     /**
      * The repair has to REWRITE, not just clear.
@@ -770,7 +764,7 @@ __vscodroid_pip_note() {
 
         assertFalse(bashrc.exists(), "a failed recreate left a file the appenders would extend")
 
-        assertTrue(blocker.deleteRecursively(), "could not free the temp path")
+        blocker.close()
         FirstRunSetup(context).repairTruncatedSetupFiles()
 
         assertTrue(

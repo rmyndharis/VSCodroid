@@ -34,7 +34,7 @@ class ExtensionSweepLinkTest {
         val swept = File(extensions, "ms-python.python-2026.3.0")
         Files.createSymbolicLink(swept.toPath(), project.toPath())
 
-        assertTrue(removeExtensionDir(swept), "the link was reported as still there")
+        assertTrue(removeExtensionDir(swept, root), "the link was reported as still there")
 
         assertFalse(swept.exists(), "the link itself was left behind")
         assertTrue(
@@ -52,7 +52,7 @@ class ExtensionSweepLinkTest {
         val nested = File(swept, "node_modules").apply { mkdirs() }
         Files.createSymbolicLink(File(nested, "mypkg").toPath(), project.toPath())
 
-        assertTrue(removeExtensionDir(swept), "the directory is still on disk")
+        assertTrue(removeExtensionDir(swept, root), "the directory is still on disk")
 
         assertFalse(swept.exists(), "the swept directory was left behind")
         assertTrue(
@@ -72,7 +72,7 @@ class ExtensionSweepLinkTest {
         File(swept, "media").apply { mkdirs() }
         File(swept, "media/walkthrough.md").writeText("hello")
 
-        assertTrue(removeExtensionDir(swept))
+        assertTrue(removeExtensionDir(swept, root))
         assertFalse(swept.exists())
     }
 
@@ -88,7 +88,7 @@ class ExtensionSweepLinkTest {
         val swept = File(extensions, "publisher.name-1.0.0")
         Files.createSymbolicLink(swept.toPath(), File(root, "gone").toPath())
 
-        assertTrue(removeExtensionDir(swept), "a dangling link was reported as still there")
+        assertTrue(removeExtensionDir(swept, root), "a dangling link was reported as still there")
         assertTrue(
             extensions.list()?.isEmpty() == true,
             "the dangling link is still in the extensions directory",

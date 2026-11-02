@@ -9,7 +9,8 @@ import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
 import io.mockk.mockkObject
-import io.mockk.unmockkObject
+import io.mockk.mockkStatic
+import io.mockk.unmockkAll
 import io.mockk.verify
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
@@ -24,6 +25,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.ByteArrayInputStream
 import java.io.File
+import java.nio.file.Files
 
 /**
  * A setup that could not unpack the server tree, the bootstrap scripts or
@@ -56,6 +58,7 @@ class SetupAbortsOnIncompleteTreeTest {
 
     @BeforeEach
     fun setUp() {
+        mockkStatic(Files::class)
         mockkObject(Logger)
         every { Logger.d(any(), any()) } just Runs
         every { Logger.i(any(), any()) } just Runs
@@ -90,15 +93,10 @@ class SetupAbortsOnIncompleteTreeTest {
     }
 
     @AfterEach
-    fun tearDown() = unmockkObject(Logger)
+    fun tearDown() = unmockkAll()
 
-    /** Non-empty, so the cleanup delete() cannot quietly reclaim it. */
     private fun blockTheServerWrite() {
-        val dest = File(filesDir, "server/vscode-reh/server-main.js")
-        assertTrue(dest.parentFile!!.mkdirs(), "could not stage the server directory")
-        val blocker = File(dest.parentFile, "${dest.name}.tmp~")
-        assertTrue(blocker.mkdirs(), "could not stage the blocked temp path")
-        File(blocker, "occupied").writeText("x")
+        blockAtomicWritesTo(File(filesDir, "server/vscode-reh/server-main.js"))
     }
 
     /**
@@ -358,13 +356,8 @@ class SetupAbortsOnIncompleteTreeTest {
         assertEquals("IllegalStateException: asset listing unavailable", setup.lastFailure!!.detail)
     }
 
-    private fun blockWrite(relativePath: String) {
-        val dest = File(filesDir, relativePath)
-        assertTrue(dest.parentFile!!.isDirectory || dest.parentFile!!.mkdirs(), "could not stage $relativePath")
-        val blocker = File(dest.parentFile, "${dest.name}.tmp~")
-        assertTrue(blocker.mkdirs(), "could not stage the blocked temp path of $relativePath")
-        File(blocker, "occupied").writeText("x")
-    }
+    private fun blockWrite(relativePath: String): AtomicWriteFailure =
+        blockAtomicWritesTo(File(filesDir, relativePath))
 
     private fun stageUsrTool() {
         every { assets.list("usr") } returns arrayOf("bin")
@@ -376,7 +369,7 @@ class SetupAbortsOnIncompleteTreeTest {
     @Test
     fun `a setup that cannot unpack usr reports an error and writes no completion record`() {
         stageUsrTool()
-        blockWrite("usr/bin/tool")
+        val blocker = blockWrite("usr/bin/tool")
         val setup = FirstRunSetup(context, 0, 0, 0, 0)
 
         assertEquals(FirstRunSetup.SetupResult.ERROR, runBlocking { setup.runSetup() })
@@ -387,7 +380,7 @@ class SetupAbortsOnIncompleteTreeTest {
         assertFalse(File(filesDir, "usr/bin/tool").exists())
         verify(exactly = 0) { editor.putString(SETUP_VERSION_KEY, any()) }
 
-        assertTrue(File(filesDir, "usr/bin/tool.tmp~").deleteRecursively())
+        blocker.close()
         assertEquals(FirstRunSetup.SetupResult.SUCCESS, runBlocking { setup.runSetup() })
         assertEquals("// tool", File(filesDir, "usr/bin/tool").readText())
     }

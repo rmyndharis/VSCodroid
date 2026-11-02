@@ -24,9 +24,9 @@ import org.junit.jupiter.api.io.TempDir
 import java.io.File
 import java.io.IOException
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.FutureTask
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
-import kotlin.concurrent.thread
 
 /**
  * Who `runSetup` hands the foreground hold to.
@@ -112,7 +112,7 @@ class FirstRunSetupHoldTest {
         val winnerAsked = AtomicInteger()
         // The winner parks inside the callback, which runs with the lock held,
         // so the lock stays taken for exactly as long as this test wants it.
-        val winner = thread {
+        val winnerResult = FutureTask {
             runBlocking {
                 setup(done = false).runSetup {
                     winnerAsked.incrementAndGet()
@@ -121,6 +121,7 @@ class FirstRunSetupHoldTest {
                 }
             }
         }
+        val winner = Thread(winnerResult).apply { start() }
         try {
             assertTrue(entered.await(10, TimeUnit.SECONDS), "the winner never reached the callback")
 
@@ -140,7 +141,13 @@ class FirstRunSetupHoldTest {
         } finally {
             release.countDown()
             winner.join(10_000)
+            if (winner.isAlive) {
+                winner.interrupt()
+                winner.join(5_000)
+            }
+            assertFalse(winner.isAlive, "the winner did not stop")
         }
+        assertEquals(FirstRunSetup.SetupResult.LOW_STORAGE, winnerResult.get(1, TimeUnit.SECONDS))
         assertEquals(1, winnerAsked.get(), "the instance that had the work was not asked exactly once")
     }
 

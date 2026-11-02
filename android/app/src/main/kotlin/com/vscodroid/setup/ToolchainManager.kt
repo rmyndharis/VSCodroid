@@ -34,6 +34,7 @@ import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.locks.ReentrantLock
 import java.util.zip.ZipInputStream
+import java.util.UUID
 import android.annotation.SuppressLint
 
 /**
@@ -331,6 +332,7 @@ class ToolchainManager(private val context: Context) {
          * repair that fails partway is retried only for what it did not finish.
          */
         private const val KEY_EXEC_REPAIRED = "execBitsChecked"
+        private const val KEY_INSTALL_ID = "installId"
 
         /**
          * Environment a toolchain's manifest carries today and an install made by an
@@ -703,6 +705,25 @@ class ToolchainManager(private val context: Context) {
         return result.filter { it.isNotEmpty() }
     }
 
+    /** Interrupted copies still own their files, but need an explicit Retry without a delivery. */
+    internal fun getIncompleteToolchains(): List<String> = ToolchainRegistry.available
+        .map { it.packName }
+        .filter { !packIsBeingInstalled(it) && installIsPending(it) }
+
+    private fun installIsPending(packName: String): Boolean {
+        val marker = installMarker(packName)
+        if (!marker.exists() && !Files.isSymbolicLink(marker.toPath())) return false
+        val pending = runCatching { JSONObject(marker.readText()) }.getOrNull() ?: return true
+        val installId = pending.optString(KEY_INSTALL_ID)
+        if (installId.isEmpty()) return true
+        val state = readableState() ?: return true
+        return (0 until state.length()).none {
+            val installed = state.optJSONObject(it)
+            installed != null && installed.optString("name") == pending.optString("name") &&
+                installed.optString(KEY_INSTALL_ID) == installId
+        }
+    }
+
     /**
      * The name the record holds for an installed toolchain whose build is not the one the
      * registry offers now, by pack name. Java 17 stays on a device that installed it
@@ -995,6 +1016,16 @@ class ToolchainManager(private val context: Context) {
         }
         regenerateDerivedFilesLocked()
 
+        val pendingMarker = installMarker("toolchain_$name")
+        if (pendingMarker.exists() || Files.isSymbolicLink(pendingMarker.toPath())) {
+            val pending = runCatching { JSONObject(pendingMarker.readText()) }.getOrNull()
+            if (pending != null && pending.optString("name") == name && reclaimPartialCopy(name, pending)) {
+                pendingMarker.delete()
+            }
+            // Removing a failed reinstall also cancels the delivery that could bring it back.
+            cancel("toolchain_$name")
+        }
+
         Logger.i(tag, "Uninstalled toolchain: $name")
         report("toolchain_$name", AssetPackStatus.NOT_INSTALLED, 0)
     }
@@ -1055,7 +1086,7 @@ class ToolchainManager(private val context: Context) {
                 // Link-aware, not File.deleteRecursively, which follows a directory
                 // link: `ln -s ~/projects/mygem/lib/mygem` into Ruby's load path is an
                 // ordinary thing to do, and removing Ruby then emptied the project.
-                StorageManager.deleteRecursive(dir)
+                StorageManager.deleteRecursive(dir, context.filesDir.parentFile)
                 Logger.d(tag, "Deleted install root: $installRoot")
             }
         }
@@ -1070,7 +1101,9 @@ class ToolchainManager(private val context: Context) {
         for (path in ownedPaths(manifest)) {
             // For a file, a link and a directory alike, and link-aware for the
             // reason the install root's delete is.
-            StorageManager.deleteRecursive(paths.getValue(path.relativeTo(context.filesDir).path)!!)
+            StorageManager.deleteRecursive(
+                paths.getValue(path.relativeTo(context.filesDir).path)!!, context.filesDir.parentFile,
+            )
             Logger.d(tag, "Removed owned path: ${path.relativeTo(context.filesDir).path}")
         }
 
@@ -1261,13 +1294,9 @@ class ToolchainManager(private val context: Context) {
                     "a full device will fail during the copy instead of before it",
             )
         } else {
-            val credit = existingTreeCredit(
-                deliveredInstallRoot(assetsDir, packName),
-                context.filesDir,
-                unpacked,
-                StorageManager::dirSize,
-            )
-            val required = (packInstallBytes(unpacked) - credit).coerceAtLeast(SPACE_BUFFER)
+            val space = toolchainCopySpace(File(assetsDir, "usr"), File(context.filesDir, "usr"))
+            val required = (packInstallBytes(unpacked) - minOf(unpacked, space.creditedBytes))
+                .coerceAtLeast(SPACE_BUFFER) + space.replacementBytes
             val available = StatFs(context.filesDir.absolutePath).availableBytes
             if (available < required) {
                 Logger.e(
@@ -1319,20 +1348,9 @@ class ToolchainManager(private val context: Context) {
     /**
      * Finishes any Play delivery that completed while nothing was listening for it.
      *
-     * Until this existed, `installFromDirectory` was reachable only from the
-     * COMPLETED callback, and that callback only arrives while a listener is
-     * registered. This is the second route, and the one that needs no listener. Both screens that install
-     * toolchains drop their registration at teardown -- `ToolchainActivity.onStop` and
-     * `SplashActivity.onDestroy` -- so backgrounding the app mid-download left the pack
-     * downloaded, paid for, and never installed. Nothing retried it: the picker reads
-     * `toolchains.json`, sees the toolchain absent, and offers the same download again.
-     *
-     * Holding the registration open instead is the wrong repair, and the reason is
-     * the retention this class was just corrected for: a listener that outlives its
-     * screen is what kept an Activity alive in Play Core's registry. Reconciling at
-     * launch needs no listener at all. Play is asked what it has already delivered,
-     * which is a question with an answer whether or not anyone was listening when it
-     * became true.
+     * Listeners follow live requests. A process death can still leave an unconsumed
+     * delivery, so startup reconciles it without depending on a repeated callback.
+     * A pending marker also keeps an interrupted reinstall retryable over its old record.
      *
      * The second job is the same repair for the other outcome. A pack Play still
      * holds for a toolchain the record already calls installed is a delivery that
@@ -1427,7 +1445,7 @@ class ToolchainManager(private val context: Context) {
             Logger.w(tag, "Could not ask Play about ${info.packName}: ${e.message}")
             null
         } ?: return
-        if (info.packName.removePrefix("toolchain_") in installed) {
+        if (info.packName.removePrefix("toolchain_") in installed && !installIsPending(info.packName)) {
             // The toolchain is already in `usr/`, so this delivery has
             // nothing left to give and is pure duplicate storage. It
             // reaches here when the release that should have followed the
@@ -1639,59 +1657,6 @@ class ToolchainManager(private val context: Context) {
     }
 
     /**
-     * The install root the record already holds for [name], or null.
-     *
-     * The sibling of [deliveredInstallRoot] for the path that has no delivered
-     * manifest to read. [downloadViaHttp] gates on free space before the ZIP
-     * carrying the incoming manifest has been fetched, so the persisted record is
-     * the only witness available then of where a previous install of this
-     * toolchain put its tree.
-     *
-     * A lookup by name rather than string surgery through the registry, because
-     * an entry can outlive its registry row and because the record is what those
-     * files were actually written from.
-     *
-     * Null unless the record's `displayName` is [displayName], the registry's name for
-     * the build about to be downloaded. A reinstall only overwrites the recorded tree
-     * when the root stays put, and the one pack that moved it, Java 17 to 21, kept
-     * the name `java`: the old 155 MB were credited against a tree that was written
-     * beside them. A record that names no build gets no credit either.
-     */
-    private fun recordedInstallRoot(name: String, displayName: String?): File? {
-        val state = readState()
-        for (i in 0 until state.length()) {
-            val entry = state.optJSONObject(i) ?: continue
-            if (entry.optString("name") != name) continue
-            if (displayName == null || entry.optString("displayName") != displayName) return null
-            val root = entry.optString("installRoot", "")
-            return if (root.isEmpty()) null else File(context.filesDir, root)
-        }
-        return null
-    }
-
-    /**
-     * The delivered manifest's install root under `filesDir`, best-effort.
-     *
-     * Best-effort and null on anything unexpected, because the authoritative
-     * parse stays where it is, in [installFromDirectoryHoldingPack]: a malformed
-     * manifest must still report CORRUPT from there rather than change the space
-     * gate's answer here.
-     */
-    private fun deliveredInstallRoot(assetsDir: File, packName: String): File? = try {
-        val manifestFile = File(assetsDir, "$packName.json")
-        if (!manifestFile.exists()) {
-            null
-        } else {
-            JSONObject(manifestFile.readText()).optString("installRoot", "")
-                .takeIf { it.isNotEmpty() }
-                ?.let { File(context.filesDir, it) }
-        }
-    } catch (e: Exception) {
-        Logger.w(tag, "Could not read the install root from $packName's manifest", e)
-        null
-    }
-
-    /**
      * The install itself, with the pack already claimed by the caller.
      *
      * @return whether the delivery has nothing left to give. True for a finished
@@ -1756,12 +1721,8 @@ class ToolchainManager(private val context: Context) {
         // does not already say, and would leave a kill during the copy exactly as
         // unrecoverable as it was.
         //
-        // [writeAtomically] gives all-or-nothing content through a rename, so a
-        // torn marker cannot exist and [reclaimInterruptedInstallsSync] never has
-        // to reason about one. A marker that could not be written is a warning and
-        // not a failure: the install then behaves exactly as it did before this
-        // existed, which is the right trade for a file that only helps a launch
-        // that may never be needed.
+        // The marker must land before any payload changes, so every interrupted copy
+        // remains distinguishable from the installed record it may be replacing.
         synchronized(stateLock) {
             if (readableState() == null) {
                 failUnreadableRecord(packName, transferId)
@@ -1780,12 +1741,11 @@ class ToolchainManager(private val context: Context) {
             }
         }
         installMarkerDir.mkdirs()
+        manifest.put(KEY_INSTALL_ID, UUID.randomUUID().toString())
         if (!writeAtomically(installMarker(packName)) { it.write(manifest.toString().toByteArray()) }) {
-            Logger.w(
-                tag,
-                "Could not note where $packName is being installed; if this copy is " +
-                    "interrupted nothing will be able to reclaim it",
-            )
+            Logger.e(tag, "Could not record the pending install of $packName; leaving its files unchanged")
+            fail(packName, ToolchainFailure.STORAGE, transferId)
+            return false
         }
         Logger.i(tag, "Installing toolchain: $name (from $packName)")
 
@@ -1987,7 +1947,7 @@ class ToolchainManager(private val context: Context) {
         if (new.path == resolvedOld.path || new.path.startsWith(resolvedOld.path + File.separator) ||
             resolvedOld.path.startsWith(new.path + File.separator)
         ) return
-        StorageManager.deleteRecursive(old)
+        StorageManager.deleteRecursive(old, context.filesDir.parentFile)
         Logger.i(tag, "Deleted the superseded install root: $oldRoot")
         val kept = manifest.optJSONObject("symlinks")
         val links = replaced?.optJSONObject("symlinks") ?: return
@@ -2083,28 +2043,10 @@ class ToolchainManager(private val context: Context) {
      * 197 MB of its 254 MB in two libraries in `usr/lib`, and a copy that ran
      * out of room is exactly where those bytes are needed for the retry.
      *
-     * Left alone when the record already names this toolchain: those files are a
-     * working copy's, and deleting them would cost a user a toolchain that runs.
-     * But that is not the same as saying nothing happened to them, which is why
-     * the entry is sent back through the repair pass rather than simply kept. The
-     * two cases behind it are an install that finished and only lost the delete
-     * of its own marker, and a reinstall the system stopped part-way through, and
-     * nothing on disk tells them apart: both leave a marker beside a record that
-     * names the toolchain.
-     *
-     * The second is the one that leaves damage. The copy writes content and not
-     * permissions -- `copyTo` carries neither the execute bit nor anything else
-     * -- and the install applies the bits from the manifest AFTER the copy, so a
-     * reinstall stopped in between leaves the binaries it had reached with no
-     * execute bit at all. `java` then answers "permission denied" for good: the
-     * record says [KEY_EXEC_REPAIRED], so [repairInstalledToolchainsSync] steps
-     * over the entry on this launch and on every launch after it.
-     *
-     * ⚠️ What that repair CANNOT put right is the content. A reinstall from a
-     * payload that differs from the recorded one leaves a tree that is part one
-     * version and part the other, and no pass here can tell which files came from
-     * which or fetch the missing half. Re-running the install is the only cure,
-     * and it is the user's to ask for.
+     * A recorded tree is preserved. Its marker stays pending until the same install
+     * identity reaches the record; older markers without an identity require a retry.
+     * The permission pass can repair execute bits, while content is completed from a
+     * retained Play delivery or a new verified HTTP download.
      */
     private fun reclaimPartialCopy(name: String, manifest: JSONObject): Boolean = synchronized(stateLock) {
         val state = readableState() ?: return@synchronized false
@@ -2112,11 +2054,15 @@ class ToolchainManager(private val context: Context) {
             .firstOrNull { it.optString("name") == name }
         if (installed != null) {
             Logger.w(tag, "Keeping the files of $name: the record still names it")
+            val installId = manifest.optString(KEY_INSTALL_ID)
+            if (installId.isNotEmpty() && installed.optString(KEY_INSTALL_ID) == installId &&
+                toolchainPathsAreOwned(manifest, installed)
+            ) return@synchronized true
             if (installed.optBoolean(KEY_EXEC_REPAIRED, false)) {
                 installed.put(KEY_EXEC_REPAIRED, false)
                 if (!writeState(state)) return@synchronized false
             }
-            return@synchronized toolchainPathsAreOwned(manifest, installed)
+            return@synchronized false
         }
         val settled = removeToolchainFiles(name, manifest, state)
         if (settled) {
@@ -2236,50 +2182,11 @@ class ToolchainManager(private val context: Context) {
                     return@execute
                 }
 
-                // Pre-flight disk space check, crediting the tree this install is
-                // about to write over. The same arithmetic and the same helper the
-                // Play path already applies in [installDeliveredPack], so the two
-                // delivery paths stop disagreeing about whether a device has room
-                // for a toolchain it mostly already holds.
-                //
-                // The credit covers the second of the two copies this reservation
-                // charges for, the one into `usr/`: `copyTo(overwrite = true)`
-                // deletes each destination file before opening its output stream,
-                // so overwriting an identical tree allocates nothing net. The
-                // staging copy under `cacheDir` is a genuinely new allocation and
-                // stays charged in full.
-                //
-                // Handed to [toolchainInstallBytes] rather than subtracted from
-                // what it returns, and that is not a tidy-up. The credit is worth
-                // nothing until the copy reaches the file it is overwriting, while
-                // the archive and the staging tree are both on disk before that,
-                // so a fully credited reinstall subtracted its way UNDER the peak
-                // the extraction actually reaches. Taking both figures, the
-                // function can charge for whichever stage is the tallest. No
-                // `coerceAtLeast` here either, for the same reason as before:
-                // [existingTreeCredit] clamps at the recorded size, so the figure
-                // below can never fall under one tree plus [SPACE_BUFFER], and a
-                // floor written over the top would hide a mistake instead.
-                //
-                // The root comes from the RECORD, not from the incoming payload,
-                // which is not on disk yet, and that gap is the whole reason this
-                // path lacked the credit. The two differ when a pack moves its
-                // `installRoot` between versions under an unchanged pack name, as
-                // Java did from 17 to 21, so the record only counts when it was
-                // written by the build now being downloaded
-                // ([recordedInstallRoot] compares `displayName`).
+                // Reserve both the downloaded staging tree and the destination copy.
+                // Matching paths cannot be credited until the incoming payload is available.
                 val stat = StatFs(context.filesDir.absolutePath)
                 val availableBytes = stat.availableBytes
-                val credit = existingTreeCredit(
-                    recordedInstallRoot(
-                        toolchainShortName(packName),
-                        ToolchainRegistry.find(packName)?.displayName,
-                    ),
-                    context.filesDir,
-                    unpackedBytes,
-                    StorageManager::dirSize,
-                )
-                val requiredBytes = toolchainInstallBytes(unpackedBytes, downloadBytes, credit)
+                val requiredBytes = toolchainInstallBytes(unpackedBytes, downloadBytes)
                 if (availableBytes < requiredBytes) {
                     Logger.e(tag, "Not enough disk space: ${availableBytes / 1_000_000} MB available, " +
                             "${requiredBytes / 1_000_000} MB required")
@@ -2364,7 +2271,11 @@ class ToolchainManager(private val context: Context) {
                 // Extract: report as TRANSFERRING (file copy phase)
                 download.percent = 90
                 report(packName, AssetPackStatus.TRANSFERRING, 90, download.transferId)
-                extractDir.deleteRecursively()
+                StorageManager.deleteRecursive(extractDir, context.filesDir.parentFile)
+                if (extractDir.exists() || Files.isSymbolicLink(extractDir.toPath())) {
+                    fail(packName, ToolchainFailure.STORAGE, download.transferId)
+                    return@execute
+                }
                 extractDir.mkdirs()
                 try {
                     extractZip(zipFile, extractDir)
@@ -2445,7 +2356,7 @@ class ToolchainManager(private val context: Context) {
                 // Remove only this task's token before publishing its cancellation.
                 val heldThePack = httpDownloads.remove(packName, download)
                 // Clean up temp files
-                tempDir.deleteRecursively()
+                StorageManager.deleteRecursive(tempDir, context.filesDir.parentFile)
                 // The cancellation, said out loud. Every `return@execute` on the
                 // flag above leaves without reporting, and a report goes to the
                 // manager that began this download and to no other, so what the
@@ -4208,7 +4119,8 @@ class ToolchainManager(private val context: Context) {
         var removed = 0
         for (entry in entries) {
             if (!isAbandonedDownload(entry.lastModified(), now)) continue
-            if (entry.deleteRecursively()) removed++
+            StorageManager.deleteRecursive(entry, context.filesDir.parentFile)
+            if (!entry.exists() && !Files.isSymbolicLink(entry.toPath())) removed++
         }
         if (removed > 0) {
             Logger.i(tag, "Removed $removed abandoned toolchain download directories")
@@ -4248,11 +4160,8 @@ class ToolchainManager(private val context: Context) {
     private fun reclaimInterruptedInstallsSync() {
         val markers = installMarkerDir.listFiles() ?: return
         for (marker in markers) {
-            // [writeAtomically] writes a sibling named `<file>.tmp~` and renames
-            // it, and a kill can leave one. Left where it is rather than deleted:
-            // it is a couple of kilobytes the next write of the same marker reuses,
-            // and its name does not identify a pack, so nothing here could take the
-            // claim that makes a delete safe.
+            // A killed atomic write can leave a uniquely named .tmp~ sibling.
+            // Its name proves no ownership, so only the complete .json markers are consumed.
             if (!marker.name.endsWith(".json")) continue
             val packName = marker.name.removeSuffix(".json")
             if (!claimPack(packName, readsDeliveredPack = false)) continue
@@ -4563,49 +4472,15 @@ internal fun isAbandonedDownload(lastModifiedMs: Long, nowMs: Long): Boolean =
 internal const val SPACE_BUFFER = 50_000_000L
 
 /**
- * What an HTTP toolchain install actually needs free, given its unpacked size.
- *
- * Twice the tree for a first install, because the install holds two copies at
- * that peak: the one unpacked into the cache and the one being written into
- * `filesDir/usr`. The reservation used to charge for one, which is the product
- * rather than the process, and nothing frees a stage before the next allocates.
- * For Java 17 as it was then that asked 196 MB for something that needs about 342, so every
- * device between the two figures downloaded 55 MB and then failed partway
- * through the copy, with the disk error reported as a network problem and the
- * half-copied files left in `usr/` under no manifest, so each retry started from
- * less space than the last.
- *
- * The archive is not a third term but it is half of one, and the difference cost
- * a device its install. It is deleted after extraction and before the copy
- * begins, so it is never on disk at the same time as the second tree; it IS on
- * disk at the same time as the first, for the whole of the extraction that
- * writes it. So the run has two peaks, not one, and this charges for the taller:
- *
- *  - unpacking, holding the archive and the staging tree at once;
- *  - copying, holding the staging tree and what it writes into `usr/`, less the
- *    tree it overwrites there ([existingTreeCredit], which `copyTo(overwrite)`
- *    frees file by file as it goes).
- *
- * A fresh install is dominated by the second, which is where the doubled term
- * came from and why the first went unnoticed: 312 MB against 211 MB for Java 17.
- * Credit the copy with a tree already on disk, though, and the second peak drops
- * below the first, and a caller subtracting the credit from a single figure
- * reserved 207 MB for an extraction that needs 211 MB. That is the whole of the
- * failure: the gate passes, the 55 MB download is spent, and the unpack runs out
- * of disk a few megabytes short of finishing.
- *
- * This KDoc said the archive was deliberately excluded and that charging for it
- * "would refuse devices for room they never need at once", which was never true
- * of the extraction, and it is the sentence a reader would have used to decide
- * the archive could go on being ignored.
+ * HTTP reserves the larger of extraction and copying peaks, plus the working margin.
+ * The incoming payload is not available yet, so existing files cannot be credited.
  */
 internal fun toolchainInstallBytes(
     unpackedBytes: Long,
     downloadBytes: Long,
-    existingTreeBytes: Long,
 ): Long = maxOf(
     downloadBytes + unpackedBytes,
-    unpackedBytes * 2 - existingTreeBytes,
+    unpackedBytes * 2,
 ) + SPACE_BUFFER
 
 /**
@@ -4654,35 +4529,6 @@ internal fun packInstallBytes(unpackedBytes: Long): Long =
     unpackedBytes + SPACE_BUFFER
 
 /**
- * Bytes already on disk under an install root that the copy will write over.
- *
- * `copyTo(overwrite = true)` deletes the destination before opening the output
- * stream, so an overwrite of an identical tree allocates nothing net. Clamped at
- * [recordedBytes] because a directory can hold more than the pack will write
- * back, and a credit for those bytes is space the copy never returns.
- */
-internal fun existingTreeCredit(
-    root: File?,
-    within: File,
-    recordedBytes: Long,
-    measure: (File) -> Long,
-): Long {
-    if (root == null) return 0
-    // A root that resolves outside [within] credits nothing. `..` escapes
-    // File(base, relative) while an absolute string is re-nested under it, so this
-    // rejects the one form that reaches outside. The manifest comes from a signed
-    // pack rather than an attacker, and uninstallLocked and reclaimPartialCopy
-    // already build the same File and delete through it, so this is not a last line
-    // of defence. It is that a credit is the first DECISION taken on that string:
-    // measuring the whole app data directory would clamp to the pack's own size and
-    // leave the gate asking for nothing but the buffer.
-    val base = runCatching { within.canonicalFile }.getOrNull() ?: return 0
-    val resolved = runCatching { root.canonicalFile }.getOrNull() ?: return 0
-    if (!generateSequence(resolved) { it.parentFile }.any { it == base }) return 0
-    return minOf(recordedBytes, measure(resolved)).coerceAtLeast(0)
-}
-
-/**
  * Copies a tree, refusing rather than shrugging when a directory cannot be read.
  *
  * `listFiles` answers null both for a directory that is empty of readable
@@ -4719,11 +4565,36 @@ internal fun copyDirectoryTree(
         }
     } else {
         dest.parentFile?.mkdirs()
-        if (Files.isSymbolicLink(dest.toPath()) && !dest.delete()) {
-            throw IOException("Cannot replace the destination link")
+        var cause: String? = null
+        val copied = writeAtomically(dest, onError = { cause = it }) { output ->
+            src.inputStream().use { it.copyTo(output) }
         }
-        src.copyTo(dest, overwrite = true)
+        if (!copied) {
+            throw IOException(cause ?: "Could not replace ${dest.name}")
+        }
     }
+}
+
+internal data class ToolchainCopySpace(val creditedBytes: Long, val replacementBytes: Long)
+
+/** Credits only matching files, retaining room for one atomic replacement. */
+internal fun toolchainCopySpace(src: File, dest: File): ToolchainCopySpace {
+    var credit = 0L
+    var replacement = 0L
+    if (Files.isSymbolicLink(dest.toPath())) return ToolchainCopySpace(0, 0)
+    val base = dest.canonicalFile
+    src.walkTopDown().forEach { file ->
+        if (!file.isFile) return@forEach
+        val relative = file.relativeTo(src).path
+        val target = File(dest, relative).absoluteFile
+        if (!target.isFile || Files.isSymbolicLink(target.toPath()) ||
+            target.parentFile.canonicalFile != File(base, relative).parentFile
+        ) return@forEach
+        val reusable = minOf(file.length(), target.length())
+        credit += reusable
+        replacement = maxOf(replacement, reusable)
+    }
+    return ToolchainCopySpace(credit, replacement)
 }
 
 /**

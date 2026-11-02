@@ -548,11 +548,9 @@ class SplashActivity : AppCompatActivity() {
     }
 
     override fun onDestroy() {
-        // The Play Core subscription only. The state callback stays, because it
-        // is what advances the download queue and leaving this screen does not
-        // stop the transfer: a queue still running re-registers this listener at
-        // its next fetch, and [endDownloadQueue] settles both when it ends.
-        toolchainManager?.unregisterListener()
+        // A Play completion installs the current pack and advances the queue even
+        // after this screen leaves. The queue releases the listener and callback when done.
+        toolchainManager?.unregisterListenerIfIdle()
         // Without this the extraction goes on reporting into a destroyed
         // activity's closure, which keeps that Activity and its whole view
         // hierarchy reachable for the rest of a run measured in minutes.
@@ -743,9 +741,7 @@ class SplashActivity : AppCompatActivity() {
         // the only thing that advances the queue -- handleDownloadState ends in
         // downloadNext(), which installs the pack behind the one that just
         // settled -- so behind a weak reference the queue stopped whenever the
-        // collector happened to run. Only on the HTTP path, because the Play path
-        // already ends at onDestroy's unregisterListener, which is to say
-        // precisely the sideload and GitHub-release users. Pressing Back on this
+        // collector happened to run. Pressing Back on this
         // screen sets nothing (only Cancel sets `cancelled`), so a user who
         // picked three toolchains got somewhere between one and three of them,
         // decided by the timing of a collection.
@@ -756,9 +752,9 @@ class SplashActivity : AppCompatActivity() {
         // whole. Outside it there are exactly two holders and both ARE the queue:
         // an ioExecutor task running an HTTP transfer, which ends when the
         // transfer does, and Play Core's listener registry. The registry is the
-        // one that needs saying, because install() re-registers before every
-        // fetch and so undoes onDestroy's unregister; [endDownloadQueue] is what
-        // settles it. This screen is therefore reachable for as long as the
+        // one that needs saying, because [onDestroy] keeps it while the current
+        // request is outstanding; [endDownloadQueue] is what settles it.
+        // This screen is therefore reachable for as long as the
         // downloads it started are running, and not a step past them. That holds
         // only because every state either settles or can be advanced past:
         // [handleDownloadState] ends the queue on a status that will not arrive
@@ -880,11 +876,8 @@ class SplashActivity : AppCompatActivity() {
      * moment the queue is over it is a finished window kept alive by a download
      * that has ended.
      *
-     * The Play Core half is not a duplicate of [onDestroy]'s unregister.
-     * `ToolchainManager.install` registers the listener again before every fetch,
-     * so a queue that goes on draining after the user has left undoes that
-     * unregister with the next pack it starts, and ends with this screen sitting
-     * in a process-wide registry with nothing left to take it out.
+     * [onDestroy] leaves the Play listener registered while a request is outstanding,
+     * so the queue itself must take it out of the process-wide registry when done.
      *
      * Called where the queue ends and nowhere else: from [downloadNext] when the
      * last pack settles, and from Cancel. That it is reached at all rests on
@@ -1060,8 +1053,7 @@ class SplashActivity : AppCompatActivity() {
         // The download queue outlives this screen, and nothing else stops it.
         // Only Cancel sets `cancelled`, so pressing Back on the first-run
         // download screen finishes this Activity while the transfer carries on:
-        // the HTTP path reports straight through `onStateChange` rather than
-        // through the Play Core listener onDestroy unregisters, so minutes later
+        // the download still reports through `onStateChange`, so minutes later
         // `downloadNext()` drains the queue and a destroyed Activity calls
         // startActivity. Either the app pops itself into the foreground long
         // after the user left it, or Android's background-activity-start rules

@@ -29,6 +29,7 @@ import java.util.Collections
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executor
 import java.util.concurrent.ExecutorService
+import java.util.concurrent.FutureTask
 import java.util.concurrent.TimeUnit
 
 class ToolchainPackReleaseTest {
@@ -38,6 +39,7 @@ class ToolchainPackReleaseTest {
     private lateinit var packManager: AssetPackManager
     private val proceed = CountDownLatch(1)
     private var installer: Thread? = null
+    private var installResult: FutureTask<*>? = null
     private val pack = "toolchain_ruby"
     private val removalCompletions = Collections.synchronizedList(mutableListOf<() -> Unit>())
 
@@ -75,12 +77,17 @@ class ToolchainPackReleaseTest {
     fun tearDown() {
         proceed.countDown()
         installer?.join(TimeUnit.SECONDS.toMillis(10))
+        if (installer?.isAlive == true) {
+            installer?.interrupt()
+            installer?.join(TimeUnit.SECONDS.toMillis(5))
+        }
         removalCompletions.toList().forEach { it() }
         // Process-wide, and a removal whose Task never completes (a mock that answers
         // nothing) would otherwise stay in flight for every test that follows.
         removalsInFlight().clear()
         unmockkAll()
         assertFalse(installer?.isAlive == true, "the install did not settle")
+        installResult?.get(1, TimeUnit.SECONDS)
     }
 
     private fun pendingRemoval(): Task<Void> {
@@ -143,7 +150,8 @@ class ToolchainPackReleaseTest {
             onStateChange = { _, status, _, _, _ -> events.add(status) }
         }
         val canceller = ToolchainManager(context)
-        installer = Thread { install(owner, dir) }.apply { start() }
+        val result = FutureTask { install(owner, dir) }.also { installResult = it }
+        installer = Thread(result).apply { start() }
         assertTrue(copying.await(10, TimeUnit.SECONDS), "the install never reached its copy")
 
         canceller.cancel(pack)
@@ -153,6 +161,7 @@ class ToolchainPackReleaseTest {
         proceed.countDown()
         installer!!.join(TimeUnit.SECONDS.toMillis(10))
         assertFalse(installer!!.isAlive, "the install did not finish")
+        result.get(1, TimeUnit.SECONDS)
         assertTrue(removed.await(10, TimeUnit.SECONDS), "cancel never released the consumed pack")
         assertEquals(listOf(AssetPackStatus.COMPLETED), events.toList())
         assertEquals("ruby payload", File(filesDir, "usr/bin/ruby").readText())

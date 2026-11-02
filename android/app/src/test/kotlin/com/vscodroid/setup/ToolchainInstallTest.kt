@@ -28,9 +28,11 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.nio.file.Files
 import java.io.RandomAccessFile
 import java.util.Collections
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.ExecutorService
 import java.util.concurrent.TimeUnit
 
 /**
@@ -62,6 +64,7 @@ class ToolchainInstallTest {
     private lateinit var context: Context
     private lateinit var packageManager: PackageManager
     private lateinit var packManager: AssetPackManager
+    private val managers = mutableListOf<ToolchainManager>()
 
     /** Written by the caller thread and by ioExecutor, so it has to be synchronized. */
     private val events: MutableList<Triple<String, Int, Int>> =
@@ -79,6 +82,7 @@ class ToolchainInstallTest {
 
     @BeforeEach
     fun setUp() {
+        mockkStatic(Files::class)
         mockkObject(Logger)
         every { Logger.d(any(), any()) } just Runs
         every { Logger.i(any(), any()) } just Runs
@@ -107,9 +111,26 @@ class ToolchainInstallTest {
     }
 
     @AfterEach
-    fun tearDown() = unmockkAll()
+    fun tearDown() {
+        val executors = managers.map { manager ->
+            ToolchainManager::class.java.getDeclaredField("ioExecutor")
+                .apply { isAccessible = true }.get(manager) as ExecutorService
+        }
+        try {
+            executors.forEach { it.shutdown() }
+            executors.forEach { executor ->
+                if (!executor.awaitTermination(10, TimeUnit.SECONDS)) {
+                    executor.shutdownNow()
+                    assertTrue(executor.awaitTermination(10, TimeUnit.SECONDS), "an install task outlived its fixture")
+                }
+            }
+        } finally {
+            executors.forEach { it.shutdownNow() }
+            unmockkAll()
+        }
+    }
 
-    private fun manager() = ToolchainManager(context).apply {
+    private fun manager() = ToolchainManager(context).also { managers.add(it) }.apply {
         onStateChange = { pack, status, pct, why, _ ->
             if (why != null) reasons.add(why)
             events.add(Triple(pack, status, pct))
@@ -309,22 +330,9 @@ class ToolchainInstallTest {
 
     // ── what the HTTP pre-flight asks for ────────────────────────────────
 
-    /**
-     * A reinstall is charged for what the copy adds, not for the whole tree twice.
-     *
-     * `copyTo(overwrite = true)` deletes each destination file before opening its
-     * output stream, so the copy into `usr/` over an identical tree allocates
-     * nothing net. The Play path has credited that since it could read the
-     * delivered manifest; this path could not, because it gates before the ZIP
-     * carrying the manifest exists, and so refused a device that already held most
-     * of the toolchain the room it plainly had. The record is the witness that IS
-     * available then, and it carries `installRoot`.
-     *
-     * The staging copy stays charged in full, which is why the expected figure
-     * subtracts one tree and not two.
-     */
+    /** An undownloaded payload cannot prove which existing files it will replace. */
     @Test
-    fun `an HTTP reinstall is charged only for what the copy adds`() {
+    fun `an HTTP reinstall reserves the full staging and destination copies`() {
         installedBy("com.example.sideloader")
         val alreadyThere = 40_000_000L
         File(filesDir, "home/.vscodroid/toolchains.json").writeText(
@@ -338,7 +346,7 @@ class ToolchainInstallTest {
         verify {
             Logger.e(
                 any(),
-                refusalNaming(toolchainInstallBytes(javaUnpacked, javaDownload, alreadyThere)),
+                refusalNaming(toolchainInstallBytes(javaUnpacked, javaDownload)),
                 any(),
             )
         }
@@ -360,7 +368,7 @@ class ToolchainInstallTest {
         manager().install("toolchain_java")
 
         assertTrue(failed.await(10, TimeUnit.SECONDS), "the HTTP task never reported an outcome")
-        verify { Logger.e(any(), refusalNaming(toolchainInstallBytes(javaUnpacked, javaDownload, 0L)), any()) }
+        verify { Logger.e(any(), refusalNaming(toolchainInstallBytes(javaUnpacked, javaDownload)), any()) }
     }
 
     /**
@@ -382,7 +390,7 @@ class ToolchainInstallTest {
         manager().install("toolchain_java")
 
         assertTrue(failed.await(10, TimeUnit.SECONDS), "the HTTP task never reported an outcome")
-        verify { Logger.e(any(), refusalNaming(toolchainInstallBytes(javaUnpacked, javaDownload, 0L)), any()) }
+        verify { Logger.e(any(), refusalNaming(toolchainInstallBytes(javaUnpacked, javaDownload)), any()) }
     }
 
     /**
@@ -400,7 +408,7 @@ class ToolchainInstallTest {
         manager().install("toolchain_java")
 
         assertTrue(failed.await(10, TimeUnit.SECONDS), "the HTTP task never reported an outcome")
-        verify { Logger.e(any(), refusalNaming(toolchainInstallBytes(javaUnpacked, javaDownload, 0L)), any()) }
+        verify { Logger.e(any(), refusalNaming(toolchainInstallBytes(javaUnpacked, javaDownload)), any()) }
     }
 
     // ── where both routes converge ───────────────────────────────────────
@@ -587,9 +595,7 @@ class ToolchainInstallTest {
      * picker shows 100% and Done, the first-run queue moves to the next pack, and
      * the card reads "Install" again after the next launch with nothing said.
      *
-     * The failure is arranged as the rest of this package arranges it, by
-     * occupying the temporary path `writeAtomically` derives from its
-     * destination.
+     * The failure is injected at the install record's atomic temporary-file open.
      */
     @Test
     fun `an install whose record cannot be written reports FAILED rather than COMPLETED`() {
@@ -609,17 +615,9 @@ class ToolchainInstallTest {
         assertFalse(marker().exists(), "an install that could not be recorded left its marker")
     }
 
-    /**
-     * Occupies the temporary path `writeAtomically` derives from `toolchains.json`,
-     * which is how the rest of this package arranges a record write that fails.
-     *
-     * Non-empty, so the cleanup `delete()` cannot quietly reclaim it and let the
-     * write through; the point is that this write fails.
-     */
+    /** Refuse the real atomic writer's temporary-file open for the install record. */
     private fun blockTheRecordWrite() {
-        val blocker = File(filesDir, "home/.vscodroid/toolchains.json.tmp~")
-        assertTrue(blocker.mkdirs(), "could not stage the blocked temp path")
-        File(blocker, "occupied").writeText("x")
+        blockAtomicWritesTo(File(filesDir, "home/.vscodroid/toolchains.json"))
     }
 
     /** A pack whose copy runs to the end, so the record write is what fails. */

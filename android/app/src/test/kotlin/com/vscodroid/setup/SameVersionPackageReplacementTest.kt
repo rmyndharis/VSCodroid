@@ -13,6 +13,7 @@ import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
 import io.mockk.mockkObject
+import io.mockk.mockkStatic
 import io.mockk.unmockkAll
 import io.mockk.verify
 import kotlinx.coroutines.runBlocking
@@ -25,6 +26,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.ByteArrayInputStream
 import java.io.File
+import java.nio.file.Files
 import java.io.IOException
 
 class SameVersionPackageReplacementTest {
@@ -42,6 +44,7 @@ class SameVersionPackageReplacementTest {
 
     @BeforeEach
     fun setUp() {
+        mockkStatic(Files::class)
         mockkObject(Logger)
         every { Logger.d(any(), any()) } just Runs
         every { Logger.i(any(), any()) } just Runs
@@ -122,10 +125,8 @@ class SameVersionPackageReplacementTest {
         assertEquals("// alpha".length, payloads.getValue("vscode-reh/a.js").length)
     }
 
-    private fun interruptedPackage(): File {
-        val blocker = File(second.parentFile, "${second.name}.tmp~")
-        assertTrue(blocker.mkdirs())
-        File(blocker, "occupied").writeText("")
+    private fun interruptedPackage(): AtomicWriteFailure {
+        val blocker = blockAtomicWritesTo(second)
         assertEquals(FirstRunSetup.SetupResult.ERROR, launchSetupDecision())
         assertEquals("// alpha", first.readText())
         assertFalse(stored.containsKey("setup_version"))
@@ -153,7 +154,7 @@ class SameVersionPackageReplacementTest {
     fun `a replacement package rewrites equal length assets from an interrupted package`() {
         val blocker = interruptedPackage()
         replacementPackage()
-        assertTrue(blocker.deleteRecursively())
+        blocker.close()
 
         assertEquals(FirstRunSetup.SetupResult.SUCCESS, launchSetupDecision())
 
@@ -165,7 +166,7 @@ class SameVersionPackageReplacementTest {
     @Test
     fun `an unchanged package finishes its interrupted extraction`() {
         val blocker = interruptedPackage()
-        assertTrue(blocker.deleteRecursively())
+        blocker.close()
 
         assertEquals(FirstRunSetup.SetupResult.SUCCESS, launchSetupDecision())
 
@@ -179,7 +180,7 @@ class SameVersionPackageReplacementTest {
         val blocker = interruptedPackage()
         replacementPackage()
         currentCode = 17L
-        assertTrue(blocker.deleteRecursively())
+        blocker.close()
 
         assertEquals(FirstRunSetup.SetupResult.SUCCESS, launchSetupDecision())
 
@@ -195,7 +196,7 @@ class SameVersionPackageReplacementTest {
         assertEquals(FirstRunSetup.SetupResult.ERROR, launchSetupDecision())
         assertEquals("1.5.0/16/2000!mixed", stored["extraction_attempt"])
         first.writeText("// alpha")
-        assertTrue(blocker.deleteRecursively())
+        blocker.close()
 
         assertEquals(FirstRunSetup.SetupResult.SUCCESS, launchSetupDecision())
 

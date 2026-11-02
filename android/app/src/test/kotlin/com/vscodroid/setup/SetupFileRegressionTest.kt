@@ -14,7 +14,9 @@ import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
 import io.mockk.mockkObject
+import io.mockk.mockkStatic
 import io.mockk.unmockkObject
+import io.mockk.unmockkAll
 import org.json.JSONArray
 import org.json.JSONObject
 import org.junit.jupiter.api.AfterEach
@@ -80,6 +82,7 @@ class SetupFileRegressionTest {
 
     @BeforeEach
     fun quietPlatformLogging() {
+        mockkStatic(Files::class)
         mockkObject(Logger)
         every { Logger.d(any(), any()) } just Runs
         every { Logger.i(any(), any()) } just Runs
@@ -88,7 +91,7 @@ class SetupFileRegressionTest {
     }
 
     @AfterEach
-    fun restorePlatformLogging() = unmockkObject(Logger)
+    fun restorePlatformLogging() = unmockkAll()
 
     private val record get() = File(root, "preferences.json")
     private val files get() = File(root, "files").apply { mkdirs() }
@@ -144,14 +147,12 @@ class SetupFileRegressionTest {
         val file = File(Environment.getMachineSettingsPath(firstContext))
         file.parentFile.mkdirs()
         file.writeText(settings())
-        val blocker = File(file.parentFile, "${file.name}.tmp~").apply { mkdirs() }
-        val occupied = File(blocker, "occupied").apply { writeText("fixture") }
+        val blocker = blockAtomicWritesTo(file)
 
         setup(firstContext).updateSettingsNativeLibPaths()
         val afterRefusal = file.readText()
         val prematureFlag = record.isFile && JSONObject(record.readText()).optBoolean("moved_defaults_pruned")
-        assertTrue(occupied.delete())
-        assertTrue(blocker.delete())
+        blocker.close()
         setup(context()).updateSettingsNativeLibPaths()
         val afterRetry = JSONObject(file.readText())
 
@@ -355,7 +356,7 @@ class SetupFileRegressionTest {
         val refused = File(files, legacyRoots.first())
         mockkObject(StorageManager)
         try {
-            every { StorageManager.deleteRecursive(any()) } answers {
+            every { StorageManager.deleteRecursive(any(), any()) } answers {
                 if (firstArg<File>() == refused) 0L else callOriginal()
             }
             migrate(10)

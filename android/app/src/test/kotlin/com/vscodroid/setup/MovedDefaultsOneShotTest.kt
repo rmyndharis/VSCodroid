@@ -10,7 +10,9 @@ import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
 import io.mockk.mockkObject
+import io.mockk.mockkStatic
 import io.mockk.unmockkObject
+import io.mockk.unmockkAll
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -19,6 +21,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.nio.file.Files
 
 /**
  * That taking the app's old preferences out of the machine settings file happens
@@ -74,6 +77,7 @@ class MovedDefaultsOneShotTest {
 
     @BeforeEach
     fun setUp() {
+        mockkStatic(Files::class)
         mockkObject(Logger)
         every { Logger.d(any(), any()) } just Runs
         every { Logger.i(any(), any()) } just Runs
@@ -126,7 +130,7 @@ class MovedDefaultsOneShotTest {
     }
 
     @AfterEach
-    fun tearDown() = unmockkObject(Logger)
+    fun tearDown() = unmockkAll()
 
     private fun run() = FirstRunSetup(context).updateSettingsNativeLibPaths()
 
@@ -165,15 +169,12 @@ class MovedDefaultsOneShotTest {
     /**
      * A pass whose write fails has not taken anything out, so it must run again.
      *
-     * Arranged the way UpdateSettingsPathsTest arranges it: a non-empty directory
-     * where writeAtomically wants its temporary file. Recording the flag on that
-     * path would leave the preferences in the file for ever with nothing to notice.
+     * The temporary-file open fails. Recording the flag after that failure
+     * would leave the preferences in the file with no later retry.
      */
     @Test
     fun `a failed write does not record the pass as done`() {
-        val blocker = File(settingsFile.parentFile, "${settingsFile.name}.tmp~")
-        assertTrue(blocker.mkdirs(), "could not stage the blocked temp path")
-        File(blocker, "occupied").writeText("x")
+        val blocker = blockAtomicWritesTo(settingsFile)
 
         run()
 
@@ -390,10 +391,7 @@ class MovedDefaultsOneShotTest {
             }
             """.trimIndent(),
         )
-        val tmpBlocker = File(settingsFile.parentFile, "${settingsFile.name}.tmp~").apply {
-            mkdirs()
-            File(this, "occupied").writeText("x")
-        }
+        val tmpBlocker = blockAtomicWritesTo(settingsFile)
 
         run()
 
@@ -404,7 +402,7 @@ class MovedDefaultsOneShotTest {
         // First-run setup completes before the next launch and records the build identity.
         stored["setup_version"] = "1.3.9"
         stored["setup_version_code"] = 14
-        assertTrue(tmpBlocker.deleteRecursively())
+        tmpBlocker.close()
 
         run()
 
@@ -482,10 +480,7 @@ class MovedDefaultsOneShotTest {
             }
             """.trimIndent(),
         )
-        val tmpBlocker = File(settingsFile.parentFile, "${settingsFile.name}.tmp~").apply {
-            mkdirs()
-            File(this, "occupied").writeText("x")
-        }
+        val tmpBlocker = blockAtomicWritesTo(settingsFile)
 
         run()
 
@@ -498,7 +493,7 @@ class MovedDefaultsOneShotTest {
         // First-run setup completes in the meantime and records the build identity.
         stored["setup_version"] = "1.3.9"
         stored["setup_version_code"] = 14
-        assertTrue(tmpBlocker.deleteRecursively())
+        tmpBlocker.close()
 
         run()
 

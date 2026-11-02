@@ -68,9 +68,14 @@ class ToolchainIoExecutorTest {
         val executor = toolchainIoExecutor(keepAliveMs = 50)
         try {
             val ran = CountDownLatch(1)
-            executor.execute { ran.countDown() }
-            assertTrue(ran.await(10, TimeUnit.SECONDS), "the task never ran")
-            assertEquals(1, executor.poolSize, "no thread was created to run it")
+            val release = CountDownLatch(1)
+            executor.execute { ran.countDown(); release.await() }
+            try {
+                assertTrue(ran.await(10, TimeUnit.SECONDS), "the task never ran")
+                assertEquals(1, executor.poolSize, "no thread was created to run it")
+            } finally {
+                release.countDown()
+            }
 
             val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
             while (executor.poolSize > 0 && System.nanoTime() < deadline) Thread.sleep(10)

@@ -8,7 +8,8 @@ import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
 import io.mockk.mockkObject
-import io.mockk.unmockkObject
+import io.mockk.mockkStatic
+import io.mockk.unmockkAll
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -18,6 +19,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.ByteArrayInputStream
 import java.io.File
+import java.nio.file.Files
 
 /**
  * What happens to a bundled extension whose unpack is never allowed to finish.
@@ -69,6 +71,7 @@ class AbandonedUnpackTest {
 
     @BeforeEach
     fun setUp() {
+        mockkStatic(Files::class)
         mockkObject(Logger)
         every { Logger.d(any(), any()) } just Runs
         every { Logger.i(any(), any()) } just Runs
@@ -100,7 +103,7 @@ class AbandonedUnpackTest {
     }
 
     @AfterEach
-    fun tearDown() = unmockkObject(Logger)
+    fun tearDown() = unmockkAll()
 
     private fun extractBundledExtensions() {
         FirstRunSetup::class.java
@@ -277,7 +280,7 @@ class AbandonedUnpackTest {
         // No package.json, which is what makes it abandoned on a device that
         // predates the mark: the state a kill during a pre-marker release left.
         assertTrue(File(installed, UNPACK_MARKER_NAME).mkdirs(), "could not block the mark")
-        assertTrue(File(installed, "extension.js.tmp~").mkdirs(), "could not block the copy")
+        val blocked = blockAtomicWritesTo(File(installed, "extension.js"))
 
         val failed = runCatching { extractBundledExtensions() }
         assertTrue(
@@ -291,6 +294,7 @@ class AbandonedUnpackTest {
                 "on every activation",
         )
 
+        blocked.close()
         extractBundledExtensions()
 
         assertEquals(

@@ -8,7 +8,9 @@ import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
 import io.mockk.mockkObject
+import io.mockk.mockkStatic
 import io.mockk.unmockkObject
+import io.mockk.unmockkAll
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -18,6 +20,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.nio.file.Files
 import java.io.IOException
 import java.lang.reflect.InvocationTargetException
 
@@ -46,9 +49,7 @@ import java.lang.reflect.InvocationTargetException
  * `UserKnownHostsFile` it looks for the key in a directory this app cannot read.
  * The welcome README costs a greeting, which is why it warns rather than throws.
  *
- * The failure is arranged as in [BashrcAtomicityTest]: by occupying the
- * temporary path [writeAtomically] derives from the destination. That path only
- * exists to be occupied once the writer goes through it, which is the point.
+ * The failure is injected at the temporary-file open in [writeAtomically].
  */
 class LoginShellFilesAtomicityTest {
 
@@ -64,6 +65,7 @@ class LoginShellFilesAtomicityTest {
 
     @BeforeEach
     fun setUp() {
+        mockkStatic(Files::class)
         mockkObject(Logger)
         every { Logger.d(any(), any()) } just Runs
         every { Logger.i(any(), any()) } just Runs
@@ -80,7 +82,7 @@ class LoginShellFilesAtomicityTest {
     }
 
     @AfterEach
-    fun tearDown() = unmockkObject(Logger)
+    fun tearDown() = unmockkAll()
 
     private fun invoke(name: String) {
         FirstRunSetup::class.java
@@ -89,12 +91,7 @@ class LoginShellFilesAtomicityTest {
             .invoke(FirstRunSetup(context))
     }
 
-    /** Non-empty, so the cleanup `delete()` cannot quietly reclaim it. */
-    private fun block(dest: File) {
-        val blocker = File(dest.parentFile, "${dest.name}.tmp~")
-        assertTrue(blocker.mkdirs(), "could not stage the blocked temp path")
-        File(blocker, "occupied").writeText("x")
-    }
+    private fun block(dest: File) = blockAtomicWritesTo(dest)
 
     @Test
     fun `the login shell profile is written on a first run`() {
@@ -222,7 +219,7 @@ class LoginShellFilesAtomicityTest {
     @Test
     fun `a failed welcome readme write is quiet and leaves nothing behind`() {
         assertTrue(welcome.parentFile!!.mkdirs(), "could not stage the projects directory")
-        block(welcome)
+        val blocker = block(welcome)
 
         // Must not throw: it runs in the middle of the first-run unpack.
         invoke("createWelcomeProject")
@@ -232,7 +229,7 @@ class LoginShellFilesAtomicityTest {
             "a half-written README was left in the projects directory, where its own " +
                 "exists() guard greets every later launch with it",
         )
-        assertTrue(File(welcome.parentFile, "${welcome.name}.tmp~").deleteRecursively())
+        blocker.close()
         invoke("createWelcomeProject")
         val delivered = welcome.readText()
         assertTrue(delivered.startsWith("# Welcome to VSCodroid\n"))

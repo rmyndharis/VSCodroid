@@ -121,16 +121,19 @@ class PythonBytecodeEnvTest {
     /**
      * pip realpaths its build directories, so their bytecode is filed under the
      * canonical spelling of the cache directory, which in the app process is
-     * `/data/data` behind the `/data/user/0` the context reports. Modelled here
-     * with a symlinked cache directory.
+     * `/data/data` behind the `/data/user/0` the context reports. The platform
+     * alias is above the trusted app directory, rather than inside its cache.
      */
     @Test
     fun `bytecode filed under the canonical cache path is pruned too`() {
-        val real = File(filesDir, "real-cache").apply { mkdirs() }
-        val link = File(filesDir, "linked-cache")
-        java.nio.file.Files.createSymbolicLink(link.toPath(), real.toPath())
-        every { context.cacheDir } returns link
-        val prefix = File(link, "pycache")
+        val data = File(filesDir, "data").apply { mkdirs() }
+        val real = File(data, "com.vscodroid/cache").apply { mkdirs() }
+        File(data, "com.vscodroid/files").mkdirs()
+        val alias = File(filesDir, "user/0").apply { parentFile?.mkdirs() }
+        java.nio.file.Files.createSymbolicLink(alias.toPath(), data.toPath())
+        every { context.filesDir } returns File(alias, "com.vscodroid/files")
+        every { context.cacheDir } returns File(alias, "com.vscodroid/cache")
+        val prefix = File(context.cacheDir, "pycache")
         val canonical = File(prefix, "${real.canonicalPath.trimStart('/')}/tmp/pip-build-env-y/x.cpython-314.pyc")
         canonical.parentFile!!.mkdirs()
         canonical.writeBytes(ByteArray(64))
@@ -138,6 +141,21 @@ class PythonBytecodeEnvTest {
         StorageManager.pruneTemporaryBytecode(context)
 
         assertFalse(canonical.exists(), "bytecode under the canonical cache path was left behind")
+    }
+
+    @Test
+    fun `a cache redirected inside the app directory is preserved`() {
+        val real = File(filesDir, "real-cache").apply { mkdirs() }
+        val link = File(filesDir, "linked-cache")
+        java.nio.file.Files.createSymbolicLink(link.toPath(), real.toPath())
+        every { context.cacheDir } returns link
+        val canonical = File(link, "pycache/${real.canonicalPath.trimStart('/')}/tmp/build/x.pyc")
+        canonical.parentFile!!.mkdirs()
+        canonical.writeBytes(ByteArray(64))
+
+        StorageManager.pruneTemporaryBytecode(context)
+
+        assertTrue(canonical.isFile, "cleanup followed an app-controlled redirected parent")
     }
 
     @Test
@@ -180,7 +198,7 @@ class PythonBytecodeEnvTest {
             val t = it.trimStart()
             t.startsWith("//") || t.startsWith("*") || t.startsWith("/*")
         }
-        val start = lines.indexOfFirst { it.contains("fun startServer(") }
+        val start = lines.indexOfFirst { it.contains("private fun startServer(generation:") }
         check(start >= 0) { "startServer not found in ProcessManager.kt" }
         // By brace depth, so the slice is that function and not the rest of the
         // file: a call moved into a neighbour would otherwise still be found.

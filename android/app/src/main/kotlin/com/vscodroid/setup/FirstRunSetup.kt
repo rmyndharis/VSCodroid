@@ -24,6 +24,7 @@ import java.security.KeyStore
 import java.security.MessageDigest
 import java.security.cert.Certificate
 import java.util.Base64
+import java.util.UUID
 import java.util.concurrent.TimeUnit
 import androidx.core.content.edit
 import android.annotation.SuppressLint
@@ -917,7 +918,7 @@ class FirstRunSetup(
             // so following one empties their project on the way past. The
             // helper unlinks a link and never descends it, for the same reason
             // the cache reclaim uses it.
-            StorageManager.deleteRecursive(File(libDir, name))
+            StorageManager.deleteRecursive(File(libDir, name), context.filesDir.parentFile)
         }
 
         if (!File(libDir, runtime).exists()) {
@@ -984,7 +985,7 @@ class FirstRunSetup(
         val present = sitePackages.listFiles()?.map { it.name } ?: return
         for (name in supersededBundledPipDistInfo(present, shipped)) {
             Logger.i(tag, "Removing superseded bundled pip metadata $name")
-            StorageManager.deleteRecursive(File(sitePackages, name))
+            StorageManager.deleteRecursive(File(sitePackages, name), context.filesDir.parentFile)
         }
     }
 
@@ -1976,13 +1977,13 @@ class FirstRunSetup(
      *
      * That second case needs a rewrite that fails and an append moments later
      * that succeeds, and no state of the device produces the pair: every one of
-     * them rewrites the whole file through the same `.bashrc.tmp~`, so none can
+     * them rewrites the whole file in the same directory, so none can
      * succeed where the rewrite failed. `createNpmWrappers` writes several times
      * the rewrite's size, so a disk or a quota that refused the rewrite refuses
      * it outright; `ensureToolchainEnvSourcing` writes a couple of hundred bytes
      * against the rewrite's couple of kilobytes, both inside one inode and one
-     * block, so they fail together. An occupied temporary path or a failing
-     * rename is size-independent and stops all three alike. It takes something
+     * block, so they fail together. A failing destination rename is
+     * size-independent and stops all three alike. It takes something
      * else freeing a block in between, which is why this is written down rather
      * than closed.
      *
@@ -3550,7 +3551,7 @@ claude() {
             }
             if (!extractAssetDir("extensions/$name", "home/.vscodroid/extensions/$name", progress, required = true)) {
                 if (failedUnpackMustBeRemoved(name, existedBefore, marker.isFile) &&
-                    !removeExtensionDir(dest)
+                    !removeExtensionDir(dest, context.filesDir.parentFile)
                 ) {
                     Logger.e(
                         tag,
@@ -3579,7 +3580,7 @@ claude() {
         var removedSuperseded = 0
         for (name in superseded) {
             if (elsewhere == null || name in elsewhere) continue
-            if (removeExtensionDir(File(extensionsDir, name))) {
+            if (removeExtensionDir(File(extensionsDir, name), context.filesDir.parentFile)) {
                 removedSuperseded++
                 Logger.i(tag, "Removed superseded bundled extension: $name")
             }
@@ -3588,7 +3589,7 @@ claude() {
         // Disjoint from superseded by construction: that set is versions of ids
         // still bundled, this one is our ids that stopped being bundled at all.
         for (name in retiredOwnExtensionDirs(present, bundled.toList())) {
-            if (removeExtensionDir(File(extensionsDir, name))) {
+            if (removeExtensionDir(File(extensionsDir, name), context.filesDir.parentFile)) {
                 Logger.i(tag, "Removed retired bundled extension: $name")
             }
         }
@@ -3607,7 +3608,7 @@ claude() {
         val owed = retiredIdsToSweep(sweptAlready)
         if (owed.isNotEmpty()) {
             for (name in retiredFetchedExtensionDirs(present, owed)) {
-                if (removeExtensionDir(File(extensionsDir, name))) {
+                if (removeExtensionDir(File(extensionsDir, name), context.filesDir.parentFile)) {
                     Logger.i(tag, "Removed a bundled extension this build no longer ships: $name")
                 }
             }
@@ -3633,7 +3634,7 @@ claude() {
         if (listed != null && elsewhere != null) {
             val onDisk = extensionsDir.list()?.toList() ?: emptyList()
             for (name in orphanedBundledCopies(onDisk, bundled.toList(), listed, elsewhere)) {
-                if (removeExtensionDir(File(extensionsDir, name))) {
+                if (removeExtensionDir(File(extensionsDir, name), context.filesDir.parentFile)) {
                     Logger.i(tag, "Removed $name: an earlier update unpacked it beside the user's own copy, and nothing lists it")
                 }
             }
@@ -4072,7 +4073,7 @@ claude() {
             // beyond behaviour nobody can account for.
             val serverTree = File(context.filesDir, "server/vscode-reh")
             if (serverTree.exists() || Files.isSymbolicLink(serverTree.toPath())) {
-                val freed = StorageManager.deleteRecursive(serverTree)
+                val freed = StorageManager.deleteRecursive(serverTree, context.filesDir.parentFile)
                 if (!serverTree.exists() && !Files.isSymbolicLink(serverTree.toPath())) {
                     Logger.i(tag, "Removed the previous server tree (${freed / 1_048_576} MB)")
                 } else {
@@ -4091,7 +4092,7 @@ claude() {
             // forever, counted into the storage figure the app reports.
             val webTree = File(context.filesDir, "server/vscode-web")
             if (webTree.exists() || Files.isSymbolicLink(webTree.toPath())) {
-                val freed = StorageManager.deleteRecursive(webTree)
+                val freed = StorageManager.deleteRecursive(webTree, context.filesDir.parentFile)
                 if (!webTree.exists() && !Files.isSymbolicLink(webTree.toPath())) {
                     Logger.i(tag, "Removed the orphaned web client tree (${freed / 1_048_576} MB)")
                 } else {
@@ -4187,7 +4188,7 @@ claude() {
             ?.filter { it.name !in shipped }
             ?.forEach {
                 Logger.i(tag, "Removing server/$assetDir/${it.name}, which this build no longer ships")
-                StorageManager.deleteRecursive(it)
+                StorageManager.deleteRecursive(it, context.filesDir.parentFile)
             }
     }
 
@@ -4475,7 +4476,7 @@ claude() {
          *    install already holding the tree is not about to write it again from
          *    nothing. Credit is capped at each matching APK file's length.
          *  - the room to rewrite one file, bounded by what is on disk to rewrite.
-         *    [writeAtomically] writes `<dest>.tmp~` and renames, so while the
+         *    [writeAtomically] writes a sibling temporary file and renames, so while the
          *    biggest file is being replaced both copies exist: the Copilot
          *    extension's `runtime.node`, 91.8 MiB at 1.139.1. On an install with
          *    nothing on disk there is no second copy to hold, and charging for one
@@ -5484,24 +5485,12 @@ internal fun isSymlinkMode(stMode: Int): Boolean = (stMode and 0xF000) == 0xA000
  * which a truncated file satisfies. The reconciliation added for #18 could
  * therefore accept a half-written interpreter runtime and never look again.
  *
- * The temporary file sits in the destination's own directory, so the rename is
- * within one filesystem and needs no space of its own. Its name is derived from
- * the destination rather than randomised, which means a copy killed outright --
- * process death, not an exception -- leaves at most one stray file per
- * destination, and the next attempt at the same asset truncates it. Sweeping
- * for strays would cost a directory walk on every extraction to reclaim a file
- * that the retry reclaims anyway, so there is no sweep.
- *
- * That deterministic name is also why the body is serialised. Two threads can
- * reach here at once: `runSetupLocked` runs on Dispatchers.IO while
- * SplashActivity's per-launch repairs run on the main thread under no lock, and
- * both write `.bashrc` and `settings.json`. Sharing one temp path they open the
- * same file, interleave into it, and the first to finish renames it onto the
- * destination -- after which the loser is still writing through a descriptor
- * that now points AT the destination, and its own rename fails, so it reports
- * "unchanged" having just corrupted the file it claims not to have touched.
- * Writing straight to the destination, which is what this replaced, raced too;
- * what this shape adds is the ability to report success while doing it.
+ * A uniquely named sibling is created and opened exclusively, so an existing
+ * backup, link or payload file is never claimed as scratch. Its short name also
+ * works when the destination already reaches the filesystem's filename limit.
+ * The rename stays within one filesystem. A process killed during the write can
+ * leave its unique temporary file; an ordinary failure removes only the file this
+ * invocation successfully opened.
  *
  * The exclusion is per DESTINATION, and that is not a refinement. One monitor
  * for every write put a 118 MiB inflate on the same lock as a one-line config
@@ -5538,39 +5527,35 @@ internal fun writeAtomically(
     onError: ((String) -> Unit)? = null,
     write: (OutputStream) -> Unit,
 ): Boolean {
-    val tmp = File(dest.parentFile, "${dest.name}.tmp~")
-    val path = tmp.absolutePath
+    val path = dest.absolutePath
     val lock = claimWriteLock(path)
     try {
         synchronized(lock) {
+            val prefix = ".vscodroid-${Integer.toUnsignedString(dest.name.hashCode(), 16)}-"
+            val tmp = File(dest.parentFile, "$prefix${UUID.randomUUID()}.tmp~")
+            var owned = false
             try {
-                val temporaryPath = tmp.toPath()
-                if (Files.isDirectory(temporaryPath, LinkOption.NOFOLLOW_LINKS)) {
-                    throw IOException("temporary path is a directory: ${tmp.name}")
+                try {
+                    Files.newOutputStream(
+                        tmp.toPath(), StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE,
+                        LinkOption.NOFOLLOW_LINKS,
+                    ).use { output ->
+                        owned = true
+                        write(output)
+                    }
+                } catch (e: IOException) {
+                    onError?.invoke(e.message?.trim().orEmpty().ifEmpty { e.javaClass.simpleName })
+                    return false
                 }
-                // Reclaim the name without truncating an inode linked to another file.
-                Files.deleteIfExists(temporaryPath)
-                Files.newOutputStream(
-                    temporaryPath, StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE,
-                    LinkOption.NOFOLLOW_LINKS,
-                ).use(write)
-            } catch (e: IOException) {
-                // The message, not just the failure. "No space left on device" is
-                // the one sentence this whole subsystem is built around, and it
-                // died here: the boolean reached the caller, the exception reached
-                // nothing, and a device that filled up mid-unpack was told "Setup
-                // failed" with no mention of disk on a screen whose only control
-                // is Retry.
-                onError?.invoke(e.message?.trim().orEmpty().ifEmpty { e.javaClass.simpleName })
-                tmp.delete()
-                return false
+                if (!tmp.renameTo(dest)) {
+                    onError?.invoke("could not move ${tmp.name} onto ${dest.name}")
+                    return false
+                }
+                owned = false
+                return true
+            } finally {
+                if (owned) tmp.delete()
             }
-            if (!tmp.renameTo(dest)) {
-                onError?.invoke("could not move ${tmp.name} onto ${dest.name}")
-                tmp.delete()
-                return false
-            }
-            return true
         }
     } finally {
         releaseWriteLock(path, lock)
@@ -5694,12 +5679,11 @@ private fun sha256HexOf(text: String): String =
         .joinToString("") { "%02x".format(it) }
 
 /**
- * One monitor per temporary-file path, held only while a write to that path is
+ * One monitor per destination path, held only while a write to that path is
  * in flight.
  *
- * Keyed on the temporary file rather than the destination because the temporary
- * file is the shared thing: it is what two writers would open together, and it
- * is derived from the destination, so one key covers both.
+ * Temporary names are unique per invocation, so the destination is the stable
+ * key that keeps writers to the same file on one monitor.
  *
  * Counted, and removed at zero, so the table holds an entry per write RUNNING
  * rather than an entry per file ever written. That is what makes a per-path
@@ -5716,7 +5700,7 @@ private fun sha256HexOf(text: String): String =
  */
 private val WRITE_LOCKS = HashMap<String, DestinationLock>()
 
-/** A monitor for one temporary-file path, plus how many writers still need it. */
+/** A monitor for one destination path, plus how many writers still need it. */
 private class DestinationLock {
     var holders = 0
 }
@@ -5877,8 +5861,8 @@ internal fun bundledIdsToRelist(
  * returns freed bytes, and a directory nothing could remove is exactly what the
  * callers want to log about.
  */
-internal fun removeExtensionDir(dir: File): Boolean {
-    StorageManager.deleteRecursive(dir)
+internal fun removeExtensionDir(dir: File, appRoot: File?): Boolean {
+    StorageManager.deleteRecursive(dir, appRoot)
     return !dir.exists() && !Files.isSymbolicLink(dir.toPath())
 }
 
@@ -6359,6 +6343,7 @@ private fun insertSetting(content: String, key: String, value: String): String {
  */
 private val TERMINAL_ENV_LINUX_KEY = Regex(""""terminal\.integrated\.env\.linux"\s*:""")
 private val TERMINAL_ENV_LINUX_OPEN = Regex(""""terminal\.integrated\.env\.linux"\s*:\s*\{""")
+private val LD_PRELOAD_KEY = Regex(""""LD_PRELOAD"\s*:""")
 
 /** A JSON string literal, escapes included, for stepping over one in a scan. */
 private val JSON_STRING = Regex(""""(?:\\.|[^"\\])*"""")
@@ -6424,7 +6409,7 @@ internal fun ensureTerminalPreload(content: String, preloadPath: String, package
     val brace = open.range.last
     val close = objectEnd(scan, brace)
     if (close < 0) return null
-    if (scan.substring(brace, close).contains("\"LD_PRELOAD\"")) {
+    if (LD_PRELOAD_KEY.containsMatchIn(scan.substring(brace, close))) {
         val value = ownPreload(packageName).find(scan.substring(0, close), brace)?.groups?.get(1)?.range
             ?: return null
         return if (content.substring(value) == preloadPath) null else content.replaceRange(value, preloadPath)

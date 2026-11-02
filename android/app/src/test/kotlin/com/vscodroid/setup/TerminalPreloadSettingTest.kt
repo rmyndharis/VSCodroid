@@ -106,6 +106,31 @@ class TerminalPreloadSettingTest {
     inner class ExistingObject {
 
         @Test
+        fun `a value naming LD_PRELOAD does not count as its key`() {
+            val document = settings(envLinux = "{\n        \"OTHER\": \"LD_PRELOAD\"\n    }")
+
+            val result = requireNotNull(ensureTerminalPreload(document, preload, pkg))
+
+            assertEquals(
+                settings(envLinux = "{\n        \"LD_PRELOAD\": \"$preload\",\n        \"OTHER\": \"LD_PRELOAD\"\n    }"),
+                result,
+            )
+            assertNull(ensureTerminalPreload(result, preload, pkg), "a second pass must preserve the inserted key")
+        }
+
+        @Test
+        fun `a quoted preload example in a value does not count as its key`() {
+            val env = "{\n        \"OTHER\": \"\\\"LD_PRELOAD\\\": null\"\n    }"
+            val document = settings(envLinux = env)
+
+            val result = requireNotNull(ensureTerminalPreload(document, preload, pkg))
+
+            assertTrue(result.contains("\"LD_PRELOAD\": \"$preload\""))
+            assertTrue(result.contains("\"OTHER\": \"\\\"LD_PRELOAD\\\": null\""))
+            assertNull(ensureTerminalPreload(result, preload, pkg))
+        }
+
+        @Test
         fun `adds one line to an object that holds other keys, at the object's indent`() {
             val document = settings(envLinux = "{\n        \"FOO\": \"bar\",\n        \"BAZ\": \"qux\"\n    }")
 

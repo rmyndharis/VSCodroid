@@ -9,7 +9,8 @@ import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
 import io.mockk.mockkObject
-import io.mockk.unmockkObject
+import io.mockk.mockkStatic
+import io.mockk.unmockkAll
 import io.mockk.verify
 import org.json.JSONArray
 import org.junit.jupiter.api.AfterEach
@@ -22,6 +23,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.ByteArrayInputStream
 import java.io.File
+import java.nio.file.Files
 import java.io.IOException
 import java.lang.reflect.InvocationTargetException
 
@@ -80,6 +82,7 @@ class ExtensionsManifestWriteTest {
 
     @BeforeEach
     fun setUp() {
+        mockkStatic(Files::class)
         mockkObject(Logger)
         every { Logger.d(any(), any()) } just Runs
         every { Logger.i(any(), any()) } just Runs
@@ -116,7 +119,7 @@ class ExtensionsManifestWriteTest {
     }
 
     @AfterEach
-    fun tearDown() = unmockkObject(Logger)
+    fun tearDown() = unmockkAll()
 
     private fun generateExtensionsManifest() {
         FirstRunSetup::class.java
@@ -187,12 +190,7 @@ class ExtensionsManifestWriteTest {
         )
     }
 
-    /** Non-empty, so the cleanup delete() cannot quietly reclaim it. */
-    private fun blockTheWrite() {
-        val blocker = File(extensionsDir, "${manifestFile.name}.tmp~")
-        assertTrue(blocker.mkdirs(), "could not stage the blocked temp path")
-        File(blocker, "occupied").writeText("x")
-    }
+    private fun blockTheWrite(): AtomicWriteFailure = blockAtomicWritesTo(manifestFile)
 
     @Test
     fun `a failed write leaves no manifest behind and fails loudly`() {
@@ -348,10 +346,10 @@ class ExtensionsManifestWriteTest {
             """[{"identifier":{"id":"$expectedId"},"relativeLocation":"$dirName"}]"""
         )
 
-        blockTheWrite()
+        val blocker = blockTheWrite()
         assertThrows(InvocationTargetException::class.java) { extractBundledExtensions() }
 
-        File(extensionsDir, "${manifestFile.name}.tmp~").deleteRecursively()
+        blocker.close()
         extractBundledExtensions()
 
         val text = manifestFile.readText()

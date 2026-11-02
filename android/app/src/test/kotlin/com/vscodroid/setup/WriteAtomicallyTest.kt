@@ -5,11 +5,19 @@ import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
 import java.io.IOException
 import java.nio.file.Files
+import java.util.UUID
+import java.util.concurrent.Callable
+import java.util.concurrent.Executors
+import java.util.concurrent.TimeUnit
+import io.mockk.every
+import io.mockk.mockkStatic
+import io.mockk.unmockkStatic
 
 /**
  * Tests for [writeAtomically], the mechanism that stops a failed extraction from
@@ -23,7 +31,9 @@ class WriteAtomicallyTest {
     @TempDir
     lateinit var dir: File
 
-    private fun tempFiles() = dir.listFiles()?.filter { it.name.endsWith(".tmp~") } ?: emptyList()
+    private fun tempFiles() = dir.listFiles()?.filter {
+        it.name.startsWith(".vscodroid-") && it.name.endsWith(".tmp~")
+    } ?: emptyList()
 
     @Test
     fun `writes the content and leaves no temporary file behind`() {
@@ -143,61 +153,105 @@ class WriteAtomicallyTest {
         assertArrayEquals(bytes, dest.readBytes())
     }
 
+    @Test
+    fun `a neighboring user backup survives a successful replacement`() {
+        val dest = File(dir, "settings.json").apply { writeText("previous settings") }
+        val backup = File(dir, "settings.json.tmp~").apply { writeText("user backup") }
+
+        assertTrue(writeAtomically(dest) { it.write("updated settings".toByteArray()) })
+
+        assertEquals("updated settings", dest.readText())
+        assertTrue(backup.isFile, "the writer erased a neighboring user backup")
+        assertEquals("user backup", backup.readText())
+    }
+
+    @Test
+    fun `a valid maximum length destination name remains writable`() {
+        val dest = File(dir, "a".repeat(255)).apply { writeText("previous payload") }
+
+        assertTrue(writeAtomically(dest) { it.write("updated payload".toByteArray()) })
+
+        assertEquals("updated payload", dest.readText())
+        assertEquals(setOf(dest.name), dir.list()!!.toSet())
+    }
+
+    @Test
+    fun `an occupied exclusive temporary name preserves both existing files`() {
+        val dest = File(dir, "payload.so").apply { writeText("working version") }
+        val id = UUID.fromString("24ffb347-264c-4878-ab2d-bb552c07a03d")
+        val occupied = File(dir, ".vscodroid-${Integer.toUnsignedString(dest.name.hashCode(), 16)}-$id.tmp~").apply { writeText("existing neighbor") }
+        var entered = false
+        mockkStatic(UUID::class)
+        try {
+            every { UUID.randomUUID() } returns id
+            assertFalse(writeAtomically(dest) { entered = true; it.write("replacement".toByteArray()) })
+        } finally {
+            unmockkStatic(UUID::class)
+        }
+        assertFalse(entered, "an occupied path was opened as this write's temporary file")
+        assertEquals("working version", dest.readText())
+        assertEquals("existing neighbor", occupied.readText())
+    }
+
+    @Test
+    fun `an unchecked writer failure removes only its own temporary file`() {
+        val dest = File(dir, "payload.so").apply { writeText("working version") }
+
+        assertThrows(IllegalStateException::class.java) {
+            writeAtomically(dest) {
+                it.write("partial".toByteArray())
+                throw IllegalStateException("writer failed")
+            }
+        }
+
+        assertEquals("working version", dest.readText())
+        assertTrue(tempFiles().isEmpty())
+    }
+
     /**
      * Two writers are never inside the body at the same time.
      *
-     * The temp name is derived from the destination rather than randomised, for
-     * the reason above, so two writers share one temp file. They are reachable
-     * together: setup runs on Dispatchers.IO while SplashActivity's per-launch
-     * repairs run on the main thread under no lock, and both write `.bashrc`
-     * and `settings.json`. Overlapping, they open the same path, write into it
-     * at their own offsets, and the first to finish renames it onto the
-     * destination -- after which the loser is writing through a descriptor that
-     * now points at the destination, and its own rename fails, so it reports
-     * "unchanged" having just corrupted the file.
-     *
-     * This asserts the exclusion rather than the corruption, and that choice is
-     * the point. A test that raced two payloads and demanded the file hold one
-     * of them intact was written first and measured: it caught the unserialised
-     * version once in three runs, because two writers that interleave *evenly*
-     * still leave the later one's bytes at every offset. A test that fails a
-     * third of the time when the code is broken is worse than none -- it goes
-     * red at random, and the first person under time pressure deletes it.
-     * Occupancy is the property the lock actually provides and it is decidable
-     * on every run.
+     * Config and payload writes to one destination retain a single admission
+     * order even though their temporary files now have different names.
      */
     @Test
     fun `two writers are never inside the body at once`() {
         val dest = File(dir, "settings.json")
         val inside = java.util.concurrent.atomic.AtomicInteger(0)
+        val entered = java.util.concurrent.atomic.AtomicInteger(0)
         val mostAtOnce = java.util.concurrent.atomic.AtomicInteger(0)
         val start = java.util.concurrent.CountDownLatch(1)
-        val done = java.util.concurrent.CountDownLatch(2)
-
-        repeat(2) { n ->
-            Thread {
-                start.await()
-                writeAtomically(dest) { out ->
-                    val now = inside.incrementAndGet()
-                    mostAtOnce.updateAndGet { maxOf(it, now) }
-                    // Long enough that the other thread is certainly awake and
-                    // trying, so a missing lock shows up rather than being
-                    // outrun by scheduling.
-                    Thread.sleep(50)
-                    out.write("writer $n".toByteArray())
-                    inside.decrementAndGet()
-                }
-                done.countDown()
-            }.start()
+        val workers = Executors.newFixedThreadPool(2)
+        try {
+            val results = (0..1).map { n ->
+                workers.submit(Callable {
+                    check(start.await(10, TimeUnit.SECONDS))
+                    writeAtomically(dest) { out ->
+                        entered.incrementAndGet()
+                        val now = inside.incrementAndGet()
+                        mostAtOnce.updateAndGet { maxOf(it, now) }
+                        try {
+                            Thread.sleep(50)
+                            out.write("writer $n".toByteArray())
+                        } finally {
+                            inside.decrementAndGet()
+                        }
+                    }
+                })
+            }
+            start.countDown()
+            results.forEach { assertTrue(it.get(30, TimeUnit.SECONDS), "a writer failed") }
+        } finally {
+            start.countDown()
+            workers.shutdownNow()
+            assertTrue(workers.awaitTermination(5, TimeUnit.SECONDS), "writers did not stop")
         }
-        start.countDown()
-        assertTrue(done.await(30, java.util.concurrent.TimeUnit.SECONDS), "writers did not finish")
 
+        assertEquals(2, entered.get(), "both writer bodies must run")
         assertEquals(
             1,
             mostAtOnce.get(),
-            "two writers were inside the body together, so they shared one temp file and " +
-                "the loser wrote through a descriptor the winner had already renamed",
+            "writers to the same destination were not serialized",
         )
         assertTrue(tempFiles().isEmpty(), "a temporary file survived")
     }
@@ -230,27 +284,27 @@ class WriteAtomicallyTest {
         val quickFinished = java.util.concurrent.CountDownLatch(1)
         val quickGotThrough = java.util.concurrent.atomic.AtomicBoolean(false)
 
-        val slowWriter = Thread {
-            writeAtomically(slow) { out ->
-                slowInside.countDown()
-                quickGotThrough.set(
-                    quickFinished.await(10, java.util.concurrent.TimeUnit.SECONDS)
-                )
-                out.write("the asset copy".toByteArray())
-            }
+        val worker = Executors.newSingleThreadExecutor()
+        try {
+            val slowWriter = worker.submit(Callable {
+                writeAtomically(slow) { out ->
+                    slowInside.countDown()
+                    quickGotThrough.set(quickFinished.await(10, TimeUnit.SECONDS))
+                    out.write("the asset copy".toByteArray())
+                }
+            })
+            assertTrue(slowInside.await(10, TimeUnit.SECONDS), "the slow writer never entered the body")
+            assertTrue(
+                writeAtomically(quick) { it.write("the config write".toByteArray()) },
+                "the config write failed",
+            )
+            quickFinished.countDown()
+            assertTrue(slowWriter.get(15, TimeUnit.SECONDS), "the asset write failed")
+        } finally {
+            quickFinished.countDown()
+            worker.shutdownNow()
+            assertTrue(worker.awaitTermination(5, TimeUnit.SECONDS), "the asset writer did not stop")
         }
-        slowWriter.start()
-
-        assertTrue(
-            slowInside.await(10, java.util.concurrent.TimeUnit.SECONDS),
-            "the slow writer never entered the body",
-        )
-        assertTrue(
-            writeAtomically(quick) { it.write("the config write".toByteArray()) },
-            "the config write failed",
-        )
-        quickFinished.countDown()
-        slowWriter.join(15_000)
 
         assertTrue(
             quickGotThrough.get(),
@@ -263,16 +317,14 @@ class WriteAtomicallyTest {
     }
 
     @Test
-    fun `overwrites a stray temporary file from an earlier failure`() {
-        // The name is derived from the destination rather than randomised, so a
-        // copy killed outright leaves at most one stray per destination and the
-        // next attempt reclaims it. That is the reason there is no sweep.
+    fun `a neighboring temporary-looking file remains untouched`() {
         val dest = File(dir, "payload.so")
-        File(dir, "payload.so.tmp~").writeText("orphan from a killed process")
+        val neighbor = File(dir, "payload.so.tmp~").apply { writeText("unclaimed neighboring content") }
 
         assertTrue(writeAtomically(dest) { it.write("fresh".toByteArray()) })
         assertEquals("fresh", dest.readText())
-        assertTrue(tempFiles().isEmpty(), "the stray was not reclaimed")
+        assertEquals("unclaimed neighboring content", neighbor.readText())
+        assertTrue(tempFiles().isEmpty())
     }
 
     @Test
@@ -286,6 +338,7 @@ class WriteAtomicallyTest {
         assertEquals("project contents", project.readText())
         assertEquals("fresh", dest.readText())
         assertFalse(Files.isSymbolicLink(dest.toPath()))
+        assertTrue(Files.isSymbolicLink(File(dir, "payload.so.tmp~").toPath()))
         assertTrue(tempFiles().isEmpty())
     }
 
@@ -300,6 +353,7 @@ class WriteAtomicallyTest {
         assertEquals("project contents", project.readText())
         assertEquals("fresh", dest.readText())
         assertFalse(Files.isSameFile(dest.toPath(), project.toPath()))
+        assertTrue(Files.isSameFile(File(dir, "payload.so.tmp~").toPath(), project.toPath()))
         assertTrue(tempFiles().isEmpty())
     }
 
@@ -314,6 +368,7 @@ class WriteAtomicallyTest {
         })
 
         assertEquals("working version", dest.readText())
+        assertTrue(Files.isSameFile(File(dir, "payload.so.tmp~").toPath(), dest.toPath()))
         assertTrue(tempFiles().isEmpty())
     }
 
@@ -328,20 +383,21 @@ class WriteAtomicallyTest {
         assertFalse(project.exists())
         assertEquals("fresh", dest.readText())
         assertFalse(Files.isSymbolicLink(dest.toPath()))
+        assertTrue(Files.isSymbolicLink(File(dir, "payload.so.tmp~").toPath()))
         assertTrue(tempFiles().isEmpty())
     }
 
     @Test
-    fun `a blocked temporary directory preserves the previous destination`() {
+    fun `a neighboring temporary-looking directory survives replacement`() {
         val dest = File(dir, "payload.so").apply { writeText("working version") }
         val blocker = File(dir, "payload.so.tmp~").apply { mkdirs() }
         File(blocker, "keep.txt").writeText("keep")
         var reported: String? = null
 
-        assertFalse(writeAtomically(dest, onError = { reported = it }) { it.write("fresh".toByteArray()) })
+        assertTrue(writeAtomically(dest, onError = { reported = it }) { it.write("fresh".toByteArray()) })
 
-        assertEquals("working version", dest.readText())
+        assertEquals("fresh", dest.readText())
         assertEquals("keep", File(blocker, "keep.txt").readText())
-        assertTrue(!reported.isNullOrEmpty())
+        assertNull(reported)
     }
 }

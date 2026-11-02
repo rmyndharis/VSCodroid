@@ -8,7 +8,8 @@ import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
 import io.mockk.mockkObject
-import io.mockk.unmockkObject
+import io.mockk.mockkStatic
+import io.mockk.unmockkAll
 import io.mockk.verify
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -17,6 +18,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.nio.file.Files
 
 /**
  * Tests the Python reconciliation call site -- the order it does its two jobs
@@ -60,6 +62,7 @@ class PythonReclaimTest {
 
     @BeforeEach
     fun setUp() {
+        mockkStatic(Files::class)
         mockkObject(Logger)
         every { Logger.d(any(), any()) } just Runs
         every { Logger.i(any(), any()) } just Runs
@@ -76,7 +79,7 @@ class PythonReclaimTest {
     }
 
     @AfterEach
-    fun tearDown() = unmockkObject(Logger)
+    fun tearDown() = unmockkAll()
 
     private fun contextWith(freeBytes: Long): Context = mockk<Context>(relaxed = true).also {
         every { it.filesDir } returns CappedDir(filesDir.path, freeBytes)
@@ -209,16 +212,14 @@ class PythonReclaimTest {
             java.io.ByteArrayInputStream("runtime".toByteArray())
         }
         val leaf = File(libDir, "python3.13/encodings/__init__.py")
-        val blocker = File(leaf.parentFile, "${leaf.name}.tmp~")
-        assertTrue(blocker.mkdirs())
-        File(blocker, "occupied").writeText("x")
+        val blocker = blockAtomicWritesTo(leaf)
         val setup = FirstRunSetup(contextWith(512L * 1_048_576))
 
         kotlinx.coroutines.runBlocking { setup.reconcilePythonRuntime() }
 
         assertFalse(File(libDir, shipped).exists(), "the runtime was published before its stdlib")
         assertTrue(setup.pythonRuntimeNeedsWork(), "the failed stdlib no longer has a retry trigger")
-        assertTrue(blocker.deleteRecursively())
+        blocker.close()
         kotlinx.coroutines.runBlocking { setup.reconcilePythonRuntime() }
         org.junit.jupiter.api.Assertions.assertEquals("# encodings", leaf.readText())
         assertTrue(File(libDir, shipped).isFile)

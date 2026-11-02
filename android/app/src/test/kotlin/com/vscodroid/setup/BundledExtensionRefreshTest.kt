@@ -8,7 +8,8 @@ import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
 import io.mockk.mockkObject
-import io.mockk.unmockkObject
+import io.mockk.mockkStatic
+import io.mockk.unmockkAll
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -19,6 +20,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.ByteArrayInputStream
 import java.io.File
+import java.nio.file.Files
 import java.io.IOException
 import java.io.InputStream
 import java.lang.reflect.InvocationTargetException
@@ -70,6 +72,7 @@ class BundledExtensionRefreshTest {
 
     @BeforeEach
     fun setUp() {
+        mockkStatic(Files::class)
         mockkObject(Logger)
         every { Logger.d(any(), any()) } just Runs
         every { Logger.i(any(), any()) } just Runs
@@ -97,7 +100,7 @@ class BundledExtensionRefreshTest {
     }
 
     @AfterEach
-    fun tearDown() = unmockkObject(Logger)
+    fun tearDown() = unmockkAll()
 
     /**
      * Reflection rather than widened visibility, the way [TerminalShellPathTest]
@@ -226,10 +229,7 @@ class BundledExtensionRefreshTest {
         installed.mkdirs()
         File(installed, "extension.js").writeText(installedSource)
         File(installed, "package.json").writeText(shippedManifest)
-        // Occupy the temp path the atomic write derives for extension.js.
-        val blocker = File(installed, "extension.js.tmp~")
-        assertTrue(blocker.mkdirs(), "could not stage the blocked temp path")
-        File(blocker, "occupied").writeText("x")
+        blockAtomicWritesTo(File(installed, "extension.js"))
 
         assertThrows(InvocationTargetException::class.java) { extractBundledExtensions() }
 

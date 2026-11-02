@@ -631,7 +631,7 @@ class SafStorageManager(context: Context) {
      * two callers need the same answer and one of them counts it.
      */
     private fun finishOff(discarded: File, originalPath: File): Boolean {
-        StorageManager.deleteRecursive(discarded)
+        StorageManager.deleteRecursive(discarded, context.filesDir.parentFile)
         if (discarded.exists()) {
             Logger.w(tag, "Could not finish removing ${discarded.name}; the next launch retries")
             return false
