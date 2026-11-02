@@ -16,7 +16,6 @@ import java.io.File
 import java.io.IOException
 import java.net.InetAddress
 import java.net.Socket
-import java.net.StandardProtocolFamily
 import java.net.UnixDomainSocketAddress
 import java.nio.ByteBuffer
 import java.nio.channels.SelectionKey
@@ -47,7 +46,7 @@ class EditorGatewayTest {
         Thread.setDefaultUncaughtExceptionHandler { _, failure -> failures.add(failure) }
         mockkStatic("com.vscodroid.service.EditorGatewayKt")
         every { connectEditorBackend(any()) } answers {
-            val channel = SocketChannel.open(StandardProtocolFamily.UNIX)
+            val channel = openUnixClientChannel()
             resources.add(channel)
             channel.connect(UnixDomainSocketAddress.of(firstArg<File>().toPath()))
             channel.configureBlocking(false)
@@ -97,7 +96,7 @@ class EditorGatewayTest {
 
     private fun backend(name: String): Pair<File, ServerSocketChannel> {
         val path = File(directory, name + ".sock")
-        val server = ServerSocketChannel.open(StandardProtocolFamily.UNIX)
+        val server = openUnixServerChannel()
         resources.add(server)
         server.bind(UnixDomainSocketAddress.of(path.toPath()))
         return path to server

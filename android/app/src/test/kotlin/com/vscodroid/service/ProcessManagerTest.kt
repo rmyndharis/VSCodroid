@@ -2887,7 +2887,7 @@ class AdoptionTest {
         val holder = serving(200)
         recordEditorServer(4242, holder.port)
         val endpoint = editorBackendSocket(contextMock, "run-4242")!!
-        java.nio.channels.ServerSocketChannel.open(java.net.StandardProtocolFamily.UNIX).use { socket ->
+        openUnixServerChannel().use { socket ->
             socket.bind(java.net.UnixDomainSocketAddress.of(endpoint.toPath()))
             manager.killRecordedProcess = { socket.close() }
             val captured = File(tempDir, "server/editor-server.pid").readText()
@@ -2903,7 +2903,7 @@ class AdoptionTest {
         val holder = serving(200)
         recordEditorServer(4242, holder.port)
         val endpoint = editorBackendSocket(contextMock, "run-4242")!!
-        java.nio.channels.ServerSocketChannel.open(java.net.StandardProtocolFamily.UNIX).use { socket ->
+        openUnixServerChannel().use { socket ->
             socket.bind(java.net.UnixDomainSocketAddress.of(endpoint.toPath()))
         }
         File(tempDir, "proc/4242").deleteRecursively()
@@ -2920,7 +2920,7 @@ class AdoptionTest {
         val holder = serving(200)
         recordEditorServer(4242, holder.port)
         val endpoint = editorBackendSocket(contextMock, "run-4242")!!
-        java.nio.channels.ServerSocketChannel.open(java.net.StandardProtocolFamily.UNIX).use { socket ->
+        openUnixServerChannel().use { socket ->
             socket.bind(java.net.UnixDomainSocketAddress.of(endpoint.toPath()))
             File(tempDir, "proc/4242/cmdline").writeText("other-program\u0000")
             manager.killRecordedProcess = { throw AssertionError("an unverified process must not be signalled") }
@@ -2937,7 +2937,7 @@ class AdoptionTest {
         val holder = serving(200)
         recordEditorServer(4242, holder.port)
         val outside = File(tempDir.parentFile, "other-${UUID.randomUUID()}.sock")
-        java.nio.channels.ServerSocketChannel.open(java.net.StandardProtocolFamily.UNIX).use { socket ->
+        openUnixServerChannel().use { socket ->
             socket.bind(java.net.UnixDomainSocketAddress.of(outside.toPath()))
             try {
                 val noteFile = File(tempDir, "server/editor-server.pid")
