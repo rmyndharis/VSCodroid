@@ -53,7 +53,7 @@ class ExtractionAllocationTest {
     @AfterEach
     fun tearDown() = unmockkObject(Logger)
 
-    private fun runWithSpace(assetBytes: Long, largest: Long, free: Long): FirstRunSetup.SetupResult {
+    private fun runWithSpace(assetBytes: Long, largest: Long, free: Long, usrBytes: Long = 0): FirstRunSetup.SetupResult {
         mockkObject(Logger)
         every { Logger.d(any(), any()) } just Runs
         every { Logger.i(any(), any()) } just Runs
@@ -69,7 +69,7 @@ class ExtractionAllocationTest {
         every { prefs.edit() } returns editor
         every { prefs.getString(any(), any()) } returns null
         every { context.getSharedPreferences(any(), any()) } returns prefs
-        return runBlocking { FirstRunSetup(context, assetBytes, largest, 0, 0).runSetup() }
+        return runBlocking { FirstRunSetup(context, assetBytes, largest, usrBytes, 0).runSetup() }
     }
 
     @Test
@@ -162,6 +162,28 @@ class ExtractionAllocationTest {
         assertEquals(FirstRunSetup.SetupResult.LOW_STORAGE, runWithSpace(256 * mib, 8 * mib, 140 * mib))
         assertEquals(emptyList<String>(), writtenKeys)
         assertEquals(256 * mib, retired.length())
+    }
+
+    @Test
+    fun `a missing server still reserves space to rewrite an installed tool atomically`() {
+        val mib = 1_048_576L
+        val toolBytes = 33 * mib
+        listings[""] = arrayOf("vscode-reh", "usr")
+        listings["vscode-reh"] = Array(20_000) { "file-$it" }
+        every { assets.open(any()) } answers {
+            val size = if (firstArg<String>() == "usr/one") toolBytes.toInt() else 1
+            object : InputStream() {
+                override fun available() = size
+                override fun read(): Int = throw IOException("Stop after preflight")
+            }
+        }
+        val tool = File(files, "usr/one").apply { parentFile!!.mkdirs() }
+        RandomAccessFile(tool, "rw").use { it.setLength(toolBytes) }
+
+        assertEquals(FirstRunSetup.SetupResult.LOW_STORAGE,
+            runWithSpace(toolBytes + 20_000, toolBytes, 190 * mib, usrBytes = toolBytes))
+        assertEquals(emptyList<String>(), writtenKeys)
+        assertEquals(toolBytes, tool.length())
     }
 
     @Test

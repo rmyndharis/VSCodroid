@@ -200,6 +200,7 @@ class FirstRunSetup(
         val usrBytes: Long,
         val extensionBytes: Long,
         val missingOverhead: Long,
+        val largestExistingFile: Long,
     )
 
     /** Measures reusable APK files and allocation overhead without following destination links. */
@@ -212,6 +213,7 @@ class FirstRunSetup(
             "extensions" to "home/.vscodroid/extensions",
         ) + listOf("server.js", "process-monitor.js", "platform-fix.js", "dns-proxy.js", "xdg-open.js")
             .map { it to "server/$it" }
+        var largestExistingFile = 0L
 
         fun measure(assetPath: String, destination: File, missingParent: Boolean): Pair<Long, Long> {
             val children = assets.list(assetPath) ?: throw IOException("Could not list $assetPath")
@@ -228,7 +230,11 @@ class FirstRunSetup(
                 return credit to overhead
             }
             val length = assets.open(assetPath).use { it.available().toLong() }
-            if (reusable && destination.isFile) return minOf(length, destination.length()) to 0L
+            if (reusable && destination.isFile) {
+                val credit = minOf(length, destination.length())
+                largestExistingFile = maxOf(largestExistingFile, credit)
+                return credit to 0L
+            }
             val rounding = (EXTRACTION_BLOCK_BYTES - length % EXTRACTION_BLOCK_BYTES) % EXTRACTION_BLOCK_BYTES
             // Encrypted f2fs cannot inline file data into the inode block.
             return 0L to EXTRACTION_BLOCK_BYTES + rounding
@@ -243,6 +249,7 @@ class FirstRunSetup(
             measured["usr"]?.first ?: 0,
             measured["extensions"]?.first ?: 0,
             measured.values.sumOf { it.second },
+            largestExistingFile,
         )
     }
 
@@ -367,7 +374,8 @@ class FirstRunSetup(
                 sharedTreeCredit(space.usrBytes, bundledUsrBytes, 0) +
                 sharedTreeCredit(space.extensionBytes, bundledExtensionBytes, 0)
             val required = requiredExtractionBytes(
-                assetBytes, largestAssetBytes, installed, extractedTreeBytes, space.missingOverhead,
+                assetBytes, largestAssetBytes, installed,
+                maxOf(extractedTreeBytes, space.largestExistingFile), space.missingOverhead,
             )
             // Short of room, and the caches are the one thing this app can give
             // back on its own. Reclaimed here rather than offered, because the
@@ -4473,27 +4481,12 @@ claude() {
          *    of the Copilot runtime. No file already on disk can cost more to
          *    replace than the bytes already on disk.
          *
-         *    [extractedTreeBytes] and not [installedBytes] decides that, and the
-         *    two are not interchangeable. `installedBytes` also carries the credit
-         *    for `usr/` and the extensions directory, and SplashActivity's
-         *    per-launch repair block writes into `usr/` before this gate is ever
-         *    reached: `setupGitCaBundle` alone leaves `usr/etc/tls/cert.pem`
-         *    there. So on a genuinely fresh install `installedBytes` is already
-         *    above zero, the headroom fired, and the gate asked a device with
-         *    nothing unpacked for 986 MB where 873 is what the unpack needs.
-         *    `server/` answers it honestly, and it is also where the biggest file
-         *    lands (`vscode-reh` extracts to `server/vscode-reh`). Not because
-         *    extraction is the only thing that writes there, which is not true:
-         *    `setupCopilotAndroidAliases` writes an alias `package.json` under it
-         *    on every launch, and `setupRipgrepVscodeSymlink` makes directories
-         *    and a symlink. Because neither can put a counted byte there before
-         *    extraction has run, for two different reasons. The alias manifest
-         *    sits behind a test for the extension's `sdk/index.js`, which is the
-         *    extracted tree itself; and the ripgrep repair writes only a
-         *    directory and a link, which [installedExtractionBytes] counts as
-         *    nothing, with no copying fallback if the link fails. Check both if
-         *    either is edited: a repair that starts writing a file into `server/`
-         *    unconditionally puts this gate back where it was.
+         *    [extractedTreeBytes] bounds this separately from total storage credit.
+         *    The caller combines existing server bytes with the largest matching
+         *    file across all extraction roots: tools and bundled extensions still
+         *    need atomic replacement when the server tree is missing. A small
+         *    launch-time repair is charged only its own length, never the full
+         *    size of the largest asset.
          *  - the larger of [EXTRACTION_SLACK_BYTES] and the missing allocation
          *    plus [EXTRACTION_WORKING_MARGIN_BYTES], so new entries fit encrypted
          *    f2fs without charging existing nodes again.

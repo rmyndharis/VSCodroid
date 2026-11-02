@@ -326,33 +326,20 @@ class StoragePreflightTest {
         )
     }
 
-    /**
-     * The case the gate got wrong, and the reason the headroom reads a tree of its
-     * own rather than the total.
-     *
-     * A fresh install is not a device with an empty `filesDir`. SplashActivity's
-     * per-launch repair block runs before this gate, and `setupGitCaBundle` writes
-     * `usr/etc/tls/cert.pem` on the way through, so `installedBytes` already
-     * carries a few hundred KB of credit by the time the gate is asked. Charged
-     * off that, the rewrite headroom fired on an install with nothing unpacked and
-     * the gate demanded 1,120 MB where the unpack needs 1,007, refusing devices that
-     * fit on a screen whose only other control is a Retry that measures the same
-     * thing again.
-     */
+    /** A launch-time repair costs its own temporary copy, not the largest asset. */
     @Test
-    fun `a repair file under usr does not make a fresh install pay the rewrite headroom`() {
+    fun `a small repair file does not require a copy of the largest asset`() {
         val repairBytes = 320L * 1024
 
         assertEquals(
-            assetBytes - repairBytes + slack,
+            assetBytes + slack,
             FirstRunSetup.requiredExtractionBytes(
                 assetBytes,
                 largestAssetBytes,
                 installedBytes = repairBytes,
-                extractedTreeBytes = 0,
+                extractedTreeBytes = repairBytes,
             ),
-            "a launch-time repair writing into usr/ must not be read as an extracted tree; " +
-                "charging the headroom for it refuses fresh installs that fit",
+            "a small launch-time repair must not require a temporary copy of the largest asset",
         )
     }
 
