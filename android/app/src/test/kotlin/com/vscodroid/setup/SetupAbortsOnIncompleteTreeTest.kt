@@ -350,7 +350,7 @@ class SetupAbortsOnIncompleteTreeTest {
         assertEquals(FirstRunSetup.SetupResult.ERROR, runBlocking { setup.runSetup() })
         assertEquals(SetupStepStrings.text("setup_step_tools").trimEnd('.', ' ', '\u2026'),
             setup.lastFailure!!.step)
-        every { assets.list("usr") } throws IllegalStateException("asset listing unavailable")
+        every { assets.list("") } throws IllegalStateException("asset listing unavailable")
 
         assertEquals(FirstRunSetup.SetupResult.ERROR, runBlocking { setup.runSetup() })
 

@@ -21,6 +21,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.io.ByteArrayInputStream
 import java.nio.file.Files
 
 /**
@@ -128,11 +129,23 @@ class StoragePreflightTest {
         every { Logger.w(any(), any(), any()) } just Runs
         every { Logger.e(any(), any(), any()) } just Runs
 
-        // An APK with nothing in it: the gate is what these runs are about, and
-        // the figures it works from are supplied to the constructor instead.
+        // The staged files below match this APK listing, so credit can be checked per file.
         assets = mockk()
         every { assets.list(any()) } returns emptyArray()
-        every { assets.open(any()) } throws java.io.IOException("absent")
+        every { assets.list("") } answers {
+            arrayOf("vscode-reh", "usr", "extensions").filter {
+                assets.list(it)?.isNotEmpty() == true
+            }.toTypedArray()
+        }
+        every { assets.list("extensions/$bundledExtension") } returns arrayOf("extension.js")
+        every { assets.open(any()) } answers {
+            when {
+                firstArg<String>().startsWith("vscode-reh/out/part-") -> ByteArrayInputStream(ByteArray(mb.toInt()))
+                firstArg<String>() == "usr/lib/libcrypto.so.3" -> ByteArrayInputStream(ByteArray((2 * mb).toInt()))
+                firstArg<String>() == "extensions/$bundledExtension/extension.js" -> ByteArrayInputStream(ByteArray((2 * mb).toInt()))
+                else -> throw java.io.IOException("absent")
+            }
+        }
     }
 
     @AfterEach
@@ -212,6 +225,12 @@ class StoragePreflightTest {
      * device never takes.
      */
     private fun stageServerTree(bytes: Long) {
+        val shared = arrayOf("usr", "extensions").count {
+            assets.list(it)?.isNotEmpty() == true
+        } * 2 * mb
+        every { assets.list("vscode-reh") } returns arrayOf("out")
+        every { assets.list("vscode-reh/out") } returns
+            Array(((assetBytes - shared) / mb).toInt()) { "part-$it" }
         val chunk = ByteArray(64 * 1024)
         val dir = File(filesDir, "server/vscode-reh/out")
         assertTrue(dir.mkdirs(), "could not stage the server tree")
@@ -279,10 +298,11 @@ class StoragePreflightTest {
         val nodeBlocks = (shippedDirectories + shippedFiles) * blockBytes
         val overhead = fileRounding + nodeBlocks
 
-        assertEquals(192 * mb, slack)
+        assertEquals(128 * mb, slack)
+        val requiredOverhead = FirstRunSetup.requiredExtractionBytes(0, 0, 0, 0, overhead)
         assertTrue(
-            slack >= overhead,
-            "the slack is ${slack / mb} MiB against ${overhead / mb} MiB of on-disk overhead " +
+            requiredOverhead >= overhead,
+            "the allowance is ${requiredOverhead / mb} MiB against ${overhead / mb} MiB of on-disk overhead " +
                 "for $shippedFiles files and $shippedDirectories directories on encrypted f2fs, " +
                 "so the pre-flight admits a device the unpack then fills",
         )
@@ -296,7 +316,7 @@ class StoragePreflightTest {
             installedBytes = 0,
             extractedTreeBytes = 0,
         )
-        assertEquals(200 * mb, required)
+        assertEquals(136 * mb, required)
         assertEquals(
             assetBytes + slack,
             required,
@@ -346,7 +366,7 @@ class StoragePreflightTest {
                 extractedTreeBytes = assetBytes,
             )
 
-        assertEquals(194 * mb, required)
+        assertEquals(130 * mb, required)
         assertEquals(largestAssetBytes + slack, required)
         assertTrue(
             required < assetBytes + slack,
@@ -393,7 +413,7 @@ class StoragePreflightTest {
             extractedTreeBytes = assetBytes / 2,
         )
 
-        assertEquals(198 * mb, required)
+        assertEquals(134 * mb, required)
         assertEquals(assetBytes / 2 + largestAssetBytes + slack, required)
         assertTrue(
             required > FirstRunSetup.requiredExtractionBytes(

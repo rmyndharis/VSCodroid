@@ -195,82 +195,55 @@ class FirstRunSetup(
         runSetupLocked()
     }
 
-    /**
-     * How many bytes of `usr/` the next unpack writes over.
-     *
-     * Only the paths the APK carries are measured, the same question
-     * [installedBundledExtensionBytes] asks of the extensions directory and for
-     * the same reason: `usr/` is shared ground, and its size on disk is not an
-     * answer to "how much of what we are about to write is already here".
-     * Toolchains install into it, `npm install -g` lands there, pip writes into
-     * the stdlib, and only the first of those is recorded anywhere. A record is
-     * therefore not a way to subtract them: it cannot see an install that copied
-     * its tree and then failed to write its own record, which is a state
-     * `ToolchainManager` documents rather than repairs.
-     *
-     * One level below `usr`'s own directories, which is neither arbitrary nor
-     * free to change. `assets/usr` holds `lib` and `share`, and that is where
-     * toolchains install too, so naming those two credits everything again.
-     * One level further down separates them: Java writes `usr/lib/jvm`, Ruby
-     * writes `usr/lib/ruby` and `usr/bin` (which the APK does not carry at all),
-     * and none of those is a name the APK lists. It costs about 65 `list` calls
-     * against the 3400 a walk of the whole asset tree would.
-     *
-     * What it still over-counts, so the cap in [sharedTreeCredit] stays: bytes
-     * added INSIDE a bundled directory. Two happen: `pip install` into
-     * `usr/lib/python3.x/site-packages`, and `npm install -g` into
-     * `usr/lib/node_modules`, which is bundled because npm itself lives there.
-     * That is bounded by the bundled figure; the unrecorded trees this replaces
-     * were not.
-     *
-     * An assets listing that cannot be read yields no credit, the same direction
-     * an absent directory takes.
-     */
-    private fun installedBundledUsrBytes(): Long {
-        val usrDir = File(context.filesDir, "usr")
-        return bundledUsrEntries().sumOf { installedExtractionBytes(File(usrDir, it)) }
-    }
+    internal data class ExtractionSpace(
+        val serverBytes: Long,
+        val usrBytes: Long,
+        val extensionBytes: Long,
+        val missingOverhead: Long,
+    )
 
-    private fun bundledUsrEntries(): List<String> = try {
-        (context.assets.list("usr") ?: emptyArray()).flatMap { top ->
-            val children = context.assets.list("usr/$top") ?: emptyArray()
-            // `list` answers an empty array for a file as well as for an empty
-            // directory (see [extractAssetDir], which reads it the same way), so
-            // a file sitting at the top level is measured where it is rather
-            // than expanded into nothing.
-            if (children.isEmpty()) listOf(top) else children.map { "$top/$it" }
-        }
-    } catch (e: IOException) {
-        Logger.w(tag, "Could not list the bundled usr/ assets; crediting none of it: ${e.message}")
-        emptyList()
-    }
+    /** Measures reusable APK files and allocation overhead without following destination links. */
+    internal fun extractionSpace(): ExtractionSpace {
+        val assets = context.assets
+        val roots = assets.list("")?.toSet() ?: throw IOException("Could not list bundled assets")
+        val destinations = listOf(
+            "vscode-reh" to "server/vscode-reh",
+            "usr" to "usr",
+            "extensions" to "home/.vscodroid/extensions",
+        ) + listOf("server.js", "process-monitor.js", "platform-fix.js", "dns-proxy.js", "xdg-open.js")
+            .map { it to "server/$it" }
 
-    /**
-     * How many bytes of the extensions directory the next unpack writes over.
-     *
-     * Only the bundled directories are measured, one per name in
-     * `assets/extensions`, because only those are what extraction writes. The
-     * rest of that directory is the user's: it is the `--extensions-dir` the
-     * server installs gallery extensions into, and their bytes are not bytes we
-     * are about to replace.
-     *
-     * A bundled directory that is absent contributes nothing, which is the case
-     * that matters on an upgrade bumping a pinned extension version: the new
-     * `id-version` directory is written beside the old one rather than over it,
-     * so nothing of it is on disk to credit.
-     *
-     * An assets listing that cannot be read yields no credit, the same direction
-     * a missing directory takes.
-     */
-    private fun installedBundledExtensionBytes(): Long {
-        val extensionsDir = File(context.filesDir, "home/.vscodroid/extensions")
-        val bundled = try {
-            context.assets.list("extensions") ?: emptyArray()
-        } catch (e: IOException) {
-            Logger.d(tag, "No bundled extensions in assets; crediting none of the directory")
-            emptyArray()
+        fun measure(assetPath: String, destination: File, missingParent: Boolean): Pair<Long, Long> {
+            val children = assets.list(assetPath) ?: throw IOException("Could not list $assetPath")
+            val reusable = !missingParent && !Files.isSymbolicLink(destination.toPath())
+            if (children.isNotEmpty()) {
+                val missing = !reusable || !destination.isDirectory
+                var credit = 0L
+                var overhead = if (missing) EXTRACTION_BLOCK_BYTES else 0L
+                for (child in children) {
+                    val measured = measure("$assetPath/$child", File(destination, child), missing)
+                    credit += measured.first
+                    overhead += measured.second
+                }
+                return credit to overhead
+            }
+            val length = assets.open(assetPath).use { it.available().toLong() }
+            if (reusable && destination.isFile) return minOf(length, destination.length()) to 0L
+            val rounding = (EXTRACTION_BLOCK_BYTES - length % EXTRACTION_BLOCK_BYTES) % EXTRACTION_BLOCK_BYTES
+            // Encrypted f2fs cannot inline file data into the inode block.
+            return 0L to EXTRACTION_BLOCK_BYTES + rounding
         }
-        return bundled.sumOf { installedExtractionBytes(File(extensionsDir, it)) }
+
+        val measured = destinations.filter { it.first in roots }.associate { (asset, destination) ->
+            val target = File(context.filesDir, destination)
+            asset to measure(asset, target, !hasUnredirectedParent(target))
+        }
+        return ExtractionSpace(
+            measured.filterKeys { it != "usr" && it != "extensions" }.values.sumOf { it.first },
+            measured["usr"]?.first ?: 0,
+            measured["extensions"]?.first ?: 0,
+            measured.values.sumOf { it.second },
+        )
     }
 
     private suspend fun runSetupLocked(): SetupResult = withContext(Dispatchers.IO) {
@@ -371,7 +344,7 @@ class FirstRunSetup(
             // complete tree and a tree an interrupted attempt left half-written both
             // exist, and the first needs almost nothing while the second needs the
             // rest of itself. [requiredExtractionBytes] carries the arithmetic,
-            // [installedExtractionBytes] what each root is worth, and
+            // [extractionSpace] which APK files are already present, and
             // [sharedTreeCredit] the clamps on the two roots that are not ours
             // alone.
             //
@@ -386,57 +359,16 @@ class FirstRunSetup(
             // with a Retry button that measures the same thing for ever and a
             // MainActivity that never runs, so nothing the app offers can free a byte.
             var available = context.filesDir.usableSpace
-            // Kept on its own because three different questions read it. It
-            // counts toward what is already on disk, it is the only honest
-            // answer to "is the extracted tree here at all" for the rewrite
-            // headroom, and below the pre-flight it tells the marker whether an
-            // uncompleted install already holds unattributed `server/` bytes.
-            // `usr/` cannot answer the second or third: the per-launch repair
-            // block writes into it before this gate ever runs.
+            // Raw server bytes bound rewrite headroom and identify an unfinished
+            // tree. Only matching APK paths below count as reusable bytes.
             val extractedTreeBytes = installedExtractionBytes(File(context.filesDir, "server"))
-            val installed = extractedTreeBytes +
-                sharedTreeCredit(
-                    // The bundled entries that are on disk, not the whole
-                    // directory, for the reason the extensions credit below
-                    // states: measured is a fact, a subtracted estimate is only
-                    // as good as what it can see. The estimate this replaces
-                    // came from `toolchains.json`, which knows the installs that
-                    // FINISHED. `ToolchainManager` takes its install root back
-                    // on both failures it can see, but a process killed mid-copy
-                    // reaches neither and leaves up to 180 MB in `usr/` that
-                    // nothing names, the part written into the shared `usr/bin`
-                    // and `usr/lib` is never reclaimed on any exit, and
-                    // `npm install -g` and pip never had a record at all, so
-                    // every one of those bytes was credited as a byte the next
-                    // unpack writes over. The cap hid it while the bundled part
-                    // of `usr/` was complete and stopped hiding it exactly where
-                    // it matters: a retry after an aborted unpack, where `usr/`
-                    // is the tree left partial because it is extracted last.
-                    installedBytes = installedBundledUsrBytes(),
-                    bundledBytes = bundledUsrBytes,
-                    foreignBytes = 0,
-                ) +
-                sharedTreeCredit(
-                    // The bundled directories that are already there, not the
-                    // whole directory. A literal `foreignBytes = 0` over the
-                    // whole directory asserted it was ours alone, which is what
-                    // [sharedTreeCredit]'s own doc names as the assumption to
-                    // avoid: it is the same `--extensions-dir` the server
-                    // installs gallery extensions into. That was worth 60 KB
-                    // while everything bundled here was ours; this release
-                    // bundles gallery extensions too and the cap it is
-                    // measured against is 46.6 MiB, so a device with any gallery
-                    // installs at all was credited the whole bundled tree for
-                    // bytes not one of which was on disk. Measured this way the
-                    // zero is a fact rather than an assumption, and it also
-                    // stops a version bump crediting the new directory while the
-                    // old one is still what is on disk.
-                    installedBytes = installedBundledExtensionBytes(),
-                    bundledBytes = bundledExtensionBytes,
-                    foreignBytes = 0,
-                )
-            val required =
-                requiredExtractionBytes(assetBytes, largestAssetBytes, installed, extractedTreeBytes)
+            val space = extractionSpace()
+            val installed = space.serverBytes +
+                sharedTreeCredit(space.usrBytes, bundledUsrBytes, 0) +
+                sharedTreeCredit(space.extensionBytes, bundledExtensionBytes, 0)
+            val required = requiredExtractionBytes(
+                assetBytes, largestAssetBytes, installed, extractedTreeBytes, space.missingOverhead,
+            )
             // Short of room, and the caches are the one thing this app can give
             // back on its own. Reclaimed here rather than offered, because the
             // only route to the same action is a Command Palette command inside
@@ -4387,9 +4319,8 @@ claude() {
                     val firstSeparator = message.indexOf(": ")
                     val reasonSeparator = message.lastIndexOf(": ")
                     val tail = if (reasonSeparator > 0) message.substring(reasonSeparator) else ""
-                    val minHead = if (firstSeparator >= 0) firstSeparator else 0
                     val headBudget = DETAIL_LIMIT - 1 - tail.length
-                    if (tail.isNotEmpty() && headBudget > minHead) {
+                    if (reasonSeparator > firstSeparator && headBudget > 0) {
                         "$type: " + message.take(headBudget).trimEnd() + "\u2026" + tail
                     } else {
                         "$type: " + message.take(DETAIL_LIMIT).trimEnd() + "\u2026"
@@ -4485,47 +4416,17 @@ claude() {
         private const val MIXED_TREE = "!mixed"
 
         /**
-         * Headroom above the bytes to be written, and the one number here that is
-         * still a judgement rather than a measurement.
-         *
-         * Two things extraction needs that the asset byte count does not include.
-         * The larger is block rounding: the tree is over 23,000 files, and each
-         * one rounds up to a filesystem block on the way out, so a few KiB of
-         * slack per file adds up to tens of MiB. The smaller is the files written
-         * after extraction, settings.json, .bashrc, ssh defaults, git config,
-         * which together are under a megabyte.
-         *
-         * Deliberately a fixed figure rather than a percentage: block rounding
-         * scales with the file COUNT, not with the total size, and the count has
-         * been stable across pins while the size has not.
-         *
-         * 192 MiB, raised from 128, 96, and 64, each time because the figure
-         * did not cover what it names. Measured at Code - OSS 1.139.1,
-         * counting the way BuildConfig.EXTRACTED_ASSET_BYTES counts (assets minus
-         * nls): 22,653 files, 5,103 directories, 774.1 MiB of logical length,
-         * 834.3 MiB when each file is rounded to a 4 KiB data block (60.1 MiB of
-         * data-block rounding).
-         *
-         * Encrypted f2fs is the filesystem that binds. On Android's file-based
-         * encryption (`fscrypt`), f2fs disables `inline_data` for encrypted files,
-         * so every regular file allocates a 4 KiB data block in addition to its
-         * 4 KiB node block, and every directory allocates a 4 KiB node block too:
-         * `(22,653 + 5,103) * 4,096 = 108.4 MiB` of node blocks on top of the
-         * `60.1 MiB` of data-block rounding, or `168.6 MiB` of overhead in total.
-         * Charging node blocks only for the 6,343 files larger than ~3.4 KiB
-         * assumed `inline_data` was active and under-counted encrypted userdata by
-         * `16,310 * 4 KiB = 63.7 MiB`, letting a device with ~930 MiB free pass the
-         * pre-flight and hit ENOSPC while unpacking the bundled extensions.
-         *
-         * The same figure serves the upgrade path, which asks for far fewer bytes,
-         * and that is not an oversight. Rounding on a rewrite is roughly neutral,
-         * the file already occupies its blocks, but the credit given for it is
-         * computed from logical file lengths, which under-states the space an
-         * overwrite actually reclaims, and a new file in a new pin rounds like any
-         * other. One over-estimate covering another is worth more here than a
-         * second constant nobody can measure either.
+         * Minimum working reserve for temporary writes and small setup files.
+         * Missing files and directories additionally need block rounding and inode
+         * blocks on encrypted f2fs. [extractionSpace] measures that
+         * allowance from the APK. A separate margin covers generated setup files
+         * and filesystem metadata beyond the measured file and directory nodes.
+         * A complete-tree upgrade keeps its existing reserve because its nodes
+         * and data blocks are already allocated.
          */
-        private const val EXTRACTION_SLACK_BYTES = 192L * 1_048_576L
+        private const val EXTRACTION_SLACK_BYTES = 128L * 1_048_576L
+        private const val EXTRACTION_WORKING_MARGIN_BYTES = 16L * 1_048_576L
+        private const val EXTRACTION_BLOCK_BYTES = 4_096L
 
         /**
          * How much the device was short the last time the pre-flight refused,
@@ -4554,8 +4455,7 @@ claude() {
          *
          *  - what is missing. Extraction merges into whatever is on disk, so an
          *    install already holding the tree is not about to write it again from
-         *    nothing. Clamped at zero: `installedBytes` can exceed the asset total
-         *    when a pin drops files that extraction never removes.
+         *    nothing. Credit is capped at each matching APK file's length.
          *  - the room to rewrite one file, bounded by what is on disk to rewrite.
          *    [writeAtomically] writes `<dest>.tmp~` and renames, so while the
          *    biggest file is being replaced both copies exist: the Copilot
@@ -4594,7 +4494,9 @@ claude() {
          *    nothing, with no copying fallback if the link fails. Check both if
          *    either is edited: a repair that starts writing a file into `server/`
          *    unconditionally puts this gate back where it was.
-         *  - [EXTRACTION_SLACK_BYTES], for what neither of those counts.
+         *  - the larger of [EXTRACTION_SLACK_BYTES] and the missing allocation
+         *    plus [EXTRACTION_WORKING_MARGIN_BYTES], so new entries fit encrypted
+         *    f2fs without charging existing nodes again.
          *
          * Takes its figures rather than reading `BuildConfig`, so the decision can
          * be tested with a tree of known size; see the class doc for why that
@@ -4605,24 +4507,23 @@ claude() {
             largestAssetBytes: Long,
             installedBytes: Long,
             extractedTreeBytes: Long,
+            missingAllocationOverhead: Long = 0,
         ): Long {
             val missing = (assetBytes - installedBytes).coerceAtLeast(0)
             val rewriteHeadroom = minOf(largestAssetBytes, extractedTreeBytes)
-            return missing + rewriteHeadroom + EXTRACTION_SLACK_BYTES
+            return missing + rewriteHeadroom + maxOf(
+                EXTRACTION_SLACK_BYTES,
+                missingAllocationOverhead + EXTRACTION_WORKING_MARGIN_BYTES,
+            )
         }
 
         /**
          * How much of a directory extraction shares with something else may be
          * credited as already unpacked.
          *
-         * `server/` can be measured and believed: near enough every byte there is
-         * one the next unpack writes over, for the reasons [installedExtractionBytes]
-         * gives. `usr/` and the extensions directory cannot: toolchains
-         * install into the first, `npm install -g` lands there too, and the
-         * second fills with whatever the user takes from the gallery. Their size
-         * on disk is therefore not an answer to "how much of what we are about
-         * to write is already here", and charging them in full instead was
-         * asking an updater for about 334 MB where roughly 180 would do.
+         * Toolchains and globally installed packages share `usr/`, and gallery
+         * installs share the extensions directory. Only matching APK files may
+         * contribute credit; unrelated files never reduce the missing payload.
          *
          * Two clamps, both pointing the same way:
          *
@@ -5826,57 +5727,12 @@ private fun releaseWriteLock(path: String, lock: DestinationLock) = synchronized
 }
 
 /**
- * How many bytes of the asset tree are already unpacked under [root], for the
- * storage pre-flight to subtract from what it asks for.
+ * Logical bytes already in an extraction tree, excluding symbolic links.
  *
- * Answers only "how many bytes are under this root", and the three roots the
- * pre-flight passes are believed to different degrees, which is [sharedTreeCredit]'s
- * job rather than this one's:
- *
- *  - `server/` is measured and believed. It is most of the tree (436 of 575 MiB
- *    at 1.139.1) and near enough every byte counted there is a byte the next
- *    unpack writes over. Near enough rather than all: `setupCopilotAndroidAliases`
- *    writes an alias `package.json` beside the packages it aliases, `server.js`
- *    leaves its pid note there, and ToolchainManager keeps the git helper
- *    scripts and the remote CLI beside their links under a `.script` name, and
- *    all of those are counted without extraction replacing them. That credits
- *    bytes overwriting does not give back, so it asks for less space rather than
- *    more, which is the worse direction; they are kilobytes against hundreds of
- *    MiB and the slack absorbs them many times over, so they are left rather
- *    than filtered. A repair that ever writes something substantial there would
- *    have to be.
- *  - `usr/` is shared ground. Toolchains install into it, Java is 180 MB
- *    unpacked, and `npm install -g` lands there too, so its size on disk is not
- *    an answer to "how much of what we are about to write is already here".
- *    Only the entries the APK names are measured, see
- *    `installedBundledUsrBytes`, and the bundled figure is the ceiling.
- *  - the extensions directory is shared in the same way, with the user's gallery
- *    installs in it, and the pre-flight does not pass the whole of it: it sums
- *    this over the bundled directories one at a time
- *    (`installedBundledExtensionBytes`), which is the same question asked where
- *    the answer is knowable.
- *
- * This function used to be the whole of the decision and its first paragraph
- * argued that crediting the other two roots was the mistake to avoid. That was
- * true before [sharedTreeCredit] and its clamps existed; charging their asset
- * size in full is what asked an updater for about 334 MB where roughly 180
- * would do.
- *
- * Symlinks are skipped rather than followed, and that is not tidiness. The
- * Copilot extension's alias links its whole `sdk` directory, the largest in the
- * extension. Following it counts the same bytes twice and credits the install
- * for space that does not exist, which is the direction that lets the gate pass
- * a device it should refuse.
- *
- * Asks `Files.isSymbolicLink` rather than [isSymlink], which is the same
- * question, both are `lstat` on the final component, and `SymlinkPredicateTest`
- * already leans on that equivalence, put through the JDK instead of
- * `android.system.Os`. The difference is only that `Os.lstat` throws in a JVM
- * unit test and [isSymlink] catches it into "not a link", so the skipping this
- * walk depends on could be asserted but never measured.
- *
- * A `root` that does not exist walks to nothing and answers 0, which is the
- * fresh-install case.
+ * This sizes temporary rewrite headroom and identifies an unfinished server tree.
+ * Storage credit is measured separately against individual APK files by
+ * `FirstRunSetup.extractionSpace`, so retired or unrelated files cannot pay for
+ * missing bundled content.
  */
 internal fun installedExtractionBytes(root: File): Long =
     root.walkTopDown()

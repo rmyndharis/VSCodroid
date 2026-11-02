@@ -156,6 +156,19 @@ class SetupFailureCauseTest {
     }
 
     @Test
+    fun `several failed extraction components still name the disk error`() {
+        val message = "could not unpack vscode-reh, server.js, process-monitor.js, " +
+            "platform-fix.js, dns-proxy.js, xdg-open.js, usr: " +
+            "server/vscode-reh/node_modules/deep/nested/file.js: " +
+            "open failed: ENOSPC (No space left on device)"
+
+        val failure = FirstRunSetup.describeFailure("Extracting tools", IOException(message))
+
+        assertTrue(failure.detail.endsWith(": ENOSPC (No space left on device)"), failure.detail)
+        assertTrue(failure.detail.length <= "IOException: ".length + FirstRunSetup.DETAIL_LIMIT)
+    }
+
+    @Test
     fun `a long unpack message with a deep path keeps the trailing errno cause`() {
         val deepMsg =
             "could not unpack bundled extension github.copilot-chat-0.43.2026033101: " +
