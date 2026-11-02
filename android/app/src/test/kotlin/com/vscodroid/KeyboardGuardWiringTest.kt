@@ -249,26 +249,19 @@ class KeyboardGuardWiringTest {
             guard.contains("window.__vscodroidFinishComposition = finishComposition"),
             "the guard no longer exposes __vscodroidFinishComposition on window",
         )
-        assertTrue(
-            Regex(
-                """override fun onConfigurationChanged\(newConfig: Configuration\)[^}]*""" +
-                    """evaluateJavascript\(\s*"[^"]*__vscodroidFinishComposition\(\)""",
-            ).containsMatchIn(source),
-            "onConfigurationChanged no longer finishes an active IME composition on rotation",
-        )
         val configBody = SourceScan.withoutComments(
             SourceScan.body(source, "override fun onConfigurationChanged("),
         )
         assertTrue(
-            configBody.contains("if (window.__vscodroidFinishComposition) window.__vscodroidFinishComposition();"),
-            "onConfigurationChanged must guard __vscodroidFinishComposition() for pages before the guard has run",
+            configBody.contains("finishKeyboardCompositionOnTurn()"),
+            "onConfigurationChanged no longer invokes composition recovery",
         )
         val turnedIdx = configBody.indexOf("keyboardDismissal.turned()")
-        val finishIdx = configBody.indexOf("__vscodroidFinishComposition()")
+        val finishIdx = configBody.indexOf("finishKeyboardCompositionOnTurn()")
         val noKeysIdx = configBody.indexOf("Configuration.KEYBOARD_NOKEYS")
         assertTrue(
             turnedIdx in 0 until finishIdx && finishIdx < noKeysIdx,
-            "keyboardDismissal.turned() must precede __vscodroidFinishComposition(), before the KEYBOARD_NOKEYS branch",
+            "keyboardDismissal.turned() must precede composition recovery, before the KEYBOARD_NOKEYS branch",
         )
     }
 

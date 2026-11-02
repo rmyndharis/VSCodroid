@@ -80,12 +80,12 @@ const MAIN_ACTIVITY = path.join(
  * The body of the raw string in `injectKeyboardGuard()`, with the indentation
  * `trimIndent()` removes taken off, which is the text the WebView is given.
  */
-function extractGuard() {
+function extractGuard(name = 'injectKeyboardGuard') {
     const lines = fs.readFileSync(MAIN_ACTIVITY, 'utf8').split('\n');
-    const fn = lines.findIndex((l) => l.includes('private fun injectKeyboardGuard()'));
+    const fn = lines.findIndex((l) => l.includes(`private fun ${name}()`));
     assert.notStrictEqual(
         fn, -1,
-        'injectKeyboardGuard() is gone from MainActivity.kt, so this check has nothing to ' +
+        `${name}() is gone from MainActivity.kt, so this check has nothing to ` +
         'run. If the script moved, point this at its new home rather than deleting the check.',
     );
 
@@ -102,12 +102,13 @@ function extractGuard() {
     // A `$` before a name or `{` is a Kotlin template; before `/` it is literal.
     assert.ok(!/\$[A-Za-z_{]/.test(js),
         'the guard gained a Kotlin interpolation this check does not know how to fill');
-    assert.ok(js.includes('function applyAll()'),
-        'the extracted text has no applyAll(), so the wrong block was extracted');
+    assert.ok(js.includes(name === 'injectKeyboardGuard' ? 'function applyAll()' : '__vscodroidFinishComposition'),
+        `the extracted ${name} script does not contain its expected entry point`);
     return js;
 }
 
 const GUARD = extractGuard();
+const ROTATION = extractGuard('finishKeyboardCompositionOnTurn');
 const GESTURES = ['-monaco-gesturetap', '-monaco-gesturecontextmenu'];
 
 /** Blur, focus, attribute writes and the editor's own handlers, in order. */
@@ -503,6 +504,44 @@ check('calling __vscodroidFinishComposition twice in a row blurs and focuses onc
             p.window.__vscodroidFinishComposition();
         });
     }, ['blur host', 'focus host']);
+
+function rotationVerdict(page) {
+    return vm.runInNewContext(ROTATION, { window: page.window, document: page.document });
+}
+
+check('rotation releases native input after finishing an editable host',
+    typing(), (p) => { assert.strictEqual(rotationVerdict(p), true); }, ['blur host', 'focus host']);
+check('rotation refreshes a host whose old composition already ended',
+    typing({ composing: false }), (p) => { assert.strictEqual(rotationVerdict(p), true); }, []);
+check('rotation before the keyboard guard loads leaves native input alone',
+    typing(), (p) => {
+        delete p.window.__vscodroidFinishComposition;
+        assert.strictEqual(rotationVerdict(p), false);
+    }, []);
+check('rotation ignores a nonfunction composition hook',
+    typing(), (p) => {
+        p.window.__vscodroidFinishComposition = {};
+        assert.strictEqual(rotationVerdict(p), false);
+    }, []);
+check('rotation leaves the textarea input path alone',
+    typing({ textarea: true }), (p) => { assert.strictEqual(rotationVerdict(p), false); }, []);
+check('rotation leaves a held keyboard down after finishing composition',
+    typing(), (p) => {
+        p.window.__vscodroidImeVisible = false;
+        p.host.attrs.set('inputmode', 'none');
+        assert.strictEqual(rotationVerdict(p), false);
+    }, ['blur host', 'focus host']);
+check('rotation with focus on a suggest row leaves native input alone',
+    openList(typing()), (p) => {
+        p.rows[0].focus();
+        log = [];
+        assert.strictEqual(rotationVerdict(p), false);
+    }, []);
+check('rotation ignores a host that loses focus during composition recovery',
+    typing(), (p) => {
+        p.window.__vscodroidFinishComposition = () => { p.document.activeElement = p.document.body; };
+        assert.strictEqual(rotationVerdict(p), false);
+    }, []);
 check('the textarea edit path, which has no EditContext, is left alone',
     typing({ textarea: true }), (p) => press(p, 'End'), ['editor End']);
 

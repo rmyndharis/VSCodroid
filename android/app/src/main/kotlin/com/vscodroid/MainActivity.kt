@@ -1186,21 +1186,41 @@ class MainActivity : AppCompatActivity() {
      * The manifest's `configChanges` keeps the activity across a turn of the phone,
      * a resize or a fold, so this is where one is seen. The keyboard is reported
      * hidden with it and comes back by itself, [keyboardDismissal] must not hold
-     * the page's editor down for that, and any word still composing in the page is
-     * ended before the keyboard restarts for the new orientation.
+     * the page's editor down for that. Finish any composing word and release the
+     * old native input connection before the keyboard edits the new selection.
      */
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         keyboardDismissal.turned()
-        webView?.evaluateJavascript(
-            "if (window.__vscodroidFinishComposition) window.__vscodroidFinishComposition();",
-            null,
-        )
+        finishKeyboardCompositionOnTurn()
         // The keyboard the extra key row stood aside for is gone, a Bluetooth one
         // asleep or unpaired, and the soft keyboard is what is left. A touch would
         // bring the row back, but the person may well carry on typing on the screen.
         if (newConfig.keyboard == Configuration.KEYBOARD_NOKEYS) {
             extraKeyRow?.hiddenForHardwareKeyboard = false
+        }
+    }
+
+    private fun finishKeyboardCompositionOnTurn() {
+        val targetView = webView ?: return
+        val generation = AuthTabWindow.pageGeneration()
+        targetView.evaluateJavascript(
+            """
+            (function() {
+                if (typeof window.__vscodroidFinishComposition !== 'function') return false;
+                var element = document.activeElement;
+                window.__vscodroidFinishComposition();
+                return !!(element && element === document.activeElement && element.editContext &&
+                    element.getAttribute('inputmode') !== 'none');
+            })();
+            """.trimIndent(),
+        ) { editable ->
+            if (editable != "true" || webView !== targetView ||
+                AuthTabWindow.pageGeneration() != generation || isFinishing || isDestroyed ||
+                !targetView.isFocused || !targetView.hasWindowFocus()) return@evaluateJavascript
+            // Release the old native input connection as well as the page's composing range.
+            targetView.clearFocus()
+            targetView.requestFocus()
         }
     }
 
