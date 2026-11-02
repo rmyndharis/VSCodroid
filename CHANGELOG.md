@@ -9,6 +9,19 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Keep the editor origin reserved across backend stops and restarts, using an app-private socket for each editor run.
+- Cancel stale server starts and clean up bootstrap processes when launch preparation fails.
+- End a verified surviving editor before moving away from an occupied public port.
+- Serialize device-folder mutations across overlapping grants and report files that did not reach the device.
+- Stop retired directory watchers from registering after their synchronization session ends.
+- Preserve installed toolchain files during failed replacements and keep interrupted installs available for Retry or Remove.
+- Keep first-run toolchain queues progressing after their screen closes.
+- Prevent delayed workspace lookups and navigation consent from affecting a newer editor page.
+- Preserve existing backup files and long filenames during atomic writes.
+- Keep cache and toolchain cleanup anchored inside app storage and close remaining descriptors after a close failure.
+- Distinguish an explicit terminal `LD_PRELOAD` setting from the same text inside another value.
+- Retry the welcome page's secondary sidebar alignment after a workspace-state write fails.
+- Honor offline package downloads, the Android NDK root setting, and backslashes in device-launch UI dumps.
 - Reject device-folder reads that overlap saves and retry deferred saves without blocking later edits.
 - Retry pending settings migrations after interrupted setup without removing later user preferences.
 - Validate the opened file before serving workspace resources, preserving regular-file symlinks and cache behavior.
