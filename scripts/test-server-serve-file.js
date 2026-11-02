@@ -8,6 +8,7 @@ const os = require('node:os');
 const path = require('node:path');
 const vm = require('node:vm');
 const { execFileSync } = require('node:child_process');
+const { once } = require('node:events');
 const { stripTypeScriptTypes } = require('node:module');
 
 if (typeof stripTypeScriptTypes !== 'function') {
@@ -16,7 +17,7 @@ if (typeof stripTypeScriptTypes !== 'function') {
     process.exit(1);
 }
 
-function fetchBounded(port, targetPath, timeoutMs = 1500, maxBytes = 64 * 1024 * 1024) {
+function fetchBounded(port, targetPath, timeoutMs = 1500, maxBytes = 64 * 1024 * 1024, options = {}) {
     return new Promise(resolve => {
         const start = Date.now();
         let settled = false;
@@ -30,13 +31,14 @@ function fetchBounded(port, targetPath, timeoutMs = 1500, maxBytes = 64 * 1024 *
             host: '127.0.0.1',
             port,
             path: '/vscode-remote-resource?path=' + encodeURIComponent(targetPath),
-            headers: { Connection: 'close' },
+            headers: { Connection: 'close', ...options.headers },
         }, res => {
             let totalBytes = 0;
             const smallChunks = [];
             res.on('data', chunk => {
                 totalBytes += chunk.length;
                 if (totalBytes <= 4096) smallChunks.push(chunk);
+                if (options.abortAfterBytes && totalBytes >= options.abortAfterBytes) req.destroy();
                 if (totalBytes > maxBytes) {
                     req.destroy();
                     finish({
@@ -50,6 +52,7 @@ function fetchBounded(port, targetPath, timeoutMs = 1500, maxBytes = 64 * 1024 *
             });
             res.on('end', () => finish({
                 status: res.statusCode ?? null,
+                headers: res.headers,
                 bytes: totalBytes,
                 body: totalBytes <= 4096 ? Buffer.concat(smallChunks).toString('utf8') : '',
                 completed: true,
@@ -91,6 +94,7 @@ function fetchBounded(port, targetPath, timeoutMs = 1500, maxBytes = 64 * 1024 *
                 error: 'TIMEOUT',
             });
         }, timeoutMs);
+        options.onRequest?.(req);
     });
 }
 
@@ -115,9 +119,34 @@ module.exports = (async () => {
         });
 
         const errors = [];
+        const openedFiles = [];
+        let afterStat = () => {};
+        let beforeOpen = () => {};
+        let openFlags;
+        const promises = {
+            ...fs.promises,
+            async stat(filePath) {
+                const stat = await fs.promises.stat(filePath);
+                await afterStat(filePath);
+                return stat;
+            },
+            async open(filePath, flags) {
+                await beforeOpen(filePath);
+                const file = await fs.promises.open(filePath, openFlags ?? flags);
+                openedFiles.push(file);
+                const stat = file.stat.bind(file);
+                file.stat = async () => {
+                    const result = await stat();
+                    await afterStat(filePath);
+                    return result;
+                };
+                return file;
+            },
+        };
         const context = {
+            constants: fs.constants,
             createReadStream: fs.createReadStream,
-            promises: fs.promises,
+            promises,
             crypto,
             Buffer,
             extname: path.extname,
@@ -159,20 +188,111 @@ module.exports = (async () => {
         fs.writeFileSync(largeFile, '');
         fs.truncateSync(largeFile, largeSize);
 
+        const pendingRequests = new Set();
+        const requestErrors = [];
+        const responses = new Map();
         const server = http.createServer((req, res) => {
             const parsed = new URL(req.url, 'http://127.0.0.1');
             const filePath = parsed.searchParams.get('path') || '';
-            serveFile(filePath, CacheControl.ETAG, logService, req, res, Object.create(null));
+            responses.set(filePath, res);
+            const headers = { 'X-Resource': 'preserved' };
+            if (req.headers['x-invalid-header']) headers['Invalid\nHeader'] = 'invalid';
+            const request = serveFile(filePath, CacheControl[req.headers['x-cache-control']] ?? CacheControl.ETAG,
+                logService, req, res, headers);
+            pendingRequests.add(request);
+            request.then(() => pendingRequests.delete(request), error => {
+                pendingRequests.delete(request);
+                requestErrors.push(error);
+            });
         });
         await new Promise(resolve => server.listen(0, '127.0.0.1', resolve));
         const port = server.address().port;
+        const drainRequests = async () => {
+            let timer;
+            try {
+                await Promise.race([
+                    Promise.all([...pendingRequests]),
+                    new Promise((_, reject) => {
+                        timer = setTimeout(() => reject(new Error('file requests must settle after completion or disconnect')), 1000);
+                    }),
+                ]);
+                for (const file of openedFiles) assert.equal(file.fd, -1, 'every completed request must close its descriptor');
+                assert.deepEqual(requestErrors, [], 'file requests must handle errors without rejecting');
+            } finally {
+                clearTimeout(timer);
+            }
+        };
 
         try {
+            for (const replacement of ['/dev/zero', fifoPath, emptyFile]) {
+                const raceFile = path.join(workspaceDir, 'replaced-settings.json');
+                fs.rmSync(raceFile, { force: true });
+                fs.writeFileSync(raceFile, regularBody);
+                const stat = fs.statSync(raceFile);
+                afterStat = filePath => {
+                    if (filePath === raceFile) {
+                        fs.unlinkSync(raceFile);
+                        fs.symlinkSync(replacement, raceFile);
+                    }
+                };
+                const raceRes = await fetchBounded(port, raceFile, 1000, 64 * 1024);
+                assert.equal(raceRes.completed, true, 'replacing a validated path must not start an unbounded device stream');
+                assert.equal(raceRes.error, null);
+                assert.equal(raceRes.status, 200);
+                assert.equal(raceRes.body, regularBody, 'the response must read the regular file that was validated');
+                assert.equal(raceRes.headers.etag, `W/"${stat.ino}-${stat.size}-${stat.mtime.getTime()}"`);
+                await drainRequests();
+            }
+            afterStat = () => {};
+
+            for (const replacement of ['/dev/zero', fifoPath]) {
+                const raceFile = path.join(workspaceDir, 'before-open-settings.json');
+                fs.rmSync(raceFile, { force: true });
+                fs.writeFileSync(raceFile, regularBody);
+                beforeOpen = filePath => {
+                    if (filePath === raceFile) {
+                        fs.unlinkSync(raceFile);
+                        fs.symlinkSync(replacement, raceFile);
+                    }
+                };
+                const raceRes = await fetchBounded(port, raceFile, 1000, 64 * 1024);
+                assert.equal(raceRes.completed, true, 'a special file present at open must receive a bounded response');
+                assert.equal(raceRes.error, null);
+                assert.equal(raceRes.status, 404);
+                await drainRequests();
+            }
+            beforeOpen = () => {};
+
             const regularRes = await fetchBounded(port, regularFile);
             assert.equal(regularRes.completed, true);
             assert.equal(regularRes.error, null);
             assert.equal(regularRes.status, 200, 'regular file must answer 200');
             assert.equal(regularRes.body, regularBody);
+            assert.equal(regularRes.headers['content-type'], 'application/json');
+            assert.equal(regularRes.headers['x-resource'], 'preserved');
+
+            const cachedRes = await fetchBounded(port, regularFile, 1000, 4096,
+                { headers: { 'If-None-Match': regularRes.headers.etag } });
+            assert.equal(cachedRes.completed, true);
+            assert.equal(cachedRes.status, 304);
+            assert.equal(cachedRes.bytes, 0);
+            assert.equal(cachedRes.headers.etag, regularRes.headers.etag);
+            assert.equal(cachedRes.headers['x-resource'], 'preserved');
+            await drainRequests();
+
+            for (const [cache, expected] of [['NO_CACHING', 'no-store'], ['NO_EXPIRY', 'public, max-age=31536000']]) {
+                const cacheRes = await fetchBounded(port, regularFile, 1000, 4096,
+                    { headers: { 'X-Cache-Control': cache } });
+                assert.equal(cacheRes.status, 200);
+                assert.equal(cacheRes.body, regularBody);
+                assert.equal(cacheRes.headers['cache-control'], expected);
+                assert.equal(cacheRes.headers.etag, undefined);
+            }
+
+            const rangeRes = await fetchBounded(port, regularFile, 1000, 4096,
+                { headers: { Range: 'bytes=0-1' } });
+            assert.equal(rangeRes.status, 200, 'the endpoint must retain its full-file response to Range requests');
+            assert.equal(rangeRes.body, regularBody);
 
             const emptyRes = await fetchBounded(port, emptyFile);
             assert.equal(emptyRes.completed, true);
@@ -218,15 +338,67 @@ module.exports = (async () => {
             assert.equal(dirRes.error, null);
             assert.equal(dirRes.status, 404);
 
+            const missingRes = await fetchBounded(port, path.join(workspaceDir, 'missing.json'));
+            assert.equal(missingRes.completed, true);
+            assert.equal(missingRes.status, 404);
+            assert.equal(missingRes.body, 'Not found');
+
+            afterStat = filePath => {
+                if (filePath === regularFile) throw Object.assign(new Error('Unable to read file metadata'), { code: 'EIO' });
+            };
+            const failedStatRes = await fetchBounded(port, regularFile);
+            assert.equal(failedStatRes.completed, true);
+            assert.equal(failedStatRes.status, 404);
+            await drainRequests();
+            afterStat = () => {};
+
+            openFlags = fs.constants.O_WRONLY;
+            const failedReadRes = await fetchBounded(port, regularFile);
+            assert.equal(failedReadRes.completed, false, 'a read error must terminate the response');
+            assert.notEqual(failedReadRes.error, 'TIMEOUT');
+            await drainRequests();
+            openFlags = undefined;
+
+            const invalidHeaderRes = await fetchBounded(port, regularFile, 1000, 4096,
+                { headers: { 'X-Invalid-Header': 'true' } });
+            assert.equal(invalidHeaderRes.completed, true);
+            assert.equal(invalidHeaderRes.status, 404);
+            await drainRequests();
+
+            let abortClient;
+            for (const failStat of [false, true]) {
+                afterStat = async filePath => {
+                    if (filePath === regularFile) {
+                        const closed = once(responses.get(filePath), 'close');
+                        abortClient.destroy();
+                        await closed;
+                        if (failStat) throw Object.assign(new Error('Unable to read file metadata'), { code: 'EIO' });
+                    }
+                };
+                const beforeStreamRes = await fetchBounded(port, regularFile, 1000, 4096,
+                    { onRequest: req => { abortClient = req; } });
+                assert.equal(beforeStreamRes.completed, false);
+                await drainRequests();
+                assert.equal(responses.get(regularFile).headersSent, false, 'a disconnected response must not receive headers');
+            }
+            afterStat = () => {};
+
+            const abortedRes = await fetchBounded(port, largeFile, 5000, largeSize + 1024,
+                { abortAfterBytes: 64 * 1024 });
+            assert.equal(abortedRes.completed, false);
+            assert(abortedRes.bytes < largeSize, 'the client must disconnect before the large response completes');
+            await drainRequests();
+
             const largeRes = await fetchBounded(port, largeFile, 5000, largeSize + 1024);
             assert.equal(largeRes.completed, true, 'large regular file must be served whole');
             assert.equal(largeRes.error, null);
             assert.equal(largeRes.status, 200);
             assert.equal(largeRes.bytes, largeSize);
+            await drainRequests();
         } finally {
             await new Promise(resolve => server.close(resolve));
         }
-        console.log('ok - serveFile serves regular, empty, linked and large files and refuses devices, pipes and directories');
+        console.log('ok - serveFile preserves file identity, caching and bounded streaming and closes descriptors on every response path');
     } finally {
         fs.rmSync(temporary, { recursive: true, force: true });
     }

@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Validate the opened file before serving workspace resources, preserving regular-file symlinks and cache behavior.
 - Prevent a recomposing keyboard from cutting or duplicating editor text after screen rotation.
 - Setup that stops on a symbolic link in its way names the path, not only the tree that is incomplete.
 - The setup notification no longer says unpacking only happens once, in every language; it runs again after each update.
