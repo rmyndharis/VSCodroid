@@ -26,7 +26,6 @@ import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
-import kotlin.concurrent.thread
 
 /**
  * What reading the recent-folder list costs the thread that asks and the threads that wait.
@@ -66,6 +65,7 @@ class RecentFolderGrantLookupTest {
     private lateinit var prefs: SharedPreferences
 
     private var recentJson = "[]"
+    private val workers = SafTestWorkers()
 
     /** How many times the system server was asked which trees are still granted. */
     private val lookups = AtomicInteger(0)
@@ -117,7 +117,7 @@ class RecentFolderGrantLookupTest {
             if (gated) {
                 gated = false
                 entered.countDown()
-                release.await(5, TimeUnit.SECONDS)
+                assertTrue(release.await(5, TimeUnit.SECONDS), "the fixture gate was not released")
             }
             names.map { permissionFor(uris.getValue(it)) }
         }
@@ -140,9 +140,12 @@ class RecentFolderGrantLookupTest {
 
     @AfterEach
     fun tearDown() {
-        // However the assertions ended, no case may leave a thread parked in the gate.
-        release.countDown()
-        unmockkAll()
+        try {
+            release.countDown()
+            workers.finish()
+        } finally {
+            unmockkAll()
+        }
     }
 
     private fun text(name: String) = "content://tree/primary%3A$name"
@@ -203,14 +206,14 @@ class RecentFolderGrantLookupTest {
         val hash = manager.getMirrorDir(uris.getValue("Alpha")).name
         gated = true
 
-        val reader = thread(isDaemon = true) { manager.getPersistedFolders() }
+        val reader = workers.start { manager.getPersistedFolders() }
         assertTrue(
             entered.await(5, TimeUnit.SECONDS),
             "setup failed: the listing never reached the system server, so nothing below " +
                 "is measuring what another thread waits for",
         )
 
-        val writer = thread(isDaemon = true) { manager.releaseGrantFor(hash) }
+        val writer = workers.start { manager.releaseGrantFor(hash) }
         writer.join(2_000)
         assertFalse(
             writer.isAlive,

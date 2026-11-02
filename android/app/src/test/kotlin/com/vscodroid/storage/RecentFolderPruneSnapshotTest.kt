@@ -25,7 +25,6 @@ import org.junit.jupiter.api.io.TempDir
 import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
-import kotlin.concurrent.thread
 
 /**
  * How old the grants a listing prunes against are allowed to be.
@@ -59,6 +58,7 @@ class RecentFolderPruneSnapshotTest {
     private lateinit var prefs: SharedPreferences
 
     private var recentJson = "[]"
+    private val workers = SafTestWorkers()
 
     private val existingText = "content://tree/primary%3AExisting"
     private val pickedText = "content://tree/primary%3APicked"
@@ -115,7 +115,7 @@ class RecentFolderPruneSnapshotTest {
             if (gated) {
                 gated = false
                 entered.countDown()
-                release.await(5, TimeUnit.SECONDS)
+                assertTrue(release.await(5, TimeUnit.SECONDS), "the fixture gate was not released")
             }
             answer
         }
@@ -141,9 +141,12 @@ class RecentFolderPruneSnapshotTest {
 
     @AfterEach
     fun tearDown() {
-        // However the assertions ended, no case may leave a thread parked in the gate.
-        release.countDown()
-        unmockkAll()
+        try {
+            release.countDown()
+            workers.finish()
+        } finally {
+            unmockkAll()
+        }
     }
 
     private fun fakePrefs(): SharedPreferences {
@@ -185,7 +188,7 @@ class RecentFolderPruneSnapshotTest {
         )
 
         gated = true
-        val reader = thread(isDaemon = true) { manager.getPersistedFolders() }
+        val reader = workers.start { manager.getPersistedFolders() }
         assertTrue(
             entered.await(5, TimeUnit.SECONDS),
             "setup failed: the listing never reached the system server, so its reading " +

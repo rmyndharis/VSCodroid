@@ -33,7 +33,6 @@ import java.io.OutputStream
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.concurrent.thread
 import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.IOException
@@ -70,6 +69,8 @@ class SafUploadInterruptionTest {
     private lateinit var resolver: ContentResolver
     private lateinit var context: Context
     private lateinit var engine: SafSyncEngine
+    private val workers = SafTestWorkers()
+    private val providerReleases = mutableListOf<AtomicBoolean>()
     private lateinit var treeUri: Uri
     private val uris = mutableMapOf<String, Uri>()
 
@@ -108,7 +109,16 @@ class SafUploadInterruptionTest {
     }
 
     @AfterEach
-    fun tearDown() = unmockkAll()
+    fun tearDown() {
+        try {
+            providerReleases.forEach { it.set(true) }
+            workers.finish()
+        } finally {
+            unmockkAll()
+        }
+    }
+
+    private fun providerRelease() = AtomicBoolean(false).also { providerReleases.add(it) }
 
     /**
      * The device folder answers for one file, the way the write-back path needs:
@@ -612,7 +622,7 @@ class SafUploadInterruptionTest {
     fun `a path stays recorded while another write to it is still in flight`() {
         deviceHolding("notes.txt")
         val file = File(mirror, "notes.txt").apply { writeText("the whole edit") }
-        val released = AtomicBoolean(false)
+        val released = providerRelease()
         val firstWriteStarted = CountDownLatch(1)
         var opens = 0
         every { resolver.openOutputStream(any(), any()) } answers {
@@ -634,7 +644,7 @@ class SafUploadInterruptionTest {
 
         // The first writer: this engine's drain, still streaming.
         engine.handleMirrorEvent(FileObserver.MODIFY, file, mirror, treeUri)
-        val drain = thread(isDaemon = true) { engine.runWriteBackLoop { false } }
+        val drain = workers.start { engine.runWriteBackLoop { false } }
         assertTrue(
             firstWriteStarted.await(5, TimeUnit.SECONDS),
             "setup failed: the first write never reached the provider",
@@ -644,12 +654,11 @@ class SafUploadInterruptionTest {
             // A different document permits both writers to hold this mirror path.
             val otherDocument = mockk<Uri>(relaxed = true)
             every { otherDocument.toString() } returns "content://test/other/notes.txt"
+            every { otherDocument.authority } returns "other"
             every { DocumentsContract.getDocumentId(otherDocument) } returns "other:notes.txt"
             val second = SafSyncEngine(context)
             // Exercise the writer independently of the event's per-mirror admission.
-            SafSyncEngine::class.java.getDeclaredMethod(
-                "writeLocalToSaf", File::class.java, Uri::class.java, File::class.java,
-            ).apply { isAccessible = true }.invoke(second, file, otherDocument, mirror)
+            writeSafFile(second, file, otherDocument, mirror)
 
             assertEquals(2, opens, "both document writes must reach the provider")
             assertEquals(
@@ -670,7 +679,7 @@ class SafUploadInterruptionTest {
         deviceHolding("notes.txt")
         val file = File(mirror, "notes.txt").apply { writeText("the whole edit") }
         val device = ByteArrayOutputStream()
-        val released = AtomicBoolean(false)
+        val released = providerRelease()
         val firstWriteStarted = CountDownLatch(1)
         var opens = 0
         every { resolver.openInputStream(any()) } answers {
@@ -694,7 +703,7 @@ class SafUploadInterruptionTest {
         }
 
         engine.handleMirrorEvent(FileObserver.MODIFY, file, mirror, treeUri)
-        val drain = thread(isDaemon = true) { engine.runWriteBackLoop { false } }
+        val drain = workers.start { engine.runWriteBackLoop { false } }
         try {
             assertTrue(
                 firstWriteStarted.await(5, TimeUnit.SECONDS),

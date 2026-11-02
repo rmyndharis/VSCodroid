@@ -267,7 +267,7 @@ class SafConcurrentWriteTest {
 
     @ParameterizedTest
     @ValueSource(strings = ["overlap", "authority", "document"])
-    fun `provider document identity controls overlapping tree writers`(identity: String) {
+    fun `provider mutation admission serializes grants while separate authorities remain independent`(identity: String) {
         deviceHolding("notes.md")
         fun document(tree: String, authority: String = "test", id: String = "shared") = mockk<Uri>(relaxed = true).also {
             every { it.toString() } returns "content://$authority/tree/$tree/document/$id"
@@ -295,15 +295,15 @@ class SafConcurrentWriteTest {
             assertTrue(firstWriterInside.await(5, TimeUnit.SECONDS), "the first writer never opened the document")
             secondEngine.handleMirrorEvent(FileObserver.MODIFY, secondFile, otherMirror, otherTree)
             secondEngine.runWriteBackLoop { false }
-            assertEquals(if (identity == "overlap") 1 else 2, peak.get(), "provider document exclusion used the wrong identity")
-            assertEquals(if (identity == "overlap") 1 else 0, refused.get(), "the undelivered child mirror save was not reported")
+            assertEquals(if (identity == "authority") 2 else 1, peak.get(), "provider mutation admission used the wrong authority")
+            assertEquals(if (identity == "authority") 0 else 1, refused.get(), "the undelivered child mirror save was not reported")
         } finally {
             releaseFirstWriter.countDown()
             first.join(5_000)
         }
         secondEngine.handleMirrorEvent(FileObserver.MODIFY, secondFile, otherMirror, otherTree)
         secondEngine.runWriteBackLoop { false }
-        assertEquals(if (identity == "overlap") 2 else 3, everOpened.get(), "the provider document remained claimed after the first writer finished")
+        assertEquals(if (identity == "authority") 3 else 2, everOpened.get(), "the provider remained claimed after the first writer finished")
     }
 
     /**
@@ -690,8 +690,9 @@ class SafConcurrentWriteTest {
         assertTrue(syncedAfter.isFile && syncedAfter.readText().contains("notes.md"))
     }
 
-    @Test
-    fun `a writer starting mid-read aborts setAsideDeviceCopy without leaving a partial copy or marking unread`() {
+    @ParameterizedTest
+    @ValueSource(strings = ["save", "failed-save", "prefix", "preserve"])
+    fun `a writer arriving during a protected proof waits and preserves the completed version`(read: String) {
         var nowMs = 1_000_000L
         every { SystemClock.elapsedRealtime() } answers { nowMs }
         deviceHolding("notes.md")
@@ -706,61 +707,69 @@ class SafConcurrentWriteTest {
         every { DocumentsContract.buildDocumentUriUsingTree(any(), any()) } answers {
             if (firstArg<Uri>() === treeUri) parentDocument else childDocument
         }
-
-        val firstFile = File(mirror, "notes.md").apply { writeText("winner full text") }
+        var providerBytes = "device snapshot".toByteArray()
+        every { resolver.openOutputStream(any(), any()) } answers {
+            val counted = countingStream()
+            providerBytes = byteArrayOf()
+            object : ByteArrayOutputStream() {
+                override fun close() {
+                    providerBytes = toByteArray()
+                    counted.close()
+                    super.close()
+                }
+            }
+        }
+        val firstFile = File(mirror, "notes.md").apply { writeText("deferred writer content") }
+        val secondContents = if (read == "prefix") "device snapshot and a local tail" else "proof owner content"
         val secondFile = File(otherMirror, "notes.md").apply {
-            writeText("loser edit")
+            writeText(secondContents)
             setLastModified(1_800_000_000_000L)
         }
-        val secondEngine = SafSyncEngine(context)
-        blockFirstWriter = true
-        var writerThread: Thread? = null
-        var startedWriterMidRead = false
+        if (read == "prefix") File(filesDir, SafSyncEngine.UPLOADS_IN_FLIGHT_FILE).writeText(secondFile.absolutePath)
+        val proofOwner = SafSyncEngine(context)
+        var attempted = false
+        var failRead = read == "failed-save"
         every { resolver.openInputStream(any()) } answers {
-            val uri = firstArg<Uri>()
-            val bytes = "truncated mid-read bytes".toByteArray()
-            if (uri === childDocument && !startedWriterMidRead) {
-                startedWriterMidRead = true
+            val snapshot = providerBytes
+            if (firstArg<Uri>() === childDocument) {
                 object : java.io.InputStream() {
                     private var pos = 0
                     override fun read(): Int {
-                        if (pos == 0) {
-                            writerThread = Thread {
-                                engine.handleMirrorEvent(FileObserver.MODIFY, firstFile, mirror, treeUri)
-                                engine.runWriteBackLoop { false }
-                            }.apply { start() }
-                            assertTrue(
-                                firstWriterInside.await(5, TimeUnit.SECONDS),
-                                "the contending writer did not enter its stream during the set-aside read",
-                            )
+                        if (!attempted) {
+                            attempted = true
+                            engine.handleMirrorEvent(FileObserver.MODIFY, firstFile, mirror, treeUri)
+                            engine.runWriteBackLoop { false }
+                            assertEquals(0, everOpened.get(), "a writer entered during another operation's proof")
                         }
-                        return if (pos < bytes.size) bytes[pos++].toInt() and 0xff else -1
+                        if (failRead) throw IOException("The device proof is unavailable")
+                        return if (pos < snapshot.size) snapshot[pos++].toInt() and 0xff else -1
                     }
                 }
-            } else {
-                ByteArrayInputStream(bytes)
-            }
+            } else ByteArrayInputStream(snapshot)
         }
-
-        try {
-            secondEngine.handleMirrorEvent(FileObserver.MODIFY, secondFile, otherMirror, otherTree)
-            secondEngine.runWriteBackLoop { false }
-            assertEquals(
-                listOf("notes.md"),
-                otherMirror.listFiles()?.map { it.name }?.sorted(),
-                "a writer starting mid-read left a preserved or partial file behind",
-            )
-        } finally {
-            releaseFirstWriter.countDown()
-            writerThread?.join(5_000)
+        if (read == "prefix" || read == "preserve") {
+            runBlocking { proofOwner.initialSync(otherTree, otherMirror) { _, _ -> } }
+        } else {
+            proofOwner.handleMirrorEvent(FileObserver.MODIFY, secondFile, otherMirror, otherTree)
+            proofOwner.runWriteBackLoop { false }
         }
-
+        assertTrue(attempted, "the competing writer never arrived during the proof")
+        if (failRead) {
+            assertEquals("device snapshot", String(providerBytes))
+            assertEquals(0, everOpened.get())
+            failRead = false
+            nowMs += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+            assertTrue(proofOwner.retryHeldBack(WatchSession(otherMirror)), "the failed proof lost its save")
+        }
+        assertEquals(secondContents, String(providerBytes))
+        assertEquals(secondContents, secondFile.readText())
         nowMs += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
-        assertTrue(
-            secondEngine.retryHeldBack(WatchSession(otherMirror)),
-            "a mid-read abort did not hold the save back for retry",
-        )
-        assertEquals(2, everOpened.get(), "the retried save did not reach the document")
+        assertTrue(engine.retryHeldBack(WatchSession(mirror)), "the competing save was not retained for retry")
+        assertEquals("deferred writer content", String(providerBytes))
+        assertEquals(2, everOpened.get())
+        assertTrue(mirror.listFiles().orEmpty().any {
+            it.name.startsWith("notes.md${SafSyncEngine.DEVICE_COPY_SUFFIX}") && it.readText() == secondContents
+        }, "the retry discarded the completed proof owner's bytes")
     }
 
     @Test
@@ -880,7 +889,7 @@ class SafConcurrentWriteTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = ["copy", "match", "prefix", "preserve"])
+    @ValueSource(strings = ["copy", "match"])
     fun `a write completed inside a read must not accept mixed bytes`(read: String) {
         var nowMs = 1_000_000L
         every { SystemClock.elapsedRealtime() } answers { nowMs }
@@ -905,14 +914,7 @@ class SafConcurrentWriteTest {
         }
         val firstFile = File(mirror, "notes.md").apply { writeText("12345678") }
         val imported = File(otherMirror, "notes.md")
-        when (read) {
-            "match" -> imported.writeText("ABCD5678")
-            "prefix" -> {
-                imported.writeText("ABCD5678 and a local tail")
-                File(filesDir, SafSyncEngine.UPLOADS_IN_FLIGHT_FILE).writeText(imported.absolutePath)
-            }
-            "preserve" -> imported.writeText("local edit kept in the mirror")
-        }
+        if (read == "match") imported.writeText("ABCD5678")
         var writerCompleted = false
         every { resolver.openInputStream(any()) } answers {
             if (firstArg<Uri>() === childDocument && !writerCompleted) {
@@ -933,11 +935,6 @@ class SafConcurrentWriteTest {
         val reader = SafSyncEngine(context)
         runBlocking { reader.initialSync(otherTree, otherMirror) { _, _ -> } }
         assertTrue(writerCompleted)
-        if (read == "preserve") {
-            assertEquals(listOf("notes.md"), otherMirror.listFiles().orEmpty().map { it.name })
-            nowMs += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
-            assertTrue(reader.retryHeldBack(WatchSession(otherMirror)), "the invalidated set-aside was not retried")
-        }
         when (read) {
             "copy" -> {
                 if (imported.exists()) {
@@ -952,88 +949,13 @@ class SafConcurrentWriteTest {
                 assertEquals("ABCD5678", imported.readText())
                 assertFalse(reader.holdsOnlyVouchedCopies(otherMirror), "a matching hybrid was recorded as device bytes")
             }
-            else -> {
-                val copies = otherMirror.listFiles().orEmpty().filter {
-                    it.name.startsWith("notes.md${SafSyncEngine.DEVICE_COPY_SUFFIX}")
-                }
-                assertEquals(listOf("12345678"), copies.map { it.readText() }, "the completed device version was not preserved whole")
-            }
-        }
-    }
-
-    @ParameterizedTest
-    @ValueSource(booleans = [false, true])
-    fun `writer finishing after failed or rejected read must not mark document unread`(readFails: Boolean) {
-        deviceHolding("notes.md")
-        fun document(tree: String) = mockk<Uri>(relaxed = true).also {
-            every { it.toString() } returns "content://test/tree/$tree/document/shared"
-            every { it.authority } returns "test"
-            every { DocumentsContract.getDocumentId(it) } returns "shared"
-        }
-        val parentDocument = document("parent")
-        val childDocument = document("child")
-        val otherTree = mockk<Uri>(relaxed = true)
-        every { DocumentsContract.buildDocumentUriUsingTree(any(), any()) } answers {
-            if (firstArg<Uri>() === treeUri) parentDocument else childDocument
-        }
-        val firstFile = File(mirror, "notes.md").apply { writeText("winner full text") }
-        val secondFile = File(otherMirror, "notes.md").apply {
-            writeText("loser edit kept in mirror")
-            setLastModified(1_800_000_000_000L)
-        }
-        val secondEngine = SafSyncEngine(context)
-        blockFirstWriter = true
-        var writerThread: Thread? = null
-        var startedWriter = false
-        every { resolver.openInputStream(any()) } answers {
-            if (firstArg<Uri>() === childDocument && !startedWriter) {
-                object : java.io.ByteArrayInputStream("read before winner finished".toByteArray()) {
-                    override fun read(bytes: ByteArray, off: Int, length: Int): Int {
-                        if (!startedWriter) {
-                            startedWriter = true
-                            writerThread = Thread {
-                                engine.handleMirrorEvent(FileObserver.MODIFY, firstFile, mirror, treeUri)
-                                engine.runWriteBackLoop { false }
-                            }.apply { start() }
-                            assertTrue(firstWriterInside.await(5, TimeUnit.SECONDS))
-                            if (readFails) {
-                                releaseFirstWriter.countDown()
-                                writerThread!!.join(5_000)
-                                assertFalse(writerThread!!.isAlive)
-                                throw IOException("The provider read failed during the contending write")
-                            }
-                        }
-                        return super.read(bytes, off, length)
-                    }
-                }
-            } else ByteArrayInputStream("winner full text".toByteArray())
-        }
-        // The writer can finish after the post-read check observed it, before the caller
-        // asks again to classify the failed copy. Stop the scheduler here to reproduce it.
-        every { Logger.w(any(), match { it.startsWith("Discarding copy into") }) } answers {
-            releaseFirstWriter.countDown()
-            writerThread!!.join(5_000)
-            assertFalse(writerThread!!.isAlive)
-            Unit
-        }
-        try {
-            runBlocking { secondEngine.initialSync(otherTree, otherMirror) { _, _ -> } }
-            assertTrue(startedWriter)
-            releaseFirstWriter.countDown()
-            writerThread!!.join(5_000)
-            assertFalse(writerThread!!.isAlive)
-            secondFile.writeText("save after the winner finished")
-            secondEngine.handleMirrorEvent(FileObserver.MODIFY, secondFile, otherMirror, otherTree)
-            secondEngine.runWriteBackLoop { false }
-            assertEquals(2, everOpened.get(), "a temporary contending writer disabled future saves for the session")
-        } finally {
-            releaseFirstWriter.countDown()
-            writerThread?.join(5_000)
         }
     }
 
     @Test
-    fun `a digest matching mixed device bytes cannot authorize deletion`() {
+    fun `a pending delete keeps changed bytes and defers a contending save`() {
+        var nowMs = 1_000_000L
+        every { SystemClock.elapsedRealtime() } answers { nowMs }
         deviceHolding("notes.md", reportedSize = 8L)
         fun document(tree: String) = mockk<Uri>(relaxed = true).also {
             every { it.toString() } returns "content://test/tree/$tree/document/shared"
@@ -1063,14 +985,14 @@ class SafConcurrentWriteTest {
             }
         }
         providerBytes = "ABCDEFGH".toByteArray()
-        var writerCompleted = false
+        var writerAttempted = false
         every { resolver.openInputStream(any()) } answers {
-            if (firstArg<Uri>() === childDocument && !writerCompleted) {
+            if (firstArg<Uri>() === childDocument && !writerAttempted) {
                 object : java.io.InputStream() {
                     private var pos = 0
                     override fun read(): Int {
-                        if (pos == 4 && !writerCompleted) {
-                            writerCompleted = true
+                        if (pos == 4 && !writerAttempted) {
+                            writerAttempted = true
                             engine.handleMirrorEvent(FileObserver.MODIFY, firstFile, mirror, treeUri)
                             engine.runWriteBackLoop { false }
                         }
@@ -1087,9 +1009,15 @@ class SafConcurrentWriteTest {
         assertTrue(imported.delete())
         reader.handleMirrorEvent(FileObserver.DELETE, imported, otherMirror, otherTree)
         reader.runWriteBackLoop { false }
-        assertTrue(writerCompleted, "the digest read never met the contending write")
-        assertFalse(providerDeleted, "a digest of mixed bytes authorized deletion of the completed document")
+        assertTrue(writerAttempted, "the digest read never met the contending save")
+        assertFalse(providerDeleted, "a changed device document was deleted")
+        assertEquals("ABCDEFGH", String(providerBytes))
+        nowMs += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+        assertTrue(engine.retryHeldBack(WatchSession(mirror)), "the pending delete discarded the contending save")
         assertEquals("12345678", String(providerBytes))
+        assertTrue(mirror.listFiles().orEmpty().any {
+            it.name.startsWith("notes.md${SafSyncEngine.DEVICE_COPY_SUFFIX}") && it.readText() == "ABCDEFGH"
+        }, "the deferred save did not preserve the changed device document")
     }
 
     @Test

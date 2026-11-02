@@ -25,7 +25,6 @@ import java.io.File
 import java.io.OutputStream
 import java.util.Collections
 import java.util.concurrent.atomic.AtomicBoolean
-import kotlin.concurrent.thread
 
 /**
  * Who may write into a device document, and how many of them there can be.
@@ -49,6 +48,7 @@ class SafWatchSessionTest {
 
     private lateinit var resolver: ContentResolver
     private lateinit var engine: SafSyncEngine
+    private val workers = SafTestWorkers()
 
     /** Held closed until the test lets the provider finish accepting a write. */
     private val released = AtomicBoolean(false)
@@ -88,9 +88,12 @@ class SafWatchSessionTest {
 
     @AfterEach
     fun tearDown() {
-        // However the assertions ended, no test may leave a thread parked in a write.
-        released.set(true)
-        unmockkAll()
+        try {
+            released.set(true)
+            workers.finish()
+        } finally {
+            unmockkAll()
+        }
     }
 
     /**
@@ -142,7 +145,7 @@ class SafWatchSessionTest {
     fun `a drain that outlives its stop never takes the next folder's jobs`() {
         val closing = engine.session
         closing.queue.offer(saveOf("slow.txt"))
-        val worker = thread(isDaemon = true) { engine.runWriteBackLoop(closing) { closing.running } }
+        val worker = workers.start { engine.runWriteBackLoop(closing) { closing.running } }
         closing.worker = worker
 
         // The write has to be in flight before the folder closes: that is the case where
@@ -197,7 +200,7 @@ class SafWatchSessionTest {
         val job = saveOf("big.txt")
         File(job.localPath).writeBytes(ByteArray(200_000) { (it % 251).toByte() })
         closing.queue.offer(job)
-        val worker = thread(isDaemon = true) { engine.runWriteBackLoop(closing) { closing.running } }
+        val worker = workers.start { engine.runWriteBackLoop(closing) { closing.running } }
         closing.worker = worker
         waitUntil("the first write reaches the provider") { openedForWrite.isNotEmpty() }
 
@@ -213,7 +216,7 @@ class SafWatchSessionTest {
     @Test
     fun `the stop ends the drain rather than leaving it polling`() {
         val closing = engine.session
-        val worker = thread(isDaemon = true) { engine.runWriteBackLoop(closing) { closing.running } }
+        val worker = workers.start { engine.runWriteBackLoop(closing) { closing.running } }
         closing.worker = worker
 
         engine.stopWatching()

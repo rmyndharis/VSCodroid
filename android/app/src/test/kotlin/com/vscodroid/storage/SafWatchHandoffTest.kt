@@ -21,7 +21,6 @@ import java.io.File
 import java.util.Collections
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
-import kotlin.concurrent.thread
 
 /**
  * Which folder's queue a save observed just before a folder switch is offered to.
@@ -70,6 +69,7 @@ class SafWatchHandoffTest {
 
     private lateinit var resolver: ContentResolver
     private lateinit var engine: SafSyncEngine
+    private val workers = SafTestWorkers()
     private lateinit var treeUri: Uri
 
     /** Every string the app handed the log, from any thread. */
@@ -120,9 +120,12 @@ class SafWatchHandoffTest {
 
     @AfterEach
     fun tearDown() {
-        // However the assertions ended, no case may leave a thread parked in the gate.
-        release.countDown()
-        unmockkAll()
+        try {
+            release.countDown()
+            workers.finish()
+        } finally {
+            unmockkAll()
+        }
     }
 
     private fun oneChildNamed(name: String): Cursor {
@@ -155,7 +158,7 @@ class SafWatchHandoffTest {
         val closing = engine.session
         File(mirror, "notes.txt").writeText("a save mid-flight")
 
-        val observer = thread(isDaemon = true) {
+        val observer = workers.start {
             engine.handleMirrorEvent(FileObserver.MODIFY, File(mirror, "notes.txt"), mirror, treeUri)
         }
         assertTrue(
@@ -234,7 +237,7 @@ class SafWatchHandoffTest {
     fun `a save that arrives after the drain has ended says so`() {
         File(mirror, "notes.txt").writeText("a save mid-flight")
 
-        val observer = thread(isDaemon = true) {
+        val observer = workers.start {
             engine.handleMirrorEvent(FileObserver.MODIFY, File(mirror, "notes.txt"), mirror, treeUri)
         }
         assertTrue(

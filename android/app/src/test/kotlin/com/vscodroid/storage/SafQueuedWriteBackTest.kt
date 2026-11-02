@@ -229,10 +229,7 @@ class SafQueuedWriteBackTest {
         val file = File(mirror, path)
         file.parentFile!!.mkdirs()
         file.writeBytes(checkNotNull(device[path]))
-        SafSyncEngine::class.java
-            .getDeclaredMethod("writeLocalToSaf", File::class.java, Uri::class.java, File::class.java)
-            .apply { isAccessible = true }
-            .invoke(engine, file, docUri(docId(path)), mirror)
+        writeSafFile(engine, file, docUri(docId(path)), mirror)
         assertEquals(file.readText(), text(path), "the provider did not receive the baseline")
         assertTrue(writes.contains(path), "the baseline upload did not reach the provider")
         writes.clear()

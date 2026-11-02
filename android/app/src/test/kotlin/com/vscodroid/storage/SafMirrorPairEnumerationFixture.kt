@@ -90,7 +90,7 @@ abstract class SafMirrorPairEnumerationFixture : SafInitialSyncTestBase() {
         val deletedPath = File(entry.parentFile, SafStorageManager.DISCARD_PREFIX + entry.name).absolutePath
         var stopped = false
         mockkObject(StorageManager)
-        every { StorageManager.deleteRecursive(any()) } answers {
+        every { StorageManager.deleteRecursive(any(), any()) } answers {
             val deleting = firstArg<File>()
             val removed = callOriginal()
             if (deleting.absolutePath == deletedPath) {

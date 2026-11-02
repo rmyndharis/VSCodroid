@@ -67,6 +67,8 @@ class SafLiveDeviceEditTest {
     private lateinit var resolver: ContentResolver
     private lateinit var engine: SafSyncEngine
     private lateinit var treeUri: Uri
+    private val workers = SafTestWorkers()
+    private val providerReleases = mutableListOf<CountDownLatch>()
     private val uris = mutableMapOf<String, Uri>()
 
     private var deviceText = "v1"
@@ -248,7 +250,16 @@ class SafLiveDeviceEditTest {
     }
 
     @AfterEach
-    fun tearDown() = unmockkAll()
+    fun tearDown() {
+        try {
+            providerReleases.forEach { it.countDown() }
+            workers.finish()
+        } finally {
+            unmockkAll()
+        }
+    }
+
+    private fun providerRelease() = CountDownLatch(1).also { providerReleases.add(it) }
 
     /**
      * One row for `notes.txt`, answering both the enumeration and a single-document query,
@@ -425,10 +436,8 @@ class SafLiveDeviceEditTest {
         engine.handleMirrorEvent(event, file, mirror, treeUri)
         editOnDevice("UNREAD DEVICE EDIT")
         val entered = CountDownLatch(1)
-        val release = CountDownLatch(1)
+        val release = providerRelease()
         val firstListing = AtomicBoolean(true)
-        var failure: Throwable? = null
-        lateinit var opening: Thread
         every { resolver.query(any(), any(), any(), any(), any()) } answers {
             if (firstArg<Uri>() !in uris.values && firstListing.compareAndSet(true, false)) {
                 entered.countDown()
@@ -437,9 +446,7 @@ class SafLiveDeviceEditTest {
             }
             deviceCursor(listing = firstArg<Uri>() !in uris.values)
         }
-        opening = Thread {
-            try { open() } catch (e: Throwable) { failure = e }
-        }
+        val opening = workers.prepare { open() }
         opening.start()
         try {
             assertTrue(entered.await(5, TimeUnit.SECONDS))
@@ -451,7 +458,6 @@ class SafLiveDeviceEditTest {
             opening.join(5_000)
         }
         assertEquals(false, opening.isAlive)
-        assertNull(failure)
     }
 
     @Test
@@ -944,9 +950,7 @@ class SafLiveDeviceEditTest {
             if (!landed) {
                 landed = true
                 val local = File(mirror, "notes.txt").apply { writeText("saved as the folder opened") }
-                SafSyncEngine::class.java.getDeclaredMethod(
-                    "writeLocalToSaf", File::class.java, Uri::class.java, File::class.java,
-                ).apply { isAccessible = true }.invoke(engine, local, uris.getValue(docId), mirror)
+                writeSafFile(engine, local, uris.getValue(docId), mirror)
             }
         })
         open()
@@ -1279,15 +1283,15 @@ class SafLiveDeviceEditTest {
         engine.handleMirrorEvent(FileObserver.MODIFY, file, mirror, treeUri)
         val closing = engine.session
         val inFetch = CountDownLatch(1)
-        val release = CountDownLatch(1)
-        val drain = Thread { engine.runWriteBackLoop(closing) { false } }
+        val release = providerRelease()
+        val drain = workers.prepare { engine.runWriteBackLoop(closing) { false } }
         var drainReads = 0
         every { resolver.openInputStream(any()) } answers {
             reads++
             // The drain's second read, the set-aside's fetch, is the one that outlasts the stop.
             if (Thread.currentThread() === drain && ++drainReads == 2 && inFetch.count > 0) {
                 inFetch.countDown()
-                release.await(5, TimeUnit.SECONDS)
+                check(release.await(5, TimeUnit.SECONDS)) { "the device read was not released" }
             }
             throw IOException("offline")
         }
@@ -1325,18 +1329,10 @@ class SafLiveDeviceEditTest {
         engine.handleMirrorEvent(FileObserver.MODIFY, file, mirror, treeUri)
         val closing = engine.session
         val inFetch = CountDownLatch(1)
-        val release = CountDownLatch(1)
+        val release = providerRelease()
         val oldFetchClosed = AtomicBoolean(false)
-        val newerReadRefused = AtomicBoolean(false)
         var drainReads = 0
-        var drainFailure: Throwable? = null
-        val drain = Thread {
-            try {
-                engine.runWriteBackLoop(closing) { false }
-            } catch (error: Throwable) {
-                drainFailure = error
-            }
-        }
+        val drain = workers.prepare { engine.runWriteBackLoop(closing) { false } }
         every { resolver.openInputStream(any()) } answers {
             reads++
             val snapshot = deviceText
@@ -1352,7 +1348,6 @@ class SafLiveDeviceEditTest {
                 }
             } else {
                 if (!deviceReadable) {
-                    newerReadRefused.set(true)
                     throw IOException("offline")
                 }
                 ByteArrayInputStream(snapshot.toByteArray())
@@ -1366,7 +1361,7 @@ class SafLiveDeviceEditTest {
 
             open()
 
-            assertTrue(newerReadRefused.get(), "the reopen never tried to read the newer device copy")
+            assertTrue(failed.any { it == file }, "the reopen did not report its retained local save")
             assertEquals("newer device edit", deviceText)
             assertEquals(emptyMap<String, String>(), deviceCopies(), "the reopen unexpectedly installed a device copy")
         } finally {
@@ -1374,8 +1369,9 @@ class SafLiveDeviceEditTest {
             drain.join(5_000)
         }
         assertEquals(false, drain.isAlive, "the old fetch did not finish after being released")
-        drainFailure?.let { throw AssertionError("the closing drain failed", it) }
         assertTrue(oldFetchClosed.get(), "the old preservation fetch did not finish successfully")
+        clock += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+        retryWhileWatching()
         assertEquals("second save", file.readText(), "the reopen lost the pending local save")
         assertEquals("newer device edit", deviceText, "the old save replaced the protected device copy")
         assertEquals(1, writes, "the old save wrote after the reopen")

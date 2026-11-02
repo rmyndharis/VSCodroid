@@ -15,7 +15,6 @@ import io.mockk.just
 import io.mockk.mockk
 import io.mockk.mockkObject
 import io.mockk.mockkStatic
-import io.mockk.spyk
 import io.mockk.unmockkAll
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
@@ -777,8 +776,6 @@ class SafPendingDirectoryRenameTest {
     }
 
     @Test fun `normalization callbacks do not upload a renamed directory a second time`() {
-        engine = spyk(engine, recordPrivateCalls = true)
-        every { engine["watchTree"](any<File>(), any<File>(), any<Uri>()) } returns Unit
         open()
         rewriteNames = true
         local("old/new.txt", "pending incoming bytes")
@@ -797,8 +794,6 @@ class SafPendingDirectoryRenameTest {
     }
 
     @Test fun `a normalization callback cannot retire upload records before they move`() {
-        engine = spyk(engine, recordPrivateCalls = true)
-        every { engine["watchTree"](any<File>(), any<File>(), any<Uri>()) } returns Unit
         open()
         assertTrue(File(mirror, "old").renameTo(File(mirror, "a:b")))
         local("a:b/new.txt", "undelivered local bytes")
@@ -932,8 +927,6 @@ class SafPendingDirectoryRenameTest {
         )
     }
     private fun prepareSlot(directory: Boolean, reuseIds: Boolean): String {
-        engine = spyk(engine, recordPrivateCalls = true)
-        every { engine["watchTree"](any<File>(), any<File>(), any<Uri>()) } returns Unit
         reusePathIds = reuseIds
         val documentId = if (reuseIds) "root/slot" else "initial-slot"
         add(documentId, "root", "slot", if (directory) null else "original slot bytes")
@@ -1091,8 +1084,6 @@ class SafPendingDirectoryRenameTest {
         assertForeignFileKept(reuseIds = false)
 
     private fun assertQueuedChildDelivered(renameParent: Boolean, refuseFirstCreate: Boolean) {
-        engine = spyk(engine, recordPrivateCalls = true)
-        every { engine["watchTree"](any<File>(), any<File>(), any<Uri>()) } returns Unit
         open()
         assertTrue(File(mirror, "old/incoming").mkdir())
         observe(FileObserver.CREATE or 0x40000000, "old/incoming")
@@ -1129,8 +1120,6 @@ class SafPendingDirectoryRenameTest {
     @Test fun `a successful subtree upload remains single after its parent rename`() =
         assertQueuedChildDelivered(renameParent = true, refuseFirstCreate = false)
     private fun assertMixedChildrenDelivered(failOutput: Boolean, nested: Boolean) {
-        engine = spyk(engine, recordPrivateCalls = true)
-        every { engine["watchTree"](any<File>(), any<File>(), any<Uri>()) } returns Unit
         open()
         val parent = if (nested) "old/incoming/nested" else "old/incoming"
         assertTrue(File(mirror, "old/incoming").mkdir())
