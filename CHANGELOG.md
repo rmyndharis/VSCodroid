@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Retry pending settings migrations after interrupted setup without removing later user preferences.
 - Validate the opened file before serving workspace resources, preserving regular-file symlinks and cache behavior.
 - Prevent a recomposing keyboard from cutting or duplicating editor text after screen rotation.
 - Setup that stops on a symbolic link in its way names the path, not only the tree that is incomplete.

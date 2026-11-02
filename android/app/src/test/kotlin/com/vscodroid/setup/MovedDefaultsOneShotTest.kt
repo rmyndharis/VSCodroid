@@ -12,6 +12,7 @@ import io.mockk.mockk
 import io.mockk.mockkObject
 import io.mockk.unmockkObject
 import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
@@ -51,6 +52,7 @@ class MovedDefaultsOneShotTest {
 
     /** The preferences, remembered rather than relaxed: the whole subject is state. */
     private val stored = mutableMapOf<String, Any>()
+    private var commitSucceeds = true
 
     private val nativeLibDir = "/data/app/~~new==/com.vscodroid-new==/lib/arm64"
     private val oldNativeLibDir = "/data/app/~~old==/com.vscodroid-old==/lib/arm64"
@@ -78,22 +80,31 @@ class MovedDefaultsOneShotTest {
         every { Logger.w(any(), any(), any()) } just Runs
         every { Logger.e(any(), any(), any()) } just Runs
 
+        val pending = mutableMapOf<String, Any?>()
         val editor = mockk<SharedPreferences.Editor>(relaxed = true)
         every { editor.putBoolean(any(), any()) } answers {
-            stored[firstArg()] = secondArg<Boolean>()
+            pending[firstArg()] = secondArg<Boolean>()
             editor
         }
         every { editor.putInt(any(), any()) } answers {
-            stored[firstArg()] = secondArg<Int>()
+            pending[firstArg()] = secondArg<Int>()
             editor
         }
         every { editor.putString(any(), any()) } answers {
-            val value = secondArg<String?>()
-            if (value == null) stored.remove(firstArg()) else stored[firstArg()] = value
+            pending[firstArg()] = secondArg<String?>()
             editor
+        }
+        every { editor.commit() } answers {
+            // Android updates process-local preferences even when its disk commit fails.
+            for ((key, value) in pending) {
+                if (value == null) stored.remove(key) else stored[key] = value
+            }
+            pending.clear()
+            commitSucceeds
         }
         val prefs = mockk<SharedPreferences>(relaxed = true)
         every { prefs.edit() } returns editor
+        every { prefs.contains(any()) } answers { stored.containsKey(firstArg()) }
         every { prefs.getBoolean(any(), any()) } answers {
             stored[firstArg()] as? Boolean ?: secondArg()
         }
@@ -220,6 +231,76 @@ class MovedDefaultsOneShotTest {
                 "the app's own preferences stay in the file that outranks the user's " +
                 "settings and nothing will ever look again",
         )
+    }
+
+    @Test
+    fun `a layout backfill retries deferred legacy pruning after an interrupted first launch`() {
+        run()
+        stored.clear()
+        val legacy = settingsFile.readText()
+            .replace("    \"vscodroid.layout.compactScreen\": true,\n", "")
+            .replaceFirst(
+                "{\n",
+                "{\n    // restored legacy settings\n    \"editor.wordWrap\": \"on\",\n" +
+                    "    \"editor.fontSize\": 18,\n",
+            )
+        settingsFile.writeText(legacy)
+
+        run()
+
+        val afterFirst = settingsFile.readText()
+        assertTrue(afterFirst.contains("\"editor.wordWrap\": \"on\""))
+        assertTrue(afterFirst.contains("\"vscodroid.layout.compactScreen\": true"))
+        assertFalse(stored.containsKey("setup_version"))
+        assertFalse(stored.containsKey("setup_version_code"))
+
+        run()
+
+        val afterRetry = settingsFile.readText()
+        assertFalse(
+            afterRetry.contains("editor.wordWrap"),
+            "the app's own layout backfill made an unfinished legacy migration look like a post-migration restore",
+        )
+        assertTrue(afterRetry.contains("// restored legacy settings"))
+        assertTrue(afterRetry.contains("\"editor.fontSize\": 18"))
+        assertEquals(true, stored["moved_defaults_pruned"])
+
+        settingsFile.writeText(
+            afterRetry.replaceFirst("{\n", "{\n    \"editor.wordWrap\": \"on\",\n"),
+        )
+        run()
+
+        assertTrue(settingsFile.readText().contains("\"editor.wordWrap\": \"on\""))
+    }
+
+    @Test
+    fun `a failed pending record leaves deferred legacy settings unchanged`() {
+        run()
+        stored.clear()
+        val legacy = settingsFile.readText()
+            .replace("    \"vscodroid.layout.compactScreen\": true,\n", "")
+            .replaceFirst(
+                "{\n",
+                "{\n    // restored legacy settings\n    \"editor.wordWrap\": \"on\",\n",
+            )
+        settingsFile.writeText(legacy)
+        commitSucceeds = false
+
+        run()
+        run()
+
+        assertEquals(
+            legacy,
+            settingsFile.readText(),
+            "a layout backfill must not erase legacy provenance before the pending migration record reaches disk",
+        )
+
+        commitSucceeds = true
+        run()
+        run()
+
+        assertFalse(settingsFile.readText().contains("editor.wordWrap"))
+        assertEquals(true, stored["moved_defaults_pruned"])
     }
 
     /**

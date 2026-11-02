@@ -45,7 +45,7 @@ import android.annotation.SuppressLint
 // step of a run that a kill can interrupt at any moment, and apply()'s flush
 // window is exactly the interval those writes exist to survive. Lint does not
 // hold that line: ApplySharedPref flags a call to `Editor.commit()`, not the
-// KTX `edit(commit = true)` each write uses. FirstRunPrefsCommitTest does.
+// KTX `edit(commit = true)` most writes use. FirstRunPrefsCommitTest does.
 //
 // UsableSpace: the pre-flight deliberately asks what is free rather than what
 // the platform would let this app allocate. getAllocatableBytes counts space it
@@ -2808,7 +2808,7 @@ claude() {
         // the user and must not be stripped.
         val document = refreshed ?: current
         val restoredPostMigration =
-            !prefs.getBoolean(KEY_MOVED_DEFAULTS_PRUNED, false) &&
+            !prefs.contains(KEY_MOVED_DEFAULTS_PRUNED) &&
                 prefs.getString(KEY_VERSION, null).isNullOrEmpty() &&
                 getPreviousVersionCode() == 0 &&
                 COMPACT_SCREEN_KEY.containsMatchIn(commentsBlanked(document)) &&
@@ -2837,6 +2837,16 @@ claude() {
                 if (looked) markMovedDefaultsPruned()
                 return
             }
+
+        if (shouldPrune && !looked) {
+            // Persist the pending prune before our layout backfill can resemble a restore.
+            @SuppressLint("ApplySharedPref")
+            val recorded = prefs.edit().putBoolean(KEY_MOVED_DEFAULTS_PRUNED, false).commit()
+            if (!recorded) {
+                Logger.w(tag, "Could not record pending settings migration; settings.json is unchanged")
+                return
+            }
+        }
 
         // Atomic because this file is the user's, not ours -- it carries their
         // editor preferences, and this runs at every launch. writeText truncates
