@@ -88,9 +88,14 @@ class EditorGatewayTest {
         workers.forEach { it.join(3000) }
         workers.filter { it.isAlive }.forEach { it.interrupt(); it.join(1000) }
         val alive = workers.filter { it.isAlive }
+        val relays = EditorGateway::class.java.getDeclaredField("workers").apply {
+            isAccessible = true
+        }.get(gateway) as java.util.concurrent.ExecutorService
+        val relaysStopped = relays.awaitTermination(3, TimeUnit.SECONDS)
         Thread.setDefaultUncaughtExceptionHandler(previousHandler)
         unmockkAll()
         assertTrue(alive.isEmpty(), "backend fixture did not stop")
+        assertTrue(relaysStopped, "relay workers did not stop")
         assertTrue(failures.isEmpty(), "backend fixture failed: " + failures.joinToString())
     }
 
@@ -180,6 +185,7 @@ class EditorGatewayTest {
     @Test
     fun backendHalfCloseStillAcceptsClientUpload() {
         val (path, server) = backend("reverse-half-close")
+        val uploaded = CountDownLatch(1)
         gateway.bind(0)
         gateway.selectBackend(path, "reverse-half-close-run")
         worker {
@@ -187,6 +193,7 @@ class EditorGatewayTest {
                 it.socketOutput().write(7)
                 it.shutdownOutput()
                 assertEquals("after eof", it.socketInput().readBytes().toString(Charsets.UTF_8))
+                uploaded.countDown()
             }
         }
         client().use {
@@ -194,6 +201,7 @@ class EditorGatewayTest {
             assertEquals(-1, it.getInputStream().read())
             it.getOutputStream().write("after eof".toByteArray())
             it.shutdownOutput()
+            assertTrue(uploaded.await(3, TimeUnit.SECONDS), "the backend did not receive the upload")
         }
     }
 
@@ -202,6 +210,7 @@ class EditorGatewayTest {
         val (firstPath, first) = backend("first")
         val (secondPath, second) = backend("second")
         val oldConnected = CountDownLatch(1)
+        val oldClosed = CountDownLatch(1)
         gateway.bind(0)
         gateway.selectBackend(firstPath, "first-run")
         worker {
@@ -209,6 +218,7 @@ class EditorGatewayTest {
                 it.socketOutput().write(1)
                 oldConnected.countDown()
                 it.socketInput().readBytes()
+                oldClosed.countDown()
             }
         }
         val old = client()
@@ -217,6 +227,7 @@ class EditorGatewayTest {
         gateway.selectBackend(secondPath, "second-run")
         gateway.withdrawBackend("first-run")
         assertEquals(-1, old.getInputStream().read())
+        assertTrue(oldClosed.await(3, TimeUnit.SECONDS), "the old backend remained connected")
         worker { second.accept().use { it.socketOutput().write(2) } }
         client().use { assertEquals(2, it.getInputStream().read()) }
         assertTrue(gateway.isBound(gateway.boundPort!!))
@@ -346,12 +357,14 @@ class EditorGatewayTest {
     @Test
     fun inactivityEventuallyClosesBothDirections() {
         val (path, server) = backend("idle")
+        val backendClosed = CountDownLatch(1)
         gateway.bind(0)
         gateway.selectBackend(path, "idle-run")
         worker {
             server.accept().use {
                 it.socketOutput().write(42)
                 assertEquals(-1, it.socketInput().read())
+                backendClosed.countDown()
             }
         }
         client().use {
@@ -361,6 +374,7 @@ class EditorGatewayTest {
             assertEquals(-1, it.getInputStream().read())
             val elapsed = TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - started)
             assertTrue(elapsed in 118..125, "inactivity timeout took " + elapsed + " seconds")
+            assertTrue(backendClosed.await(3, TimeUnit.SECONDS), "the idle backend remained connected")
         }
     }
 
