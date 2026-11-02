@@ -23,7 +23,7 @@ diff --git a/src/vs/workbench/services/configuration/browser/configurationServic
  	private async onWorkspaceConfigurationChanged(fromCache: boolean): Promise<void> {
  		if (this.workspace && this.workspace.configuration) {
 -			let newFolders = toWorkspaceFolders(this.workspaceConfiguration.getFolders(), this.workspace.configuration, this.uriIdentityService.extUri);
-+			let newFolders = toWorkspaceFolders(Array.isArray(this.workspaceConfiguration.getFolders()) ? this.workspaceConfiguration.getFolders() : this.workspace.folders.map(folder => folder.raw), this.workspace.configuration, this.uriIdentityService.extUri);
++			let newFolders = Array.isArray(this.workspaceConfiguration.getFolders()) ? toWorkspaceFolders(this.workspaceConfiguration.getFolders(), this.workspace.configuration, this.uriIdentityService.extUri) : this.workspace.folders;
  
  			// Validate only if workspace is initialized
  			if (this.workspace.initialized) {

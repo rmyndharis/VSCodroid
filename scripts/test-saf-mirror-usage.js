@@ -642,6 +642,23 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
         assert.deepEqual(repairedAfterPoisonedCache.unhandled, []);
         cases++;
 
+        {
+            const fixture = browserFixture();
+            const service = serviceFixture(fixture.helper, null, () => {});
+            const rawlessFolder = new WorkspaceFolder({ uri: remote('/active'), name: 'active', index: 0 });
+            service.workspace = { folders: [rawlessFolder], configuration: configPath, initialized: true };
+            service.workspaceConfiguration = { getFolders: () => ({}), getConfiguration: () => ({}) };
+            service.uriIdentityService = { extUri };
+            service.toValidWorkspaceFolders = async folders => folders;
+            service.compareFolders = (before, after) => ({
+                added: after.filter(folder => !before.includes(folder)),
+                removed: before.filter(folder => !after.includes(folder)), changed: [],
+            });
+            await service.onWorkspaceConfigurationChanged(false);
+            assert.deepEqual(service.workspace.folders, [rawlessFolder]);
+            cases++;
+        }
+
         const runningWindow = await runMultiFolderScenario({
             initialText: validTwo,
             fileText: validTwo,
