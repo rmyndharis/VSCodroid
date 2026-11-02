@@ -413,8 +413,92 @@ RED="" GREEN="" YELLOW="" RESET=""
     def test_launch_ignores_node_processes_owned_by_another_app(self):
         self.assert_contract(device_launch(SOURCE / "scripts/device-launch.sh", self.root / "launch"))
 
+    def test_launcher_treats_ui_xml_and_adb_paths_as_data(self):
+        helper = shell_function((SOURCE / "scripts/device-launch.sh").read_text(), "tap_by_text")
+        for label, extra_text, button, adb_name in (
+                ("ordinary", "/data/users/name", "Skip", "adb"),
+                ("backslash", r"C:\Users\name", "Skip", "adb"),
+                ("large-ui", "x" * 200_000, "Skip", "adb"),
+                ("quoted-path", "/data/users/name", "Skip", 'adb "quoted"'),
+                ("absent-button", "/data/users/name", "Continue", "adb")):
+            with self.subTest(label=label):
+                case = self.root / label
+                case.mkdir()
+                xml = case / "ui.xml"
+                write(xml, '<hierarchy><node text="' + extra_text +
+                      '" bounds="[1,2][3,4]"/><node text="' + button +
+                      '" bounds="[10,20][30,40]"/></hierarchy>')
+                adb = case / adb_name
+                write(adb, '''#!/bin/bash
+printf '%s\n' "$*" >> "$CALL_LOG"
+case "$*" in
+    'shell uiautomator dump /sdcard/ui.xml') exit 0 ;;
+    'shell cat /sdcard/ui.xml') cat "$UI_XML" ;;
+    'shell input tap 20 30') exit 0 ;;
+    *) exit 97 ;;
+esac
+''', True)
+                script = "set -euo pipefail\n" + helper + "\ntap_by_text Skip\n"
+                result = run(["/bin/bash", "-c", script], case,
+                             {"ADB": str(adb), "UI_XML": str(xml), "CALL_LOG": str(case / "calls")})
+                calls = (case / "calls").read_text().splitlines()
+                self.assertEqual(1 if label == "absent-button" else 0, result["status"], result)
+                self.assertEqual(label != "absent-button", "shell input tap 20 30" in calls, result)
+
     def test_wheelhouse_accepts_relative_and_external_output_paths(self):
         self.assert_contract(wheelhouse(SOURCE / "scripts/build-wheelhouse.py", self.root / "wheels"))
+
+    def test_java_uses_the_same_explicit_ndk_precedence_as_other_builds(self):
+        text = (SOURCE / "scripts/download-java.sh").read_text()
+        begin = text.index("# Same resolution order as build-native-addons.sh")
+        phase = text[begin:text.index('\n(\n    cd "$SPAWN_SRC"', begin)]
+        ndk_home = self.root / "ndk home"
+        ndk_root = self.root / "ndk root"
+        sdk = self.root / "sdk"
+        for ndk in (ndk_home, ndk_root, sdk / "ndk/27.0"):
+            for host in ("linux-x86_64", "linux-aarch64", "darwin-x86_64", "darwin-arm64"):
+                (ndk / "toolchains/llvm/prebuilt" / host / "bin").mkdir(parents=True)
+        for label, overrides, expected in (
+                ("home", {"ANDROID_NDK_HOME": str(ndk_home)}, ndk_home),
+                ("root", {"ANDROID_NDK_ROOT": str(ndk_root)}, ndk_root),
+                ("both", {"ANDROID_NDK_HOME": str(ndk_home), "ANDROID_NDK_ROOT": str(ndk_root)}, ndk_home),
+                ("sdk", {}, sdk / "ndk/27.0")):
+            with self.subTest(label=label):
+                result = run(["/bin/bash", "-c", "set -euo pipefail\n" + phase +
+                              '\nprintf "%s" "$NDK_DIR"\n'], self.root,
+                             {"HOME": str(self.root / "empty-home"), "ANDROID_HOME": str(sdk), **overrides})
+                self.assertEqual(0, result["status"], result)
+                self.assertEqual(str(expected), result["stdout"], result)
+
+    def test_offline_termux_packages_never_attempt_a_download(self):
+        library = SOURCE / "scripts/lib/termux-packages.sh"
+        payload = b"cached package bytes"
+        for label, offline, cached, expected_status, expected_network in (
+                ("offline-cached", "1", payload, 0, False),
+                ("offline-missing", "1", None, 1, False),
+                ("offline-corrupt", "1", b"corrupt", 1, False),
+                ("online-missing", "0", None, 0, True)):
+            with self.subTest(label=label):
+                case = self.root / label
+                (case / "debs").mkdir(parents=True)
+                if cached is not None:
+                    (case / "debs/fixture.deb").write_bytes(cached)
+                script = '''set -euo pipefail
+WORK_DIR="$PWD"
+. "$1"
+termux_pkg_filename() { printf pool/fixture.deb; }
+termux_pkg_sha256() { printf '%s' "$EXPECTED"; }
+curl() {
+    printf called >> "$PWD/network-attempt"
+    while [ "$1" != -o ]; do shift; done
+    printf 'cached package bytes' > "$2"
+}
+termux_download_packages fixture
+'''
+                result = run(["/bin/bash", "-c", script, "bash", str(library)], case,
+                             {"TERMUX_OFFLINE": offline, "EXPECTED": hashlib.sha256(payload).hexdigest()})
+                self.assertEqual(expected_status, result["status"], result)
+                self.assertEqual(expected_network, (case / "network-attempt").exists(), result)
 
 
 if __name__ == "__main__":

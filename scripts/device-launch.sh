@@ -28,16 +28,17 @@ DISMISS=("Allow" "Skip")
 tap_by_text() {
     local want=$1 dump
     dump=$("$ADB" shell uiautomator dump /sdcard/ui.xml >/dev/null 2>&1 && "$ADB" shell cat /sdcard/ui.xml 2>/dev/null | tr -d '\r') || return 1
-    python3 - "$want" <<PY
+    python3 - "$want" "$ADB" 3<<<"$dump" <<'PY'
 import re, subprocess, sys
-xml = """$dump"""
-want = sys.argv[1]
+with open(3, encoding="utf-8") as source:
+    xml = source.read()
+want, adb = sys.argv[1:]
 m = re.search(r'text="%s"[^>]*bounds="\[(\d+),(\d+)\]\[(\d+),(\d+)\]"' % re.escape(want), xml)
 if not m:
     sys.exit(1)
 x1, y1, x2, y2 = map(int, m.groups())
 print(f"  tapped {want} at {(x1+x2)//2},{(y1+y2)//2}")
-subprocess.run(["$ADB", "shell", "input", "tap", str((x1+x2)//2), str((y1+y2)//2)], check=True)
+subprocess.run([adb, "shell", "input", "tap", str((x1+x2)//2), str((y1+y2)//2)], check=True)
 PY
 }
 

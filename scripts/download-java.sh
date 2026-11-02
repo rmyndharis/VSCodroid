@@ -176,8 +176,8 @@ done
 echo "  source verified against pinned digests ($SPAWN_COMMIT)"
 
 # Same resolution order as build-native-addons.sh, which cross-compiles here too.
-if [ -n "${ANDROID_NDK_HOME:-}" ]; then
-    NDK_DIR="$ANDROID_NDK_HOME"
+if [ -n "${ANDROID_NDK_HOME:-${ANDROID_NDK_ROOT:-}}" ]; then
+    NDK_DIR="${ANDROID_NDK_HOME:-$ANDROID_NDK_ROOT}"
 elif [ -n "${ANDROID_HOME:-}" ] && [ -d "$ANDROID_HOME/ndk" ]; then
     NDK_DIR="$(ls -d "$ANDROID_HOME/ndk/"* 2>/dev/null | sort -V | tail -1)"
 elif [ -d "$HOME/Library/Android/sdk/ndk" ]; then
