@@ -1,7 +1,7 @@
 # VSCodroid Privacy Policy
 
 **Effective Date: February 13, 2026**
-**Last Updated: November 1, 2026**
+**Last Updated: November 2, 2026**
 
 ## Summary
 
@@ -157,7 +157,7 @@ Uninstalling the app or clearing its data through Android Settings removes its p
 
 VSCodroid itself includes no third-party analytics, advertising, or tracking SDKs. The third-party services it integrates are:
 
-- **GitHub Copilot Chat**: Bundled with the app and configured as the editor's chat provider. On a new profile the editor leaves it disabled until chat setup completes, and it has no account and offers you no chat until you sign in to GitHub. While it is enabled it starts with the editor whether or not you are signed in, and whether it sends anything before you sign in is not something we have established. Once you have signed in and used it, what you ask and the code it attaches as context go to GitHub, under GitHub's terms and privacy statement. It can be turned off from the Extensions view (**Disable AI Features**), but not uninstalled, because it ships as a built-in.
+- **GitHub Copilot Chat**: Bundled with the app and configured as the editor's chat provider. It has no account and offers you no chat until you sign in to GitHub. While it is enabled it starts with the editor whether or not you are signed in, and whether it sends anything before you sign in is not something we have established. Once you have signed in and used it, what you ask and the code it attaches as context go to GitHub, under GitHub's terms and privacy statement. It can be turned off from the Extensions view (**Disable AI Features**), but not uninstalled, because it ships as a built-in.
 - **Google Play Asset Delivery**: Used solely for downloading optional language toolchain packs on Play Store installs. This is a Google Play Store feature and is governed by Google's privacy policy.
 - **GitHub Releases and GitHub Pages**: Used for downloading those same toolchain packs on installs that did not come from the Play Store, and for the prebuilt Python packages `pip` is pointed at (see **Package Installation**). Governed by GitHub's privacy policy.
 
