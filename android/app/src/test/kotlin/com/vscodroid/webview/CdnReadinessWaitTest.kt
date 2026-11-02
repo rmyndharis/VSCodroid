@@ -5,6 +5,7 @@ import android.webkit.ServiceWorkerClient
 import android.webkit.ServiceWorkerController
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
+import com.vscodroid.service.mockEditorGateway
 import com.vscodroid.service.restartBackoffMs
 import com.vscodroid.util.Logger
 import io.mockk.Runs
@@ -69,6 +70,7 @@ class CdnReadinessWaitTest {
 
     @BeforeEach
     fun setUp() {
+        mockEditorGateway()
         mockkObject(Logger)
         every { Logger.d(any(), any()) } just Runs
         every { Logger.i(any(), any()) } just Runs

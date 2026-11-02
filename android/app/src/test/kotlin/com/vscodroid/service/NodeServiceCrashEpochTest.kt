@@ -40,6 +40,7 @@ class NodeServiceCrashEpochTest {
 
     @Test
     fun `a heap charge suspended across stop and relaunch cannot replace the new startup notice`() = runBlocking {
+        mockEditorGateway()
         mockkObject(Logger)
         every { Logger.i(any(), any()) } just Runs
         every { Logger.d(any(), any()) } just Runs
@@ -197,6 +198,7 @@ class NodeServiceCrashEpochTest {
     }
 
     private fun buildCrashHarness(now: () -> Long): CrashHarness {
+        mockEditorGateway()
         mockkObject(Logger)
         every { Logger.i(any(), any()) } just Runs
         every { Logger.d(any(), any()) } just Runs

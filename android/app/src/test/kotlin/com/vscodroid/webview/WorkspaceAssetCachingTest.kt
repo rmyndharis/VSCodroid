@@ -96,7 +96,7 @@ class WorkspaceAssetCachingTest {
 
     @Test
     fun `the body being checked was actually found`() {
-        assertTrue(served.contains("FileInputStream") && served.contains("resourceOutcome")) {
+        assertTrue(served.contains("openResourceFile") && served.contains("resourceOutcome")) {
             "interceptResourceRequest no longer looks like the function this was written " +
                 "against, so the search below is running over the wrong text and would " +
                 "pass over anything. Point it at wherever a resource is served from the " +

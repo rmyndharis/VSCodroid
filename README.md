@@ -146,7 +146,7 @@ If you are **ready to learn**, you should be able to **start today**.
 
 ## 🏗️ Architecture
 
-VSCodroid runs a local VS Code Server instance on your Android device. The VS Code Web Client renders inside a WebView, and the VS Code Server (Node.js) runs as a native ARM64 process, all on `localhost`.
+VSCodroid runs a local VS Code Server instance on your Android device. The VS Code Web Client renders inside a WebView, and the VS Code Server (Node.js) runs as a native ARM64 process. The app retains a loopback endpoint and relays HTTP and WebSocket traffic to Node through a private filesystem socket.
 
 ```mermaid
 flowchart TD
@@ -166,11 +166,11 @@ flowchart TD
     REH --> FS
     KEY --> WV
   end
-  WEB <--> LOCAL["localhost:PORT (HTTP + WebSocket)"]
-  LOCAL <--> REH
+  WEB <--> LOCAL["EditorGateway: 127.0.0.1:PORT<br/>(HTTP + WebSocket)"]
+  LOCAL <-->|"Private filesystem socket"| REH
 ```
 
-> For full architecture details, see [Architecture Design Document (historical: the 2026-02-10 design, not the code)](docs/03-ARCHITECTURE.md).
+> For full architecture details, see the [Architecture Design Document](docs/03-ARCHITECTURE.md).
 
 ## 📱 Requirements
 

@@ -27,7 +27,7 @@ class SpawnFailureLoggedTest {
         val startServer = SourceScan.withoutComments(
             SourceScan.body(
                 SourceScan.read("src/main/kotlin/com/vscodroid/service/ProcessManager.kt"),
-                "fun startServer(",
+                "private fun startServer(generation:",
             )
         )
 

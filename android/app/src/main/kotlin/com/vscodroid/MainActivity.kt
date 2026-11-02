@@ -3035,6 +3035,9 @@ class MainActivity : AppCompatActivity() {
             navigateToFolder(port, known)
             return
         }
+        val targetView = webView ?: return
+        val request = ++recoveryPageEpoch
+        val generation = AuthTabWindow.pageGeneration()
         lifecycleScope.launch {
             // Off the main thread for the reason adoptWorkbenchFolder hops, and
             // this is the same lookup: deciding whether a remembered mirror is
@@ -3076,7 +3079,9 @@ class MainActivity : AppCompatActivity() {
             // outranking it after: a renderer crash recovering into the folder it
             // was showing arrives through this same method, and a remembered
             // folder resolved before it would otherwise land last and win.
-            val currentUrl = webView?.url
+            val currentUrl = targetView.url
+            if (request != recoveryPageEpoch || webView !== targetView || nodeService?.isServerReady() != true ||
+                (generation != AuthTabWindow.pageGeneration() && isWorkbenchUrl(currentUrl, port))) return@launch
             val target = workspaceTargetAfterLookup(currentUrl, port, folderFromUrl(currentUrl), resolved)
             navigateToFolder(port, target)
         }
@@ -3262,6 +3267,7 @@ class MainActivity : AppCompatActivity() {
             workspaceMembers = { workspaceResources.roots() },
             connectionToken = { nodeService?.getConnectionToken() },
             onCrash = { recreateWebView() },
+            onNavigationStarted = appNavigation::clear,
             // The page covers itself the moment it is told to leave, and a
             // navigation this client hands to another app or refuses never comes
             // to replace it: the cover has to be taken down from here.
@@ -7525,20 +7531,24 @@ internal fun syncProgressIsDue(done: Int, total: Int, sinceLastMs: Long): Boolea
  * mirror as well, by design, and here it would rename a directory created in the
  * editor after the device folder containing it: "four files in Documents did not
  * reach the device" for a shortfall that was entirely inside `src/generated`.
- * Matched on the directory NAME rather than the whole path, since the name is the
- * digest and is what the manager itself keys mirrors by.
+ * Matched on the complete canonical path so system aliases still name the same
+ * copy, while a nested directory with the same basename keeps its own name.
  *
  * [folders] is the recent list, pruned of revoked grants before it is handed
  * over, so a folder whose grant the user has taken back has no entry and keeps
  * the directory name. That is the honest answer at that point: the app no longer
  * knows what the folder was called.
  *
- * Top-level and pure for the reason the notices are wired out of locals: anything
+ * Top-level for the reason the notices are wired out of locals: anything
  * they call on the Activity captures it, and the write-back worker they belong to
  * outlives the screen.
  */
-internal fun mirrorDisplayName(folders: List<SafFolderInfo>, dir: File): String =
-    folders.firstOrNull { File(it.mirrorPath).name == dir.name }?.displayName ?: dir.name
+internal fun mirrorDisplayName(folders: List<SafFolderInfo>, dir: File): String {
+    val directory = runCatching { dir.canonicalFile }.getOrNull() ?: return dir.name
+    return folders.firstOrNull {
+        runCatching { File(it.mirrorPath).canonicalFile == directory }.getOrDefault(false)
+    }?.displayName ?: dir.name
+}
 
 /**
  * How long a renderer crash counts towards a loop, and how many are allowed
@@ -8324,6 +8334,10 @@ internal class AppNavigationMark(private val windowMs: Long) {
     /** Says the navigation about to be started is this app's own. */
     fun mark(now: Long) {
         markedAt = now
+    }
+
+    fun clear() {
+        markedAt = 0L
     }
 
     /** True at most once per [mark], and only inside the window. */

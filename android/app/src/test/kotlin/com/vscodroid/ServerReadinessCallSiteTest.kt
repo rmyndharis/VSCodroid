@@ -4,6 +4,7 @@ import android.content.Context
 import android.os.SystemClock
 import android.webkit.WebView
 import android.widget.Toast
+import com.vscodroid.service.mockEditorGateway
 import com.vscodroid.bridge.AuthTabWindow
 import com.vscodroid.service.NodeService
 import com.vscodroid.service.StartupNotice
@@ -46,6 +47,7 @@ class ServerReadinessCallSiteTest {
         events.clear()
         now = 400_000L
         AuthTabWindow.beginPage()
+        mockEditorGateway()
         mockkObject(Logger)
         every { Logger.i(any(), any()) } just Runs
         every { Logger.w(any(), any()) } just Runs

@@ -16,8 +16,11 @@ import androidx.test.platform.app.InstrumentationRegistry
 import androidx.test.rule.GrantPermissionRule
 import com.vscodroid.keyboard.ExtraKeyRow
 import com.vscodroid.util.ServerReadyHelper
+import com.vscodroid.webview.VSCodroidWebChromeClient
+import com.vscodroid.webview.VSCodroidWebViewClient
 import org.hamcrest.CoreMatchers.containsString
 import org.junit.Assert.assertEquals
+import org.junit.Assert.assertFalse
 import org.junit.Assert.assertNotNull
 import org.junit.Assert.assertTrue
 import org.junit.Before
@@ -114,6 +117,35 @@ class MainActivityTest {
             loaded != null && (loaded.startsWith("data:") || loaded.startsWith("http://127.0.0.1"))
         )
         scenario.close()
+    }
+
+    @Test
+    fun newDocumentRetiresOnlyThePreviousAppNavigation() {
+        ActivityScenario.launch(MainActivity::class.java).use { scenario ->
+            scenario.onActivity { activity ->
+                MainActivity::class.java.getDeclaredMethod("initBridge", Int::class.javaPrimitiveType).apply {
+                    isAccessible = true
+                }.invoke(activity, 13337)
+                val view = activity.findViewById<WebView>(R.id.webView)
+                val client = view.webViewClient as VSCodroidWebViewClient
+                val chrome = view.webChromeClient as VSCodroidWebChromeClient
+                val mark = MainActivity::class.java.getDeclaredMethod("markAppNavigation").apply {
+                    isAccessible = true
+                }
+
+                mark.invoke(activity)
+                assertTrue(chrome.onJsBeforeUnload(view, "about:blank", "", null))
+                mark.invoke(activity)
+                client.onPageStarted(view, "about:blank", null)
+                assertFalse("a new page inherited the previous navigation's consent",
+                    chrome.onJsBeforeUnload(view, "about:blank", "", null))
+
+                mark.invoke(activity)
+                client.onPageFinished(view, "about:blank")
+                assertTrue("an older completion withdrew the next app navigation",
+                    chrome.onJsBeforeUnload(view, "about:blank", "", null))
+            }
+        }
     }
 
     @Test

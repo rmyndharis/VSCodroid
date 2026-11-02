@@ -7,6 +7,7 @@ import android.webkit.WebResourceRequest
 import android.webkit.WebView
 import android.webkit.WebViewClient
 import android.net.Uri
+import com.vscodroid.service.mockEditorGateway
 import com.vscodroid.util.Logger
 import io.mockk.Runs
 import io.mockk.every
@@ -61,6 +62,7 @@ class TlsFailureNoticeTest {
     @BeforeEach
     fun setUp() {
         announced.clear()
+        mockEditorGateway()
         mockkObject(Logger)
         every { Logger.w(any(), any(), any()) } just Runs
         every { Logger.e(any(), any(), any()) } just Runs

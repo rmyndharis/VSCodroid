@@ -17,7 +17,7 @@
 
 ## 1. Architecture Overview
 
-VSCodroid follows a **local client-server architecture** where both the client (VS Code Web UI) and server (VS Code Server + Node.js) run on the same Android device, communicating over localhost.
+VSCodroid follows a **local client-server architecture** where both the client (VS Code Web UI) and server (VS Code Server + Node.js) run on the same Android device. The app owns the loopback HTTP and WebSocket endpoint for its process lifetime; `EditorGateway` relays bytes to the editor through a private filesystem socket.
 
 ```mermaid
 flowchart TD
@@ -36,8 +36,8 @@ flowchart TD
     BIN["Bundled Binaries (.so): node, python launcher, git, bash, tmux, make, ripgrep, ssh"]
   end
 
-  WV <--> LOCAL["localhost:PORT (HTTP + WebSocket)"]
-  LOCAL <--> NODE
+  WV <--> LOCAL["EditorGateway: 127.0.0.1:PORT<br/>(app process lifetime)"]
+  LOCAL <-->|"Private filesystem socket<br/>HTTP + WebSocket bytes"| NODE
   FG --> NODE
   BIN --> NODE
 ```
@@ -101,16 +101,19 @@ flowchart TD
         PM["ProcessManager"]
         BRIDGE["BridgeInterface"]
       end
+      GATEWAY["EditorGateway (app process lifetime)<br/>127.0.0.1:PORT"]
     end
 
     LIBS["Native Libraries (jniLibs)<br/>libnode.so, libpython.so, libgit.so, libgit-remote-curl.so,<br/>libbash.so, libtmux.so, libmake.so, libripgrep.so,<br/>libssh.so, libssh-keygen.so, libldmusl.so, libexec-trampoline.so"]
   end
 
   EXTRAROW --> WEBVIEW
-  WEBVIEW <-->|"HTTP + WebSocket"| VSS
+  WEBVIEW <-->|"HTTP + WebSocket"| GATEWAY
+  GATEWAY <-->|"Private filesystem socket"| VSS
   VSS --> CHILD
   FGSVC --> VSS
   PM --> VSS
+  PM -->|"Select or withdraw backend"| GATEWAY
   BRIDGE --> WEBVIEW
   LIBS --> VSS
 ```
@@ -346,16 +349,21 @@ owning extension is what frees a slot.
 ```mermaid
 sequenceDiagram
   participant W as WebView (vscode-web)
+  participant G as EditorGateway (127.0.0.1:PORT)
   participant S as VS Code Server (vscode-reh)
-  W->>S: GET / with workspace and connection-token query
-  S-->>W: Workbench HTML (initial page load)
-  W->>S: GET /static/*
-  S-->>W: JS, CSS, fonts
-  W->>S: Connect the remote-agent WebSocket
-  S-->>W: RPC stream (file operations, terminal I/O, extension messages, diagnostics)
+  W->>G: GET / with workspace and connection-token query
+  G->>S: Relay HTTP bytes over the private filesystem socket
+  S-->>G: Workbench HTML, then requested assets
+  G-->>W: Relay the response
+  W->>G: Connect the remote-agent WebSocket
+  G->>S: Relay the upgrade and WebSocket bytes
+  S-->>G: RPC stream (files, terminal I/O, extensions, diagnostics)
+  G-->>W: Relay the stream
 ```
 
 **Protocol**: VS Code's built-in `IExtHostRpcProtocol` over WebSocket. Binary frames for efficiency.
+
+The relay preserves the HTTP `Host` header and WebSocket bytes without parsing or rewriting them. Each editor run listens on its own filesystem socket under app-private storage. Stopping or replacing that backend leaves the public port bound, so another process cannot take over the workbench origin while the app is alive. With no selected backend, the gateway answers new connections with HTTP 503. A backend restart uses the same public port; a surviving editor remains routed while its exited bootstrap is adopted again.
 
 ### 5.2 Kotlin ↔ WebView
 
@@ -383,16 +391,21 @@ injected object at all; they reach a fixed list of commands over the BroadcastCh
 ```mermaid
 sequenceDiagram
   participant K as Kotlin Native Shell
+  participant G as EditorGateway
   participant N as Node.js Process
-  K->>N: ProcessBuilder.start() (launch)
-  K->>N: HTTP GET /version (polling, 200 only)
-  K->>N: Fresh nonce challenge for listener ownership
-  N-->>K: HMAC using the private server run identifier
+  K->>G: Bind or retain the app-owned loopback endpoint
+  K->>N: ProcessBuilder.start() with a private socket path
+  K->>G: Select the backend for this run
+  K->>G: HTTP GET /version and a fresh ownership challenge
+  G->>N: Relay requests over the private socket
+  N-->>G: Version response and HMAC using the private run identifier
+  G-->>K: Relay responses for readiness and ownership checks
+  K->>G: Withdraw this run's backend on Stop
   K->>N: Process.destroy() (graceful shutdown)
   N-->>K: Process.exitValue() (death detection)
 ```
 
-Readiness and adoption also require a valid listener proof. A compatible version response alone does not identify the process that owns the port. Existing server adoption repeats the proof before token recovery and while monitoring the adopted listener.
+Readiness and adoption also require a valid listener proof. A compatible version response alone does not identify the editor. Its PID record includes the public port, run identity and private socket path. Existing server adoption checks that ownership and repeats the proof before token recovery and while monitoring the adopted listener.
 
 ---
 
@@ -502,7 +515,7 @@ flowchart TD
   B --> B5["server/ (VS Code extracted)"]
   B5 --> B5a["vscode-reh/ (server plus the web client it serves)"]
   B5 --> B5b["server.js, process-monitor.js, platform-fix.js, dns-proxy.js, xdg-open.js"]
-  B5 --> B5c["editor-server.pid (pid, port and run identity of the running server)"]
+  B5 --> B5c["editor-server.pid (pid, public port, run identity and private socket path)"]
   B --> B6["saf-mirrors/ (one hash-named local copy per granted device folder)"]
   B6 --> B6a["by-name/ (a link to each copy, named after its folder,<br/>which the editor opens so the folder shows its own name)"]
   B --> B7["projects/ (default workspace on a new install)"]

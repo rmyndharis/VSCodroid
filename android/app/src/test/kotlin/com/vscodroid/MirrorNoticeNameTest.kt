@@ -5,7 +5,9 @@ import com.vscodroid.storage.SafFolderInfo
 import io.mockk.mockk
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.nio.file.Files
 
 /**
  * What a device-folder notice calls the folder it is about.
@@ -66,6 +68,32 @@ class MirrorNoticeNameTest {
             "a shortfall inside one directory was reported against the whole device " +
                 "folder, sending the user to look in the wrong place",
         )
+    }
+
+    @Test
+    fun `a nested directory with another mirror's name keeps its own name`() {
+        assertEquals(
+            "999888777666",
+            mirrorDisplayName(recent, File("$root/a1b2c3d4e5f6/src/999888777666")),
+        )
+    }
+
+    @Test
+    fun `an unrelated directory with a mirror's name keeps its own name`(@TempDir temp: File) {
+        assertEquals(
+            "a1b2c3d4e5f6",
+            mirrorDisplayName(recent, File(temp, "a1b2c3d4e5f6")),
+        )
+    }
+
+    @Test
+    fun `a system path alias still names the actual mirror root`(@TempDir temp: File) {
+        val mirror = File(temp, "actual/saf-mirrors/a1b2c3d4e5f6").apply { mkdirs() }
+        val alias = File(temp, "alias")
+        Files.createSymbolicLink(alias.toPath(), mirror.parentFile.toPath())
+        val aliased = File(alias, mirror.name)
+        assertEquals("Documents", mirrorDisplayName(listOf(recent.first().copy(mirrorPath = aliased.path)), mirror))
+        assertEquals("Documents", mirrorDisplayName(listOf(recent.first().copy(mirrorPath = mirror.path)), aliased))
     }
 
     /**

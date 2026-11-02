@@ -22,6 +22,21 @@ const LOG_LEVEL = args.log || 'info';
 
 const SERVER_DIR = path.dirname(__filename);
 const REH_DIR = path.join(SERVER_DIR, 'vscode-reh');
+const SOCKET_PATH = args['socket-path'];
+if (SOCKET_PATH) {
+    const owner = process.env.VSCODROID_SERVER_RUN_ID || '';
+    const name = crypto.createHash('sha256').update(owner).digest('hex').slice(0, 32);
+    if (!process.env.TERMUX_APP__DATA_DIR) throw new Error('The private app data root is unavailable');
+    const appRoot = fs.realpathSync(process.env.TERMUX_APP__DATA_DIR);
+    const filesRoot = fs.realpathSync(path.dirname(SERVER_DIR));
+    const relative = path.relative(appRoot, filesRoot);
+    const expected = path.join(filesRoot, `e-${name}.sock`);
+    if (!/^[A-Za-z0-9-]{1,128}$/.test(owner) || SOCKET_PATH !== expected ||
+        !relative || relative === '..' || relative.startsWith(`..${path.sep}`) || path.isAbsolute(relative) ||
+        Buffer.byteLength(SOCKET_PATH) >= 108) {
+        throw new Error('The editor backend socket is not an app-private run path');
+    }
+}
 
 // The tail of the intent address the same page navigates to, with or without the
 // package a previous start pinned into it, for the same idempotence.
@@ -839,6 +854,8 @@ if (!fs.existsSync(rehEntryPoint)) {
         '--log', LOG_LEVEL
     ];
 
+    if (SOCKET_PATH) serverArgs.push('--socket-path', SOCKET_PATH);
+
     // Forward relevant CLI args
     ['extensions-dir', 'user-data-dir', 'server-data-dir', 'logsPath'].forEach(key => {
         if (args[key]) serverArgs.push(`--${key}`, args[key]);
@@ -924,7 +941,10 @@ if (!fs.existsSync(rehEntryPoint)) {
     // The port is written with the pid on purpose: a stale file from an
     // earlier run on a different port must not vouch for this one.
     const pidFile = path.join(SERVER_DIR, 'editor-server.pid');
-    const pidNote = JSON.stringify({ pid: server.pid, port: PORT, runId: process.env.VSCODROID_SERVER_RUN_ID });
+    const pidNote = JSON.stringify({
+        pid: server.pid, port: PORT, runId: process.env.VSCODROID_SERVER_RUN_ID,
+        ...(SOCKET_PATH ? { socketPath: SOCKET_PATH } : {}),
+    });
     try {
         const tmp = pidFile + '.tmp';
         fs.writeFileSync(tmp, pidNote);
@@ -937,7 +957,10 @@ if (!fs.existsSync(rehEntryPoint)) {
 
     const clearPidFile = () => {
         try {
-            if (fs.readFileSync(pidFile, 'utf8') === pidNote) fs.unlinkSync(pidFile);
+            if (fs.readFileSync(pidFile, 'utf8') === pidNote) {
+                fs.unlinkSync(pidFile);
+                if (SOCKET_PATH && fs.lstatSync(SOCKET_PATH).isSocket()) fs.unlinkSync(SOCKET_PATH);
+            }
         } catch {
             // Already gone, or never written. Either way there is nothing to
             // clean up, and a stale file is handled by the reader anyway.

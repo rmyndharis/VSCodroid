@@ -3,6 +3,7 @@ package com.vscodroid.webview
 import android.net.Uri
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
+import com.vscodroid.service.mockEditorGateway
 import com.vscodroid.SourceScan
 import com.vscodroid.util.Logger
 import com.vscodroid.webview.VSCodroidWebViewClient.Companion.SECRET_KEY_PATH
@@ -142,6 +143,7 @@ class SecretKeyInterceptorResponseTest {
     fun setUp() {
         keyReads = 0
         logged.clear()
+        mockEditorGateway()
         mockkObject(Logger)
         every { Logger.d(any(), any()) } answers { logged += secondArg<String>() }
         every { Logger.i(any(), any()) } answers { logged += secondArg<String>() }

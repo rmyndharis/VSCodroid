@@ -7,6 +7,7 @@ import android.net.Uri
 import android.os.SystemClock
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
+import com.vscodroid.service.mockEditorGateway
 import com.vscodroid.util.Logger
 import io.mockk.Runs
 import io.mockk.every
@@ -102,6 +103,7 @@ class ExternalUrlNoticeThrottleTest {
         // leaves behind is harmless today; a case that reached the cap without
         // announcing would otherwise depend on which cases ran before it.
         lastHandoffNoticeAt = 0L
+        mockEditorGateway()
         mockkObject(Logger)
         every { Logger.i(any(), any()) } just Runs
         every { Logger.e(any(), any(), any()) } just Runs

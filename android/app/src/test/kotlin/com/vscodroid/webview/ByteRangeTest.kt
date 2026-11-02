@@ -3,8 +3,12 @@ package com.vscodroid.webview
 import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertNull
+import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Test
+import org.junit.jupiter.api.io.TempDir
 import java.io.ByteArrayInputStream
+import java.io.File
+import java.io.FileInputStream
 
 /**
  * What the webview resource arm answers a `Range` header with.
@@ -21,6 +25,9 @@ import java.io.ByteArrayInputStream
  * built.
  */
 class ByteRangeTest {
+
+    @TempDir
+    lateinit var temp: File
 
     private val length = 1000L
 
@@ -125,5 +132,33 @@ class ByteRangeTest {
         assertEquals(0, body.read())
         assertEquals(1, body.read())
         assertEquals(-1, body.read(), "a third byte was handed out past a two-byte range")
+    }
+
+    @Test
+    fun `a zero length read returns zero even after the range or source ends`() {
+        val empty = BoundedInputStream(ByteArrayInputStream(byteArrayOf()), 0)
+        assertEquals(0, empty.read(ByteArray(1), 0, 0))
+        val range = BoundedInputStream(ByteArrayInputStream(byteArrayOf(1, 2)), 1)
+        assertEquals(1, range.read())
+        assertEquals(0, range.read(ByteArray(1), 0, 0))
+    }
+
+    @Test
+    fun `a negative skip cannot read before the range starts`() {
+        val file = File(temp, "bytes").apply { writeBytes(byteArrayOf(0, 1, 2, 3, 4)) }
+        FileInputStream(file).use { source ->
+            source.channel.position(2)
+            val range = BoundedInputStream(source, 3)
+
+            assertEquals(0L, range.skip(-1))
+            assertArrayEquals(byteArrayOf(2, 3, 4), range.readBytes())
+        }
+    }
+
+    @Test
+    fun `an exhausted range still validates read arguments`() {
+        val range = BoundedInputStream(ByteArrayInputStream(byteArrayOf()), 0)
+        assertThrows(IndexOutOfBoundsException::class.java) { range.read(ByteArray(1), 2, 0) }
+        assertThrows(IndexOutOfBoundsException::class.java) { range.read(ByteArray(1), 0, -1) }
     }
 }

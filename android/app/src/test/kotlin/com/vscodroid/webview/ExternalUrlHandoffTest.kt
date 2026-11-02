@@ -7,6 +7,7 @@ import android.net.Uri
 import android.os.SystemClock
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
+import com.vscodroid.service.mockEditorGateway
 import com.vscodroid.authCallbackIsExpected
 import com.vscodroid.callbackSecretMatches
 import com.vscodroid.bridge.AUTH_TAB_WINDOW_MILLIS
@@ -236,6 +237,7 @@ class ExternalUrlHandoffTest {
         announced.clear()
         logged.clear()
         declined = 0
+        mockEditorGateway()
         mockkObject(Logger)
         every { Logger.i(any(), any()) } answers { logged += secondArg<String>() }
         every { Logger.e(any(), any(), any()) } answers { logged += secondArg<String>() }

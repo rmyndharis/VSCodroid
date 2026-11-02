@@ -25,6 +25,7 @@ const fs = require('fs');
 const http = require('http');
 const os = require('os');
 const path = require('path');
+const crypto = require('crypto');
 const { URL } = require('url');
 const { spawn, spawnSync } = require('child_process');
 
@@ -107,6 +108,78 @@ function boot(dir) {
         timeout: 20_000,
     });
     return { ...result, output: `${result.stdout || ''}${result.stderr || ''}` };
+}
+
+async function privateSocketBackend() {
+    const dir = fixture(UPSTREAM, { serverMain: [
+        "const socket = process.argv[process.argv.indexOf('--socket-path') + 1];",
+        "require('http').createServer((req, res) => res.end(req.headers.host)).listen(socket);",
+    ].join('\n') });
+    const owner = crypto.randomUUID();
+    const socketPath = path.join(fs.realpathSync(path.dirname(dir)),
+        `e-${crypto.createHash('sha256').update(owner).digest('hex').slice(0, 32)}.sock`);
+    const notePath = path.join(dir, 'editor-server.pid');
+    const bootstrap = spawn(process.execPath, [path.join(dir, 'server.js'), '--port=45831',
+        `--socket-path=${socketPath}`], {
+        stdio: 'ignore', env: {
+            ...process.env, VSCODROID_SERVER_RUN_ID: owner,
+            TERMUX_APP__DATA_DIR: path.dirname(fs.realpathSync(path.dirname(dir))),
+        },
+    });
+    let childPid;
+    try {
+        await until(() => fs.existsSync(socketPath) && fs.existsSync(notePath), 'the private editor socket');
+        const note = JSON.parse(fs.readFileSync(notePath, 'utf8'));
+        childPid = note.pid;
+        assert.strictEqual(note.socketPath, socketPath);
+        assert.strictEqual(note.port, 45831);
+        assert.strictEqual(note.runId, owner);
+        const host = await new Promise((resolve, reject) => {
+            const request = http.get({ socketPath, path: '/', headers: { Host: '127.0.0.1:45831' } }, (res) => {
+                let body = '';
+                res.on('data', (part) => { body += part; });
+                res.on('end', () => resolve(body));
+                res.on('error', reject);
+            });
+            request.setTimeout(1000, () => request.destroy(new Error('Private backend request timed out')));
+            request.on('error', reject);
+        });
+        assert.strictEqual(host, '127.0.0.1:45831');
+        bootstrap.kill('SIGTERM');
+        await until(() => !alive(bootstrap.pid), 'the private backend shutdown');
+        assert.ok(!fs.existsSync(socketPath), 'shutdown left its private socket behind');
+    } finally {
+        if (childPid) { try { process.kill(childPid, 'SIGKILL'); } catch { /* already gone */ } }
+        bootstrap.kill('SIGKILL');
+        fs.rmSync(socketPath, { force: true });
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+}
+
+function redirectedPrivateSocketParentIsRefused() {
+    const app = fs.mkdtempSync(path.join(os.tmpdir(), 'vscodroid-app-'));
+    const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'vscodroid-shared-'));
+    const server = path.join(outside, 'server');
+    fs.renameSync(fixture(UPSTREAM, {
+        serverMain: "require('fs').writeFileSync(require('path').join(__dirname, '../../child-ran'), 'unexpected');\n",
+    }), server);
+    fs.symlinkSync(outside, path.join(app, 'files'));
+    const owner = crypto.randomUUID();
+    const socketPath = path.join(outside,
+        `e-${crypto.createHash('sha256').update(owner).digest('hex').slice(0, 32)}.sock`);
+    try {
+        const result = spawnSync(process.execPath, [path.join(app, 'files/server/server.js'),
+            `--socket-path=${socketPath}`], {
+            encoding: 'utf8', timeout: 20_000,
+            env: { ...process.env, VSCODROID_SERVER_RUN_ID: owner, TERMUX_APP__DATA_DIR: app },
+        });
+        assert.notStrictEqual(result.status, 0, 'a redirected private backend was started');
+        assert.ok(!fs.existsSync(path.join(server, 'child-ran')), 'the invalid parent reached the child');
+        assert.ok(!fs.existsSync(socketPath), 'an outside backend socket was created');
+    } finally {
+        fs.rmSync(app, { recursive: true, force: true });
+        fs.rmSync(outside, { recursive: true, force: true });
+    }
 }
 
 // The formatter a marketplace search cannot surface; see EXTENSION_RECOMMENDATIONS.
@@ -1697,6 +1770,8 @@ async function exitingBootstrapPreservesReplacementNote() {
 }
 
 preloadRidesAsOneToken()
+    .then(privateSocketBackend)
+    .then(redirectedPrivateSocketParentIsRefused)
     .then(() => require('./test-server-run-proof.js'))
     .then(proxySurvivesTheBootstrap)
     .then(exitingBootstrapPreservesReplacementNote)

@@ -21,6 +21,7 @@ import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executor
 import java.util.concurrent.ExecutorService
 import java.util.concurrent.Executors
+import java.util.concurrent.FutureTask
 import java.util.concurrent.LinkedBlockingQueue
 import java.util.concurrent.TimeUnit
 
@@ -128,6 +129,7 @@ class DownloadWriteBlockingTest {
      * on the runner's mood.
      */
     private lateinit var providerWork: ExecutorService
+    private val workers = mutableListOf<Pair<Thread, FutureTask<Unit>>>()
 
     /** Counted down by whichever call is holding the provider. */
     private val insideCall = CountDownLatch(1)
@@ -244,13 +246,42 @@ class DownloadWriteBlockingTest {
     @AfterEach
     fun tearDown() {
         release.countDown()
-        awaitProviderIdle()
-        providerWork.shutdown()
-        assertTrue(
-            providerWork.awaitTermination(5, TimeUnit.SECONDS),
-            "the provider worker must finish before its mocks are removed",
-        )
-        unmockkAll()
+        try {
+            var failed: Throwable? = null
+            for ((worker, result) in workers) {
+                try {
+                    worker.join(5_000)
+                    if (worker.isAlive) {
+                        worker.interrupt()
+                        worker.join(5_000)
+                    }
+                    assertFalse(worker.isAlive, "a download caller did not stop")
+                    result.get(1, TimeUnit.SECONDS)
+                } catch (error: Throwable) {
+                    if (failed == null) failed = error else failed.addSuppressed(error)
+                }
+            }
+            awaitProviderIdle()
+            failed?.let { throw it }
+        } finally {
+            providerWork.shutdownNow()
+            try {
+                assertTrue(
+                    providerWork.awaitTermination(5, TimeUnit.SECONDS),
+                    "the provider worker must finish before its mocks are removed",
+                )
+            } finally {
+                unmockkAll()
+            }
+        }
+    }
+
+    private fun startWorker(work: () -> Unit): Thread {
+        val result = FutureTask { work() }
+        val worker = Thread(result)
+        workers += worker to result
+        worker.start()
+        return worker
     }
 
     private fun destination(name: String = "doc"): Uri = mockk<Uri>(relaxed = true, name = name)
@@ -324,7 +355,7 @@ class DownloadWriteBlockingTest {
         val id = startAndChoose(target)
         blockWrites = true
 
-        val writer = Thread { coordinator.onBytes(id, encode("payload")) }.apply { start() }
+        val writer = startWorker { coordinator.onBytes(id, encode("payload")) }
         awaitInsideProvider()
 
         val waitedMs = timed { coordinator.onPageGone() }
@@ -346,7 +377,7 @@ class DownloadWriteBlockingTest {
         val id = startAndChoose(target)
         blockWrites = true
 
-        val writer = Thread { coordinator.onBytes(id, encode("payload")) }.apply { start() }
+        val writer = startWorker { coordinator.onBytes(id, encode("payload")) }
         awaitInsideProvider()
         coordinator.onPageGone()
 
@@ -370,7 +401,7 @@ class DownloadWriteBlockingTest {
         coordinator.onBytes(id, encode("payload"))
         blockCloses = true
 
-        val closer = Thread { coordinator.onComplete(id, null) }.apply { start() }
+        val closer = startWorker { coordinator.onComplete(id, null) }
         awaitInsideProvider()
 
         val waitedMs = timed { coordinator.onPageGone() }
@@ -392,7 +423,7 @@ class DownloadWriteBlockingTest {
         coordinator.onBytes(id, encode("payload"))
         blockCloses = true
 
-        val closer = Thread { coordinator.onComplete(id, null) }.apply { start() }
+        val closer = startWorker { coordinator.onComplete(id, null) }
         awaitInsideProvider()
         coordinator.onPageGone()
 
@@ -421,7 +452,7 @@ class DownloadWriteBlockingTest {
         val id = startAndChoose(target)
         blockWrites = true
 
-        val writer = Thread { coordinator.onBytes(id, encode("payload")) }.apply { start() }
+        val writer = startWorker { coordinator.onBytes(id, encode("payload")) }
         awaitInsideProvider()
 
         coordinator.onComplete(id, null)
@@ -445,7 +476,7 @@ class DownloadWriteBlockingTest {
         val id = startAndChoose(target)
         blockWrites = true
 
-        val writer = Thread { coordinator.onBytes(id, encode("first")) }.apply { start() }
+        val writer = startWorker { coordinator.onBytes(id, encode("first")) }
         awaitInsideProvider()
 
         val accepted = coordinator.onBytes(id, encode("second"))
@@ -632,8 +663,7 @@ class DownloadWriteBlockingTest {
         // On a thread of its own, so that restoring the inline open leaves this
         // case measuring a monitor a blocked caller is holding rather than a
         // provider that has already returned.
-        val chooser = Thread { coordinator.onDestinationChosen(pickerIds.last(), target) }
-            .apply { start() }
+        val chooser = startWorker { coordinator.onDestinationChosen(pickerIds.last(), target) }
         awaitInsideProvider()
 
         val waitedMs = timed { coordinator.onPageGone() }
@@ -728,7 +758,7 @@ class DownloadWriteBlockingTest {
         val target = destination()
         val id = startAndChoose(target)
         blockWrites = true
-        val writer = Thread { coordinator.onBytes(id, encode("payload")) }.apply { start() }
+        val writer = startWorker { coordinator.onBytes(id, encode("payload")) }
         awaitInsideProvider()
         coordinator.onPageGone()
         release.countDown()

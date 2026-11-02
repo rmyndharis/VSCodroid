@@ -99,6 +99,7 @@ class ResourceInterceptionWiringTest {
         every { Logger.i(any(), any()) } just Runs
 
         mockkConstructor(WebResourceResponse::class)
+        mockResourceFileOpening()
     }
 
     @AfterEach
