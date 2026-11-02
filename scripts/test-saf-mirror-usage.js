@@ -135,7 +135,7 @@ function serviceFixture(helper, workspace, publish, warnings = []) {
     return Object.assign(new context.SelectedWorkspaceService(), {
         initialized: false,
         initialWorkspaceSettings: undefined,
-        logService: { warn: error => warnings.push(error) },
+        logService: { warn: (message, error) => warnings.push(error ?? message) },
         workspace: { folders: [], configuration: undefined },
         _configuration: { toData: () => ({}), compareAndUpdateWorkspaceConfiguration: () => ({}) },
         _onDidChangeWorkspaceFolders: { fire: () => publish('member-event') },

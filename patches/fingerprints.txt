@@ -352,12 +352,12 @@
 # The same patch's second flag, the height a panel that stayed in a short window had before it.
 0034 short window panel height is remembered|out/vs/code/browser/workbench/workbench.js x10|panelHeightBeforeShort
 0035 mirror usage acknowledgement|out/vs/code/browser/workbench/workbench.js|claimWorkspacePaths
-0035 initial claim caught|out/vs/code/browser/workbench/workbench.js|]:[]]).catch(
+0035 initial claim caught|out/vs/code/browser/workbench/workbench.js|Could not claim initial workspace paths
 0035 update claim caught|out/vs/code/browser/workbench/workbench.js|.uri)).catch(
 0036 editor bind failure exits|out/server-main.js|Editor failed to bind its port
 0037 current startup state|out/vs/code/browser/workbench/workbench.js x3|loadedConfigurationGeneration
 0038 workspace resource publication|out/vs/code/browser/workbench/workbench.js x2|publishWorkspaceRoots
-0038 workspace publication caught|out/vs/code/browser/workbench/workbench.js x2|],!0).catch(
+0038 workspace publication caught|out/vs/code/browser/workbench/workbench.js x2|Could not publish workspace resource roots
 0039 editor listener run proof|out/server-main.js|vscodroid-server-proof
 0040 wrapped terminal link row end|out/vs/code/browser/workbench/workbench.js|end.x : this._terminal.cols
 0041 narrow horizontal panel width|out/vs/code/browser/workbench/workbench.js|getMaximumEditorDimensions(this.layoutService.mainContainer).width

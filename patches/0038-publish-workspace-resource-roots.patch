@@ -50,11 +50,9 @@ diff --git a/src/vs/workbench/browser/safMirrorUsage.ts b/src/vs/workbench/brows
 diff --git a/src/vs/workbench/services/configuration/browser/configurationService.ts b/src/vs/workbench/services/configuration/browser/configurationService.ts
 --- a/src/vs/workbench/services/configuration/browser/configurationService.ts
 +++ b/src/vs/workbench/services/configuration/browser/configurationService.ts
-@@ -456,6 +456,7 @@
- 		const workspace = await this.createWorkspace(arg);
- 		await claimSafMirrorPaths([...workspace.folders.map(folder => folder.uri), ...(workspace.configuration ? [workspace.configuration] : [])]).catch(error => this.logService.warn(error));
+@@ -458,4 +458,5 @@
  		await this.updateWorkspaceAndInitializeConfiguration(workspace, trigger);
-+		await claimSafMirrorPaths([...this.workspace.folders.map(folder => folder.uri), ...(this.workspace.configuration ? [this.workspace.configuration] : [])], true).catch(error => this.logService.warn(error));
++		await claimSafMirrorPaths([...this.workspace.folders.map(folder => folder.uri), ...(this.workspace.configuration ? [this.workspace.configuration] : [])], true).catch(error => this.logService.warn('Could not publish workspace resource roots', error));
  		this.checkAndMarkWorkspaceComplete(false);
  		// Read for the workspace the page opened, so for no other.
  		this.initialWorkspaceSettings = undefined;
@@ -62,7 +60,7 @@ diff --git a/src/vs/workbench/services/configuration/browser/configurationServic
  		const changes = this.compareFolders(this.workspace.folders, workspaceFolders);
  		if (changes.added.length || changes.removed.length || changes.changed.length) {
  			this.workspace.folders = workspaceFolders;
-+			await claimSafMirrorPaths([...workspaceFolders.map(folder => folder.uri), ...(this.workspace.configuration ? [this.workspace.configuration] : [])], true).catch(error => this.logService.warn(error));
++			await claimSafMirrorPaths([...workspaceFolders.map(folder => folder.uri), ...(this.workspace.configuration ? [this.workspace.configuration] : [])], true).catch(error => this.logService.warn('Could not publish workspace resource roots', error));
  			const change = await this.onFoldersChanged();
  			await this.handleWillChangeWorkspaceFolders(changes, fromCache);
  			this.triggerConfigurationChange(change, previous, ConfigurationTarget.WORKSPACE_FOLDER);
