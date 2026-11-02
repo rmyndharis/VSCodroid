@@ -686,8 +686,8 @@ class SafSyncEngine(private val context: Context) {
                             HeldBackSave(doc.uri, SystemClock.elapsedRealtime() + wait, wait)
                         Logger.w(
                             tag,
-                            "Deferring ${doc.relativePath}: another folder grant is still " +
-                                "writing its device copy, so the mirror keeps its copy and " +
+                            "Deferring ${doc.relativePath}: its device copy was involved " +
+                                "in another write, so the mirror keeps its copy and " +
                                 "retries when that write finishes",
                         )
                         announceLost(localPath)
@@ -927,8 +927,8 @@ class SafSyncEngine(private val context: Context) {
                                 HeldBackSave(doc.uri, SystemClock.elapsedRealtime() + wait, wait)
                             Logger.w(
                                 tag,
-                                "Deferring ${doc.relativePath}: another folder grant " +
-                                    "is still writing its device copy, so the mirror keeps " +
+                                "Deferring ${doc.relativePath}: its device copy was " +
+                                    "involved in another write, so the mirror keeps " +
                                     "the edit and retries when that write finishes",
                             )
                             announceLost(localPath)
@@ -1027,7 +1027,7 @@ class SafSyncEngine(private val context: Context) {
                 }
                 localPath.parentFile?.mkdirs()
                 // One sync at a time per mirror file, and the loser walks away rather
-                // than waiting, which is the shape [documentWritesInFlight] already
+                // than waiting, which is the shape [documentAccess] already
                 // uses on the outbound side and for the same measured reason: a
                 // provider stream has no timeout, so waiting turns a race into a stall
                 // behind a dialog the user cannot cancel. Two syncs over one mirror is
@@ -1089,7 +1089,7 @@ class SafSyncEngine(private val context: Context) {
                 } finally {
                     mirrorCopiesInFlight.remove(localPath.absolutePath)
                 }
-                if (copied != null) {
+                if (copied is LandedCopy) {
                     // What the open fetched vouches for the device copy as a landed write's
                     // bytes do in [keepsDeviceEdit]. Without it a provider that settles its
                     // stamp after the open, a FAT card once the cached inode is evicted or
@@ -1730,13 +1730,8 @@ class SafSyncEngine(private val context: Context) {
         } finally {
             mirrorCopiesInFlight.remove(preserved.absolutePath)
         }
-        if (fetched == null) {
-            return if (anotherMirrorWritesDocument(doc.uri, mirrorRoot)) {
-                DeviceCopyOutcome.IN_FLIGHT
-            } else {
-                DeviceCopyOutcome.UNAVAILABLE
-            }
-        }
+        if (fetched == FailedCopy.IN_FLIGHT) return DeviceCopyOutcome.IN_FLIGHT
+        if (fetched !is LandedCopy) return DeviceCopyOutcome.UNAVAILABLE
         // A changed time is not a changed file. This app's own delivered
         // write-back moves the device time and the record never learns the new
         // one, and a provider with coarse stamps (FAT32 at two seconds, cloud
@@ -1809,8 +1804,7 @@ class SafSyncEngine(private val context: Context) {
         Logger.w(
             tag,
             if (kept == DeviceCopyOutcome.IN_FLIGHT) {
-                "Not writing ${localFile.name} back: another folder grant is still writing " +
-                    "its device document"
+                "Not writing ${localFile.name} back: its device copy was involved in another write"
             } else {
                 "Not writing ${localFile.name} back: its device copy changed since this app " +
                     "last read or wrote it and could not be set aside"
@@ -3281,15 +3275,16 @@ class SafSyncEngine(private val context: Context) {
     /**
      * Copies a single SAF document to a local file.
      *
-     * @return what [dest] now holds of this document, or null when no completed copy was
-     *   installed. The destination can still hold a local edit, or its preserved copy
-     *   can be beside it if installation failed after preservation. Null also when free space is below
-     *   [OPEN_SPACE_FLOOR_BYTES], decided before the device stream is read. Taken before the rename,
-     *   not from [dest] afterwards, which an editor can have written by then.
+     * @return the installed [LandedCopy], or why no copy was installed. A writer observed
+     *   during the read remains [FailedCopy.IN_FLIGHT] even if it finishes before the
+     *   caller handles the result. Other failures answer [FailedCopy.UNAVAILABLE]. The
+     *   destination can still hold a local edit, or its preserved copy can be beside it
+     *   if installation failed after preservation. The landed identity is taken before
+     *   the rename, not from [dest] afterwards, which an editor can have written by then.
      * @param digest updated with every byte fetched, so a caller learns what the copy
-     *   holds without reading it again. Meaningful only after an answer that is not null.
+     *   holds without reading it again. Meaningful only after a [LandedCopy] answer.
      * @param limit the most bytes the copy may hold. A document holding more is not
-     *   copied, after no more than that has been staged, and answers null.
+     *   copied, after no more than that has been staged, and answers [FailedCopy.UNAVAILABLE].
      * @param expectedSize a positive provider size the completed stream must reach.
      * @param onCopyFailed told whether the failed copy left the original destination
      *   unchanged, so old record metadata cannot vouch for an intervening edit.
@@ -3311,10 +3306,10 @@ class SafSyncEngine(private val context: Context) {
             if (changed) throw IOException("The preserved-copy destination changed during copy")
             false
         },
-    ): LandedCopy? {
+    ): DocumentCopyResult {
         // The only floor, and here because both fetches into filesDir pass through this
-        // function: phase 2's copy and [setAsideDeviceCopy]. Both already read null as a
-        // copy that did not happen and turn it into [unfetched] or UNAVAILABLE, so a
+        // function: phase 2's copy and [setAsideDeviceCopy]. Both turn an unavailable
+        // copy into [unfetched] or UNAVAILABLE, so a
         // document held back is guarded exactly like one that failed, unless phase 2 can
         // read that the mirror already holds it. Measured before every fetch rather than
         // latched, so copies resume if space comes back mid-open.
@@ -3339,44 +3334,38 @@ class SafSyncEngine(private val context: Context) {
             requireCurrentParent(target, dest, mirrorRoot)
             if (usableSpaceOf(dest.parentFile ?: dest) < OPEN_SPACE_FLOOR_BYTES) {
                 Logger.d(tag, "Not copying into ${dest.name}: free space is below the floor")
-                return null
+                return FailedCopy.UNAVAILABLE
             }
             if (anotherMirrorWritesDocument(docUri, mirrorRoot)) {
                 Logger.w(
                     tag,
                     "Not copying into ${dest.name}: another folder grant is still writing its device copy",
                 )
-                return null
+                return FailedCopy.IN_FLIGHT
             }
-            val source = context.contentResolver.openInputStream(docUri)
-            if (source == null) {
-                // By the mirror file's own name, never the document id: a provider
-                // composes that from the user's own path, and this level ships. See
-                // SafStorageManager.persistPermission for the whole of that reasoning.
-                Logger.w(tag, "No stream for ${dest.name}")
-                return null
-            }
-            val copied = (if (digest != null) DigestInputStream(source, digest) else source)
-                .use { input ->
+            val copied = withStableDocumentRead(docUri) {
+                val source = context.contentResolver.openInputStream(docUri)
+                if (source == null) {
+                    // By the mirror file's own name, never the document id: a provider
+                    // composes that from the user's own path, and this level ships. See
+                    // SafStorageManager.persistPermission for the whole of that reasoning.
+                    Logger.w(tag, "No stream for ${dest.name}")
+                    return@withStableDocumentRead null
+                }
+                (if (digest != null) DigestInputStream(source, digest) else source).use { input ->
                     // Workspace entries must never choose or redirect the scratch file.
                     val scratch = createInboundStage().also { partial = it }
                     scratch.output.use { output -> copyAtMost(input, output, limit) }
                 }
-            val fetched = partial ?: return null
-            if (anotherMirrorWritesDocument(docUri, mirrorRoot)) {
-                Logger.w(
-                    tag,
-                    "Discarding copy into ${dest.name}: another folder grant began writing its device copy during the read",
-                )
-                return null
             }
+            val fetched = partial ?: return FailedCopy.UNAVAILABLE
             if (copied == null) {
                 Logger.i(
                     tag,
                     "Not copying ${dest.name}: the document holds more than this app's own " +
                         "storage will hold a copy of",
                 )
-                return null
+                return FailedCopy.UNAVAILABLE
             }
             if (expectedSize > 0 && copied < expectedSize) {
                 throw IOException("The device stream ended before its reported size")
@@ -3420,7 +3409,13 @@ class SafSyncEngine(private val context: Context) {
                 installed = true
                 onCopied(target, staged)
                 landed
-            }
+            } ?: FailedCopy.UNAVAILABLE
+        } catch (_: DocumentWriteDuringReadException) {
+            Logger.w(
+                tag,
+                "Discarding copy into ${dest.name}: a write overlapped its device read",
+            )
+            return FailedCopy.IN_FLIGHT
         } catch (e: Exception) {
             // The class rather than the message, and it takes both halves to be
             // redaction at all: the document id names the user's directory, and a
@@ -3428,7 +3423,7 @@ class SafSyncEngine(private val context: Context) {
             // dropping the interpolation alone would put the same string in logcat by
             // the other route.
             Logger.w(tag, "Failed to copy into ${dest.name}: ${e.javaClass.simpleName}")
-            return null
+            return FailedCopy.UNAVAILABLE
         } finally {
             if (!installed) {
                 val unchanged = try {
@@ -3502,27 +3497,29 @@ class SafSyncEngine(private val context: Context) {
     private fun deviceIsTruncatedMirror(safDocUri: Uri, localFile: File, mirrorRoot: File): Boolean {
         return try {
             openOutboundSource(localFile, mirrorRoot).use { selected ->
-                val matched = context.contentResolver.openInputStream(safDocUri)?.use { device ->
-                    selected.input.use { mirror ->
-                        val a = ByteArray(COPY_BUFFER_SIZE)
-                        val b = ByteArray(COPY_BUFFER_SIZE)
-                        while (true) {
-                            val read = readFully(device, a, a.size)
-                            // The document ended while the two still agreed, so it is
-                            // a prefix. Strict needs one more byte in the mirror, and
-                            // it is asked of the stream rather than of
-                            // `localFile.length()`: the mirror is a file an editor may
-                            // be writing while this runs, and a second measurement of
-                            // it can disagree with the bytes just read.
-                            if (read == 0) return@use mirror.read() != -1
-                            // The mirror ran out first, so the document holds more
-                            // than any prefix of it: something else put it there.
-                            if (readFully(mirror, b, read) != read) return@use false
-                            if (!java.util.Arrays.equals(a, 0, read, b, 0, read)) return@use false
+                val matched = withStableDocumentRead(safDocUri) {
+                    context.contentResolver.openInputStream(safDocUri)?.use { device ->
+                        selected.input.use { mirror ->
+                            val a = ByteArray(COPY_BUFFER_SIZE)
+                            val b = ByteArray(COPY_BUFFER_SIZE)
+                            while (true) {
+                                val read = readFully(device, a, a.size)
+                                // The document ended while the two still agreed, so it is
+                                // a prefix. Strict needs one more byte in the mirror, and
+                                // it is asked of the stream rather than of
+                                // `localFile.length()`: the mirror is a file an editor may
+                                // be writing while this runs, and a second measurement of
+                                // it can disagree with the bytes just read.
+                                if (read == 0) return@use mirror.read() != -1
+                                // The mirror ran out first, so the document holds more
+                                // than any prefix of it: something else put it there.
+                                if (readFully(mirror, b, read) != read) return@use false
+                                if (!java.util.Arrays.equals(a, 0, read, b, 0, read)) return@use false
+                            }
+                            @Suppress("UNREACHABLE_CODE") false
                         }
-                        @Suppress("UNREACHABLE_CODE") false
-                    }
-                } ?: false
+                    } ?: false
+                }
                 matched && sameInboundAttributes(selected.attributes, selected.path.attributes()) &&
                     parentIsCurrent(selected.path, localFile, mirrorRoot)
             }
@@ -3571,22 +3568,24 @@ class SafSyncEngine(private val context: Context) {
     private fun deviceMatchesMirror(safDocUri: Uri, localFile: File, deviceSize: Long, selected: OutboundSource): Boolean {
         if (deviceSize != 0L && deviceSize != selected.attributes.size()) return false
         return try {
-            context.contentResolver.openInputStream(safDocUri)?.use { device ->
-                selected.input.use { mirror ->
-                    val a = ByteArray(COPY_BUFFER_SIZE)
-                    val b = ByteArray(COPY_BUFFER_SIZE)
-                    while (true) {
-                        val read = readFully(device, a, a.size)
-                        val same = readFully(mirror, b, b.size)
-                        if (read != same) return@use false
-                        if (read == 0) return@use true
-                        // Only the bytes this chunk filled. Comparing the whole buffer
-                        // would drag in the previous, longer chunk's tail.
-                        if (!java.util.Arrays.equals(a, 0, read, b, 0, read)) return@use false
+            withStableDocumentRead(safDocUri) {
+                context.contentResolver.openInputStream(safDocUri)?.use { device ->
+                    selected.input.use { mirror ->
+                        val a = ByteArray(COPY_BUFFER_SIZE)
+                        val b = ByteArray(COPY_BUFFER_SIZE)
+                        while (true) {
+                            val read = readFully(device, a, a.size)
+                            val same = readFully(mirror, b, b.size)
+                            if (read != same) return@use false
+                            if (read == 0) return@use true
+                            // Only the bytes this chunk filled. Comparing the whole buffer
+                            // would drag in the previous, longer chunk's tail.
+                            if (!java.util.Arrays.equals(a, 0, read, b, 0, read)) return@use false
+                        }
+                        @Suppress("UNREACHABLE_CODE") false
                     }
-                    @Suppress("UNREACHABLE_CODE") false
-                }
-            } ?: false
+                } ?: false
+            }
         } catch (e: Exception) {
             Logger.w(
                 tag,
@@ -3646,7 +3645,7 @@ class SafSyncEngine(private val context: Context) {
      * Writes a local file's contents back to its corresponding SAF document.
      *
      * Declines outright when another write already holds the document, so two streams
-     * never interleave into one file: see [documentWritesInFlight]. Declines a symbolic
+     * never interleave into one file: see [documentAccess]. Declines a symbolic
      * link outright too, for the reason spelled out at that test.
      *
      * The copy itself runs in [writeLocalToSafHoldingDocument], bracketed by the
@@ -3691,7 +3690,15 @@ class SafSyncEngine(private val context: Context) {
         }
         val settledWait = settledHeldWait.remove(localFile.absolutePath)
         val document = documentWriteKey(safDocUri)
-        if (documentWritesInFlight.putIfAbsent(document, mirrorRoot.absolutePath) != null) {
+        val claimed = synchronized(documentAccess) {
+            val state = documentAccess.getOrPut(document) { DocumentAccess() }
+            if (state.writer != null) false else {
+                state.writer = mirrorRoot.absolutePath
+                state.generation++
+                true
+            }
+        }
+        if (!claimed) {
             // Someone is streaming into this document now. Declining is what keeps the
             // two from interleaving, and holding the save lets the write-back loop try
             // again once that stream finishes.
@@ -3711,7 +3718,11 @@ class SafSyncEngine(private val context: Context) {
         try {
             return writeLocalToSafHoldingDocument(localFile, safDocUri, mirrorRoot)
         } finally {
-            documentWritesInFlight.remove(document, mirrorRoot.absolutePath)
+            synchronized(documentAccess) {
+                val state = documentAccess.getValue(document)
+                state.writer = null
+                if (state.readers == 0) documentAccess.remove(document)
+            }
         }
     }
 
@@ -4822,7 +4833,9 @@ class SafSyncEngine(private val context: Context) {
      * read stops: more bytes than a digest covers cannot hash to it.
      */
     private fun deviceSha256(docUri: Uri, limit: Long): ByteArray? = try {
-        context.contentResolver.openInputStream(docUri)?.use { sha256(it, limit)?.first }
+        withStableDocumentRead(docUri) {
+            context.contentResolver.openInputStream(docUri)?.use { sha256(it, limit)?.first }
+        }
     } catch (e: Exception) {
         null
     }
@@ -5078,6 +5091,9 @@ class SafSyncEngine(private val context: Context) {
                         settledHeldWait.remove(job.localPath)
                         refuseUnreadDocument(localFile, localFile.name)
                     } else if (mirrorRoot == null) {
+                        announceLost(localFile)
+                    } else if (withCurrent(access) { true } == null) {
+                        // Wait for a previous mutation without holding admission over provider reads.
                         announceLost(localFile)
                     } else if (!keepsDeviceEdit(localFile, job.safDocUri, mirrorRoot, access, preserveUnknown = true)) {
                         if (withCurrent(access) { writeLocalToSaf(localFile, job.safDocUri, mirrorRoot) } == null) {
@@ -6119,13 +6135,14 @@ class SafSyncEngine(private val context: Context) {
         private val uploadClaims = mutableListOf<UploadClaim>()
 
         /**
-         * Provider documents with a truncating stream open, shared across engine instances
-         * and mapped to the absolute path of the mirror root holding the stream. Tree grants
-         * can spell one document differently, so identity is authority plus document ID. A
-         * contending writer of another mirror defers its set-aside and holds the save for
-         * [retryHeldBack] rather than reading an in-flight stream or waiting indefinitely.
+         * Active document reads and truncating writers, shared across engine instances.
+         * Tree grants can spell one document differently, so identity is authority plus
+         * document ID. A reader retains the write generation until its stream closes,
+         * rejecting bytes touched by a write even when that write has already finished.
+         * Entries disappear once no read or write uses them. A contending writer holds
+         * its save for [retryHeldBack] without waiting indefinitely.
          */
-        private val documentWritesInFlight = ConcurrentHashMap<Pair<String?, String>, String>()
+        private val documentAccess = mutableMapOf<Pair<String?, String>, DocumentAccess>()
 
         private fun documentWriteKey(safDocUri: Uri): Pair<String?, String> {
             val authority = safDocUri.authority?.takeIf { it.isNotEmpty() }
@@ -6142,14 +6159,51 @@ class SafSyncEngine(private val context: Context) {
         }
 
         private fun anotherMirrorWritesDocument(safDocUri: Uri, mirrorRoot: File): Boolean =
-            documentWritesInFlight[documentWriteKey(safDocUri)]
-                ?.let { it != mirrorRoot.absolutePath } == true
+            synchronized(documentAccess) {
+                documentAccess[documentWriteKey(safDocUri)]?.writer
+                    ?.let { it != mirrorRoot.absolutePath } == true
+            }
+
+        /** Reads outside a writer claim, retaining its version until the stream closes. */
+        private fun <T> withStableDocumentRead(docUri: Uri, read: () -> T): T {
+            val document = documentWriteKey(docUri)
+            val (state, generation) = synchronized(documentAccess) {
+                val current = documentAccess.getOrPut(document) { DocumentAccess() }
+                if (current.writer != null) {
+                    throw DocumentWriteDuringReadException()
+                }
+                current.readers++
+                current to current.generation
+            }
+            try {
+                val result = try {
+                    read()
+                } catch (failure: Exception) {
+                    synchronized(documentAccess) {
+                        if (state.generation != generation) {
+                            throw DocumentWriteDuringReadException().apply { addSuppressed(failure) }
+                        }
+                    }
+                    throw failure
+                }
+                synchronized(documentAccess) {
+                    // A writer may finish entirely during the read, leaving no active stream.
+                    if (state.generation != generation) throw DocumentWriteDuringReadException()
+                }
+                return result
+            } finally {
+                synchronized(documentAccess) {
+                    state.readers--
+                    if (state.readers == 0 && state.writer == null) documentAccess.remove(document)
+                }
+            }
+        }
 
         /**
          * Mirror files a sync is streaming a device document into right now, keyed by
          * absolute mirror path.
          *
-         * The inbound twin of [documentWritesInFlight], in this object for the reason
+         * The inbound twin of [documentAccess], in this object for the reason
          * that one is: two syncs over one mirror are routinely in two different engines.
          * A mirror is named by a hash of the tree URI rather than by the session, and
          * [initialSync]'s phase-2 loop contains no suspension point, so cancelling the
@@ -6166,7 +6220,7 @@ class SafSyncEngine(private val context: Context) {
          * [reconcileDeletions] and [holdsOnlyVouchedCopies] later act on, so a corrupted
          * file was also a deletable one.
          *
-         * The loser declines rather than waits, exactly as [documentWritesInFlight]'s
+         * The loser declines rather than waits, exactly as [documentAccess]'s
          * loser does and for the same measured reason: a `ContentResolver` stream to a
          * network or MTP provider has no timeout, so waiting would trade a race for an
          * unbounded stall of a folder open behind a dialog with `setCancelable(false)`.
@@ -7041,9 +7095,9 @@ internal enum class DeviceCopyOutcome {
     IDENTICAL,
 
     /**
-     * Another mirror is streaming into this device document now, so reading or
-     * setting it aside would copy a half-written prefix. Callers defer the write
-     * without marking the document unread.
+     * A writer is streaming into this device document, or began writing during
+     * the read, so the copy cannot establish stable bytes. Callers defer the write
+     * without marking the document unread, even if the other writer has finished.
      */
     IN_FLIGHT,
 
@@ -7084,11 +7138,20 @@ private class DeviceState(
  */
 private class HeldBackSave(val docUri: Uri, val dueAt: Long, val wait: Long)
 
-/**
- * What [SafSyncEngine] fetched into the mirror: the copy's modification time as the
- * filesystem kept it, and how many bytes the fetch streamed.
- */
-private class LandedCopy(val lastModified: Long, val length: Long)
+private sealed interface DocumentCopyResult
+
+/** The installed copy's filesystem time and the number of bytes fetched. */
+private class LandedCopy(val lastModified: Long, val length: Long) : DocumentCopyResult
+
+private enum class FailedCopy : DocumentCopyResult { IN_FLIGHT, UNAVAILABLE }
+
+private class DocumentAccess {
+    var writer: String? = null
+    var generation = 0L
+    var readers = 0
+}
+
+private class DocumentWriteDuringReadException : IOException()
 
 /**
  * What [SafSyncEngine.uploadPlan] found under a directory, and whether the cap stopped

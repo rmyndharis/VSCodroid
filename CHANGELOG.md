@@ -9,6 +9,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Reject device-folder reads that overlap saves and retry deferred saves without blocking later edits.
 - Retry pending settings migrations after interrupted setup without removing later user preferences.
 - Validate the opened file before serving workspace resources, preserving regular-file symlinks and cache behavior.
 - Prevent a recomposing keyboard from cutting or duplicating editor text after screen rotation.
