@@ -1,200 +1,192 @@
 package com.vscodroid
 
+import android.content.Context
+import android.os.SystemClock
+import android.webkit.WebView
+import android.widget.Toast
+import com.vscodroid.bridge.AuthTabWindow
+import com.vscodroid.service.NodeService
+import com.vscodroid.service.StartupNotice
+import com.vscodroid.util.Logger
+import com.vscodroid.webview.VSCodroidWebChromeClient
+import io.mockk.Runs
+import io.mockk.every
+import io.mockk.just
+import io.mockk.mockk
+import io.mockk.mockkObject
+import io.mockk.mockkStatic
+import io.mockk.unmockkAll
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
-import java.io.File
 
-/**
- * Which question `MainActivity` asks before it navigates the WebView.
- *
- * `isServerRunning()` is `Process.isAlive`: true from the instant the process is
- * spawned, and true for the whole of a restart after a crash, neither of which
- * means anything is listening on the port. Navigating on it produces a
- * connection-refused page, and `onReceivedError` only logs, so nothing takes it
- * away again. `isServerReady()` reports what the health probe found.
- *
- * This reads the source, which is a weaker kind of test than the rest of this
- * suite. It is one of two layers, and it is worth being exact about which half
- * each covers:
- *
- *  - [ServerReadinessDecisionTest] covers the pure decision functions
- *    (`bindDecision` and `shouldActOnResume`) as values.
- *  - This file covers the call sites in `MainActivity`: that the right readiness
- *    question (`isServerReady()`) is handed to both decisions, that `onStop` and
- *    `onStart` wire the resume check, that `handleResumeFromBackground` returns
- *    when `shouldActOnResume` answers false, and that the `BindDecision.Load` arm
- *    records `serverPort` and calls `loadVSCode`.
- *
- * What neither catches: a third call site added later that asks the wrong
- * question through some other spelling, or the same mistake made in another file.
- */
 class ServerReadinessCallSiteTest {
+    private lateinit var activity: MainActivity
+    private lateinit var service: NodeService
+    private lateinit var webView: WebView
+    private val events = mutableListOf<String>()
+    private var now = 400_000L
 
-    private val mainActivity = File("src/main/kotlin/com/vscodroid/MainActivity.kt")
+    private fun field(name: String) =
+        MainActivity::class.java.getDeclaredField(name).apply { isAccessible = true }
 
-    private val source = SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt")
+    private fun setField(name: String, value: Any?) = field(name).set(activity, value)
+    private fun port() = field("serverPort").getInt(activity)
+    private fun backgroundedAt() = field("backgroundedAt").getLong(activity)
 
-    /** Source lines with comments dropped, since both methods are named in prose. */
-    private fun codeLines(): List<IndexedValue<String>> =
-        mainActivity.readLines().withIndex().filterNot { (_, line) ->
-            val t = line.trimStart()
-            t.startsWith("//") || t.startsWith("*") || t.startsWith("/*")
-        }
-
-    @Test
-    fun `the activity asks whether the server is serving, not whether a process exists`() {
-        check(mainActivity.isFile) {
-            "MainActivity.kt not found at ${mainActivity.absolutePath}: this test " +
-                "would otherwise pass by looking at nothing"
-        }
-
-        val offenders = codeLines()
-            .filter { (_, line) -> line.contains("isServerRunning") }
-            .map { (i, line) -> "MainActivity.kt:${i + 1}: ${line.trim()}" }
-
-        assertEquals(
-            emptyList<String>(), offenders,
-            "isServerRunning() is Process.isAlive and is true long before the server " +
-                "answers. Navigating on it gives the user a connection-refused page. " +
-                "Use isServerReady(), which reports the health probe's own result.",
-        )
+    private fun runReal(name: String) {
+        every { activity[name]() } answers { callOriginal() }
+        MainActivity::class.java.getDeclaredMethod(name).apply { isAccessible = true }.invoke(activity)
     }
 
-    // The two cases below replaced a single count with a floor of two. The floor
-    // was the control for the case above, and it stopped discriminating once a
-    // third `isServerReady()` reached this file: deleting either decision, or
-    // reverting one to the port-only check, still left two tokens for it to
-    // count, so it passed. A count cannot say WHICH decision it counted, and
-    // that is the whole question here. Each decision is now pinned where it
-    // lives, so absence fails by name rather than by arithmetic.
-    //
-    // `SourceScan.body` throws with a sentence when the declaration is gone,
-    // which is the self-blindness this class of test otherwise has: "found
-    // nothing" and "found what I wanted" look identical from the same distance.
+    @BeforeEach
+    fun setUp() {
+        events.clear()
+        now = 400_000L
+        AuthTabWindow.beginPage()
+        mockkObject(Logger)
+        every { Logger.i(any(), any()) } just Runs
+        every { Logger.w(any(), any()) } just Runs
+        mockkStatic(SystemClock::class)
+        every { SystemClock.elapsedRealtime() } answers { now }
+        mockkStatic(Toast::class)
+        val toast = mockk<Toast>(relaxed = true)
+        every { Toast.makeText(any<Context>(), any<CharSequence>(), any()) } answers {
+            events += "toast:${secondArg<CharSequence>()}"
+            toast
+        }
+        every { toast.show() } answers { events += "show" }
+        activity = mockk(relaxed = true)
+        setField("tag", "MainActivity")
+        service = mockk(relaxed = true)
+        webView = mockk(relaxed = true)
+        setField("nodeService", service)
+        setField("webView", webView)
+        every { service.getPort() } returns 13337
+        every { service.isServerReady() } returns true
+        every { service.lastStartupNotice() } returns null
+        every { activity["loadVSCode"](any<Int>(), isNull<String>(), isNull<String>()) } answers {
+            events += "load:${firstArg<Int>()}:port=${port()}"
+        }
+        every { activity["showServerGaveUpWithLog"]() } answers { events += "gave-up" }
+        every { activity["checkConnectionHealth"](any<Long>()) } answers { events += "probe" }
+        every { webView.reload() } answers { events += "reload" }
+        every { activity["signInIsPending"]() } answers { callOriginal() }
+        every { activity["fileChooserIsPending"]() } answers { callOriginal() }
+        every { activity["savePickerIsPending"]() } answers { callOriginal() }
+    }
 
-    @Test
-    fun `onStop records the background timestamp and onStart runs the resume handler`() {
-        val onStop = SourceScan.withoutComments(
-            SourceScan.body(source, "override fun onStop()"),
-        )
-        assertTrue(
-            Regex("""backgroundedAt\s*=\s*SystemClock\.elapsedRealtime\(\)""").containsMatchIn(onStop),
-            "onStop no longer records backgroundedAt, so handleResumeFromBackground always " +
-                "sees 0 and returns at its first line",
-        )
-
-        val onStart = SourceScan.withoutComments(
-            SourceScan.body(source, "override fun onStart()"),
-        )
-        assertTrue(
-            Regex("""\bhandleResumeFromBackground\s*\(\s*\)""").containsMatchIn(onStart),
-            "onStart no longer calls handleResumeFromBackground(); moving or dropping the " +
-                "call skips background recovery or runs it after an activity result has " +
-                "already cleared the pending picker flag",
-        )
+    @AfterEach
+    fun tearDown() {
+        AuthTabWindow.beginPage()
+        unmockkAll()
     }
 
     @Test
-    fun `the resume guard asks the readiness question and obeys it`() {
-        val body = SourceScan.withoutComments(
-            SourceScan.body(source, "private fun handleResumeFromBackground()"),
-        )
-
-        val decisions = Regex("""shouldActOnResume\(""").findAll(body).count()
-        assertEquals(
-            1, decisions,
-            "expected exactly one resume decision inside handleResumeFromBackground(), " +
-                "found $decisions. Two of them split the verdict this case pins, and " +
-                "zero means the guard is gone.",
-        )
-
-        val decidedAt = body.indexOf("shouldActOnResume(")
-        val actedAt = body.indexOf("resumeAction(")
-        assertTrue(
-            actedAt > decidedAt,
-            "resumeAction( no longer follows the resume decision in this body, so the " +
-                "span this case reads for the verdict is not the one that guards it",
-        )
-
-        val readyAt = body.indexOf("nodeService?.isServerReady()")
-        val decideCallEnd = body.indexOf(")", decidedAt)
-        val feedsDecision = when {
-            readyAt < 0 -> false
-            decideCallEnd > decidedAt && readyAt in decidedAt until decideCallEnd -> true
-            else -> {
-                val localMatch = Regex("""val\s+(\w+)\s*=\s*nodeService\?\.isServerReady\(\)""")
-                    .find(body.substring(0, decidedAt))
-                val localName = localMatch?.groupValues?.get(1)
-                localName != null &&
-                    Regex("""shouldActOnResume\(\s*$localName\b""")
-                        .containsMatchIn(body.substring(decidedAt, actedAt))
-            }
-        }
-        assertTrue(
-            feedsDecision,
-            "the resume decision must be handed the readiness answer. A port that is " +
-                "merely allocated, or a process that is merely alive, reloads the page " +
-                "into a socket nothing is listening on yet.",
-        )
-
-        val guardStart = body.lastIndexOf("if", decidedAt).coerceAtLeast(0)
-        val guardSpan = body.substring(guardStart, actedAt)
-        assertTrue(
-            guardSpan.contains("return"),
-            "the resume decision's verdict must be obeyed before resumeAction( is " +
-                "reached; nothing returns between them, so the guard is computed and " +
-                "discarded",
-        )
-        val negatedGuard = Regex("""!\s*shouldActOnResume\(""").containsMatchIn(guardSpan) ||
-            Regex("""shouldActOnResume\([\s\S]*?\)\s*==\s*false""").containsMatchIn(guardSpan)
-        assertTrue(
-            negatedGuard,
-            "handleResumeFromBackground must return when shouldActOnResume answers false, " +
-                "not when it answers true: $guardSpan",
-        )
+    fun `binding shows a nonterminal notice without loading`() {
+        every { service.lastStartupNotice() } returns StartupNotice("Starting slowly", terminal = false)
+        runReal("setupServiceCallbacks")
+        assertEquals(listOf("toast:Starting slowly", "show"), events)
     }
 
     @Test
-    fun `the binding decision is handed the readiness answer and its Load arm loads the port`() {
-        val body = SourceScan.withoutComments(
-            SourceScan.body(source, "private fun setupServiceCallbacks()"),
-        )
+    fun `binding shows the terminal notice and the gave up page`() {
+        every { service.lastStartupNotice() } returns StartupNotice("Server stopped", terminal = true)
+        runReal("setupServiceCallbacks")
+        assertEquals(listOf("toast:Server stopped", "show", "gave-up"), events)
+    }
 
-        val decisions = Regex("""bindDecision\(""").findAll(body).count()
-        assertEquals(
-            1, decisions,
-            "expected exactly one binding decision inside setupServiceCallbacks(), " +
-                "found $decisions",
-        )
-        assertTrue(
-            body.contains("ready = service.isServerReady()") ||
-                Regex("""bindDecision\([\s\S]*?service\.isServerReady\(\)""").containsMatchIn(body),
-            "the binding decision must be told what the health probe found. Handed " +
-                "`getPort() > 0` instead it navigates the WebView at a port that is " +
-                "allocated but not yet bound, and onReceivedError only logs, so the " +
-                "connection-refused page stays.",
-        )
+    @Test
+    fun `binding a ready server records its port before loading`() {
+        runReal("setupServiceCallbacks")
+        assertEquals(listOf("load:13337:port=13337"), events)
+        assertEquals(13337, port())
+    }
 
-        val loadArmStart = body.indexOf("is BindDecision.Load ->")
-        val waitArmStart = body.indexOf("BindDecision.Wait ->", loadArmStart.coerceAtLeast(0))
-        assertTrue(
-            loadArmStart >= 0 && waitArmStart > loadArmStart,
-            "expected an `is BindDecision.Load ->` arm before `BindDecision.Wait ->` inside " +
-                "setupServiceCallbacks()",
-        )
-        val loadArm = body.substring(loadArmStart, waitArmStart)
-        val portRecordedAt = loadArm.indexOf("serverPort = decision.port")
-        val loadedAt = loadArm.indexOf("loadVSCode(decision.port)")
-        assertTrue(
-            portRecordedAt >= 0,
-            "the BindDecision.Load arm no longer records `serverPort = decision.port`, so a " +
-                "late-bound activity leaves serverPort at 0",
-        )
-        assertTrue(
-            loadedAt > portRecordedAt,
-            "the BindDecision.Load arm no longer calls `loadVSCode(decision.port)` after " +
-                "recording serverPort",
-        )
+    @Test
+    fun `binding an unready server waits despite its allocated port`() {
+        every { service.isServerReady() } returns false
+        runReal("setupServiceCallbacks")
+        assertEquals(emptyList<String>(), events)
+        assertEquals(0, port())
+    }
+
+    private fun resume(timestamp: Long = 1_000L, serverPort: Int = 13337) {
+        setField("backgroundedAt", timestamp)
+        setField("serverPort", serverPort)
+        runReal("handleResumeFromBackground")
+    }
+
+    @Test
+    fun `a long background with a ready server reloads`() {
+        resume()
+        assertEquals(listOf("reload"), events)
+        assertEquals(0L, backgroundedAt())
+    }
+
+    @Test
+    fun `an unready or unbound service consumes the timestamp without acting`() {
+        every { service.isServerReady() } returns false
+        resume()
+        assertEquals(emptyList<String>(), events)
+        assertEquals(0L, backgroundedAt())
+        setField("nodeService", null)
+        resume()
+        assertEquals(emptyList<String>(), events)
+        assertEquals(0L, backgroundedAt())
+    }
+
+    @Test
+    fun `no background timestamp or no port leaves the page alone`() {
+        resume(timestamp = 0L)
+        assertEquals(emptyList<String>(), events)
+        resume(serverPort = 0)
+        assertEquals(emptyList<String>(), events)
+        assertEquals(1_000L, backgroundedAt())
+    }
+
+    @Test
+    fun `a medium background probes and a short background does nothing`() {
+        resume(timestamp = 300_000L)
+        assertEquals(listOf("probe"), events)
+        events.clear()
+        resume(timestamp = 390_000L)
+        assertEquals(emptyList<String>(), events)
+    }
+
+    @Test
+    fun `pending sign in changes a long background reload to a probe`() {
+        val nonce = "a".repeat(32)
+        assertTrue(AuthTabWindow.register("1", nonce, "b".repeat(32), AuthTabWindow.pageGeneration()))
+        AuthTabWindow.launched(AuthTabWindow.arm(listOf("1"), nonce, now - 1_000L))
+        resume()
+        assertEquals(listOf("probe"), events)
+    }
+
+    @Test
+    fun `pending file chooser prevents recovery`() {
+        val chrome = mockk<VSCodroidWebChromeClient>()
+        every { chrome.hasPendingFileChooser } returns true
+        every { webView.webChromeClient } returns chrome
+        resume()
+        assertEquals(emptyList<String>(), events)
+    }
+
+    @Test
+    fun `pending save picker prevents recovery`() {
+        setField("pickerRequestId", "request")
+        resume()
+        assertEquals(emptyList<String>(), events)
+    }
+
+    @Test
+    fun `lifecycle records the background time and invokes recovery on start`() {
+        val source = SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt")
+        val stop = SourceScan.withoutComments(SourceScan.body(source, "override fun onStop()"))
+        val start = SourceScan.withoutComments(SourceScan.body(source, "override fun onStart()"))
+        assertTrue(Regex("""backgroundedAt\s*=\s*SystemClock\.elapsedRealtime\(\)""").containsMatchIn(stop))
+        assertTrue(Regex("""\bhandleResumeFromBackground\s*\(\s*\)""").containsMatchIn(start))
     }
 }

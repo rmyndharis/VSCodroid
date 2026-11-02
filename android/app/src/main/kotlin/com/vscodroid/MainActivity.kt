@@ -7384,9 +7384,8 @@ internal fun callbackUriJson(data: String?): String? {
  *
  * Extracted so the decision is a value rather than a shape in the source.
  * `ServerReadinessDecisionTest` checks the pure decision logic, while
- * `ServerReadinessCallSiteTest` reads `MainActivity.kt` to verify that
- * `isServerReady()` is passed in and that the `Load` arm records `serverPort`
- * and calls `loadVSCode`.
+ * `ServerReadinessCallSiteTest` invokes the activity methods to verify their
+ * loading, notice, port-recording, and resume effects.
  */
 internal sealed interface BindDecision {
     /** The server said something about its start that predates this binding. */
