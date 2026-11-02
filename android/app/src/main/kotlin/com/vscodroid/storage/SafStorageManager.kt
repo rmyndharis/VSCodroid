@@ -1,5 +1,6 @@
 package com.vscodroid.storage
 
+import android.annotation.SuppressLint
 import android.content.Context
 import android.content.Intent
 import android.net.Uri
@@ -1340,6 +1341,8 @@ class SafStorageManager(context: Context) {
          * Distinct device-folder copy directory names (`<hash>`) referenced by [paths],
          * resolving both direct mirror paths and `by-name/<hash>/<name>` spellings.
          */
+        // Both Android private data paths must identify missing mirrors as well as existing ones.
+        @SuppressLint("SdCardPath")
         internal fun mirrorNamesForPaths(paths: List<String>, mirrorsRoot: String): Set<String> {
             val normalizedRoot = File(mirrorsRoot).toPath().normalize().toString()
             val canonicalRoot = runCatching { File(mirrorsRoot).canonicalPath }.getOrNull()
