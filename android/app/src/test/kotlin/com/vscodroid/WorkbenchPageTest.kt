@@ -34,8 +34,9 @@ class WorkbenchPageTest {
     }
 
     @Test
-    fun `localhost by name counts too`() {
-        assertTrue(isWorkbenchUrl("http://localhost:41234/", port))
+    fun `another loopback address is not the reserved IPv4 origin`() {
+        assertFalse(isWorkbenchUrl("http://localhost:41234/", port))
+        assertFalse(isWorkbenchUrl("http://[::1]:41234/", port))
     }
 
     @Test

@@ -434,6 +434,16 @@ class ExternalUrlHandoffTest {
         verify(exactly = 0) { context.startActivity(any()) }
     }
 
+    @Test
+    fun `a loopback hostname opens externally without editor authority`() {
+        val handled = client.shouldOverrideUrlLoading(
+            view, request("http", "localhost", ALLOWED_PORT, "http://localhost:$ALLOWED_PORT/"),
+        )
+
+        assertTrue(handled)
+        verify(exactly = 1) { context.startActivity(any()) }
+    }
+
     /**
      * A plain-http LAN address.
      *
@@ -711,6 +721,7 @@ class ExternalUrlHandoffTest {
     fun `only a trusted owned root document can complete auth bootstrap`() {
         val previous = AuthTabWindow.pageGeneration()
         for (address in listOf("about:blank", "data:text/html,error", "https://example.com/",
+            "http://localhost:$ALLOWED_PORT/", "http://[::1]:$ALLOWED_PORT/",
             "https://127.0.0.1:$ALLOWED_PORT/", "http://127.0.0.1:$ALLOWED_PORT/vscode-remote-resource/file")) {
             every { view.url } returns address
             client.onPageStarted(view, address, null)

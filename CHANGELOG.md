@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Keep the editor origin reserved across backend stops and restarts, using an app-private socket for each editor run.
+- Restrict editor credentials and workspace resource access to the reserved IPv4 origin.
 - Cancel stale server starts and clean up bootstrap processes when launch preparation fails.
 - End a verified surviving editor before moving away from an occupied public port.
 - Serialize device-folder mutations across overlapping grants and report files that did not reach the device.

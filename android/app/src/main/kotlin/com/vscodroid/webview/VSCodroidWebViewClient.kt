@@ -1505,7 +1505,7 @@ class VSCodroidWebViewClient(
 
     private fun isLocalhost(uri: Uri): Boolean {
         val host = uri.host ?: return false
-        return (host == "127.0.0.1" || host == "localhost") && uri.port == allowedPort
+        return host == "127.0.0.1" && uri.port == allowedPort
     }
 
     private fun isCdnRedirect(uri: Uri): Boolean {
@@ -2340,7 +2340,7 @@ class VSCodroidWebViewClient(
          * merely renders.
          */
         internal fun isWorkbenchOrigin(origin: String, port: Int): Boolean =
-            origin == "http://127.0.0.1:$port" || origin == "http://localhost:$port"
+            origin == "http://127.0.0.1:$port"
 
         /**
          * Whether [origin] is the workbench itself or one of its webview documents.

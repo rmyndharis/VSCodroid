@@ -22,9 +22,10 @@ class WebviewOriginTrustTest {
     private val port = 41234
 
     @Test
-    fun `the workbench's own two spellings are ours`() {
+    fun `only the reserved IPv4 workbench origin is ours`() {
         assertTrue(VSCodroidWebViewClient.isWorkbenchOrigin("http://127.0.0.1:$port", port))
-        assertTrue(VSCodroidWebViewClient.isWorkbenchOrigin("http://localhost:$port", port))
+        assertFalse(VSCodroidWebViewClient.isWorkbenchOrigin("http://localhost:$port", port))
+        assertFalse(VSCodroidWebViewClient.isWorkbenchOrigin("http://[::1]:$port", port))
     }
 
     /**

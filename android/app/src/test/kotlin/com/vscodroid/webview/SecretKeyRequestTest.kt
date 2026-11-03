@@ -46,8 +46,12 @@ class SecretKeyRequestTest {
     fun `the workbench's key request is answered`() {
         assertEquals(SecretKeyRequest.ANSWER, secretKeyRequest(SECRET_KEY_PATH, "POST", null, null, port))
         assertEquals(SecretKeyRequest.ANSWER, secretKeyRequest(SECRET_KEY_PATH, "POST", ours, "same-origin", port))
+    }
+
+    @Test
+    fun `a loopback hostname is not the reserved key origin`() {
         assertEquals(
-            SecretKeyRequest.ANSWER,
+            SecretKeyRequest.REFUSE,
             secretKeyRequest(SECRET_KEY_PATH, "POST", "http://localhost:$port", null, port),
         )
     }
@@ -206,9 +210,10 @@ class SecretKeyInterceptorResponseTest {
         method: String,
         headers: Map<String, String> = emptyMap(),
         uriPort: Int = port,
+        uriHost: String = "127.0.0.1",
     ): WebResourceRequest {
         val uri = mockk<Uri>(relaxed = true)
-        every { uri.host } returns "127.0.0.1"
+        every { uri.host } returns uriHost
         every { uri.port } returns uriPort
         every { uri.path } returns path
         every { uri.pathSegments } returns path.split('/').filter { it.isNotEmpty() }
@@ -259,6 +264,18 @@ class SecretKeyInterceptorResponseTest {
         assertNotNull(r)
         assertEquals(1, keyReads)
         assertEquals("KEY", r!!.reasonPhrase)
+    }
+
+    @Test
+    fun `a hostname request cannot read the native key`() {
+        identifyResponses()
+
+        val r = client().shouldInterceptRequest(
+            mockk(relaxed = true), request(SECRET_KEY_PATH, "POST", uriHost = "localhost"),
+        )
+
+        assertNull(r)
+        assertEquals(0, keyReads)
     }
 
     @Test

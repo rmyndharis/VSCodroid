@@ -382,10 +382,9 @@ class WorkspaceUrlRoundTripTest {
     }
 
     @Test
-    fun `empty windows accept both supported HTTP loopback hosts and root spellings`() {
+    fun `empty windows accept the reserved HTTP origin and root spellings`() {
         for (address in listOf(
             "http://127.0.0.1:13337", "http://127.0.0.1:13337/",
-            "http://localhost:13337", "http://localhost:13337/",
         )) {
             for (query in listOf("ew", "ew=false", "folder=/missing&%65w=0", "ew=true&ew=false")) {
                 val url = "$address?$query#ignored"
@@ -397,17 +396,18 @@ class WorkspaceUrlRoundTripTest {
     @Test
     fun `empty window aliases retain the HTTP root and selector guards`() {
         for (url in listOf(
-            "http://localhost:9999/?ew=true", "http://example.com:13337/?ew=true",
-            "http://localhost:13337/vscode-remote-resource?ew=true",
+            "http://localhost:13337/?ew=true", "http://[::1]:13337/?ew=true",
+            "http://127.0.0.1:9999/?ew=true", "http://example.com:13337/?ew=true",
+            "http://127.0.0.1:13337/vscode-remote-resource?ew=true",
             "http://127.0.0.1:13337/static/workbench.html?ew=true",
-            "https://localhost:13337/?ew=true", "ftp://127.0.0.1:13337/?ew=true",
-            "http://localhost:13337/?ew=true&folder=/missing",
-            "http://localhost:13337/?ew=true&workspace=/missing.code-workspace",
-            "http://localhost:13337/#?ew=true",
+            "https://127.0.0.1:13337/?ew=true", "ftp://127.0.0.1:13337/?ew=true",
+            "http://127.0.0.1:13337/?ew=true&folder=/missing",
+            "http://127.0.0.1:13337/?ew=true&workspace=/missing.code-workspace",
+            "http://127.0.0.1:13337/#?ew=true",
         )) assertNull(emptyWindowUrl(url, 13337), url)
-        val malformedQuery = "http://localhost:13337/?ignored=%&%65w=false"
+        val malformedQuery = "http://127.0.0.1:13337/?ignored=%&%65w=false"
         assertEquals(malformedQuery, emptyWindowUrl(malformedQuery, 13337))
-        assertNull(emptyWindowUrl("http://localhost:13337/%?ew=true", 13337))
+        assertNull(emptyWindowUrl("http://127.0.0.1:13337/%?ew=true", 13337))
     }
 
     @Test

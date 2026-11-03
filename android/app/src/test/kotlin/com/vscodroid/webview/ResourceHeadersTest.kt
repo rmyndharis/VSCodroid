@@ -164,7 +164,7 @@ class RefererGateTest {
     @Test
     fun `the workbench is ours`() {
         assertTrue(VSCodroidWebViewClient.isOurReferer("http://127.0.0.1:$port/", port))
-        assertTrue(VSCodroidWebViewClient.isOurReferer("http://localhost:$port/?folder=%2Fx", port))
+        assertFalse(VSCodroidWebViewClient.isOurReferer("http://localhost:$port/?folder=%2Fx", port))
         assertFalse(
             VSCodroidWebViewClient.isOurReferer("http://127.0.0.1:${port + 1}/", port),
             "another port on loopback is another server",

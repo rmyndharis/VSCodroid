@@ -7446,10 +7446,8 @@ internal sealed interface BindDecision {
  * cannot use it and marks the app ready to receive an OAuth callback it cannot
  * consume.
  *
- * The test is host and port together, the same pair
- * [VSCodroidWebViewClient.isLocalhost] uses, because the port is what ties a
- * page to this server rather than to any loopback listener: binding one needs
- * no permission on Android, so the host alone says nothing about who answered.
+ * The address and port match the gateway's IPv4 listener. A hostname may select
+ * IPv6, whose listener is not reserved by this application.
  *
  * Parsed with `java.net.URI` rather than `Uri.parse`, so the decision can be
  * exercised by a plain JVM test. `Uri.parse` is a framework method that answers
@@ -7470,7 +7468,7 @@ internal fun isWorkbenchUrl(url: String?, port: Int): Boolean {
     // is what has to go.
     val parsed = runCatching { java.net.URI(url) }.getOrNull() ?: return false
     val hostName = parsed.host ?: return false
-    return (hostName == "127.0.0.1" || hostName == "localhost") && parsed.port == port &&
+    return hostName == "127.0.0.1" && parsed.port == port &&
         isWorkbenchPath(parsed.path)
 }
 
