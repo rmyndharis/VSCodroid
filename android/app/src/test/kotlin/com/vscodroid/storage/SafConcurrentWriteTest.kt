@@ -32,6 +32,7 @@ import java.io.File
 import java.io.IOException
 import java.io.OutputStream
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.FutureTask
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicInteger
 
@@ -238,25 +239,46 @@ class SafConcurrentWriteTest {
      */
     @Test
     fun `two writers never hold one document open at once`() {
+        var nowMs = 1_000_000L
+        every { SystemClock.elapsedRealtime() } answers { nowMs }
         deviceHolding("notes.md")
         File(mirror, "notes.md").writeText("edited in the editor")
         blockFirstWriter = true
 
-        val first = Thread { deliver("notes.md") }.apply { start() }
-        assertTrue(
-            firstWriterInside.await(5, TimeUnit.SECONDS),
-            "the first writer never reached its stream, so nothing was contended",
-        )
+        val secondQueued = CountDownLatch(1)
+        val firstWrite = FutureTask { deliver("notes.md") }
+        val secondWrite = FutureTask {
+            engine.handleMirrorEvent(FileObserver.MODIFY, File(mirror, "notes.md"), mirror, treeUri)
+            secondQueued.countDown()
+            engine.runWriteBackLoop { false }
+        }
+        val first = Thread(firstWrite, "saf-first-writer")
+        val second = Thread(secondWrite, "saf-second-writer")
+        try {
+            first.start()
+            assertTrue(
+                firstWriterInside.await(5, TimeUnit.SECONDS),
+                "the first writer never reached its stream, so nothing was contended",
+            )
+            second.start()
+            assertTrue(secondQueued.await(5, TimeUnit.SECONDS), "the second save was never queued")
+            second.join(300)
+            assertTrue(second.isAlive, "the second writer did not wait for the first")
+        } finally {
+            releaseFirstWriter.countDown()
+            first.join(5_000)
+            second.join(5_000)
+        }
+        assertFalse(first.isAlive, "the first writer did not finish")
+        assertFalse(second.isAlive, "the second writer did not finish")
+        firstWrite.get(1, TimeUnit.SECONDS)
+        secondWrite.get(1, TimeUnit.SECONDS)
 
-        // The second writer meets a document that is being streamed into right now, and
-        // takes its turn once the first lets go.
-        val second = Thread { deliver("notes.md") }.apply { start() }
-        second.join(300)
-        assertTrue(second.isAlive, "the second writer did not wait for the first")
-
-        releaseFirstWriter.countDown()
-        first.join(5_000)
-        second.join(5_000)
+        // The mirror lock may release before the provider claim; that save must retry.
+        if (everOpened.get() == 1) {
+            nowMs += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+            assertTrue(engine.retryHeldBack(WatchSession(mirror)), "the contending save was not retained")
+        }
 
         assertEquals(1, peak.get(), "two writers held the same document open at once")
         assertEquals(
@@ -1022,6 +1044,8 @@ class SafConcurrentWriteTest {
 
     @Test
     fun `a restored watcher does not preserve another drain's unfinished device prefix`() {
+        var nowMs = 1_000_000L
+        every { SystemClock.elapsedRealtime() } answers { nowMs }
         deviceHolding("notes.md")
         val local = File(mirror, "notes.md").apply { writeText("complete mirror edit") }
         every { resolver.openInputStream(any()) } answers {
@@ -1036,14 +1060,20 @@ class SafConcurrentWriteTest {
         }
         val restored = SafSyncEngine(context)
         blockFirstWriter = true
-        val first = Thread { deliver("notes.md") }.apply { start() }
-        val second = Thread {
+        val secondQueued = CountDownLatch(1)
+        val firstWrite = FutureTask { deliver("notes.md") }
+        val secondWrite = FutureTask {
             restored.handleMirrorEvent(FileObserver.MODIFY, local, mirror, treeUri)
+            secondQueued.countDown()
             restored.runWriteBackLoop { false }
         }
+        val first = Thread(firstWrite, "saf-closing-drain")
+        val second = Thread(secondWrite, "saf-restored-writer")
         try {
+            first.start()
             assertTrue(firstWriterInside.await(5, TimeUnit.SECONDS), "the closing drain never opened its output")
             second.start()
+            assertTrue(secondQueued.await(5, TimeUnit.SECONDS), "the restored save was never queued")
             second.join(300)
             assertTrue(second.isAlive, "the restored watcher did not wait for its writer's turn")
             assertEquals(
@@ -1058,6 +1088,12 @@ class SafConcurrentWriteTest {
         }
         assertFalse(first.isAlive)
         assertFalse(second.isAlive)
+        firstWrite.get(1, TimeUnit.SECONDS)
+        secondWrite.get(1, TimeUnit.SECONDS)
+        if (everOpened.get() == 1) {
+            nowMs += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+            assertTrue(restored.retryHeldBack(WatchSession(mirror)), "the restored save was not retained")
+        }
         assertEquals(2, everOpened.get(), "the restored save never reached the device")
         assertEquals(listOf("notes.md"), mirror.listFiles().orEmpty().map { it.name })
     }
