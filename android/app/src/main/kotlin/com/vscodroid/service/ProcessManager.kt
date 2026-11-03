@@ -41,7 +41,13 @@ import androidx.core.content.edit
  * This class does NOT handle restart logic or Android service concerns;
  * those belong to [NodeService].
  */
-class ProcessManager(private val context: Context) {
+class ProcessManager internal constructor(
+    private val context: Context,
+    private val isolatedGateway: EditorGateway?,
+) {
+    constructor(context: Context) : this(context, null)
+
+    private val editorGateway get() = isolatedGateway ?: EditorGateway.instance
 
     private val tag = "ProcessManager"
 
@@ -533,7 +539,7 @@ class ProcessManager(private val context: Context) {
             Logger.e(tag, "The private editor socket is unavailable")
             return false
         }
-        val gateway = EditorGateway.instance
+        val gateway = editorGateway
         val editorNote = recordedEditorNote()
         val recorded = editorNote?.let { runCatching { JSONObject(it) }.getOrNull() }
         val inheritedPort = gateway.boundPort
@@ -1246,7 +1252,7 @@ class ProcessManager(private val context: Context) {
             isShuttingDown = true
             stoppingProcess = serverProcess
             stoppingRunId = serverRunId
-            stoppingRunId?.let { EditorGateway.instance.withdrawBackend(it) }
+            stoppingRunId?.let { editorGateway.withdrawBackend(it) }
             stoppingWatchdog = watchdogThread
             stoppingAdopted = adopted
             stoppingEditorNote = serverEditorNote
@@ -1816,7 +1822,7 @@ class ProcessManager(private val context: Context) {
                         clearReadiness()
                         adopted = false
                         runCatching { JSONObject(editorNote).optString("runId", "") }.getOrNull()
-                            ?.let { EditorGateway.instance.withdrawBackend(it) }
+                            ?.let { editorGateway.withdrawBackend(it) }
                         readinessEpoch.get()
                     }
                     Logger.w(tag, "Adopted editor is gone or stopped answering; treating it as lost")

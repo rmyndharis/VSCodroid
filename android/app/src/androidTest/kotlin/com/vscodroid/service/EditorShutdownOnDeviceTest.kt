@@ -33,6 +33,7 @@ class EditorShutdownOnDeviceTest {
     private val evidence = File(app.cacheDir, "$name-evidence")
     private val preferences = mutableSetOf<String>()
     private val runs = mutableListOf<OwnedRun>()
+    private val gateway = EditorGateway()
     private val context = object : ContextWrapper(app) {
         override fun getFilesDir() = File(sandbox, "f")
         override fun getCacheDir() = File(sandbox, "c")
@@ -56,7 +57,7 @@ class EditorShutdownOnDeviceTest {
         assertTrue(context.filesDir.mkdirs())
         assertTrue(context.cacheDir.mkdirs())
         assertTrue(evidence.mkdirs())
-        val manager = ProcessManager(context)
+        val manager = ProcessManager(context, gateway)
         try {
             phase("before-extraction")
             extract("vscode-reh", File(context.filesDir, "server/vscode-reh"))
@@ -128,15 +129,19 @@ class EditorShutdownOnDeviceTest {
             assertReservedUnavailable(second.port)
             phase("cooperative-repeated-stop-complete", second)
         } finally {
-            manager.stopServer()
-            for (run in runs) {
-                run.bootstrap.destroyForcibly()
-                if (sameEditorAlive(run)) Process.killProcess(run.pid)
-            }
-            await("all fixture-owned editors to exit") { runs.none { sameEditorAlive(it) } }
-            assertTrue("the extracted fixture could not be removed", sandbox.deleteRecursively())
-            preferences.forEach {
-                assertTrue("the fixture preferences could not be removed", app.deleteSharedPreferences(it))
+            try {
+                manager.stopServer()
+                for (run in runs) {
+                    run.bootstrap.destroyForcibly()
+                    if (sameEditorAlive(run)) Process.killProcess(run.pid)
+                }
+                await("all fixture-owned editors to exit") { runs.none { sameEditorAlive(it) } }
+                assertTrue("the extracted fixture could not be removed", sandbox.deleteRecursively())
+                preferences.forEach {
+                    assertTrue("the fixture preferences could not be removed", app.deleteSharedPreferences(it))
+                }
+            } finally {
+                gateway.close()
             }
         }
     }
@@ -201,7 +206,7 @@ class EditorShutdownOnDeviceTest {
     }.getOrDefault(false)
 
     private fun assertReservedUnavailable(port: Int) {
-        assertTrue("the editor origin was released", EditorGateway.instance.isBound(port))
+        assertTrue("the editor origin was released", gateway.isBound(port))
         assertEquals("the reserved origin must report an unavailable editor", 503, version(port))
     }
 

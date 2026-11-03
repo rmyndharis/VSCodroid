@@ -156,6 +156,32 @@ class ProcessManagerTest {
         }
     }
 
+    @ParameterizedTest
+    @ValueSource(booleans = [false, true])
+    fun `a manager routes only through its selected gateway`(isolated: Boolean) {
+        val applicationGateway = EditorGateway.instance
+        val selected = if (isolated) mockk<EditorGateway>(relaxed = true) else applicationGateway
+        if (isolated) {
+            var bound: Int? = null
+            every { selected.boundPort } answers { bound }
+            every { selected.bind(any()) } answers { firstArg<Int>().also { bound = it } }
+        }
+        manager = if (isolated) ProcessManager(contextMock, selected) else {
+            ProcessManager::class.java.getConstructor(Context::class.java).newInstance(contextMock)
+        }
+
+        assertTrue(startAndAwaitWatchdog())
+        verify(exactly = 1) { selected.bind(any()) }
+        verify(exactly = 1) { selected.selectBackend(any(), any()) }
+        manager.stopServer()
+        verify(exactly = 1) { selected.withdrawBackend(any()) }
+        if (isolated) {
+            verify(exactly = 0) { applicationGateway.bind(any()) }
+            verify(exactly = 0) { applicationGateway.selectBackend(any(), any()) }
+            verify(exactly = 0) { applicationGateway.withdrawBackend(any()) }
+        }
+    }
+
     @Test
     fun `a public listener bind failure never spawns an editor backend`() {
         val gateway = EditorGateway.instance
