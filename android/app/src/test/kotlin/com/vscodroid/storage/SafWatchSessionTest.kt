@@ -24,6 +24,7 @@ import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.OutputStream
 import java.util.Collections
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 
 /**
@@ -133,8 +134,8 @@ class SafWatchSessionTest {
     }
 
     private fun waitUntil(what: String, condition: () -> Boolean) {
-        val deadline = System.currentTimeMillis() + 5_000
-        while (System.currentTimeMillis() < deadline) {
+        val startedAt = System.nanoTime()
+        while (System.nanoTime() - startedAt < TimeUnit.SECONDS.toNanos(5)) {
             if (condition()) return
             Thread.sleep(10)
         }
@@ -152,11 +153,15 @@ class SafWatchSessionTest {
         // stopWatching() cannot end the thread and lets it finish on its own.
         waitUntil("the first write reaches the provider") { openedForWrite.isNotEmpty() }
 
-        val startedAt = System.currentTimeMillis()
+        assertFalse(Thread.currentThread().isInterrupted, "the drain wait fixture started interrupted")
+        val startedAt = System.nanoTime()
         engine.stopWatching()
-        val waited = System.currentTimeMillis() - startedAt
+        val waited = System.nanoTime() - startedAt
 
-        assertTrue(waited >= 2_000, "stopWatching returned without waiting for the drain")
+        assertTrue(
+            waited >= TimeUnit.SECONDS.toNanos(2),
+            "stopWatching returned without waiting for the drain (${TimeUnit.NANOSECONDS.toMillis(waited)}ms)",
+        )
         assertTrue(worker.isAlive, "setup failed: the drain was meant to outlive the stop")
 
         val opened = engine.session
