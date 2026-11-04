@@ -21,6 +21,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.nio.file.Files
 
 /**
  * What `toolchains.json` must survive, and which name forms reach it.
@@ -46,6 +47,7 @@ class ToolchainStateIntegrityTest {
 
     @BeforeEach
     fun setUp() {
+        mockkStatic(Files::class)
         mockkObject(Logger)
         every { Logger.d(any(), any()) } just Runs
         every { Logger.i(any(), any()) } just Runs
@@ -99,20 +101,15 @@ class ToolchainStateIntegrityTest {
      *
      * `writeText` truncates and then writes, so anything that goes wrong between
      * those two leaves a file that exists, parses as nothing, and is read as an
-     * empty install list. This arranges that failure the way `UpdateSettingsPathsTest`
-     * does -- a directory sits where the temporary file wants to be, so opening
-     * it throws -- and requires the previous record to be exactly where it was.
+     * empty install list. This makes the atomic temporary-file open throw and
+     * requires the previous record to remain intact.
      *
      * Reverting `writeState` to `stateFile.writeText(...)` turns this red: the
      * file would hold `[]` and the Ruby entry would be gone.
      */
     @Test
     fun `a failed write leaves the previous record intact`() {
-        val blocker = File(filesDir, "home/.vscodroid/toolchains.json.tmp~")
-        blocker.mkdirs()
-        // Non-empty, so the cleanup delete cannot quietly remove it and let a
-        // later attempt through -- the point is that this write fails.
-        File(blocker, "occupied").writeText("x")
+        blockAtomicWritesTo(File(filesDir, "home/.vscodroid/toolchains.json"))
 
         writeState(JSONArray())
 
@@ -133,7 +130,7 @@ class ToolchainStateIntegrityTest {
 
         assertEquals(listOf("java"), namesInState())
         assertFalse(
-            File(filesDir, "home/.vscodroid/toolchains.json.tmp~").exists(),
+            File(filesDir, "home/.vscodroid").listFiles().orEmpty().any { it.name.startsWith(".vscodroid-") },
             "the temporary file survived a successful write"
         )
     }
@@ -211,10 +208,8 @@ class ToolchainStateIntegrityTest {
      * exists, and nothing reconciles the two afterwards -- the launch repair pass
      * only checks execute bits.
      *
-     * The failure is arranged the way the atomicity case above arranges it, and
-     * for the same reason: a directory sits where the temporary file wants to be,
-     * so opening it throws and `writeAtomically` returns false with the previous
-     * record still in place.
+     * The atomic temporary-file open throws, so `writeAtomically` must return
+     * false with the previous record still in place.
      *
      * NEGATIVE CONTROL: make the write in `uninstallLocked` a bare
      * `writeState(state)` again and this goes red on the first assertion.
@@ -222,11 +217,7 @@ class ToolchainStateIntegrityTest {
      */
     @Test
     fun `a removal whose record write fails is not reported as a removal`() {
-        val blocker = File(filesDir, "home/.vscodroid/toolchains.json.tmp~")
-        blocker.mkdirs()
-        // Non-empty, so the cleanup delete cannot quietly remove it and let the
-        // write through.
-        File(blocker, "occupied").writeText("x")
+        blockAtomicWritesTo(File(filesDir, "home/.vscodroid/toolchains.json"))
 
         val reports = reportsFrom("ruby")
 

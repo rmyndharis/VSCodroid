@@ -60,6 +60,7 @@ class SafWriterTurnTest {
     private lateinit var resolver: ContentResolver
     private lateinit var context: Context
     private lateinit var engine: SafSyncEngine
+    private val workers = SafTestWorkers()
     private lateinit var treeUri: Uri
 
     /** The device folder: file name to bytes. Flat, which is all these cases need. */
@@ -168,17 +169,19 @@ class SafWriterTurnTest {
 
     @AfterEach
     fun tearDown() {
-        release.countDown()
-        File(mirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX).delete()
-        unmockkAll()
+        try {
+            release.countDown()
+            workers.finish()
+            File(mirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX).delete()
+        } finally {
+            unmockkAll()
+        }
     }
 
     private fun bothSidesHold(name: String, onDevice: String, inMirror: String) {
         device[name] = onDevice.toByteArray()
         val file = File(mirror, name).apply { writeText(onDevice) }
-        SafSyncEngine::class.java.getDeclaredMethod(
-            "writeLocalToSaf", File::class.java, Uri::class.java, File::class.java,
-        ).apply { isAccessible = true }.invoke(engine, file, docUri(docId(name)), mirror)
+        writeSafFile(engine, file, docUri(docId(name)), mirror)
         assertEquals(onDevice, text(name), "the provider did not receive the baseline")
         opened.clear()
         interruptedAtOpen.clear()
@@ -203,7 +206,7 @@ class SafWriterTurnTest {
     private fun text(name: String) = device[name]?.toString(Charsets.UTF_8)
 
     private fun drain(session: WatchSession, running: () -> Boolean = { false }) =
-        Thread { engine.runWriteBackLoop(session, running) }.apply { isDaemon = true }
+        workers.prepare { engine.runWriteBackLoop(session, running) }
 
     /** Two sessions over one mirror, as a restored watcher leaves them, and a held write in the first. */
     private fun twoDrainsOneHeld(
@@ -324,10 +327,10 @@ class SafWriterTurnTest {
         val turns = AtomicInteger(0)
 
         // The window between a worker polling its job and the stop's interrupt arriving.
-        val drain = Thread {
+        val drain = workers.start {
             Thread.currentThread().interrupt()
             engine.runWriteBackLoop(session) { turns.getAndIncrement() == 0 }
-        }.apply { isDaemon = true; start() }
+        }
         drain.join(5_000)
 
         assertFalse(drain.isAlive)
@@ -350,12 +353,9 @@ class SafWriterTurnTest {
             ByteArrayInputStream("device".toByteArray())
         }
         File(mirror, "notes.md").delete()
-        val syncing = Thread {
-            try {
-                runBlocking { SafSyncEngine(context).initialSync(treeUri, mirror) { _, _ -> } }
-            } catch (_: Exception) {
-            }
-        }.apply { isDaemon = true; start() }
+        val syncing = workers.start {
+            runBlocking { SafSyncEngine(context).initialSync(treeUri, mirror) { _, _ -> } }
+        }
         try {
             assertTrue(fetchInside.await(5, TimeUnit.SECONDS), "the sync never reached its read")
             File(mirror, "notes.md").writeText("saved during the sync")

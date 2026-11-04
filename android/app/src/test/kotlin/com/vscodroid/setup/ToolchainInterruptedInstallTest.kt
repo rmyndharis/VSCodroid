@@ -150,7 +150,7 @@ class ToolchainInterruptedInstallTest {
             File(tree, "bin/payload").exists(),
             "the reclaim deleted a toolchain the record calls installed",
         )
-        assertFalse(marker.exists(), "the marker of a finished install was kept")
+        assertTrue(marker.exists(), "a legacy marker has no proof that the copy finished")
     }
 
     /**

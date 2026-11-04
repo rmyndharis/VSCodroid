@@ -597,4 +597,5 @@
          one English word survived inside an otherwise translated About dialog. -->
     <string name="about_version_unknown">不明</string>
     <string name="saf_folder_unavailable">このデバイスフォルダーのローカルコピーは利用できなくなりました。デバイスからフォルダーをもう一度開いてください。</string>
+    <string name="saf_workspace_multiple_folders">このワークスペースには複数のデバイスフォルダーが含まれています。同時に同期されるデバイスフォルダーは 1 つだけです。他のフォルダーでの変更は、そのフォルダーを直接開くまで VSCodroid 内に留まります。</string>
 </resources>

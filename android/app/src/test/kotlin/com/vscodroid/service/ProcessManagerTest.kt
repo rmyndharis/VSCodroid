@@ -8,6 +8,7 @@ import com.vscodroid.util.Logger
 import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
+import io.mockk.mockkConstructor
 import io.mockk.mockkObject
 import io.mockk.unmockkAll
 import io.mockk.verify
@@ -23,17 +24,22 @@ import org.junit.jupiter.api.Assumptions.assumeFalse
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
+import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.ValueSource
 import kotlinx.coroutines.runBlocking
 import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.CoroutineScope
 import kotlinx.coroutines.cancel
 import java.io.File
+import java.io.IOException
+import java.io.OutputStream
 import java.net.InetAddress
 import java.net.ServerSocket
 import java.nio.file.Files
 import java.nio.file.attribute.BasicFileAttributes
 import java.nio.file.attribute.PosixFilePermissions
 import java.util.Collections
+import java.util.UUID
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
@@ -64,6 +70,7 @@ class ProcessManagerTest {
     @BeforeEach
     fun setUp() {
         // Mock Logger to avoid android.util.Log crashes in JVM tests
+        mockEditorGateway()
         mockkObject(Logger)
         every { Logger.w(any(), any(), any()) } just Runs
         // `Logger.w` and `Logger.e` take a defaulted throwable rather than having
@@ -115,6 +122,144 @@ class ProcessManagerTest {
 
         assertTrue(startAndAwaitWatchdog(), "a dead server must be restartable")
         assertNotEquals(dead, manager.serverProcessField, "the dead reference must be replaced")
+    }
+
+    @Test
+    fun `the editor backend receives a private socket path`() {
+        val output = AtomicReference<String?>(null)
+        val read = CountDownLatch(1)
+        manager.onServerOutput = { output.set(it); read.countDown() }
+
+        assertTrue(startAndAwaitWatchdog())
+        assertTrue(read.await(5, TimeUnit.SECONDS), "the spawned command was never read")
+
+        val socketPath = Regex("--socket-path=([^ ]+)").find(output.get().orEmpty())?.groupValues?.get(1)
+        assertNotNull(socketPath, "the editor still binds the public TCP port")
+        assertTrue(socketPath!!.startsWith(tempDir.canonicalPath + "/"), "the backend is outside app-private storage")
+    }
+
+    @Test
+    fun `stopping the backend keeps the public origin reserved`() {
+        val gateway = EditorGateway()
+        every { EditorGateway.instance } returns gateway
+        try {
+            assertTrue(startAndAwaitWatchdog())
+            val publicPort = manager.port
+            assertFalse(PortFinder.isPortAvailable(publicPort), "the application does not own its public origin")
+
+            manager.stopServer()
+
+            assertFalse(PortFinder.isPortAvailable(publicPort), "Stop released the live WebView origin")
+        } finally {
+            gateway.close()
+            mockEditorGateway()
+        }
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = [false, true])
+    fun `a manager routes only through its selected gateway`(isolated: Boolean) {
+        val applicationGateway = EditorGateway.instance
+        val selected = if (isolated) mockk<EditorGateway>(relaxed = true) else applicationGateway
+        if (isolated) {
+            var bound: Int? = null
+            every { selected.boundPort } answers { bound }
+            every { selected.bind(any()) } answers { firstArg<Int>().also { bound = it } }
+        }
+        manager = if (isolated) ProcessManager(contextMock, selected) else {
+            ProcessManager::class.java.getConstructor(Context::class.java).newInstance(contextMock)
+        }
+
+        assertTrue(startAndAwaitWatchdog())
+        verify(exactly = 1) { selected.bind(any()) }
+        verify(exactly = 1) { selected.selectBackend(any(), any()) }
+        manager.stopServer()
+        verify(exactly = 1) { selected.withdrawBackend(any()) }
+        if (isolated) {
+            verify(exactly = 0) { applicationGateway.bind(any()) }
+            verify(exactly = 0) { applicationGateway.selectBackend(any(), any()) }
+            verify(exactly = 0) { applicationGateway.withdrawBackend(any()) }
+        }
+    }
+
+    @Test
+    fun `a public listener bind failure never spawns an editor backend`() {
+        val gateway = EditorGateway.instance
+        every { gateway.bind(any()) } throws java.io.IOException("No descriptors")
+
+        assertFalse(manager.startServer())
+
+        assertNull(manager.serverProcessField)
+        verify(exactly = 5) { gateway.bind(any()) }
+        verify(exactly = 0) { Environment.buildProcessEnvironment(any(), any()) }
+    }
+
+    @Test
+    fun `a bootstrap is ended if closing its input pipe fails`() {
+        val child = ProcessBuilder("/bin/sleep", "30").start()
+        val wrapped = object : Process() {
+            override fun getOutputStream() = object : OutputStream() {
+                override fun write(value: Int) = child.outputStream.write(value)
+                override fun close() {
+                    child.outputStream.close()
+                    throw IOException("Controlled input pipe close failure")
+                }
+            }
+            override fun getInputStream() = child.inputStream
+            override fun getErrorStream() = child.errorStream
+            override fun waitFor() = child.waitFor()
+            override fun waitFor(timeout: Long, unit: TimeUnit) = child.waitFor(timeout, unit)
+            override fun exitValue() = child.exitValue()
+            override fun destroy() = child.destroy()
+            override fun isAlive() = child.isAlive
+        }
+        mockkConstructor(ProcessBuilder::class)
+        every { anyConstructed<ProcessBuilder>().start() } returns wrapped
+        try {
+            assertFalse(manager.startServer())
+            assertTrue(child.waitFor(3, TimeUnit.SECONDS), "the failed launch left its bootstrap running")
+            assertNull(manager.serverProcessField)
+        } finally {
+            child.destroyForcibly()
+            assertTrue(child.waitFor(3, TimeUnit.SECONDS))
+        }
+    }
+
+    @Test
+    fun `a backend socket is refused when files points outside app data`() {
+        val app = File(tempDir, "app").apply { mkdirs() }
+        val outside = File(tempDir, "shared").apply { mkdirs() }
+        val files = File(app, "files")
+        Files.createSymbolicLink(files.toPath(), outside.toPath())
+        every { contextMock.filesDir } returns files
+
+        assertNull(editorBackendSocket(contextMock, "private-run"), "the backend escaped its private app root")
+    }
+
+    @Test
+    fun `a redirected files directory is refused before the origin is reserved`() {
+        val app = File(tempDir, "app").apply { mkdirs() }
+        val outside = File(tempDir, "shared").apply { mkdirs() }
+        val files = File(app, "files")
+        Files.createSymbolicLink(files.toPath(), outside.toPath())
+        every { contextMock.filesDir } returns files
+        val gateway = EditorGateway.instance
+
+        assertFalse(manager.startServer())
+
+        verify(exactly = 0) { gateway.bind(any()) }
+        verify(exactly = 0) { Environment.buildProcessEnvironment(any(), any()) }
+    }
+
+    @Test
+    fun `an app data alias still yields a private backend socket`() {
+        val app = File(tempDir, "app").apply { mkdirs() }
+        val files = File(app, "files").apply { mkdirs() }
+        val alias = File(tempDir, "alias")
+        Files.createSymbolicLink(alias.toPath(), app.toPath())
+        every { contextMock.filesDir } returns File(alias, "files")
+
+        assertEquals(files.canonicalFile, editorBackendSocket(contextMock, "private-run")?.parentFile)
     }
 
     @Test
@@ -321,49 +466,9 @@ class ProcessManagerTest {
     }
 
     @Test
-    fun `a start onto a held port records that it can never serve`() {
-        // The other half of the test above. Starting anyway is right, but the
-        // process it starts cannot bind: its editor server prints EADDRINUSE and
-        // then does not exit, so liveness answers yes for as long as the app runs
-        // and every caller that waits on liveness waits forever. The one moment
-        // the two cases can be told apart is the spawn, so it is recorded there.
-        val holder = StubServer(null)
-        try {
-            manager.portField = holder.port
-
-            assertTrue(startAndAwaitWatchdog())
-            assertTrue(
-                manager.spawnedOntoHeldPort(),
-                "a spawn onto a port something else holds must be recorded as doomed, " +
-                    "or nothing downstream can stop waiting on it",
-            )
-        } finally {
-            holder.stop()
-        }
-    }
-
-    @Test
-    fun `a start onto a free port is not recorded as doomed`() {
-        // Control. A flag that answered true unconditionally would satisfy the
-        // test above while killing every slow but healthy start after thirty
-        // seconds, the failure running the other way, and the worse of the two.
-        manager.portField = PortFinder.findAvailablePort()
-
-        assertTrue(startAndAwaitWatchdog())
-        assertFalse(
-            manager.spawnedOntoHeldPort(),
-            "a server that had its port to itself must be allowed to be slow",
-        )
-    }
-
-    @Test
     fun `allocates a port on the first start`() {
         assertTrue(startAndAwaitWatchdog())
         assertNotEquals(0, manager.port, "the first start must allocate a port")
-        assertFalse(
-            manager.spawnedOntoHeldPort(),
-            "a freshly allocated port is free by construction",
-        )
     }
 
     @Test
@@ -1147,6 +1252,143 @@ class ProcessManagerTest {
     }
 
     @Test
+    fun `an interrupted start cannot replace a later start`() {
+        val preparing = CountDownLatch(1)
+        val resume = CountDownLatch(1)
+        val firstPreparation = AtomicBoolean(true)
+        val earlier = AtomicReference<Boolean>()
+        val later = AtomicReference<Boolean>()
+        val replacement = AtomicReference<Process>()
+        every { Environment.buildProcessEnvironment(any(), any()) } answers {
+            if (firstPreparation.compareAndSet(true, false)) {
+                preparing.countDown()
+                check(resume.await(5, TimeUnit.SECONDS))
+            }
+            emptyMap()
+        }
+        val first = thread { earlier.set(manager.startServer()) }
+        var second: Thread? = null
+        try {
+            assertTrue(preparing.await(5, TimeUnit.SECONDS), "the first start never reached preparation")
+            manager.stopServer()
+            second = thread {
+                later.set(manager.startServer())
+                replacement.set(manager.serverProcessField)
+            }
+            awaitQueuedOrCompletedStart(second, later)
+        } finally {
+            resume.countDown()
+            first.join(5_000)
+            second?.join(5_000)
+        }
+        assertFalse(first.isAlive || second?.isAlive == true, "a start did not finish")
+        assertEquals(false, earlier.get(), "the stopped start must not become current again")
+        assertEquals(true, later.get(), "the replacement start must succeed")
+        assertNotNull(replacement.get(), "the replacement process must have been recorded")
+        assertTrue(
+            manager.serverProcessField === replacement.get(),
+            "the interrupted start displaced the replacement process",
+        )
+    }
+
+    @Test
+    fun `a stop invalidates a start already waiting behind another start`() {
+        val preparing = CountDownLatch(1)
+        val resume = CountDownLatch(1)
+        val firstPreparation = AtomicBoolean(true)
+        val earlier = AtomicReference<Boolean>()
+        val later = AtomicReference<Boolean>()
+        every { Environment.buildProcessEnvironment(any(), any()) } answers {
+            if (firstPreparation.compareAndSet(true, false)) {
+                preparing.countDown()
+                check(resume.await(5, TimeUnit.SECONDS))
+            }
+            emptyMap()
+        }
+        val first = thread { earlier.set(manager.startServer()) }
+        var second: Thread? = null
+        try {
+            assertTrue(preparing.await(5, TimeUnit.SECONDS), "the first start never reached preparation")
+            manager.stopServer()
+            second = thread { later.set(manager.startServer()) }
+            awaitQueuedOrCompletedStart(second, later)
+            manager.stopServer()
+        } finally {
+            resume.countDown()
+            first.join(5_000)
+            second?.join(5_000)
+        }
+        assertFalse(first.isAlive || second?.isAlive == true, "a start did not finish")
+        assertEquals(false, earlier.get(), "the earlier stopped start resumed")
+        assertEquals(false, later.get(), "a queued start resumed after it was stopped")
+        assertNull(manager.serverProcessField, "a stopped queued start left a process behind")
+    }
+
+    private fun awaitQueuedOrCompletedStart(worker: Thread, outcome: AtomicReference<Boolean>) {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        while (outcome.get() == null) {
+            val frame = worker.stackTrace.firstOrNull()
+            if (worker.state == Thread.State.BLOCKED &&
+                frame?.className == ProcessManager::class.java.name && frame.methodName == "startServer"
+            ) return
+            check(worker.isAlive && System.nanoTime() < deadline) { "the next start never queued or completed" }
+            Thread.sleep(5)
+        }
+    }
+
+    @Test
+    fun `a replacement service waits for canceled preparation cleanup`() {
+        val preparing = CountDownLatch(1)
+        val resume = CountDownLatch(1)
+        val earlier = AtomicReference<Boolean>()
+        val later = AtomicReference<Boolean>()
+        val replacement = ProcessManager(contextMock)
+        every { Environment.buildProcessEnvironment(any(), any()) } answers {
+            if (Thread.currentThread().name == "previous-service-start") {
+                preparing.countDown()
+                check(resume.await(5, TimeUnit.SECONDS))
+            }
+            emptyMap()
+        }
+        val first = thread(name = "previous-service-start") { earlier.set(manager.startServer()) }
+        var second: Thread? = null
+        try {
+            assertTrue(preparing.await(5, TimeUnit.SECONDS))
+            manager.stopServer()
+            second = thread { later.set(replacement.startServer()) }
+            awaitQueuedOrCompletedStart(second, later)
+            assertNull(later.get(), "a replacement service started before the old caller cleaned up")
+        } finally {
+            resume.countDown()
+            first.join(5_000)
+            second?.join(5_000)
+            replacement.stopServer()
+        }
+        assertFalse(first.isAlive || second?.isAlive == true)
+        assertEquals(false, earlier.get())
+        assertEquals(true, later.get())
+    }
+
+    @Test
+    fun `a canceled caller cannot start a process`() {
+        assertFalse(manager.startServer { false }, "a canceled caller started a process")
+        assertNull(manager.serverProcessField)
+        verify(exactly = 0) { Environment.buildProcessEnvironment(any(), any()) }
+    }
+
+    @Test
+    fun `a caller canceled during preparation cannot publish its process`() {
+        val active = AtomicBoolean(true)
+        every { Environment.buildProcessEnvironment(any(), any()) } answers {
+            active.set(false)
+            emptyMap()
+        }
+
+        assertFalse(manager.startServer(active::get), "a start published after its caller was canceled")
+        assertNull(manager.serverProcessField)
+    }
+
+    @Test
     fun `the port on the command line is the one PortFinder handed out`() {
         // `allocates a port on the first start` asserts only that the port is not
         // zero, which stays true if the wiring is replaced by any number at all.
@@ -1612,6 +1854,7 @@ class ServerReadinessTest {
 
     @BeforeEach
     fun setUp() {
+        mockEditorGateway()
         mockkObject(Logger)
         every { Logger.w(any(), any(), any()) } just Runs
         every { Logger.w(any(), any()) } just Runs
@@ -2102,6 +2345,7 @@ class HeldPortReadinessTest {
 
     @BeforeEach
     fun setUp() {
+        mockEditorGateway()
         mockkObject(Logger)
         every { Logger.w(any(), any(), any()) } just Runs
         every { Logger.w(any(), any()) } just Runs
@@ -2148,7 +2392,14 @@ class HeldPortReadinessTest {
      */
     private fun childReportsListening() {
         val node = File(tempDir, "node.sh").apply {
-            writeText("#!/bin/sh\necho '$SERVER_LISTENING_LINE 1'\n")
+            writeText("""
+                #!/bin/sh
+                for arg do
+                    case "${'$'}arg" in
+                        --socket-path=*) echo "$SERVER_LISTENING_LINE ${'$'}{arg#*=}" ;;
+                    esac
+                done
+            """.trimIndent() + "\n")
             setExecutable(true)
         }
         every { Environment.getNodePath(any()) } returns node.path
@@ -2169,19 +2420,11 @@ class HeldPortReadinessTest {
      */
     private fun spawnOntoHeldPort() {
         spawn()
-        assertTrue(
-            manager.spawnedOntoHeldPort(),
-            "the fixture must be a spawn onto a held port, or the guard is not reached",
-        )
     }
 
     /** Starts on a port nothing holds, and waits for the spawn to be reaped. */
     private fun spawnOnFreePort() {
         spawn()
-        assertFalse(
-            manager.spawnedOntoHeldPort(),
-            "the fixture must be a start onto a free port, or it tests the other branch",
-        )
     }
 
     private fun spawn() {
@@ -2413,6 +2656,7 @@ class ReadyPollClockTest {
 
     @BeforeEach
     fun setUp() {
+        mockEditorGateway()
         mockkObject(Logger)
         every { Logger.w(any(), any(), any()) } just Runs
         every { Logger.w(any(), any()) } just Runs
@@ -2515,6 +2759,7 @@ class AdoptionTest {
 
     @BeforeEach
     fun setUp() {
+        mockEditorGateway()
         mockkObject(Logger)
         every { Logger.w(any(), any(), any()) } just Runs
         every { Logger.w(any(), any()) } just Runs
@@ -2603,10 +2848,13 @@ class AdoptionTest {
         port: Int,
         entry: String = "server-main.js",
         runId: String = "run-$pid",
+        privateSocket: Boolean = true,
     ) {
         File(tempDir, "server").mkdirs()
-        File(tempDir, "server/editor-server.pid")
-            .writeText("""{"pid":$pid,"port":$port,"runId":"$runId"}""")
+        val socket = if (privateSocket) editorBackendSocket(contextMock, runId)?.path else null
+        val note = org.json.JSONObject().put("pid", pid).put("port", port).put("runId", runId)
+        if (socket != null) note.put("socketPath", socket)
+        File(tempDir, "server/editor-server.pid").writeText(note.toString())
         File(tempDir, "proc/$pid").mkdirs()
         // NUL-separated, the way the kernel writes argv. Written as escapes
         // rather than as raw bytes: two NULs in the source made every tool
@@ -2616,6 +2864,7 @@ class AdoptionTest {
         // zero from a clean one.
         File(tempDir, "proc/$pid/cmdline")
             .writeText("/lib/libnode.so\u0000/data/server/vscode-reh/out/$entry\u0000")
+        File(tempDir, "proc/$pid/environ").writeText("VSCODROID_SERVER_RUN_ID=$runId\u0000")
         manager.procDirField = File(tempDir, "proc")
         stub?.proofKey = runId
     }
@@ -2623,6 +2872,112 @@ class AdoptionTest {
     /** Holds the port without answering, so any HTTP probe would fail. */
     private fun holdingPortSilently(): StubServer =
         StubServer(null).also { stub = it; manager.portField = it.port }
+
+    @Test
+    fun `an out of root backend note is never connected`() {
+        val holder = serving(200)
+        recordEditorServer(4242, holder.port)
+        val noteFile = File(tempDir, "server/editor-server.pid")
+        val outside = File(tempDir.parentFile, "outside.sock")
+        noteFile.writeText(org.json.JSONObject(noteFile.readText()).put("socketPath", outside.path).toString())
+        manager.killRecordedProcess = { }
+        val gateway = EditorGateway.instance
+
+        assertTrue(manager.startServer())
+
+        assertFalse(manager.isAdopted())
+        verify(exactly = 0) { gateway.selectBackend(outside, any()) }
+    }
+
+    @Test
+    fun `a legacy TCP survivor is ended before its public origin is reserved`() {
+        val holder = serving(200)
+        recordEditorServer(4242, holder.port, privateSocket = false)
+        val killed = mutableListOf<Int>()
+        manager.killRecordedProcess = { killed += it; holder.stop() }
+        val gateway = EditorGateway.instance
+        every { gateway.bind(holder.port) } answers {
+            assertEquals(listOf(4242), killed, "the legacy listener was not ended before binding")
+            holder.port
+        }
+
+        assertTrue(manager.startServer())
+
+        assertEquals(listOf(4242), killed)
+        assertFalse(manager.isAdopted(), "a TCP backend cannot survive behind the private transport")
+        assertEquals(holder.port, manager.port)
+    }
+
+    @Test
+    fun `reaping an owned backend removes its private socket entry`() {
+        val holder = serving(200)
+        recordEditorServer(4242, holder.port)
+        val endpoint = editorBackendSocket(contextMock, "run-4242")!!
+        openUnixServerChannel().use { socket ->
+            socket.bind(java.net.UnixDomainSocketAddress.of(endpoint.toPath()))
+            manager.killRecordedProcess = { socket.close() }
+            val captured = File(tempDir, "server/editor-server.pid").readText()
+
+            assertTrue(manager.reapRecordedEditorServer("stopping the owned backend", captured))
+
+            assertFalse(Files.exists(endpoint.toPath()), "the terminated backend left its socket entry")
+        }
+    }
+
+    @Test
+    fun `a terminated private backend leaves no socket entry on the next start`() {
+        val holder = serving(200)
+        recordEditorServer(4242, holder.port)
+        val endpoint = editorBackendSocket(contextMock, "run-4242")!!
+        openUnixServerChannel().use { socket ->
+            socket.bind(java.net.UnixDomainSocketAddress.of(endpoint.toPath()))
+        }
+        File(tempDir, "proc/4242").deleteRecursively()
+        manager.killRecordedProcess = { throw AssertionError("a terminated process must not be signalled") }
+
+        assertTrue(manager.startServer())
+
+        assertFalse(manager.isAdopted())
+        assertFalse(Files.exists(endpoint.toPath()), "a dead backend accumulated a stale socket entry")
+    }
+
+    @Test
+    fun `a PID identity mismatch alone leaves its endpoint untouched`() {
+        val holder = serving(200)
+        recordEditorServer(4242, holder.port)
+        val endpoint = editorBackendSocket(contextMock, "run-4242")!!
+        openUnixServerChannel().use { socket ->
+            socket.bind(java.net.UnixDomainSocketAddress.of(endpoint.toPath()))
+            File(tempDir, "proc/4242/cmdline").writeText("other-program\u0000")
+            manager.killRecordedProcess = { throw AssertionError("an unverified process must not be signalled") }
+
+            assertTrue(manager.startServer())
+
+            assertFalse(manager.isAdopted())
+            assertTrue(Files.exists(endpoint.toPath()), "unknown process ownership was treated as death")
+        }
+    }
+
+    @Test
+    fun `reaping never removes an endpoint outside the recorded private run path`() {
+        val holder = serving(200)
+        recordEditorServer(4242, holder.port)
+        val outside = File(tempDir.parentFile, "other-${UUID.randomUUID()}.sock")
+        openUnixServerChannel().use { socket ->
+            socket.bind(java.net.UnixDomainSocketAddress.of(outside.toPath()))
+            try {
+                val noteFile = File(tempDir, "server/editor-server.pid")
+                noteFile.writeText(org.json.JSONObject(noteFile.readText()).put("socketPath", outside.path).toString())
+                manager.killRecordedProcess = { }
+
+                assertTrue(manager.reapRecordedEditorServer("stopping the owned backend", noteFile.readText()))
+
+                assertTrue(Files.exists(outside.toPath()), "an unvalidated endpoint was removed")
+            } finally {
+                Files.deleteIfExists(outside.toPath())
+            }
+        }
+    }
 
     @Test
     fun `a listener returning the public commit without a run proof is not adopted`() {
@@ -3008,6 +3363,8 @@ class AdoptionTest {
         // does not exit.
         val holder = StubServer(null).also { stub = it }
         remember(holder.port)
+        val gateway = EditorGateway.instance
+        every { gateway.bind(holder.port) } throws java.net.BindException("Foreign holder")
 
         val exited = CountDownLatch(1)
         manager.onServerCrashed = { exited.countDown() }
@@ -3018,16 +3375,35 @@ class AdoptionTest {
             holder.port, manager.port,
             "a port a stranger holds must not be the one the spawn is pointed at",
         )
-        assertFalse(
-            manager.spawnedOntoHeldPort(),
-            "and the server it spawned must be allowed to be slow",
-        )
-
         // Last, for the reason `a recorded server that is not answering on the port
         // is not adopted` gives: a timeout here would report a stuck watchdog and
         // send the reader to the wrong file, so the assertions naming the defect go
         // first.
         assertTrue(exited.await(5, TimeUnit.SECONDS), "watchdog never reported the exit")
+    }
+
+    @ParameterizedTest
+    @ValueSource(booleans = [true, false])
+    fun `moving from a held public origin ends only the verified private survivor`(sameRun: Boolean) {
+        val holder = StubServer(null).also { stub = it }
+        remember(holder.port)
+        recordEditorServer(pid = 7311, port = holder.port)
+        if (!sameRun) File(tempDir, "proc/7311/environ").writeText("VSCODROID_SERVER_RUN_ID=another-run\u0000")
+        val killed = mutableListOf<Int>()
+        manager.killRecordedProcess = { killed += it }
+        val gateway = EditorGateway()
+        every { EditorGateway.instance } returns gateway
+        try {
+            assertTrue(manager.startServer())
+
+            assertNotEquals(holder.port, manager.port)
+            assertFalse(manager.isAdopted())
+            assertEquals(if (sameRun) listOf(7311) else emptyList<Int>(), killed)
+            assertFalse(PortFinder.isPortAvailable(manager.port), "the replacement origin is not reserved")
+        } finally {
+            stopAndAwaitWatchdog()
+            gateway.close()
+        }
     }
 
     @Test
@@ -3048,7 +3424,7 @@ class AdoptionTest {
         manager.killRecordedProcess = { killed += it }
         val holder = StubServer(null).also { stub = it }
         remember(holder.port)
-        recordEditorServer(pid = 7311, port = holder.port)
+        recordEditorServer(pid = 7311, port = holder.port, privateSocket = false)
         val asked = intArrayOf(0)
         mockkObject(PortFinder)
         every { PortFinder.isPortAvailable(holder.port) } answers { asked[0]++ > 0 }
@@ -3065,7 +3441,6 @@ class AdoptionTest {
             holder.port, manager.port,
             "and a port the reap freed is kept, with the origin the workbench's storage is keyed to",
         )
-        assertFalse(manager.spawnedOntoHeldPort(), "a port this start freed itself is free")
         assertTrue(exited.await(5, TimeUnit.SECONDS), "watchdog never reported the exit")
     }
 
@@ -3081,7 +3456,9 @@ class AdoptionTest {
         manager.killRecordedProcess = { killed += it }
         val holder = StubServer(null).also { stub = it }
         remember(holder.port)
-        recordEditorServer(pid = 7311, port = holder.port)
+        val gateway = EditorGateway.instance
+        every { gateway.bind(holder.port) } throws java.net.BindException("Foreign holder")
+        recordEditorServer(pid = 7311, port = holder.port, privateSocket = false)
 
         val exited = CountDownLatch(1)
         manager.onServerCrashed = { exited.countDown() }
@@ -3089,7 +3466,6 @@ class AdoptionTest {
 
         assertEquals(listOf(7311), killed, "the recorded server is ended before the port is given up")
         assertNotEquals(holder.port, manager.port, "a port still held after the reap is not spawned onto")
-        assertFalse(manager.spawnedOntoHeldPort(), "the port moved to is free by construction")
         assertTrue(exited.await(5, TimeUnit.SECONDS), "watchdog never reported the exit")
     }
 
@@ -3553,6 +3929,20 @@ class AdoptionTest {
         assertFalse(manager.isAdopted(), "the stop must also end our relationship with it")
     }
 
+    @Test
+    fun `an adopted pid reused by another editor run is left alone`() {
+        val killed = mutableListOf<Int>()
+        manager.killRecordedProcess = { killed += it }
+        val holder = serving(200)
+        recordEditorServer(pid = 4242, port = holder.port)
+        assertTrue(manager.startServer())
+        File(tempDir, "proc/4242/environ").writeText("VSCODROID_SERVER_RUN_ID=replacement\u0000")
+
+        stopAndAwaitWatchdog()
+
+        assertTrue(killed.isEmpty(), "a different editor run was killed through an old note")
+    }
+
     /**
      * The direction that costs someone else something. A pid is recycled the moment its
      * process exits, and the kernel refuses a kill across uids, so what stays reachable is
@@ -3628,7 +4018,7 @@ class AdoptionTest {
     fun `a start onto a port the reap just freed is not recorded as doomed`() {
         val killed = mutableListOf<Int>()
         val holder = holdingPortSilently()
-        recordEditorServer(pid = 7311, port = holder.port)
+        recordEditorServer(pid = 7311, port = holder.port, privateSocket = false)
         manager.killRecordedProcess = { killed += it }
         val asked = intArrayOf(0)
         mockkObject(PortFinder)
@@ -3639,13 +4029,8 @@ class AdoptionTest {
 
         manager.startServer()
 
-        assertEquals(2, asked[0], "the port is asked once before the reap and once after it")
+        assertEquals(2, asked[0], "the legacy reap must wait until the port becomes free")
         assertEquals(listOf(7311), killed, "the setup is the reap case or the flag proves nothing")
-        assertFalse(
-            manager.spawnedOntoHeldPort(),
-            "a port this start freed itself is free as far as the spawn is " +
-                "concerned, and the server it spawned must be allowed to be slow"
-        )
     }
 
     /**
@@ -3666,18 +4051,13 @@ class AdoptionTest {
         val killed = mutableListOf<Int>()
         manager.killRecordedProcess = { killed += it }
         val holder = holdingPortSilently()
-        recordEditorServer(pid = 7311, port = holder.port)
+        recordEditorServer(pid = 7311, port = holder.port, privateSocket = false)
         mockkObject(PortFinder)
         every { PortFinder.isPortAvailable(holder.port) } returns false
 
         manager.startServer()
 
         assertEquals(listOf(7311), killed, "the reap must have run for this to mean anything")
-        assertTrue(
-            manager.spawnedOntoHeldPort(),
-            "a port the reap did not actually free is still held, and the spawn " +
-                "onto it must stay diagnosable rather than merely slow"
-        )
     }
 
     /**
@@ -3703,7 +4083,7 @@ class AdoptionTest {
     fun `a port the reap frees a moment later is not recorded as doomed`() {
         val killed = mutableListOf<Int>()
         val holder = holdingPortSilently()
-        recordEditorServer(pid = 7311, port = holder.port)
+        recordEditorServer(pid = 7311, port = holder.port, privateSocket = false)
         manager.killRecordedProcess = { killed += it }
         val asked = intArrayOf(0)
         mockkObject(PortFinder)
@@ -3717,11 +4097,6 @@ class AdoptionTest {
             asked[0] > 2,
             "the port must be asked again after the first refusal, or the grace is not " +
                 "there; it was asked ${asked[0]} time(s)",
-        )
-        assertFalse(
-            manager.spawnedOntoHeldPort(),
-            "a socket the kernel had not closed yet is not a port somebody else is " +
-                "holding, and the server spawned onto it must be allowed to be slow",
         )
     }
 

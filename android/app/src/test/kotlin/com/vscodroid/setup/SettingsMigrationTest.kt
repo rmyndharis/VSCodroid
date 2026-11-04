@@ -9,7 +9,9 @@ import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
 import io.mockk.mockkObject
+import io.mockk.mockkStatic
 import io.mockk.unmockkObject
+import io.mockk.unmockkAll
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -19,6 +21,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.nio.file.Files
 import java.io.IOException
 import java.lang.reflect.InvocationTargetException
 
@@ -37,10 +40,8 @@ import java.lang.reflect.InvocationTargetException
  * The first-run write is covered here too, for the same reason and against the
  * same guard: it also decides by asking whether the file is there.
  *
- * The failure is arranged the way [UpdateSettingsPathsTest] arranges its own:
- * by occupying the temporary path [writeAtomically] derives from the
- * destination. That fails the write without depending on file permissions,
- * which differ depending on who runs the tests.
+ * The failure is injected at the temporary-file open in [writeAtomically],
+ * preserving the real writer and its error handling.
  */
 class SettingsMigrationTest {
 
@@ -61,6 +62,7 @@ class SettingsMigrationTest {
 
     @BeforeEach
     fun setUp() {
+        mockkStatic(Files::class)
         mockkObject(Logger)
         every { Logger.d(any(), any()) } just Runs
         every { Logger.i(any(), any()) } just Runs
@@ -82,14 +84,9 @@ class SettingsMigrationTest {
     }
 
     @AfterEach
-    fun tearDown() = unmockkObject(Logger)
+    fun tearDown() = unmockkAll()
 
-    /** Non-empty, so the cleanup `delete()` cannot quietly reclaim it. */
-    private fun blockTheWrite(): File =
-        File(current.parentFile, "${current.name}.tmp~").also {
-            assertTrue(it.mkdirs(), "could not stage the blocked temp path")
-            File(it, "occupied").writeText("x")
-        }
+    private fun blockTheWrite() = blockAtomicWritesTo(current)
 
     /**
      * The control. Without it, every assertion below would also hold for a
@@ -138,7 +135,7 @@ class SettingsMigrationTest {
         val blocker = blockTheWrite()
         FirstRunSetup(context).updateSettingsNativeLibPaths()
 
-        blocker.deleteRecursively()
+        blocker.close()
         FirstRunSetup(context).updateSettingsNativeLibPaths()
 
         assertTrue(current.isFile, "the migration never recovered")

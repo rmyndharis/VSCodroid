@@ -37,6 +37,29 @@ class ToolchainCardStateTest {
     inner class InstalledSet {
 
         @Test
+        fun `a reopened interrupted install offers Retry over its ownership record`() {
+            val state = manager()
+            state.setInstalled(listOf("ruby"), incompletePacks = listOf(ruby))
+
+            assertEquals(ToolchainAction.RETRY, state.card(ruby).action)
+            assertEquals(ToolchainBadge.FAILED, state.card(ruby).badge)
+
+            state.setInstalled(listOf("ruby"))
+            assertEquals(ToolchainAction.REMOVE, state.card(ruby).action)
+        }
+
+        @Test
+        fun `a completed retry clears its interrupted badge immediately`() {
+            val state = manager()
+            state.setInstalled(listOf("ruby"), incompletePacks = listOf(ruby))
+
+            state.updateState(ruby, AssetPackStatus.COMPLETED, 100)
+
+            assertEquals(ToolchainAction.REMOVE, state.card(ruby).action)
+            assertEquals(ToolchainBadge.INSTALLED, state.card(ruby).badge)
+        }
+
+        @Test
         fun `the short names the install record holds are recognised as installed`() {
             // ToolchainManager.getInstalledToolchains() reads the "name" field of
             // each pack manifest, which the download scripts write as "go",

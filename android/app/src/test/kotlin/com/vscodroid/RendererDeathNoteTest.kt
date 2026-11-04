@@ -3,6 +3,7 @@ package com.vscodroid
 import android.content.Context
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebView
+import com.vscodroid.service.mockEditorGateway
 import com.vscodroid.util.CrashReporter
 import com.vscodroid.util.Logger
 import com.vscodroid.webview.VSCodroidWebViewClient
@@ -37,6 +38,7 @@ class RendererDeathNoteTest {
 
     @Test
     fun `the workbench client notes a renderer death before the view is rebuilt`() {
+        mockEditorGateway()
         mockkObject(Logger)
         every { Logger.e(any(), any(), any()) } just Runs
         val order = mutableListOf<String>()

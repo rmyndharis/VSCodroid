@@ -519,7 +519,7 @@ class SafMirrorReclamationTest {
         val committed = File(mirrorsDir, SafStorageManager.DISCARD_PREFIX + dir.name)
         assertEquals("fun main() {}", File(committed, "src/main.kt").readText())
         mockkObject(StorageManager)
-        every { StorageManager.deleteRecursive(any()) } answers {
+        every { StorageManager.deleteRecursive(any(), any()) } answers {
             if (firstArg<File>().absolutePath == committed.absolutePath) 0L else callOriginal()
         }
         try {

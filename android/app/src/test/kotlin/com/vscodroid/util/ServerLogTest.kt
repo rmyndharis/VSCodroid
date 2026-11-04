@@ -7,8 +7,8 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.FutureTask
 import java.util.concurrent.TimeUnit
-import kotlin.concurrent.thread
 
 /**
  * [ServerLog] and the one line that connects it to the server's output.
@@ -24,6 +24,15 @@ class ServerLogTest {
     lateinit var tempDir: File
 
     private fun logFile() = File(tempDir, "logs/server.log")
+
+    private fun finishWorker(worker: Thread) {
+        worker.join(5_000)
+        if (worker.isAlive) {
+            worker.interrupt()
+            worker.join(5_000)
+        }
+        assertFalse(worker.isAlive, "the server log worker did not stop")
+    }
 
     @Test
     fun `quoted passwords retain no suffix after an escaped quote`() {
@@ -285,27 +294,31 @@ class ServerLogTest {
 
         val started = CountDownLatch(1)
         val written = CountDownLatch(1)
-        val worker = synchronized(lock) {
-            val t = thread(name = "second-server-log") {
-                started.countDown()
-                ServerLog(file).append("from the second instance")
-                written.countDown()
-            }
-            assertTrue(started.await(5, TimeUnit.SECONDS), "the second writer never ran")
-            assertFalse(
-                written.await(300, TimeUnit.MILLISECONDS),
-                "a second ServerLog wrote the file while its lock was held, so the two " +
-                    "instances are on separate monitors and a rotation by either can " +
-                    "swallow the other's line",
-            )
-            t
+        val result = FutureTask {
+            started.countDown()
+            ServerLog(file).append("from the second instance")
+            written.countDown()
         }
-
-        assertTrue(
-            written.await(5, TimeUnit.SECONDS),
-            "the second writer never woke after the lock was released",
-        )
-        worker.join()
+        val worker = Thread(result, "second-server-log")
+        try {
+            synchronized(lock) {
+                worker.start()
+                assertTrue(started.await(5, TimeUnit.SECONDS), "the second writer never ran")
+                assertFalse(
+                    written.await(300, TimeUnit.MILLISECONDS),
+                    "a second ServerLog wrote the file while its lock was held, so the two " +
+                        "instances are on separate monitors and a rotation by either can " +
+                        "swallow the other's line",
+                )
+            }
+            assertTrue(
+                written.await(5, TimeUnit.SECONDS),
+                "the second writer never woke after the lock was released",
+            )
+        } finally {
+            finishWorker(worker)
+            result.get(1, TimeUnit.SECONDS)
+        }
         assertEquals(
             listOf("from the second instance"), file.readLines(),
             "the line was lost rather than merely delayed",
@@ -331,23 +344,27 @@ class ServerLogTest {
 
         val started = CountDownLatch(1)
         val read = CountDownLatch(1)
-        val worker = synchronized(lock) {
-            val t = thread(name = "server-log-reader") {
-                started.countDown()
-                ServerLog(file).tail(200)
-                read.countDown()
-            }
-            assertTrue(started.await(5, TimeUnit.SECONDS), "the reader never ran")
-            assertFalse(
-                read.await(300, TimeUnit.MILLISECONDS),
-                "the reader does not take the lock a rotation holds, so a report can " +
-                    "still be taken from a file that is part-way through being rewritten",
-            )
-            t
+        val result = FutureTask {
+            started.countDown()
+            ServerLog(file).tail(200)
+            read.countDown()
         }
-
-        assertTrue(read.await(5, TimeUnit.SECONDS), "the reader never woke")
-        worker.join()
+        val worker = Thread(result, "server-log-reader")
+        try {
+            synchronized(lock) {
+                worker.start()
+                assertTrue(started.await(5, TimeUnit.SECONDS), "the reader never ran")
+                assertFalse(
+                    read.await(300, TimeUnit.MILLISECONDS),
+                    "the reader does not take the lock a rotation holds, so a report can " +
+                        "still be taken from a file that is part-way through being rewritten",
+                )
+            }
+            assertTrue(read.await(5, TimeUnit.SECONDS), "the reader never woke")
+        } finally {
+            finishWorker(worker)
+            result.get(1, TimeUnit.SECONDS)
+        }
     }
 
     @Test
@@ -738,7 +755,7 @@ class ServerLogTest {
             }
         }, "redaction-1m-stack", 1L shl 20)
         worker.start()
-        worker.join()
+        finishWorker(worker)
 
         assertEquals(null, thrown, "the redaction threw on a long name, killing the process")
         assertFalse("hunter2" in out!!, "the long name is still a credential name: $out")

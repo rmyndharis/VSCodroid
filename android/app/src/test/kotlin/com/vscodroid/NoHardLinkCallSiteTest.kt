@@ -5,7 +5,7 @@ import org.junit.jupiter.api.Test
 import java.io.File
 
 /**
- * Nothing under `src/main` hard links a file.
+ * Neither production nor instrumented source hard links a file.
  *
  * SELinux gives untrusted apps no `link` on any file (`neverallow all_untrusted_apps
  * file_type:file link;` in AOSP's `app_neverallows.te`), so `Files.createLink` and
@@ -18,13 +18,18 @@ class NoHardLinkCallSiteTest {
     private val hardLink = Regex("""\b(createLink|Os\.link)\s*\(""")
 
     @Test
-    fun `no production source creates a hard link`() {
-        val root = File("src/main")
-        check(root.isDirectory) { "${root.absolutePath} not found; this test would pass by scanning nothing" }
-        val scanned = root.walkTopDown().filter { it.isFile && it.extension in setOf("kt", "java") }.toList()
+    fun `no Android source creates a hard link`() {
+        val scanned = listOf(File("src/main"), File("src/androidTest")).flatMap { root ->
+            check(root.isDirectory) { "${root.absolutePath} not found; this test would pass by scanning nothing" }
+            root.walkTopDown().filter { it.isFile && it.extension in setOf("kt", "java") }.toList()
+        }
         assertTrue(
             scanned.any { it.name == "AndroidBridge.kt" },
             "the walk of ${scanned.size} sources never reached AndroidBridge.kt",
+        )
+        assertTrue(
+            scanned.any { it.name == "StorageAnchoredCleanupTest.kt" },
+            "the walk of ${scanned.size} sources never reached the device storage tests",
         )
 
         val offenders = scanned.flatMap { file ->

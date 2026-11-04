@@ -158,7 +158,7 @@ class SafCreatedDocumentNameTest {
         SafSyncEngine::class.java.declaredMethods
             .single { it.name == "createInSaf" }
             .apply { isAccessible = true }
-            .invoke(engine, localFile, parentUri, treeUri, workspace, null)
+            .invoke(engine, localFile, parentUri, treeUri, workspace, null, null)
     }
 
     /**
@@ -226,7 +226,7 @@ class SafCreatedDocumentNameTest {
             createdUri
         }
         SafSyncEngine::class.java.declaredMethods.single { it.name == "createInSaf" }
-            .apply { isAccessible = true }.invoke(engine, directory, parentUri, treeUri, workspace, null)
+            .apply { isAccessible = true }.invoke(engine, directory, parentUri, treeUri, workspace, null, null)
         assertFalse(directory.exists(), "the refused directory name would be created again on reopen")
         assertEquals("nested content", File(workspace, "a_b/c_d/notes.txt").readText())
         assertEquals(listOf("a_b", "c_d", "notes.txt"), stored)

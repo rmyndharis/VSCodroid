@@ -6,7 +6,11 @@ import android.content.res.AssetManager
 import android.graphics.Bitmap
 import android.net.Uri
 import android.net.http.SslError
+import android.os.ParcelFileDescriptor
 import android.os.SystemClock
+import android.system.ErrnoException
+import android.system.Os
+import android.system.OsConstants
 import android.view.KeyEvent
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.ServiceWorkerClient
@@ -24,6 +28,7 @@ import com.vscodroid.bridge.encodeCallbackState
 import com.vscodroid.isExtensionCallback
 import com.vscodroid.isWorkbenchUrl
 import com.vscodroid.service.EDITOR_PID_FILE
+import com.vscodroid.service.EditorGateway
 import com.vscodroid.service.RESTART_DELAY_MS
 import com.vscodroid.util.CrashReporter
 import com.vscodroid.util.EditorLocale
@@ -138,11 +143,46 @@ internal fun resolveWebviewResource(requestedPath: String, roots: List<String>):
     // The server's run note holds the key that authenticates its listener, and it
     // sits under the server root. Refused by name rather than by path because a
     // name needs no context; a workspace file of that name is not worth serving.
-    if (File(canonical).name == EDITOR_PID_FILE) return null
+    if (!resourcePathIsPublished(canonical, roots)) return null
     // Compared with the separator appended: a root's name is also a prefix of
     // its siblings' names, and creating such a sibling is within reach of
     // anything running in the extension host.
-    return if (roots.any { canonical.startsWith("$it/") }) File(canonical) else null
+    return File(canonical)
+}
+
+private fun resourcePathIsPublished(path: String, roots: List<String>): Boolean =
+    path.substringAfterLast('/') != EDITOR_PID_FILE && roots.any { path.startsWith("$it/") }
+
+internal fun openResourceFile(file: File, roots: List<String>): FileInputStream {
+    try {
+        val descriptor = Os.open(
+            file.path,
+            OsConstants.O_RDONLY or OsConstants.O_NONBLOCK or OsConstants.O_NOFOLLOW or OsConstants.O_CLOEXEC,
+            0,
+        )
+        var owner: ParcelFileDescriptor? = null
+        try {
+            try {
+                owner = ParcelFileDescriptor.dup(descriptor)
+            } finally {
+                Os.close(descriptor)
+            }
+            val opened = checkNotNull(owner)
+            if (!OsConstants.S_ISREG(Os.fstat(opened.fileDescriptor).st_mode)) {
+                throw IOException("Resource is not a regular file")
+            }
+            // The kernel names the opened object; resolving that name again would follow a new link.
+            val openedPath = Os.readlink("/proc/self/fd/${opened.fd}")
+            if (!resourcePathIsPublished(openedPath, roots)) {
+                throw IOException("Resource is outside its published roots")
+            }
+            return ParcelFileDescriptor.AutoCloseInputStream(opened).also { owner = null }
+        } finally {
+            owner?.close()
+        }
+    } catch (e: ErrnoException) {
+        throw IOException("Resource could not be opened", e)
+    }
 }
 
 /**
@@ -764,6 +804,8 @@ internal class BoundedInputStream(wrapped: java.io.InputStream, private var rema
     }
 
     override fun read(b: ByteArray, off: Int, len: Int): Int {
+        if (off < 0 || len < 0 || off > b.size - len) throw IndexOutOfBoundsException()
+        if (len == 0) return 0
         if (remaining <= 0) return -1
         val read = super.read(b, off, minOf(len.toLong(), remaining).toInt())
         if (read > 0) remaining -= read
@@ -784,6 +826,7 @@ internal class BoundedInputStream(wrapped: java.io.InputStream, private var rema
      * 206 records; bounding it costs one line either way.
      */
     override fun skip(n: Long): Long {
+        if (n <= 0) return 0
         val skipped = super.skip(minOf(n, remaining))
         if (skipped > 0) remaining -= skipped
         return skipped
@@ -893,6 +936,7 @@ class VSCodroidWebViewClient(
      */
     private val onNavigationDeclined: () -> Unit = { },
     private val workspaceMembers: () -> List<String>? = { null },
+    private val onNavigationStarted: () -> Unit = { },
 ) : WebViewClient() {
     // MissingOnRenderProcessGone: overridden below, and what it does there is the
     // reason the class exists in one piece. The check misses the override on a
@@ -912,6 +956,7 @@ class VSCodroidWebViewClient(
     }
 
     private fun trustedAuthOrigin(address: String?): String? {
+        if (!EditorGateway.instance.isBound(allowedPort)) return null
         if (!isWorkbenchUrl(address, allowedPort)) return null
         val parsed = runCatching { URI(address) }.getOrNull() ?: return null
         return if (parsed.scheme == "http") "http://${parsed.host}:${parsed.port}" else null
@@ -1175,6 +1220,9 @@ class VSCodroidWebViewClient(
         // own origin and that arm refuses everything which is not
         // *.vscode-cdn.net. See [nlsBundleRequested] for the shape.
         if (isLocalhost(request.url)) {
+            if (!EditorGateway.instance.isBound(allowedPort)) {
+                return emptyResponse(503, "Service Unavailable")
+            }
             val headers = request.requestHeaders
             val origin = headerValue(headers, "Origin")
             val fetchSite = headerValue(headers, "Sec-Fetch-Site")
@@ -1274,6 +1322,7 @@ class VSCodroidWebViewClient(
     }
 
     override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
+        onNavigationStarted()
         disposeAuthPage()
         AuthTabWindow.beginPage()
         trustedAuthOrigin(url)?.let { authPage = AuthPage(view, AuthTabWindow.pageGeneration(), it) }
@@ -1456,7 +1505,7 @@ class VSCodroidWebViewClient(
 
     private fun isLocalhost(uri: Uri): Boolean {
         val host = uri.host ?: return false
-        return (host == "127.0.0.1" || host == "localhost") && uri.port == allowedPort
+        return host == "127.0.0.1" && uri.port == allowedPort
     }
 
     private fun isCdnRedirect(uri: Uri): Boolean {
@@ -1993,9 +2042,8 @@ class VSCodroidWebViewClient(
                 // travelled out of `shouldInterceptRequest` into the WebView's own
                 // callback, where `CrashReporter` recorded the death rather than
                 // preventing it, so a workspace being rewritten under a preview
-                // took the editor down with it. IOException and not Exception:
-                // FileNotFoundException is the whole of what an open reports, and
-                // widening it here would swallow failures that are not this one.
+                // took the editor down with it. Only filesystem failures become a
+                // refusal; programming errors must still escape.
                 // At `Logger.d`, the same trade as the four refusals above and for
                 // the same reason: both interpolated values are read out of the
                 // host label and the path the page composed. Weaker than those,
@@ -2005,7 +2053,7 @@ class VSCodroidWebViewClient(
                 // request wrote an absolute path into a log `READ_LOGS` can read,
                 // on a level that is not gated on a debuggable build.
                 val stream = try {
-                    FileInputStream(file)
+                    openResourceFile(file, resourceRoots)
                 } catch (e: IOException) {
                     Logger.d(
                         TAG,
@@ -2292,7 +2340,7 @@ class VSCodroidWebViewClient(
          * merely renders.
          */
         internal fun isWorkbenchOrigin(origin: String, port: Int): Boolean =
-            origin == "http://127.0.0.1:$port" || origin == "http://localhost:$port"
+            origin == "http://127.0.0.1:$port"
 
         /**
          * Whether [origin] is the workbench itself or one of its webview documents.

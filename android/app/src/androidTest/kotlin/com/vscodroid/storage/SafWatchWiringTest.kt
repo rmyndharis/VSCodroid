@@ -64,9 +64,9 @@ class SafWatchWiringTest {
             .apply { isAccessible = true }
             .setBoolean(engine, true)
         SafSyncEngine::class.java
-            .getDeclaredMethod("watchTree", File::class.java, File::class.java, Uri::class.java)
+            .getDeclaredMethod("watchTree", File::class.java, File::class.java, Uri::class.java, WatchSession::class.java)
             .apply { isAccessible = true }
-            .invoke(engine, mirror, mirror, treeUri)
+            .invoke(engine, mirror, mirror, treeUri, engine.session)
     }
 
     @After

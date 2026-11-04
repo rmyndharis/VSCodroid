@@ -165,32 +165,173 @@ class SplashLifetimeTest {
         }
     }
 
+    /** Parsed once per test, so two lookups return nodes of the same document. */
+    private val parsed: Element by lazy { layoutRoot() }
+
+    /** The element carrying `android:id="@+id/<id>"`, wherever it sits in the layout. */
+    private fun viewById(id: String): Element {
+        val all = parsed.getElementsByTagName("*")
+        for (i in 0 until all.length) {
+            val e = all.item(i) as Element
+            if (e.getAttribute("android:id") == "@+id/$id") return e
+        }
+        throw AssertionError("no view with id $id in ${layout.name}; this test is measuring nothing")
+    }
+
+    private fun ancestorsOf(view: Element): List<Element> {
+        val out = mutableListOf<Element>()
+        var node = view.parentNode
+        while (node is Element) {
+            out.add(node)
+            node = node.parentNode
+        }
+        return out
+    }
+
     /**
-     * The Retry button is held against the bottom of the root, not only under the
-     * message.
+     * The Retry button is held against the bottom of the root, and the content
+     * above it ends at its top.
      *
-     * It is the single control on that screen, there is no scroll container, and
-     * the message above it is the failed step plus up to `DETAIL_LIMIT`
-     * characters of the cause in a packed chain that grows downward as it wraps.
-     * Anchored to the message alone, a long cause in landscape or at a raised
-     * font scale puts the button past the bottom of the window with no way to
-     * reach it, and reinstalling is the only way out.
+     * It is the single control on that screen, and the message above it is the
+     * failed step plus up to `DETAIL_LIMIT` characters of the cause. Where the
+     * button used to be built in code and anchored to the bottom, a long cause in
+     * landscape or at a raised font scale could still run under it, because the
+     * message had no container to scroll in. Now the layout says both halves: the
+     * button is a direct child of the root with its bottom on the root's, and the
+     * scroll container's bottom is the button's top, so neither can cover the
+     * other.
      *
-     * NEGATIVE CONTROL: remove `bottomToBottom` from the button's LayoutParams
-     * and this goes red, naming the button. Measured.
+     * NEGATIVE CONTROL: remove `layout_constraintBottom_toBottomOf` from the
+     * button, point the scroll's bottom at `parent`, or move the button inside the
+     * scroll, and each goes red. Measured.
      */
     @Test
     fun `the retry button cannot be pushed off the bottom of the screen`() {
-        val error = body("showSetupError")
-        assertTrue(error.any { it.contains("bottomToBottom") }) {
-            "the Retry button is constrained downward from the message only, so a " +
-                "long failure detail can push the only control on the screen out of " +
-                "the window:\n${error.joinToString("\n")}"
+        val button = viewById("retryButton")
+        assertEquals(parsed, button.parentNode) {
+            "the Retry button is not a direct child of the root, so it scrolls with " +
+                "the message it is meant to stay clear of"
         }
-        assertTrue(error.any { it.contains("verticalBias") }) {
-            "a bottom constraint without the bias against it centres the button in " +
-                "the gap instead of pinning it, which is the same overflow one half " +
-                "as far down"
+        assertEquals("parent", button.getAttribute("app:layout_constraintBottom_toBottomOf")) {
+            "the Retry button is not held against the bottom of the root, so a long " +
+                "failure detail can push the only control on the screen out of the window"
+        }
+        assertEquals("@+id/retryButton", viewById("splashScroll").getAttribute("app:layout_constraintBottom_toTopOf")) {
+            "the scroll container does not end at the Retry button's top, so the " +
+                "message can be drawn under the one control that answers it"
+        }
+    }
+
+    /**
+     * The button is gone until a setup fails, and big enough to hit.
+     *
+     * Gone, not invisible: the progress screen would otherwise carry a button
+     * that takes touches and does nothing, and a screen reader would announce it.
+     * 48dp is the touch target floor, and the same figure the picker's Continue
+     * button uses.
+     *
+     * NEGATIVE CONTROL: drop `android:visibility="gone"` or lower `minHeight` and
+     * the matching assertion goes red. Measured.
+     */
+    @Test
+    fun `the retry button is hidden until a setup fails and is a full touch target`() {
+        val button = viewById("retryButton")
+        assertEquals("gone", button.getAttribute("android:visibility")) {
+            "the Retry button is on screen while setup is still running"
+        }
+        assertEquals("48dp", button.getAttribute("android:minHeight")) {
+            "the Retry button is under the 48dp touch target"
+        }
+    }
+
+    /**
+     * The failure message can be read to its end, and never touches the screen edge.
+     *
+     * The message is inside a scroll container whose child fills the viewport, so
+     * a short progress line stays centred where it always was and a long failure
+     * scrolls. The status line is `0dp` wide between two margins rather than
+     * `wrap_content` with none: a long message wrapped edge to edge, with its
+     * first letters against the bezel.
+     *
+     * NEGATIVE CONTROL: replace the scroll container with a plain layout, drop
+     * `fillViewport`, or restore `wrap_content` on the status line, and each goes
+     * red. Measured.
+     */
+    @Test
+    fun `the failure message scrolls and keeps clear of the screen edges`() {
+        val status = viewById("statusText")
+        val scroll = viewById("splashScroll")
+        assertTrue(scroll.tagName.endsWith("ScrollView")) {
+            "splashScroll is a ${scroll.tagName}, which does not scroll"
+        }
+        assertTrue(ancestorsOf(status).contains(scroll)) {
+            "the status line is not inside the scroll container, so a message taller " +
+                "than the window is cut off with no way to read it"
+        }
+        assertEquals("true", scroll.getAttribute("android:fillViewport")) {
+            "without fillViewport the progress screen's chain collapses to the top of " +
+                "the window instead of staying centred"
+        }
+        assertEquals("0dp", status.getAttribute("android:layout_width")) {
+            "the status line is not constrained between its margins"
+        }
+        assertTrue(status.getAttribute("android:layout_marginStart").isNotEmpty()) {
+            "the status line has no start margin, so wrapped text touches the screen edge"
+        }
+        assertTrue(status.getAttribute("android:layout_marginEnd").isNotEmpty()) {
+            "the status line has no end margin, so wrapped text touches the screen edge"
+        }
+    }
+
+    /**
+     * A message that does not fit is read from its first line, and the scroll says
+     * there is more.
+     *
+     * Two halves of one need. Landscape, or a raised font scale, leaves less room
+     * than the message takes: measured on an API 37 emulator, the hint paragraph
+     * sat below the fold with nothing to show it was there, and at the largest
+     * font the line naming the cause did too. The fading edge is the sign, and
+     * `showSetupError` starting the scroll at the status line puts the cause on
+     * screen before anything is dragged.
+     *
+     * NEGATIVE CONTROL: drop `requiresFadingEdge` from the scroll and the first
+     * assertion goes red; delete the `scrollTo` line from `showSetupError` and the
+     * second does. Measured.
+     */
+    @Test
+    fun `a failure starts at the message and the scroll hints at hidden lines`() {
+        assertEquals("vertical", viewById("splashScroll").getAttribute("android:requiresFadingEdge")) {
+            "nothing shows that a line of the message is hidden below the fold"
+        }
+        val error = body("showSetupError")
+        assertTrue(error.any { it.contains("scrollTo(0, statusText.top") }) {
+            "showSetupError leaves the scroll at the icon, so in landscape the cause " +
+                "of the failure is off screen until something is dragged:\n${error.joinToString("\n")}"
+        }
+    }
+
+    /**
+     * `showSetupError` reveals the layout's button, and the click hides it again.
+     *
+     * Source reading, for the reason this class states. The first half is the
+     * button appearing at all; the second is the progress screen not keeping a
+     * dead Retry button after a tap.
+     *
+     * NEGATIVE CONTROL: delete the `View.VISIBLE` line and the first assertion
+     * goes red; delete the `View.GONE` line and the second does. Measured.
+     */
+    @Test
+    fun `a failed setup shows the retry button and a tap hides it`() {
+        val error = body("showSetupError")
+        assertTrue(error.any { it.contains("R.id.retryButton") }) {
+            "showSetupError does not look up the layout's Retry button"
+        }
+        assertTrue(error.any { Regex("""retryButton\.visibility\s*=\s*View\.VISIBLE""").containsMatchIn(it) }) {
+            "showSetupError never shows the Retry button, so a failed setup leaves a " +
+                "screen with nothing to tap"
+        }
+        assertTrue(error.any { Regex("""retryButton\.visibility\s*=\s*View\.GONE""").containsMatchIn(it) }) {
+            "tapping Retry leaves the button on the progress screen"
         }
     }
 

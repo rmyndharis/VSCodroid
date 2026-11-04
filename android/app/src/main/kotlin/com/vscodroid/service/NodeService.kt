@@ -22,6 +22,7 @@ import kotlinx.coroutines.NonCancellable
 import kotlinx.coroutines.SupervisorJob
 import kotlinx.coroutines.cancel
 import kotlinx.coroutines.delay
+import kotlinx.coroutines.isActive
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import androidx.core.content.edit
@@ -56,7 +57,7 @@ data class StartupNotice(val message: String, val terminal: Boolean)
  * any bound clients because it is started as a foreground service.
  *
  * Threading: the state this service keeps for itself, namely [restartCount],
- * [isServiceRunning], [launchJob], [runId], [failureRaised] and
+ * [lastReadyAt], [isServiceRunning], [launchJob], [runId], [failureRaised] and
  * [startupNotice], is touched only from [serviceScope]'s dispatcher, which is
  * the main thread. Service lifecycle callbacks already arrive there; the one
  * caller that does not is the watchdog, and [setupProcessCallbacks] hands its
@@ -81,12 +82,12 @@ class NodeService : Service() {
     private var restartCount = 0
 
     /**
-     * When the server last reported ready, on [SystemClock.elapsedRealtime].
+     * When the currently running server reported ready, on [SystemClock.elapsedRealtime].
      *
-     * Written on every readiness and read at exactly one place, [handleServerCrash],
-     * because how long a server lasted is a quantity only at the moment it stops
-     * lasting. See [NEVER_READY_AT] for why a run with no readiness behind it
-     * parks this in the future rather than in the past.
+     * Written on every readiness and consumed at [handleServerCrash] when that
+     * server dies, because how long a server lasted is a quantity only for the
+     * process that achieved that readiness. See [NEVER_READY_AT] for why a process
+     * that has not reported ready parks this in the future rather than in the past.
      */
     private var lastReadyAt = NEVER_READY_AT
     private var isServiceRunning = false
@@ -595,10 +596,8 @@ class NodeService : Service() {
      *  - [onStartCommand], which guards on [isServiceRunning];
      *  - [retryOrGiveUp], reached either from [handleServerCrash] (which the
      *    watchdog raises only after the process has exited) or from the launch
-     *    path's own [endsUnreported] branch. Of the two outcomes that reach it,
-     *    `NOT_STARTED` spawned no process by construction and `CANNOT_BIND` stops
-     *    the one it spawned before handing the run on, which is the half of that
-     *    branch this precondition depends on. It also calls `cancelLaunch()`
+     *    path's own [endsUnreported] branch. `NOT_STARTED` spawned no process,
+     *    so no process can remain behind that retry. It also calls `cancelLaunch()`
      *    before its backoff, so no earlier attempt is still in flight when it
      *    arrives here.
      *
@@ -622,7 +621,7 @@ class NodeService : Service() {
         startupNotice = null
         launchJob = serviceScope.launch {
             val outcome = launchOutcome(
-                start = { withContext(Dispatchers.IO) { processManager.startServer() } },
+                start = { withContext(Dispatchers.IO) { processManager.startServer { isActive } } },
                 awaitReady = { withContext(Dispatchers.IO) { processManager.waitForReady() } },
                 // [ProcessManager.hasLiveServer] and not `isRunning()`, which is
                 // `serverProcess?.isAlive` and is structurally false for an adopted
@@ -632,7 +631,6 @@ class NodeService : Service() {
                 // [endsUnreported] treats as already owned by the crash path, so
                 // nothing retries it and the user gets one toast over a placeholder.
                 isAlive = { processManager.hasLiveServer() },
-                portWasHeld = { processManager.spawnedOntoHeldPort() },
             )
             when (outcome) {
                 LaunchOutcome.NOT_STARTED -> {
@@ -663,37 +661,6 @@ class NodeService : Service() {
                     // not -- which is a difference nothing could justify from the
                     // user's side, since both mean the same thing to them.
                     reportFailure(getString(R.string.error_server_timeout))
-                }
-
-                // Alive, and that is the trap this branch exists to disarm. The
-                // pair spawned onto a taken port never binds and never exits, so
-                // every question about it answers "still starting", and the
-                // branch below, which waits on liveness and nothing else, then
-                // waits for the life of the app. What the user got was a
-                // placeholder, one "taking too long" toast at two minutes, and
-                // then silence: no failure, no restart, no notification, and a
-                // service that believed it was running so relaunching did
-                // nothing. The only ways out were Stop and force-stop.
-                LaunchOutcome.CANNOT_BIND -> {
-                    Logger.e(
-                        tag,
-                        "Server cannot bind port ${processManager.port}; something else " +
-                            "was already holding it when the process spawned",
-                    )
-                    // Killed here rather than left for the retry to trip over.
-                    // [ProcessManager.startServer] refuses while a process is
-                    // alive, so leaving it would turn every remaining attempt
-                    // into an immediate NOT_STARTED and spend the budget without
-                    // ever trying again, and would leave the pair running after
-                    // the budget was gone. Off the main dispatcher because the
-                    // stop waits on the process; this is not a lifecycle callback,
-                    // so nothing here depends on holding the main thread.
-                    withContext(Dispatchers.IO) { processManager.stopServer() }
-                    // The same message a spawn failure gets, because it is the
-                    // same thing from the user's side: no server, and nothing
-                    // they did caused it. Saying it is what makes the retries
-                    // below visible at all.
-                    reportFailure(getString(R.string.error_server_start))
                 }
 
                 LaunchOutcome.STILL_COMING_UP -> {
@@ -843,13 +810,8 @@ class NodeService : Service() {
      * [ProcessManager] is what reports an adopted one going away, through the
      * same `onServerCrashed`.
      *
-     * That bound is only honest while liveness means something, and there is one
-     * case where it does not: a process spawned onto a port something else holds
-     * stays alive forever without ever binding, so this loop would ask a stranger
-     * for the rest of the app's life. It is not reached from here any more,
-     * [LaunchOutcome.CANNOT_BIND] takes it before this branch is chosen, and
-     * that is what the paragraph above rests on rather than an assumption that a
-     * live process is a starting one.
+     * The public origin is reserved before the private backend starts. Failure
+     * to reserve it returns NOT_STARTED without creating a process.
      *
      * Separating patience from a verdict is only half of it, though, and the
      * first version of this stopped there. A process that stays alive and never
@@ -1021,11 +983,15 @@ class NodeService : Service() {
         //
         // Not in [retryOrGiveUp], for the same reason [chargeHeapOverride] is not
         // there either: two paths reach it for one death, and only this one is fed
-        // by a server that ever ran. A start that produced nothing has no uptime
-        // to credit, and [NEVER_READY_AT] is what makes it answer so.
+        // by a server that ever ran. Consuming [lastReadyAt] here, before
+        // [chargeHeapOverride] suspends, ensures a crash loop of replacements that
+        // never reach [announceReady] cannot inherit an earlier server's timestamp
+        // once the clock passes [READY_STABLE_MS], and cannot overwrite a
+        // replacement run's readiness recorded while preference I/O was in flight.
         if (readinessIsRecovery(SystemClock.elapsedRealtime(), lastReadyAt)) {
             endFailureEpisode()
         }
+        lastReadyAt = NEVER_READY_AT
         Logger.w(tag, "Server crashed (exit=$exitCode), restart #${restartCount + 1}")
         chargeHeapOverride(exitCode, epoch)
         // Preference I/O can outlive a stop and a replacement start.
@@ -1425,11 +1391,11 @@ internal const val MAX_BACKOFF_SHIFT = 4
 internal const val READY_STABLE_MS = 60_000L
 
 /**
- * What the last-ready instant holds while this run has never had a ready server.
+ * What [NodeService.lastReadyAt] holds while the current server has not reported ready.
  *
  * In the future rather than in the past, and that direction is the whole of it.
  * The one question asked of that instant is how long the server that just died
- * had been ready, so a run with no readiness behind it has to answer "not long
+ * had been ready, so a process with no readiness behind it has to answer "not long
  * enough". Parked in the past, which is where it sat while readiness itself
  * asked the question, every crash of a server that never answered would hand out
  * a fresh budget, and the terminal state would be unreachable for exactly the
@@ -1523,22 +1489,12 @@ internal enum class LaunchOutcome {
     /** The poll gave up and the process is gone. */
     DIED_BEFORE_ANSWERING,
 
-    /**
-     * The poll gave up, the process is alive, and it never had a port to bind.
-     *
-     * Alive here means nothing, which is what separates this from
-     * [STILL_COMING_UP]. The editor server spawned onto a taken port prints
-     * `EADDRINUSE` and does not exit, so the pair lives on serving nothing and
-     * every liveness question about it answers yes for as long as the app runs.
-     */
-    CANNOT_BIND,
-
     /** The poll gave up, but the process is alive and may still answer. */
     STILL_COMING_UP,
 }
 
 /**
- * Which of the five ends a start attempt reaches.
+ * Which of the four outcomes a start attempt reaches.
  *
  * Extracted because the branch it replaces lived inside a coroutine on a
  * `Dispatchers.Main` scope owned by a `Service`, and nothing in a plain JVM can
@@ -1559,16 +1515,10 @@ internal suspend fun launchOutcome(
     start: suspend () -> Boolean,
     awaitReady: suspend () -> Boolean,
     isAlive: () -> Boolean,
-    portWasHeld: () -> Boolean,
 ): LaunchOutcome = when {
     !start() -> LaunchOutcome.NOT_STARTED
     awaitReady() -> LaunchOutcome.READY
     !isAlive() -> LaunchOutcome.DIED_BEFORE_ANSWERING
-    // After liveness, not before it. A process that has already exited is the
-    // crash path's to report whatever it was spawned onto, and asking this first
-    // would take that report away from the watchdog and hand the same death two
-    // recoveries.
-    portWasHeld() -> LaunchOutcome.CANNOT_BIND
     else -> LaunchOutcome.STILL_COMING_UP
 }
 
@@ -1583,23 +1533,14 @@ internal suspend fun launchOutcome(
  * the crash path is already acting. Treating the two alike gives one death two
  * recoveries, and the slower of them writes its conclusion over the other's.
  *
- * Two outcomes are unreported, for two different reasons, and the function is
- * named after what they share rather than after either one:
- *
- *  - `NOT_STARTED`: no spawn, so no watchdog and no callback. That is the case a
- *    port held by an orphan reaches, which is exactly the case that has to be
- *    able to recover on its own.
- *  - `CANNOT_BIND`: a process exists, but the service has just stopped it,
- *    which sets `isShuttingDown`, and the watchdog suppresses an expected exit.
- *    Leaving it here would be worse than in the first case: the pair is alive and
- *    stays alive, so nothing would ever report anything at all.
+ * NOT_STARTED creates no process and therefore has no watchdog or crash
+ * callback. The launch path must send that failure to the retry budget.
  *
  * Exhaustive over the enum rather than an `else`, so adding an outcome is a
  * compile error here instead of a silent `false`.
  */
 internal fun endsUnreported(outcome: LaunchOutcome): Boolean = when (outcome) {
-    LaunchOutcome.NOT_STARTED,
-    LaunchOutcome.CANNOT_BIND -> true
+    LaunchOutcome.NOT_STARTED -> true
     LaunchOutcome.READY,
     LaunchOutcome.STILL_COMING_UP,
     LaunchOutcome.DIED_BEFORE_ANSWERING -> false

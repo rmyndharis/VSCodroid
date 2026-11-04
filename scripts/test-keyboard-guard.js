@@ -8,18 +8,21 @@
  * `MainActivity.injectKeyboardGuard()`, handed to `evaluateJavascript`, so
  * nothing compiles it and `KeyboardGuardWiringTest` can only match its text.
  * Part of it ends a soft keyboard's composition before the editor moves the
- * caret: Chromium keeps an EditContext composition's range where it was when
- * the page moves the selection (crbug 379170477), so a keyboard that
- * recomposes the word at the new caret writes it over the old range. What
- * makes the finish work is order and state, which text matching cannot see:
- * the blur and refocus run in the same dispatch as the key or the editor's
- * gesture and before the editor's own handler, only while the focused
- * EditContext host is composing, and without the guard's own focusin handler
- * answering the refocus by changing `inputmode`, which restarts input. An
- * open suggest list is the exception, because ending a composition makes the
- * editor refilter the list and focus its first item again: Tab accepting a
- * suggestion and a tap on a row are finished after the list has acted, and
- * Up, Down, PageUp and PageDown that move the list's focus not at all.
+ * caret or when the screen turns: Chromium keeps an EditContext composition's
+ * range where it was when the page moves the selection (crbug 379170477), so a
+ * keyboard that recomposes the word at the new caret writes it over the old
+ * range, and a turn of the phone leaves a composing word underlined in the page
+ * after the keyboard restarts for the new orientation. What makes the finish
+ * work is order and state, which text matching cannot see: the blur and refocus
+ * run in the same dispatch as the key, the editor's gesture or
+ * `window.__vscodroidFinishComposition()` and before the editor's own handler,
+ * only while the focused EditContext host is composing, and without the guard's
+ * own focusin handler answering the refocus by changing `inputmode`, which
+ * restarts input. An open suggest list is the exception, because ending a
+ * composition makes the editor refilter the list and focus its first item
+ * again: Tab accepting a suggestion and a tap on a row are finished after the
+ * list has acted, and Up, Down, PageUp and PageDown that move the list's focus
+ * not at all.
  *
  * This extracts the real script, runs it under `vm` against a small fake DOM
  * that dispatches events through the capture, target and bubble phases, and
@@ -77,12 +80,12 @@ const MAIN_ACTIVITY = path.join(
  * The body of the raw string in `injectKeyboardGuard()`, with the indentation
  * `trimIndent()` removes taken off, which is the text the WebView is given.
  */
-function extractGuard() {
+function extractGuard(name = 'injectKeyboardGuard') {
     const lines = fs.readFileSync(MAIN_ACTIVITY, 'utf8').split('\n');
-    const fn = lines.findIndex((l) => l.includes('private fun injectKeyboardGuard()'));
+    const fn = lines.findIndex((l) => l.includes(`private fun ${name}()`));
     assert.notStrictEqual(
         fn, -1,
-        'injectKeyboardGuard() is gone from MainActivity.kt, so this check has nothing to ' +
+        `${name}() is gone from MainActivity.kt, so this check has nothing to ` +
         'run. If the script moved, point this at its new home rather than deleting the check.',
     );
 
@@ -99,12 +102,13 @@ function extractGuard() {
     // A `$` before a name or `{` is a Kotlin template; before `/` it is literal.
     assert.ok(!/\$[A-Za-z_{]/.test(js),
         'the guard gained a Kotlin interpolation this check does not know how to fill');
-    assert.ok(js.includes('function applyAll()'),
-        'the extracted text has no applyAll(), so the wrong block was extracted');
+    assert.ok(js.includes(name === 'injectKeyboardGuard' ? 'function applyAll()' : '__vscodroidFinishComposition'),
+        `the extracted ${name} script does not contain its expected entry point`);
     return js;
 }
 
 const GUARD = extractGuard();
+const ROTATION = extractGuard('finishKeyboardCompositionOnTurn');
 const GESTURES = ['-monaco-gesturetap', '-monaco-gesturecontextmenu'];
 
 /** Blur, focus, attribute writes and the editor's own handlers, in order. */
@@ -460,6 +464,99 @@ check('a tap on a list outside the editor is left alone',
     ['explorer -monaco-gesturetap']);
 check('after a tap outside text, End finishes the word once and never writes inputmode',
     typing(), (p) => { touch(p, p.tabs, 100); press(p, 'End'); }, finished('editor End'));
+check('turning the screen while a word composes finishes it and never writes inputmode',
+    typing(), (p) => {
+        touch(p, p.tabs, 100);
+        p.window.__vscodroidImeVisible = false;
+        log = [];
+        task(p, () => { p.window.__vscodroidFinishComposition(); });
+    }, ['blur host', 'focus host']);
+check('a window resize event alone does not end a composing word',
+    typing(), (p) => {
+        dispatch(p, p.window, { type: 'resize' });
+    }, []);
+check('turning the screen with no word composing does nothing',
+    typing({ composing: false }), (p) => {
+        task(p, () => { p.window.__vscodroidFinishComposition(); });
+    }, []);
+check('turning the screen while the keyboard stays up ends a composing word without changing inputmode',
+    typing(), (p) => {
+        p.window.__vscodroidImeVisible = true;
+        task(p, () => { p.window.__vscodroidFinishComposition(); });
+    }, ['blur host', 'focus host']);
+check('turning the screen while a suggest list row has focus does not blur the editor host',
+    openList(typing()), (p) => {
+        p.rows[0].focus();
+        log = [];
+        task(p, () => { p.window.__vscodroidFinishComposition(); });
+    }, []);
+check('a word composed after a screen turn finishes on the next caret key',
+    typing(), (p) => {
+        task(p, () => { p.window.__vscodroidFinishComposition(); });
+        p.host.editContext.start();
+        log = [];
+        press(p, 'ArrowRight');
+    }, ['blur host', 'focus host', 'editor ArrowRight']);
+check('calling __vscodroidFinishComposition twice in a row blurs and focuses once',
+    typing(), (p) => {
+        task(p, () => {
+            p.window.__vscodroidFinishComposition();
+            p.window.__vscodroidFinishComposition();
+        });
+    }, ['blur host', 'focus host']);
+
+function rotationVerdict(page) {
+    return vm.runInNewContext(ROTATION, { window: page.window, document: page.document });
+}
+
+check('rotation releases native input after finishing an editable host',
+    typing(), (p) => { assert.strictEqual(rotationVerdict(p), true); }, ['blur host', 'focus host']);
+check('rotation refreshes a host whose old composition already ended',
+    typing({ composing: false }), (p) => { assert.strictEqual(rotationVerdict(p), true); }, []);
+check('rotation before the keyboard guard loads leaves native input alone',
+    typing(), (p) => {
+        delete p.window.__vscodroidFinishComposition;
+        assert.strictEqual(rotationVerdict(p), false);
+    }, []);
+check('rotation ignores a nonfunction composition hook',
+    typing(), (p) => {
+        p.window.__vscodroidFinishComposition = {};
+        assert.strictEqual(rotationVerdict(p), false);
+    }, []);
+check('rotation leaves the textarea input path alone',
+    typing({ textarea: true }), (p) => { assert.strictEqual(rotationVerdict(p), false); }, []);
+check('rotation leaves a held keyboard down after finishing composition',
+    typing(), (p) => {
+        p.window.__vscodroidImeVisible = false;
+        p.host.attrs.set('inputmode', 'none');
+        assert.strictEqual(rotationVerdict(p), false);
+    }, ['blur host', 'focus host']);
+check('rotation with focus on a suggest row leaves native input alone',
+    openList(typing()), (p) => {
+        p.rows[0].focus();
+        log = [];
+        assert.strictEqual(rotationVerdict(p), false);
+    }, []);
+check('rotation ignores a host that loses focus during composition recovery',
+    typing(), (p) => {
+        p.window.__vscodroidFinishComposition = () => { p.document.activeElement = p.document.body; };
+        assert.strictEqual(rotationVerdict(p), false);
+    }, []);
+check('rotation after a drag outside text leaves native input alone, which would hold the host',
+    typing({ composing: false }), (p) => {
+        drag(p, p.explorer);
+        flushTimers(p);
+        log = [];
+        assert.strictEqual(rotationVerdict(p), false);
+    }, []);
+check('rotation after a tap on text again releases native input',
+    typing({ composing: false }), (p) => {
+        drag(p, p.explorer);
+        flushTimers(p);
+        touch(p, p.lines, 100, '-monaco-gesturetap');
+        log = [];
+        assert.strictEqual(rotationVerdict(p), true);
+    }, []);
 check('the textarea edit path, which has no EditContext, is left alone',
     typing({ textarea: true }), (p) => press(p, 'End'), ['editor End']);
 

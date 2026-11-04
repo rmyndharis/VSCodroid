@@ -8,7 +8,8 @@ import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
 import io.mockk.mockkObject
-import io.mockk.unmockkObject
+import io.mockk.mockkStatic
+import io.mockk.unmockkAll
 import io.mockk.verify
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -17,6 +18,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.nio.file.Files
 
 /**
  * Tests the Python reconciliation call site -- the order it does its two jobs
@@ -60,6 +62,7 @@ class PythonReclaimTest {
 
     @BeforeEach
     fun setUp() {
+        mockkStatic(Files::class)
         mockkObject(Logger)
         every { Logger.d(any(), any()) } just Runs
         every { Logger.i(any(), any()) } just Runs
@@ -76,7 +79,7 @@ class PythonReclaimTest {
     }
 
     @AfterEach
-    fun tearDown() = unmockkObject(Logger)
+    fun tearDown() = unmockkAll()
 
     private fun contextWith(freeBytes: Long): Context = mockk<Context>(relaxed = true).also {
         every { it.filesDir } returns CappedDir(filesDir.path, freeBytes)
@@ -135,6 +138,51 @@ class PythonReclaimTest {
         assertTrue(File(libDir, "python3.13").exists(), "the current stdlib was deleted")
     }
 
+    @Test
+    fun `prunes superseded bundled pip dist-info from the current site-packages`() {
+        File(libDir, shipped).writeText("the runtime this build ships")
+        val sitePackages = File(libDir, "python3.13/site-packages").apply { mkdirs() }
+        val oldDist = File(sitePackages, "pip-26.2.1.dist-info").apply {
+            mkdirs()
+            File(this, "METADATA").writeText("Version: 26.2.1\n")
+        }
+        val symlinkTarget = File(filesDir, "outside-pip-target").apply {
+            mkdirs()
+            File(this, "keep.txt").writeText("do not delete through symlink")
+        }
+        val symlinkedStaleDist = File(sitePackages, "pip-25.0.1.dist-info")
+        java.nio.file.Files.createSymbolicLink(symlinkedStaleDist.toPath(), symlinkTarget.toPath())
+        val newDist = File(sitePackages, "pip-26.2.2.dist-info").apply {
+            mkdirs()
+            File(this, "METADATA").writeText("Version: 26.2.2\n")
+        }
+        val otherDist = File(sitePackages, "pip_tools-7.4.1.dist-info").apply { mkdirs() }
+        val userPkg = File(sitePackages, "requests-2.32.3.dist-info").apply { mkdirs() }
+        every { assets.list("usr/lib/python3.13/site-packages") } returns
+            arrayOf("pip", "pip-26.2.2.dist-info")
+
+        FirstRunSetup(contextWith(freeBytes = 100_000_000L), 0L).pruneSupersededBundledPipDistInfoLocked()
+
+        assertFalse(oldDist.exists(), "superseded pip-26.2.1.dist-info survived in site-packages")
+        assertFalse(java.nio.file.Files.exists(symlinkedStaleDist.toPath(), java.nio.file.LinkOption.NOFOLLOW_LINKS), "symlinked stale dist-info survived")
+        assertTrue(File(symlinkTarget, "keep.txt").isFile, "deleting symlinked dist-info followed the link into its target")
+        assertTrue(newDist.exists(), "current pip-26.2.2.dist-info was deleted")
+        assertTrue(otherDist.exists(), "unrelated pip_tools dist-info was deleted")
+        assertTrue(userPkg.exists(), "user-installed package dist-info was deleted")
+
+        val source = File("src/main/kotlin/com/vscodroid/setup/FirstRunSetup.kt").readText()
+        val setupBody = com.vscodroid.SourceScan.withoutComments(
+            com.vscodroid.SourceScan.body(source, "private suspend fun runSetupLocked("),
+        )
+        val incompleteIdx = setupBody.indexOf("if (incomplete.isNotEmpty())")
+        val pruneIdx = setupBody.indexOf("pruneSupersededBundledPipDistInfoLocked()")
+        val flushIdx = setupBody.indexOf("flushWritesToMedia()")
+        assertTrue(
+            incompleteIdx in 0 until pruneIdx && pruneIdx < flushIdx,
+            "pruneSupersededBundledPipDistInfoLocked() must run in runSetupLocked after the incomplete check and before flushWritesToMedia()",
+        )
+    }
+
     /**
      * An APK that carries no Python at all is a legitimate build shape, and it
      * must not be read as "everything installed is stale". Reordering the
@@ -164,16 +212,14 @@ class PythonReclaimTest {
             java.io.ByteArrayInputStream("runtime".toByteArray())
         }
         val leaf = File(libDir, "python3.13/encodings/__init__.py")
-        val blocker = File(leaf.parentFile, "${leaf.name}.tmp~")
-        assertTrue(blocker.mkdirs())
-        File(blocker, "occupied").writeText("x")
+        val blocker = blockAtomicWritesTo(leaf)
         val setup = FirstRunSetup(contextWith(512L * 1_048_576))
 
         kotlinx.coroutines.runBlocking { setup.reconcilePythonRuntime() }
 
         assertFalse(File(libDir, shipped).exists(), "the runtime was published before its stdlib")
         assertTrue(setup.pythonRuntimeNeedsWork(), "the failed stdlib no longer has a retry trigger")
-        assertTrue(blocker.deleteRecursively())
+        blocker.close()
         kotlinx.coroutines.runBlocking { setup.reconcilePythonRuntime() }
         org.junit.jupiter.api.Assertions.assertEquals("# encodings", leaf.readText())
         assertTrue(File(libDir, shipped).isFile)

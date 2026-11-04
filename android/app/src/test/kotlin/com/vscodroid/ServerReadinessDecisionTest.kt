@@ -6,29 +6,6 @@ import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
-/**
- * The two decisions `MainActivity` makes about a server that may not be serving.
- *
- * [ServerReadinessCallSiteTest] beside this one reads the source and checks which
- * *method* is called. That catches one regression (putting `isServerRunning`
- * back) and cannot catch the other: calling the right method and then ignoring
- * what it said. Both call sites were mutated that way and the whole suite stayed
- * green, because a source-reading test sees the token and not the branch.
- *
- * These are the branches, as values. A mutation that keeps the call and drops the
- * verdict has to change one of these functions to compile away, and changing
- * either one fails here.
- *
- * What each protects, if it stops holding:
- *
- *  - [bindDecision] runs when an activity binds to a service that is already up.
- *    A server that became ready before the activity bound never fires
- *    `onServerReady` at it, so the state is asked for rather than waited on. Load
- *    on a port that is not listening and the user gets a connection-refused page;
- *    `onReceivedError` only logs, so nothing takes it away.
- *  - [shouldActOnResume] runs when the app comes back from the background. The
- *    same page is reloaded into the same port, so the same failure applies.
- */
 class ServerReadinessDecisionTest {
 
     // -- bindDecision --

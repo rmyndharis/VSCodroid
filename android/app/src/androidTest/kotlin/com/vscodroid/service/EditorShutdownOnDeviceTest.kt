@@ -20,8 +20,6 @@ import org.junit.Test
 import org.junit.runner.RunWith
 import java.io.File
 import java.net.HttpURLConnection
-import java.net.InetSocketAddress
-import java.net.Socket
 import java.net.URL
 import java.util.UUID
 import java.util.concurrent.TimeUnit
@@ -35,6 +33,7 @@ class EditorShutdownOnDeviceTest {
     private val evidence = File(app.cacheDir, "$name-evidence")
     private val preferences = mutableSetOf<String>()
     private val runs = mutableListOf<OwnedRun>()
+    private val gateway = EditorGateway()
     private val context = object : ContextWrapper(app) {
         override fun getFilesDir() = File(sandbox, "f")
         override fun getCacheDir() = File(sandbox, "c")
@@ -58,7 +57,7 @@ class EditorShutdownOnDeviceTest {
         assertTrue(context.filesDir.mkdirs())
         assertTrue(context.cacheDir.mkdirs())
         assertTrue(evidence.mkdirs())
-        val manager = ProcessManager(context)
+        val manager = ProcessManager(context, gateway)
         try {
             phase("before-extraction")
             extract("vscode-reh", File(context.filesDir, "server/vscode-reh"))
@@ -91,18 +90,21 @@ class EditorShutdownOnDeviceTest {
             assertFalse(first.bootstrap.isAlive)
             assertEquals("the bootstrap must have died from SIGKILL", 137, first.bootstrap.exitValue())
             assertTrue("the editor did not survive its bootstrap", sameEditorAlive(first))
+            assertTrue("the surviving editor must still accept its private transport", backendOpen(first))
             assertEquals("the surviving editor must still serve its socket", 200, version(first.port))
             phase("bootstrap-dead-editor-serving", first)
 
             manager.stopServer()
             phase("dead-bootstrap-stop-returned", first)
-            await("the recorded editor and its socket to disappear") {
-                !sameEditorAlive(first) && !socketOpen(first.port)
+            await("the recorded editor and its private transport to stop") {
+                !sameEditorAlive(first) && !backendOpen(first)
             }
+            assertReservedUnavailable(first.port)
             assertFalse(note.exists())
             manager.stopServer()
             assertFalse(manager.hasLiveServer())
             assertFalse(note.exists())
+            assertReservedUnavailable(first.port)
             phase("repeated-stop-complete", first)
 
             assertTrue("a fresh editor must start after Stop", manager.startServer())
@@ -110,28 +112,36 @@ class EditorShutdownOnDeviceTest {
             assertTrue("the next isolated editor did not become ready", manager.waitForReady(60_000))
             val second = ownedRun(manager)
             assertNotEquals(first.runId, second.runId)
+            assertNotEquals(first.backendSocket, second.backendSocket)
+            assertEquals("a restart must retain the WebView origin", first.port, second.port)
             assertOwnedEnvironment(second)
             assertEquals(200, version(second.port))
             phase("second-editor-ready", second)
             manager.stopServer()
             phase("cooperative-stop-returned", second)
-            await("the cooperative bootstrap, editor and socket to disappear") {
-                !second.bootstrap.isAlive && !sameEditorAlive(second) && !socketOpen(second.port)
+            await("the cooperative bootstrap, editor and private transport to stop") {
+                !second.bootstrap.isAlive && !sameEditorAlive(second) && !backendOpen(second)
             }
+            assertReservedUnavailable(second.port)
             assertFalse(note.exists())
             manager.stopServer()
             assertFalse(manager.hasLiveServer())
+            assertReservedUnavailable(second.port)
             phase("cooperative-repeated-stop-complete", second)
         } finally {
-            manager.stopServer()
-            for (run in runs) {
-                run.bootstrap.destroyForcibly()
-                if (sameEditorAlive(run)) Process.killProcess(run.pid)
-            }
-            await("all fixture-owned editors to exit") { runs.none { sameEditorAlive(it) } }
-            assertTrue("the extracted fixture could not be removed", sandbox.deleteRecursively())
-            preferences.forEach {
-                assertTrue("the fixture preferences could not be removed", app.deleteSharedPreferences(it))
+            try {
+                manager.stopServer()
+                for (run in runs) {
+                    run.bootstrap.destroyForcibly()
+                    if (sameEditorAlive(run)) Process.killProcess(run.pid)
+                }
+                await("all fixture-owned editors to exit") { runs.none { sameEditorAlive(it) } }
+                assertTrue("the extracted fixture could not be removed", sandbox.deleteRecursively())
+                preferences.forEach {
+                    assertTrue("the fixture preferences could not be removed", app.deleteSharedPreferences(it))
+                }
+            } finally {
+                gateway.close()
             }
         }
     }
@@ -148,10 +158,14 @@ class EditorShutdownOnDeviceTest {
             it.substring(it.lastIndexOf(')') + 2).split(' ')[1].toLong()
         }
         assertEquals("the editor must be a child of the captured bootstrap", bootstrapPid, parentPid)
-        val run = OwnedRun(pid, recorded.getInt("port"), recorded.getString("runId"), stat(pid)!!.second, bootstrapPid, bootstrap)
+        val runId = recorded.getString("runId")
+        val backendSocket = File(recorded.getString("socketPath"))
+        assertEquals("the private transport must belong to this run", editorBackendSocket(context, runId), backendSocket)
+        val run = OwnedRun(pid, recorded.getInt("port"), runId, stat(pid)!!.second, bootstrapPid, bootstrap, backendSocket)
         assertTrue(run.runId.isNotEmpty())
         assertEquals(manager.port, run.port)
         assertTrue("the note must name this fixture's editor", sameEditorAlive(run))
+        assertTrue("the noted editor must accept its private transport", backendOpen(run))
         runs += run
         return run
     }
@@ -186,10 +200,15 @@ class EditorShutdownOnDeviceTest {
         }
     }
 
-    private fun socketOpen(port: Int): Boolean = runCatching {
-        Socket().use { it.connect(InetSocketAddress("127.0.0.1", port), 200) }
+    private fun backendOpen(run: OwnedRun): Boolean = runCatching {
+        connectEditorBackend(run.backendSocket).use { }
         true
     }.getOrDefault(false)
+
+    private fun assertReservedUnavailable(port: Int) {
+        assertTrue("the editor origin was released", gateway.isBound(port))
+        assertEquals("the reserved origin must report an unavailable editor", 503, version(port))
+    }
 
     private fun await(description: String, ready: () -> Boolean) {
         val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
@@ -230,5 +249,6 @@ class EditorShutdownOnDeviceTest {
         val startTicks: String,
         val bootstrapPid: Long,
         val bootstrap: java.lang.Process,
+        val backendSocket: File,
     )
 }

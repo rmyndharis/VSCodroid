@@ -22,6 +22,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.nio.file.Files
 
 /**
  * What a shell that is not interactive can run.
@@ -54,6 +55,7 @@ class NonInteractiveShellEnvTest {
 
     @BeforeEach
     fun setUp() {
+        mockkStatic(Files::class)
         mockkObject(Logger)
         every { Logger.d(any(), any()) } just Runs
         every { Logger.i(any(), any()) } just Runs
@@ -178,9 +180,8 @@ class NonInteractiveShellEnvTest {
     /**
      * Every non-interactive shell in the app sources this file, so a half-written
      * one is not a missing command but a syntax error printed by every task and
-     * every npm script. The failure is arranged as in [BashrcAtomicityTest], by
-     * occupying the temporary path [writeAtomically] derives from the
-     * destination.
+     * every npm script. The failure is injected at the temporary-file open in
+     * [writeAtomically].
      */
     @Test
     fun `a write that cannot finish leaves the previous file intact`() {
@@ -189,10 +190,7 @@ class NonInteractiveShellEnvTest {
         val previous = "npm() { echo previous; }\n"
         envFile.writeText(previous)
 
-        File(envFile.parentFile, "${envFile.name}.tmp~").also {
-            assertTrue(it.mkdirs(), "could not stage the blocked temp path")
-            File(it, "occupied").writeText("x")
-        }
+        blockAtomicWritesTo(envFile)
 
         FirstRunSetup(context).createBashEnvFile()
 
@@ -776,14 +774,13 @@ claude() {
         bashrc.parentFile.mkdirs()
         bashrc.writeText(olderClaudeBlock)
         val original = bashrc.readBytes()
-        val blocker = File(bashrc.parentFile, "${bashrc.name}.tmp~").apply { mkdirs() }
-        File(blocker, "occupied").writeText("x")
+        val blocker = blockAtomicWritesTo(bashrc)
         val setup = FirstRunSetup(context)
 
         setup.createNpmWrappers()
 
         assertArrayEquals(original, bashrc.readBytes())
-        assertTrue(blocker.deleteRecursively())
+        blocker.close()
         setup.createNpmWrappers()
         assertTrue(bashrc.readText().contains("    libclaude-launch.so "))
     }

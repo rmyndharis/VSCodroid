@@ -1,0 +1,90 @@
+Serve only the regular file opened for the response.
+
+Open the path without blocking on a pipe writer, validate the opened file,
+and stream the same descriptor so a replaced path cannot switch the response
+to a device or pipe. Close the descriptor after cached responses, errors and
+client disconnects as well as successful transfers.
+
+diff --git a/src/vs/server/node/webClientServer.ts b/src/vs/server/node/webClientServer.ts
+--- a/src/vs/server/node/webClientServer.ts
++++ b/src/vs/server/node/webClientServer.ts
+@@ -3,7 +3,7 @@
+  *  Licensed under the MIT License. See License.txt in the project root for license information.
+  *--------------------------------------------------------------------------------------------*/
+ 
+-import { createReadStream, promises } from 'fs';
++import { constants, promises } from 'fs';
+ import type * as http from 'http';
+ import * as cookie from 'cookie';
+ import * as crypto from 'crypto';
+@@ -53,8 +53,17 @@
+  * Serve a file at a given path or 404 if the file is missing.
+  */
+ export async function serveFile(filePath: string, cacheControl: CacheControl, logService: ILogService, req: http.IncomingMessage, res: http.ServerResponse, responseHeaders: Record<string, string>): Promise<void> {
++	let file: Awaited<ReturnType<typeof promises.open>> | undefined;
+ 	try {
+-		const stat = await promises.stat(filePath); // throws an error if file doesn't exist
++		// Open without waiting for a pipe writer, then validate and stream the same file.
++		file = await promises.open(filePath, constants.O_RDONLY | constants.O_NONBLOCK);
++		const stat = await file.stat();
++		if (!stat.isFile()) {
++			throw new Error(`Not a regular file: ${filePath}`);
++		}
++		if (res.destroyed) {
++			return;
++		}
+ 		if (cacheControl === CacheControl.ETAG) {
+ 
+ 			// Check if file modified since
+@@ -72,28 +81,17 @@
+ 
+ 		responseHeaders['Content-Type'] = textMimeType[extname(filePath)] || getMediaMime(filePath) || 'text/plain';
+ 
+-		// Create the stream first and wait for it to open before sending
+-		// headers so that errors (e.g. ENOENT race) can still produce a
+-		// proper 404 response instead of aborting a half-sent 200.
+-		const fileStream = createReadStream(filePath);
++		const fileStream = file.createReadStream();
+ 		await new Promise<void>((resolve, reject) => {
+-			fileStream.on('error', reject);
+-			fileStream.on('open', () => {
+-				// File opened successfully - send headers and pipe
+-				res.writeHead(200, responseHeaders);
+-				fileStream.pipe(res);
+-				// Destroy the read stream if the response is closed prematurely
+-				// (e.g. client disconnect) to avoid leaking the file descriptor.
+-				res.once('close', () => fileStream.destroy());
+-				fileStream.on('end', resolve);
+-				// Replace the initial error handler now that headers are sent
+-				fileStream.removeAllListeners('error');
+-				fileStream.on('error', error => {
+-					logService.error(error);
+-					console.error(error.toString());
+-					res.destroy();
+-				});
++			const onResponseClose = () => fileStream.destroy();
++			res.once('close', onResponseClose);
++			fileStream.once('error', reject);
++			fileStream.once('close', () => {
++				res.removeListener('close', onResponseClose);
++				resolve();
+ 			});
++			res.writeHead(200, responseHeaders);
++			fileStream.pipe(res);
+ 		});
+ 	} catch (error) {
+ 		if (error.code !== 'ENOENT') {
+@@ -103,7 +101,13 @@
+ 			console.error(`File not found: ${filePath}`);
+ 		}
+ 
++		if (res.headersSent || res.destroyed) {
++			res.destroy();
++			return;
++		}
+ 		res.writeHead(404, { 'Content-Type': 'text/plain' });
+ 		return void res.end('Not found');
++	} finally {
++		await file?.close();
+ 	}
+ }

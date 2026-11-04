@@ -120,6 +120,8 @@ async function activate(home, commandFor, {
     autoHide = MANIFEST.contributes.configuration.properties[AUTO_HIDE].default,
     compact = false,
     deliver = null,
+    workspaceState = new Map(),
+    updateState = null,
 } = {}) {
     executeCommand = commandFor;
     settings['workbench.secondarySideBar.defaultVisibility'] = 'hidden';
@@ -128,14 +130,17 @@ async function activate(home, commandFor, {
     for (const event of Object.keys(listeners)) delete listeners[event];
     ran.length = 0;
     process.env.HOME = home;
-    const workspaceState = new Map();
     delete require.cache[require.resolve(EXTENSION)];
     const extension = require(EXTENSION);
     extension.activate({
         subscriptions: [],
         workspaceState: {
             get: (key) => workspaceState.get(key),
-            update: (key, value) => { workspaceState.set(key, value); return Promise.resolve(); },
+            update: (key, value) => {
+                if (updateState) return updateState(key, value);
+                workspaceState.set(key, value);
+                return Promise.resolve();
+            },
         },
     });
     // Past the delay, and past the microtask turn in which a rejection with no
@@ -222,6 +227,24 @@ async function main() {
                 'runs again on every launch and reverses a bar the user opened',
         );
         assert.deepStrictEqual(escaped, [], `an unhandled rejection escaped: ${escaped}`);
+
+        const stateHome = fs.mkdtempSync(path.join(base, 'state-fails-'));
+        const workspaceState = new Map();
+        let stateWrites = 0;
+        const stateFails = await activate(stateHome, resolves, {
+            workspaceState,
+            updateState: () => {
+                stateWrites++;
+                return Promise.reject(new Error('workspace state unavailable'));
+            },
+        });
+        assert.ok(stateFails.ran.includes('workbench.action.closeAuxiliaryBar'));
+        assert.strictEqual(stateWrites, 1, 'the workspace state failure was not exercised');
+        assert.strictEqual(stateFails.aligned, false);
+        assert.deepStrictEqual(escaped, [], `a rejected workspace state update escaped: ${escaped}`);
+        const stateRetry = await activate(stateHome, resolves, { workspaceState });
+        assert.ok(stateRetry.ran.includes('workbench.action.closeAuxiliaryBar'));
+        assert.strictEqual(stateRetry.aligned, true, 'a failed state update prevented the next activation from retrying');
 
         // The close of the Explorer, which neither case above can reach: it runs
         // in the success continuation of the walkthrough command, so the broken

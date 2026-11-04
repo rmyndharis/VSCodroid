@@ -35,10 +35,23 @@ internal fun deliverFileBaseline(
             every { getLong(1) } answers { delivered.size().toLong() }
         }
     }
-    SafSyncEngine::class.java
-        .getDeclaredMethod("writeLocalToSaf", File::class.java, Uri::class.java, File::class.java)
-        .apply { isAccessible = true }
-        .invoke(engine, localFile, document, mirrorRoot)
+    writeSafFile(engine, localFile, document, mirrorRoot)
     assertEquals(localFile.readText(), delivered.toString(Charsets.UTF_8),
         "the provider did not receive the baseline")
+}
+
+/** Drives the stream boundary while retaining its real provider reservation. */
+internal fun writeSafFile(engine: SafSyncEngine, file: File, document: Uri, root: File): Boolean {
+    val companion = SafSyncEngine.Companion
+    val owner = companion.javaClass
+    val mutation = owner.getDeclaredMethod("claimProviderMutation", Uri::class.java)
+        .apply { isAccessible = true }.invoke(companion, document) ?: return false
+    try {
+        return SafSyncEngine::class.java.getDeclaredMethod(
+            "writeLocalToSaf", File::class.java, Uri::class.java, File::class.java, mutation.javaClass,
+        ).apply { isAccessible = true }.invoke(engine, file, document, root, mutation) as Boolean
+    } finally {
+        owner.getDeclaredMethod("releaseProviderMutation", mutation.javaClass)
+            .apply { isAccessible = true }.invoke(companion, mutation)
+    }
 }

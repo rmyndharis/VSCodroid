@@ -42,6 +42,8 @@ try {
         '--include=' + diskPath, hostPath.join(root, 'patches', '0035-claim-device-folder-copies-before-use.patch')], { cwd: temporary });
     execFileSync('git', ['apply', '--include=' + helperPath, '--include=' + configurationPath,
         hostPath.join(root, 'patches', '0038-publish-workspace-resource-roots.patch')], { cwd: temporary });
+    execFileSync('git', ['apply', '--include=' + configurationPath,
+        hostPath.join(root, 'patches', '0042-tolerate-non-list-workspace-folders.patch')], { cwd: temporary });
     helperSource = fs.readFileSync(hostPath.join(temporary, helperPath), 'utf8');
     configurationSource = fs.readFileSync(hostPath.join(temporary, configurationPath), 'utf8');
     diskSource = fs.readFileSync(hostPath.join(temporary, diskPath), 'utf8');
@@ -117,13 +119,23 @@ function browserFixture(nativeAnswer = true) {
         ready() { browser.__vscodroid = { authToken: 'session', pageGeneration: 7 }; [...listeners].forEach(callback => callback()); } };
 }
 function serviceFixture(helper, workspace, publish, warnings = []) {
+    class Workspace {
+        constructor(id, folders, transient, configuration) {
+            this.id = id;
+            this.folders = folders;
+            this.transient = transient;
+            this.configuration = configuration;
+            this.initialized = false;
+        }
+    }
     const context = { claimSafMirrorPaths: helper.claimSafMirrorPaths, mark() {},
+        toWorkspaceFolders, Workspace,
         ConfigurationTarget: { WORKSPACE_FOLDER: 1, WORKSPACE: 2 } };
     vm.runInNewContext(transpile(configurationSource, 'configurationService.ts') + '\nglobalThis.SelectedWorkspaceService = WorkspaceService;', context);
     return Object.assign(new context.SelectedWorkspaceService(), {
         initialized: false,
         initialWorkspaceSettings: undefined,
-        logService: { warn: error => warnings.push(error) },
+        logService: { warn: (message, error) => warnings.push(error ?? message) },
         workspace: { folders: [], configuration: undefined },
         _configuration: { toData: () => ({}), compareAndUpdateWorkspaceConfiguration: () => ({}) },
         _onDidChangeWorkspaceFolders: { fire: () => publish('member-event') },
@@ -175,12 +187,14 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
     }
     {
         const fixture = browserFixture(false);
-        const service = serviceFixture(fixture.helper, {}, type => fixture.events.push({ type }));
-        const previous = service.workspace.folders;
+        const warnings = [];
+        const service = serviceFixture(fixture.helper, {}, type => fixture.events.push({ type }), warnings);
         const folders = toWorkspaceFolders([{ path: memberB }], remote(`${filesRoot}/projects/team.code-workspace`), extUri);
-        await assert.rejects(service.updateWorkspaceConfiguration(folders, {}, false), /local copy/i);
-        assert.equal(service.workspace.folders, previous, 'rejected members were published');
-        assert(fixture.events.every(event => event.type === 'claim'));
+        await service.updateWorkspaceConfiguration(folders, {}, false);
+        assert.equal(service.workspace.folders, folders, 'updateWorkspaceConfiguration left folders unset when a copy was gone');
+        assert.deepEqual(fixture.publications, [], 'the roots of a refused copy were published during folder update');
+        assert.equal(warnings.length, 2);
+        warnings.forEach(warning => assert.match(warning.message, /local copy/i));
         cases++;
     }
     {
@@ -464,6 +478,246 @@ const settle = () => new Promise(resolve => setImmediate(resolve));
         await service.initialize({});
         assert.deepEqual(fixture.publications, [['/current'], ['/current']],
             'finishing initialization restored resource roots replaced by a folder update');
+        cases++;
+    }
+    {
+        const configPath = remote(`${filesRoot}/projects/team.code-workspace`);
+        const parseWorkspaceRaw = text => {
+            try {
+                const raw = text ? JSON.parse(text) : {};
+                return (raw && typeof raw === 'object' && !Array.isArray(raw) ? raw.folders : undefined) || [];
+            } catch {
+                if (/^\s*\{\s*"folders"\s*:\s*\{\s*$/.test(text)) return {};
+                return [];
+            }
+        };
+        async function runMultiFolderScenario({ initialText, cachedText, fileText, liveEdits = [], onClaim, onPublish }) {
+            const fixture = browserFixture();
+            const warnings = [];
+            let claimCount = 0;
+            let publishCount = 0;
+            if (onClaim) {
+                fixture.browser.AndroidBridge.claimWorkspacePaths = (token, json) => {
+                    assert.equal(token, 'session');
+                    claimCount++;
+                    const paths = JSON.parse(json);
+                    fixture.events.push({ type: 'claim', paths });
+                    return onClaim(claimCount, paths);
+                };
+            }
+            if (onPublish) {
+                fixture.browser.AndroidBridge.publishWorkspaceRoots = (token, generation, json) => {
+                    assert.equal(token, 'session');
+                    assert.equal(generation, 7);
+                    publishCount++;
+                    const paths = JSON.parse(json);
+                    const allowed = onPublish(publishCount, paths);
+                    if (allowed) fixture.publications.push(paths);
+                    return allowed;
+                };
+            }
+            const unhandled = [];
+            const onUnhandled = error => unhandled.push(error);
+            process.on('unhandledRejection', onUnhandled);
+            try {
+                let currentFolders = [];
+                let configInitialized = false;
+                let barrierOpen = false;
+                const folderEvents = [];
+                const service = serviceFixture(fixture.helper, null, type => {
+                    if (type === 'member-event') folderEvents.push(Array.from(service.workspace.folders, f => f.uri.path));
+                }, warnings);
+                delete service.createWorkspace;
+                service.workspace = undefined;
+                service.isWorkspaceTrusted = true;
+                service.initialWorkspaceSettings = initialText;
+                service.uriIdentityService = { extUri: { ...extUri, ignorePathCasing: () => false } };
+                service.compareFolders = (before, after) => {
+                    const beforePaths = before.map(f => f.uri.path);
+                    const afterPaths = after.map(f => f.uri.path);
+                    return {
+                        added: after.filter(f => !beforePaths.includes(f.uri.path)),
+                        removed: before.filter(f => !afterPaths.includes(f.uri.path)),
+                        changed: [],
+                    };
+                };
+                service.toValidWorkspaceFolders = async folders => folders;
+                service.checkAndMarkWorkspaceComplete = () => {
+                    if (!barrierOpen && service.workspace && service.workspace.initialized) {
+                        barrierOpen = true;
+                    }
+                };
+                service.createWorkspace = arg => service.createMultiFolderWorkspace(arg);
+                let deferredProviderReload;
+                service.workspaceConfiguration = {
+                    get initialized() { return configInitialized; },
+                    isTransient: () => false,
+                    getFolders: () => currentFolders,
+                    getConfiguration: () => ({}),
+                    async initialize(_id, _trusted, initialContents) {
+                        const firstText = initialContents !== undefined ? (initialContents ?? '') : (cachedText ?? '');
+                        currentFolders = parseWorkspaceRaw(firstText);
+                        deferredProviderReload = async () => {
+                            currentFolders = parseWorkspaceRaw(fileText);
+                            configInitialized = true;
+                            service.onWorkspaceConfigurationChanged(true).then(() => {
+                                service.workspace.initialized = service.workspaceConfiguration.initialized;
+                                service.checkAndMarkWorkspaceComplete(true);
+                            });
+                        };
+                    },
+                };
+                await service.initialize({ id: 'w1', configPath });
+                await deferredProviderReload();
+                await settle();
+                await settle();
+                const snapshots = [service.workspace ? Array.from(service.workspace.folders, f => f.uri.path) : null];
+                for (const editText of liveEdits) {
+                    currentFolders = parseWorkspaceRaw(editText);
+                    service.onWorkspaceConfigurationChanged(false).then(() => {
+                        service.workspace.initialized = service.workspaceConfiguration.initialized;
+                        service.checkAndMarkWorkspaceComplete(false);
+                    });
+                    await settle();
+                    await settle();
+                    snapshots.push(Array.from(service.workspace.folders, f => f.uri.path));
+                }
+                return {
+                    workspaceDefined: service.workspace !== undefined,
+                    folders: service.workspace ? Array.from(service.workspace.folders, f => f.uri.path) : null,
+                    barrierOpen,
+                    unhandled,
+                    folderEvents,
+                    snapshots,
+                    warnings,
+                    publications: fixture.publications,
+                };
+            } finally {
+                process.off('unhandledRejection', onUnhandled);
+            }
+        }
+        const validTwo = JSON.stringify({ folders: [{ path: '/a' }, { path: '/b' }] });
+        const validOne = JSON.stringify({ folders: [{ path: '/c' }] });
+        const control = await runMultiFolderScenario({ initialText: validTwo, fileText: validTwo });
+        assert.equal(control.workspaceDefined, true);
+        assert.equal(control.barrierOpen, true);
+        assert.deepEqual(control.folders, ['/a', '/b']);
+        assert.deepEqual(control.unhandled, []);
+        cases++;
+
+        for (const badText of [
+            JSON.stringify({ folders: { path: '/a' } }),
+            '{"folders": 5}',
+            '{"folders": true}',
+            '{"folders": {',
+        ]) {
+            const firstLoad = await runMultiFolderScenario({ initialText: badText, fileText: badText });
+            assert.equal(firstLoad.workspaceDefined, true, `workspace undefined for ${badText}`);
+            assert.equal(firstLoad.barrierOpen, true, `barrier stayed closed for ${badText}`);
+            assert.deepEqual(firstLoad.folders, []);
+            assert.deepEqual(firstLoad.unhandled, []);
+            cases++;
+        }
+
+        const cachedObject = JSON.stringify({ folders: { path: '/a' } });
+        const cacheOnly = await runMultiFolderScenario({
+            initialText: undefined,
+            cachedText: cachedObject,
+            fileText: cachedObject,
+        });
+        assert.equal(cacheOnly.workspaceDefined, true);
+        assert.equal(cacheOnly.barrierOpen, true);
+        assert.deepEqual(cacheOnly.folders, []);
+        assert.deepEqual(cacheOnly.unhandled, []);
+        cases++;
+
+        const repairedAfterPoisonedCache = await runMultiFolderScenario({
+            initialText: undefined,
+            cachedText: cachedObject,
+            fileText: validTwo,
+        });
+        assert.equal(repairedAfterPoisonedCache.workspaceDefined, true);
+        assert.equal(repairedAfterPoisonedCache.barrierOpen, true);
+        assert.deepEqual(repairedAfterPoisonedCache.folders, ['/a', '/b']);
+        assert.deepEqual(repairedAfterPoisonedCache.unhandled, []);
+        cases++;
+
+        {
+            const fixture = browserFixture();
+            const service = serviceFixture(fixture.helper, null, () => {});
+            const rawlessFolder = new WorkspaceFolder({ uri: remote('/active'), name: 'active', index: 0 });
+            service.workspace = { folders: [rawlessFolder], configuration: configPath, initialized: true };
+            service.workspaceConfiguration = { getFolders: () => ({}), getConfiguration: () => ({}) };
+            service.uriIdentityService = { extUri };
+            service.toValidWorkspaceFolders = async folders => folders;
+            service.compareFolders = (before, after) => ({
+                added: after.filter(folder => !before.includes(folder)),
+                removed: before.filter(folder => !after.includes(folder)), changed: [],
+            });
+            await service.onWorkspaceConfigurationChanged(false);
+            assert.deepEqual(service.workspace.folders, [rawlessFolder]);
+            cases++;
+        }
+
+        const runningWindow = await runMultiFolderScenario({
+            initialText: validTwo,
+            fileText: validTwo,
+            liveEdits: [
+                cachedObject,
+                '{"folders": "src"}',
+                '{"folders": 5}',
+                '{"folders": true}',
+                '{"folders": {',
+                validOne,
+            ],
+        });
+        assert.equal(runningWindow.workspaceDefined, true);
+        assert.equal(runningWindow.barrierOpen, true);
+        assert.deepEqual(runningWindow.unhandled, []);
+        assert.deepEqual(runningWindow.snapshots, [
+            ['/a', '/b'],
+            ['/a', '/b'],
+            ['/a', '/b'],
+            ['/a', '/b'],
+            ['/a', '/b'],
+            ['/a', '/b'],
+            ['/c'],
+        ]);
+        assert.deepEqual(runningWindow.folderEvents, [['/c']]);
+        cases++;
+
+        const savedWithMissingCopy = JSON.stringify({ folders: [{ path: '/a' }, { path: '/b' }] });
+        const refusedHeadInUpdate = await runMultiFolderScenario({
+            initialText: undefined,
+            cachedText: JSON.stringify({ folders: [{ path: '/a' }] }),
+            fileText: savedWithMissingCopy,
+            onClaim: (_count, paths) => !paths.includes('/b'),
+            onPublish: (_count, _paths) => true,
+        });
+        assert.equal(refusedHeadInUpdate.workspaceDefined, true);
+        assert.equal(refusedHeadInUpdate.barrierOpen, true, 'complete-workspace barrier stayed closed when update head claim was refused');
+        assert.deepEqual(refusedHeadInUpdate.folders, ['/a', '/b']);
+        assert.deepEqual(refusedHeadInUpdate.unhandled, []);
+        assert.deepEqual(refusedHeadInUpdate.publications, [['/a', configPath.path]]);
+        cases++;
+        assert.equal(refusedHeadInUpdate.warnings.length, 2);
+        refusedHeadInUpdate.warnings.forEach(warning => assert.match(warning.message, /local copy/i));
+        cases++;
+
+        const refusedPublishInUpdate = await runMultiFolderScenario({
+            initialText: undefined,
+            cachedText: JSON.stringify({ folders: [{ path: '/a' }] }),
+            fileText: savedWithMissingCopy,
+            onClaim: () => true,
+            onPublish: (_count, paths) => !paths.includes('/b'),
+        });
+        assert.equal(refusedPublishInUpdate.workspaceDefined, true);
+        assert.equal(refusedPublishInUpdate.barrierOpen, true, 'complete-workspace barrier stayed closed when update publishing claim was refused');
+        assert.deepEqual(refusedPublishInUpdate.folders, ['/a', '/b']);
+        assert.deepEqual(refusedPublishInUpdate.unhandled, []);
+        assert.deepEqual(refusedPublishInUpdate.publications, [['/a', configPath.path]]);
+        assert.equal(refusedPublishInUpdate.warnings.length, 1);
+        assert.match(refusedPublishInUpdate.warnings[0].message, /local copy/i);
         cases++;
     }
     console.log(JSON.stringify({ cases, result: 'passed', scope: 'selected actual methods and functions with bounded dependency stubs' }));

@@ -200,6 +200,7 @@ class MainActivity : AppCompatActivity() {
      * message was actually shown.
      */
     private val announcedHandoffFailures = mutableSetOf<HandoffFailure>()
+    private val announcedMultiMirrorGenerations = mutableSetOf<Long>()
 
     /**
      * Whether a workbench page is loaded and able to receive an auth callback.
@@ -1184,17 +1185,46 @@ class MainActivity : AppCompatActivity() {
     /**
      * The manifest's `configChanges` keeps the activity across a turn of the phone,
      * a resize or a fold, so this is where one is seen. The keyboard is reported
-     * hidden with it and comes back by itself, and [keyboardDismissal] must not
-     * hold the page's editor down for that.
+     * hidden with it and comes back by itself, [keyboardDismissal] must not hold
+     * the page's editor down for that. Finish any composing word and release the
+     * old native input connection before the keyboard edits the new selection, the
+     * second only while the person is aimed at text: the refocus it makes reaches
+     * the page's focus handler as a new focus, which after a drag outside text
+     * holds the host and takes a keyboard that stayed up away.
      */
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
         keyboardDismissal.turned()
+        finishKeyboardCompositionOnTurn()
         // The keyboard the extra key row stood aside for is gone, a Bluetooth one
         // asleep or unpaired, and the soft keyboard is what is left. A touch would
         // bring the row back, but the person may well carry on typing on the screen.
         if (newConfig.keyboard == Configuration.KEYBOARD_NOKEYS) {
             extraKeyRow?.hiddenForHardwareKeyboard = false
+        }
+    }
+
+    private fun finishKeyboardCompositionOnTurn() {
+        val targetView = webView ?: return
+        val generation = AuthTabWindow.pageGeneration()
+        targetView.evaluateJavascript(
+            """
+            (function() {
+                if (typeof window.__vscodroidFinishComposition !== 'function') return false;
+                var element = document.activeElement;
+                window.__vscodroidFinishComposition();
+                var aimed = typeof window.__vscodroidAimedAtText === 'function' && window.__vscodroidAimedAtText();
+                return !!(aimed && element && element === document.activeElement && element.editContext &&
+                    element.getAttribute('inputmode') !== 'none');
+            })();
+            """.trimIndent(),
+        ) { editable ->
+            if (editable != "true" || webView !== targetView ||
+                AuthTabWindow.pageGeneration() != generation || isFinishing || isDestroyed ||
+                !targetView.isFocused || !targetView.hasWindowFocus()) return@evaluateJavascript
+            // Release the old native input connection as well as the page's composing range.
+            targetView.clearFocus()
+            targetView.requestFocus()
         }
     }
 
@@ -3009,6 +3039,9 @@ class MainActivity : AppCompatActivity() {
             navigateToFolder(port, known)
             return
         }
+        val targetView = webView ?: return
+        val request = ++recoveryPageEpoch
+        val generation = AuthTabWindow.pageGeneration()
         lifecycleScope.launch {
             // Off the main thread for the reason adoptWorkbenchFolder hops, and
             // this is the same lookup: deciding whether a remembered mirror is
@@ -3050,7 +3083,9 @@ class MainActivity : AppCompatActivity() {
             // outranking it after: a renderer crash recovering into the folder it
             // was showing arrives through this same method, and a remembered
             // folder resolved before it would otherwise land last and win.
-            val currentUrl = webView?.url
+            val currentUrl = targetView.url
+            if (request != recoveryPageEpoch || webView !== targetView || nodeService?.isServerReady() != true ||
+                (generation != AuthTabWindow.pageGeneration() && isWorkbenchUrl(currentUrl, port))) return@launch
             val target = workspaceTargetAfterLookup(currentUrl, port, folderFromUrl(currentUrl), resolved)
             navigateToFolder(port, target)
         }
@@ -3159,12 +3194,29 @@ class MainActivity : AppCompatActivity() {
             // runOnUiThread returns Unit.
             onListMirrors = { deviceFolderCopiesAsJson() },
             onReclaimMirror = { hash, force -> removeDeviceFolderCopy(hash, force) },
+            onWorkspaceRoots = { generation, paths ->
+                val resolved = paths.mapNotNull { workspaceDirectoryInForce(it) }
+                val published = workspaceResources.publish(generation, resolved)
+                if (published) {
+                    val mirrorCount = safManager.mirrorNamesForWorkspacePaths(
+                        paths + resolved.map { it.toString() },
+                    ).size
+                    runOnUiThread {
+                        if (isFinishing || isDestroyed) return@runOnUiThread
+                        if (shouldAnnounceMultipleDeviceFolders(mirrorCount, generation, announcedMultiMirrorGenerations)) {
+                            Toast.makeText(
+                                applicationContext,
+                                R.string.saf_workspace_multiple_folders,
+                                Toast.LENGTH_LONG,
+                            ).show()
+                        }
+                    }
+                }
+                published
+            },
             // The answer's road back into the page. evaluateJavascript is a
             // WebView call and belongs to the thread the view was made on, which
             // is why this hops while the two above must not.
-            onWorkspaceRoots = { generation, paths ->
-                workspaceResources.publish(generation, paths.mapNotNull { workspaceDirectoryInForce(it) })
-            },
             onAsyncAnswer = { id, ok, payload ->
                 runOnUiThread { answerBridgeCommand(id, ok, payload) }
             },
@@ -3219,6 +3271,7 @@ class MainActivity : AppCompatActivity() {
             workspaceMembers = { workspaceResources.roots() },
             connectionToken = { nodeService?.getConnectionToken() },
             onCrash = { recreateWebView() },
+            onNavigationStarted = appNavigation::clear,
             // The page covers itself the moment it is told to leave, and a
             // navigation this client hands to another app or refuses never comes
             // to replace it: the cover has to be taken down from here.
@@ -3411,11 +3464,12 @@ class MainActivity : AppCompatActivity() {
      * One case is deliberately not covered. A process killed between the close
      * navigation starting and the page finishing leaves the old folder in the
      * preference, so the next launch reopens it. That is true of every folder
-     * here, not only of a close: the record is written from the finished load,
-     * and moving it earlier would put a preference write on the interception
-     * path.
+     * here, not only of a close: the persistent record is written from the
+     * finished load (`persist = true`), while [navigateToFolder] seeds only the
+     * in-memory fields (`persist = false`) so a cancelled `beforeunload` prompt
+     * or an aborted navigation does not overwrite the remembered workspace.
      */
-    private fun rememberWorkspaceFolder(folderPath: String?): Boolean {
+    private fun rememberWorkspaceFolder(folderPath: String?, persist: Boolean = true): Boolean {
         if (folderPath != null && !safManager.claimWorkspacePaths(listOf(folderPath))) {
             Toast.makeText(this, R.string.saf_folder_unavailable, Toast.LENGTH_LONG).show()
             return false
@@ -3431,6 +3485,7 @@ class MainActivity : AppCompatActivity() {
         // root, so an empty string here would serve the app's own working
         // directory to the page.
         openWorkspaceRoot = folderPath?.let { workspaceDirectoryInForce(it) }
+        if (!persist) return true
         // Written only on a change: this runs on every main-frame load, and the
         // server redirects, so a folder switch alone reaches it twice.
         val stored = folderPath ?: NO_FOLDER
@@ -3547,12 +3602,13 @@ class MainActivity : AppCompatActivity() {
         // crash page is up navigates here directly, and a later self-restart's
         // readiness must not be refused over the workbench it would replace.
         rendererCrashLoopShown = false
-        // Seeded here and not only from the page-loaded callback. This method is
+        // Seeded in memory here, and persisted to SharedPreferences only from the
+        // page-loaded callback once the load actually completes. This method is
         // the one that knows the folder before the page exists, and between
         // loadUrl below and onPageFinished the workbench is already fetching
         // resources, against a supplier that would still be answering null, so
         // everything inside the workspace would 404 for the length of the load.
-        if (!rememberWorkspaceFolder(folderPath)) return
+        if (!rememberWorkspaceFolder(folderPath, persist = false)) return
         // The token rides in the query once. The server consumes it on `/`, turns
         // it into the vscode-tkn cookie and redirects with the folder intact;
         // everything after that authenticates itself: the cookie for pages, the
@@ -4032,23 +4088,24 @@ class MainActivity : AppCompatActivity() {
      * with it.
      *
      * The same script ends a word the keyboard is still composing when a key or
-     * a tap moves the editor's caret. Chromium keeps an EditContext
-     * composition's range where it was when the page moves the selection
-     * (crbug 379170477), so with a keyboard that composes, moving the caret
-     * while a word was underlined made the keyboard's next edit land on the
-     * word's old range: End while `kiwi` was underlined in
+     * a tap moves the editor's caret, or when [onConfigurationChanged] calls
+     * `window.__vscodroidFinishComposition` on a turn of the screen. Chromium
+     * keeps an EditContext composition's range where it was when the page moves
+     * the selection (crbug 379170477), so with a keyboard that composes, moving
+     * the caret while a word was underlined made the keyboard's next edit land
+     * on the word's old range: End while `kiwi` was underlined in
      * `alpha delta kiwi charlie` left `alpha delta charlie charlie`, a tap on
      * an empty line followed by `cha` typed `cchcha`, and Tab accepting
      * `alpha3` over `alp` left `alpha3ha3`. Blurring and refocusing the host
      * ends the composition in the same task as the caret move, so the keyboard
      * starts again from the new caret. That runs for the arrows, Home, End,
      * PageUp, PageDown, Tab, Backspace and Delete from a window capture
-     * `keydown`, whatever sends them, and for the editor's own
+     * `keydown`, whatever sends them, for the editor's own
      * `-monaco-gesturetap` and `-monaco-gesturecontextmenu` (a long press)
-     * inside `.monaco-editor`; only for a focused host that has an
-     * `editContext` and is in the script's `composing` set, and with
-     * `reapplying` set, so the focus handler leaves the refocus and `inputmode`
-     * alone.
+     * inside `.monaco-editor`, and for `window.__vscodroidFinishComposition`;
+     * only for a focused host that has an `editContext` and is in the script's
+     * `composing` set, and with `reapplying` set, so the focus handler leaves
+     * the refocus and `inputmode` alone.
      *
      * It runs before the editor handles the key or the tap, except where an
      * open suggestion list takes a key without modifiers, or a tap. Ending a
@@ -4545,6 +4602,13 @@ class MainActivity : AppCompatActivity() {
                     element.focus();
                     reapplying = false;
                 }
+                window.__vscodroidFinishComposition = finishComposition;
+                // Whether the last touch left the person aimed at text. A refocus the
+                // guard did not make reaches the focus handler as a new focus, and
+                // after a drag or a long press outside text it holds the host, which
+                // puts a keyboard that is up away on a phone. Kotlin asks before it
+                // refocuses the WebView on a turn of the screen.
+                window.__vscodroidAimedAtText = function() { return aimedAtText === true; };
                 // Ending a composition can make the editor refilter an open
                 // suggest list and focus its first item again, so a Tab or tap
                 // the list takes ends it only after the list has acted, still
@@ -7355,11 +7419,9 @@ internal fun callbackUriJson(data: String?): String? {
  * What binding to an already-running service should do about it.
  *
  * Extracted so the decision is a value rather than a shape in the source.
- * `ServerReadinessCallSiteTest` reads `MainActivity.kt` and checks *which* method
- * is called, which catches putting `isServerRunning` back and cannot catch
- * calling the right method and ignoring the answer -- both call sites were
- * mutated that way with the whole suite still green. A branch that returns one of
- * these can be tested for what it decides.
+ * `ServerReadinessDecisionTest` checks the pure decision logic, while
+ * `ServerReadinessCallSiteTest` invokes the activity methods to verify their
+ * loading, notice, port-recording, and resume effects.
  */
 internal sealed interface BindDecision {
     /** The server said something about its start that predates this binding. */
@@ -7394,10 +7456,8 @@ internal sealed interface BindDecision {
  * cannot use it and marks the app ready to receive an OAuth callback it cannot
  * consume.
  *
- * The test is host and port together, the same pair
- * [VSCodroidWebViewClient.isLocalhost] uses, because the port is what ties a
- * page to this server rather than to any loopback listener: binding one needs
- * no permission on Android, so the host alone says nothing about who answered.
+ * The address and port match the gateway's IPv4 listener. A hostname may select
+ * IPv6, whose listener is not reserved by this application.
  *
  * Parsed with `java.net.URI` rather than `Uri.parse`, so the decision can be
  * exercised by a plain JVM test. `Uri.parse` is a framework method that answers
@@ -7418,7 +7478,7 @@ internal fun isWorkbenchUrl(url: String?, port: Int): Boolean {
     // is what has to go.
     val parsed = runCatching { java.net.URI(url) }.getOrNull() ?: return false
     val hostName = parsed.host ?: return false
-    return (hostName == "127.0.0.1" || hostName == "localhost") && parsed.port == port &&
+    return hostName == "127.0.0.1" && parsed.port == port &&
         isWorkbenchPath(parsed.path)
 }
 
@@ -7479,20 +7539,24 @@ internal fun syncProgressIsDue(done: Int, total: Int, sinceLastMs: Long): Boolea
  * mirror as well, by design, and here it would rename a directory created in the
  * editor after the device folder containing it: "four files in Documents did not
  * reach the device" for a shortfall that was entirely inside `src/generated`.
- * Matched on the directory NAME rather than the whole path, since the name is the
- * digest and is what the manager itself keys mirrors by.
+ * Matched on the complete canonical path so system aliases still name the same
+ * copy, while a nested directory with the same basename keeps its own name.
  *
  * [folders] is the recent list, pruned of revoked grants before it is handed
  * over, so a folder whose grant the user has taken back has no entry and keeps
  * the directory name. That is the honest answer at that point: the app no longer
  * knows what the folder was called.
  *
- * Top-level and pure for the reason the notices are wired out of locals: anything
+ * Top-level for the reason the notices are wired out of locals: anything
  * they call on the Activity captures it, and the write-back worker they belong to
  * outlives the screen.
  */
-internal fun mirrorDisplayName(folders: List<SafFolderInfo>, dir: File): String =
-    folders.firstOrNull { File(it.mirrorPath).name == dir.name }?.displayName ?: dir.name
+internal fun mirrorDisplayName(folders: List<SafFolderInfo>, dir: File): String {
+    val directory = runCatching { dir.canonicalFile }.getOrNull() ?: return dir.name
+    return folders.firstOrNull {
+        runCatching { File(it.mirrorPath).canonicalFile == directory }.getOrDefault(false)
+    }?.displayName ?: dir.name
+}
 
 /**
  * How long a renderer crash counts towards a loop, and how many are allowed
@@ -7681,9 +7745,7 @@ internal fun workbenchUrl(
     // read, and it answers one of those with an empty window and no message. That
     // exclusion was applied where the picker chooses a target and not here, where
     // the URL is actually built, so such a directory still went out as
-    // `?workspace=`, and it did not stay a one-off: [navigateToFolder] remembers
-    // the folder before it builds the URL, so every later launch reopened the same
-    // empty window. What the URL itself costs is separate and quieter:
+    // `?workspace=`. What the URL itself costs is separate and quieter:
     // [folderFromUrl] answers null for it, so a folder the workbench opens on its
     // own is never adopted.
     //
@@ -8282,6 +8344,10 @@ internal class AppNavigationMark(private val windowMs: Long) {
         markedAt = now
     }
 
+    fun clear() {
+        markedAt = 0L
+    }
+
     /** True at most once per [mark], and only inside the window. */
     fun consume(now: Long): Boolean {
         val marked = markedAt
@@ -8308,5 +8374,19 @@ internal fun authBootstrapVerdict(result: String?, generation: Long): Boolean? =
     }
 } catch (_: JSONException) {
     null
+}
+
+/**
+ * Whether a multi-root workspace spanning [mirrorCount] distinct device-folder
+ * copies should be announced for [generation], recording the generation so the
+ * notice appears at most once per workbench page load.
+ */
+internal fun shouldAnnounceMultipleDeviceFolders(
+    mirrorCount: Int,
+    generation: Long,
+    announcedGenerations: MutableSet<Long>,
+): Boolean {
+    if (mirrorCount < 2 || generation <= 0L) return false
+    return announcedGenerations.add(generation)
 }
 

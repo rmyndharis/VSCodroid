@@ -224,10 +224,13 @@ object Environment {
             // Ruby's OpenSSL reads the same variable and was in the same state.
             //
             // pip is NOT the client this rescues, and saying so was the first
-            // wrong version of this comment: it verifies against the certifi
-            // bundle vendored inside itself, so it worked throughout. What was
-            // broken is everything that asks OpenSSL for the default trust,
-            // which is any ordinary script a user writes.
+            // wrong version of this comment: its truststore context preloads the
+            // certifi bundle vendored inside pip before adding OpenSSL's default
+            // paths and REQUESTS_CA_BUNDLE, so public hosts worked throughout and
+            // a root present in that vendored bundle stays trusted by pip even if
+            // removed from the device store. What was broken without SSL_CERT_FILE
+            // is everything that asks OpenSSL alone for the default trust, which
+            // is any ordinary script a user writes.
             //
             // Use the managed directory so raw system roots cannot override removals.
             "SSL_CERT_FILE" to "$filesDir/usr/etc/tls/cert.pem",
@@ -282,10 +285,10 @@ object Environment {
             "VSCODROID_PACKAGE" to context.packageName,
         )
 
-        // The name pip actually reads, and what makes a CA the device owner
-        // installed count for a private index. It is requests' variable rather
-        // than pip's own PIP_CERT, so the one row also reaches a user's own
-        // `requests` code.
+        // The variable requests reads, and what makes a CA the device owner
+        // installed count for a user's own `requests` code and for pip (which
+        // loads REQUESTS_CA_BUNDLE and SSL_CERT_FILE in addition to its own
+        // vendored certifi snapshot).
         //
         // Conditional, and the guard is the whole reason this is not a row in
         // the map above. requests treats a bundle it cannot open as fatal
@@ -293,8 +296,8 @@ object Environment {
         // emulator, pointing it at a missing path stops pip with "Could not find
         // a suitable TLS CA certificate bundle". setupGitCaBundle() gives up on
         // a device with no system CA directory and after a failed write, so
-        // naming a file it never wrote would take away the one Python HTTPS
-        // client that works without any of this. SSL_CERT_FILE above wants no
+        // naming a file it never wrote would take away the Python HTTPS
+        // clients that work without any of this. SSL_CERT_FILE above wants no
         // such guard: with a path that does not exist OpenSSL loads nothing and
         // verification fails, which is where this started rather than worse.
         // Older curl versions prefer SSL_CERT_DIR over SSL_CERT_FILE, so give

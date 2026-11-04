@@ -597,4 +597,5 @@
          one English word survived inside an otherwise translated About dialog. -->
     <string name="about_version_unknown">未知</string>
     <string name="saf_folder_unavailable">此设备文件夹的本地副本已不可用。请从设备重新打开该文件夹。</string>
+    <string name="saf_workspace_multiple_folders">此工作区包含多个设备文件夹。每次仅同步一个设备文件夹；其他文件夹中的修改将保留在 VSCodroid 内，直到直接打开这些文件夹。</string>
 </resources>

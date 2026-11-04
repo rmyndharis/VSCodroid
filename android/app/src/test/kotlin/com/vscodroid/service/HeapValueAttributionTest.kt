@@ -48,6 +48,7 @@ class HeapValueAttributionTest {
     fun `a charge queued before IO still belongs to an unchanged value`() = exercise(640, beforeIo = true)
 
     private fun exercise(replacementValue: Int, beforeIo: Boolean = false) = runBlocking {
+        mockEditorGateway()
         mockkObject(Logger)
         every { Logger.i(any(), any()) } just Runs
         every { Logger.d(any(), any()) } just Runs

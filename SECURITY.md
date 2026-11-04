@@ -14,13 +14,10 @@ We take security seriously. If you discover a security vulnerability in VSCodroi
 
 **Please DO NOT open a public GitHub issue for security vulnerabilities.**
 
-Instead, please report it by email:
+Please report it by email:
 
-📧 **Email**: yudhi@rmyndharis.com
-
-Private vulnerability reporting is switched off for this repository, so GitHub's
-"Report a vulnerability" form is not open to anyone outside the maintainers.
-Email is the channel that reaches us.
+- 📧 **Email**: yudhi@rmyndharis.com
+- 🔒 **GitHub Security Advisories**: Private vulnerability reporting is also enabled on https://github.com/rmyndharis/VSCodroid, and you can send an email alongside a report filed there so we see it right away.
 
 ### What to Include
 
@@ -49,10 +46,10 @@ Email is the channel that reaches us.
 
 VSCodroid runs code locally on your device. Key security areas:
 
-- **Loopback only**: the server is started with `--host=127.0.0.1` (`ProcessManager.startServer`), so it binds no address reachable from the network
+- **Local editor transport**: the application reserves `127.0.0.1` for the WebView origin throughout its process lifetime. `EditorGateway` relays HTTP and WebSocket traffic to a per-run filesystem socket under app-private storage. Stopping the editor keeps the public port reserved and returns HTTP 503 until a backend is selected
 - **Connection token**: the server requires one on every route except `/version`, `/delay-shutdown`, `/callback` and `/vscodroid-server-proof/<nonce>` (`ProcessManager.connectionToken`). The run-proof endpoint signs a fresh challenge with a private per-run key so the app can authenticate an adopted listener without sending its connection token. The server creates the token on its first start, in app-private storage with mode 0600. The app replaces it before every server start that is not an adoption, and sends it only while its own server reports ready; the WebView URL carries it
 - **Extension host**: extensions run in the extension host, which `patches/0004-exthost-as-worker-thread.patch` makes a worker thread inside the server's Node process. It is a fault boundary, not a security sandbox: an extension has the same reach over app-private storage and the network as the app itself
-- **Bundled chat provider**: GitHub Copilot Chat ships in the server tree and `product.json` makes it the editor's chat provider. Sign-in is what gives it an account, and its chat features are unavailable before that, but it is not dormant until then: its manifest lists `onStartupFinished`, so it activates in the extension host on every start, signed in or not. Whether it sends anything before sign-in has not been established here. After sign-in, prompts and the source it attaches as context go to GitHub. `docs/PRIVACY_POLICY.md` is the user-facing statement of this
+- **Bundled chat provider**: GitHub Copilot Chat ships in the server tree and `product.json` makes it the editor's chat provider. Sign-in is what gives it an account, and its chat features are unavailable before that, but while it is enabled it is not dormant until then: its manifest lists `onStartupFinished`, so when enabled it activates in the extension host on every start, signed in or not. Whether it sends anything before sign-in has not been established here. After sign-in, prompts and the source it attaches as context go to GitHub. `docs/PRIVACY_POLICY.md` is the user-facing statement of this
 - **Extension signatures**: not verified. `extensions.verifySignature` is written `false` into the machine defaults, because signature checking loads `@vscode/vsce-sign`, which no Code - OSS build ships. A VSIX is trusted on the HTTPS connection to Open VSX and nothing else, and extension updates install unattended
 - **Storage**: settings, secrets, the server tree, the mirrors of folders opened through the Storage Access Framework and, on a new install, the default workspace all live in the app-private directory. An install that already had `projects/` under `getExternalFilesDir(null)` keeps it there (`Environment.getProjectsDir`); new installs stopped using that location because shared storage cannot hold a symbolic link, which broke `npm install`
 - **Permissions**: this repository's `AndroidManifest.xml` declares four, `INTERNET`, `FOREGROUND_SERVICE`, `FOREGROUND_SERVICE_SPECIAL_USE` and `POST_NOTIFICATIONS`. The installed app holds six: the manifest merger adds `FOREGROUND_SERVICE_DATA_SYNC` (Play Asset Delivery) and the app's own signature-level `DYNAMIC_RECEIVER_NOT_EXPORTED_PERMISSION` (AndroidX), and a Play listing shows that merged set. `scripts/check-permission-claims.py` holds the published list to the manifest that ships

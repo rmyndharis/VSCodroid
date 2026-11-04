@@ -9,8 +9,10 @@ import android.provider.DocumentsContract
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.mockkStatic
+import io.mockk.unmockkAll
 import io.mockk.verify
 import kotlinx.coroutines.runBlocking
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -92,6 +94,12 @@ class SafDirectoryRenameTest {
         // the engine speaks for no tree, every resolution here walks the provider, and
         // the cases about what the cache must not answer pass with nothing in it.
         engine.resetCache(treeUri)
+    }
+
+    @AfterEach
+    fun tearDown() {
+        File(mirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX).delete()
+        unmockkAll()
     }
 
     /**

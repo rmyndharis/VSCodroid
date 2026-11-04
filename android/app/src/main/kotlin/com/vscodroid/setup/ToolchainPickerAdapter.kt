@@ -49,8 +49,12 @@ class ToolchainPickerAdapter(
      * ([ToolchainCardState.items] is the registry), so nothing here can add or
      * remove a row.
      */
-    fun setInstalled(packNames: Collection<String>, olderBuilds: Map<String, String> = emptyMap()) {
-        cards.setInstalled(packNames, olderBuilds)
+    fun setInstalled(
+        packNames: Collection<String>,
+        olderBuilds: Map<String, String> = emptyMap(),
+        incompletePacks: Collection<String> = emptyList(),
+    ) {
+        cards.setInstalled(packNames, olderBuilds, incompletePacks)
         notifyItemRangeChanged(0, itemCount, PAYLOAD_REBIND)
     }
 

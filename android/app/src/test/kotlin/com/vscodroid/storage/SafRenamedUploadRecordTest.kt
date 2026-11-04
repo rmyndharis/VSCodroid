@@ -30,7 +30,6 @@ import java.io.IOException
 import java.io.OutputStream
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
-import kotlin.concurrent.thread
 
 /**
  * What a directory rename does to the upload records of the files beneath it.
@@ -81,6 +80,7 @@ class SafRenamedUploadRecordTest {
 
     private lateinit var resolver: ContentResolver
     private lateinit var engine: SafSyncEngine
+    private val workers = SafTestWorkers()
     private lateinit var treeUri: Uri
     private lateinit var mirrorsRoot: File
     private lateinit var mirror: File
@@ -158,13 +158,13 @@ class SafRenamedUploadRecordTest {
 
     @AfterEach
     fun tearDown() {
-        // However the assertions ended, no case may leave a thread parked in the gate.
-        releaseWrite.countDown()
-        // Nor with the temporary directory still refusing writes: one case takes that
-        // away to refuse a journal rewrite, and the directory has to be deletable
-        // whatever that case's assertions did.
-        filesDir.setWritable(true)
-        unmockkAll()
+        try {
+            filesDir.setWritable(true)
+            releaseWrite.countDown()
+            workers.finish()
+        } finally {
+            unmockkAll()
+        }
     }
 
     /**
@@ -474,7 +474,7 @@ class SafRenamedUploadRecordTest {
         file.writeText("the whole edit")
         holdNextWrite = true
         observe(FileObserver.MODIFY, path)
-        val writer = thread(isDaemon = true) { drain() }
+        val writer = workers.start { drain() }
         assertTrue(
             writeStarted.await(5, TimeUnit.SECONDS),
             "setup failed: the save never reached the provider, so the rename below did " +

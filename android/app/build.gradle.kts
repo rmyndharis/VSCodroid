@@ -535,8 +535,13 @@ dependencies {
 
 tasks.withType<Test> {
     useJUnitPlatform()
-    // MockK needs reflective access to Files internals for publication failure tests.
-    jvmArgs("--add-opens=java.base/java.nio.file=ALL-UNNAMED")
+    // MockK needs reflective access to Files internals for publication failure tests,
+    // and to UUID's for the one that forces a temporary name to collide.
+    jvmArgs("--add-opens=java.base/java.nio.file=ALL-UNNAMED", "--add-opens=java.base/java.util=ALL-UNNAMED")
+    // A Unix socket path holds 107 bytes and macOS's default temporary directory is long
+    // enough for a fixture's socket name to pass that, which fails every editor start in
+    // the service tests there, so those fixtures need a short one.
+    File("/tmp").takeIf { it.isDirectory }?.let { systemProperty("java.io.tmpdir", it.canonicalPath) }
 
     // This build script is a genuine input to the unit tests, because one of
     // them reads it: NoticesTest parses the `bundleNotices` task to check that
@@ -615,6 +620,10 @@ tasks.withType<Test> {
     //   README.md, docs/*.md  WebViewVersionTest, BridgeApiSpecParityTest,
     //                         NoticesTest
     //   MILESTONES.md         BundledExtensionVersionTest
+    //   scripts/*.js          AuthBootstrapTest, WorkbenchPatchBehavior,
+    //                         CaretDragWiringTest
+    //   scripts/*.py, *.sh    LocaleCoverageTest, MenuSeparatorFloorTest,
+    //                         FirstRunEditorDefaultsTest, RunFileCommandTest
     //
     // Sources under src/main/kotlin are read by other suites the same way and are
     // deliberately not listed: they are compiled into the classpath this task
@@ -650,13 +659,28 @@ tasks.withType<Test> {
     // FirstRunEditorDefaultsTest reads the REQUIRED list of verify-server-tree.py,
     // because the reason it gives for hiding the secondary side bar is that the
     // tree is required to carry the chat provider. Besides build-nls-bundles.py
-    // above and the download scripts below, nothing else under scripts/ is opened
-    // by a test, and most of it is Python the Python gates already cover.
+    // above and the download and spawned self-check scripts below, nothing else
+    // under scripts/ is opened by a test, and most of it is Python the Python
+    // gates already cover.
     inputs.file(rootProject.projectDir.parentFile.resolve("scripts/build-vscode-oss.sh"))
         .withPropertyName("codeOssBuildScript")
         .withPathSensitivity(PathSensitivity.RELATIVE)
     inputs.file(rootProject.projectDir.parentFile.resolve("scripts/verify-server-tree.py"))
         .withPropertyName("serverTreeGate")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    // AuthBootstrapTest and WorkbenchPatchBehavior spawn these two Node self-checks
+    // directly, and test-workbench-layout.js reads the panel-position fixture.
+    // Declared per file with inputs.file so a directory spelling does not disarm
+    // the PackagingDeclarationTest guard for the rest of scripts/ and a rename
+    // fails loudly instead of going silent.
+    inputs.file(rootProject.projectDir.parentFile.resolve("scripts/test-auth-bootstrap.js"))
+        .withPropertyName("authBootstrapSelfCheck")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.file(rootProject.projectDir.parentFile.resolve("scripts/test-workbench-layout.js"))
+        .withPropertyName("workbenchLayoutSelfCheck")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    inputs.file(rootProject.projectDir.parentFile.resolve("scripts/fixtures/workbench-panel-position.ts"))
+        .withPropertyName("panelPositionFixture")
         .withPathSensitivity(PathSensitivity.RELATIVE)
     // RunFileCommandTest holds the toolchain names the Run button offers to the manifests
     // these three write, and CaretDragWiringTest holds the caret-drag self-check to the two

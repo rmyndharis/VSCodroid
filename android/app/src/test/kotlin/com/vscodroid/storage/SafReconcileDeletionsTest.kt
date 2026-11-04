@@ -812,7 +812,7 @@ class SafReconcileDeletionsTest {
                             "redirect" -> {
                                 assertTrue(directory.renameTo(moved))
                                 Files.createSymbolicLink(directory.toPath(), moved.toPath())
-                                if (!File(moved, local.name).exists()) File(moved, local.name).writeBytes(edited)
+                                assertTrue(File(moved, local.name).isFile, "the original copy disappeared before verification finished")
                             }
                             "replacement" -> {
                                 val replacement = File(filesDir, "replacement").apply { writeBytes(edited) }
@@ -839,6 +839,7 @@ class SafReconcileDeletionsTest {
         assertTrue(changed.get(), "the deletion never verified the recorded copy")
         if (shape == "redirect") {
             assertTrue(File(moved, local.name).isFile, "deletion followed a redirected parent")
+            assertTrue(original.contentEquals(File(moved, local.name).readBytes()), "deletion changed the redirected original copy")
         } else {
             assertTrue(mirror.walkTopDown().filter { it.isFile }.any { edited.contentEquals(it.readBytes()) },
                 "deletion removed bytes changed while it verified the original copy")

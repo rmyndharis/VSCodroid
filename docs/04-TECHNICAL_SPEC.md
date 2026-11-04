@@ -397,11 +397,10 @@ val env = mapOf(
     "GIT_SSL_CAINFO"          to "${filesDir}/usr/etc/tls/cert.pem",
     "SSL_CERT_FILE"           to "${filesDir}/usr/etc/tls/cert.pem",
     "CURL_CA_BUNDLE"          to "${filesDir}/usr/etc/tls/cert.pem",   // set when the bundle exists, including empty
-    "REQUESTS_CA_BUNDLE"      to "${filesDir}/usr/etc/tls/cert.pem",   // the name pip reads; it verifies
-                                                                       // against its own vendored certifi and
-                                                                       // never looks at SSL_CERT_FILE. Set only
-                                                                       // when the bundle exists: requests treats
-                                                                       // one it cannot open as fatal
+    "REQUESTS_CA_BUNDLE"      to "${filesDir}/usr/etc/tls/cert.pem",   // read by requests (and by pip alongside
+                                                                       // SSL_CERT_FILE and pip's vendored certifi).
+                                                                       // Set only when the bundle exists: requests
+                                                                       // treats a path it cannot open as fatal
     "SSL_CERT_DIR"            to "${filesDir}/usr/etc/tls",            // an empty bundle preserves an empty trust store
     "OPENSSL_CONF"            to "${filesDir}/usr/etc/tls/openssl.cnf",  // libcrypto's built-in path is Termux's,
                                                                          // and EACCES there is fatal to Node
@@ -1332,6 +1331,8 @@ flowchart TD
   P --> P39["0039 authenticate the editor listener with a private run challenge"]
   P --> P40["0040 wrapped terminal links highlighted within each physical row"]
   P --> P41["0041 horizontal panels kept within a narrow viewport"]
+  P --> P42["0042 configuration: tolerate non-list folders in a workspace file"]
+  P --> P43["0043 server: serve only regular files from serveFile"]
 ```
 
 Five of these are load-bearing in ways their titles understate:

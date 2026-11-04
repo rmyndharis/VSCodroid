@@ -1,8 +1,25 @@
 package com.vscodroid.setup
 
+import android.content.Context
+import android.content.Intent
+import android.net.Uri
 import com.vscodroid.SourceScan
+import com.vscodroid.SplashActivity
+import com.vscodroid.util.Logger
+import io.mockk.Runs
+import io.mockk.every
+import io.mockk.just
+import io.mockk.mockk
+import io.mockk.mockkConstructor
+import io.mockk.mockkObject
+import io.mockk.unmockkAll
+import io.mockk.verify
+import org.junit.jupiter.api.AfterEach
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 
 /**
@@ -26,11 +43,11 @@ import org.junit.jupiter.api.Test
  * saf-bridge has activated. An early return therefore took that route away for
  * the session, to stop a launch that was going to be refused anyway.
  *
- * Read out of the source through [SourceScan], following [LaunchRepairWiringTest],
- * which explains why an Activity is not reachable from a JVM test here and why
- * Robolectric costs more than the gap. What this proves is that the guards are
- * written and where they sit; whether the platform flags mean what they are read
- * to mean is not something any test here can say.
+ * Covered in two ways: the structural checks read the source through
+ * [SourceScan], and the behavioral cases invoke `launchMain`, `onStop`, and
+ * `onStart` directly on a mocked [SplashActivity] instance to verify the
+ * `stopped` and `launchPending` state machine and the `startActivity`,
+ * `publishToolchainShortcut`, and `finish` call order.
  */
 class SplashLaunchGuardTest {
 
@@ -94,6 +111,98 @@ class SplashLaunchGuardTest {
         )
     }
 
+    private lateinit var act: SplashActivity
+    private var finishing = false
+    private var destroyed = false
+    private val events = mutableListOf<String>()
+    private lateinit var incomingUri: Uri
+
+    private fun field(name: String) =
+        SplashActivity::class.java.getDeclaredField(name).apply { isAccessible = true }
+
+    private fun flag(name: String) = field(name).getBoolean(act)
+
+    /** Runs the compiled body of a SplashActivity method and returns what it threw, if anything. */
+    private fun runReal(name: String): Throwable? {
+        every { act[name]() } answers { callOriginal() }
+        val m = SplashActivity::class.java.getDeclaredMethod(name).apply { isAccessible = true }
+        return try {
+            m.invoke(act)
+            null
+        } catch (e: java.lang.reflect.InvocationTargetException) {
+            e.targetException
+        }
+    }
+
+    @BeforeEach
+    fun setUp() {
+        mockkObject(Logger)
+        every { Logger.d(any(), any()) } just Runs
+        every { Logger.i(any(), any()) } just Runs
+        every { Logger.w(any(), any(), any()) } just Runs
+        every { Logger.e(any(), any(), any()) } just Runs
+        mockkConstructor(Intent::class)
+        every { anyConstructed<Intent>().setData(any()) } returns mockk(relaxed = true)
+
+        finishing = false
+        destroyed = false
+        events.clear()
+        act = mockk(relaxed = true)
+        val appContext = mockk<Context>(relaxed = true)
+        every { act.applicationContext } returns appContext
+        incomingUri = mockk(relaxed = true)
+        val incoming = mockk<Intent>(relaxed = true)
+        every { incoming.data } returns incomingUri
+        every { act.intent } returns incoming
+        every { act.isFinishing } answers { finishing }
+        every { act.isDestroyed } answers { destroyed }
+        every { act.finish() } answers { events += "finish"; finishing = true }
+        every { act.startActivity(any<Intent>()) } answers { events += "startActivity(MainActivity)" }
+        every { act["publishToolchainShortcut"]() } answers { events += "shortcut" }
+    }
+
+    @AfterEach
+    fun tearDown() = unmockkAll()
+
+    @Test
+    fun `a cold launch on a visible screen starts the editor publishes the shortcut and finishes`() {
+        assertNull(runReal("launchMain"))
+
+        assertEquals(listOf("startActivity(MainActivity)", "shortcut", "finish"), events)
+        assertFalse(flag("launchPending"))
+        verify(exactly = 1) { anyConstructed<Intent>().setData(incomingUri) }
+    }
+
+    @Test
+    fun `onStop records that the user has left`() {
+        runReal("onStop")
+
+        assertTrue(flag("stopped"), "onStop did not record that the user has left")
+    }
+
+    @Test
+    fun `a launch asked for after onStop is held without starting or finishing`() {
+        runReal("onStop")
+
+        assertNull(runReal("launchMain"))
+
+        assertEquals(listOf("shortcut"), events, "nothing may start or finish while the user is away")
+        assertTrue(flag("launchPending"), "a launch asked for while away was not remembered")
+    }
+
+    @Test
+    fun `a finishing or destroyed screen starts nothing and still publishes the shortcut`() {
+        finishing = true
+        assertNull(runReal("launchMain"))
+        assertEquals(listOf("shortcut"), events)
+
+        events.clear()
+        finishing = false
+        destroyed = true
+        assertNull(runReal("launchMain"))
+        assertEquals(listOf("shortcut"), events)
+    }
+
     /**
      * Setup that ends while the user is in another app.
      *
@@ -113,14 +222,25 @@ class SplashLaunchGuardTest {
         assertTrue(held in 0 until body.indexOf("startActivity("),
             "launchMain no longer asks whether the user has left before it starts the editor")
         assertTrue("launchPending = true" in body, "a launch asked for while away is not remembered")
-        assertTrue("if (!gone && !away) finish()" in body,
-            "launchMain finishes the screen on the path that held the launch back")
 
         val onStart = code(SourceScan.body(source, "override fun onStart("))
-        assertTrue("stopped = false" in onStart && "launchPending" in onStart && "launchMain()" in onStart,
-            "onStart no longer replays a launch that was held while the user was away")
+        val clearStopped = onStart.indexOf("stopped = false")
+        val askPending = onStart.indexOf("if (launchPending) {")
+        val clearPending = onStart.indexOf("launchPending = false")
+        val callLaunch = onStart.indexOf("launchMain()")
+        assertTrue(
+            clearStopped in 0 until askPending &&
+                askPending in 0 until clearPending &&
+                clearPending in 0 until callLaunch,
+            "onStart no longer clears stopped, checks launchPending, clears launchPending, " +
+                "and replays launchMain in order",
+        )
         val onStop = code(SourceScan.body(source, "override fun onStop("))
-        assertTrue("stopped = true" in onStop, "onStop no longer records that the user has left")
+        assertTrue(
+            Regex("""(?m)^\s*stopped = true\s*$""").containsMatchIn(onStop) &&
+                !Regex("""\b(if|when)\b""").containsMatchIn(onStop),
+            "onStop no longer unconditionally records that the user has left",
+        )
     }
 
     /**
@@ -136,9 +256,8 @@ class SplashLaunchGuardTest {
      * sideload and GitHub-release install, and with the outcome decided by the
      * timing of a garbage collection.
      *
-     * Source text rather than behaviour, for the reason the cases above are: the
-     * callback is installed in an Activity method and this module has no
-     * Robolectric.
+     * Checked in the source text because the callback is installed inside
+     * `startDownloads` alongside UI view setup and this module has no Robolectric.
      */
     @Test
     fun `the download callback is not gated on a reference that can be collected`() {

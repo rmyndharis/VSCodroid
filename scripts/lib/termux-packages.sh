@@ -224,6 +224,10 @@ termux_download_packages() {
         if [ -f "$WORK_DIR/debs/$debname" ]; then
             echo "  $debname (cached)"
         else
+            if [ "${TERMUX_OFFLINE:-0}" != "0" ]; then
+                echo "  ERROR: TERMUX_OFFLINE is set and $debname is not cached at $WORK_DIR/debs" >&2
+                return 1
+            fi
             if ! curl -L --fail --show-error -o "$WORK_DIR/debs/$debname" "$TERMUX_REPO/$filename"; then
                 echo "  $debname: not served by $TERMUX_REPO, trying $TERMUX_FALLBACK_REPO"
                 curl -L --fail --show-error -o "$WORK_DIR/debs/$debname" "$TERMUX_FALLBACK_REPO/$filename"

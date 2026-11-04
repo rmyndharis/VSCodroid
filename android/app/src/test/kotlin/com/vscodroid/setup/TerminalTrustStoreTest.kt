@@ -35,11 +35,10 @@ import java.io.File
  * there.
  *
  * What that cost, measured on device before the file variable existed: the
- * bundled Python loaded zero certificates and every HTTPS request failed with
- * CERTIFICATE_VERIFY_FAILED, so `pip install` could not reach PyPI at all, on a
- * command the user guide documents and the Get Started walkthrough advertises as
- * ready. git was unaffected the whole time, because it had been handed the file
- * form separately, which is exactly why nothing noticed.
+ * bundled Python loaded zero certificates and every `urllib` or
+ * `ssl.create_default_context()` HTTPS request failed with
+ * CERTIFICATE_VERIFY_FAILED. git was unaffected the whole time, because it had
+ * been handed the file form separately, which is exactly why nothing noticed.
  */
 class TerminalTrustStoreTest {
 
@@ -89,16 +88,16 @@ class TerminalTrustStoreTest {
             bundle, environment["SSL_CERT_FILE"],
             "nothing but git is given a readable trust store. The directory store beside " +
                 "this is named with the pre-1.0 OpenSSL hash, so OpenSSL 3 looks up a name " +
-                "that is not there and finds no issuer: pip install fails at TLS against " +
-                "PyPI, on a command the guide documents as working",
+                "that is not there and finds no issuer: Python's urllib and OpenSSL clients " +
+                "fail at TLS",
         )
     }
 
     /**
-     * pip does not read SSL_CERT_FILE. It verifies against the certifi bundle
-     * vendored inside itself, so it kept working throughout and the row above
-     * does nothing for it. This is the name it does read, and without it a CA
-     * the device owner installed reaches git and never reaches a private index.
+     * A user's `requests` code reads REQUESTS_CA_BUNDLE rather than SSL_CERT_FILE,
+     * and pip loads both alongside its vendored certifi snapshot. Without
+     * REQUESTS_CA_BUNDLE, `requests` falls back to certifi alone and a CA the
+     * device owner installed does not reach it.
      */
     @Test
     fun `requests and curl use the generated bundle when present`() {
@@ -108,8 +107,8 @@ class TerminalTrustStoreTest {
 
         assertEquals(
             "${filesDir.absolutePath}/usr/etc/tls/cert.pem", environment["REQUESTS_CA_BUNDLE"],
-            "pip and a user's own requests code are back on the vendored certifi, so a CA " +
-                "the device owner installed does not reach a private index",
+            "requests is back on its vendored certifi alone, so a CA " +
+                "the device owner installed does not reach a user's requests code",
         )
         assertEquals("${filesDir.absolutePath}/usr/etc/tls/cert.pem", environment["CURL_CA_BUNDLE"])
     }
@@ -117,10 +116,10 @@ class TerminalTrustStoreTest {
     /**
      * And only when the file is there.
      *
-     * requests treats a bundle it cannot open as fatal rather than falling back,
-     * so naming one `setupGitCaBundle` never wrote would stop pip outright: it
-     * is the one Python HTTPS client that works without any of this, and taking
-     * it away to improve trust would be the worse trade.
+     * requests and pip treat a REQUESTS_CA_BUNDLE they cannot open as fatal
+     * rather than falling back, so naming one `setupGitCaBundle` never wrote
+     * would break both: pip's vendored certifi works without any of this, and
+     * breaking it to improve trust would be the worse trade.
      */
     @Test
     fun `requests and curl bundle overrides are absent when no bundle exists`() {
@@ -132,9 +131,9 @@ class TerminalTrustStoreTest {
         val environment = env()
         assertTrue(
             environment["REQUESTS_CA_BUNDLE"] == null,
-            "pip is pointed at a bundle that does not exist, which it treats as fatal: " +
-                "every install stops with \"Could not find a suitable TLS CA certificate " +
-                "bundle\" instead of falling back to the one vendored inside it",
+            "requests and pip are pointed at a bundle that does not exist, which both " +
+                "treat as fatal: every request stops with \"Could not find a suitable TLS " +
+                "CA certificate bundle\" instead of falling back to the vendored bundle",
         )
         assertTrue(environment["CURL_CA_BUNDLE"] == null, "a missing bundle disables curl's own trust store")
     }

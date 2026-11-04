@@ -162,8 +162,9 @@ function checkLabelCoverage(snapshot) {
 /**
  * Every row says which program it is.
  *
- * The details view and the counter's tooltip are the only places a person can
- * find out what is holding a slot, and both print this string. It used to be
+ * The details view is the only place a person can find out which program is
+ * holding a slot, and it prints this string (the counter's tooltip groups rows
+ * by `type`). It used to be
  * argv[0] plus argv[1], which on this device is the bundled Node binary plus the
  * heap ceiling for nearly every process the app owns: on an idle API 33 emulator
  * five of six rows read `libnode.so --max-old-space-size=488` and the view named
@@ -172,7 +173,11 @@ function checkLabelCoverage(snapshot) {
  * The pairs matter as much as the strings. `bootstrap-fork` is launched twice
  * with different `--type=`, so a rule that keeps only the program name leaves two
  * rows sharing one identity, and a rule that keeps only the first argument leaves
- * every row sharing the heap flag. Both failures are asserted for, and the
+ * every row sharing the heap flag. The musl loader rows cover the options the
+ * wrapper and loader launches put in front of the target binary
+ * (`--preload <shim>` and `--library-path <dir>`), so the row names the program
+ * rather than `--preload libclaude-launch.so` or `--preload libseccomp-shim.so`.
+ * Both failures are asserted for, and the
  * expectations are compared as a set so that a pid dropping out of the snapshot
  * cannot quietly empty the check.
  */
@@ -184,6 +189,14 @@ function checkCommandNames(snapshot, byPid) {
         [1029, 'libnode.so bootstrap-fork --type=agentHost'],
         [1030, 'libnode.so copilot-android-arm64/index.js'],
         [1004, 'libbash.so'],
+        [1058, 'claude'],
+        [1059, 'claude'],
+        [1060, 'claude'],
+        [1061, 'claude'],
+        [1062, 'libnode.so tsserver.js'],
+        [1063, '-bash'],
+        [1064, ''],
+        [1065, 'claude'],
     ]);
     for (const [pid, want] of expected) {
         const got = byPid.get(pid);
@@ -616,6 +629,14 @@ function run(tmp, proc, signals) {
         [1055, [NODE, '--unknown-pair', '/tmp/tsserver.js', '/projects/build.js'], 'unknown'],
         [1056, ['/usr/bin/gopls', '--config=/tmp/file'], 'langserver'],
         [1057, ['/usr/bin/bash', '-c', 'node /tmp/tsserver.js'], 'terminal'],
+        [1058, ['/data/app/pkg/lib/arm64/libldmusl.so', '--preload', '/data/user/0/com.vscodroid/files/usr/lib/libclaude-proc.so', '/data/user/0/com.vscodroid/files/home/.local/share/claude/versions/2.1.112/claude'], 'unknown'],
+        [1059, ['/data/app/pkg/lib/arm64/libldmusl.so', '--library-path', '/data/user/0/com.vscodroid/files/usr/lib', '--preload', '/data/user/0/com.vscodroid/files/usr/lib/libclaude-proc.so', '/ext/claude', '--version'], 'unknown'],
+        [1060, ['/data/app/pkg/lib/arm64/libldmusl.so', '--preload=/data/user/0/com.vscodroid/files/usr/lib/libclaude-proc.so', '--argv0', 'claude', '/ext/claude'], 'unknown'],
+        [1061, ['/data/app/pkg/lib/arm64/libldmusl.so', '--', '/ext/claude'], 'unknown'],
+        [1062, ['/data/app/pkg/lib/arm64/libldmusl.so', '--library-path', '/data/user/0/com.vscodroid/files/usr/lib', '--preload', '/data/user/0/com.vscodroid/files/usr/lib/libclaude-proc.so', NODE, '/extensions/tsserver.js'], 'langserver'],
+        [1063, ['-bash'], 'unknown'],
+        [1064, ['/data/app/pkg/lib/arm64/libldmusl.so', '--preload'], 'unknown'],
+        [1065, ['/data/app/pkg/lib/arm64/libldmusl.so', '--preload=/data/user/0/com.vscodroid/files/usr/lib/libseccomp-shim.so', '/data/user/0/com.vscodroid/files/home/.vscodroid/extensions/anthropic.claude-code-2.1.112-linux-arm64/resources/native-binary/claude'], 'unknown'],
     ];
     for (const [pid, argv] of cases) {
         writeProc(proc, pid, argv);

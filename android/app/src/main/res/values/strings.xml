@@ -611,4 +611,5 @@
          tls_unknown_host stands in for an address. Written in Kotlin before, so
          one English word survived inside an otherwise translated About dialog. -->
     <string name="about_version_unknown">unknown</string>
+    <string name="saf_workspace_multiple_folders">This workspace spans more than one device folder. Only one device folder is synced at a time; edits in the others stay inside VSCodroid until those folders are opened directly.</string>
 </resources>

@@ -609,4 +609,5 @@
          one English word survived inside an otherwise translated About dialog. -->
     <string name="about_version_unknown">neznámá</string>
     <string name="saf_folder_unavailable">Místní kopie této složky v zařízení už není dostupná. Otevřete složku ze zařízení znovu.</string>
+    <string name="saf_workspace_multiple_folders">Tento pracovní prostor zahrnuje více než jednu složku zařízení. Současně se synchronizuje jen jedna složka zařízení; úpravy v ostatních zůstávají uvnitř VSCodroidu, dokud tyto složky neotevřete přímo.</string>
 </resources>

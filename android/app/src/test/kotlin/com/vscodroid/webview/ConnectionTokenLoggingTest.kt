@@ -9,8 +9,12 @@ import android.webkit.ConsoleMessage
 import android.webkit.WebResourceRequest
 import android.webkit.WebResourceResponse
 import android.webkit.WebView
+import com.vscodroid.service.mockEditorGateway
 import com.vscodroid.util.Logger
 import io.mockk.every
+import io.mockk.ConstantMatcher
+import io.mockk.EqMatcher
+import io.mockk.FunctionMatcher
 import io.mockk.mockk
 import io.mockk.mockkConstructor
 import io.mockk.mockkObject
@@ -19,11 +23,17 @@ import io.mockk.unmockkAll
 import io.mockk.verify
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import java.net.InetAddress
 import java.net.ServerSocket
-import kotlin.concurrent.thread
+import java.io.InputStream
+import java.util.concurrent.FutureTask
+import java.util.concurrent.TimeUnit
+import java.util.concurrent.atomic.AtomicReference
 
 /**
  * That the webview layer never puts the server's connection token into logcat.
@@ -67,6 +77,7 @@ class ConnectionTokenLoggingTest {
     fun setUp() {
         logged.clear()
 
+        mockEditorGateway()
         mockkObject(Logger)
         every { Logger.d(any(), any()) } answers { logged += secondArg<String>() }
         every { Logger.i(any(), any()) } answers { logged += secondArg<String>() }
@@ -80,9 +91,10 @@ class ConnectionTokenLoggingTest {
         mockkStatic(Uri::class)
         every { Uri.encode(any()) } answers { firstArg<String>() }
 
-        // Cannot be constructed under the stub android.jar. Mocked purely so the
-        // functions under test run to their end; nothing is asserted about it.
+        // The stub android.jar cannot construct this class. Capture constructor
+        // arguments in cases that need to inspect the returned response.
         mockkConstructor(WebResourceResponse::class)
+        mockResourceFileOpening()
     }
 
     @AfterEach
@@ -123,11 +135,25 @@ class ConnectionTokenLoggingTest {
      */
     @Test
     fun `the proxy does not log the token when the rewrite succeeds`() {
+        var responseBody: InputStream? = null
+        every { anyConstructed<WebResourceResponse>().reasonPhrase } returns "OTHER"
+        every {
+            constructedWith<WebResourceResponse>(
+                EqMatcher("application/javascript"), EqMatcher("utf-8"), EqMatcher(200), EqMatcher("Stub"),
+                ConstantMatcher<Any>(true),
+                FunctionMatcher<InputStream>({ responseBody = it; true }, InputStream::class),
+            ).reasonPhrase
+        } returns "PROXY200"
         Loopback(200).use { server ->
-            VSCodroidWebViewClient.interceptCdnRequest(
+            val response = VSCodroidWebViewClient.interceptCdnRequest(
                 cdnRequest("abc123.vscode-cdn.net", "/stable/deadbeef/out/vs/workbench/workbench.js"),
                 server.port, { token }, emptyList(), emptyList(), { null },
             )
+            assertNotNull(response, "the request never produced a response")
+            assertEquals("PROXY200", response!!.reasonPhrase, "the proxy did not return HTTP 200")
+            assertEquals(server.body, checkNotNull(responseBody).bufferedReader().use { it.readText() })
+            assertTrue(server.requestLine.get().orEmpty().contains("tkn=$token"), "the fixture never received the token")
+            assertTrue(logged.any { it.startsWith("CDN redirect:") && it.endsWith("(200)") && it.contains("tkn=<redacted>") })
             assertNothingLeaked()
         }
     }
@@ -425,49 +451,44 @@ class ConnectionTokenLoggingTest {
 }
 
 /**
- * A loopback server that answers one status and nothing else.
- *
- * `ProcessManagerTest` has an equivalent, but it is file-private and in another
- * package. This one is smaller because it does not need to record what was asked
- * for -- these tests read the log, not the request.
+ * A one-request loopback server with an observed worker result.
+ * The request and response body let a successful rewrite prove its full path.
  */
-private class Loopback(private val status: Int) : AutoCloseable {
+private class Loopback(private val status: Int, val body: String = "proxy fixture") : AutoCloseable {
 
     private val socket = ServerSocket(0, 0, InetAddress.getByName("127.0.0.1"))
 
-    @Volatile
-    private var running = true
-
     val port: Int get() = socket.localPort
-
-    init {
-        thread(name = "token-log-stub", isDaemon = true) {
-            while (running) {
-                try {
-                    socket.accept().use { client ->
-                        val reader = client.getInputStream().bufferedReader()
-                        reader.readLine()
-                        while (true) {
-                            val line = reader.readLine()
-                            if (line.isNullOrEmpty()) break
-                        }
-                        client.getOutputStream().apply {
-                            write(
-                                ("HTTP/1.1 $status Stub\r\n" +
-                                    "Content-Length: 0\r\nConnection: close\r\n\r\n").toByteArray()
-                            )
-                            flush()
-                        }
-                    }
-                } catch (e: Exception) {
-                    if (!running) break
-                }
+    val requestLine = AtomicReference<String?>()
+    private val response = FutureTask {
+        socket.accept().use { client ->
+            client.soTimeout = 5_000
+            val reader = client.getInputStream().bufferedReader()
+            requestLine.set(reader.readLine())
+            while (true) {
+                val line = reader.readLine()
+                if (line.isNullOrEmpty()) break
+            }
+            val payload = body.toByteArray()
+            client.getOutputStream().apply {
+                write(("HTTP/1.1 $status Stub\r\nContent-Length: ${payload.size}\r\n" +
+                    "Connection: close\r\n\r\n").toByteArray())
+                write(payload)
+                flush()
             }
         }
+        Unit
     }
+    private val worker = Thread(response, "token-log-stub").apply { isDaemon = true; start() }
 
     override fun close() {
-        running = false
         socket.close()
+        worker.join(5_000)
+        if (worker.isAlive) {
+            worker.interrupt()
+            worker.join(5_000)
+        }
+        assertFalse(worker.isAlive, "the loopback server did not stop")
+        response.get(1, TimeUnit.SECONDS)
     }
 }

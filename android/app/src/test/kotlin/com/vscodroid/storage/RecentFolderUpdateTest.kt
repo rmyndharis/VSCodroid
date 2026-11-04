@@ -25,7 +25,6 @@ import org.junit.jupiter.api.io.TempDir
 import java.io.File
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
-import kotlin.concurrent.thread
 
 /**
  * Two threads updating the recent-folder list at once.
@@ -64,6 +63,7 @@ class RecentFolderUpdateTest {
     private lateinit var prefs: SharedPreferences
 
     private var recentJson = "[]"
+    private val workers = SafTestWorkers()
 
     private val pickedText = "content://tree/primary%3APicked"
     private val removedText = "content://tree/primary%3ARemoved"
@@ -123,9 +123,12 @@ class RecentFolderUpdateTest {
 
     @AfterEach
     fun tearDown() {
-        // However the assertions ended, no case may leave a thread parked in the gate.
-        release.countDown()
-        unmockkAll()
+        try {
+            release.countDown()
+            workers.finish()
+        } finally {
+            unmockkAll()
+        }
     }
 
     private fun fakePrefs(): SharedPreferences {
@@ -157,7 +160,7 @@ class RecentFolderUpdateTest {
                 gated = false
                 val snapshot = recentJson
                 entered.countDown()
-                release.await(5, TimeUnit.SECONDS)
+                assertTrue(release.await(5, TimeUnit.SECONDS), "the fixture gate was not released")
                 snapshot
             } else {
                 recentJson
@@ -176,14 +179,14 @@ class RecentFolderUpdateTest {
         )
         gateTheFirstRead()
 
-        val adder = thread(isDaemon = true) { manager.persistPermission(picked) }
+        val adder = workers.start { manager.persistPermission(picked) }
         assertTrue(
             entered.await(5, TimeUnit.SECONDS),
             "setup failed: the first writer never reached the list, so nothing below is " +
                 "measuring what happens when the second one arrives while it is inside",
         )
 
-        val remover = thread(isDaemon = true) { manager.releaseGrantFor(removedHash) }
+        val remover = workers.start { manager.releaseGrantFor(removedHash) }
         remover.join(300)
         assertTrue(
             remover.isAlive,

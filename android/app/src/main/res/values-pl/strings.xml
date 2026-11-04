@@ -609,4 +609,5 @@
          one English word survived inside an otherwise translated About dialog. -->
     <string name="about_version_unknown">nieznana</string>
     <string name="saf_folder_unavailable">Lokalna kopia tego folderu na urządzeniu nie jest już dostępna. Otwórz folder ponownie z urządzenia.</string>
+    <string name="saf_workspace_multiple_folders">Ten obszar roboczy obejmuje więcej niż jeden folder urządzenia. Jednocześnie synchronizowany jest tylko jeden folder urządzenia; zmiany w pozostałych pozostają w VSCodroidzie, dopóki te foldery nie zostaną otwarte bezpośrednio.</string>
 </resources>

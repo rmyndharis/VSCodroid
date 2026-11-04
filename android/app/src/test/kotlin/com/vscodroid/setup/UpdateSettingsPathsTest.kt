@@ -10,7 +10,9 @@ import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
 import io.mockk.mockkObject
+import io.mockk.mockkStatic
 import io.mockk.unmockkObject
+import io.mockk.unmockkAll
 import io.mockk.verify
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -21,6 +23,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.nio.file.Files
 
 /**
  * Tests for [FirstRunSetup.updateSettingsNativeLibPaths], the call site, not the
@@ -71,6 +74,7 @@ class UpdateSettingsPathsTest {
 
     @BeforeEach
     fun setUp() {
+        mockkStatic(Files::class)
         mockkObject(Logger)
         every { Logger.d(any(), any()) } just Runs
         every { Logger.i(any(), any()) } just Runs
@@ -89,7 +93,7 @@ class UpdateSettingsPathsTest {
     }
 
     @AfterEach
-    fun tearDown() = unmockkObject(Logger)
+    fun tearDown() = unmockkAll()
 
     /**
      * The profile has to name the `usr/bin/bash` symlink, not the `.so` it points at:
@@ -137,28 +141,20 @@ class UpdateSettingsPathsTest {
      * written: the workbench reads an empty settings.json as "no settings" rather
      * than as an error, so the loss is silent.
      *
-     * The failure is arranged by putting a directory where [writeAtomically] wants to
-     * put its temporary file, which it names from the destination. That fails the
-     * write without depending on file permissions, which behave differently depending
-     * on who runs the tests.
+     * The failure is injected at the temporary-file open in [writeAtomically],
+     * preserving the real writer and its error handling.
      */
     @Test
     fun `a failed write leaves the user's settings exactly as they were`() {
         val before = settingsFile.readText()
-        val blocker = File(settingsFile.parentFile, "${settingsFile.name}.tmp~")
-        assertTrue(blocker.mkdirs(), "could not stage the blocked temp path")
-        // Non-empty, so the cleanup delete() cannot remove it. An empty directory
-        // would vanish on the first failure and quietly let a later call succeed.
-        File(blocker, "occupied").writeText("x")
+        val blocker = blockAtomicWritesTo(settingsFile)
 
         FirstRunSetup(context).updateSettingsNativeLibPaths()
 
         assertEquals(before, settingsFile.readText(), "settings.json was modified despite the write failing")
         assertTrue(settingsFile.exists(), "settings.json disappeared")
-        // Proves the write was attempted rather than skipped: only the atomic path
-        // builds this name, and reaching it at all means the early returns above were
-        // not taken.
-        assertTrue(blocker.isDirectory, "the blocked temp path was consumed")
+        // The open must have been attempted rather than bypassed by an early return.
+        assertTrue(blocker.attempts.get() > 0, "the atomic temporary open was not attempted")
         verify(exactly = 0) { Logger.i(any(), match { it.contains("Refreshed managed paths") }) }
     }
 

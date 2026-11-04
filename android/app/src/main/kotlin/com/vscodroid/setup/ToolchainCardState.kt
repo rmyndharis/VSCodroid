@@ -65,6 +65,7 @@ class ToolchainCardState(private val mode: ToolchainCardMode) {
 
     private val selected = mutableSetOf<String>()
     private val installed = mutableSetOf<String>()
+    private val incomplete = mutableSetOf<String>()
     private val downloadStatus = mutableMapOf<String, Int>()
     private val downloadPercent = mutableMapOf<String, Int>()
     private val downloadTransfer = mutableMapOf<String, Long>()
@@ -117,12 +118,18 @@ class ToolchainCardState(private val mode: ToolchainCardMode) {
      * them the pack way ("toolchain_ruby"), so each name is normalised on the way
      * in. Both spellings are accepted because both reach here.
      */
-    fun setInstalled(packNames: Collection<String>, olderBuilds: Map<String, String> = emptyMap()) {
+    fun setInstalled(
+        packNames: Collection<String>,
+        olderBuilds: Map<String, String> = emptyMap(),
+        incompletePacks: Collection<String> = emptyList(),
+    ) {
         installed.clear()
         installed.addAll(packNames.map { name ->
             if (name.startsWith("toolchain_")) name else "toolchain_$name"
         })
         this.olderBuilds = olderBuilds
+        incomplete.clear()
+        incomplete.addAll(incompletePacks)
     }
 
     /**
@@ -190,9 +197,11 @@ class ToolchainCardState(private val mode: ToolchainCardMode) {
 
         if (status == AssetPackStatus.COMPLETED) {
             installed.add(packName)
+            incomplete.remove(packName)
         }
         if (status == AssetPackStatus.NOT_INSTALLED) {
             installed.remove(packName)
+            incomplete.remove(packName)
         }
         return positionOf(packName)
     }
@@ -315,7 +324,7 @@ class ToolchainCardState(private val mode: ToolchainCardMode) {
             // branches deliberately, so a card that is somehow both would still
             // show the Cancel that stops a transfer.
             packName in removing -> ToolchainCard(badge = ToolchainBadge.INSTALLED)
-            status == AssetPackStatus.FAILED -> ToolchainCard(
+            status == AssetPackStatus.FAILED || packName in incomplete -> ToolchainCard(
                 badge = ToolchainBadge.FAILED,
                 action = ToolchainAction.RETRY,
             )

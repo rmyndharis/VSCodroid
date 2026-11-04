@@ -9,10 +9,12 @@ import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
 import io.mockk.mockkObject
-import io.mockk.unmockkObject
+import io.mockk.mockkStatic
+import io.mockk.unmockkAll
 import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -21,6 +23,7 @@ import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.ByteArrayInputStream
 import java.io.File
+import java.nio.file.Files
 
 /**
  * What a retry re-copies, and what it is allowed to leave alone.
@@ -77,6 +80,7 @@ class ExtractionResumeTest {
 
     @BeforeEach
     fun setUp() {
+        mockkStatic(Files::class)
         mockkObject(Logger)
         every { Logger.d(any(), any()) } just Runs
         every { Logger.i(any(), any()) } just Runs
@@ -124,7 +128,7 @@ class ExtractionResumeTest {
     }
 
     @AfterEach
-    fun tearDown() = unmockkObject(Logger)
+    fun tearDown() = unmockkAll()
 
     /**
      * The subject, with the tree figures supplied rather than read from
@@ -148,21 +152,14 @@ class ExtractionResumeTest {
         bundledExtensionBytes = 0,
     )
 
-    /** Non-empty, so the cleanup `delete()` cannot quietly reclaim it. */
-    private fun blockSecondWrite(): File {
-        assertTrue(second.parentFile!!.mkdirs(), "could not stage the server directory")
-        val blocker = File(second.parentFile, "${second.name}.tmp~")
-        assertTrue(blocker.mkdirs(), "could not stage the blocked temp path")
-        File(blocker, "occupied").writeText("x")
-        return blocker
-    }
+    private fun blockSecondWrite(): AtomicWriteFailure = blockAtomicWritesTo(second)
 
     /**
      * A run that writes the first asset and then cannot write the second, which
      * is the state every retry starts from: some of the tree on disk, the record
      * of the attempt still standing, and nothing marked complete.
      */
-    private fun interruptedFirstRun(): File {
+    private fun interruptedFirstRun(): AtomicWriteFailure {
         val blocker = blockSecondWrite()
         val result = runBlocking { setup().runSetup() }
         assertEquals(
@@ -180,7 +177,7 @@ class ExtractionResumeTest {
         // Same length, different bytes: the only way to tell a skip from a
         // rewrite without depending on timing.
         first.writeText(tampered)
-        assertTrue(blocker.deleteRecursively(), "could not free the temp path")
+        blocker.close()
 
         val result = runBlocking { setup().runSetup() }
 
@@ -201,7 +198,7 @@ class ExtractionResumeTest {
         // What a kill or a full disk leaves. The length no longer matches, so the
         // skip must not claim it.
         first.writeText("//")
-        assertTrue(blocker.deleteRecursively(), "could not free the temp path")
+        blocker.close()
 
         runBlocking { setup().runSetup() }
 
@@ -223,7 +220,7 @@ class ExtractionResumeTest {
      */
     @Test
     fun `a run that is not a retry of the same build rewrites everything`() {
-        interruptedFirstRun().also { assertTrue(it.deleteRecursively(), "could not free the temp path") }
+        interruptedFirstRun().close()
         first.writeText(tampered)
 
         // The attempt record now names a build this is not.
@@ -260,7 +257,7 @@ class ExtractionResumeTest {
      */
     @Test
     fun `a retry on an install an earlier build completed rewrites everything`() {
-        interruptedFirstRun().also { assertTrue(it.deleteRecursively(), "could not free the temp path") }
+        interruptedFirstRun().close()
 
         // Same length, different bytes, and not this build's: what an upgrade
         // finds sitting under its own attempt marker.
@@ -308,7 +305,7 @@ class ExtractionResumeTest {
         // This build's first attempt: it writes into the tree it found and stops
         // at the blocked file, so its own marker goes over a tree another build
         // began.
-        interruptedFirstRun().also { assertTrue(it.deleteRecursively(), "could not free the temp path") }
+        interruptedFirstRun().close()
 
         // Same length, different bytes: what the earlier build left where this
         // one is about to look.
@@ -385,5 +382,72 @@ class ExtractionResumeTest {
 
         assertNull(stored["extraction_attempt"], "the attempt record survived a completed setup")
         assertNotNull(stored["setup_version"], "the run under test did not complete")
+    }
+
+    @Test
+    fun `a retry over a server tree left by a build that recorded no attempt rewrites everything`() {
+        File(filesDir, "server").apply {
+            mkdirs()
+            File(this, "preexisting.js").writeText(tampered)
+        }
+
+        val blocker = blockSecondWrite()
+        assertEquals(FirstRunSetup.SetupResult.ERROR, runBlocking { setup().runSetup() })
+        assertEquals(setOf("extraction_attempt"), stored.keys)
+        assertTrue(
+            stored["extraction_attempt"]!!.endsWith("!mixed"),
+            "an unattributed pre-existing server tree must poison the recorded extraction_attempt marker",
+        )
+        first.writeText(tampered)
+        blocker.close()
+
+        val result = runBlocking { setup().runSetup() }
+
+        assertEquals(FirstRunSetup.SetupResult.SUCCESS, result)
+        assertEquals(
+            firstAsset, first.readText(),
+            "a retry trusted equal-length bytes in a server tree that existed before any " +
+                "build recorded KEY_EXTRACTION_ATTEMPT",
+        )
+    }
+
+    @Test
+    fun `the launch repairs write zero counted bytes into server and keep fresh-install resume`() {
+        setup().setupRipgrepVscodeSymlink()
+        setup().ensureExecPreload()
+        assertEquals(
+            0L,
+            installedExtractionBytes(File(filesDir, "server")),
+            "launch repairs must not write counted regular-file bytes under server/ before extraction",
+        )
+
+        val blocker = interruptedFirstRun()
+        first.writeText(tampered)
+        blocker.close()
+
+        val result = runBlocking { setup().runSetup() }
+
+        assertEquals(FirstRunSetup.SetupResult.SUCCESS, result)
+        assertEquals(
+            tampered, first.readText(),
+            "launch repairs before the first extraction run caused a same-build retry to rewrite equal-length files",
+        )
+    }
+
+    @Test
+    fun `an interrupted upgrade from a completed install records a plain attempt marker`() {
+        stored["setup_version"] = "1.0.0"
+        File(filesDir, "server").apply {
+            mkdirs()
+            File(this, "preexisting.js").writeText(tampered)
+        }
+
+        val blocker = blockSecondWrite()
+        assertEquals(FirstRunSetup.SetupResult.ERROR, runBlocking { setup().runSetup() })
+        assertFalse(
+            stored["extraction_attempt"]!!.endsWith("!mixed"),
+            "an upgrade from a completed install must record the plain attempt marker rather than !mixed",
+        )
+        blocker.close()
     }
 }

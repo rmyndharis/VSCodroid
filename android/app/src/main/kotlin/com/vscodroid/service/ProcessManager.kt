@@ -41,7 +41,13 @@ import androidx.core.content.edit
  * This class does NOT handle restart logic or Android service concerns;
  * those belong to [NodeService].
  */
-class ProcessManager(private val context: Context) {
+class ProcessManager internal constructor(
+    private val context: Context,
+    private val isolatedGateway: EditorGateway?,
+) {
+    constructor(context: Context) : this(context, null)
+
+    private val editorGateway get() = isolatedGateway ?: EditorGateway.instance
 
     private val tag = "ProcessManager"
 
@@ -70,12 +76,13 @@ class ProcessManager(private val context: Context) {
      */
     @Volatile
     private var serverProcess: Process? = null
+    // Selected backend owner, including an adoption proof in flight; guarded by readinessLock.
     private var serverRunId: String? = null
     @Volatile
     private var watchdogThread: Thread? = null
 
     /**
-     * The port this instance serves on, written once per instance lifetime.
+     * The public origin port, fixed once the application gateway binds.
      *
      * Volatile for the same reason as the fields either side of it, and it was
      * the one that missed out. It is written on whichever thread called
@@ -144,6 +151,12 @@ class ProcessManager(private val context: Context) {
      */
     private val readinessLock = Any()
 
+    private companion object {
+        // Old service cleanup must finish before its replacement can adopt the same child.
+        val startLock = Any()
+    }
+    private var stopGeneration = 0L
+
     /**
      * Whether the server being served is one this instance found rather than
      * started.
@@ -153,58 +166,17 @@ class ProcessManager(private val context: Context) {
      *
      * There is no [Process] behind an adopted server, so everything that reasons
      * from `serverProcess` has to consult this too: the start guard, and
-     * [stopServer], which cannot kill what it did not spawn and says so instead
-     * of reporting success.
+     * [stopServer], which reaps an adopted backend through its captured PID note.
      */
     @Volatile
     private var adopted = false
 
     /**
-     * Whether the process the last [startServer] spawned went onto a port
-     * something else was already holding.
+     * Whether the spawned private backend has still to report its expected listen path.
      *
-     * Recorded at the spawn because that is the only moment the two cases can be
-     * told apart. Afterwards the port is occupied either way, and nothing in a
-     * later probe distinguishes a server of ours holding its own port from a
-     * stranger holding it while our process sits behind it unable to bind.
-     *
-     * Volatile for the same reason as the flags above: it is written on whichever
-     * thread called [startServer] and read from the service's main dispatcher.
-     */
-    @Volatile
-    private var spawnedOntoHeldPort = false
-
-    /**
-     * Whether the process the last [startServer] spawned has still to say it is
-     * listening.
-     *
-     * Set at the spawn and cleared by [startOutputReader] on the line
-     * `server-main.js` prints from its listen callback, [SERVER_LISTENING_LINE],
-     * which reaches this process because `assets/server.js` forks the editor
-     * server with its stdio inherited. While it is set, [probeReadiness] refuses
-     * whatever the port answers, and that is the one ownership test that does not
-     * ask the port. A 200 carrying the right commit proves only that something on
-     * the loopback knows a public value; this line can only have been printed by a
-     * child of ours after its own bind succeeded. Readiness is what carries the
-     * connection token to the port, so the party it is carried to has to be
-     * identified by something a stranger cannot say.
-     *
-     * The window it closes is wider than a restart onto a held port. Binding a
-     * loopback port needs no permission, so a process that takes the remembered
-     * port between the free check in [startServer] and the child's own listen
-     * leaves [spawnedOntoHeldPort] false and used to be handed readiness on a bare
-     * 200. A child that lost that race prints EADDRINUSE instead of this line, and
-     * the start now stays not ready for as long as it does.
-     *
-     * False for an adopted server, which spawned nothing: its ownership is the
-     * note's business, see [portHeldByOurEditorServer].
-     *
-     * Cleared only when the line came from the process that is still the current
-     * one, because a reader draining the previous process's pipe after a restart
-     * would otherwise vouch for a spawn it knows nothing about.
-     *
-     * Volatile for the same reason as the flags above: written on whichever thread
-     * called [startServer] and on the output reader, read on every probe.
+     * Only the current process's exact run-path line clears this. A fresh keyed
+     * proof separately authenticates its response before readiness publishes the token.
+     * An adopted backend has already passed that proof and needs no new output line.
      */
     @Volatile
     private var listenUnreported = false
@@ -215,8 +187,7 @@ class ProcessManager(private val context: Context) {
      *
      * The poll asks five times a second for thirty seconds and then goes on
      * asking, so an unthrottled line would be the whole of the log by the end of
-     * it while saying nothing the first one did not. Cleared beside
-     * [spawnedOntoHeldPort], at the spawn the line would describe.
+     * it while saying nothing the first one did not. Cleared at each new spawn.
      */
     @Volatile
     private var unboundRefusalLogged = false
@@ -388,14 +359,6 @@ class ProcessManager(private val context: Context) {
     fun hasLiveServer(): Boolean = isRunning() || adopted
 
     /**
-     * Whether this start selected a port already held by another listener.
-     * Current servers exit on EADDRINUSE; the timeout path also handles older
-     * payloads that stayed alive without binding. A fresh probe cannot recover
-     * which process held the port when this start selected it.
-     */
-    fun spawnedOntoHeldPort(): Boolean = spawnedOntoHeldPort
-
-    /**
      * The connection token the server requires on every route except `/version`,
      * `/delay-shutdown`, `/callback` and the bounded `/vscodroid-server-proof/<nonce>`
      * challenge route, as held by the server this instance last saw become ready,
@@ -544,7 +507,12 @@ class ProcessManager(private val context: Context) {
      * @return `true` if the process was spawned successfully, `false` on error or
      *         if a live process is already running.
      */
-    fun startServer(): Boolean {
+    fun startServer(canStart: () -> Boolean = { true }): Boolean {
+        val generation = synchronized(readinessLock) { stopGeneration }
+        return synchronized(startLock) { startServer(generation, canStart) }
+    }
+
+    private fun startServer(generation: Long, canStart: () -> Boolean): Boolean {
         // Liveness, not nullity: the crash path leaves the dead Process referenced,
         // so a null check here refused every automatic restart attempt (issue #3).
         //
@@ -552,357 +520,105 @@ class ProcessManager(private val context: Context) {
         // behind an adopted server, so `isRunning()` answers false for one that is
         // serving perfectly well, and without this a restart would spawn a second
         // server onto a port the first still holds.
-        if (isRunning() || adopted) {
-            Logger.w(tag, "Server already running")
-            return false
+        synchronized(readinessLock) {
+            if (generation != stopGeneration || !canStart()) return false
+            if (isRunning() || adopted) {
+                Logger.w(tag, "Server already running")
+                return false
+            }
+            isShuttingDown = false
+            clearReadiness()
         }
-
-        isShuttingDown = false
         // A server that is starting is not serving, and this is the assignment
         // that makes a restart honest: the flag survives in this instance across
         // restarts exactly as the port does, so leaving it set would report the
         // previous server's readiness for the new one during the seconds it takes
         // to bind.
-        clearReadiness()
-        // Keep the port across restarts. The WebView's loaded URL and the WebViewClient
-        // are both bound to it, and neither is rebuilt on restart: initBridge() guards on
-        // bridgeInitialized (MainActivity.initBridge), so the client keeps the port it
-        // was constructed with, and it is what CDN interception and the localhost check
-        // read (VSCodroidWebViewClient.shouldInterceptRequest and its isLocalhost).
-        // This used to cite the bridge's allowed-origin
-        // check as the second binding; that check was removed in #144 because nothing
-        // called it.
-        // Across cold starts it is the workbench's IndexedDB that is bound to it:
-        // see PortFinder.getOrAllocatePort.
-        //
-        // Whether it is free is asked once and held, because two decisions turn
-        // on that one answer: whether to adopt, and whether the spawn further
-        // down has any chance of binding. Asking twice would let the port change
-        // hands in between and record a doomed spawn as a healthy one. A port
-        // this call allocates is free by construction, PortFinder either
-        // verified the remembered one or scanned for another.
-        //
-        // On the FIRST start in this process the candidate is the REMEMBERED port,
-        // not whatever the allocator would hand back, and that difference is the
-        // whole of the adoption path. `getOrAllocatePort` answers a held port by
-        // moving to a free one, so it can only ever return a port nothing is
-        // holding: the true below was unconditional on every cold start, both
-        // readers of the note are gated on its negation, and adoption could not run
-        // on the one launch it exists for, a server that outlived the process that
-        // spawned it. Moving is not free either; it is the line PortFinder logs as
-        // "Workbench storage keyed to the old origin is lost".
-        //
-        // Re-deriving the port here is not the re-derivation the note above
-        // forbids. That one is about a port this instance has already published to
-        // the WebView and its client. Nothing has seen this one: `_port` is zero
-        // only on an instance that has never started a server, MainActivity reads
-        // the port only beside `isServerReady()`, which is false throughout, and
-        // the replacement happens inside this same call.
-        val firstStart = _port == 0
-        if (firstStart) _port = PortFinder.rememberedPort(context)
-        var portIsFree = if (_port == 0) {
-            _port = PortFinder.getOrAllocatePort(context)
-            true
-        } else {
-            PortFinder.isPortAvailable(_port)
+        val runId = UUID.randomUUID().toString()
+        val backendSocket = editorBackendSocket(context, runId) ?: run {
+            Logger.e(tag, "The private editor socket is unavailable")
+            return false
         }
-        val editorNote = if (portIsFree) null else recordedEditorNote()
-        if (editorNote != null && portHeldByOurEditorServer(editorNote) && recordedServerIsServing(editorNote)) {
-            // A server of ours is already on the port. Serve it instead of
-            // spawning a second one that cannot bind.
-            //
-            // This is the case the long note below is about, and it is the common
-            // one rather than the exotic one: `assets/server.js` forks the editor
-            // server and forwards SIGTERM, but a SIGKILLed `server.js` -- routine
-            // here, it is what the watchdog's 137 branch exists for -- forwards
-            // nothing and `fork()` sets no PDEATHSIG, so the child outlives its
-            // parent still holding the socket. It is not wreckage: it is a live,
-            // healthy editor server, the one the open WebView is still talking to.
-            //
-            // Measured on an API 36 emulator: spawning anyway produced a parent
-            // that never becomes the server. Its child printed
-            // `code: 'EADDRINUSE'` and did NOT exit, so this class ended up
-            // watching a process whose death means nothing while the process that
-            // serves the user was untracked. Adopting removes that second process
-            // entirely and puts the watch on the one that matters.
-            //
-            // The ownership test is what makes this safe to do at all. Anything
-            // can hold a loopback port on Android, so the holder cannot be the one
-            // asked: [portHeldByOurEditorServer] reads a note the bootstrap wrote
-            // into app-private storage naming the pid it forked, and checks that
-            // process is still alive and still that server. A holder we have no
-            // note for falls through and is spawned over, which fails the way it
-            // always did rather than the way a refusal would.
-            //
-            // Ownership is only half of it, and the note cannot supply the other
-            // half: it is written at the fork, so it names a process that was
-            // asked to bind the port rather than one that did.
-            // [recordedServerIsServing] asks the port itself before this branch is
-            // taken, see there for what a note alone lets through, and why the
-            // two questions are not interchangeable.
-            Logger.i(tag, "Port $_port already served by a server of ours; adopting it")
-            // The same window the spawn below guards, on the branch that has no
-            // Process to destroy, and the decision above is where it opens.
-            // [recordedServerIsServing] spends a second of connect and a second of
-            // read against the port, and [stopServer] runs on the main thread: a
-            // Stop pressed inside that round trip reads `adopted` as false, so it
-            // reaps nothing and returns, and the assignments below would then clear
-            // the flag that stop had just set and record the orphan as this
-            // instance's server. What the user is left with is exactly the state
-            // adoption exists to end, now with the service gone: an editor server
-            // holding the port that nothing is tracking, and the poll
-            // [startAdoptionWatch] would have started over it, both outliving the
-            // stop that was supposed to take them.
-            //
-            // Ended rather than merely declined, for the reason [stopServer]'s own
-            // adopted branch gives: the note names the pid, and a stop is the user
-            // asking for the server to be gone rather than for it to be left
-            // untracked. Placed before every assignment below, because a return
-            // taken after any of them would publish state describing a server this
-            // start is not going to serve.
-            synchronized(readinessLock) {
-                if (isShuttingDown) {
-                    Logger.i(tag, "A stop landed while the server was being adopted; ending it instead")
-                    reapRecordedEditorServer("a stop landed while it was being adopted")
-                    return false
-                }
-                // Nothing is warned about here, and that is a change rather than an
-                // omission. An adopted server is by construction one whose bootstrap
-                // is gone, and while the DNS proxy was bound by that bootstrap the
-                // survivor kept pointing HTTPS_PROXY at a closed port that no running
-                // process can be made to forget: the Open VSX gallery, the agent host,
-                // and git, npm and curl in every terminal (they inherit the same
-                // environment) all failed to reach the network for the rest of the
-                // session, while the workbench itself looked perfectly healthy.
-                // `assets/server.js` now preloads `assets/dns-proxy.js` into the child
-                // it forks and the child binds its own listener, so the proxy has
-                // exactly the lifetime of the server that uses it and a survivor
-                // carries a working one. Read those two files before putting any
-                // warning back here.
-                adopted = true
-                adoptedAnnouncedServer = recordedEditorNote().let {
-                    it == editorNote && it == announcedEditorNote
-                }
-                clearReadiness()
-                serverEditorNote = editorNote
-                // Nothing was spawned, so the flag describes nothing. Cleared rather
-                // than left, because it survives in this instance across attempts and
-                // a value left over from a previous one is not about this server.
-                spawnedOntoHeldPort = false
-                // Nothing was spawned, so there is no listen to wait for either. The
-                // note vouched for this holder before it was adopted, which is the
-                // ownership test this branch rests on; a flag left set from an
-                // earlier spawn in this instance would refuse readiness to a server
-                // that is serving, and nothing would ever clear it.
-                listenUnreported = false
-                // The same reasoning, and a sharper consequence. An adopted server was
-                // spawned by a bootstrap that is gone, and it carries whatever ceiling
-                // that bootstrap gave it -- which is unknowable from here and is not
-                // whatever this instance last read out of settings.json. Left set, the
-                // user's number would be charged for a kill of a process that never
-                // ran with it, and three of those disable a value that was never tried.
-                heapOverrideActive = false
-                // And the same for the suspension, which [heapOverrideSuspendedNow]
-                // documents as derived at every spawn: this branch is the one start
-                // that spawns nothing, so a value left standing here describes some
-                // earlier process rather than the one being served, and the running
-                // card would tell the user their ceiling had just been turned off on
-                // a start that never read it.
-                heapOverrideSuspendedNow = false
-                startAdoptionWatch(editorNote)
-                return true
+        val gateway = editorGateway
+        val editorNote = recordedEditorNote()
+        val recorded = editorNote?.let { runCatching { JSONObject(it) }.getOrNull() }
+        val inheritedPort = gateway.boundPort
+        _port = inheritedPort ?: _port.takeIf { it > 0 } ?: PortFinder.rememberedPort(context)
+        if (_port == 0) _port = PortFinder.getOrAllocatePort(context)
+
+        // A legacy child owns TCP itself. End it before reserving the same WebView origin.
+        val recordedSocket = recorded?.let { recordedBackendSocket(it) }
+        if (inheritedPort == null && recorded != null && recordedSocket == null &&
+            portHeldByOurEditorServer(editorNote)) {
+            if (reapRecordedEditorServer("moving the editor behind its private transport", editorNote)) {
+                portFreedByReap()
             }
         }
-        // An editor server of ours that is alive, holds the port, and is not one this
-        // start can adopt is the one shape worth ending before spawning over it. Adoption
-        // already declined it just above, and leaving it there guarantees the spawn below
-        // hits EADDRINUSE: that child does not exit, so the run ends in CANNOT_BIND with
-        // two processes where the user wanted one, and the survivor outlives every retry.
-        //
-        // Three declines reach here and only one of them is silence, so the reason is not
-        // repeated in the reap: [recordedServerIsServing] has already logged which of them
-        // it was. `/version` did not answer within a second, which a server still starting
-        // up could fail; or it answered as a different build, which an orphan left by an
-        // earlier app version does; or this build could not read its own commit, so the
-        // port was never asked at all.
-        //
-        // The last two end a process that may be serving perfectly well, and that is a
-        // decision rather than an oversight. What it is serving is not this build, or
-        // cannot be shown to be, and the alternative is not "leave the user's editor
-        // alone" but a launch that fails for as long as the holder lives, because nothing
-        // here can bind the port while it is held and `_port` is re-derived only on the
-        // first start in a process. A server ended a second early is restarted by the
-        // line below; one left alone is not.
-        //
-        // On a first start as well, and ABOVE the move that follows. The move used to
-        // come first, on the reasoning that a cold start had a way out a restart did
-        // not and that the reap was argued from "the spawn is about to hit this port".
-        // What that ordering cost was the orphan itself: an editor server of this
-        // build that took longer than a second to answer `/version` under cold-start
-        // load was declined, the port was abandoned to it, and nothing ever ended it,
-        // so it kept a Node heap and one of the 32 phantom-process slots until the OS
-        // took them back, while the workbench storage keyed to its origin was lost
-        // for nothing. Reaping first is what the restart path has always done with
-        // the same three declines; what is new is only that the cold start no longer
-        // walks away before it gets the chance.
-        //
-        // The reap is subtracted only when the port agrees it is free, because a
-        // signalled pid is not a released socket: the kill returns when the signal
-        // is sent, and the holder can also be a foreign process the reap never
-        // touched, the note naming a wedged child that never bound while someone
-        // else took the port. Answering from the signal alone would call that spawn
-        // healthy while it wedges on EADDRINUSE without exiting, and the
-        // liveness-bounded wait behind [spawnedOntoHeldPort] would never end: the
-        // failure the restart budget used to report, become a "still starting" that
-        // says nothing. The probe is the same loopback bind test [PortFinder]
-        // already answers, and its residual race, a port freed just after it reads
-        // held, is the one the free-at-first-ask path has always accepted. Asked
-        // through [portFreedByReap] rather than once, because after a reap that
-        // race is not residual but the likely answer: see there.
-        if (!portIsFree && portHeldByOurEditorServer()) {
-            val reaped =
-                reapRecordedEditorServer("not adoptable by this start, for the reason logged above")
-            if (reaped && portFreedByReap()) portIsFree = true
+        var bound = false
+        repeat(5) {
+            if (bound) return@repeat
+            try {
+                _port = gateway.bind(_port)
+                bound = true
+            } catch (e: IOException) {
+                if (inheritedPort != null || it == 4) {
+                    Logger.e(tag, "Could not reserve the editor origin", e)
+                    serverLog.append("Could not reserve the editor origin: ${e.javaClass.simpleName}: ${e.message}")
+                    return false
+                }
+                if (recordedSocket != null) {
+                    reapRecordedEditorServer("the public editor origin could not be retained", editorNote)
+                }
+                _port = PortFinder.getOrAllocatePort(context)
+            }
         }
-        // A candidate this start still cannot claim is not a port to spawn onto, and
-        // on a first start there is a way out that a restart does not have: nothing
-        // is bound to it yet, so moving costs only the workbench storage the
-        // allocator already logs, while spawning costs a child that wedges on
-        // EADDRINUSE without exiting. What reaches here on a cold start is a holder
-        // that is not ours, or a reap whose socket the kernel had not closed inside
-        // the grace; a reap that did free the port keeps it, and the origin with it.
-        if (firstStart && !portIsFree) {
-            _port = PortFinder.getOrAllocatePort(context)
-            portIsFree = true
-        }
+        if (!bound) return false
 
-        // Reaching here means the port was free, or was held by something that is
-        // not ours. Nothing refuses to start in either case, and that is a
-        // decision rather than an omission: a refusal was tried and removed. What
-        // follows is what it cost and what the real problem was, because the idea
-        // is an obvious one to have again.
-        //
-        // The situation it aimed at: `assets/server.js` forks the editor server
-        // and forwards SIGTERM to it, but a `server.js` that is SIGKILLed --
-        // routine here, it is what the watchdog's 137 branch exists for --
-        // forwards nothing, and `fork()` sets no PDEATHSIG. So the child outlives
-        // its parent still holding the port. `assets/process-monitor.js` does not
-        // reap it: it kills nothing, and it runs inside the parent it would have
-        // to outlive.
-        //
-        // The trap is what that child IS. It is not a stranger and it is not
-        // wreckage -- it is a live, healthy editor server, the one the open
-        // WebView is still talking to. Refusing to start because the port is held
-        // therefore takes a working editor away from the user, in the common case,
-        // to fix bookkeeping. It also cannot recover: `_port` is written only
-        // while it is zero, so nothing re-derives it, and a refusal repeats for
-        // the life of this instance.
-        //
-        // What IS wrong is that nothing distinguishes the survivor from a server
-        // this class started. The health probe read a response code, so a
-        // survivor satisfied readiness, `NodeService.announceReady` fired, and the
-        // WebView was pointed at it. That much worked -- the token matched,
-        // because `server.js` reused the token file -- which is why nothing
-        // downstream noticed. It no longer passes: [probeReadiness] now waits for
-        // the process this start spawned to say it is listening, and a spawn that
-        // lost the port never does, so a start onto a held port ends in
-        // CANNOT_BIND rather than in the survivor's readiness. The cost of the
-        // old shape was everywhere the app assumed the server it was serving was
-        // the one it spawned:
-        //
-        //  - `serverProcess` refers to the process spawned here, not the survivor.
-        //    So [stopServer] destroys the wrong one. Stop takes the notification
-        //    down, reports success, and `MainActivity`'s `onServerStopped` closes
-        //    the editor with `finishAndRemoveTask()` -- while the survivor is
-        //    still running, still serving, still holding the port, and now with no
-        //    foreground service tracking it at all.
-        //  - the next cold start finds the port taken, and
-        //    `PortFinder.getOrAllocatePort` moves to another one. It says so
-        //    itself: "Workbench storage keyed to the old origin is lost." That is
-        //    IndexedDB and localStorage -- signed-out sessions, every extension's
-        //    globalState, the sealed secrets -- discarded with no user-visible cause.
-        //  - and the restart budget is refilled by the survivor answering, so this
-        //    class can never conclude that anything is wrong. Note what that does
-        //    and does not mean: an earlier version of this note said the children
-        //    that cannot bind "respawn without bound", and the measurement below
-        //    refutes it -- they do not exit, so nothing respawns. The cost is not
-        //    churn, it is that the terminal state becomes unreachable while the
-        //    condition lasts.
-        //
-        // And the process spawned here never becomes the server. Measured on an
-        // API 36 emulator, killing the parent and leaving the child: the survivor
-        // was still LISTENING on the port after sixty seconds, reparented to init;
-        // the child of the newly spawned parent printed
-        // `code: 'EADDRINUSE', syscall: 'listen'` and then did NOT exit. Same pids
-        // at 0, 5, 15, 30 and 60 seconds -- no churn, no respawn -- and the
-        // workbench on screen was never reloaded, which its hour-old unsent chat
-        // text proved better than any log could.
-        //
-        // So the steady state is two servers with the roles swapped. The one this
-        // class manages is alive, watched, and serving nothing, forever. The one
-        // serving the user is untracked. `stopServer` can only reach the first,
-        // which makes the second unkillable by any route the app has, and the
-        // first immortal. The watchdog watches a process whose death would mean
-        // nothing and cannot see the one whose death would take the editor away.
-        //
-        // Worth knowing before designing the fix: the app already SEES this
-        // happen. `startOutputReader` receives that EADDRINUSE line and now
-        // writes it to `server.log`, so a bug report carries it. The same line
-        // also goes to `Logger.d`, which in a release build is nowhere, and to
-        // [onServerOutput], which still has no production consumer.
-        //
-        // What the spawn below now does NOT do is last forever. A pair that
-        // cannot bind stays alive indefinitely, the measurement above is the
-        // proof, so every question the app asks about it answers "still
-        // starting", and the launch path waits on liveness. [spawnedOntoHeldPort]
-        // is what ends that: the service reads it when the start poll gives up on
-        // a live process, kills the pair and spends a restart instead of watching
-        // it for the life of the app. The port is deliberately not re-derived
-        // here, because the WebView and its client are built around the one this
-        // instance already published; a start that keeps failing therefore ends
-        // in the terminal state, which says so on the notification.
-        //
-        // Those are the defects worth fixing, and none of them is fixed by
-        // refusing to start. Do not read the list as an argument for putting the
-        // refusal back: refusing produced a state the user could not reach the
-        // editor from at all, which is worse than every line above.
-        //
-        // ALL THREE ARE ADDRESSED BY THE ADOPTION BRANCH ABOVE, which is why the
-        // list above is written in the past tense of a defect rather than as a
-        // standing one. Adoption makes `serverProcess` and the thing on the port
-        // the same subject again -- by having no second subject at all -- and that
-        // is where all three came from.
-        //
-        // What it does NOT fix, and this is the honest residue: an adopted server
-        // still cannot be killed by this app, because there is no handle to it.
-        // [stopServer] says so now instead of destroying the wrong process and
-        // reporting success, which is a smaller claim than "Stop works" and a true
-        // one. And the IndexedDB loss on a cold start is narrowed rather than
-        // gone: a fresh instance that finds the remembered port held by a
-        // stranger, or by a server of ours whose socket the reap above could not
-        // free in time, still moves with `PortFinder` and takes the origin with
-        // it. What no longer loses it is an orphan of ours that answers too slowly
-        // to adopt, which is now ended and its port kept.
-        //
-        // The objection that kept adoption out until now was real and had to be
-        // answered rather than accepted: an adopted server has no `Process`, so no
-        // watchdog, so its death would go unnoticed -- trading the loud failure
-        // the refusal was removed for against a silent one, in the other
-        // direction. [startAdoptionWatch] is that answer. It polls, because a
-        // signal a `Process` gives for free has to be asked for here, and reports
-        // through the same `onServerCrashed` the watchdog uses, so recovery is the
-        // path that already exists rather than a second one.
-        //
-        // If that watch is ever removed or weakened, adoption stops being safe and
-        // the trade comes back. It is the load-bearing half.
-        //
-        // Recorded before the spawn, because this is the last moment it can be
-        // known: from here on the port is occupied whichever case this is. It is
-        // what lets the service tell a slow server from one that will never
-        // answer, see [spawnedOntoHeldPort] and `NodeService.awaitLateReadiness`.
-        // A port the reap freed inside its grace has already been folded into
-        // the answer above, and so has a first start's move to a free one.
-        spawnedOntoHeldPort = !portIsFree
+        // The private backend may survive the application process, whose TCP listener did not.
+        if (editorNote != null && recorded != null && recordedSocket != null &&
+            portHeldByOurEditorServer(editorNote)) {
+            val owner = recorded.optString("runId", "")
+            synchronized(readinessLock) {
+                if (isShuttingDown || generation != stopGeneration || !canStart()) {
+                    reapRecordedEditorServer("a stop landed before adoption", editorNote)
+                    return false
+                }
+                // Stop must be able to withdraw routing while the adoption proof is in flight.
+                serverRunId = owner
+                gateway.selectBackend(recordedSocket, owner)
+            }
+            if (recordedServerIsServing(editorNote)) {
+                synchronized(readinessLock) {
+                    if (isShuttingDown || generation != stopGeneration || !canStart()) {
+                        gateway.withdrawBackend(owner)
+                        reapRecordedEditorServer("a stop landed while it was being adopted", editorNote)
+                        return false
+                    }
+                    adopted = true
+                    adoptedAnnouncedServer = recordedEditorNote().let {
+                        it == editorNote && it == announcedEditorNote
+                    }
+                    clearReadiness()
+                    serverProcess = null
+                    serverRunId = owner
+                    serverEditorNote = editorNote
+                    listenUnreported = false
+                    heapOverrideActive = false
+                    heapOverrideSuspendedNow = false
+                    startAdoptionWatch(editorNote)
+                    return true
+                }
+            }
+            gateway.withdrawBackend(owner)
+            synchronized(readinessLock) {
+                if (serverRunId == owner) serverRunId = null
+            }
+            reapRecordedEditorServer("the private backend could not be adopted", editorNote)
+        } else if (recorded != null && recordedSocket != null && recorded.optInt("pid", 0) > 0 &&
+            Files.notExists(File(procDir, recorded.optInt("pid").toString()).toPath(), LinkOption.NOFOLLOW_LINKS)) {
+            // Only confirmed process absence permits cleanup without sending a signal.
+            StorageManager.deleteFile(recordedSocket, context.filesDir.parentFile)
+        }
         unboundRefusalLogged = false
         // Below the adoption branch, which returned above: an adopted server holds
         // the token it started with in memory and must keep the file that names it.
@@ -935,17 +651,10 @@ class ProcessManager(private val context: Context) {
         val nodePath = Environment.getNodePath(context)
         val serverScript = Environment.getServerScript(context)
         val env = Environment.buildProcessEnvironment(context, _port)
-        val runId = UUID.randomUUID().toString()
 
-        // These arguments reach server.js, not the editor server it forks. server.js
-        // reads host, port and log as defaults and forwards exactly four keys --
-        // extensions-dir, user-data-dir, server-data-dir and logsPath -- while
-        // building the rest of the command itself. Two flags that used to sit here,
-        // --without-connection-token and --accept-server-license-terms, were read by
-        // nobody: server.js writes its own. They are gone rather than corrected,
-        // because an argument that looks decisive and does nothing is worse than a
-        // missing one, and the next person to change authentication would have
-        // started here.
+        // The bootstrap receives the public origin and private backend transport separately.
+        // It forwards extensions-dir, user-data-dir, server-data-dir and logsPath,
+        // and supplies the remaining editor flags.
         val heapMb = heapCeilingForDevice()
         val command = listOf(
             nodePath,
@@ -953,6 +662,7 @@ class ProcessManager(private val context: Context) {
             serverScript,
             "--host=127.0.0.1",
             "--port=$_port",
+            "--socket-path=${backendSocket.path}",
             "--extensions-dir=${Environment.getExtensionsDir(context)}",
             "--user-data-dir=${Environment.getUserDataDir(context)}",
             "--server-data-dir=${Environment.getUserDataDir(context)}",
@@ -967,7 +677,13 @@ class ProcessManager(private val context: Context) {
                 redirectErrorStream(true)
                 directory(context.filesDir)
             }
-            val spawned = processBuilder.start().also { it.outputStream.close() }
+            val spawned = processBuilder.start()
+            try {
+                spawned.outputStream.close()
+            } catch (failure: IOException) {
+                stopOwnedProcess(spawned, runId, rejected = true)
+                throw failure
+            }
             // A stop that landed while this was spawning has to take the process
             // it could not see. [stopServer] runs on the main thread and reads
             // `serverProcess`, which is still null everywhere above this line, so
@@ -982,9 +698,10 @@ class ProcessManager(private val context: Context) {
             // Read after the spawn rather than before it, because before it the
             // answer is meaningless: the window this closes opens at the spawn.
             val accepted = synchronized(readinessLock) {
-                if (isShuttingDown) {
+                if (isShuttingDown || generation != stopGeneration || !canStart()) {
                     false
                 } else {
+                    gateway.selectBackend(backendSocket, runId)
                     serverRunId = runId
                     serverProcess = spawned
                     // Publish the owner and its readers together so Stop captures one run.
@@ -1091,7 +808,7 @@ class ProcessManager(private val context: Context) {
         TimeUnit.NANOSECONDS.toMillis(nanoClock() - startNanos)
 
     /**
-     * Whether the process holding our port is an editor server this app started.
+     * Whether the recorded PID is an editor server this app started.
      *
      * Answered from a note the bootstrap left, not by asking the port holder.
      * That direction is the whole point, and the earlier version had it backwards:
@@ -1259,7 +976,10 @@ class ProcessManager(private val context: Context) {
         }
         return try {
             killRecordedProcess(pid)
-            Logger.i(tag, "Ended the editor server $pid still holding port $_port ($reason)")
+            recordedBackendSocket(recorded)?.let { socket ->
+                StorageManager.deleteFile(socket, context.filesDir.parentFile)
+            }
+            Logger.i(tag, "Ended the editor backend $pid for port $_port ($reason)")
             true
         } catch (e: Exception) {
             Logger.w(tag, "Could not end the editor server $pid: ${e.message}")
@@ -1267,39 +987,7 @@ class ProcessManager(private val context: Context) {
         }
     }
 
-    /**
-     * Whether the port a reap has just signalled for is free yet, given a moment.
-     *
-     * The reason this is a short poll rather than one question: a kill returns
-     * when the signal is QUEUED. `android.os.Process.killProcess` is `kill(2)`
-     * underneath, and the kernel closes the dead process's listening socket while
-     * it runs `do_exit` afterwards, which for a Node process with a large
-     * descriptor table is not instantaneous. The single bind test that stood here
-     * ran microseconds later, on the same thread, so it was likely to still read
-     * held, and the flag it fed says "this spawn can never serve" -- which is what
-     * turns a start that is merely slow into `LaunchOutcome.CANNOT_BIND`, kills
-     * the healthy server it spawned and spends a restart on it.
-     *
-     * Bounded rather than patient: the whole grace is paid only when a reap ran,
-     * only while the socket is still held, and returns at the first free answer,
-     * so the ordinary reap pays one bind test and a few milliseconds. A holder the
-     * reap never touched -- a foreign process that took the port while the
-     * recorded child wedged on EADDRINUSE -- still reads held at the end of it,
-     * which is the case the flag exists for and the reason the grace is short
-     * enough to be spent rather than long enough to matter.
-     *
-     * What a true answer here decides is two things, neither of them the
-     * credential: on a cold start, whether the remembered port is kept or
-     * abandoned to the allocator (see the reap in [startServer]); and on every
-     * start, the verdict the service reads when the start poll gives up,
-     * CANNOT_BIND against merely slow. It no longer decides who may be handed
-     * the connection token: [probeReadiness] waits for
-     * the spawned process itself to report its listen whether the port read held
-     * or free at the spawn, so a reap that frees the port, and a reap that only
-     * looked as if it had, both end up trusting the same evidence. An earlier
-     * shape hung a commit check on [spawnedOntoHeldPort] alone, which made this
-     * grace a security decision as well as a diagnostic one.
-     */
+    /** Wait briefly for a terminated legacy TCP backend to release the remembered origin. */
     private fun portFreedByReap(): Boolean {
         var waited = 0L
         while (true) {
@@ -1316,6 +1004,11 @@ class ProcessManager(private val context: Context) {
             }
             waited += REAP_PORT_POLL_MS
         }
+    }
+
+    private fun recordedBackendSocket(note: JSONObject): File? {
+        val expected = editorBackendSocket(context, note.optString("runId", "")) ?: return null
+        return expected.takeIf { note.optString("socketPath", "") == it.path }
     }
 
     /**
@@ -1549,22 +1242,34 @@ class ProcessManager(private val context: Context) {
      * succeed while its editor child is still alive.
      */
     fun stopServer() {
-        val (stoppingProcess, stoppingRunId, stoppingWatchdog) = synchronized(readinessLock) {
+        val stoppingProcess: Process?
+        val stoppingRunId: String?
+        val stoppingWatchdog: Thread?
+        val stoppingAdopted: Boolean
+        val stoppingEditorNote: String?
+        synchronized(readinessLock) {
+            stopGeneration++
             isShuttingDown = true
+            stoppingProcess = serverProcess
+            stoppingRunId = serverRunId
+            stoppingRunId?.let { editorGateway.withdrawBackend(it) }
+            stoppingWatchdog = watchdogThread
+            stoppingAdopted = adopted
+            stoppingEditorNote = serverEditorNote
+            adopted = false
+            heapOverrideActive = false
+            heapOverrideSuspendedNow = false
             clearReadiness()
-            Triple(serverProcess, serverRunId, watchdogThread)
         }
         // Nothing of ours is running with the user's number after this, so a crash
         // report still on its way to the service must not be charged against it.
-        heapOverrideActive = false
         // And the suspension with it, because the card that reports it is built
         // BEFORE the spawn that would derive it: `NodeService.onStartCommand`
         // promotes to the foreground to decide whether to serve at all, so the
         // first card of a start carries whatever the previous one left here.
         // Cleared at the stop, a start after one reports nothing until
         // `announceReady` rebuilds the card from a value this start actually read.
-        heapOverrideSuspendedNow = false
-        if (adopted) {
+        if (stoppingAdopted) {
             // No `Process` handle exists for a server this class did not spawn, which is
             // why this used to be a log line saying the stop could not end it. The note
             // the bootstrap wrote is the way in: it names the pid, and killing by pid is
@@ -1576,7 +1281,7 @@ class ProcessManager(private val context: Context) {
             // away: a note that has been consumed, a pid already recycled, or a kill the
             // kernel refuses all land here, and a silent return would leave the caller
             // believing the stop succeeded.
-            if (!reapRecordedEditorServer("service stopping")) {
+            if (stoppingEditorNote == null || !reapRecordedEditorServer("service stopping", stoppingEditorNote)) {
                 Logger.w(
                     tag,
                     "The server on port $_port was adopted, not started here, and could " +
@@ -1584,7 +1289,6 @@ class ProcessManager(private val context: Context) {
                         "system reclaims it.",
                 )
             }
-            adopted = false
         }
         Logger.i(tag, "Stopping server...")
         stoppingProcess?.let { stopOwnedProcess(it, stoppingRunId, rejected = false) }
@@ -2046,6 +1750,9 @@ class ProcessManager(private val context: Context) {
      */
     private fun startOutputReader() {
         val process = serverProcess ?: return
+        val listeningLine = serverRunId?.let { owner ->
+            editorBackendSocket(context, owner)?.let { "$SERVER_LISTENING_LINE ${it.path}" }
+        }
         thread(name = "node-stdout", isDaemon = true) {
             try {
                 BufferedReader(InputStreamReader(process.inputStream)).use { reader ->
@@ -2058,7 +1765,7 @@ class ProcessManager(private val context: Context) {
                         // `serverProcess` before it raises the flag again, so a
                         // reader still draining the previous pipe cannot lower it
                         // for a spawn it knows nothing about.
-                        if (line.contains(SERVER_LISTENING_LINE) && serverProcess === process) {
+                        if (line == listeningLine && serverProcess === process) {
                             listenUnreported = false
                         }
                         onServerOutput?.invoke(line)
@@ -2114,6 +1821,8 @@ class ProcessManager(private val context: Context) {
                         if (isShuttingDown || !adopted || readinessEpoch.get() != epoch) return@thread
                         clearReadiness()
                         adopted = false
+                        runCatching { JSONObject(editorNote).optString("runId", "") }.getOrNull()
+                            ?.let { editorGateway.withdrawBackend(it) }
                         readinessEpoch.get()
                     }
                     Logger.w(tag, "Adopted editor is gone or stopped answering; treating it as lost")
@@ -2304,6 +2013,23 @@ internal const val EDITOR_PID_FILE = "editor-server.pid"
  * process reads as absent rather than as a match, and the check fails closed.
  */
 internal const val EDITOR_ENTRY_POINT = "server-main.js"
+
+internal fun editorBackendSocket(context: Context, runId: String): File? {
+    if (!Regex("[A-Za-z0-9-]{1,128}").matches(runId)) return null
+    return try {
+        val root = context.filesDir.absoluteFile.parentFile?.canonicalFile ?: return null
+        val files = context.filesDir.canonicalFile
+        if (files == root || !files.toPath().startsWith(root.toPath())) return null
+        val name = MessageDigest.getInstance("SHA-256").digest(runId.toByteArray(Charsets.US_ASCII))
+            .take(16).joinToString("") { "%02x".format(it) }
+        File(files, "e-$name.sock")
+            .takeIf { it.path.toByteArray(Charsets.UTF_8).size < 108 }
+    } catch (_: IOException) {
+        null
+    }
+}
+
+
 
 /**
  * What the editor server prints once its listen has succeeded.

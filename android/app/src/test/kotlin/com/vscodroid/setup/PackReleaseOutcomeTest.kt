@@ -31,6 +31,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.nio.file.Files
 import java.util.Collections
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.Executor
@@ -177,15 +178,10 @@ class PackReleaseOutcomeTest {
         }
     }
 
-    /**
-     * Occupies the temporary path `writeAtomically` derives from `toolchains.json`,
-     * which is how the rest of this package arranges a record write that fails.
-     * Non-empty, so the cleanup `delete()` cannot quietly reclaim it.
-     */
+    /** Refuse the real atomic writer's temporary-file open for the install record. */
     private fun blockTheRecordWrite() {
-        val blocker = File(filesDir, "home/.vscodroid/toolchains.json.tmp~")
-        assertTrue(blocker.mkdirs(), "could not stage the blocked temp path")
-        File(blocker, "occupied").writeText("x")
+        mockkStatic(Files::class)
+        blockAtomicWritesTo(File(filesDir, "home/.vscodroid/toolchains.json"))
     }
 
     /**
@@ -423,14 +419,15 @@ class PackReleaseOutcomeTest {
         every { anyConstructed<StatFs>().availableBytes } returns bytes
     }
 
-    /** Eight readable megabytes inside the delivered tree, so the credit is legible. */
+    /** Two large files let the first replacement free space for the next. */
     private fun fattenDelivery(pack: String, name: String) {
         val lib = File(filesDir, "delivered/$pack/usr/opt/$name/lib").apply { mkdirs() }
         File(lib, "rt").writeBytes(ByteArray(8_000_000))
+        File(lib, "rt2").writeBytes(ByteArray(8_000_000))
     }
 
-    /** 8,000,007 bytes: the fattened file plus the "payload" [deliver] writes. */
-    private val orphanBytes = 8_000_007L
+    /** Both matching libraries plus the executable [deliver] writes. */
+    private val orphanBytes = 16_000_007L
 
     /**
      * What the Play pre-flight asks of a device for the Java 21 delivery with
@@ -461,7 +458,9 @@ class PackReleaseOutcomeTest {
 
         val orphan = File(filesDir, "usr/opt/java/lib").apply { mkdirs() }
         File(orphan, "rt").writeBytes(ByteArray(8_000_000))
-        File(File(filesDir, "usr/opt/java"), "payload").writeBytes(ByteArray(7))
+        File(orphan, "rt2").writeBytes(ByteArray(8_000_000))
+        val bin = File(filesDir, "usr/opt/java/bin").apply { mkdirs() }
+        File(bin, "java").writeBytes(ByteArray(7))
         assertEquals(
             orphanBytes,
             com.vscodroid.util.StorageManager.dirSize(File(filesDir, "usr/opt/java")),
@@ -469,7 +468,7 @@ class PackReleaseOutcomeTest {
         )
 
         // Strictly between the credited demand (the registry's figure for Java 21
-        // plus the buffer, less 8,000,007) and the uncredited one, wherever the
+        // plus the buffer, less 8,000,007 after one replacement) and the uncredited one, wherever the
         // registry puts that figure.
         room(javaDemand() - 2_000_000L)
         val secondOut = Collections.synchronizedList(mutableListOf<Int>())

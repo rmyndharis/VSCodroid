@@ -31,51 +31,16 @@ class ToolchainInstallSpaceTest {
      */
     @Test
     fun `the reservation covers both copies the install holds at once`() {
-        assertEquals(342_000_000L, toolchainInstallBytes(146_000_000L, 55_000_000L, 0L))
+        assertEquals(342_000_000L, toolchainInstallBytes(146_000_000L, 55_000_000L))
     }
 
     @Test
     fun `and scales with the tree rather than being a fixed figure`() {
-        assertEquals(SPACE_BUFFER, toolchainInstallBytes(0L, 0L, 0L))
+        assertEquals(SPACE_BUFFER, toolchainInstallBytes(0L, 0L))
         assertEquals(
             2 * 34_000_000L + SPACE_BUFFER,
-            toolchainInstallBytes(34_000_000L, 9_000_000L, 0L),
+            toolchainInstallBytes(34_000_000L, 9_000_000L),
         )
-    }
-
-    /**
-     * A credited reinstall still has to pay for the unpacking, which is a stage
-     * the credit is worth nothing at.
-     *
-     * The archive and the staging tree it expands into are both on disk for the
-     * whole of the extraction; only the copy after it overwrites the tree the
-     * credit stands for, and it frees those bytes file by file as it goes. Java
-     * 21 as it ships today: 64 MB downloaded, 186 MB recorded, on a device that
-     * already holds the whole tree. Taking the credit off a single doubled figure
-     * reserved 236 MB for an extraction that needs 250 MB, so the gate passed,
-     * the download was spent, and the unpack ran out of disk a few megabytes from
-     * the end -- the exact outcome the gate exists to buy the user out of.
-     */
-    @Test
-    fun `a fully credited reinstall still reserves for the archive and the unpack`() {
-        assertEquals(
-            64_000_000L + 186_000_000L + SPACE_BUFFER,
-            toolchainInstallBytes(186_000_000L, 64_000_000L, 186_000_000L),
-        )
-    }
-
-    /** And that holds for every pack shipped, whatever its compression ratio. */
-    @Test
-    fun `no credit takes a shipped toolchain under its unpacking peak`() {
-        for (info in ToolchainRegistry.available) {
-            val asked = toolchainInstallBytes(info.estimatedSize, info.downloadSize, info.estimatedSize)
-            assertTrue(
-                asked >= info.downloadSize + info.estimatedSize + SPACE_BUFFER,
-                "${info.displayName} is charged $asked on a reinstall, while unpacking it " +
-                    "holds ${info.downloadSize} of archive and ${info.estimatedSize} of tree " +
-                    "at once; a device could pass the gate and fail during the extraction",
-            )
-        }
     }
 
     /**
@@ -108,7 +73,7 @@ class ToolchainInstallSpaceTest {
         for (info in ToolchainRegistry.available) {
             assertTrue(
                 packInstallBytes(info.estimatedSize) <
-                    toolchainInstallBytes(info.estimatedSize, info.downloadSize, 0L),
+                    toolchainInstallBytes(info.estimatedSize, info.downloadSize),
                 "${info.packName}: the Play path should ask for less than the HTTP path, " +
                     "since Play has already written the tree it copies from",
             )
@@ -119,7 +84,7 @@ class ToolchainInstallSpaceTest {
     @Test
     fun `every shipped toolchain is charged for both copies`() {
         for (info in ToolchainRegistry.available) {
-            val asked = toolchainInstallBytes(info.estimatedSize, info.downloadSize, 0L)
+            val asked = toolchainInstallBytes(info.estimatedSize, info.downloadSize)
             assertTrue(
                 asked >= info.estimatedSize * 2,
                 "${info.displayName} is charged $asked for a tree of ${info.estimatedSize} " +
@@ -128,96 +93,57 @@ class ToolchainInstallSpaceTest {
         }
     }
 
-    // -- the credit for a tree the copy writes over --
-
     @TempDir
     lateinit var filesDir: File
 
-    private fun rootUnder(name: String) = File(filesDir, name).apply { mkdirs() }
-
     @Test
-    fun `a tree larger than the pack records is credited only what the pack writes back`() {
-        assertEquals(
-            186_000_000L,
-            existingTreeCredit(rootUnder("usr"), filesDir, 186_000_000L) { 900_000_000L },
-            "a swollen directory credited bytes the overwrite never returns",
-        )
+    fun `only matching regular files are credited`() {
+        val src = File(filesDir, "source").apply { mkdirs() }
+        val dest = File(filesDir, "destination").apply { mkdirs() }
+        File(src, "shared").writeText("new")
+        File(src, "added").writeText("new")
+        File(dest, "shared").writeText("old shared content")
+        File(dest, "retired").writeText("old retired content")
+
+        assertEquals(ToolchainCopySpace(3, 3), toolchainCopySpace(src, dest))
     }
 
     @Test
-    fun `a smaller tree is credited what is measured`() {
-        assertEquals(
-            8_000_007L,
-            existingTreeCredit(rootUnder("usr"), filesDir, 186_000_000L) { 8_000_007L },
-        )
+    fun `an expanding replacement credits only its previous allocation`() {
+        val src = File(filesDir, "source").apply { mkdirs() }
+        val dest = File(filesDir, "destination").apply { mkdirs() }
+        File(src, "shared").writeText("new larger content")
+        File(dest, "shared").writeText("old")
+
+        assertEquals(ToolchainCopySpace(3, 3), toolchainCopySpace(src, dest))
     }
 
     @Test
-    fun `no install root means no credit`() {
-        assertEquals(0L, existingTreeCredit(null, filesDir, 186_000_000L) { 900_000_000L })
-    }
+    fun `redirected destination files and parents are never credited`() {
+        val src = File(filesDir, "source").apply { mkdirs() }
+        val dest = File(filesDir, "destination").apply { mkdirs() }
+        File(src, "leaf").writeText("new")
+        File(src, "child").mkdirs()
+        File(src, "child/payload").writeText("new")
+        val outside = File(filesDir, "outside").apply { mkdirs() }
+        File(outside, "payload").writeText("old")
+        java.nio.file.Files.createSymbolicLink(File(dest, "leaf").toPath(), File(outside, "payload").toPath())
+        java.nio.file.Files.createSymbolicLink(File(dest, "child").toPath(), outside.toPath())
 
-    /**
-     * The credit is the first decision built on the manifest's `installRoot`, and
-     * `File(base, "../..")` resolves outside the base it was joined to. Measuring
-     * there would return the whole app data directory, clamp to the pack's own
-     * size, and leave the gate asking for nothing but the buffer, which is the
-     * refusal switched off rather than relaxed.
-     */
-    @Test
-    fun `a root that resolves outside the base credits nothing`() {
-        val escaped = File(filesDir, "../..")
-        var measured = false
-        assertEquals(
-            0L,
-            existingTreeCredit(escaped, filesDir, 186_000_000L) { measured = true; 900_000_000L },
-        )
-        assertFalse(measured, "the escaped root was walked, which is the cost this refuses")
+        assertEquals(ToolchainCopySpace(0, 0), toolchainCopySpace(src, dest))
     }
 
     @Test
-    fun `the base itself is inside the base`() {
-        assertEquals(
-            8_000_007L,
-            existingTreeCredit(filesDir, filesDir, 186_000_000L) { 8_000_007L },
-            "a manifest naming the base directly is not an escape",
-        )
-    }
+    fun `an alias above the destination root still credits matching files`() {
+        val src = File(filesDir, "source").apply { mkdirs() }
+        val real = File(filesDir, "real").apply { mkdirs() }
+        val alias = File(filesDir, "alias")
+        java.nio.file.Files.createSymbolicLink(alias.toPath(), real.toPath())
+        File(src, "payload").writeText("new")
+        val dest = File(alias, "usr").apply { mkdirs() }
+        File(dest, "payload").writeText("old")
 
-    /**
-     * The floor is held here, not by the coercion that carries its name.
-     *
-     * `installDeliveredPack` spells its reservation
-     * `(packInstallBytes(unpacked) - credit).coerceAtLeast(SPACE_BUFFER)`, which
-     * reads as the guard and is not one: [existingTreeCredit] clamps the credit
-     * at the size the pack itself records, and [packInstallBytes] adds
-     * [SPACE_BUFFER] on top of that same figure, so the subtraction bottoms out
-     * at exactly the buffer and the coercion never has anything to do.
-     *
-     * Take either half away and the gate collapses. Without the clamp, a `usr/`
-     * that has grown past what the pack writes back credits bytes the overwrite
-     * never returns, and the reservation goes to zero or below: a full device
-     * walks through the pre-flight and fails partway into the copy it existed to
-     * refuse, leaving half a toolchain under no manifest. Without the buffer in
-     * [packInstallBytes], an unchanged tree credits the whole reservation and
-     * the gate asks for nothing at all.
-     *
-     * Asserted over the composition, and over the range of measurements a device
-     * can produce rather than one of them, because a case written against the
-     * coercion measures what happens after this has already held, and stays
-     * green with the coercion deleted.
-     */
-    @Test
-    fun `the credited gate never falls below the buffer`() {
-        val unpacked = 186_000_000L
-        for (measured in listOf(0L, 1L, unpacked - 1, unpacked, unpacked + 1, 900_000_000L)) {
-            val credit = existingTreeCredit(rootUnder("usr"), filesDir, unpacked) { measured }
-            assertTrue(
-                packInstallBytes(unpacked) - credit >= SPACE_BUFFER,
-                "a tree measuring $measured credited $credit against a pack recorded at " +
-                    "$unpacked, leaving the install gate asking for less than the buffer",
-            )
-        }
+        assertEquals(ToolchainCopySpace(3, 3), toolchainCopySpace(src, dest))
     }
 
     // -- what the pre-flight is told a pack unpacks to --

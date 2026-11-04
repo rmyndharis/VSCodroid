@@ -42,6 +42,7 @@ class EditorShutdownTest {
 
     @BeforeEach
     fun setUp() {
+        mockEditorGateway()
         mockkObject(Logger)
         every { Logger.i(any(), any()) } just Runs
         every { Logger.d(any(), any()) } just Runs

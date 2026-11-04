@@ -34,9 +34,8 @@ import java.io.File
  * ENOSPC, which is the point: it is 46.6 MiB out of a 64 MiB margin, spent
  * silently, across an 810 MiB unpack.
  *
- * Reached through reflection because the measurement is private and takes no
- * arguments: what it reads is the directory and the assets listing, and both are
- * staged here.
+ * The measured credit matches the APK paths and caps each file at the shipped
+ * length. Extra files and earlier extension versions remain untouched.
  */
 class ExtensionsCreditTest {
 
@@ -60,6 +59,8 @@ class ExtensionsCreditTest {
 
         assets = mockk()
         every { assets.list(any()) } returns emptyArray()
+        every { assets.list("") } returns arrayOf("extensions")
+        every { assets.open(any()) } answers { java.io.ByteArrayInputStream(ByteArray(4096)) }
 
         context = mockk(relaxed = true)
         every { context.filesDir } returns filesDir
@@ -71,6 +72,9 @@ class ExtensionsCreditTest {
 
     private fun bundle(vararg names: String) {
         every { assets.list("extensions") } returns arrayOf(*names)
+        for (name in names) {
+            every { assets.list("extensions/$name") } returns arrayOf("extension.js")
+        }
     }
 
     private fun stage(dirName: String, bytes: Int) {
@@ -79,11 +83,7 @@ class ExtensionsCreditTest {
         File(dir, "extension.js").writeText("x".repeat(bytes))
     }
 
-    private fun credited(): Long =
-        FirstRunSetup::class.java
-            .getDeclaredMethod("installedBundledExtensionBytes")
-            .apply { isAccessible = true }
-            .invoke(FirstRunSetup(context)) as Long
+    private fun credited(): Long = FirstRunSetup(context).extractionSpace().extensionBytes
 
     @Test
     fun `a gallery install is not credited as a bundled one`() {
@@ -140,10 +140,10 @@ class ExtensionsCreditTest {
      * direction that asks for more space rather than less.
      */
     @Test
-    fun `an unreadable assets listing credits nothing`() {
+    fun `an unreadable assets listing aborts measurement`() {
         every { assets.list("extensions") } throws java.io.IOException("no assets")
         stage(bundledPython, 4096)
 
-        assertEquals(0L, credited())
+        org.junit.jupiter.api.Assertions.assertThrows(java.io.IOException::class.java) { credited() }
     }
 }

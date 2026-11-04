@@ -1,15 +1,15 @@
 # VSCodroid Privacy Policy
 
 **Effective Date: February 13, 2026**
-**Last Updated: October 27, 2026**
+**Last Updated: November 4, 2026**
 
 ## Summary
 
 VSCodroid is a code editor that runs entirely on your Android device. **We** do not collect, transmit, or store any personal data, and there is no server of ours for anything to reach. Your code and files stay on your device unless you send them somewhere yourself, for example by pushing to a Git remote.
 
-Three exceptions to "nothing leaves the device", all under your control and none involving us. Android's own backup service copies your editor settings to your Google account if you have backup switched on (see **Android Backup** below). Anything you ask the app to fetch (an extension, a toolchain, an `npm install`) is a request you initiated, with two things the editor does on its own: it checks Open VSX for newer versions of your installed extensions and installs them, and when you open a Python file without Black Formatter installed it looks that extension up on Open VSX so it can suggest it (see **Network Access**).
+Three exceptions to "nothing leaves the device", all under your control and none involving us. Android's own backup service copies your editor settings to your Google account if you have backup switched on (see **Android Backup** below). Anything you ask the app to fetch (an extension, a toolchain, an `npm install`) is a request you initiated, alongside several online lookups the editor performs on its own: it checks Open VSX for newer versions of your installed extensions and installs them, when you open a Python file without Black Formatter installed it looks that extension up on Open VSX so it can suggest it, and its built-in language features fetch JSON schemas, `npm` package metadata, and TypeScript type definitions when you work with files that use them (see **Network Access**).
 
-The third is different in kind and worth reading before you use it: the app bundles **GitHub Copilot Chat**, and once you sign in to GitHub and use it, what you ask it and the code it attaches as context go to GitHub. That is the one feature here that sends your own work to someone else. It has no account and no chat until you sign in, though it does load and run in the background from the moment the editor starts, and it can be switched off.
+The third is different in kind and worth reading before you use it: the app bundles **GitHub Copilot Chat**, and once you sign in to GitHub and use it, what you ask it and the code it attaches as context go to GitHub. That is the one feature here that sends your own work to someone else. It has no account and no chat until you sign in, though while it is enabled it loads and runs in the background from the moment the editor starts, and it can be switched off.
 
 ---
 
@@ -24,7 +24,7 @@ VSCodroid runs a local code editor server entirely on your Android device. The e
 All code execution -- whether Node.js, Python, Bash, or any other bundled runtime -- happens 100% on your device.
 
 The app asks for four Android permissions of its own. `INTERNET` covers the
-user-initiated cases listed under **Network Access** below, and the loopback
+connections listed under **Network Access** below, and the loopback
 traffic between the editor page and the local server. `FOREGROUND_SERVICE` and
 `FOREGROUND_SERVICE_SPECIAL_USE` keep that local server alive while you are
 working. `POST_NOTIFICATIONS` is for the notification showing the server's
@@ -54,6 +54,16 @@ Not every one of these connections is one you asked for, which is why this secti
 
 The app also asks the editor to recommend the Black Formatter extension (`ms-python.black-formatter`) for Python files. When you open a Python file while that extension is not installed, the editor looks it up on Open VSX to show the suggestion. What goes out is that extension's identifier, never anything from your files. The setting `extensions.ignoreRecommendations` turns it off.
 
+### Built-in Language Features
+
+Several of the editor's built-in language extensions fetch public metadata over HTTPS when you open or edit matching files, without waiting for an explicit command:
+
+- **JSON schemas**: When you open a JSON file (such as `package.json` or `tsconfig.json`) or a file declaring a `$schema` URL, the built-in JSON language server fetches the schema from the domain the editor or the file names (by default `json.schemastore.org` and the other hosts listed under `json.schemaDownload.trustedDomains`). What goes out is the schema URL, not the contents of your JSON file. You can turn this off with `json.schemaDownload.enable`.
+- **`package.json` package metadata**: When you edit `package.json`, the built-in `npm` extension queries `registry.npmjs.org` for package names, descriptions, and latest versions to power completions and hover text, and when you hover a dependency inside a folder that contains `package.json`, it runs `npm view` against the configured `npm` registry (`registry.npmjs.org` by default) for the package under the cursor. What goes out is the dependency name or prefix being completed or inspected. Set `npm.fetchOnlinePackageInfo` to `false` and disable the built-in `npm` extension from the Extensions view if you want to stop both lookups.
+- **TypeScript automatic type acquisition**: When you open a JavaScript or TypeScript project, the TypeScript language server can install missing `@types/*` packages from `registry.npmjs.org` into the editor's local cache so completions work for third-party libraries. What goes out is the package names imported or listed in your project. You can turn this off with `js/ts.tsserver.automaticTypeAcquisition.enabled` (set to `false`) or `typescript.disableAutomaticTypeAcquisition` (set to `true`).
+
+You can set these on either the **Remote** or **User** tab in Settings (settings on the **Remote** tab are included in Android Backup; see **Android Backup** below).
+
 ### Signing In to a Service From the Editor (User-Initiated)
 
 If an extension asks you to sign in (to GitHub, for example), the app hands that extension's authorisation URL to your device's browser, and the sign-in happens there rather than inside the app. VSCodroid never sees your password: it is typed into the provider's own page in the browser.
@@ -64,7 +74,7 @@ Any tokens the editor keeps afterwards are stored locally in the app's private s
 
 ### GitHub Copilot Chat (Bundled, User-Initiated)
 
-VSCodroid bundles **GitHub Copilot Chat**, published by GitHub, and the editor is configured to use it as its chat provider. The extension loads when the editor starts, and it is not something this app disables.
+VSCodroid bundles **GitHub Copilot Chat**, published by GitHub, and the editor is configured to use it as its chat provider. When the extension is enabled, it loads when the editor starts.
 
 It has no account to work against until you sign in to GitHub, which happens through the browser flow described above, and its features are unavailable until you do.
 
@@ -72,7 +82,7 @@ That sign-in does not have to be one you made for the chat. A GitHub session cre
 
 Once you are signed in and you use it, **what you send goes to GitHub**. That means the message you type and the material the extension decides to attach as context, which normally includes code from the file you are working in and can include other parts of the project. That exchange is between you and GitHub under GitHub's terms and privacy statement (https://docs.github.com/site-policy). It passes through the same on-device proxy described under Git Operations below, which tunnels the encrypted connection without reading it; VSCodroid does not read it or keep a copy, and this is the only feature in this app that sends anything you write to a service we did not have to name elsewhere in this policy.
 
-If you would rather it were not there, disable **GitHub Copilot Chat** from the Extensions view; the editor works without it. It ships inside the app rather than being downloaded, so the view offers Disable rather than Uninstall, and disabling it is what stops it loading.
+If you would rather it stayed off, use **Disable AI Features** on **GitHub Copilot Chat** in the Extensions view (or set `chat.disableAIFeatures` to `true`); the editor works without it. It ships inside the app rather than being downloaded, so the view offers **Disable AI Features** rather than Uninstall.
 
 ### Git Operations (User-Initiated)
 
@@ -147,7 +157,7 @@ Uninstalling the app or clearing its data through Android Settings removes its p
 
 VSCodroid itself includes no third-party analytics, advertising, or tracking SDKs. The third-party services it integrates are:
 
-- **GitHub Copilot Chat**: Bundled with the app and configured as the editor's chat provider. It has no account and offers you no chat until you sign in to GitHub, but it is not dormant before that: it starts with the editor whether or not you are signed in. Whether it sends anything before you sign in is not something we have established. Once you have signed in and used it, what you ask and the code it attaches as context go to GitHub, under GitHub's terms and privacy statement. It can be disabled from the Extensions view, but not uninstalled, because it ships as a built-in.
+- **GitHub Copilot Chat**: Bundled with the app and configured as the editor's chat provider. It has no account and offers you no chat until you sign in to GitHub. While it is enabled it starts with the editor whether or not you are signed in, and whether it sends anything before you sign in is not something we have established. Once you have signed in and used it, what you ask and the code it attaches as context go to GitHub, under GitHub's terms and privacy statement. It can be turned off from the Extensions view (**Disable AI Features**), but not uninstalled, because it ships as a built-in.
 - **Google Play Asset Delivery**: Used solely for downloading optional language toolchain packs on Play Store installs. This is a Google Play Store feature and is governed by Google's privacy policy.
 - **GitHub Releases and GitHub Pages**: Used for downloading those same toolchain packs on installs that did not come from the Play Store, and for the prebuilt Python packages `pip` is pointed at (see **Package Installation**). Governed by GitHub's privacy policy.
 

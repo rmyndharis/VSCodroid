@@ -68,6 +68,9 @@ class ToolchainActivity : AppCompatActivity() {
      */
     private var removeDialog: AlertDialog? = null
 
+    /** Retry and removal remain available while an installed pack needs repair. */
+    private var retryDialog: AlertDialog? = null
+
     /**
      * The packs this screen asked for that have not reported a settled state.
      *
@@ -175,20 +178,15 @@ class ToolchainActivity : AppCompatActivity() {
 
         // Set up grid with MANAGER mode adapter
         adapter = ToolchainPickerAdapter(ToolchainCardMode.MANAGER)
-        adapter.setInstalled(toolchainManager.getInstalledToolchains(), toolchainManager.installedLabels())
+        adapter.setInstalled(
+            toolchainManager.getInstalledToolchains(), toolchainManager.installedLabels(),
+            toolchainManager.getIncompleteToolchains(),
+        )
 
         adapter.onAction = { packName, action ->
             when (action) {
-                ToolchainAction.INSTALL,
-                ToolchainAction.RETRY -> {
-                    // Recorded before the call, not after: install() can report a
-                    // failure on this very thread, for an unknown pack or a
-                    // missing download URL, and the removal that follows would
-                    // then run against a set this pack was not in yet, leaving the
-                    // subscription held for a download that never began.
-                    outstanding.add(packName)
-                    toolchainManager.install(packName)
-                }
+                ToolchainAction.INSTALL -> requestInstall(packName)
+                ToolchainAction.RETRY -> retryToolchain(packName)
                 ToolchainAction.REMOVE -> {
                     showRemoveConfirmation(packName)
                 }
@@ -359,7 +357,10 @@ class ToolchainActivity : AppCompatActivity() {
         super.onStart()
         toolchainManager.registerListener()
         // Refresh installed state on resume (user may have installed from terminal)
-        adapter.setInstalled(toolchainManager.getInstalledToolchains(), toolchainManager.installedLabels())
+        adapter.setInstalled(
+            toolchainManager.getInstalledToolchains(), toolchainManager.installedLabels(),
+            toolchainManager.getIncompleteToolchains(),
+        )
         // And what is downloading, which this screen is not told about at all when
         // another manager began the transfer: the cards started empty and offered
         // Install for a pack already downloading, with no progress and no Cancel.
@@ -468,6 +469,7 @@ class ToolchainActivity : AppCompatActivity() {
         // also what a recreated screen needs, since it puts the question again
         // only when the user taps Remove again.
         removeDialog?.dismiss()
+        retryDialog?.dismiss()
         super.onDestroy()
     }
 
@@ -486,7 +488,41 @@ class ToolchainActivity : AppCompatActivity() {
         // for something that has just finished installing. Reading the record on
         // every percentage tick instead would be a file read a second for an
         // answer that cannot have changed.
-        if (refresh.rereadInstalled) adapter.setInstalled(toolchainManager.getInstalledToolchains(), toolchainManager.installedLabels())
+        if (refresh.rereadInstalled) adapter.setInstalled(
+            toolchainManager.getInstalledToolchains(), toolchainManager.installedLabels(),
+            toolchainManager.getIncompleteToolchains(),
+        )
+    }
+
+    private fun requestInstall(packName: String) {
+        // A synchronous failure must be able to settle this request immediately.
+        outstanding.add(packName)
+        toolchainManager.install(packName)
+    }
+
+    private fun retryToolchain(packName: String) {
+        val shortName = packName.removePrefix("toolchain_")
+        if (shortName !in toolchainManager.getInstalledToolchains() ||
+            packName !in toolchainManager.getIncompleteToolchains()
+        ) {
+            requestInstall(packName)
+            return
+        }
+        // Repair can require freeing space or removing an incompatible old tree.
+        // Keep removal reachable while the card uses its single button for Retry.
+        val fallback = ToolchainRegistry.find(packName)?.displayName ?: shortName
+        retryDialog?.dismiss()
+        retryDialog = AlertDialog.Builder(this)
+            .setTitle(adapter.labelFor(packName, fallback))
+            .setItems(arrayOf(getString(R.string.progress_retry), getString(R.string.toolchain_remove))) { _, which ->
+                when (which) {
+                    0 -> requestInstall(packName)
+                    1 -> showRemoveConfirmation(packName)
+                }
+            }
+            .setNegativeButton(android.R.string.cancel, null)
+            .setOnDismissListener { retryDialog = null }
+            .show()
     }
 
     private fun showRemoveConfirmation(packName: String) {

@@ -13,16 +13,14 @@ VSCodroid has three interface boundaries:
 ```mermaid
 flowchart TD
   K["Kotlin Native Shell"] <--> |"A: Android Bridge (JavascriptInterface)"| W["WebView (vscode-web)"]
-  W <--> |"B: VS Code Remote Protocol<br/>HTTP + WebSocket"| N["Node.js Process (VS Code Server, vscode-reh)"]
-  K <--> |"C: Process Management<br/>stdout + HTTP"| N
+  W <--> |"B: VS Code Remote Protocol<br/>HTTP + WebSocket"| G["EditorGateway<br/>app-owned loopback endpoint"]
+  G <--> |"Private filesystem socket"| N["Node.js Process (VS Code Server, vscode-reh)"]
+  K <--> |"C: Process Management<br/>stdout"| N
+  K <--> |"C: HTTP readiness and ownership checks"| G
 ```
 
-Boundary C is one-way for the pipe: `ProcessManager` closes the child's stdin at spawn
-(`start().also { it.outputStream.close() }`) and only ever reads stdout. Nothing is
-written to the process. This said "stdin/stdout/HTTP", which invites a design that
-sends the server a command down the pipe; there is no reader on the other end. Kotlin
-asks the server things over HTTP on the loopback port, and learns of its death from
-`Process.waitFor()`.
+Boundary C is one-way for the pipe: `ProcessManager` closes the child's stdin immediately after spawn and only reads stdout. If closing stdin fails, it stops the new process before reporting failure. Nothing is written to the process; the server has no command reader on that pipe. Kotlin
+asks the server things over HTTP on the app-owned loopback port, which the gateway relays to the private backend socket, and learns of its death from `Process.waitFor()`. The public port remains bound across editor stops and restarts for the app process lifetime.
 
 ---
 
@@ -444,6 +442,8 @@ fun publishWorkspaceRoots(authToken: String, pageGeneration: Long, pathsJson: St
 // Replaces the current document's complete workspace resource-root set.
 // Empty input closes the set; stale sessions, generations, and relative paths are refused.
 // Resource requests retain their origin, referrer, sensitive-path, and containment checks.
+// When the published paths span two or more distinct device-folder copies under saf-mirrors/,
+// MainActivity shows saf_workspace_multiple_folders once for that pageGeneration.
 
 @JavascriptInterface
 fun openRecentFolder(authToken: String, uriString: String)
@@ -846,8 +846,9 @@ libnode.so
 --max-old-space-size=N        # V8 heap ceiling, derived from device RAM by
                               # heapCeilingForDevice() -- not a constant
 server.js
---host=127.0.0.1              # Localhost only
---port=PORT                   # Dynamic port, allocated once and reused across restarts
+--host=127.0.0.1              # Loopback fallback when no socket is supplied
+--port=PORT                   # App-owned public port, retained across editor restarts
+--socket-path=PATH            # Private filesystem listener for this editor run
 --extensions-dir=PATH         # Custom extensions location
 --user-data-dir=PATH          # User settings location
 --server-data-dir=PATH        # Server data location
@@ -855,9 +856,7 @@ server.js
 --log=info                    # Log level
 ```
 
-What reaches the editor server is a different list. `server.js` reads `host`, `port`
-and `log` as its own **defaults** and rebuilds them, adds four flags nobody passed in,
-and then forwards a **whitelist of exactly four keys**:
+What reaches the editor server is a different list. `server.js` reads `host`, `port` and `log` as its own **defaults** and rebuilds them, adds four flags nobody passed in, and passes `--socket-path` when supplied. It separately forwards a **whitelist of exactly four directory keys**:
 
 ```js
 // server.js, at the fork
@@ -887,7 +886,7 @@ Added by `server.js` itself, not passed from Kotlin:
   nine, then fails to activate at its first read of one (`testObserver`). The id is the
   point: the flag with no id turns the check off for every extension on the phone.
 
-⚠️ **An argument that is not in that whitelist is dropped silently.** Adding a flag to
+⚠️ **An argument not handled explicitly by `server.js` is dropped silently.** Adding a flag to
 the Kotlin command line and expecting the editor server to see it is the trap here,
 and it is worst for authentication: the server takes its connection token from
 `<server-data-dir>/data/token` precisely because no token flag is passed, and a

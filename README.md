@@ -146,7 +146,7 @@ If you are **ready to learn**, you should be able to **start today**.
 
 ## 🏗️ Architecture
 
-VSCodroid runs a local VS Code Server instance on your Android device. The VS Code Web Client renders inside a WebView, and the VS Code Server (Node.js) runs as a native ARM64 process, all on `localhost`.
+VSCodroid runs a local VS Code Server instance on your Android device. The VS Code Web Client renders inside a WebView, and the VS Code Server (Node.js) runs as a native ARM64 process. The app retains a loopback endpoint and relays HTTP and WebSocket traffic to Node through a private filesystem socket.
 
 ```mermaid
 flowchart TD
@@ -166,11 +166,11 @@ flowchart TD
     REH --> FS
     KEY --> WV
   end
-  WEB <--> LOCAL["localhost:PORT (HTTP + WebSocket)"]
-  LOCAL <--> REH
+  WEB <--> LOCAL["EditorGateway: 127.0.0.1:PORT<br/>(HTTP + WebSocket)"]
+  LOCAL <-->|"Private filesystem socket"| REH
 ```
 
-> For full architecture details, see [Architecture Design Document (historical: the 2026-02-10 design, not the code)](docs/03-ARCHITECTURE.md).
+> For full architecture details, see the [Architecture Design Document](docs/03-ARCHITECTURE.md).
 
 ## 📱 Requirements
 
@@ -180,7 +180,7 @@ flowchart TD
 | Architecture | arm64-v8a                          |
 | WebView      | Chrome 125+                        |
 | RAM          | 4 GB recommended                   |
-| Storage      | ~738 MB free to install            |
+| Storage      | ~800 MB free to install            |
 
 ## 🚀 Getting Started
 
@@ -240,31 +240,38 @@ adb install android/app/build/outputs/apk/debug/app-debug.apk
 | -------------------------------------- | -------------------- |
 | Play Store download (core)             | ~270 MB              |
 | + Each toolchain (on-demand)           | 11-74 MB per language |
-| Free space required to install         | ~738 MB              |
+| Free space required to install         | ~800 MB              |
 | Extracted to internal storage (core)   | ~603 MB              |
 | Extracted, plus Ruby and Java          | ~830 MB              |
 | Extracted, plus all three toolchains   | ~1,090 MB            |
 | RAM usage (typical)                    | ~400-700 MB          |
 
-The install figure is larger than what the app ends up occupying because extraction
-needs room to work: it is the asset tree plus about 134 MB of headroom, which covers
-the filesystem block rounding a tree of over 23,000 files costs. When it refuses to
-start for lack of space it asks for the shortfall it measured, not for the whole
-figure, so a device already holding part of the tree is asked only for what is
-missing. Freeing only what the extracted size suggests is what leaves setup
-failing partway.
+The install figure includes the space needed to allocate missing files and directories
+on encrypted f2fs. Setup measures their block rounding and inode blocks from the
+bundled assets, plus 16 MiB for generated files and filesystem metadata, with a minimum reserve of 128 MiB. Existing files and
+directories do not pay that allocation allowance again. A refusal asks for the
+measured shortfall, so a partial installation needs room only for what is missing
+and for rewriting one file at a time.
 
-These move with every VS Code bump. Re-measure rather than trusting them:
+These figures move with the bundled tree. Measure a fresh installation from the
+current assets, excluding the translations that are served directly from the APK:
 
 ```bash
-# what the app will extract, and therefore what the storage gate demands.
-# python3 rather than stat: `stat -f` is the BSD spelling and `stat -c` the GNU one,
-# and the version that shipped here failed on Linux by printing a plausible 0 MB.
-# This sums the way the gate itself does, in app/build.gradle.kts: decimal MB,
-# which is the unit the app asks in, and `nls/` left out, because those bundles are
-# served to the page straight from the APK and are never unpacked. The 134.2 is
-# EXTRACTION_SLACK_BYTES, 128 MiB, in the same unit.
-python3 -c "import os; b='android/app/src/main/assets'; s={os.path.join(r,f):os.path.getsize(os.path.join(r,f)) for r,_,fs in os.walk(b) for f in fs}; n=os.path.join(b,'nls')+os.sep; t=sum(v for k,v in s.items() if not k.startswith(n)); print(f'{t/1e6:.0f} MB extracted, gate demands {t/1e6+134.2:.0f} MB')"
+python3 - <<'PYTHON'
+from pathlib import Path
+root = Path('android/app/src/main/assets')
+files = [p for p in root.rglob('*') if p.is_file() and p.relative_to(root).parts[0] != 'nls']
+directories = set()
+for path in files:
+    for parent in path.parents:
+        if parent == root:
+            break
+        directories.add(parent)
+logical = sum(path.stat().st_size for path in files)
+overhead = sum(4096 + (-path.stat().st_size) % 4096 for path in files) + 4096 * len(directories)
+required = logical + max(128 * 1048576, overhead + 16 * 1048576)
+print(f'{logical / 1e6:.0f} MB extracted, fresh gate demands {required / 1e6:.0f} MB')
+PYTHON
 ```
 
 ## 🤝 Contributing

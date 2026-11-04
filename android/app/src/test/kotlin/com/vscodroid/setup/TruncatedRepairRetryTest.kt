@@ -9,7 +9,9 @@ import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
 import io.mockk.mockkObject
+import io.mockk.mockkStatic
 import io.mockk.unmockkObject
+import io.mockk.unmockkAll
 import io.mockk.verify
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
@@ -19,6 +21,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.nio.file.Files
 
 /**
  * What `repairTruncatedSetupFiles` must leave behind when its rewrite fails.
@@ -46,8 +49,7 @@ import java.io.File
  * file it could not rewrite, and for one of the two shapes what they add takes
  * the retry away. `repairTruncatedSetupFiles` documents which and why.
  *
- * The failure is arranged as in [BashrcAtomicityTest]: by occupying the
- * temporary path [writeAtomically] derives from the destination.
+ * The failure is injected at the temporary-file open in [writeAtomically].
  */
 class TruncatedRepairRetryTest {
 
@@ -61,6 +63,7 @@ class TruncatedRepairRetryTest {
 
     @BeforeEach
     fun setUp() {
+        mockkStatic(Files::class)
         mockkObject(Logger)
         every { Logger.d(any(), any()) } just Runs
         every { Logger.i(any(), any()) } just Runs
@@ -81,14 +84,9 @@ class TruncatedRepairRetryTest {
     }
 
     @AfterEach
-    fun tearDown() = unmockkObject(Logger)
+    fun tearDown() = unmockkAll()
 
-    /** Non-empty, so the cleanup `delete()` cannot quietly reclaim it. */
-    private fun block(dest: File): File =
-        File(dest.parentFile, "${dest.name}.tmp~").also {
-            assertTrue(it.mkdirs(), "could not stage the blocked temp path")
-            File(it, "occupied").writeText("x")
-        }
+    private fun block(dest: File) = blockAtomicWritesTo(dest)
 
     /**
      * NEGATIVE CONTROL: restore `&& bashrc.delete()` to the branch condition in
@@ -113,7 +111,7 @@ class TruncatedRepairRetryTest {
 
         // The user frees space and launches again. That is the whole value of
         // leaving the empty file: it is what the repair re-enters through.
-        assertTrue(blocker.deleteRecursively(), "could not free the temp path")
+        blocker.close()
         FirstRunSetup(context).repairTruncatedSetupFiles()
 
         assertTrue(
@@ -145,7 +143,7 @@ class TruncatedRepairRetryTest {
                 "every guard that would have tried again",
         )
 
-        assertTrue(blocker.deleteRecursively(), "could not free the temp path")
+        blocker.close()
         FirstRunSetup(context).repairTruncatedSetupFiles()
 
         assertTrue(
@@ -169,7 +167,7 @@ class TruncatedRepairRetryTest {
      *
      * The blocker is freed before the append on purpose. It is the only route to
      * a failed rewrite followed by a successful append: both writes derive the
-     * same temporary path from the same destination, so whatever stops one stops
+     * same temporary-file open for the destination, so whatever stops one stops
      * the other.
      *
      * NEGATIVE CONTROL: change `text.startsWith(BASHRC_HEADER)` in
@@ -198,7 +196,7 @@ class TruncatedRepairRetryTest {
 
         // Room appears between the two calls. Nothing else lets the append below
         // succeed where the rewrite above failed.
-        assertTrue(blocker.deleteRecursively(), "could not free the temp path")
+        blocker.close()
         setup.createNpmWrappers()
         assertTrue(bashrc.readText().contains("npm()"), "the append under test never ran")
         assertFalse(

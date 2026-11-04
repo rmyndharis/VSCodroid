@@ -1,0 +1,29 @@
+Open a workspace file whose folders value is not a list.
+
+A workspace file whose folders value is an object, a non-zero number or true
+makes toWorkspaceFolders throw before the workspace exists; start-up then throws
+again and the page never builds a workbench. Treat a non-list folders value as
+an empty list on first load, and keep the current folders when a running window
+reloads a non-list folders value.
+
+diff --git a/src/vs/workbench/services/configuration/browser/configurationService.ts b/src/vs/workbench/services/configuration/browser/configurationService.ts
+--- a/src/vs/workbench/services/configuration/browser/configurationService.ts
++++ b/src/vs/workbench/services/configuration/browser/configurationService.ts
+@@ -528,7 +528,7 @@ export class WorkspaceService extends Disposable implements IWorkbenchConfigurat
+ 	private async createMultiFolderWorkspace(workspaceIdentifier: IWorkspaceIdentifier): Promise<Workspace> {
+ 		await this.workspaceConfiguration.initialize({ id: workspaceIdentifier.id, configPath: workspaceIdentifier.configPath }, this.isWorkspaceTrusted, this.initialWorkspaceSettings);
+ 		const workspaceConfigPath = workspaceIdentifier.configPath;
+-		const workspaceFolders = toWorkspaceFolders(this.workspaceConfiguration.getFolders(), workspaceConfigPath, this.uriIdentityService.extUri);
++		const workspaceFolders = toWorkspaceFolders(Array.isArray(this.workspaceConfiguration.getFolders()) ? this.workspaceConfiguration.getFolders() : [], workspaceConfigPath, this.uriIdentityService.extUri);
+ 		const workspaceId = workspaceIdentifier.id;
+ 		const workspace = new Workspace(workspaceId, workspaceFolders, this.workspaceConfiguration.isTransient(), workspaceConfigPath, uri => this.uriIdentityService.extUri.ignorePathCasing(uri));
+ 		workspace.initialized = this.workspaceConfiguration.initialized;
+@@ -835,7 +835,7 @@ export class WorkspaceService extends Disposable implements IWorkbenchConfigurat
+ 
+ 	private async onWorkspaceConfigurationChanged(fromCache: boolean): Promise<void> {
+ 		if (this.workspace && this.workspace.configuration) {
+-			let newFolders = toWorkspaceFolders(this.workspaceConfiguration.getFolders(), this.workspace.configuration, this.uriIdentityService.extUri);
++			let newFolders = Array.isArray(this.workspaceConfiguration.getFolders()) ? toWorkspaceFolders(this.workspaceConfiguration.getFolders(), this.workspace.configuration, this.uriIdentityService.extUri) : this.workspace.folders;
+ 
+ 			// Validate only if workspace is initialized
+ 			if (this.workspace.initialized) {

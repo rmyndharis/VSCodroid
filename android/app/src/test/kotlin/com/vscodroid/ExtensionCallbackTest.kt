@@ -1,14 +1,23 @@
 package com.vscodroid
 
+import android.content.Context
+import android.content.Intent
 import android.net.Uri
+import android.os.SystemClock
+import android.widget.Toast
 import com.vscodroid.bridge.AUTH_TAB_WINDOW_MILLIS
 import com.vscodroid.bridge.AuthTabWindow
 import com.vscodroid.bridge.AUTH_UNLAUNCHED_GRACE_MILLIS
 import com.vscodroid.bridge.authCallbackNonceIn
 import com.vscodroid.bridge.authRequestIdsIn
 import com.vscodroid.bridge.encodeCallbackState
+import com.vscodroid.util.Logger
 import com.vscodroid.webview.redactToken
+import io.mockk.Runs
 import io.mockk.every
+import io.mockk.just
+import io.mockk.mockk
+import io.mockk.mockkObject
 import io.mockk.mockkStatic
 import io.mockk.unmockkAll
 import org.junit.jupiter.api.AfterEach
@@ -620,10 +629,9 @@ class CallbackRequestIdTest {
  * everything, and a browser launch that never records leaves the gate shut on a
  * real sign-in. Neither shows up in a test of the function itself.
  *
- * Source reading, which is weaker than the rest of this suite, and here for the
- * reason `ServerReadinessCallSiteTest` gives: the decision lives inside an
- * Activity method with no seam, and the mutation is not a value the code
- * computes but whether a call is present at all.
+ * Source reading for the browser-launch call sites and structural order, paired
+ * with [ReceiveCallbackIntentSecretTest] below which invokes
+ * `receiveCallbackIntent` at runtime on a mocked [MainActivity] instance.
  *
  * What it does not catch: a browser opened from a third file, or the gate
  * reached through some other spelling. It catches removing either half of what
@@ -753,24 +761,14 @@ class AuthCallbackCallSiteTest {
 
     @Test
     fun `the relay asks whether a sign-in was in flight`() {
-        check(mainActivity.isFile) {
-            "MainActivity.kt not found at ${mainActivity.absolutePath}; this test " +
-                "would otherwise pass by looking at nothing"
-        }
-
-        // The declaration is in this same file and its first line reads
-        // `fun authCallbackIsExpected(`, so a search for the name alone is
-        // satisfied by the function existing. Measured: deleting the entire
-        // gate from receiveCallbackIntent left all 630 tests green.
-        val calls = code(mainActivity).filterNot { it.contains("fun authCallbackIsExpected") }
-            .count { it.contains("authCallbackIsExpected(") }
+        val calls = relayBody().count { it.contains("authCallbackIsExpected(") }
 
         assertTrue(
             calls >= 1,
             "the vscodroid://callback relay must refuse a callback no sign-in was " +
-                "waiting for; found $calls call site(s), and without one the " +
-                "exported entry point takes a value from anything on the device " +
-                "at any moment",
+                "waiting for; found $calls call site(s) in receiveCallbackIntent, and " +
+                "without one the exported entry point takes a value from anything on " +
+                "the device at any moment",
         )
     }
 
@@ -1048,8 +1046,8 @@ class AuthCallbackCallSiteTest {
         // loop, branded as this app and nagging the user to re-authenticate on
         // someone else's cue.
         //
-        // Asserted on the source because the branch lives in an Activity method,
-        // which cannot be built in a plain JVM test. Position is the property:
+        // Asserted in the source to pin the structural order alongside the
+        // runtime check in ReceiveCallbackIntentSecretTest. Position is the property:
         // taking the record back before the timing gate would refuse the sign-in
         // the user is actually completing, and taking it back after the gate has
         // passed would consume a callback that is about to be relayed.
@@ -1987,5 +1985,172 @@ class ResumeActionTest {
             "the resume decision must be told whether a file picker is still out; found: " +
                 decisions.single(),
         )
+    }
+}
+
+/**
+ * Behavioral verification of `MainActivity.receiveCallbackIntent` on the secret
+ * and timing gates, driving the real private method against a live [AuthTabWindow].
+ */
+class CallbackRelayDecisionTest {
+
+    private lateinit var activity: MainActivity
+    private val relayedIds = mutableListOf<String>()
+    private val toastMessages = mutableListOf<String>()
+    private var now = 1_500L
+
+    private val requestId = "42"
+    private val secret = "0123456789abcdef0123456789abcdef"
+    private val wrongSecret = "fedcba9876543210fedcba9876543210"
+    private val docId = "d".repeat(32)
+
+    private fun setField(name: String, value: Any) {
+        MainActivity::class.java.getDeclaredField(name).apply {
+            isAccessible = true
+            set(activity, value)
+        }
+    }
+
+    private fun deliver(dataPayload: String?, scheme: String = "vscodroid", host: String = "callback") {
+        val uri = mockk<Uri>(relaxed = true)
+        every { uri.scheme } returns scheme
+        every { uri.host } returns host
+        every { uri.getQueryParameter("data") } returns dataPayload
+        val intent = mockk<Intent>(relaxed = true)
+        every { intent.data } returns uri
+        val method = MainActivity::class.java.getDeclaredMethod("receiveCallbackIntent", Intent::class.java).apply {
+            isAccessible = true
+        }
+        method.invoke(activity, intent)
+    }
+
+    private fun payload(id: String = requestId, nonce: String? = secret): String =
+        if (nonce != null) {
+            """{"id":"$id","uri":{"scheme":"vscodroid","authority":"vscode.github-authentication","query":"code=abc&vscodroid-nonce=$nonce"}}"""
+        } else {
+            """{"id":"$id","uri":{"scheme":"vscodroid","authority":"vscode.github-authentication","query":"code=abc"}}"""
+        }
+
+    @BeforeEach
+    fun setUp() {
+        AuthTabWindow.beginPage()
+        assertTrue(AuthTabWindow.register(requestId, secret, docId, AuthTabWindow.pageGeneration(), 1_000L))
+        AuthTabWindow.launched(AuthTabWindow.arm(listOf(requestId), secret, 1_000L))
+
+        relayedIds.clear()
+        toastMessages.clear()
+        now = 1_500L
+
+        mockkObject(Logger)
+        every { Logger.d(any(), any()) } just Runs
+        every { Logger.i(any(), any()) } just Runs
+        every { Logger.w(any(), any()) } just Runs
+        every { Logger.w(any(), any(), any()) } just Runs
+        every { Logger.e(any(), any(), any()) } just Runs
+
+        mockkStatic(SystemClock::class)
+        every { SystemClock.elapsedRealtime() } answers { now }
+
+        val toast = mockk<Toast>(relaxed = true)
+        mockkStatic(Toast::class)
+        every { Toast.makeText(any<Context>(), any<CharSequence>(), any()) } answers {
+            toastMessages += secondArg<CharSequence>().toString()
+            toast
+        }
+
+        activity = mockk(relaxed = true)
+        setField("workbenchLoaded", true)
+        setField("restartNoticeShown", false)
+        every { activity.getString(R.string.sign_in_timed_out) } returns "timed-out"
+        every { activity.getString(R.string.sign_in_editor_restarted) } returns "restarted"
+        every { activity["handleExtensionCallback"](any<Uri>(), any<String>()) } answers {
+            relayedIds += secondArg<String>()
+            Unit
+        }
+        every { activity["receiveCallbackIntent"](any<Intent>()) } answers { callOriginal() }
+    }
+
+    @AfterEach
+    fun tearDown() {
+        AuthTabWindow.beginPage()
+        unmockkAll()
+    }
+
+    @Test
+    fun `the right secret inside the window is relayed under the same id`() {
+        deliver(payload(id = requestId, nonce = secret))
+
+        assertEquals(listOf(requestId), relayedIds)
+        assertEquals(emptyList<String>(), toastMessages)
+        assertEquals(1_000L, AuthTabWindow.armedAt(requestId))
+    }
+
+    @Test
+    fun `a wrong secret is refused and consumes nothing`() {
+        deliver(payload(id = requestId, nonce = wrongSecret))
+
+        assertEquals(emptyList<String>(), relayedIds)
+        assertEquals(emptyList<String>(), toastMessages)
+        assertEquals(1_000L, AuthTabWindow.armedAt(requestId), "a wrong secret retired the pending launch")
+    }
+
+    @Test
+    fun `no secret is refused and consumes nothing`() {
+        deliver(payload(id = requestId, nonce = null))
+        deliver(payload(id = requestId, nonce = ""))
+
+        assertEquals(emptyList<String>(), relayedIds)
+        assertEquals(emptyList<String>(), toastMessages)
+        assertEquals(1_000L, AuthTabWindow.armedAt(requestId), "a callback with no secret retired the pending launch")
+    }
+
+    @Test
+    fun `the right secret after the window gives the late message once and relays nothing`() {
+        now = 1_000L + AUTH_TAB_WINDOW_MILLIS + 1
+        deliver(payload(id = requestId, nonce = secret))
+        deliver(payload(id = requestId, nonce = secret))
+
+        assertEquals(emptyList<String>(), relayedIds)
+        assertEquals(listOf("timed-out"), toastMessages)
+        assertNull(AuthTabWindow.armedAt(requestId))
+    }
+
+    @Test
+    fun `a wrong secret after the window raises no message`() {
+        now = 1_000L + AUTH_TAB_WINDOW_MILLIS + 1
+        deliver(payload(id = requestId, nonce = wrongSecret))
+        deliver(payload(id = requestId, nonce = null))
+        deliver(payload(id = requestId, nonce = ""))
+
+        assertEquals(emptyList<String>(), relayedIds)
+        assertEquals(emptyList<String>(), toastMessages)
+        assertEquals(1_000L, AuthTabWindow.armedAt(requestId))
+    }
+
+    @Test
+    fun `an unloaded workbench gives the restart message once and relays nothing`() {
+        setField("workbenchLoaded", false)
+        deliver(payload(id = requestId, nonce = secret))
+        deliver(payload(id = requestId, nonce = secret))
+
+        assertEquals(emptyList<String>(), relayedIds)
+        assertEquals(listOf("restarted"), toastMessages)
+    }
+
+    @Test
+    fun `an unknown request id relays nothing and raises no message`() {
+        deliver(payload(id = "999", nonce = secret))
+
+        assertEquals(emptyList<String>(), relayedIds)
+        assertEquals(emptyList<String>(), toastMessages)
+    }
+
+    @Test
+    fun `an oversize payload is refused before parsing`() {
+        deliver("x".repeat(MAX_CALLBACK_PAYLOAD_CHARS + 1))
+
+        assertEquals(emptyList<String>(), relayedIds)
+        assertEquals(emptyList<String>(), toastMessages)
+        assertEquals(1_000L, AuthTabWindow.armedAt(requestId))
     }
 }

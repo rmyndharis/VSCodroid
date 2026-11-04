@@ -1,7 +1,11 @@
 Exit when the editor cannot bind its listener
 
-Report an unbound EADDRINUSE as a failed server process so the bootstrap and
-watchdog can retry. Other errors retain the existing remote service handler.
+Report any listener error raised before the server is listening as a failed
+server process, so the bootstrap and watchdog can retry and the gave-up page
+can show the reason. The listener is a private socket now, and a full disk, a
+refused path or a read-only directory fail the bind as surely as a busy port
+did, leaving a process that serves nothing and that nothing replaces. Errors
+after listening retain the existing remote service handler.
 
 --- a/src/server-main.ts
 +++ b/src/server-main.ts
@@ -9,7 +13,7 @@ watchdog can retry. Other errors retain the existing remote service handler.
  		return remoteExtensionHostAgentServer.handleUpgrade(req, socket);
  	});
  	server.on('error', async (err) => {
-+		if (!server.listening && (err as NodeJS.ErrnoException).code === 'EADDRINUSE') {
++		if (!server.listening) {
 +			console.error('Editor failed to bind its port', err);
 +			process.exit(1);
 +		}

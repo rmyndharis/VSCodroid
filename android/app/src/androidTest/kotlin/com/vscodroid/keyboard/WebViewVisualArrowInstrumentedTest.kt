@@ -141,7 +141,11 @@ class WebViewVisualArrowInstrumentedTest {
         assertTrue("the injector used a synthetic DOM keyup", event.getBoolean("keyupTrusted"))
         assertFalse(event.getBoolean("ctrl") || event.getBoolean("alt") || event.getBoolean("shift") || event.getBoolean("meta"))
         assertEquals("the wrong interceptor state was loaded", guarded, measured.getBoolean("guarded"))
-        assertEquals("the guard did not decide the collapsed-caret native press", guarded, event.getBoolean("prevented"))
+        assertEquals(
+            "the guard cancelled a press that moved the caret, or let an edge press through",
+            guarded && measured.getInt("start") == case.offset,
+            event.getBoolean("prevented"),
+        )
         return measured
     }
 
@@ -232,7 +236,7 @@ class WebViewVisualArrowInstrumentedTest {
         })
         val ack = File(steps, "$stem.ack")
         val deadline = SystemClock.elapsedRealtime() + 90_000
-        while (!ack.isFile && SystemClock.elapsedRealtime() < deadline) Thread.sleep(50)
+        while ((!ack.isFile || ack.length() == 0L) && SystemClock.elapsedRealtime() < deadline) Thread.sleep(50)
         check(ack.isFile && ack.length() <= 8 && ack.readText() == step.toString()) { "checkpoint $step was not acknowledged" }
         check(ack.delete())
     }

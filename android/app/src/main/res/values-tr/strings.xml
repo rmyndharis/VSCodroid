@@ -601,4 +601,5 @@
          one English word survived inside an otherwise translated About dialog. -->
     <string name="about_version_unknown">bilinmiyor</string>
     <string name="saf_folder_unavailable">Bu cihaz klasörünün yerel kopyası artık kullanılamıyor. Klasörü cihazdan yeniden açın.</string>
+    <string name="saf_workspace_multiple_folders">Bu çalışma alanı birden fazla cihaz klasörünü kapsıyor. Aynı anda yalnızca bir cihaz klasörü eşitlenir; diğerlerindeki değişiklikler o klasörler doğrudan açılana kadar VSCodroid içinde kalır.</string>
 </resources>

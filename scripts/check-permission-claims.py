@@ -300,6 +300,16 @@ def main(argv=()) -> int:
         )
 
     stated = named_in_policy(POLICY.read_text(encoding="utf-8"))
+    policy_text = POLICY.read_text(encoding="utf-8")
+    for retired_claim in (
+        "loads from the first launch",
+        "loads and runs from every start",
+        "offers Disable rather than Uninstall",
+    ):
+        if retired_claim in policy_text:
+            return fail(
+                f"{POLICY.relative_to(ROOT)} still carries retired Copilot claim: {retired_claim!r}"
+            )
     expected = own | MERGED_IN
 
     unstated = sorted(expected - stated)

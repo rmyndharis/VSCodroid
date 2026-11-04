@@ -137,4 +137,19 @@ class AuthCallbackSecretTest {
         )
         assertEquals("code=abc", callbackQueryWithoutNonce("code=abc"))
     }
+
+    @Test
+    fun `the golden callback payload produces the exact stored value the Node suite feeds the provider`() {
+        val goldenPayload =
+            """{"id":"1","uri":{"scheme":"vscodroid","authority":"example.test","path":"/auth","query":"code=golden-code&state=xyz&vscodroid-nonce=$ours","fragment":"done"}}"""
+        val goldenStoredValue =
+            """{"scheme":"vscodroid","authority":"example.test","path":"/auth","query":"code=golden-code&state=xyz","fragment":"done"}"""
+        assertEquals(ours, callbackNonce(goldenPayload))
+        val actual = JSONObject(callbackUriJson(goldenPayload)!!)
+        val expected = JSONObject(goldenStoredValue)
+        assertEquals(expected.keys().asSequence().toSet(), actual.keys().asSequence().toSet())
+        for (key in expected.keys()) {
+            assertEquals(expected.getString(key), actual.getString(key), "mismatch for $key")
+        }
+    }
 }

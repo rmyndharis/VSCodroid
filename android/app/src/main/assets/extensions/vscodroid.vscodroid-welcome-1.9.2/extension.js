@@ -56,9 +56,8 @@ function alignSecondarySideBar(context) {
     Promise.resolve(
         vscode.commands.executeCommand('workbench.action.closeAuxiliaryBar')
     ).then(
-        () => context.workspaceState.update(SIDE_BAR_ALIGNED, true),
-        () => {}
-    );
+        () => context.workspaceState.update(SIDE_BAR_ALIGNED, true)
+    ).catch(() => {});
 }
 
 /**

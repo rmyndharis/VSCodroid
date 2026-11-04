@@ -7,7 +7,9 @@ import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
 import io.mockk.mockkObject
+import io.mockk.mockkStatic
 import io.mockk.unmockkObject
+import io.mockk.unmockkAll
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -16,6 +18,7 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.nio.file.Files
 import java.security.PublicKey
 import java.security.cert.Certificate
 import java.security.cert.CertificateEncodingException
@@ -82,6 +85,7 @@ class UserCaBundleTest {
 
     @BeforeEach
     fun setUp() {
+        mockkStatic(Files::class)
         mockkObject(Logger)
         every { Logger.d(any(), any()) } just Runs
         every { Logger.i(any(), any()) } just Runs
@@ -96,7 +100,7 @@ class UserCaBundleTest {
     }
 
     @AfterEach
-    fun tearDown() = unmockkObject(Logger)
+    fun tearDown() = unmockkAll()
 
     /** [FirstRunSetup] wired to the fixture directory, with [certs] as the store. */
     private fun setupWith(certs: () -> List<Certificate>): FirstRunSetup =
@@ -424,9 +428,8 @@ class UserCaBundleTest {
      * same crash leaves the marker absent, which is a mismatch, which is a
      * rebuild.
      *
-     * Arranged as in [BashrcAtomicityTest], by occupying the temporary path the
-     * atomic write derives from its destination: the bundle write fails, and
-     * what the next launch does about it is the property.
+     * The temporary-file open fails, so the bundle write fails and the next
+     * launch must retry it.
      */
     @Test
     fun `a fingerprint is never recorded for a bundle that was not written`() {
@@ -440,7 +443,7 @@ class UserCaBundleTest {
             "the blocked write modified the bundle anyway; the harness is wrong",
         )
 
-        blocker.deleteRecursively()
+        blocker.close()
         makeMtimeLookFresh()
 
         buildWith(certificateOf(byteArrayOf(5, 5, 5)))
@@ -452,13 +455,9 @@ class UserCaBundleTest {
         )
     }
 
-    /** Non-empty, so the cleanup `delete()` cannot quietly reclaim it. */
-    private fun blockTheBundleWrite(): File {
+    private fun blockTheBundleWrite(): AtomicWriteFailure {
         bundle.parentFile?.mkdirs()
-        return File(bundle.parentFile, "${bundle.name}.tmp~").also {
-            assertTrue(it.mkdirs(), "could not stage the blocked temp path")
-            File(it, "occupied").writeText("x")
-        }
+        return blockAtomicWritesTo(bundle)
     }
 
     // -- the armour itself --

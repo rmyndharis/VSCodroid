@@ -75,9 +75,6 @@ class BridgeCallbackThreadHopTest {
             "by reply id; the UI calls it makes hop on their own (a Toast, and the " +
             "confirmation dialog a forced removal waits on), and the filesystem work it " +
             "does belongs off the UI thread rather than on it",
-        "onWorkspaceRoots" to
-            "returns a Boolean after publishing synchronized resource metadata; workspace " +
-            "file checks stay on the bridge thread and the callback touches no UI",
     )
 
     /**

@@ -21,27 +21,28 @@ import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.io.ByteArrayInputStream
 import java.nio.file.Files
 
 /**
  * What the first-run storage gate asks for, and of whom.
  *
  * The gate used to ask every install for the whole asset tree plus slack,
- * 874 MiB at the current pin, whether or not the device already held 810 MiB
+ * 1,002 MiB at the current slack, whether or not the device already held 810 MiB
  * of it. That was survivable only by coincidence: while `PIVOT_VERSION_CODE`
  * was still ahead of every installed build, each upgrade that reached the check
  * had its previous server tree deleted a few lines earlier and measured a device
  * with that room given back. That coincidence has expired, an upgrade from the
  * Code - OSS tree deletes nothing, and the
- * demand would have been 874 MiB free on top of the 810 MiB already occupied:
+ * demand would have been 1,002 MiB free on top of the 810 MiB already occupied:
  * refused on the splash screen, with a Retry button that measures the same thing
  * for ever and a `MainActivity` that never runs, so nothing the app offers can
  * free a byte.
  *
  * The same arithmetic is what makes a retry after a half-finished unpack
- * possible. A fresh install with 900 MiB free passes the gate, writes 810 MiB,
- * loses one file and aborts; on the retry the old gate measured the ~90 MiB
- * left and asked for 874 again, 810 of which was the partial tree the app had
+ * possible. A fresh install with 1,020 MiB free passes the gate, writes 810 MiB,
+ * loses one file and aborts; on the retry the old gate measured the ~210 MiB
+ * left and asked for 1,002 again, 810 of which was the partial tree the app had
  * just written and would not delete.
  *
  * **Every figure here is supplied by the test.** `BuildConfig.EXTRACTED_ASSET_BYTES`
@@ -128,11 +129,23 @@ class StoragePreflightTest {
         every { Logger.w(any(), any(), any()) } just Runs
         every { Logger.e(any(), any(), any()) } just Runs
 
-        // An APK with nothing in it: the gate is what these runs are about, and
-        // the figures it works from are supplied to the constructor instead.
+        // The staged files below match this APK listing, so credit can be checked per file.
         assets = mockk()
         every { assets.list(any()) } returns emptyArray()
-        every { assets.open(any()) } throws java.io.IOException("absent")
+        every { assets.list("") } answers {
+            arrayOf("vscode-reh", "usr", "extensions").filter {
+                assets.list(it)?.isNotEmpty() == true
+            }.toTypedArray()
+        }
+        every { assets.list("extensions/$bundledExtension") } returns arrayOf("extension.js")
+        every { assets.open(any()) } answers {
+            when {
+                firstArg<String>().startsWith("vscode-reh/out/part-") -> ByteArrayInputStream(ByteArray(mb.toInt()))
+                firstArg<String>() == "usr/lib/libcrypto.so.3" -> ByteArrayInputStream(ByteArray((2 * mb).toInt()))
+                firstArg<String>() == "extensions/$bundledExtension/extension.js" -> ByteArrayInputStream(ByteArray((2 * mb).toInt()))
+                else -> throw java.io.IOException("absent")
+            }
+        }
     }
 
     @AfterEach
@@ -212,6 +225,12 @@ class StoragePreflightTest {
      * device never takes.
      */
     private fun stageServerTree(bytes: Long) {
+        val shared = arrayOf("usr", "extensions").count {
+            assets.list(it)?.isNotEmpty() == true
+        } * 2 * mb
+        every { assets.list("vscode-reh") } returns arrayOf("out")
+        every { assets.list("vscode-reh/out") } returns
+            Array(((assetBytes - shared) / mb).toInt()) { "part-$it" }
         val chunk = ByteArray(64 * 1024)
         val dir = File(filesDir, "server/vscode-reh/out")
         assertTrue(dir.mkdirs(), "could not stage the server tree")
@@ -251,14 +270,15 @@ class StoragePreflightTest {
      * blocks, so 60.1 MiB of rounding from the files alone before the directories
      * add 19.9 MiB more.
      *
-     * f2fs is the filesystem that binds, and the figure below is its one, not
-     * ext4's. inline_data does not make a small file free: the node block holding
-     * it is itself a 4 KiB allocation charged against the free space the gate
-     * reads, so f2fs costs ext4 plus a block for every file it does not inline.
-     * 6,343 of those 22,653 files are over the ~3.4 KiB ceiling, which is 24.8 MiB
-     * on top of the 80.1 MiB ext4 pays. Asserting the ext4 figure alone would
-     * leave this case green at any slack down to 81 MiB, which is exactly the
-     * f2fs ENOSPC the constant was raised to 128 MiB for.
+     * Encrypted f2fs is the filesystem that binds, and the figure below is its
+     * one, not ext4's or unencrypted f2fs's. Under Android file-based encryption,
+     * f2fs does not inline small files into their node block: every regular file
+     * takes a 4 KiB data block (counted in [fileRounding]) plus a 4 KiB node block,
+     * and every directory takes a 4 KiB node block too, for `(22,653 + 5,103) * 4 KiB`
+     * = 108.4 MiB of node blocks on top of the 60.1 MiB of data-block rounding
+     * (168.6 MiB total). Counting node blocks only for the 6,343 files over ~3.4 KiB
+     * left this case green at 128 MiB while an encrypted f2fs userdata partition
+     * ran out of space during the bundled-extension unpack.
      *
      * The counts are recorded rather than walked, deliberately. Walking
      * `src/main/assets` would need an `assumeTrue` for the CI runner, which stubs
@@ -271,66 +291,55 @@ class StoragePreflightTest {
     fun `the slack covers the block rounding of the tree this release ships`() {
         val shippedFiles = 22_653L
         val shippedDirectories = 5_103L
-        val shippedNonInlined = 6_343L
         val blockBytes = 4_096L
 
         // 834.3 MiB block-rounded against 774.1 MiB logical, in bytes.
         val fileRounding = 874_803_200L - 811_745_977L
-        val nodeBlocks = (shippedDirectories + shippedNonInlined) * blockBytes
+        val nodeBlocks = (shippedDirectories + shippedFiles) * blockBytes
         val overhead = fileRounding + nodeBlocks
 
+        assertEquals(128 * mb, slack)
+        val requiredOverhead = FirstRunSetup.requiredExtractionBytes(0, 0, 0, 0, overhead)
         assertTrue(
-            slack >= overhead,
-            "the slack is ${slack / mb} MiB against ${overhead / mb} MiB of on-disk overhead " +
-                "for $shippedFiles files and $shippedDirectories directories, of which " +
-                "$shippedNonInlined are too large for f2fs to inline, so the pre-flight " +
-                "admits a device the unpack then fills",
+            requiredOverhead >= overhead,
+            "the allowance is ${requiredOverhead / mb} MiB against ${overhead / mb} MiB of on-disk overhead " +
+                "for $shippedFiles files and $shippedDirectories directories on encrypted f2fs, " +
+                "so the pre-flight admits a device the unpack then fills",
         )
     }
 
     @Test
     fun `a fresh install has to fit the whole tree`() {
+        val required = FirstRunSetup.requiredExtractionBytes(
+            assetBytes,
+            largestAssetBytes,
+            installedBytes = 0,
+            extractedTreeBytes = 0,
+        )
+        assertEquals(136 * mb, required)
         assertEquals(
             assetBytes + slack,
-            FirstRunSetup.requiredExtractionBytes(
-                assetBytes,
-                largestAssetBytes,
-                installedBytes = 0,
-                extractedTreeBytes = 0,
-            ),
+            required,
             "an install with nothing on disk must still be asked for the whole tree; the room " +
                 "to hold a second copy of one file is not part of it, because there is no " +
                 "first copy to hold",
         )
     }
 
-    /**
-     * The case the gate got wrong, and the reason the headroom reads a tree of its
-     * own rather than the total.
-     *
-     * A fresh install is not a device with an empty `filesDir`. SplashActivity's
-     * per-launch repair block runs before this gate, and `setupGitCaBundle` writes
-     * `usr/etc/tls/cert.pem` on the way through, so `installedBytes` already
-     * carries a few hundred KB of credit by the time the gate is asked. Charged
-     * off that, the rewrite headroom fired on an install with nothing unpacked and
-     * the gate demanded 986 MB where the unpack needs 873, refusing devices that
-     * fit on a screen whose only other control is a Retry that measures the same
-     * thing again.
-     */
+    /** A launch-time repair costs its own temporary copy, not the largest asset. */
     @Test
-    fun `a repair file under usr does not make a fresh install pay the rewrite headroom`() {
+    fun `a small repair file does not require a copy of the largest asset`() {
         val repairBytes = 320L * 1024
 
         assertEquals(
-            assetBytes - repairBytes + slack,
+            assetBytes + slack,
             FirstRunSetup.requiredExtractionBytes(
                 assetBytes,
                 largestAssetBytes,
                 installedBytes = repairBytes,
-                extractedTreeBytes = 0,
+                extractedTreeBytes = repairBytes,
             ),
-            "a launch-time repair writing into usr/ must not be read as an extracted tree; " +
-                "charging the headroom for it refuses fresh installs that fit",
+            "a small launch-time repair must not require a temporary copy of the largest asset",
         )
     }
 
@@ -344,6 +353,7 @@ class StoragePreflightTest {
                 extractedTreeBytes = assetBytes,
             )
 
+        assertEquals(130 * mb, required)
         assertEquals(largestAssetBytes + slack, required)
         assertTrue(
             required < assetBytes + slack,
@@ -390,6 +400,7 @@ class StoragePreflightTest {
             extractedTreeBytes = assetBytes / 2,
         )
 
+        assertEquals(134 * mb, required)
         assertEquals(assetBytes / 2 + largestAssetBytes + slack, required)
         assertTrue(
             required > FirstRunSetup.requiredExtractionBytes(
@@ -724,7 +735,7 @@ class StoragePreflightTest {
      * %1$d MB". What must be freed is what the device is MISSING; what the gate
      * computes is what has to BE free, and the two differ by everything the
      * device already has. Quoting the second told a user 200 MB short to clear
-     * 873 and sent them to delete photos they did not need to lose.
+     * 1,007 and sent them to delete photos they did not need to lose.
      *
      * Both figures are asserted, because the test this replaces was sized so
      * they were the same number and could not have told them apart.

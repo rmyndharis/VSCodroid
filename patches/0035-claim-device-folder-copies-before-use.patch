@@ -131,7 +131,7 @@ diff --git a/src/vs/workbench/services/configuration/browser/configurationServic
  		const trigger = this.initialized;
  		this.initialized = false;
  		const workspace = await this.createWorkspace(arg);
-+		await claimSafMirrorPaths([...workspace.folders.map(folder => folder.uri), ...(workspace.configuration ? [workspace.configuration] : [])]).catch(error => this.logService.warn(error));
++		await claimSafMirrorPaths([...workspace.folders.map(folder => folder.uri), ...(workspace.configuration ? [workspace.configuration] : [])]).catch(error => this.logService.warn('Could not claim initial workspace paths', error));
  		await this.updateWorkspaceAndInitializeConfiguration(workspace, trigger);
  		this.checkAndMarkWorkspaceComplete(false);
  		// Read for the workspace the page opened, so for no other.
@@ -139,7 +139,7 @@ diff --git a/src/vs/workbench/services/configuration/browser/configurationServic
  	}
  
  	private async updateWorkspaceConfiguration(workspaceFolders: WorkspaceFolder[], configuration: ConfigurationModel, fromCache: boolean): Promise<void> {
-+		await claimSafMirrorPaths(workspaceFolders.map(folder => folder.uri));
++		await claimSafMirrorPaths(workspaceFolders.map(folder => folder.uri)).catch(error => this.logService.warn(error));
  		const previous = { data: this._configuration.toData(), workspace: this.workspace };
  		const change = this._configuration.compareAndUpdateWorkspaceConfiguration(configuration);
  		const changes = this.compareFolders(this.workspace.folders, workspaceFolders);

@@ -24,8 +24,8 @@ A practical guide to using VSCodroid -- the full VS Code IDE running natively on
 
 ### What Happens on First Open
 
-1. **Install**. Download from the [Play Store](https://play.google.com/store/apps/details?id=com.vscodroid) or [GitHub Releases](https://github.com/rmyndharis/VSCodroid/releases). The core download is roughly 270 MB, and you need about 738 MB free for the extraction that follows.
-2. **Binary extraction** -- On first launch, VSCodroid extracts bundled tools (Node.js, Python, Git, Bash, and others) to internal storage. About 603 MB lands on disk, unpacked one file at a time behind a progress bar, so allow minutes rather than seconds on a slower device. The ~738 MB above is that payload plus the working room setup insists on before it will start. It happens on the first launch and again after every app update or reinstall, because extraction follows the installed package's version and update timestamp rather than only what is already unpacked. An update needs far less free space than a fresh install (the app credits what it already holds, so roughly 230 MB rather than 738 MB), but it does re-copy the files and it does take minutes. A first run that is interrupted and retried with the same installed package is the one case that does not start over: files already the right size are left alone.
+1. **Install**. Download from the [Play Store](https://play.google.com/store/apps/details?id=com.vscodroid) or [GitHub Releases](https://github.com/rmyndharis/VSCodroid/releases). The core download is roughly 270 MB, and you need about 800 MB free for the extraction that follows.
+2. **Binary extraction**. On first launch, VSCodroid extracts bundled tools (Node.js, Python, Git, Bash, and others) to internal storage. About 603 MB lands on disk, unpacked one file at a time behind a progress bar, so allow minutes rather than seconds on a slower device. The ~800 MB above is that payload plus the working room setup insists on before it will start. It happens on the first launch and again after every app update or reinstall, because extraction follows the installed package's version and update timestamp rather than only what is already unpacked. An update needs far less free space than a fresh install (the app credits what it already holds, so roughly 230 MB for a complete tree rather than 800 MB), but it does re-copy the files and it does take minutes. A first run that is interrupted and retried with the same installed package is the one case that does not start over: files already the right size are left alone.
 3. **Language Picker** -- A prompt asks "What do you code in?" with options for Ruby, Java and C/C++. It comes back at each launch until you answer it with Continue or Skip, and your answer is not final: touch and hold the app icon and pick **Manage toolchains** to add or remove them later. Whatever you select downloads there on the setup screen, one at a time; a download that fails is skipped and the rest continue. Skip goes straight to the editor.
 4. **Ready** -- The VS Code editor loads with terminal, file explorer, and all bundled tools available immediately.
 
@@ -117,6 +117,11 @@ VSCodroid is VS Code. If you have used VS Code on desktop, everything works the 
   save to it is still being written, the open does not wait for it: it says
   the folder is still syncing, saving carries on, and your later saves wait up
   to two minutes and are sent after that one.
+- Two device folders on the same provider take turns writing, for example a
+  folder you closed a moment ago and the one you opened next. While one is
+  still saving, a save in the other is held back and retried on its own, and a
+  delete, a new file or a rename there is refused with a notice; repeat it once
+  the first folder has finished.
 - A file of a device folder that you delete in the editor is deleted in the
   device folder too, unless the device folder's version is one VSCodroid has not
   read: another app may have changed it since you opened the folder or last
@@ -146,7 +151,10 @@ VSCodroid is VS Code. If you have used VS Code on desktop, everything works the 
   the code for that folder.
 - A `.code-workspace` file opens as a multi-root workspace: open the file and
   choose **Open Workspace**. On a device folder its roots have to sit inside the
-  folder you granted, because nothing outside that folder is reachable.
+  folder you granted, because nothing outside a granted folder is reachable. Only
+  one device folder is synced back to the device at a time; if a workspace spans
+  more than one copied device folder, VSCodroid shows a notice and edits in the
+  other folders stay inside VSCodroid until you open those folders directly.
 - Create new files with **Ctrl+N** or by right-clicking in the Explorer.
 - The default workspace is `~/projects/`. Create subdirectories there for each project.
 
@@ -740,7 +748,8 @@ does not help for a page, and this is the one place where it makes a difference 
 part of the app is asking. Pages are rendered by the system WebView, which trusts the
 device's system roots and nothing else. The terminal does read a CA you installed,
 because the app builds a certificate bundle from both halves of the device trust store
-and hands it to git, to Python and to everything else there that speaks TLS. So the same
+and hands it to git, Python, pip, Ruby and the bundled Node.js (`npm` included; Java 21 uses
+its own keystore, see [Git Push/Pull Fails](#git-pushpull-fails)). So the same
 certificate can clone or `pip install` fine in the terminal and still be refused in a
 preview tab.
 
@@ -1466,7 +1475,7 @@ VS Code's web client runs as a single window. You cannot open multiple VS Code w
 
 ### Storage
 
-Core installation extracts approximately 603 MB to internal storage. With Ruby and Java installed, expect around 830 MB, and about 1,090 MB with C/C++ as well. Setup needs about 738 MB free before it starts, which is more than it ends up occupying because extraction needs room to work. If it refuses, it asks for the shortfall it measured rather than the whole figure, so a device part of the way through is asked only for what is missing. Beyond it, keep a few hundred MB free for node_modules, build artifacts and caches.
+Core installation extracts approximately 603 MB to internal storage. With Ruby and Java installed, expect around 830 MB, and about 1,090 MB with C/C++ as well. Setup needs about 800 MB free before it starts, which is more than it ends up occupying because extraction needs room to work. If it refuses, it asks for the shortfall it measured rather than the whole figure, so a device part of the way through is asked only for what is missing. Beyond it, keep a few hundred MB free for node_modules, build artifacts and caches.
 
 ---
 
@@ -1561,7 +1570,7 @@ If `npm install` fails with errors:
 ### Git Push/Pull Fails
 
 - **Permission denied (publickey)** -- generate an SSH key with `ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519` in the terminal and add it to your GitHub/GitLab account. The `-f` is required; see [Generating an SSH Key](#generating-an-ssh-key) for why.
-- **SSL certificate error** -- the CA bundle the terminal uses is built from your device's own trust store: the system roots, plus any certificate authority you installed yourself through Android Settings, under the CA-certificate flow in the device's security settings. git and Python are both given it, so a private or corporate CA works for `git clone` and for `pip install` alike, from the next time you open the app -- the bundle is rebuilt at launch, not while the app is running. If you would rather not install a CA on the device, an SSH remote (`git@`) instead of `https://` is still the shortest route to an internal host. Two things that bundle does not reach: npm, which has its own trust store, and pages loaded inside the editor, which use the system roots only.
+- **SSL certificate error** -- the CA bundle the terminal uses is built from your device's own trust store: the system roots, plus any certificate authority you installed yourself through Android Settings, under the CA-certificate flow in the device's security settings. git, Python, pip, Ruby and the bundled Node.js (`npm` included, when the bundle file is present) are all given it, so a private or corporate CA works for `git clone`, `pip install` and `npm install` alike, from the next time you open the app -- the bundle is rebuilt at launch, not while the app is running. If you would rather not install a CA on the device, an SSH remote (`git@`) instead of `https://` is still the shortest route to an internal host. Two things that bundle does not reach: pages loaded inside the editor, which use the system roots only, and the optional Java 21 toolchain, which reads its own keystore at `$JAVA_HOME/lib/security/cacerts`. To add a private CA for Java, import its PEM file in the terminal with `keytool -importcert -cacerts -alias my-ca -file ~/ca.pem -storepass changeit -noprompt` (import one certificate per file under a distinct `-alias`; removing and reinstalling the Java 21 toolchain replaces `cacerts`, so repeat the import afterwards). Turning a system root off in Android Settings drops it from the bundle at the next launch for `git`, Python, `curl`, Ruby and Node.js (`https` and `npm`), whereas `pip` (which also loads its vendored `certifi` bundle), the extension host's `fetch` and WebSocket client (which merge Node's compiled-in root list with the bundle), and Java 21 (`cacerts`) keep trusting roots that remain in their own built-in lists.
 
 ### App Uses Too Much Storage
 

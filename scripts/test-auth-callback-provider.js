@@ -23,7 +23,9 @@ if (typeof stripTypeScriptTypes !== 'function') {
 const root = path.join(__dirname, '..');
 const temporary = fs.mkdtempSync(path.join(os.tmpdir(), 'callback-provider-'));
 let source;
+let callbackHtml;
 let callbackSource;
+let webClientServerSource;
 try {
     const target = path.join(temporary, 'src/vs/code/browser/workbench/workbench.ts');
     fs.mkdirSync(path.dirname(target), { recursive: true });
@@ -32,8 +34,16 @@ try {
     source = stripTypeScriptTypes(fs.readFileSync(target, 'utf8'), { mode: 'transform' });
     const callback = path.join(temporary, 'src/vs/code/browser/workbench/callback.html');
     fs.copyFileSync(path.join(__dirname, 'fixtures/callback.html'), callback);
+    const serverTarget = path.join(temporary, 'src/vs/server/node/webClientServer.ts');
+    fs.mkdirSync(path.dirname(serverTarget), { recursive: true });
+    fs.copyFileSync(path.join(__dirname, 'fixtures/web-client-server.ts'), serverTarget);
     execFileSync('git', ['apply', path.join(root, 'patches/0006-callback-intent-relay.patch')], { cwd: temporary });
-    callbackSource = fs.readFileSync(callback, 'utf8').match(/<script>([\s\S]*?)<\/script>/)[1];
+    callbackHtml = fs.readFileSync(callback, 'utf8');
+    callbackSource = callbackHtml.match(/<script>([\s\S]*?)<\/script>/)[1];
+    webClientServerSource = stripTypeScriptTypes(
+        fs.readFileSync(serverTarget, 'utf8').replace(/^import .*;$/gm, '').replace(/^export /gm, ''),
+        { mode: 'transform' },
+    );
 } finally {
     fs.rmSync(temporary, { recursive: true, force: true });
 }
@@ -281,12 +291,16 @@ for (const options of [
     const { provider } = fixture({ ready: true });
     const callback = provider.create({ scheme: 'vscodroid', authority: 'example.test', ...options });
     const storage = new Map();
-    const window = { location: { href: 'http://127.0.0.1:13337/callback?' + callback.query } };
+    const initialHref = 'http://127.0.0.1:13337/callback?' + callback.query;
+    const window = { location: { href: initialHref } };
+    window.top = window;
+    window.self = window;
     vm.runInNewContext(callbackSource, {
         window, URL, URLSearchParams,
         localStorage: { setItem(key, value) { storage.set(key, value); } },
     });
     const id = new URLSearchParams(callback.query).get('vscode-reqid');
+    assert.equal(storage.size, 1, 'top-level callback page must write once to localStorage');
     const uri = JSON.parse(storage.get(`vscode-web.url-callbacks[${id}]`));
     assert.equal(uri.path, options.path, 'callback paths must survive one query-parameter round trip');
     assert.equal(uri.fragment, options.fragment);
@@ -295,6 +309,92 @@ for (const options of [
     }
     const payload = window.location.href.split('?data=')[1].split('#Intent;')[0];
     assert.deepEqual(JSON.parse(decodeURIComponent(payload)), { id, uri });
+
+    const framedStorage = new Map();
+    const framedWindow = { location: { href: initialHref }, top: {} };
+    framedWindow.self = framedWindow;
+    vm.runInNewContext(callbackSource, {
+        window: framedWindow, URL, URLSearchParams,
+        localStorage: { setItem(key, value) { framedStorage.set(key, value); } },
+    });
+    assert.equal(framedStorage.size, 0, 'framed callback page must not write to localStorage');
+    assert.equal(framedWindow.location.href, initialHref, 'framed callback page must not navigate');
     provider.dispose();
 }
-console.log('ok: callback issuance, document identity and URI round trips');
+{
+    // Golden pair shared with AuthCallbackSecretTest.kt: the exact payload built
+    // by callback.html for a callback URL carrying vscodroid-nonce, and the exact
+    // stored value callbackUriJson writes after stripping vscodroid-nonce.
+    const goldenNonce = '9f2c' + 'a'.repeat(28);
+    const goldenPayload = '{"id":"1","uri":{"scheme":"vscodroid","authority":"example.test","path":"/auth","query":"code=golden-code&state=xyz&vscodroid-nonce=' + goldenNonce + '","fragment":"done"}}';
+    const goldenStoredValue = '{"scheme":"vscodroid","authority":"example.test","path":"/auth","query":"code=golden-code&state=xyz","fragment":"done"}';
+
+    const goldenWindow = {
+        location: {
+            href: 'http://127.0.0.1:13337/callback?vscode-reqid=1&vscode-scheme=vscodroid&vscode-authority=example.test&vscode-path=%2Fauth&vscode-query=state%3Dxyz%26vscodroid-nonce%3D' + goldenNonce + '&vscode-fragment=done&code=golden-code',
+        },
+    };
+    goldenWindow.top = goldenWindow;
+    goldenWindow.self = goldenWindow;
+    const goldenStorage = new Map();
+    vm.runInNewContext(callbackSource, {
+        window: goldenWindow, URL, URLSearchParams,
+        localStorage: { setItem(key, value) { goldenStorage.set(key, value); } },
+    });
+    const relayedPayload = decodeURIComponent(goldenWindow.location.href.split('?data=')[1].split('#Intent;')[0]);
+    assert.equal(relayedPayload, goldenPayload, 'callback.html must build the exact golden payload expected by Kotlin');
+
+    const page = fixture({ ready: true });
+    page.provider.create({ scheme: 'vscodroid', authority: 'example.test', path: '/auth', query: 'state=xyz', fragment: 'done' });
+    const goldenDelivery = callbackMatch[1]
+        .replaceAll('$documentId', JSON.stringify(page.window.__vscodroidCallbackDocumentId))
+        .replaceAll('$generation', '7')
+        .replaceAll('$origin', JSON.stringify('http://127.0.0.1:13337'))
+        .replaceAll('$key', JSON.stringify('vscode-web.url-callbacks[1]'))
+        .replaceAll('$value', JSON.stringify(goldenStoredValue));
+    vm.runInNewContext(goldenDelivery, page.context);
+    page.provider.checkCallbacks();
+    assert.equal(page.delivered.length, 1, 'golden stored value from Kotlin relay must be delivered');
+    assert.deepEqual(JSON.parse(JSON.stringify(page.delivered[0])), JSON.parse(goldenStoredValue));
+    page.provider.dispose();
+}
+(async () => {
+    const cryptoNode = require('node:crypto');
+    const serverContext = {
+        createReadStream: fs.createReadStream,
+        promises: { async readFile() { return Buffer.from(callbackHtml, 'utf8'); } },
+        crypto: cryptoNode,
+        Buffer,
+        extname: path.extname,
+        getMediaMime: () => undefined,
+        FileAccess: { asFileUri: () => ({ fsPath: '/callback.html' }) },
+        console,
+    };
+    vm.runInNewContext(webClientServerSource + '\nglobalThis.WebClientServer = WebClientServer;', serverContext);
+    const server = new serverContext.WebClientServer();
+    const recorded = {
+        status: 0,
+        headers: {},
+        body: '',
+        writeHead(status, headers = {}) { this.status = status; this.headers = headers; return this; },
+        end(body = '') { this.body = body; return this; },
+    };
+    await server._handleCallback(recorded);
+    assert.equal(recorded.status, 200);
+    assert.equal(recorded.headers['Content-Type'], 'text/html');
+    assert.equal(recorded.headers['X-Frame-Options'], 'DENY', '_handleCallback must send X-Frame-Options: DENY');
+    const csp = recorded.headers['Content-Security-Policy'];
+    assert.ok(typeof csp === 'string' && csp.length > 0, '_handleCallback must send Content-Security-Policy');
+    assert.match(csp, /\bdefault-src 'self';/);
+    assert.match(csp, /\bstyle-src 'self' 'unsafe-inline';/);
+    assert.match(csp, /\bframe-ancestors 'none';/, '_handleCallback CSP must refuse framing with frame-ancestors \'none\'');
+    const expectedHash = cryptoNode.createHash('sha256')
+        .update(Buffer.from(callbackSource.replace(/\r\n/g, '\n')))
+        .digest('base64');
+    assert.ok(
+        csp.includes(`'sha256-${expectedHash}'`),
+        '_handleCallback CSP must allow the inline callback script hash',
+    );
+    assert.doesNotMatch(recorded.body, /<meta[^>]*frame-ancestors/i, 'frame-ancestors must be sent as a response header, not a meta tag');
+    console.log('ok: callback issuance, document identity and URI round trips');
+})().catch(error => { console.error(error); process.exitCode = 1; });

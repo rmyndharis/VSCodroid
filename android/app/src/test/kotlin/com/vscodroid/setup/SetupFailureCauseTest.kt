@@ -154,4 +154,98 @@ class SetupFailureCauseTest {
         assertEquals("IOException: $exact", failure.detail)
         assertFalse(failure.detail.endsWith("…"), "a message that fits was marked truncated")
     }
+
+    @Test
+    fun `several failed extraction components still name the disk error`() {
+        val message = "could not unpack vscode-reh, server.js, process-monitor.js, " +
+            "platform-fix.js, dns-proxy.js, xdg-open.js, usr: " +
+            "server/vscode-reh/node_modules/deep/nested/file.js: " +
+            "open failed: ENOSPC (No space left on device)"
+
+        val failure = FirstRunSetup.describeFailure("Extracting tools", IOException(message))
+
+        assertTrue(failure.detail.endsWith(": ENOSPC (No space left on device)"), failure.detail)
+        assertTrue(failure.detail.length <= "IOException: ".length + FirstRunSetup.DETAIL_LIMIT)
+    }
+
+    @Test
+    fun `a long unpack message with a deep path keeps the trailing errno cause`() {
+        val deepMsg =
+            "could not unpack bundled extension github.copilot-chat-0.43.2026033101: " +
+                "home/.vscodroid/extensions/github.copilot-chat-0.43.2026033101/node_modules/" +
+                "@github/copilot/node_modules/@ Sharp/some/very/deep/nested/file.js: " +
+                "open failed: ENOSPC (No space left on device)"
+        assertTrue(deepMsg.length > FirstRunSetup.DETAIL_LIMIT)
+
+        val failure = FirstRunSetup.describeFailure("Configuring extensions…", IOException(deepMsg))
+
+        assertEquals("Configuring extensions", failure.step)
+        assertTrue(
+            failure.detail.endsWith(": open failed: ENOSPC (No space left on device)") ||
+                failure.detail.endsWith(": ENOSPC (No space left on device)"),
+            "truncating from the right dropped the OS reason at the tail: ${failure.detail}",
+        )
+        assertTrue(
+            failure.detail.contains("…"),
+            "middle-elided detail must still mark the omitted path segment with an ellipsis: ${failure.detail}",
+        )
+        assertTrue(
+            failure.detail.length <= "IOException: ".length + FirstRunSetup.DETAIL_LIMIT,
+            "detail exceeded the length budget: ${failure.detail.length}",
+        )
+
+        val serverMsg =
+            "could not unpack vscode-reh: server/vscode-reh/node_modules/@vscode/ripgrep/" +
+                "bin/some/very/deep/nested/directory/structure/rg: " +
+                "open failed: ENOSPC (No space left on device)"
+        assertTrue(serverMsg.length > FirstRunSetup.DETAIL_LIMIT)
+        val serverFailure = FirstRunSetup.describeFailure("Extracting VS Code Server…", IOException(serverMsg))
+        assertEquals("Extracting VS Code Server", serverFailure.step)
+        assertTrue(
+            serverFailure.detail.endsWith(": open failed: ENOSPC (No space left on device)") ||
+                serverFailure.detail.endsWith(": ENOSPC (No space left on device)"),
+            "server unpack detail dropped the trailing errno cause: ${serverFailure.detail}",
+        )
+        assertTrue(serverFailure.detail.contains("…"))
+
+        val singleColonMsg = "could not unpack vscode-reh: " + "x".repeat(FirstRunSetup.DETAIL_LIMIT)
+        val singleColonFailure = FirstRunSetup.describeFailure("Extracting VS Code Server…", IOException(singleColonMsg))
+        assertTrue(
+            singleColonFailure.detail.startsWith("IOException: could not unpack vscode-reh: "),
+            "a message with a single colon and an overlong tail must not slice the step name: ${singleColonFailure.detail}",
+        )
+    }
+
+    /**
+     * A file system exception reads "path: reason" with one separator, and when the path is
+     * long the reason, which is the part that says what to do, was cut with the rest.
+     */
+    @Test
+    fun `a long message with one separator keeps a short reason at the tail`() {
+        val path = "server/vscode-reh/" + "deep/".repeat(30) + ".vscodroid-1a2b-rg.tmp~"
+        val failure = FirstRunSetup.describeFailure(
+            "Extracting tools...", java.nio.file.FileSystemException(path, null, "No space left on device"),
+        )
+
+        assertTrue(failure.detail.endsWith(": No space left on device"), failure.detail)
+        assertTrue(failure.detail.contains("…"), "the omitted middle is not marked: ${failure.detail}")
+        assertTrue(
+            failure.detail.length <= "FileSystemException: ".length + FirstRunSetup.DETAIL_LIMIT,
+            "detail exceeded the length budget: ${failure.detail.length}",
+        )
+    }
+
+    @Test
+    fun `a long message with one separator and a tail longer than a reason keeps its head`() {
+        // A tail longer than a reason and shorter than the budget, so keeping it would cut the step name.
+        val step = "could not unpack bundled extension github.copilot-chat-0.43"
+        val message = "$step: " + "x".repeat(FirstRunSetup.REASON_LIMIT + 32)
+        assertTrue(message.length > FirstRunSetup.DETAIL_LIMIT, "setup: the message fits and is not cut")
+        val failure = FirstRunSetup.describeFailure("Configuring extensions…", IOException(message))
+
+        assertTrue(
+            failure.detail.startsWith("IOException: $step: "),
+            "a tail that is not a reason must leave the step name whole: ${failure.detail}",
+        )
+    }
 }

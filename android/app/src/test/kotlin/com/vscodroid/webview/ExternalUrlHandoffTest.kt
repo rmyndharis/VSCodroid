@@ -7,6 +7,7 @@ import android.net.Uri
 import android.os.SystemClock
 import android.webkit.WebResourceRequest
 import android.webkit.WebView
+import com.vscodroid.service.mockEditorGateway
 import com.vscodroid.authCallbackIsExpected
 import com.vscodroid.callbackSecretMatches
 import com.vscodroid.bridge.AUTH_TAB_WINDOW_MILLIS
@@ -236,6 +237,7 @@ class ExternalUrlHandoffTest {
         announced.clear()
         logged.clear()
         declined = 0
+        mockEditorGateway()
         mockkObject(Logger)
         every { Logger.i(any(), any()) } answers { logged += secondArg<String>() }
         every { Logger.e(any(), any(), any()) } answers { logged += secondArg<String>() }
@@ -430,6 +432,16 @@ class ExternalUrlHandoffTest {
         val handled = client.shouldOverrideUrlLoading(view, request("http", "127.0.0.1", ALLOWED_PORT))
         assertFalse(handled, "the WebView must navigate to its own origin itself")
         verify(exactly = 0) { context.startActivity(any()) }
+    }
+
+    @Test
+    fun `a loopback hostname opens externally without editor authority`() {
+        val handled = client.shouldOverrideUrlLoading(
+            view, request("http", "localhost", ALLOWED_PORT, "http://localhost:$ALLOWED_PORT/"),
+        )
+
+        assertTrue(handled)
+        verify(exactly = 1) { context.startActivity(any()) }
     }
 
     /**
@@ -709,6 +721,7 @@ class ExternalUrlHandoffTest {
     fun `only a trusted owned root document can complete auth bootstrap`() {
         val previous = AuthTabWindow.pageGeneration()
         for (address in listOf("about:blank", "data:text/html,error", "https://example.com/",
+            "http://localhost:$ALLOWED_PORT/", "http://[::1]:$ALLOWED_PORT/",
             "https://127.0.0.1:$ALLOWED_PORT/", "http://127.0.0.1:$ALLOWED_PORT/vscode-remote-resource/file")) {
             every { view.url } returns address
             client.onPageStarted(view, address, null)

@@ -46,6 +46,7 @@ class ToolchainOwnershipLifecycleTest {
 
     @BeforeEach
     fun setUp() {
+        mockkStatic(Files::class)
         mockkObject(Logger)
         every { Logger.d(any(), any()) } just Runs
         every { Logger.i(any(), any()) } just Runs
@@ -147,9 +148,25 @@ class ToolchainOwnershipLifecycleTest {
         file("$root/retained.txt", "retained installed bytes")
     }
 
-    private fun blockStateWrite() = File(stateFile.parentFile, "toolchains.json.tmp~").apply {
-        mkdirs()
-        File(this, "occupied").writeText("block the temporary-file open")
+    private fun blockStateWrite() = blockAtomicWritesTo(stateFile)
+
+    @Test
+    fun `uninstall removes canonical managed paths when the context uses its app data alias`() {
+        val realData = File(filesDir, "data").apply { mkdir() }
+        val userParent = File(filesDir, "user").apply { mkdir() }
+        Files.createSymbolicLink(File(userParent, "0").toPath(), realData.toPath())
+        File(realData, "com.vscodroid").mkdir()
+        filesDir = File(userParent, "0/com.vscodroid/files").apply { mkdir() }
+        every { context.filesDir } returns filesDir
+        every { context.cacheDir } returns File(filesDir, "cache")
+        stateFile.parentFile!!.mkdirs()
+        oldJava()
+
+        uninstall("java")
+
+        assertFalse(File(filesDir, oldRoot).exists(), "the canonical install root survived the alias-based uninstall")
+        assertEquals(0, JSONArray(stateFile.readText()).length())
+        assertTrue(reports.any { it.first == AssetPackStatus.NOT_INSTALLED })
     }
 
     private fun assertSettledOrNamed(root: String, mark: File) {
@@ -237,7 +254,7 @@ class ToolchainOwnershipLifecycleTest {
         repeat(2) { reclaim() }
 
         assertEquals("installed bytes", payload.readText())
-        assertFalse(mark.exists())
+        assertTrue(mark.exists(), "a legacy marker must remain retryable without completion identity")
         assertEquals(listOf("ruby"), manager().getInstalledToolchains())
     }
 
@@ -270,7 +287,7 @@ class ToolchainOwnershipLifecycleTest {
         assertEquals(listOf(AssetPackStatus.FAILED), reports.map { it.first })
         assertSettledOrNamed(newRoot, File(filesDir, "home/.vscodroid/toolchain-installing/toolchain_java.json"))
 
-        blocker.deleteRecursively()
+        blocker.close()
         reports.clear()
         assertTrue(install(m, pack))
         assertEquals(newRoot, JSONArray(stateFile.readText()).getJSONObject(0).getString("installRoot"))

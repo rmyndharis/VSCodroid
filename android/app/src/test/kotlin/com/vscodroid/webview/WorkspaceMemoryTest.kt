@@ -256,4 +256,117 @@ class WorkspaceMemoryTest {
                 "two records are set apart from each other again."
         }
     }
+
+    @Test
+    fun `navigateToFolder seeds the in-memory workspace without persisting KEY_LAST_FOLDER early`() {
+        val navigate = withoutComments(body("navigateToFolder"))
+        val holdIdx = navigate.indexOf("if (!rememberWorkspaceFolder(folderPath, persist = false)) return")
+        val loadIdx = navigate.indexOf("wv.loadUrl(url)")
+        assertTrue(holdIdx in 0 until loadIdx) {
+            "navigateToFolder must call rememberWorkspaceFolder(folderPath, persist = false) before wv.loadUrl(url)"
+        }
+
+        val source = File("src/main/kotlin/com/vscodroid/MainActivity.kt").readText()
+        assertTrue(
+            source.contains("private fun rememberWorkspaceFolder(folderPath: String?, persist: Boolean = true): Boolean"),
+            "rememberWorkspaceFolder must default persist to true",
+        )
+
+        val remember = withoutComments(body("rememberWorkspaceFolder"))
+        val claimIdx = remember.indexOf("claimWorkspacePaths(listOf(folderPath))")
+        val folderSet = remember.indexOf("openWorkspaceFolder = folderPath")
+        val rootSet = remember.indexOf("openWorkspaceRoot =")
+        val guard = remember.indexOf("if (!persist) return true")
+        val prefsWrite = remember.indexOf("putString(KEY_LAST_FOLDER")
+        assertTrue(
+            claimIdx in 0 until folderSet &&
+                folderSet < rootSet &&
+                rootSet < guard &&
+                guard < prefsWrite,
+        ) {
+            "rememberWorkspaceFolder must claim and update openWorkspaceFolder/openWorkspaceRoot before returning on !persist, and write KEY_LAST_FOLDER only afterwards"
+        }
+
+        val initBridgeBody = withoutComments(body("initBridge"))
+        assertTrue(initBridgeBody.contains("if (rememberWorkspaceFolder(opened)) adoptWorkbenchFolder(opened)")) {
+            "onPageLoaded must persist the opened workspace folder once loading completes"
+        }
+        assertTrue(initBridgeBody.contains("rememberWorkspaceFolder(null)")) {
+            "onPageLoaded must persist the empty-window close once loading completes"
+        }
+
+        val openSafBody = withoutComments(body("openSafFolder"))
+        assertTrue(openSafBody.contains("if (!rememberWorkspaceFolder(target)) return@launch")) {
+            "openSafFolder must persist the target folder when the server is not ready"
+        }
+
+        val recreateBody = withoutComments(body("recreateWebView"))
+        org.junit.jupiter.api.Assertions.assertFalse(recreateBody.contains("rememberWorkspaceFolder")) {
+            "recreateWebView must not call rememberWorkspaceFolder directly"
+        }
+
+        val callSites = withoutComments(source)
+            .lines()
+            .map { it.trim() }
+            .filter { it.contains("rememberWorkspaceFolder(") && !it.startsWith("private fun rememberWorkspaceFolder(") }
+        assertEquals(
+            listOf(
+                "if (!rememberWorkspaceFolder(target)) return@launch",
+                "if (rememberWorkspaceFolder(opened)) adoptWorkbenchFolder(opened)",
+                "rememberWorkspaceFolder(null)",
+                "if (!rememberWorkspaceFolder(folderPath, persist = false)) return",
+            ),
+            callSites,
+        )
+    }
+
+    @Test
+    fun `rememberWorkspaceFolder updates in-memory state when persist is false and writes preferences when persist is true`() {
+        val folder = java.nio.file.Files.createTempDirectory("vscodroid-workspace-memory").toFile()
+        try {
+            val stored = mutableMapOf<String, String?>()
+            val editor = io.mockk.mockk<android.content.SharedPreferences.Editor>(relaxed = true)
+            io.mockk.every { editor.putString(any(), any()) } answers {
+                stored[firstArg()] = secondArg()
+                editor
+            }
+            val prefs = io.mockk.mockk<android.content.SharedPreferences>(relaxed = true)
+            io.mockk.every { prefs.edit() } returns editor
+            io.mockk.every { prefs.getString(any(), any()) } answers { stored[firstArg()] ?: secondArg() }
+            val saf = io.mockk.mockk<com.vscodroid.storage.SafStorageManager>(relaxed = true)
+            io.mockk.every { saf.claimWorkspacePaths(any()) } returns true
+
+            val activity = io.mockk.mockk<com.vscodroid.MainActivity>(relaxed = true)
+            io.mockk.every { activity getProperty "workspacePrefs" } returns prefs
+            io.mockk.every {
+                activity["rememberWorkspaceFolder"](matchNullable<String> { true }, any<Boolean>())
+            } answers { callOriginal() }
+
+            val safField = com.vscodroid.MainActivity::class.java.getDeclaredField("safManager").apply { isAccessible = true }
+            val folderField = com.vscodroid.MainActivity::class.java.getDeclaredField("openWorkspaceFolder").apply { isAccessible = true }
+            val rootField = com.vscodroid.MainActivity::class.java.getDeclaredField("openWorkspaceRoot").apply { isAccessible = true }
+            safField.set(activity, saf)
+
+            val method = com.vscodroid.MainActivity::class.java.getDeclaredMethod(
+                "rememberWorkspaceFolder",
+                String::class.java,
+                Boolean::class.javaPrimitiveType,
+            ).apply { isAccessible = true }
+
+            assertTrue(method.invoke(activity, folder.absolutePath, false) as Boolean)
+            assertEquals(folder.absolutePath, folderField.get(activity))
+            assertEquals(folder.absolutePath, rootField.get(activity))
+            assertTrue(stored.isEmpty(), "persist = false must not write KEY_LAST_FOLDER")
+
+            assertTrue(method.invoke(activity, folder.absolutePath, true) as Boolean)
+            assertEquals(mapOf("last_workspace_folder" to folder.absolutePath), stored)
+
+            assertTrue(method.invoke(activity, null, true) as Boolean)
+            assertNull(folderField.get(activity))
+            assertNull(rootField.get(activity))
+            assertEquals(mapOf("last_workspace_folder" to "vscodroid:closed"), stored)
+        } finally {
+            folder.deleteRecursively()
+        }
+    }
 }

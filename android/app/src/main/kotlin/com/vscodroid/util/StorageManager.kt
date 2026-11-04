@@ -5,7 +5,14 @@ import com.vscodroid.setup.ToolchainManager
 import org.json.JSONArray
 import org.json.JSONObject
 import java.io.File
+import java.io.IOException
+import java.nio.file.DirectoryIteratorException
+import java.nio.file.DirectoryStream
 import java.nio.file.Files
+import java.nio.file.LinkOption.NOFOLLOW_LINKS
+import java.nio.file.Path
+import java.nio.file.SecureDirectoryStream
+import java.nio.file.attribute.BasicFileAttributeView
 import java.util.Locale
 import android.annotation.SuppressLint
 
@@ -129,11 +136,11 @@ object StorageManager {
 
         // npm cache
         val npmCache = File(context.cacheDir, "npm-cache")
-        freed += deleteRecursive(npmCache)
+        freed += deleteRecursive(npmCache, context.filesDir.parentFile)
 
         // pip's download and wheel cache, which PIP_CACHE_DIR in [Environment]
         // points here. Every wheel it holds can be fetched again.
-        freed += deleteRecursive(File(context.cacheDir, "pip"))
+        freed += deleteRecursive(File(context.cacheDir, "pip"), context.filesDir.parentFile)
 
         // Python bytecode. PYTHONPYCACHEPREFIX in [Environment] points the
         // interpreter here, so this is the whole of what it writes; the next
@@ -141,20 +148,20 @@ object StorageManager {
         // It is also the remedy for a `.pyc` left with an intact header and a
         // damaged body by a crash or power loss mid-write (CPython does not
         // fsync), which raises out of the import rather than recompiling.
-        freed += deleteRecursive(File(context.cacheDir, "pycache"))
+        freed += deleteRecursive(File(context.cacheDir, "pycache"), context.filesDir.parentFile)
 
         // tmp dir
         val tmpDir = File(context.cacheDir, "tmp")
-        freed += deleteRecursive(tmpDir)
+        freed += deleteRecursive(tmpDir, context.filesDir.parentFile)
         tmpDir.mkdirs() // recreate (needed at runtime)
 
         // Crash logs
         val crashLogs = File(context.cacheDir, "crash-logs")
-        freed += deleteRecursive(crashLogs)
+        freed += deleteRecursive(crashLogs, context.filesDir.parentFile)
 
         // VS Code logs
         val vscodeLogs = File(context.filesDir, "home/.vscodroid/data/logs")
-        freed += deleteRecursive(vscodeLogs)
+        freed += deleteRecursive(vscodeLogs, context.filesDir.parentFile)
         vscodeLogs.mkdirs() // recreate
 
         // Toolchain staging directories
@@ -189,7 +196,7 @@ object StorageManager {
         val cache = context.cacheDir
         return listOfNotNull(cache.absolutePath, runCatching { cache.canonicalPath }.getOrNull())
             .distinct()
-            .sumOf { deleteRecursive(File(prefix, it.trimStart('/'))) }
+            .sumOf { deleteRecursive(File(prefix, it.trimStart('/')), context.filesDir.parentFile) }
     }
 
     /**
@@ -199,7 +206,7 @@ object StorageManager {
      * is gone this costs one failed lookup.
      */
     fun removeLegacyPipCache(context: Context): Long =
-        deleteRecursive(File(context.filesDir, "home/.cache/pip"))
+        deleteRecursive(File(context.filesDir, "home/.cache/pip"), context.filesDir.parentFile)
 
     /**
      * Removes the toolchain staging directories no download is using, and reports
@@ -244,7 +251,7 @@ object StorageManager {
                 Logger.i(TAG, "Keeping ${entry.name}: a download is still using it")
                 continue
             }
-            freed += deleteRecursive(entry)
+            freed += deleteRecursive(entry, context.filesDir.parentFile)
         }
         return freed
     }
@@ -303,6 +310,35 @@ object StorageManager {
         return size
     }
 
+    /** Unlinks one entry without descending into directories or following parent links. */
+    internal fun deleteFile(file: File, appRoot: File?): Boolean {
+        val root = appRoot?.toPath()?.toAbsolutePath()?.normalize() ?: return false
+        val canonicalRoot = try { appRoot.canonicalFile.toPath() } catch (_: IOException) { return false }
+        val target = file.toPath().toAbsolutePath().normalize()
+        if (target == root || target == canonicalRoot) return false
+        val relative = when {
+            target.startsWith(root) -> root.relativize(target)
+            target.startsWith(canonicalRoot) -> canonicalRoot.relativize(target)
+            else -> return false
+        }
+        val parents = mutableListOf<DirectoryStream<Path>>()
+        return try {
+            val opened = Files.newDirectoryStream(canonicalRoot).also { parents.add(it) }
+            val anchored = opened as? SecureDirectoryStream<Path> ?: return false
+            var parent = anchored
+            for (i in 0 until relative.nameCount - 1) {
+                parent = parent.newDirectoryStream(relative.getName(i), NOFOLLOW_LINKS)
+                parents.add(parent)
+            }
+            parent.deleteFile(relative.fileName)
+            true
+        } catch (_: IOException) {
+            false
+        } finally {
+            parents.asReversed().forEach { try { it.close() } catch (_: IOException) {} }
+        }
+    }
+
     /**
      * Deletes [dir] and everything under it, unlinking links rather than following
      * them, and reports the bytes the filesystem accepted the unlink of.
@@ -322,46 +358,80 @@ object StorageManager {
      * link-aware rule below is what stands between a forced removal and a directory
      * somewhere else on the device.
      */
-    internal fun deleteRecursive(dir: File): Long {
-        // exists() resolves a link, so a dangling one answers false and would be
-        // left behind by an early return. It holds no bytes, but a caller that
-        // then asks whether the path is gone is told yes while the link is still
-        // there, so the walk below is entered for it and unlinks it.
-        if (!dir.exists() && !isLink(dir)) return 0
-        var freed = 0L
-        val stack = ArrayDeque<File>()
-        val dirs = ArrayDeque<File>()
-        stack.addLast(dir)
-        while (stack.isNotEmpty()) {
-            val f = stack.removeLast()
-            // A link is unlinked, never followed. cacheDir/tmp is TMPDIR and
-            // TMUX_TMPDIR for every terminal and for the server, so `ln -s
-            // ~/projects/app $TMPDIR/app` is an ordinary thing for a person or a build
-            // tool to leave there, and isDirectory/listFiles answer for the target, so
-            // clearing the cache emptied ~/projects/app and reported its bytes as cache
-            // freed. Unlinking also clears a dangling link, which the branches below
-            // match neither of and which kept its directory from being removed.
-            if (isLink(f)) {
-                f.delete()
-            } else if (f.isFile) {
-                // Counted only once the unlink succeeded, and the length is taken
-                // first because there is nothing left to measure afterwards. Adding it
-                // unconditionally charged every file the walk reached to the total
-                // whether or not it went, so a clear that removed nothing still
-                // reported the whole tree as freed. The screen this number reaches is
-                // the one a person opens because they are out of disk, and a confident
-                // "Freed 187.4 MB" that changes nothing is worse than a small figure
-                // they can act on.
-                val length = f.length()
-                if (f.delete()) freed += length
-            } else if (f.isDirectory) {
-                dirs.addFirst(f)
-                f.listFiles()?.forEach { stack.addLast(it) }
-            }
+    internal fun deleteRecursive(dir: File, appRoot: File?): Long {
+        // Context supplies the app data root; Android owns its parent and prevents its replacement.
+        val root = appRoot?.toPath()?.toAbsolutePath()?.normalize() ?: return 0
+        val canonicalRoot = try { appRoot.canonicalFile.toPath() } catch (_: IOException) { return 0 }
+        val target = dir.toPath().toAbsolutePath().normalize()
+        if (target == root || target == canonicalRoot) return 0
+        val relative = when {
+            target.startsWith(root) -> root.relativize(target)
+            target.startsWith(canonicalRoot) -> canonicalRoot.relativize(target)
+            else -> return 0
         }
-        // Delete directories bottom-up (children first)
-        dirs.forEach { it.delete() }
-        return freed
+
+        fun remove(parent: SecureDirectoryStream<Path>, name: Path): Long {
+            class Pending(val parent: SecureDirectoryStream<Path>, val name: Path) {
+                var directory: SecureDirectoryStream<Path>? = null
+                var entries: Iterator<Path>? = null
+            }
+            val pending = ArrayDeque<Pending>()
+            pending.addLast(Pending(parent, name))
+            var freed = 0L
+            while (pending.isNotEmpty()) {
+                val item = pending.last()
+                try {
+                    val entries = item.entries
+                    if (entries != null) {
+                        if (entries.hasNext()) {
+                            pending.addLast(Pending(item.directory!!, entries.next().fileName))
+                            continue
+                        }
+                        item.directory?.close()
+                        item.directory = null
+                        item.parent.deleteDirectory(item.name)
+                    } else {
+                        val attrs = item.parent.getFileAttributeView(
+                            item.name, BasicFileAttributeView::class.java, NOFOLLOW_LINKS,
+                        )?.readAttributes()
+                        if (attrs?.isDirectory == true) {
+                            val directory = item.parent.newDirectoryStream(item.name, NOFOLLOW_LINKS)
+                            item.directory = directory
+                            item.entries = directory.iterator()
+                            continue
+                        }
+                        if (attrs != null) {
+                            item.parent.deleteFile(item.name)
+                            if (attrs.isRegularFile) freed += attrs.size()
+                        }
+                    }
+                } catch (_: IOException) {
+                    // A replaced or unavailable entry is left for a later clear.
+                } catch (_: DirectoryIteratorException) {
+                    // Keep the bytes already removed even if enumeration stops.
+                }
+                runCatching { item.directory?.close() }
+                pending.removeLast()
+            }
+            return freed
+        }
+
+        val parents = mutableListOf<DirectoryStream<Path>>()
+        return try {
+            val opened = Files.newDirectoryStream(canonicalRoot).also { parents.add(it) }
+            // A pathname fallback would follow a directory replaced during cleanup.
+            val anchored = opened as? SecureDirectoryStream<Path> ?: return 0
+            var parent = anchored
+            for (i in 0 until relative.nameCount - 1) {
+                parent = parent.newDirectoryStream(relative.getName(i), NOFOLLOW_LINKS)
+                parents.add(parent)
+            }
+            remove(parent, relative.fileName)
+        } catch (_: IOException) {
+            0L
+        } finally {
+            parents.asReversed().forEach { try { it.close() } catch (_: IOException) {} }
+        }
     }
 
     /**

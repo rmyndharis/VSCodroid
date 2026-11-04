@@ -9,13 +9,36 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Keep the editor origin reserved across backend stops and restarts, using an app-private socket for each editor run.
+- Restrict editor credentials and workspace resource access to the reserved IPv4 origin.
+- Cancel stale server starts and clean up bootstrap processes when launch preparation fails.
+- End a verified surviving editor before moving away from an occupied public port.
+- Serialize device-folder mutations across overlapping grants and report files that did not reach the device.
+- Stop retired directory watchers from registering after their synchronization session ends.
+- Preserve installed toolchain files during failed replacements and keep interrupted installs available for Retry or Remove.
+- Keep first-run toolchain queues progressing after their screen closes.
+- Prevent delayed workspace lookups and navigation consent from affecting a newer editor page.
+- Preserve existing backup files and long filenames during atomic writes.
+- Keep cache and toolchain cleanup anchored inside app storage and close remaining descriptors after a close failure.
+- Distinguish an explicit terminal `LD_PRELOAD` setting from the same text inside another value.
+- Retry the welcome page's secondary sidebar alignment after a workspace-state write fails.
+- Honor offline package downloads, the Android NDK root setting, and backslashes in device-launch UI dumps.
+- Reject device-folder reads that overlap saves and retry deferred saves without blocking later edits.
+- Stop a folder's write-back loop from using a full CPU core after a newer open takes over the folder.
+- Retry pending settings migrations after interrupted setup without removing later user preferences.
+- Validate the opened file before serving workspace resources, preserving regular-file symlinks and cache behavior.
+- End a composing word in the editor when the screen turns.
 - Setup that stops on a symbolic link in its way names the path, not only the tree that is incomplete.
 - The setup notification no longer says unpacking only happens once, in every language; it runs again after each update.
 - A device folder that is still syncing is reported in the app's language instead of an English sentence.
 - Setup that finishes while the app is in the background starts the editor when you come back, not from the background.
+- The first-run failure message scrolls and the Retry button stays below it, so a long message no longer runs under the button in landscape or at a large font size.
+- Keep the caret in view when arrow keys move it in a text box without moving focus out of right-to-left and mixed text.
 
 ### Changed
 
+- Keep device storage tests compatible with Android's hard-link restrictions.
+- Clarify which clients stop trusting a system root CA turned off in Android Settings (`git`, Python, Ruby, and the bundled Node.js) and which still trust roots in their own built-in lists (`pip`, extension-host `fetch`/WebSocket, and Java 21).
 - The extension version check refuses a shallow clone, and the build requires every `scripts/test-*.py` to run in both the lint and release workflows.
 - The release workflow refuses a tag whose commit is not on main.
 
@@ -40,7 +63,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Open terminal links that wrap across rows without failing during highlight preview.
 - Exclude upstream repository configuration files at the root of each bundled extension, keeping runtime files and licenses.
 - Preserve external device-folder edits when provider metadata is missing or unchanged.
-- Decline a second save of one device document reached through overlapping device-folder grants, instead of letting two interleave.
+- Hold back and retry a second save of one device document reached through overlapping device-folder grants, instead of setting aside an in-flight write or letting two interleave.
 - A device-folder deletion sets the file aside and checks its content first, so an edit made meanwhile is kept.
 - Authenticate the editor listener before sending its connection token or adopting a saved session.
 - Bound editor health checks even when a listener sends headers or body bytes slowly.

@@ -24,7 +24,8 @@
 ```mermaid
 flowchart TD
   subgraph SANDBOX["Trust Boundary: Android App Sandbox"]
-    W["WebView (workbench UI)"] <--> |"localhost"| N["VS Code Server (vscode-reh)<br/>extension host, terminals, the user's code"]
+    W["WebView (workbench UI)"] <--> |"HTTP + WebSocket on 127.0.0.1"| E["EditorGateway<br/>app-owned loopback endpoint"]
+    E <--> |"Private filesystem socket"| N["VS Code Server (vscode-reh)<br/>extension host, terminals, the user's code"]
     N --> |"HTTPS_PROXY"| P["dns-proxy.js<br/>loopback proxy inside the server process"]
   end
   W --> |"external HTTPS: gallery queries, READMEs, icons"| O["Open VSX"]
@@ -71,7 +72,7 @@ without the credential minted for that boot, which rides in the proxy URL.
 | No audit trail for file changes by extensions         | **Repudiation**            | Low    | Medium     | VS Code timeline/git history, extension activity logging (future)                   |
 | User denies executing destructive terminal command    | **Repudiation**            | Low    | Low        | Accepted, no audit trail. Each terminal spawns bash directly on a PTY through node-pty, and the only record is bash's own history file in app-private storage, which the user can edit or clear |
 | Extension phones home with user data                  | **Information Disclosure** | High   | Medium     | **Not mitigated.** The extension host is a Node process with the app's own network access, and nothing in this app filters what it reaches. "No internet by default for the extension host" was listed here as a planned control until 2026-08-23; nothing was built and the shipped configuration goes the other way, see the row below |
-| Bundled chat provider sends the user's source to GitHub | **Information Disclosure** | High   | Medium     | **By design, and disclosed rather than blocked.** GitHub Copilot Chat ships in the server tree and `product.json` makes it the editor's chat provider. It has no account and no chat until the user signs in to GitHub, but it is not dormant until then: its manifest lists `onStartupFinished`, so it activates in the extension host on every start, signed in or not. Whether it sends anything before sign-in has not been established here. From sign-in on, a prompt and the context the extension attaches (the open file, and other parts of the project) go to GitHub. It can be disabled from the Extensions view but not uninstalled, because it is a built-in. `docs/PRIVACY_POLICY.md` states this in the terms a user reads |
+| Bundled chat provider sends the user's source to GitHub | **Information Disclosure** | High   | Medium     | **By design, and disclosed rather than blocked.** GitHub Copilot Chat ships in the server tree and `product.json` makes it the editor's chat provider. It has no account and no chat until the user signs in to GitHub. When it is enabled, its manifest lists `onStartupFinished`, so it activates in the extension host on every start, signed in or not; whether it sends anything before sign-in has not been established here. From sign-in on, a prompt and the context the extension attaches (the open file, and other parts of the project) go to GitHub. It can be turned off from the Extensions view (its menu offers **Disable AI Features** rather than Uninstall, because it ships as a built-in). `docs/PRIVACY_POLICY.md` states this in the terms a user reads |
 | SSH key theft via backup                              | **Information Disclosure** | High   | Low        | Backup rules exclude ~/.ssh/ (M1); Android Keystore migration (post-v1.0 hardening) |
 | Crash-loop DoS on Node.js server                      | **Denial of Service**      | Low    | Medium     | Auto-restart with exponential backoff, max restart count                            |
 | Malicious extension consuming all memory/CPU          | **Denial of Service**      | Medium | Low        | **Nothing caps total memory.** The V8 old-space ceiling the server is started with (`ProcessManager.heapCeilingForDevice`) caps each isolate at that number rather than capping their sum, so the extension host worker gets its own allowance of it rather than drawing on the server's, and a language server the extension host forks sets its own ceiling outside this control (tsserver builds one from `tsserver.maxMemory`, upstream default 3072). What the ceiling buys is that no single isolate grows without bound. `process-monitor.js` marks idle language servers in the process tree and kills nothing, since a killed server is restarted by its extension within a second. Neither bounds CPU, and a busy loop in the extension host is not reachable from here |
@@ -86,11 +87,13 @@ without the credential minted for that boot, which rides in the proxy URL.
 
 ### 3.1 Network Security
 
+`EditorGateway` keeps the loopback endpoint bound for the app process lifetime, including while the service stops or restarts the editor. Node listens on a separate filesystem socket for each run under app-private storage. The gateway relays HTTP and WebSocket bytes unchanged, including the `Host` header. Backend replacement closes the old run's connections without releasing the public port; with no backend selected, new connections receive HTTP 503. Another app therefore cannot occupy the workbench origin during an editor restart while this app process is alive. The relay preserves the server's connection-token checks.
+
 | Control                     | Implementation                                                               |
 | --------------------------- | ---------------------------------------------------------------------------- |
-| Localhost-only server       | Node.js binds to `127.0.0.1` exclusively                                     |
+| Local editor transport      | The app's gateway binds to `127.0.0.1` exclusively; Node's editor listener uses an app-private filesystem socket |
 | Connection token            | Required on every route except `/version`, `/delay-shutdown`, `/callback` and `/vscodroid-server-proof/<nonce>`. The run-proof endpoint signs a fresh challenge with the private per-run key before the app marks a spawned listener ready or adopts an existing one. The connection token is generated by the server on first start, kept in app-private storage, owner-readable only. Replaced by the app before every server start that is not an adoption. The app attaches it, and forwards webview asset requests to the port at all, only while its own server reports ready. Readiness is also withdrawn for the seconds it takes to adopt back a server that outlived its bootstrap, while the page stays connected to that server, so a webview asset requested while the server is not ready waits for it on the request's own thread, for up to four seconds (twice the backoff before the first restart) and no more than two requests at a time, and is then forwarded with the token, or refused with nothing sent to the port. The limit is there because each waiting request holds a worker of the WebView thread pool that serves every request the page makes. A webview refused this way stays blank. Hiding it and showing it again afterwards, for example by switching to another tab and back, loads it afresh; a webview that keeps its content while hidden has to be closed and opened again instead. The page is not reloaded to repair it, because reloading the workbench would cost the open editor that adoption exists to keep. `/callback` is open because it arrives in the system browser, which holds neither the cookie nor the token; what proves such a callback is the per-request secret the workbench mints into the callback URL. That secret goes out to the provider inside the redirect the extension registers and comes back in the query the browser is redirected to, so it proves the callback came back from the sign-in this app launched rather than from an app on the device that guessed the request id. The provider sees it, as it sees the whole redirect, and it is the party the user is signing in to; nothing else is served it, which is what the page behind `/callback` used to do |
-| HTTPS for external requests | Open VSX, GitHub, and the GitHub Copilot endpoints the bundled chat extension uses: all HTTPS |
+| HTTPS for external requests | Open VSX, GitHub, the GitHub Copilot endpoints the bundled chat extension uses, and the schema and package-registry endpoints the built-in language extensions query (`json.schemastore.org`, the other schema hosts in `json.schemaDownload.trustedDomains`, and `registry.npmjs.org`): all HTTPS |
 | No telemetry                | `branding/product.json` sets `enableTelemetry: false` and `telemetryOptIn: false` into the Code - OSS build, `server.js` writes both again at every start, and the default settings pin `telemetry.telemetryLevel: "off"`. The packaged `product.json` carries no telemetry endpoint |
 | Bundled extension telemetry | Not the same claim as the row above, and worth stating separately. `extensions/copilot/dist/extension.js` carries its own senders (`copilot-telemetry.githubusercontent.com`, two Application Insights hosts). They are gated on the editor's own switch, which this build pins off: the extension reads `vscode.env.isTelemetryEnabled` and the `TelemetryLogger` the editor derives from `telemetry.telemetryLevel`. That gate is a setting, not a removal: what the extension sends is decided by the editor's telemetry level at the time, and the row above is what pins it |
 | No auto-update phone home   | No update URL in `product.json` and `update.mode: "none"` in the default settings. New versions arrive from the Play Store or a GitHub Release APK |
@@ -100,7 +103,7 @@ without the credential minted for that boot, which rides in the proxy URL.
 | Control                              | Implementation                                                                                                                                                                                                                     |
 | ------------------------------------ | ---------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |
 | Android App Sandbox                  | Standard Android process isolation                                                                                                                                                                                                 |
-| App-private storage                  | Files in /data/data/com.vscodroid/, inaccessible to other apps. The projects tree is the one thing not there, see 5.2                                                                                                              |
+| App-private storage                  | Settings, secrets, server files, runtimes and new installs' projects remain in app-private internal storage. Existing shared-storage projects are retained at their previous location, see 5.2 |
 | WebView process isolation            | WebView renderer runs in separate process                                                                                                                                                                                          |
 | AndroidBridge access control         | Every bridge method requires the per-session token and refuses without it; a reflection test fails the build if one is added that does not. There is no origin check -- `@JavascriptInterface` does not carry the caller's origin |
 | Code signing                         | APK/AAB signed with release key                                                                                                                                                                                                    |
@@ -172,6 +175,8 @@ to: patch 0005 disables the service worker upstream uses to scope each webview t
 | `http://127.0.0.1:<port>`               | The workbench, the only document served by our own server                  |
 | `https://<uuid>.vscode-cdn.net`         | Extension webview documents, answered locally by the interception           |
 | `https://<scheme>+.vscode-resource.vscode-cdn.net` | Subresources of those documents, read off the filesystem         |
+
+Native responses on the workbench origin require `EditorGateway` to own the client's expected port. Every request the app intercepts on that origin, the secret storage key and translated interface bundles included, is refused with HTTP 503 when that ownership check fails. This check depends on the retained listener, so an unavailable editor backend does not let a different process inherit that origin. The gateway itself answers HTTP 503 to every connection while no editor backend is selected and to any connection beyond 32 open at once, and it closes a connection that makes no progress for two minutes.
 
 - **Two arms answer ahead of all of this, and both are on our own origin.** A request to
   `http://127.0.0.1:<port>/_nls/<commit>/<version>/<locale>/nls.messages.js` is answered out of
@@ -256,7 +261,7 @@ to: patch 0005 disables the service worker upstream uses to scope each webview t
 
 | Permission                       | Reason                                          | When Requested |
 | -------------------------------- | ----------------------------------------------- | -------------- |
-| `INTERNET`                       | Open VSX, GitHub, toolchain downloads           | Install time   |
+| `INTERNET`                       | Open VSX, GitHub, toolchain downloads, built-in schema and package-registry lookups | Install time   |
 | `FOREGROUND_SERVICE`             | Keep Node.js alive in background                | Install time   |
 | `FOREGROUND_SERVICE_SPECIAL_USE` | Dev server foreground service type              | Install time   |
 | `POST_NOTIFICATIONS`             | Foreground Service notification (API 33+)       | Runtime        |
@@ -322,11 +327,13 @@ location. Clear Data wipes both.
 
 | Flow                              | Protocol         | Notes                                             |
 | --------------------------------- | ---------------- | ------------------------------------------------- |
-| WebView ↔ Server                  | HTTP (localhost) | No encryption needed: same device, loopback only  |
+| WebView ↔ EditorGateway           | HTTP and WebSocket (127.0.0.1) | App-owned endpoint; connection token and origin checks still apply |
+| EditorGateway ↔ Server           | HTTP and WebSocket over a private filesystem socket | Raw bytes, with the original HTTP Host header preserved |
 | App ↔ Open VSX                    | HTTPS            | TLS 1.2+                                          |
 | App ↔ GitHub                      | HTTPS or SSH     | TLS 1.2+ or SSH                                   |
 | Extension host ↔ GitHub Copilot   | HTTPS            | Prompts and attached source, after a GitHub sign-in |
 | App ↔ Play Store (Asset Delivery) | HTTPS            | Managed by Play Store                             |
+| Built-in language features ↔ Schema and package registries | HTTPS | `json.schemastore.org`, the other schema hosts in `json.schemaDownload.trustedDomains`, and `registry.npmjs.org` when editing JSON, `package.json`, or JS/TS files; see `docs/PRIVACY_POLICY.md` |
 
 ---
 
@@ -351,7 +358,7 @@ If a malicious extension is reported:
 
 | Test                                   | Method                                                             | Frequency     |
 | -------------------------------------- | ------------------------------------------------------------------ | ------------- |
-| Server only binds to localhost         | `netstat` / port scan from another device                          | Every release |
+| Local editor transport ownership       | Loopback port scan, private socket checks, and Stop/restart tests that retain the public listener | Every release |
 | No telemetry network requests          | Network traffic capture (Charles/mitmproxy)                        | Every release |
 | Extension Host isolation               | Install test extension that attempts privilege escalation          | Every release |
 | WebView CSP headers                    | Chrome DevTools Network tab                                        | Every release |
