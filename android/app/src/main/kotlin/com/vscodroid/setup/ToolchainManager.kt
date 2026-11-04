@@ -387,6 +387,14 @@ class ToolchainManager(private val context: Context) {
         }
 
         /**
+         * The most arguments an exec-table row can carry after its target. The
+         * trampoline has its own `MAX_ROW_ARGS` (`scripts/exec-trampoline.c`) and
+         * refuses a longer row whole when the command runs, so a row is never
+         * written past it. `ExecTrampolineRowLimitTest` holds the two equal.
+         */
+        internal const val MAX_ROW_ARGS = 8
+
+        /**
          * Whether a manifest binary is a command at all. The JDK keeps `jspawnhelper` and
          * `jexec` in `lib/`: the JVM starts the first by absolute path and the second is a
          * `#!` target, so neither belongs on PATH, where each only showed up as a command
@@ -1298,8 +1306,7 @@ class ToolchainManager(private val context: Context) {
             )
         } else {
             val space = toolchainCopySpace(File(assetsDir, "usr"), File(context.filesDir, "usr"))
-            val required = (packInstallBytes(unpacked) - minOf(unpacked, space.creditedBytes))
-                .coerceAtLeast(SPACE_BUFFER) + space.replacementBytes
+            val required = toolchainCopyBytes(unpacked, space)
             val available = StatFs(context.filesDir.absolutePath).availableBytes
             if (available < required) {
                 Logger.e(
@@ -2129,6 +2136,34 @@ class ToolchainManager(private val context: Context) {
     }
 
     /**
+     * The install root the record already holds for [name], or null.
+     *
+     * [downloadViaHttp] gates on free space before the ZIP carrying the incoming
+     * manifest has been fetched, so the persisted record is the only witness
+     * available then of where a previous install of this toolchain put its tree.
+     * A lookup by name rather than through the registry, because an entry can
+     * outlive its registry row and because the record is what those files were
+     * actually written from.
+     *
+     * Null unless the record's `displayName` is [displayName], the registry's name for
+     * the build about to be downloaded. A reinstall only overwrites the recorded tree
+     * when the root stays put, and the one pack that moved it, Java 17 to 21, kept
+     * the name `java`: the old tree would be credited against one written beside it.
+     * A record that names no build gets no credit either.
+     */
+    private fun recordedInstallRoot(name: String, displayName: String?): File? {
+        val state = readState()
+        for (i in 0 until state.length()) {
+            val entry = state.optJSONObject(i) ?: continue
+            if (entry.optString("name") != name) continue
+            if (displayName == null || entry.optString("displayName") != displayName) return null
+            val root = entry.optString("installRoot", "")
+            return if (root.isEmpty()) null else File(context.filesDir, root)
+        }
+        return null
+    }
+
+    /**
      * Downloads a toolchain ZIP from GitHub Releases, extracts it, and installs.
      * Runs entirely on ioExecutor. Fires onStateChange with AssetPackStatus constants.
      */
@@ -2185,11 +2220,26 @@ class ToolchainManager(private val context: Context) {
                     return@execute
                 }
 
-                // Reserve both the downloaded staging tree and the destination copy.
-                // Matching paths cannot be credited until the incoming payload is available.
+                // Reserve the stage that holds the most at once, crediting a tree of
+                // this build that is already installed. The incoming payload is not
+                // on disk yet, so the credit comes from the RECORD: its install root
+                // is where a previous install of this toolchain put its files, and it
+                // only counts when the record names the build about to be downloaded
+                // ([recordedInstallRoot] compares `displayName`; Java 17 and 21 share
+                // a pack name and not a root). The credit is an assumption about a
+                // payload nobody has read, so a credited install is measured again
+                // from the real files once they are extracted, below.
                 val stat = StatFs(context.filesDir.absolutePath)
                 val availableBytes = stat.availableBytes
-                val requiredBytes = toolchainInstallBytes(unpackedBytes, downloadBytes)
+                val installed = installedTreeSpace(
+                    recordedInstallRoot(
+                        toolchainShortName(packName),
+                        ToolchainRegistry.find(packName)?.displayName,
+                    ),
+                    context.filesDir,
+                    unpackedBytes,
+                )
+                val requiredBytes = toolchainInstallBytes(unpackedBytes, downloadBytes, installed)
                 if (availableBytes < requiredBytes) {
                     Logger.e(tag, "Not enough disk space: ${availableBytes / 1_000_000} MB available, " +
                             "${requiredBytes / 1_000_000} MB required")
@@ -2325,6 +2375,32 @@ class ToolchainManager(private val context: Context) {
                 if (download.cancelled) {
                     Logger.i(tag, "HTTP download cancelled for $packName")
                     return@execute
+                }
+
+                // The measurement the pre-flight could not make: the files about to
+                // be written against the files they replace, which is the check the
+                // Play path makes before its copy and with the same arithmetic. Only
+                // when the pre-flight leaned on a credit. A first install was charged
+                // for both trees in full and has nothing to confirm, and holding it to
+                // the buffer again here would refuse a copy that fits after a
+                // neighbouring app took a few megabytes during the download.
+                //
+                // Refused here, the copy has written nothing: a half-replaced
+                // toolchain is the thing the atomic replacement exists to avoid, and
+                // the cost of getting here is a download the retry repeats.
+                if (installed.bytes > 0) {
+                    val space = toolchainCopySpace(File(extractDir, "usr"), File(context.filesDir, "usr"))
+                    val needed = toolchainCopyBytes(unpackedBytes, space)
+                    val free = StatFs(context.filesDir.absolutePath).availableBytes
+                    if (free < needed) {
+                        Logger.e(
+                            tag,
+                            "Not enough disk space to replace $packName: " +
+                                "${free / 1_000_000} MB available, ${needed / 1_000_000} MB required",
+                        )
+                        fail(packName, ToolchainFailure.STORAGE, download.transferId)
+                        return@execute
+                    }
                 }
 
                 // Install from extracted directory (same path as Play Asset Delivery)
@@ -3460,6 +3536,8 @@ class ToolchainManager(private val context: Context) {
                 }
             }
 
+            addLauncherRows(tc, name, rows)
+
             val gemHome = env?.optString("GEM_HOME", "").orEmpty()
             val ruby = elfPaths["ruby"]
             if (gemHome.isNotEmpty() && ruby != null) {
@@ -3508,6 +3586,52 @@ class ToolchainManager(private val context: Context) {
         refreshTrampolineLinks(rows.keys - setAside)
         Logger.i(tag, "Regenerated toolchain-exec.tsv (${rows.size} commands, " +
             "${envRows.size} variables)")
+    }
+
+    /**
+     * Rows for the binaries a manifest's `launchers` object names, each with the
+     * arguments the row carries ahead of the caller's own:
+     * `{"usr/bin/clangd": ["--resource-dir=$FILESDIR/usr/lib/clang/21"]}`.
+     *
+     * The way into the table for a program of a [isPreloadOnly] toolchain that
+     * a client starts by itself. clangd is the one: a language client spawns it
+     * with no terminal and so no interceptor, and a compiler's own start does
+     * not need this. Started as `linker64 <file>` it takes the loader's
+     * directory for its own and puts `-resource-dir=/apex/.../lib/clang/<major>`
+     * on every compile command, so stddef.h is not found; the argument gives it
+     * the real directory. Everything else it needs comes from the `clang` it
+     * finds on PATH, which is `usr/bin/clang`, and that is why `clang` never gets
+     * a row here: a link in tcbin would be found first and send its sysroot to
+     * `usr/libexec`.
+     *
+     * A launcher is held to what the table can carry. Its path has to be one of
+     * the manifest's own `binaries` and an ELF on disk, and its arguments have to
+     * fit the trampoline's row ([MAX_ROW_ARGS]) and contain neither a tab nor a
+     * line break, which would read as a field or a record of their own. A launcher
+     * that is not is skipped and logged, and nothing else about the toolchain
+     * changes.
+     */
+    private fun addLauncherRows(tc: JSONObject, name: String, rows: MutableMap<String, String>) {
+        val launchers = tc.optJSONObject("launchers") ?: return
+        val shipped = tc.optJSONArray("binaries")
+            ?.let { list -> (0 until list.length()).map { list.optString(it) }.toSet() }.orEmpty()
+        for (relPath in launchers.keys()) {
+            val command = relPath.substringAfterLast('/')
+            val argList = launchers.optJSONArray(relPath)
+            val args = argList?.let { list ->
+                (0 until list.length()).map { expandToolchainValue(list.optString(it)) }
+            }
+            when {
+                command.isEmpty() || relPath !in shipped ->
+                    Logger.w(tag, "No launcher row for $name's $relPath: not one of its binaries")
+                args == null || args.size > MAX_ROW_ARGS || args.any { '\t' in it || '\n' in it } ->
+                    Logger.w(tag, "No launcher row for $name's $command: its arguments " +
+                        "are not a list of at most $MAX_ROW_ARGS the table can carry")
+                !isElfFile(File(context.filesDir, relPath)) ->
+                    Logger.d(tag, "No launcher row for $name's $command: $relPath is not on disk")
+                else -> rows[command] = (listOf(command, "$filesDir/$relPath") + args).joinToString("\t")
+            }
+        }
     }
 
     /**
@@ -3894,8 +4018,9 @@ class ToolchainManager(private val context: Context) {
      * `"type": "process"` task) the command is a file under `filesDir` that
      * the kernel will not execute, and nothing here makes it one.
      *
-     * What still applies to it: the execute bit, `pathDirs`, `env` rows and
-     * removal. Only the two ways of starting a program are skipped.
+     * What still applies to it: the execute bit, `pathDirs`, `env` rows, removal,
+     * and the rows its `launchers` object names ([addLauncherRows]). Only the two
+     * ways of starting a program are skipped, for every binary it does not launch.
      */
     private fun isPreloadOnly(manifest: JSONObject): Boolean =
         manifest.optBoolean("preloadOnly", false)
@@ -4475,16 +4600,108 @@ internal fun isAbandonedDownload(lastModifiedMs: Long, nowMs: Long): Boolean =
 internal const val SPACE_BUFFER = 50_000_000L
 
 /**
- * HTTP reserves the larger of extraction and copying peaks, plus the working margin.
- * The incoming payload is not available yet, so existing files cannot be credited.
+ * What an HTTP toolchain install needs free, given its sizes and the tree of this
+ * build that is already installed.
+ *
+ * The run has two peaks and this charges for the taller:
+ *
+ *  - unpacking, holding the archive and the staging tree at once;
+ *  - copying, holding the staging tree and what the copy adds to `usr/`. A first
+ *    install adds the whole tree, which is why it is charged twice. A reinstall
+ *    adds only what the tree on disk does not already hold, and replaces each of
+ *    those files by writing a sibling and renaming it over the old one, so one
+ *    file's worth of both versions exists at a time: [InstalledTree.largestFile].
+ *
+ * The archive is deleted after extraction and before the copy, so it is never on
+ * disk beside the second tree. A fully credited reinstall puts the second peak
+ * below the first, which is why the credit is handed in here instead of being
+ * subtracted from a single figure afterwards.
+ *
+ * So a toolchain that is already installed is charged roughly one tree plus its
+ * largest file, where a first install is charged two trees.
  */
 internal fun toolchainInstallBytes(
     unpackedBytes: Long,
     downloadBytes: Long,
+    installed: InstalledTree = InstalledTree.NONE,
 ): Long = maxOf(
     downloadBytes + unpackedBytes,
-    unpackedBytes * 2,
+    unpackedBytes * 2 - installed.bytes + installed.largestFile,
 ) + SPACE_BUFFER
+
+/**
+ * What the copy into `usr/` needs free once the incoming tree is on disk and
+ * already counted, given what [toolchainCopySpace] measured against the files it
+ * will replace.
+ *
+ * One tree rather than two: the staged copy exists before this is asked. The new
+ * allocation is the tree less the bytes of matching files it replaces, never less
+ * than the working margin, plus room to write the largest replacement beside its
+ * original before the rename. Both delivery paths ask it, so a device is not told
+ * yes by one and no by the other about the same toolchain.
+ */
+internal fun toolchainCopyBytes(unpackedBytes: Long, space: ToolchainCopySpace): Long =
+    (packInstallBytes(unpackedBytes) - minOf(unpackedBytes, space.creditedBytes))
+        .coerceAtLeast(SPACE_BUFFER) + space.replacementBytes
+
+/**
+ * What an installed tree holds that a reinstall can reuse: its bytes, links
+ * excluded, and its largest single file.
+ */
+internal data class InstalledTree(val bytes: Long, val largestFile: Long) {
+    companion object {
+        val NONE = InstalledTree(0L, 0L)
+    }
+}
+
+/**
+ * Measures the tree under [root] that a reinstall of the build now downloading
+ * would write over, or [InstalledTree.NONE].
+ *
+ * Clamped at [recordedBytes], because a directory can hold more than the pack
+ * writes back, and a credit for those bytes is space the copy never returns. A
+ * root that resolves outside [within] credits nothing: `..` escapes
+ * `File(base, relative)` while an absolute string is re-nested under it, and a
+ * credit is the first decision taken on that string. Measuring the whole app
+ * data directory would clamp to the pack's own size and leave the gate asking for
+ * nothing but the buffer. Links are neither followed nor counted, as in
+ * `StorageManager.dirSize`.
+ */
+internal fun installedTreeSpace(
+    root: File?,
+    within: File,
+    recordedBytes: Long,
+    measure: (File) -> InstalledTree = ::measureInstalledTree,
+): InstalledTree {
+    if (root == null) return InstalledTree.NONE
+    val base = runCatching { within.canonicalFile }.getOrNull() ?: return InstalledTree.NONE
+    val resolved = runCatching { root.canonicalFile }.getOrNull() ?: return InstalledTree.NONE
+    if (!generateSequence(resolved) { it.parentFile }.any { it == base }) return InstalledTree.NONE
+    val found = measure(resolved)
+    val bytes = minOf(recordedBytes, found.bytes).coerceAtLeast(0)
+    return InstalledTree(bytes, minOf(found.largestFile, bytes))
+}
+
+/** The bytes and the largest file under [dir], without following or counting links. */
+internal fun measureInstalledTree(dir: File): InstalledTree {
+    if (!dir.exists()) return InstalledTree.NONE
+    var bytes = 0L
+    var largest = 0L
+    val stack = ArrayDeque<File>()
+    stack.addLast(dir)
+    while (stack.isNotEmpty()) {
+        val f = stack.removeLast()
+        if (Files.isSymbolicLink(f.toPath())) continue
+        if (f.isFile) {
+            val length = f.length()
+            bytes += length
+            largest = maxOf(largest, length)
+        } else if (f.isDirectory) {
+            f.listFiles()?.forEach { stack.addLast(it) }
+        }
+    }
+    return InstalledTree(bytes, largest)
+}
 
 /**
  * The unpacked size recorded for [packName], or null when none is.

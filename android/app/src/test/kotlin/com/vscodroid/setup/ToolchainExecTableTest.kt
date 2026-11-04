@@ -1062,6 +1062,142 @@ class ToolchainExecTableTest {
 
         assertEquals(emptyList<String>(), toolchainLines(), execTable.readText())
     }
+
+    // -- the programs of a preloadOnly toolchain that a client starts itself ---
+
+    private val resourceDirArg = "--resource-dir=${'$'}FILESDIR/usr/lib/clang/21"
+
+    private fun cppRecord(launchers: String, flag: String = """"preloadOnly":true,""") =
+        """[{"name":"cpp",$flag"binaries":["usr/bin/clang-21","usr/bin/clangd"],""" +
+            """"env":{},"pathDirs":["usr/bin"],"launchers":$launchers}]"""
+
+    /**
+     * clangd is started by a language client with no terminal, and so no exec
+     * interceptor, which leaves it without the row the rest of a preloadOnly
+     * toolchain goes without. The row carries the one argument that stands in for
+     * what the loader's path hides from it, and the compiler beside it still gets
+     * nothing: a `clang` link in tcbin would be the driver clangd finds first on
+     * PATH, and the sysroot it takes from that driver would be `usr/libexec`.
+     */
+    @Test
+    fun `a launcher of a preloadOnly toolchain gets a row with its arguments, and the compiler none`() {
+        elf("usr/bin/clang-21")
+        elf("usr/bin/clangd")
+        stateFile.writeText(cppRecord("""{"usr/bin/clangd":["$resourceDirArg"]}"""))
+
+        regenerate()
+
+        val root = filesDir.absolutePath
+        assertEquals(
+            listOf("clangd\t$root/usr/bin/clangd\t--resource-dir=$root/usr/lib/clang/21"),
+            toolchainLines(),
+            "the launcher's row is not what a language client needs:\n" + execTable.readText(),
+        )
+        val link = File(filesDir, "usr/libexec/tcbin/clangd").toPath()
+        assertTrue(Files.isSymbolicLink(link), "clangd is not on PATH ahead of the file the kernel refuses")
+        assertEquals(trampoline, Files.readSymbolicLink(link).toString())
+        for (compiler in listOf("clang-21", "clang")) {
+            assertFalse(
+                Files.exists(File(filesDir, "usr/libexec/tcbin/$compiler").toPath(), LinkOption.NOFOLLOW_LINKS),
+                "a link named $compiler in tcbin would be the driver clangd finds, and its sysroot would be usr/libexec",
+            )
+        }
+    }
+
+    @Test
+    fun `a launcher is also a row where the toolchain is not preloadOnly, with its arguments`() {
+        elf("usr/bin/clang-21")
+        elf("usr/bin/clangd")
+        stateFile.writeText(cppRecord("""{"usr/bin/clangd":["$resourceDirArg"]}""", flag = ""))
+
+        regenerate()
+
+        val root = filesDir.absolutePath
+        assertEquals(
+            listOf(
+                "clang-21\t$root/usr/bin/clang-21",
+                "clangd\t$root/usr/bin/clangd\t--resource-dir=$root/usr/lib/clang/21",
+            ),
+            toolchainLines(),
+            "the control: the plain rows stay and the launcher's arguments replace the plain one",
+        )
+    }
+
+    /** The manifest's own `binaries` are the only files a launcher can name. */
+    @Test
+    fun `a launcher that is not one of the manifest's binaries gets no row`() {
+        elf("usr/bin/clangd")
+        stateFile.writeText(
+            """[{"name":"cpp","preloadOnly":true,"binaries":["usr/bin/clang-21"],""" +
+                """"env":{},"launchers":{"usr/bin/clangd":["--x"]}}]"""
+        )
+
+        regenerate()
+
+        assertEquals(emptyList<String>(), toolchainLines(), execTable.readText())
+    }
+
+    @Test
+    fun `a launcher whose file is missing or is not an ELF gets no row`() {
+        stateFile.writeText(cppRecord("""{"usr/bin/clangd":["--x"]}"""))
+        regenerate()
+        assertEquals(emptyList<String>(), toolchainLines(), "a row names a file that is not there:\n" + execTable.readText())
+
+        script("usr/bin/clangd")
+        regenerate()
+        assertEquals(emptyList<String>(), toolchainLines(), "a row starts a script as a program:\n" + execTable.readText())
+
+        elf("usr/bin/clangd")
+        regenerate()
+        assertEquals(1, toolchainLines().size, "the control: the same record with an ELF gets its row")
+    }
+
+    /**
+     * What the trampoline's row cannot carry: a tab is a field of its own, a line
+     * break a record of its own, and a ninth argument makes it refuse the whole
+     * row when the command runs, naming nothing the user chose. Each is declined
+     * here, where it can be logged, and the launcher is the only thing lost.
+     */
+    @Test
+    fun `a launcher whose arguments the table cannot carry gets no row`() {
+        elf("usr/bin/clangd")
+        val tooMany = (1..ToolchainManager.MAX_ROW_ARGS + 1).joinToString(",") { "\"--a$it\"" }
+        val atTheLimit = (1..ToolchainManager.MAX_ROW_ARGS).joinToString(",") { "\"--a$it\"" }
+        val refused = mapOf(
+            "a tab" to """{"usr/bin/clangd":["--a\tb"]}""",
+            "a line break" to """{"usr/bin/clangd":["--a\nb"]}""",
+            "one argument too many" to """{"usr/bin/clangd":[$tooMany]}""",
+            "a string where a list belongs" to """{"usr/bin/clangd":"--x"}""",
+        )
+        for ((why, launchers) in refused) {
+            stateFile.writeText(cppRecord(launchers))
+            regenerate()
+            assertEquals(emptyList<String>(), toolchainLines(), "a row was written with $why:\n" + execTable.readText())
+        }
+
+        stateFile.writeText(cppRecord("""{"usr/bin/clangd":[$atTheLimit]}"""))
+        regenerate()
+        assertEquals(
+            ToolchainManager.MAX_ROW_ARGS + 2, toolchainLines().single().split('\t').size,
+            "the control: a row at the limit is written whole",
+        )
+    }
+
+    @Test
+    fun `removing the toolchain removes the launcher's row and its link`() {
+        elf("usr/bin/clangd")
+        stateFile.writeText(cppRecord("""{"usr/bin/clangd":["$resourceDirArg"]}"""))
+        regenerate()
+        val link = File(filesDir, "usr/libexec/tcbin/clangd").toPath()
+        assertTrue(Files.isSymbolicLink(link), "control: the launcher never got its link")
+
+        stateFile.writeText("[]")
+        regenerate()
+
+        assertEquals(emptyList<String>(), toolchainLines(), "the row outlived the toolchain")
+        assertFalse(Files.exists(link, LinkOption.NOFOLLOW_LINKS), "the link outlived the toolchain")
+    }
+
     private fun jdkRecord(flags: String) =
         """[{"name":"java","installRoot":"usr/lib/jvm/jdk",$flags""" +
             """"binaries":["usr/lib/jvm/jdk/bin/java","usr/lib/jvm/jdk/bin/javac",""" +

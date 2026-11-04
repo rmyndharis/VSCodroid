@@ -412,7 +412,7 @@ M6 (Release)   → Play Store release
 2. **On-demand toolchain download scripts** (`scripts/download-ruby.sh`, `download-java.sh`, `download-cpp.sh`)
    - [x] Ruby from Termux `ruby` + libgmp + libyaml. Unpacked size is recorded in `ToolchainRegistry`, which is what every gate reads: 41 MB today, 39.7 MB of it measured, with the C headers a native gem is built against
    - [x] Java from Termux `openjdk-21` + libandroid-shmem + libandroid-spawn (`openjdk-17` until 21 replaced it, for the Java extension). 179.5 MB unpacked; the registry records 186 MB, which leaves 6.5 MB of room
-   - [x] C/C++ from Termux `clang`, `libllvm`, `lld`, `llvm`, `libcompiler-rt`, `ndk-sysroot`, `libxml2` and the headers of `python`, minus what the base APK already ships. 254.0 MB unpacked in 3,790 files (the registry records 260 MB) and a 73.7 MB ZIP. Its programs start only through the terminal's exec interceptor, so its manifest is `preloadOnly` and the card says that it does not work with `LD_PRELOAD` set to null
+   - [x] C/C++ from Termux `clang` (with its `clangd`), `libllvm`, `lld`, `llvm`, `libcompiler-rt`, `ndk-sysroot`, `libxml2` and the headers of `python`, minus what the base APK already ships. 272.7 MB unpacked in 3,793 files (the registry records 280 MB) and a 79.1 MB ZIP, of which `clangd` is 18.7 MB. Its compilers start only through the terminal's exec interceptor, so its manifest is `preloadOnly` and the card says that it does not work with `LD_PRELOAD` set to null; `clangd`, which a language client starts without a terminal, is named under `launchers` and gets an exec-table row
    - [x] Each script: download .deb → extract → place in asset pack module → strip → write manifest
    - [x] Each script fails the build on any symbolic link anywhere in the pack. Neither delivery path can carry one: an asset pack cannot hold a link, and `ToolchainManager.extractZip` writes it as a text file holding the target path
    - Go shipped here and was withdrawn: it ran but could not compile, because `go build` starts its compiler from the app's data directory with a raw `execve` system call, which Android refuses there. The terminal's exec interceptor replaces only the libc exec functions and never sees that call, so it does not change Go's case.
@@ -654,7 +654,7 @@ Features planned for after Play Store launch, prioritized by user demand.
 ### Additional On-demand Toolchains
 
 - **Rust** (rustc + cargo, ~100 MB): high demand, self-contained
-- **C/C++** (clang/LLVM from Termux, ~84 MB): shipped as `toolchain_cpp` in 1.5.0, 254 MB unpacked and a 74 MB ZIP once stripped, and only through the terminal's exec interceptor
+- **C/C++** (clang/LLVM from Termux, ~84 MB): shipped as `toolchain_cpp` in 1.5.0, 254 MB unpacked and a 74 MB ZIP once stripped, with `clangd` added after 1.6.0 (273 MB and 79 MB), and its compilers only through the terminal's exec interceptor
 - Delivered via same Play Asset Delivery pipeline as Ruby and Java
 
 ### Future Enhancements

@@ -1290,4 +1290,99 @@ class ToolchainDigestInstallTest {
             "a half-unpacked tree was copied into usr/ anyway",
         )
     }
+
+    // ── an installed toolchain is credited, and the credit is confirmed ───
+
+    /** A file of [bytes] length with nothing written, which `File.length()` reports in full. */
+    private fun sparse(path: String, bytes: Long) {
+        val file = File(filesDir, path)
+        file.parentFile?.mkdirs()
+        java.io.RandomAccessFile(file, "rw").use { it.setLength(bytes) }
+    }
+
+    /** The record an earlier install of this fixture's build left, naming the root its files went to. */
+    private fun recordInstalled() {
+        File(filesDir, "home/.vscodroid/toolchains.json").writeText(
+            """[{"name":"test","displayName":"Test","installRoot":"usr/opt/test"}]"""
+        )
+    }
+
+    /**
+     * 800 MB free is more than a reinstall of a 400 MB tree needs (750 MB: one tree
+     * plus its largest file, 300 MB) and less than a first install does (850 MB).
+     * Planted files carry the credit; the extracted payload overwrites one of them.
+     */
+    @Test
+    fun `a reinstall that fits only with the credit installs`() {
+        zipBytes = packZip(2_048)
+        publishFrom(releaseDir, unpackedBytes = 400_000_000L)
+        publishManifest("$zipDigest  toolchain_test.zip\n")
+        recordInstalled()
+        sparse("usr/opt/test/payload.bin", 300_000_000L)
+        sparse("usr/opt/test/lib.bin", 100_000_000L)
+        every { anyConstructed<StatFs>().availableBytes } returns 800_000_000L
+
+        installAndWait()
+
+        assertEquals(AssetPackStatus.COMPLETED, statuses().last(), "the reinstall was refused: $events")
+        assertEquals(
+            2_048L,
+            File(filesDir, "usr/opt/test/payload.bin").length(),
+            "the payload was not written over the installed file",
+        )
+    }
+
+    /** The control: the same device with nothing installed is refused, before anything is fetched. */
+    @Test
+    fun `the same device is refused when nothing is installed`() {
+        zipBytes = packZip(2_048)
+        publishFrom(releaseDir, unpackedBytes = 400_000_000L)
+        publishManifest("$zipDigest  toolchain_test.zip\n")
+        every { anyConstructed<StatFs>().availableBytes } returns 800_000_000L
+
+        installAndWait()
+
+        assertEquals(listOf(ToolchainFailure.STORAGE), synchronized(reasons) { reasons.toList() })
+        assertEquals(0, timesRequested(zipPath), "the archive was fetched for a device that cannot hold it")
+    }
+
+    /**
+     * The credit rests on a record, and the record does not say which files the
+     * payload will replace. The archive here carries a file the installed tree
+     * does not have and none of its own, so the copy would add the whole tree, and
+     * the device that was admitted on the credit does not have the room. The
+     * refusal comes before the copy, so the installed files are untouched.
+     */
+    @Test
+    fun `a credit the extracted files do not honour is refused before anything is copied`() {
+        zipBytes = packZip(2_048)
+        publishFrom(releaseDir, unpackedBytes = 400_000_000L)
+        publishManifest("$zipDigest  toolchain_test.zip\n")
+        recordInstalled()
+        sparse("usr/opt/test/old-a.bin", 300_000_000L)
+        sparse("usr/opt/test/old-b.bin", 100_000_000L)
+        // The pre-flight reads the free space once, then the extraction has used some.
+        // 420 MB is more than the record's own files would leave the copy needing
+        // (350 MB: the margin and the 300 MB file it writes beside) and less than the
+        // archive really adds (450 MB: the whole tree and the margin), so only a check
+        // that measures the extracted files against the installed ones refuses it.
+        var reads = 0
+        every { anyConstructed<StatFs>().availableBytes } answers {
+            if (reads++ == 0) 800_000_000L else 420_000_000L
+        }
+
+        installAndWait()
+
+        assertEquals(
+            listOf(ToolchainFailure.STORAGE),
+            synchronized(reasons) { reasons.toList() },
+            "the install was not refused for space: $events",
+        )
+        assertFalse(
+            File(filesDir, "usr/opt/test/payload.bin").exists(),
+            "the copy started although the device had no room for it",
+        )
+        assertEquals(300_000_000L, File(filesDir, "usr/opt/test/old-a.bin").length())
+        assertEquals(1, timesRequested(zipPath), "the refusal should come after the download, not before it")
+    }
 }

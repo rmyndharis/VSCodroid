@@ -6,9 +6,10 @@ set -euo pipefail
 #
 # What the pack is: the clang driver, lld, libLLVM and libclang-cpp, the NDK
 # sysroot (headers, crt objects, libunwind), the clang resource headers with the
-# builtins archive, libc++'s headers, a handful of llvm-* tools, and Python's
-# headers so pip can build a C extension. What it is not: clangd and the other
-# clang tools, libclang, cmake, ninja, the sanitizer runtimes, OpenMP.
+# builtins archive, libc++'s headers, a handful of llvm-* tools, clangd, and
+# Python's headers so pip can build a C extension. What it is not: clang-format
+# and the other clang tools, libclang, cmake, ninja, the sanitizer runtimes,
+# OpenMP.
 #
 # Nothing the base APK already ships is repeated here. libc++_shared.so, libz,
 # libzstd, libffi, libiconv and liblzma are in assets/usr/lib, an asset entry
@@ -36,6 +37,16 @@ set -euo pipefail
 # They are two-line scripts that start the plain name beside them, which carries
 # the driver's default target. Python's sysconfig names the first as its CC, so
 # without it pip builds no C extension.
+#
+# clangd is the exception to "starts only through the preloaded exec". A language
+# client starts it by itself, with no terminal and so no interceptor, and it is
+# found through the trampoline like any command. Started as `linker64 <file>` it
+# takes the loader's directory for its own and puts
+# -resource-dir=/apex/com.android.runtime/lib/clang/<major> on every compile
+# command, which hides stddef.h and the rest of what clang ships. Its sysroot
+# needs nothing: clangd takes that from the `clang` it finds on PATH, in usr/bin,
+# which is why `clang` must never get a trampoline link. So the manifest names it
+# under `launchers`, with the one argument that gives it the real directory.
 #
 # Compatible with bash 3.2+ (macOS default).
 
@@ -182,6 +193,12 @@ require "$LLD_USR/bin/lld"
 cp -L "$LLD_USR/bin/lld" "$PACK_ASSETS/usr/bin/lld"
 echo "  bin/lld"
 
+# The language server. It links libclang-cpp.so and libLLVM.so as the driver does,
+# so it adds only itself; clang-format and the other tools stay out.
+require "$CLANG_USR/bin/clangd"
+cp -L "$CLANG_USR/bin/clangd" "$PACK_ASSETS/usr/bin/clangd"
+echo "  bin/clangd"
+
 for tool in "${LLVM_TOOLS[@]}"; do
     require "$LLVM_USR/bin/$tool"
     cp -L "$LLVM_USR/bin/$tool" "$PACK_ASSETS/usr/bin/$tool"
@@ -308,6 +325,10 @@ echo "Writing toolchain_cpp.json..."
 # clang and libLLVM use to find the resource directory and the sysroot. They
 # start through the preloaded exec instead, which names the file in
 # TERMUX_EXEC__PROC_SELF_EXE first.
+#
+# launchers: the binaries that get a trampoline row all the same, each with the
+# arguments that stand in for what its path cannot tell it (see the header). Each
+# path is one of the `binaries`, and $FILESDIR is expanded on the device.
 python3 -I - "$PACK_ASSETS" "$CLANG_VERSION" "$LLVM_MAJOR" <<'PYEOF'
 import json, os, sys
 
@@ -343,7 +364,13 @@ for name, target in (("ar", "llvm-ar"), ("ranlib", "llvm-ranlib"), ("nm", "llvm-
                      ("size", "llvm-size")):
     symlinks[name] = "usr/bin/" + target
 
+# clangd under the trampoline, with the resource directory its own path cannot give.
+launchers = {"usr/bin/clangd": ["--resource-dir=$FILESDIR/usr/lib/clang/" + major]}
+
 problems = []
+for target in launchers:
+    if target not in binaries:
+        problems.append("launcher %s is not a file the pack ships" % target)
 for name, target in sorted(symlinks.items()):
     if target not in binaries:
         problems.append("link %s points at %s, which the pack does not ship" % (name, target))
@@ -377,6 +404,7 @@ manifest = {
     # environment read pathDirs only for a toolchain that has an env object.
     "env": {},
     "pathDirs": ["usr/bin"],
+    "launchers": launchers,
     "libs": libs,
     "ownedPaths": owned,
 }

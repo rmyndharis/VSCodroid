@@ -235,6 +235,12 @@ class SafSyncEngine(private val context: Context) {
      */
     internal var outboundTurnWaitMs: Long = OUTBOUND_TURN_WAIT_MS
 
+    /**
+     * How long a delete, a create or a rename waits for another folder's write to the same
+     * provider before it is refused. See [claimProviderMutationWithin].
+     */
+    internal var providerClaimWaitMs: Long = PROVIDER_CLAIM_WAIT_MS
+
     private fun outboundAccess(root: File, generation: Any? = null): OutboundAccess {
         val access = mirrorAccess.computeIfAbsent(root.absolutePath) { MirrorAccess() }
         val observed = generation
@@ -4567,7 +4573,7 @@ class SafSyncEngine(private val context: Context) {
             return withCurrent(access) { createOneInSaf(localFile, parentSafUri, treeUri, mirrorRoot, mutation = mutation) }
         }
         if (mutation == null) {
-            val owned = claimProviderMutation(parentSafUri) ?: return null
+            val owned = claimProviderMutationWithin(parentSafUri, providerClaimWaitMs) ?: return null
             try {
                 return createOneInSaf(localFile, parentSafUri, treeUri, mirrorRoot, mutation = owned)
             } finally {
@@ -5194,7 +5200,7 @@ class SafSyncEngine(private val context: Context) {
                             providerHolds(job.safTreeUri, job.relativePath) != false
                     else -> {
                         val handled = withCurrent(access) {
-                            val mutation = claimProviderMutation(job.safDocUri)
+                            val mutation = claimProviderMutationWithin(job.safDocUri, providerClaimWaitMs)
                             if (mutation == null) {
                                 keptOnDevice.add(job.localPath)
                                 keepUnread(File(job.localPath), job.relativePath, job.isDirectory, changed = true)
@@ -5316,7 +5322,7 @@ class SafSyncEngine(private val context: Context) {
                         null
                     }
                 if (withCurrent(access) {
-                    val mutation = job.safDocUri?.let { claimProviderMutation(it) }
+                    val mutation = job.safDocUri?.let { claimProviderMutationWithin(it, providerClaimWaitMs) }
                     if (mutation == null) {
                         announceLost(localFile)
                         return@withCurrent
@@ -6143,6 +6149,16 @@ class SafSyncEngine(private val context: Context) {
         internal const val OUTBOUND_TURN_WAIT_MS = 120_000L
 
         /**
+         * The default for [providerClaimWaitMs]: ten seconds.
+         *
+         * Far below [OUTBOUND_TURN_WAIT_MS] on purpose. A delete, a rename and the create inside a
+         * turn wait for the claim while holding their mirror's turn, and a save of the same mirror
+         * is waiting for that turn; the longer wait is the one that gives up on a stalled provider,
+         * and this one must not be the reason it does.
+         */
+        internal const val PROVIDER_CLAIM_WAIT_MS = 10_000L
+
+        /**
          * What [setAsideDivergedMirror] puts in front of the mirror copy's own
          * modification time when it moves one out of a newer device copy's way.
          *
@@ -6225,6 +6241,55 @@ class SafSyncEngine(private val context: Context) {
             }
         }
 
+        /**
+         * [claimProviderMutation], waiting up to [waitMs] for the claim to come free.
+         *
+         * For a delete, a create and a rename, which were refused with a notice and had to be
+         * repeated when they met another folder's write to the same provider, so that a closing
+         * write still running as the next folder opens cost the user a refusal. A save does not
+         * use it: it is held back and tried again on its own. Woken by
+         * [releaseProviderMutation], so a write that ends in a second costs the waiter a second.
+         *
+         * Bounded, and once per holder. The first waiter to run out of time marks the holder
+         * [ProviderMutation.waitedOut], and everyone after it is refused at once for as long as
+         * that holder has the claim, so a provider call that never returns costs one wait and not
+         * one per queued delete, which is what the drain of a removed tree would otherwise be. A
+         * refusal is what these paths did before this existed, so a wait that runs out changes
+         * nothing about what happens next.
+         *
+         * An interrupt ends the wait as a refusal and is handed back: the thread is a write-back
+         * drain, and an interrupt is it being told to stop.
+         */
+        private fun claimProviderMutationWithin(uri: Uri, waitMs: Long): ProviderMutation? {
+            val key = providerMutationKey(uri)
+            val deadline = System.nanoTime() + TimeUnit.MILLISECONDS.toNanos(waitMs)
+            var waited = false
+            return synchronized(providerMutations) {
+                var claim: ProviderMutation? = null
+                while (true) {
+                    val holder = providerMutations[key]
+                    if (holder == null) {
+                        claim = ProviderMutation(key).also { providerMutations[key] = it }
+                        break
+                    }
+                    val left = deadline - System.nanoTime()
+                    if (holder.waitedOut || left <= 0) {
+                        if (waited) holder.waitedOut = true
+                        break
+                    }
+                    try {
+                        @Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN")
+                        (providerMutations as Object).wait(TimeUnit.NANOSECONDS.toMillis(left).coerceAtLeast(1))
+                        waited = true
+                    } catch (_: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        break
+                    }
+                }
+                claim
+            }
+        }
+
         private fun ownsProviderMutation(uri: Uri, mutation: ProviderMutation): Boolean =
             synchronized(providerMutations) {
                 mutation.key == providerMutationKey(uri) && providerMutations[mutation.key] === mutation
@@ -6232,7 +6297,11 @@ class SafSyncEngine(private val context: Context) {
 
         private fun releaseProviderMutation(mutation: ProviderMutation) {
             synchronized(providerMutations) {
-                if (providerMutations[mutation.key] === mutation) providerMutations.remove(mutation.key)
+                if (providerMutations[mutation.key] === mutation) {
+                    providerMutations.remove(mutation.key)
+                    @Suppress("PLATFORM_CLASS_MAPPED_TO_KOTLIN")
+                    (providerMutations as Object).notifyAll()
+                }
             }
         }
 
@@ -7243,7 +7312,10 @@ private class DocumentAccess {
     var readers = 0
 }
 
-private class ProviderMutation(val key: String?)
+private class ProviderMutation(val key: String?) {
+    /** A waiter has already given up on this holder, so the next one need not wait for it. */
+    @Volatile var waitedOut = false
+}
 
 private class DocumentWriteDuringReadException : IOException()
 
