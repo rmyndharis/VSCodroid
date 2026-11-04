@@ -49,6 +49,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Clarify which clients stop trusting a system root CA turned off in Android Settings (`git`, Python, Ruby, and the bundled Node.js) and which still trust roots in their own built-in lists (`pip`, extension-host `fetch`/WebSocket, and Java 21).
 - The extension version check refuses a shallow clone, and the build requires every `scripts/test-*.py` to run in both the lint and release workflows.
 - The release workflow refuses a tag whose commit is not on main.
+- Log the storage a first run used, its filesystem and the pre-flight's estimate, so the extraction margin can be checked on a real device.
 
 ## [1.6.0] - 2026-10-28
 
