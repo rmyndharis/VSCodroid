@@ -2,8 +2,12 @@ package com.vscodroid.service
 
 import android.system.ErrnoException
 import android.system.OsConstants
+import com.vscodroid.util.Logger
+import io.mockk.Runs
 import io.mockk.every
+import io.mockk.just
 import io.mockk.mockk
+import io.mockk.mockkObject
 import io.mockk.mockkStatic
 import io.mockk.unmockkAll
 import org.junit.jupiter.api.AfterEach
@@ -11,6 +15,8 @@ import org.junit.jupiter.api.Assertions.*
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
+import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.ValueSource
 import java.io.Closeable
 import java.io.File
 import java.io.IOException
@@ -25,6 +31,8 @@ import java.nio.channels.SocketChannel
 import java.util.concurrent.ConcurrentLinkedQueue
 import java.util.concurrent.CompletableFuture
 import java.util.concurrent.CountDownLatch
+import java.util.concurrent.SynchronousQueue
+import java.util.concurrent.ThreadPoolExecutor
 import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicInteger
@@ -318,6 +326,60 @@ class EditorGatewayTest {
         }
         assertTrue(gateway.isBound(port))
         release.countDown()
+    }
+
+    /**
+     * Under memory pressure a thread cannot be created, and that is an Error rather than an
+     * IOException, so it ended the listener or a relay thread, which on Android ends the app.
+     * The client that found no thread is refused and the next one is served. Submission 0 is
+     * the listener's own, 1 is the relay's second pump.
+     */
+    @ParameterizedTest
+    @ValueSource(ints = [0, 1])
+    fun aClientThatFindsNoThreadIsRefusedAndTheListenerKeepsServing(failingSubmission: Int) {
+        mockkObject(Logger)
+        every { Logger.w(any(), any(), any()) } just Runs
+        val request = "GET / HTTP/1.1\r\nHost: x\r\n\r\n".toByteArray()
+        val reply = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nConnection: close\r\n\r\nok".toByteArray()
+        val (path, server) = backend("no-thread")
+        worker {
+            while (!closing.get()) {
+                val connection = try { server.accept() } catch (_: IOException) { return@worker }
+                runCatching {
+                    connection.use {
+                        val received = it.socketInput().readNBytes(request.size)
+                        if (received.size == request.size) it.socketOutput().write(reply)
+                    }
+                }
+            }
+        }
+        val field = EditorGateway::class.java.getDeclaredField("workers").apply { isAccessible = true }
+        val real = field.get(gateway) as ThreadPoolExecutor
+        val submissions = AtomicInteger()
+        val refusing = object : ThreadPoolExecutor(0, 4, 1, TimeUnit.SECONDS, SynchronousQueue()) {
+            override fun execute(command: Runnable) {
+                if (submissions.getAndIncrement() == failingSubmission) throw OutOfMemoryError("pthread_create failed")
+                real.execute(command)
+            }
+        }
+        field.set(gateway, refusing)
+        try {
+            gateway.bind(0)
+            gateway.selectBackend(path, "no-thread-run")
+
+            client().use {
+                it.getOutputStream().write(request)
+                val answer = try { it.getInputStream().readBytes() } catch (_: IOException) { ByteArray(0) }
+                assertEquals(0, answer.size, "the client that found no thread was answered")
+            }
+            client().use {
+                it.getOutputStream().write(request)
+                assertArrayEquals(reply, it.getInputStream().readNBytes(reply.size))
+            }
+        } finally {
+            field.set(gateway, real)
+            refusing.shutdownNow()
+        }
     }
 
     @Test

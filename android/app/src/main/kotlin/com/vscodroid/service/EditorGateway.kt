@@ -120,6 +120,13 @@ internal class EditorGateway : Closeable {
                 } else {
                     try { workers.execute { connection.start() } }
                     catch (_: RejectedExecutionException) { connection.close(); connection.finished() }
+                    catch (_: OutOfMemoryError) {
+                        // Thread creation failing under memory pressure is no fault of the listener:
+                        // refuse this client and go on accepting, rather than end the thread and,
+                        // on Android, the process with it.
+                        Logger.w("EditorGateway", "Editor relay could not start a thread")
+                        connection.close(); connection.finished()
+                    }
                     accepted = null
                 }
             } catch (failure: IOException) {
@@ -156,6 +163,7 @@ internal class EditorGateway : Closeable {
                 pumps.incrementAndGet()
                 try { workers.execute { pump { fromBackend(opened) } } }
                 catch (_: RejectedExecutionException) { finished(); throw IOException("Editor relay is busy") }
+                catch (_: OutOfMemoryError) { finished(); throw IOException("Editor relay could not start a thread") }
                 toBackend(opened)
             } catch (_: IOException) {
                 close()
