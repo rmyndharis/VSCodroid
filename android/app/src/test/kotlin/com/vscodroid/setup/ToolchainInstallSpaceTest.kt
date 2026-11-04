@@ -44,6 +44,68 @@ class ToolchainInstallSpaceTest {
     }
 
     /**
+     * A reinstall holds the staging tree and adds only what the tree on disk lacks,
+     * and replaces a file by writing its sibling first, so it is charged one tree
+     * plus the largest file. C and C++ is the toolchain this was measured against:
+     * 260 MB unpacked, 74 MB to download, one file of 100 MB.
+     */
+    @Test
+    fun `a reinstall is charged one tree plus the largest file it replaces`() {
+        assertEquals(
+            410_000_000L,
+            toolchainInstallBytes(260_000_000L, 74_000_000L, InstalledTree(260_000_000L, 100_000_000L)),
+        )
+    }
+
+    /**
+     * The extraction peak holds the archive and the tree together, and a credit
+     * must not carry the reservation under it.
+     */
+    @Test
+    fun `a reinstall is never charged less than the extraction needs`() {
+        assertEquals(
+            74_000_000L + 260_000_000L + SPACE_BUFFER,
+            toolchainInstallBytes(260_000_000L, 74_000_000L, InstalledTree(260_000_000L, 0L)),
+        )
+    }
+
+    /** Nothing installed is the first-install figure, whatever default a caller leans on. */
+    @Test
+    fun `no installed tree is charged for both copies`() {
+        assertEquals(
+            toolchainInstallBytes(260_000_000L, 74_000_000L, InstalledTree.NONE),
+            toolchainInstallBytes(260_000_000L, 74_000_000L),
+        )
+        assertEquals(2 * 260_000_000L + SPACE_BUFFER, toolchainInstallBytes(260_000_000L, 74_000_000L))
+    }
+
+    /**
+     * The copy asks for the same figure whichever route delivered the files. Pinned
+     * against the three shapes it has: nothing replaced, everything replaced, and a
+     * tree that replaces more than it adds, where the margin takes over.
+     */
+    @Test
+    fun `the copy needs the new bytes plus room for the largest replacement`() {
+        assertEquals(
+            186_000_000L + SPACE_BUFFER,
+            toolchainCopyBytes(186_000_000L, ToolchainCopySpace(0L, 0L)),
+        )
+        assertEquals(
+            SPACE_BUFFER + 30_000_000L,
+            toolchainCopyBytes(186_000_000L, ToolchainCopySpace(186_000_000L, 30_000_000L)),
+        )
+        assertEquals(
+            (186_000_000L + SPACE_BUFFER - 150_000_000L) + 30_000_000L,
+            toolchainCopyBytes(186_000_000L, ToolchainCopySpace(150_000_000L, 30_000_000L)),
+        )
+        // A credit larger than the tree is clamped, never subtracted below the margin.
+        assertEquals(
+            SPACE_BUFFER + 1L,
+            toolchainCopyBytes(100L, ToolchainCopySpace(1_000_000_000L, 1L)),
+        )
+    }
+
+    /**
      * The Play path is charged for one copy, not two, and the difference is when the
      * first one is written rather than where.
      *
@@ -95,6 +157,79 @@ class ToolchainInstallSpaceTest {
 
     @TempDir
     lateinit var filesDir: File
+
+    private fun sparse(path: String, bytes: Long): File {
+        val file = File(filesDir, path)
+        file.parentFile?.mkdirs()
+        java.io.RandomAccessFile(file, "rw").use { it.setLength(bytes) }
+        return file
+    }
+
+    @Test
+    fun `an installed tree is measured by its bytes and its largest file`() {
+        sparse("usr/opt/x/a", 30L)
+        sparse("usr/opt/x/deep/b", 10L)
+
+        assertEquals(
+            InstalledTree(40L, 30L),
+            installedTreeSpace(File(filesDir, "usr/opt/x"), filesDir, recordedBytes = 1_000L),
+        )
+    }
+
+    /** A directory can hold more than the pack writes back, and that excess is not returned. */
+    @Test
+    fun `the credit is clamped at the size the pack records`() {
+        sparse("usr/opt/x/a", 300L)
+        sparse("usr/opt/x/b", 100L)
+
+        assertEquals(
+            InstalledTree(250L, 250L),
+            installedTreeSpace(File(filesDir, "usr/opt/x"), filesDir, recordedBytes = 250L),
+        )
+    }
+
+    @Test
+    fun `no recorded root and a missing tree credit nothing`() {
+        assertEquals(InstalledTree.NONE, installedTreeSpace(null, filesDir, 1_000L))
+        assertEquals(InstalledTree.NONE, installedTreeSpace(File(filesDir, "usr/opt/gone"), filesDir, 1_000L))
+    }
+
+    /** `..` escapes `File(base, relative)`, and a credit is the first decision taken on that string. */
+    @Test
+    fun `a root outside the app files credits nothing`() {
+        val outside = File(filesDir.parentFile, "elsewhere-${System.nanoTime()}").apply { mkdirs() }
+        try {
+            java.io.RandomAccessFile(File(outside, "big"), "rw").use { it.setLength(5_000L) }
+
+            assertEquals(
+                InstalledTree.NONE,
+                installedTreeSpace(File(filesDir, "../${outside.name}"), filesDir, 10_000L),
+            )
+        } finally {
+            outside.deleteRecursively()
+        }
+    }
+
+    /** A link's target is not in the directory being measured, so it is neither followed nor counted. */
+    @Test
+    fun `links are not followed or counted`() {
+        val target = sparse("usr/opt/target/huge", 9_000L)
+        sparse("usr/opt/x/real", 20L)
+        java.nio.file.Files.createSymbolicLink(
+            File(filesDir, "usr/opt/x/link").toPath(),
+            target.toPath(),
+        )
+        java.nio.file.Files.createSymbolicLink(
+            File(filesDir, "usr/opt/x/dirlink").toPath(),
+            File(filesDir, "usr/opt/target").toPath(),
+        )
+
+        assertEquals(
+            InstalledTree(20L, 20L),
+            installedTreeSpace(File(filesDir, "usr/opt/x"), filesDir, recordedBytes = 100_000L),
+        )
+    }
+
 
     @Test
     fun `only matching regular files are credited`() {
