@@ -1568,6 +1568,7 @@ module and a pack ship is a conflict bundletool refuses. What lands in `filesDir
 | Path | What | Size |
 |---|---|---|
 | `bin/clang-<major>`, `bin/lld` | the driver and the linker | 6 MB |
+| `bin/clangd` | the language server, linked against the same two libraries; see `launchers` below | 18 MB |
 | `bin/llvm-ar`, `-ranlib`, `-nm`, `-objdump`, `-objcopy`, `-strip`, `-readelf`, `-size` | the binary tools | 3 MB |
 | `bin/aarch64-linux-android-clang`, `-clang++` | two scripts that start `clang` and `clang++`, see below | under 1 KB |
 | `lib/libLLVM.so`, `lib/libclang-cpp.so` | the compiler, shared by every tool above | 197 MB |
@@ -1584,6 +1585,21 @@ path is what the interceptor puts in `TERMUX_EXEC__PROC_SELF_EXE`, which libLLVM
 do, the process believes it is the loader and finds none of it. Hence `"preloadOnly": true`, which
 `regenerateEnvFileLocked` and `regenerateExecTableLocked` honour by writing no function and no
 row for the toolchain's binaries, while `binaries`, `pathDirs` and `env` apply as for any other.
+
+`launchers` is the one thing that gets a row anyway: `{"usr/bin/clangd": ["--resource-dir=$FILESDIR/usr/lib/clang/<major>"]}`.
+A language client starts clangd with no terminal and so no interceptor, and started through the
+trampoline it takes the loader's directory for its own: every compile command it builds carries
+`-resource-dir=/apex/com.android.runtime/lib/clang/<major>`, and `stddef.h` and the rest of clang's
+own headers are not found (measured on an API 37 emulator, through the extension: `stdio.h` found,
+`stddef.h` not, one error on every file that includes it). The row's argument gives it the real
+directory, and with it a C and a C++ file both check clean. The sysroot needs nothing, because
+clangd takes it from the `clang` it finds on `PATH`, which is `usr/bin/clang`: a link in tcbin
+named `clang` would be found first and would send the sysroot to `usr/libexec`, which is the
+other reason the compilers stay out of the table. `addLauncherRows` writes the row, and holds
+it to what the trampoline reads: the path is one of the manifest's `binaries` and an ELF on disk,
+there are at most `MAX_ROW_ARGS` (8, the trampoline's own constant, pinned by
+`ExecTrampolineRowLimitTest`) arguments, and none holds a tab or a line break. A pack from before
+this key has no row and clangd is simply absent from it.
 
 The command names are `symlinks` in the manifest (`clang`, `clang++`, `cc`, `c++`, `gcc` and `g++`
 onto the driver; `ld` and `ld.lld` onto lld; `ar`, `ranlib`, `nm`, `strip`, `objdump`, `objcopy`,
@@ -1612,13 +1628,14 @@ them stays. An entry is refused unless it is under `usr/` and at least three com
 (`isOwnedPathName`). The build script ends by checking that every file in the pack is named by
 `binaries`, `libs` or `ownedPaths`, so an uninstall cannot leave one behind.
 
-Not in the pack, and not a defect: `clangd` and the other clang tools, `libclang.so`, cmake, ninja,
+Not in the pack, and not a defect: `clang-format` and the other clang tools, `libclang.so`, cmake, ninja,
 the sanitizer runtimes, OpenMP and the profile library. `make` is the base app's.
 
-**What it needs.** The terminal's interceptor, and only that. With `LD_PRELOAD` set to null, from an
-extension that starts a process itself, or as a `"type": "process"` task's own command, a compiler
-is a file under `filesDir` the kernel will not execute and nothing here makes it one. The card says
-so, and so does the user guide.
+**What it needs.** The terminal's interceptor, and only that, for the compilers. With `LD_PRELOAD`
+set to null, from an extension that starts a process itself, or as a `"type": "process"` task's own
+command, a compiler is a file under `filesDir` the kernel will not execute and nothing here makes
+it one. The card says so, and so does the user guide. clangd is the exception, through `launchers`
+above.
 
 ## 8. Package Manager
 
