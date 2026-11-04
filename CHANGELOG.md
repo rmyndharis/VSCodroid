@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add `clangd` to the C/C++ toolchain, so the clangd extension works on C and C++ files.
+- The C/C++ toolchain is an 80 MB download and 280 MB installed, and needs installing again to get `clangd`.
+
 ### Fixed
 
 - Keep the editor origin reserved across backend stops and restarts, using an app-private socket for each editor run.
@@ -34,6 +39,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Setup that finishes while the app is in the background starts the editor when you come back, not from the background.
 - The first-run failure message scrolls and the Retry button stays below it, so a long message no longer runs under the button in landscape or at a large font size.
 - Keep the caret in view when arrow keys move it in a text box without moving focus out of right-to-left and mixed text.
+- A delete, a new file or a rename in a device folder waits up to ten seconds for another folder of the same provider to finish writing, instead of being refused at once.
+- Reinstalling or updating a toolchain over HTTP asks for one installed size plus its largest file of free space, not the first-install figure.
 
 ### Changed
 

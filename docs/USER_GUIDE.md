@@ -120,8 +120,9 @@ VSCodroid is VS Code. If you have used VS Code on desktop, everything works the 
 - Two device folders on the same provider take turns writing, for example a
   folder you closed a moment ago and the one you opened next. While one is
   still saving, a save in the other is held back and retried on its own, and a
-  delete, a new file or a rename there is refused with a notice; repeat it once
-  the first folder has finished.
+  delete, a new file or a rename there waits up to ten seconds for the first
+  folder to finish. If that folder is still writing after that, it is refused
+  with a notice; repeat it once the first folder has finished.
 - A file of a device folder that you delete in the editor is deleted in the
   device folder too, unless the device folder's version is one VSCodroid has not
   read: another app may have changed it since you opened the folder or last
@@ -889,11 +890,13 @@ Beyond the bundled tools (Node.js, Python, Git, Bash), VSCodroid offers addition
 |----------|--------------|----------------|----------|
 | Ruby | 11 MB | 41 MB | ruby, gem, irb, bundler, rake, and the headers native gems build against |
 | Java 21 (OpenJDK) | 64 MB | 186 MB | java, javac, jar, jshell |
-| C/C++ (clang) | 74 MB | 260 MB | cc, c++, gcc, g++, clang, clang++, ld, ar, ranlib, nm, strip, objdump, objcopy, readelf, size, and the C and C++ headers |
+| C/C++ (clang) | 80 MB | 280 MB | cc, c++, gcc, g++, clang, clang++, ld, ar, ranlib, nm, strip, objdump, objcopy, readelf, size, clangd (the language server), and the C and C++ headers |
 
 The C/C++ toolchain is the largest. Installing a toolchain holds the unpacked copy and the
 installed copy at once, so the install asks for roughly twice the installed size free while
-it runs, which for this one is about 570 MB.
+it runs, which for this one is about 610 MB. Reinstalling or updating a toolchain that is
+already installed asks for less, about one installed size plus its largest file, because the
+copy replaces files that are already on the disk.
 
 ### What You Get For Each Language
 
@@ -906,13 +909,16 @@ beyond that differs a great deal, and this is the whole of it, so you can pick w
 | Python (bundled) | Yes | Completion and hover from Jedi; no type checking | None | pip, including wheels built for Android (numpy installs and runs) |
 | Ruby | `ruby file` | None | None | gem and bundler; a gem with a compiled part needs the C/C++ toolchain as well (`bcrypt` builds) |
 | Java 21 | `java file` (a single source file) | None | None | None: no Maven or Gradle |
-| C and C++ | Compiles to a temporary file and runs it | None | None | None: no CMake or Ninja; `make` works |
+| C and C++ | Compiles to a temporary file and runs it | clangd, through its extension (see [C and C++](#c-and-c)) | None | None: no CMake or Ninja; `make` works |
 
-**Java and C/C++ here are for compiling and running programs, not an IDE.** The Language
+**Java here is for compiling and running programs, not an IDE.** The Language
 Support for Java extension from Open VSX installs but cannot run: it starts its server by the
 JDK's full path, which Android refuses to execute, and the server it would start needs about 650
 MB of memory on a phone. Nothing in VSCodroid works around that, so do not expect error squiggles
-or completion for Java. The same goes for C and C++, where `clangd` is not included.
+or completion for Java.
+
+**C and C++ have a language server.** The C/C++ toolchain includes `clangd`, and the clangd
+extension from Open VSX talks to it: see [C and C++](#c-and-c). There is no debugger for either.
 
 **TypeScript.** `npm install typescript` now installs version 7, whose compiler is a native
 program with no Android build, so `npx tsc` stops with `Unable to resolve ... Either your
@@ -1012,7 +1018,18 @@ provides under that name, and it puts Python's headers where they are looked for
 `usr/include/python3.14`. A large package can take a long time on a phone, and some packages
 need libraries that are not here.
 
-**What is not included:** `clangd`, `clang-format` and the other clang tools; `libclang`; CMake
+**Language server.** The toolchain includes `clangd`. Install the toolchain, then the **clangd**
+extension (publisher `llvm-vs-code-extensions`) from the Extensions view. Open a `.c` or `.cpp`
+file and the status bar shows `clangd: idle` after a moment, with error squiggles, completion
+and hover. If the extension was installed first, run **clangd: Restart language server** from the
+Command Palette once the toolchain is in. An extension starts `clangd` by itself, so unlike the
+compilers it does not need the terminal's exec interceptor. Without a `compile_commands.json` or
+a `compile_flags.txt`, clangd parses each file with its default flags, which is enough for a
+file or two. Giving it your own flags through one of those files is the usual way for a larger
+project, and was not tried here. A toolchain installed before this was added needs installing
+again to get `clangd`.
+
+**What is not included:** `clang-format` and the other clang tools; `libclang`; CMake
 and Ninja; OpenMP (`-fopenmp`); the sanitizers (`-fsanitize=`); a debugger; and `<spawn.h>`, so a
 program that calls `posix_spawn` does not compile. Programs are built for the phone, as arm64
 Android programs, and for nothing else.
@@ -1321,11 +1338,13 @@ an absolute path, a forked helper and a script run by its own path all work.
 program on `PATH` for everything else. So `sh -c 'npm -v'`, `timeout 60 npm install`
 and a tool that runs `npm install` itself all find them, as the terminal does.
 
-The [C/C++ toolchain](#c-and-c) is the one exception, and it is the other way round. It gets
-no bash function and no program on `PATH`, because starting a compiler through the loader by
-hand makes clang believe it is the loader and look for its headers in the wrong place. It is
-found on `PATH` like any program and started by the terminal's own exec, so it works in a
-terminal and in a `"type": "shell"` task and in nothing that starts a process without one.
+The [C/C++ toolchain](#c-and-c) is the one exception, and it is the other way round. Its
+compilers get no bash function and no program on `PATH`, because starting a compiler through the
+loader by hand makes clang believe it is the loader and look for its headers in the wrong place.
+They are found on `PATH` like any program and started by the terminal's own exec, so they work in
+a terminal and in a `"type": "shell"` task and in nothing that starts a process without one.
+`clangd` is the exception to the exception: a language client starts it without a terminal, so it
+does get a program on `PATH`, which hands it the directory of clang's own headers.
 
 ### Android Phantom Process Limit
 

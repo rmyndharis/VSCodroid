@@ -21,7 +21,7 @@ set -euo pipefail
 # Output:
 #   toolchain-zips/toolchain_ruby.zip  (~11 MB)
 #   toolchain-zips/toolchain_java.zip  (~64 MB)
-#   toolchain-zips/toolchain_cpp.zip   (~74 MB)
+#   toolchain-zips/toolchain_cpp.zip   (~79 MB)
 #
 # The ZIPs are intended to be attached to GitHub Releases so that sideloaded
 # APK users (not from Play Store) can download toolchains manually. The app's

@@ -659,9 +659,9 @@ tasks.withType<Test> {
     // FirstRunEditorDefaultsTest reads the REQUIRED list of verify-server-tree.py,
     // because the reason it gives for hiding the secondary side bar is that the
     // tree is required to carry the chat provider. Besides build-nls-bundles.py
-    // above and the download and spawned self-check scripts below, nothing else
-    // under scripts/ is opened by a test, and most of it is Python the Python
-    // gates already cover.
+    // above, the trampoline source and the download and spawned self-check scripts
+    // below, nothing else under scripts/ is opened by a test, and most of it is
+    // Python the Python gates already cover.
     inputs.file(rootProject.projectDir.parentFile.resolve("scripts/build-vscode-oss.sh"))
         .withPropertyName("codeOssBuildScript")
         .withPathSensitivity(PathSensitivity.RELATIVE)
@@ -681,6 +681,11 @@ tasks.withType<Test> {
         .withPathSensitivity(PathSensitivity.RELATIVE)
     inputs.file(rootProject.projectDir.parentFile.resolve("scripts/fixtures/workbench-panel-position.ts"))
         .withPropertyName("panelPositionFixture")
+        .withPathSensitivity(PathSensitivity.RELATIVE)
+    // ExecTrampolineRowLimitTest holds the arguments an exec-table row is written with
+    // to the number the trampoline's C source reads them with.
+    inputs.file(rootProject.projectDir.parentFile.resolve("scripts/exec-trampoline.c"))
+        .withPropertyName("execTrampolineSource")
         .withPathSensitivity(PathSensitivity.RELATIVE)
     // RunFileCommandTest holds the toolchain names the Run button offers to the manifests
     // these three write, and CaretDragWiringTest holds the caret-drag self-check to the two

@@ -153,6 +153,11 @@ class ToolchainCppPackTest {
 
     private fun manifest() = JSONObject(manifestFile.readText())
 
+    private fun launchers() = manifest().getJSONObject("launchers")
+
+    /** The commands that start through the trampoline whatever `preloadOnly` says. */
+    private val launched = setOf("usr/bin/clangd")
+
     /** Regular files and links, not what a link points at, and not directories. */
     private fun entriesUnder(dir: File): List<File> =
         dir.walkTopDown().filter { !Files.isDirectory(it.toPath(), LinkOption.NOFOLLOW_LINKS) }.toList()
@@ -194,6 +199,23 @@ class ToolchainCppPackTest {
             assertFalse(Files.isSymbolicLink(file.toPath()), "$name is a link in the pack")
             assertEquals(scriptFor(plain), file.readText(), "$name is not the script that starts $plain")
         }
+
+        // clangd is the one program a client starts by itself, so it is the one that
+        // gets a row, with the directory its own path cannot give it.
+        assertEquals(launched, launchers().keys().asSequence().toSet(), "the programs launched through the table changed")
+        for (path in launchers().keys()) {
+            assertTrue(path in binaries, "launcher $path is not a file the pack ships, so its row names nothing")
+        }
+        val major = m.getString("version").substringBefore('.')
+        assertEquals(
+            listOf("--resource-dir=\$FILESDIR/usr/lib/clang/$major"),
+            strings(launchers().getJSONArray("usr/bin/clangd")),
+            "clangd is not given the resource directory the pack ships",
+        )
+        assertTrue(
+            File(packAssets, "usr/lib/clang/$major/include/stddef.h").isFile,
+            "the resource directory the launcher names holds no stddef.h",
+        )
     }
 
     @Test
@@ -240,16 +262,35 @@ class ToolchainCppPackTest {
         )
 
         val commands = binaries.map { it.substringAfterLast('/') } + links.keys().asSequence()
+        val launchedCommands = launched.map { it.substringAfterLast('/') }.toSet()
         for (command in commands) {
             assertFalse(
                 env.lineSequence().any { it.startsWith("$command() ") },
                 "a bash wrapper was written for $command, which would start it through linker64:\n$env",
             )
+            if (command in launchedCommands) continue
             assertFalse(
                 table.lineSequence().any { it.startsWith("$command\t") },
                 "an exec-table row was written for $command, which would start it through linker64:\n$table",
             )
+            assertFalse(
+                Files.exists(File(filesDir, "usr/libexec/tcbin/$command").toPath(), LinkOption.NOFOLLOW_LINKS),
+                "a link in tcbin for $command would be found ahead of the real command",
+            )
         }
+
+        // The one exception, read the way the trampoline reads it.
+        val root = filesDir.absolutePath
+        val major = manifest().getString("version").substringBefore('.')
+        assertEquals(
+            listOf("clangd\t$root/usr/bin/clangd\t--resource-dir=$root/usr/lib/clang/$major"),
+            table.lineSequence().filter { it.startsWith("clangd\t") }.toList(),
+            "the launcher's row is not what a language client needs:\n$table",
+        )
+        assertTrue(
+            Files.isSymbolicLink(File(filesDir, "usr/libexec/tcbin/clangd").toPath()),
+            "clangd has a row and no link on PATH, so nothing reaches it by name",
+        )
     }
 
     /**
@@ -278,6 +319,10 @@ class ToolchainCppPackTest {
 
         val left = packFiles()
         assertEquals(emptyList<String>(), left.take(20), "an uninstall left ${left.size} files behind")
+        assertFalse(
+            Files.exists(File(filesDir, "usr/libexec/tcbin/clangd").toPath(), LinkOption.NOFOLLOW_LINKS),
+            "the launcher's link outlived the toolchain",
+        )
         val state = File(filesDir, "home/.vscodroid/toolchains.json").readText()
         assertFalse("\"cpp\"" in state, "the record still names it: $state")
     }
