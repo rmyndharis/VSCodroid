@@ -215,4 +215,37 @@ class SetupFailureCauseTest {
             "a message with a single colon and an overlong tail must not slice the step name: ${singleColonFailure.detail}",
         )
     }
+
+    /**
+     * A file system exception reads "path: reason" with one separator, and when the path is
+     * long the reason, which is the part that says what to do, was cut with the rest.
+     */
+    @Test
+    fun `a long message with one separator keeps a short reason at the tail`() {
+        val path = "server/vscode-reh/" + "deep/".repeat(30) + ".vscodroid-1a2b-rg.tmp~"
+        val failure = FirstRunSetup.describeFailure(
+            "Extracting tools...", java.nio.file.FileSystemException(path, null, "No space left on device"),
+        )
+
+        assertTrue(failure.detail.endsWith(": No space left on device"), failure.detail)
+        assertTrue(failure.detail.contains("…"), "the omitted middle is not marked: ${failure.detail}")
+        assertTrue(
+            failure.detail.length <= "FileSystemException: ".length + FirstRunSetup.DETAIL_LIMIT,
+            "detail exceeded the length budget: ${failure.detail.length}",
+        )
+    }
+
+    @Test
+    fun `a long message with one separator and a tail longer than a reason keeps its head`() {
+        // A tail longer than a reason and shorter than the budget, so keeping it would cut the step name.
+        val step = "could not unpack bundled extension github.copilot-chat-0.43"
+        val message = "$step: " + "x".repeat(FirstRunSetup.REASON_LIMIT + 32)
+        assertTrue(message.length > FirstRunSetup.DETAIL_LIMIT, "setup: the message fits and is not cut")
+        val failure = FirstRunSetup.describeFailure("Configuring extensions…", IOException(message))
+
+        assertTrue(
+            failure.detail.startsWith("IOException: $step: "),
+            "a tail that is not a reason must leave the step name whole: ${failure.detail}",
+        )
+    }
 }

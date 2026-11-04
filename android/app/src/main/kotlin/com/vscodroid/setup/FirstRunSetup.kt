@@ -4312,6 +4312,14 @@ claude() {
         internal const val DETAIL_LIMIT = 120
 
         /**
+         * The longest tail kept after the only separator of a long message. One separator reads
+         * as "where: why" as often as "what: detail", so the tail is kept only while it is short
+         * enough to be a reason such as "No space left on device"; a longer one is the detail,
+         * and the head names the step.
+         */
+        internal const val REASON_LIMIT = 48
+
+        /**
          * The user-facing description of a failure: which step, and what went wrong.
          *
          * A pure function in the companion so it can be exercised without a
@@ -4339,7 +4347,9 @@ claude() {
                     val reasonSeparator = message.lastIndexOf(": ")
                     val tail = if (reasonSeparator > 0) message.substring(reasonSeparator) else ""
                     val headBudget = DETAIL_LIMIT - 1 - tail.length
-                    if (reasonSeparator > firstSeparator && headBudget > 0) {
+                    val keepsTail = reasonSeparator > firstSeparator ||
+                        (reasonSeparator > 0 && tail.length <= REASON_LIMIT)
+                    if (keepsTail && headBudget > 0) {
                         "$type: " + message.take(headBudget).trimEnd() + "\u2026" + tail
                     } else {
                         "$type: " + message.take(DETAIL_LIMIT).trimEnd() + "\u2026"
