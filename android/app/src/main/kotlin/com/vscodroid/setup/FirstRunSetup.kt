@@ -5533,8 +5533,12 @@ internal fun writeAtomically(
         synchronized(lock) {
             val prefix = ".vscodroid-${Integer.toUnsignedString(dest.name.hashCode(), 16)}-"
             val tmp = File(dest.parentFile, "$prefix${UUID.randomUUID()}.tmp~")
+            // Named before the sweep looks at the directory, so a write that starts while
+            // another sweeps is never taken for what a dead process left.
+            LIVE_TEMPS.add(tmp.absolutePath)
             var owned = false
             try {
+                dest.parentFile?.let(::sweepStrayTemps)
                 try {
                     Files.newOutputStream(
                         tmp.toPath(), StandardOpenOption.CREATE_NEW, StandardOpenOption.WRITE,
@@ -5555,6 +5559,7 @@ internal fun writeAtomically(
                 return true
             } finally {
                 if (owned) tmp.delete()
+                LIVE_TEMPS.remove(tmp.absolutePath)
             }
         }
     } finally {
@@ -5711,6 +5716,34 @@ private fun claimWriteLock(path: String): DestinationLock = synchronized(WRITE_L
 
 private fun releaseWriteLock(path: String, lock: DestinationLock) = synchronized(WRITE_LOCKS) {
     if (--lock.holders == 0) WRITE_LOCKS.remove(path)
+}
+
+/** The temporary files [writeAtomically] is writing right now, so a sweep never takes one for a stray. */
+private val LIVE_TEMPS: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+/** The directories this process has swept for strays, so each is listed once however many files it gets. */
+private val SWEPT_FOR_STRAYS: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
+
+/**
+ * Deletes from [dir] the temporary files that a process which died inside [writeAtomically]
+ * left behind.
+ *
+ * Their names carry a unique id, so no later write of the same file reuses them the way the one
+ * fixed name they replaced was, and the largest are the size of the file being written: 92 MiB
+ * for the Copilot runtime, about 196 MiB for the libraries of the C and C++ toolchain. Dying
+ * inside a write is the only way to leave one, because the writer removes its own on every other
+ * exit, so a directory is swept once per process, by the first write into it or by the removal
+ * of a toolchain that put files there.
+ */
+internal fun sweepStrayTemps(dir: File) {
+    if (!SWEPT_FOR_STRAYS.add(dir.absolutePath)) return
+    val names = dir.list { _, name -> name.startsWith(".vscodroid-") && name.endsWith(".tmp~") } ?: return
+    for (name in names) {
+        val stray = File(dir, name)
+        if (stray.absolutePath !in LIVE_TEMPS && Files.isRegularFile(stray.toPath(), LinkOption.NOFOLLOW_LINKS)) {
+            stray.delete()
+        }
+    }
 }
 
 /**

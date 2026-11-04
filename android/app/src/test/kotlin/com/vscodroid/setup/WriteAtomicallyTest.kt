@@ -178,6 +178,8 @@ class WriteAtomicallyTest {
     @Test
     fun `an occupied exclusive temporary name preserves both existing files`() {
         val dest = File(dir, "payload.so").apply { writeText("working version") }
+        // The first write into a directory sweeps strays, and this test is about a name taken after that.
+        assertTrue(writeAtomically(File(dir, "warm")) { it.write("warm".toByteArray()) })
         val id = UUID.fromString("24ffb347-264c-4878-ab2d-bb552c07a03d")
         val occupied = File(dir, ".vscodroid-${Integer.toUnsignedString(dest.name.hashCode(), 16)}-$id.tmp~").apply { writeText("existing neighbor") }
         var entered = false
@@ -191,6 +193,55 @@ class WriteAtomicallyTest {
         assertFalse(entered, "an occupied path was opened as this write's temporary file")
         assertEquals("working version", dest.readText())
         assertEquals("existing neighbor", occupied.readText())
+    }
+
+    /**
+     * A process that dies inside a write leaves its temporary file, and the unique name means
+     * no later write of that file reuses it, so each kill used to leak a file as large as the
+     * one being written.
+     */
+    @Test
+    fun `the first write into a directory sweeps the temporary files a dead process left`() {
+        val ofThisFile = File(dir, ".vscodroid-${Integer.toUnsignedString("payload.so".hashCode(), 16)}-24ffb347-264c-4878-ab2d-bb552c07a03d.tmp~")
+            .apply { writeText("half a payload") }
+        val ofAnotherFile = File(dir, ".vscodroid-1f-5d1c9a3e-0b6f-4c38-9c1f-7d3a2f4e8b10.tmp~")
+            .apply { writeText("half of another file") }
+        val neighbor = File(dir, ".vscodroid-backup").apply { writeText("not a temporary file") }
+        val dest = File(dir, "payload.so")
+
+        assertTrue(writeAtomically(dest) { it.write("whole".toByteArray()) })
+
+        assertEquals("whole", dest.readText())
+        assertFalse(ofThisFile.exists(), "a stray of the file being written was left")
+        assertFalse(ofAnotherFile.exists(), "a stray of another file in the directory was left")
+        assertEquals("not a temporary file", neighbor.readText())
+        assertTrue(tempFiles().isEmpty())
+    }
+
+    @Test
+    fun `a directory is swept once and not again by every write into it`() {
+        assertTrue(writeAtomically(File(dir, "first")) { it.write("1".toByteArray()) })
+        val late = File(dir, ".vscodroid-2a-0e9d7c61-3b52-4a0f-8f4e-6c1d9b7a5e32.tmp~")
+            .apply { writeText("a stray after the sweep") }
+
+        assertTrue(writeAtomically(File(dir, "second")) { it.write("2".toByteArray()) })
+
+        assertTrue(late.exists(), "every write listed the directory again")
+    }
+
+    @Test
+    fun `a link or a folder named like a temporary file is neither followed nor removed`() {
+        val target = File(dir, "target.bin").apply { writeText("not a temporary file") }
+        val link = File(dir, ".vscodroid-3b-1a2b3c4d-0000-4000-8000-000000000001.tmp~")
+        Files.createSymbolicLink(link.toPath(), target.toPath())
+        val folder = File(dir, ".vscodroid-3c-1a2b3c4d-0000-4000-8000-000000000002.tmp~").apply { mkdirs() }
+        File(folder, "kept").writeText("inside")
+
+        assertTrue(writeAtomically(File(dir, "payload.so")) { it.write("x".toByteArray()) })
+
+        assertTrue(Files.isSymbolicLink(link.toPath()), "a link was removed")
+        assertEquals("not a temporary file", target.readText())
+        assertEquals("inside", File(folder, "kept").readText())
     }
 
     @Test

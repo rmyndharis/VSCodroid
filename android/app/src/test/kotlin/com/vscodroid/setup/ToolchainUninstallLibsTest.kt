@@ -126,6 +126,25 @@ class ToolchainUninstallLibsTest {
     }
 
     /**
+     * A copy of a library that a dying process cut short leaves a temporary file of its own
+     * beside the library, under a name no manifest carries, so only a sweep of the directory
+     * finds it, and C and C++ libraries run to about 196 MiB.
+     */
+    @Test
+    fun `an uninstall takes the temporary file a killed copy left beside a library`() {
+        every { assets.list("usr/lib") } returns arrayOf(shared)
+        val stray = File(libDir, ".vscodroid-1a2b3c-24ffb347-264c-4878-ab2d-bb552c07a03d.tmp~")
+            .apply { writeText("half a library") }
+        val neighbor = File(libDir, ".vscodroid-notes").apply { writeText("not a temporary file") }
+
+        uninstallSync("ruby")
+
+        assertFalse(stray.exists(), "the temporary file stayed in usr/lib after the uninstall")
+        assertTrue(neighbor.exists(), "a file that is not a temporary file was swept")
+        assertTrue(File(libDir, shared).exists(), "$shared is shipped by the base install and must survive")
+    }
+
+    /**
      * The base APK is not the only other owner of `usr/lib`.
      *
      * A second installed toolchain ships its libraries into the same directory,

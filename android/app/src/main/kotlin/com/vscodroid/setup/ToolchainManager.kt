@@ -1051,6 +1051,9 @@ class ToolchainManager(private val context: Context) {
             Logger.w(tag, "Keeping $name: a managed path has a redirected ancestor")
             return false
         }
+        // A copy of one of these files that a dying process cut short left its temporary file
+        // beside it, which no manifest names, so the removal below would never find it.
+        paths.values.mapNotNullTo(HashSet()) { it?.parentFile }.forEach(::sweepStrayTemps)
         val expectedGone = paths.keys.toMutableSet()
         // Delete symlinks from usr/bin/ (use Os.lstat to catch dangling symlinks)
         val symlinks = manifest.optJSONObject("symlinks")
