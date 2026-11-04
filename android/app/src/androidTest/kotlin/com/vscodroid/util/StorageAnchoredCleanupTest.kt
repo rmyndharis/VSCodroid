@@ -114,18 +114,6 @@ class StorageAnchoredCleanupTest {
     }
 
     @Test
-    fun cleanupUnlinksAHardLinkWithoutChangingItsOtherName() {
-        val owned = File(fixture, "owned").apply { mkdir() }
-        val contents = File(owned, "data").apply { writeText("shared bytes") }
-        val remaining = File(fixture, "user-copy")
-        Files.createLink(remaining.toPath(), contents.toPath())
-
-        assertEquals(12L, StorageManager.deleteRecursive(owned, appRoot))
-        assertFalse(owned.exists())
-        assertEquals("shared bytes", remaining.readText())
-    }
-
-    @Test
     fun cleanupKeepsTheRemovedByteCountWhenOneSubtreeIsUnreadable() {
         val owned = File(fixture, "owned").apply { mkdir() }
         val blocked = File(owned, "blocked").apply { mkdir() }

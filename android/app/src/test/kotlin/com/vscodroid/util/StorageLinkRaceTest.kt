@@ -1,5 +1,7 @@
 package com.vscodroid.util
 
+import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -42,5 +44,17 @@ class StorageLinkRaceTest {
         StorageManager.deleteRecursive(File(cache, "redirected/pip"), temp)
 
         assertTrue(work.isFile, "cleanup followed a redirected parent")
+    }
+
+    @Test
+    fun `cleanup unlinks a hard link without changing its other name`() {
+        val owned = File(temp, "owned").apply { mkdir() }
+        val contents = File(owned, "data").apply { writeText("shared bytes") }
+        val remaining = File(temp, "user-copy")
+        Files.createLink(remaining.toPath(), contents.toPath())
+
+        assertEquals(12L, StorageManager.deleteRecursive(owned, temp))
+        assertFalse(owned.exists())
+        assertEquals("shared bytes", remaining.readText())
     }
 }
