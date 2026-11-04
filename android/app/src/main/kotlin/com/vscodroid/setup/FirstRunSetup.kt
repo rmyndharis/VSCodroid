@@ -595,11 +595,36 @@ class FirstRunSetup(
 
             val elapsed = System.currentTimeMillis() - startTime
             Logger.i(tag, "First-run setup completed in ${elapsed}ms")
+            logStorageUse(available, (assetBytes - installed).coerceAtLeast(0), space.missingOverhead)
             SetupResult.SUCCESS
         } catch (e: Exception) {
             Logger.e(tag, "First-run setup failed", e)
             lastFailure = describeFailure(currentStep, e)
             SetupResult.ERROR
+        }
+    }
+
+    /**
+     * Says in the log how much storage this run used against what the pre-flight allowed for.
+     *
+     * The overhead the pre-flight models (a node block per file, data rounded to 4 KiB, a block per
+     * directory, for encrypted f2fs) was checked against one measurement taken by hand, and what it
+     * asks for moves with every pin. Every first run is a measurement of it, on a filesystem this
+     * project does not have in its test devices, and the line below is how one is read off a
+     * device: it names the filesystem and goes to logcat (`adb logcat -s VSCodroid.FirstRunSetup`),
+     * which Copy Bug Report does not carry. [before] is the free space the pre-flight read, after
+     * its cache reclaim, and what is read here is a device that other apps were also writing to,
+     * so a run that wrote less than [MEASURABLE_PAYLOAD_BYTES] says nothing and is not reported.
+     */
+    private fun logStorageUse(before: Long, payloadBytes: Long, modelledOverhead: Long) {
+        if (payloadBytes < MEASURABLE_PAYLOAD_BYTES) return
+        try {
+            val used = before - context.filesDir.usableSpace
+            val mounts = runCatching { File("/proc/mounts").readLines() }.getOrDefault(emptyList())
+            val fileSystem = fileSystemOf(context.filesDir.canonicalPath, mounts)
+            Logger.i(tag, storageUseReport(used, payloadBytes, modelledOverhead, fileSystem))
+        } catch (e: Exception) {
+            Logger.d(tag, "Could not measure the storage setup used: ${e.message}")
         }
     }
 
@@ -4476,6 +4501,47 @@ claude() {
          */
         @Volatile
         private var lastShortfallBytes: Long = 0
+
+        /** A run that wrote less than this tells nothing about allocation overhead, so it is not reported. */
+        internal const val MEASURABLE_PAYLOAD_BYTES = 100_000_000L
+
+        /**
+         * The filesystem type that holds [path], from the lines of `/proc/mounts`, or "unknown".
+         *
+         * The longest mount point that is [path] or a parent of it, compared by whole path
+         * components: `/data2` does not hold `/data/user`. Fields are separated by spaces, and a
+         * space inside a mount point is written `\040`, which is undone before comparing.
+         */
+        internal fun fileSystemOf(path: String, mounts: List<String>): String {
+            var best = ""
+            var type = "unknown"
+            for (line in mounts) {
+                val fields = line.trim().split(Regex("\\s+"))
+                if (fields.size < 3) continue
+                val mountPoint = fields[1].replace("\\040", " ")
+                val holds = mountPoint == "/" || path == mountPoint || path.startsWith("$mountPoint/")
+                if (holds && mountPoint.length >= best.length) {
+                    best = mountPoint
+                    type = fields[2]
+                }
+            }
+            return type
+        }
+
+        /**
+         * The line a first run leaves about its own storage cost: what was used, what the files weigh,
+         * the difference between the two, and what the pre-flight modelled that difference to be, in
+         * decimal MB as every figure the user sees is.
+         */
+        internal fun storageUseReport(
+            usedBytes: Long,
+            payloadBytes: Long,
+            modelledOverheadBytes: Long,
+            fileSystem: String,
+        ): String = "First-run setup used ${usedBytes / 1_000_000} MB of storage for " +
+            "${payloadBytes / 1_000_000} MB of files on $fileSystem: " +
+            "${(usedBytes - payloadBytes) / 1_000_000} MB beyond the files, " +
+            "against ${modelledOverheadBytes / 1_000_000} MB modelled"
 
         /**
          * How much free space the next unpack needs, given what is already there.
