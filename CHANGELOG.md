@@ -37,7 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Changed
 
 - Keep device storage tests compatible with Android's hard-link restrictions.
-- Clarify which clients stop trusting a system root CA turned off in Android Settings (`git`, Python, `curl`, Ruby, and Node.js) and which still trust roots in their own built-in lists (`pip`, extension-host `fetch`/WebSocket, and Java 21).
+- Clarify which clients stop trusting a system root CA turned off in Android Settings (`git`, Python, Ruby, and the bundled Node.js) and which still trust roots in their own built-in lists (`pip`, extension-host `fetch`/WebSocket, and Java 21).
 - The extension version check refuses a shallow clone, and the build requires every `scripts/test-*.py` to run in both the lint and release workflows.
 - The release workflow refuses a tag whose commit is not on main.
 
