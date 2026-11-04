@@ -542,6 +542,21 @@ check('rotation ignores a host that loses focus during composition recovery',
         p.window.__vscodroidFinishComposition = () => { p.document.activeElement = p.document.body; };
         assert.strictEqual(rotationVerdict(p), false);
     }, []);
+check('rotation after a drag outside text leaves native input alone, which would hold the host',
+    typing({ composing: false }), (p) => {
+        drag(p, p.explorer);
+        flushTimers(p);
+        log = [];
+        assert.strictEqual(rotationVerdict(p), false);
+    }, []);
+check('rotation after a tap on text again releases native input',
+    typing({ composing: false }), (p) => {
+        drag(p, p.explorer);
+        flushTimers(p);
+        touch(p, p.lines, 100, '-monaco-gesturetap');
+        log = [];
+        assert.strictEqual(rotationVerdict(p), true);
+    }, []);
 check('the textarea edit path, which has no EditContext, is left alone',
     typing({ textarea: true }), (p) => press(p, 'End'), ['editor End']);
 

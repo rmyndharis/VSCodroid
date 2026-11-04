@@ -1187,7 +1187,10 @@ class MainActivity : AppCompatActivity() {
      * a resize or a fold, so this is where one is seen. The keyboard is reported
      * hidden with it and comes back by itself, [keyboardDismissal] must not hold
      * the page's editor down for that. Finish any composing word and release the
-     * old native input connection before the keyboard edits the new selection.
+     * old native input connection before the keyboard edits the new selection, the
+     * second only while the person is aimed at text: the refocus it makes reaches
+     * the page's focus handler as a new focus, which after a drag outside text
+     * holds the host and takes a keyboard that stayed up away.
      */
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
@@ -1210,7 +1213,8 @@ class MainActivity : AppCompatActivity() {
                 if (typeof window.__vscodroidFinishComposition !== 'function') return false;
                 var element = document.activeElement;
                 window.__vscodroidFinishComposition();
-                return !!(element && element === document.activeElement && element.editContext &&
+                var aimed = typeof window.__vscodroidAimedAtText === 'function' && window.__vscodroidAimedAtText();
+                return !!(aimed && element && element === document.activeElement && element.editContext &&
                     element.getAttribute('inputmode') !== 'none');
             })();
             """.trimIndent(),
@@ -4599,6 +4603,12 @@ class MainActivity : AppCompatActivity() {
                     reapplying = false;
                 }
                 window.__vscodroidFinishComposition = finishComposition;
+                // Whether the last touch left the person aimed at text. A refocus the
+                // guard did not make reaches the focus handler as a new focus, and
+                // after a drag or a long press outside text it holds the host, which
+                // puts a keyboard that is up away on a phone. Kotlin asks before it
+                // refocuses the WebView on a turn of the screen.
+                window.__vscodroidAimedAtText = function() { return aimedAtText === true; };
                 // Ending a composition can make the editor refilter an open
                 // suggest list and focus its first item again, so a Tab or tap
                 // the list takes ends it only after the list has acted, still

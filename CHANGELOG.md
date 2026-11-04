@@ -27,7 +27,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Stop a folder's write-back loop from using a full CPU core after a newer open takes over the folder.
 - Retry pending settings migrations after interrupted setup without removing later user preferences.
 - Validate the opened file before serving workspace resources, preserving regular-file symlinks and cache behavior.
-- Prevent a recomposing keyboard from cutting or duplicating editor text after screen rotation.
+- End a composing word in the editor when the screen turns.
 - Setup that stops on a symbolic link in its way names the path, not only the tree that is incomplete.
 - The setup notification no longer says unpacking only happens once, in every language; it runs again after each update.
 - A device folder that is still syncing is reported in the app's language instead of an English sentence.
