@@ -176,7 +176,7 @@ to: patch 0005 disables the service worker upstream uses to scope each webview t
 | `https://<uuid>.vscode-cdn.net`         | Extension webview documents, answered locally by the interception           |
 | `https://<scheme>+.vscode-resource.vscode-cdn.net` | Subresources of those documents, read off the filesystem         |
 
-Native responses on the workbench origin require `EditorGateway` to own the client's expected port. The secret storage key and translated interface bundles are refused with HTTP 503 when that ownership check fails. This check depends on the retained listener, so an unavailable editor backend does not let a different process inherit that origin.
+Native responses on the workbench origin require `EditorGateway` to own the client's expected port. Every request the app intercepts on that origin, the secret storage key and translated interface bundles included, is refused with HTTP 503 when that ownership check fails. This check depends on the retained listener, so an unavailable editor backend does not let a different process inherit that origin. The gateway itself answers HTTP 503 to every connection while no editor backend is selected and to any connection beyond 32 open at once, and it closes a connection that makes no progress for two minutes.
 
 - **Two arms answer ahead of all of this, and both are on our own origin.** A request to
   `http://127.0.0.1:<port>/_nls/<commit>/<version>/<locale>/nls.messages.js` is answered out of

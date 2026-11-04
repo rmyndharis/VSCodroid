@@ -117,6 +117,11 @@ VSCodroid is VS Code. If you have used VS Code on desktop, everything works the 
   save to it is still being written, the open does not wait for it: it says
   the folder is still syncing, saving carries on, and your later saves wait up
   to two minutes and are sent after that one.
+- Two device folders on the same provider take turns writing, for example a
+  folder you closed a moment ago and the one you opened next. While one is
+  still saving, a save in the other is held back and retried on its own, and a
+  delete, a new file or a rename there is refused with a notice; repeat it once
+  the first folder has finished.
 - A file of a device folder that you delete in the editor is deleted in the
   device folder too, unless the device folder's version is one VSCodroid has not
   read: another app may have changed it since you opened the folder or last
