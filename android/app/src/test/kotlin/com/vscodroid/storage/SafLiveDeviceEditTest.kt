@@ -1477,6 +1477,30 @@ class SafLiveDeviceEditTest {
     }
 
     /**
+     * A drain whose mirror a newer open has taken over can send nothing. Its try of a due
+     * hold was refused without ending the hold and still answered that it had tried, so the
+     * loop took the same hold again with no pause for as long as the drain ran.
+     */
+    @Test
+    fun `a held-back save of a mirror a newer open took over is not tried and the hold stays`() {
+        lateStamp = LateStamp.WHOLE_SECONDS
+        open()
+        save("first save")
+        settle()
+        deviceReadable = false
+        save("second save")
+        clock += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+
+        val outrun = WatchSession(mirror, generation = Any())
+        assertEquals(false, engine.retryHeldBack(outrun), "a session the mirror had moved past tried its hold")
+        assertEquals(false, engine.retryHeldBack(outrun), "a second turn of that session tried it again")
+
+        deviceReadable = true
+        assertEquals(true, engine.retryHeldBack(WatchSession(mirror)), "the refused turns ended the hold")
+        assertEquals("second save", deviceText, "the held-back save never reached the device")
+    }
+
+    /**
      * A save held back over a document another app then deletes, a delete on the server
      * that Nextcloud syncs down among them, before the editor's file is replaced by a
      * rename, as git checkout, git stash and mv do. The create writes the file into a new

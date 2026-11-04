@@ -2005,12 +2005,16 @@ class SafSyncEngine(private val context: Context) {
      * again: tried all at once, a save made meanwhile waited behind every try that was due,
      * which on a server that takes long to refuse a read is long for a save that has nothing
      * to do with them. A file the mirror no longer holds is dropped rather than tried, which
-     * would spin the loop on a save with nothing left to send. A try runs as a save does, so
-     * one of a file the folder's last open could not read is refused like a save of it.
+     * would spin the loop on a save with nothing left to send, and so would a mirror this
+     * session may no longer write to (a reset is running, or a newer open took it over): a
+     * try there is refused without ending the hold, so it answers false and the loop parks.
+     * A try runs as a save does, so one of a file the folder's last open could not read is
+     * refused like a save of it.
      */
     internal fun retryHeldBack(session: WatchSession): Boolean {
         val root = session.root ?: return false
         val access = outboundAccess(root, session.generation)
+        if (withCurrentMemory(access) { true } == null) return false
         val prefix = root.absolutePath + File.separator
         val now = SystemClock.elapsedRealtime()
         for ((path, held) in heldBack) {

@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Retry the welcome page's secondary sidebar alignment after a workspace-state write fails.
 - Honor offline package downloads, the Android NDK root setting, and backslashes in device-launch UI dumps.
 - Reject device-folder reads that overlap saves and retry deferred saves without blocking later edits.
+- Stop a folder's write-back loop from using a full CPU core after a newer open takes over the folder.
 - Retry pending settings migrations after interrupted setup without removing later user preferences.
 - Validate the opened file before serving workspace resources, preserving regular-file symlinks and cache behavior.
 - Prevent a recomposing keyboard from cutting or duplicating editor text after screen rotation.
