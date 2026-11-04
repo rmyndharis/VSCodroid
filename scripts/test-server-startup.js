@@ -221,8 +221,15 @@ for label, bundle, pattern, times in rows:
         assert.deepEqual(calls.delegated, expectedExit ? [] : [error]);
         cases++;
     }
-    await checkError({ listening: false }, Object.assign(new Error('dummy'), { code: 'EOTHER' }), false);
+    // Any error before the server is listening is a failed bind. The listener is a private socket, which a
+    // full disk, a refused path or a read-only directory fail as surely as a busy name does, and a server
+    // left alive without listening is one nothing replaces.
+    for (const code of ['EOTHER', 'ENOSPC', 'EACCES', 'EROFS', undefined]) {
+        await checkError({ listening: false }, Object.assign(new Error('dummy'), code ? { code } : {}), true);
+    }
+    // After listening the existing handler keeps every error, an address in use included.
     await checkError({ listening: true }, Object.assign(new Error('dummy'), { code: 'EADDRINUSE' }), false);
+    await checkError({ listening: true }, Object.assign(new Error('dummy'), { code: 'ENOSPC' }), false);
     const holder = http.createServer();
     const listener = http.createServer();
     try {
