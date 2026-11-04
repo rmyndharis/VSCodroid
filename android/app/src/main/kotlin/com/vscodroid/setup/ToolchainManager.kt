@@ -387,6 +387,14 @@ class ToolchainManager(private val context: Context) {
         }
 
         /**
+         * The most arguments an exec-table row can carry after its target. The
+         * trampoline has its own `MAX_ROW_ARGS` (`scripts/exec-trampoline.c`) and
+         * refuses a longer row whole when the command runs, so a row is never
+         * written past it. `ExecTrampolineRowLimitTest` holds the two equal.
+         */
+        internal const val MAX_ROW_ARGS = 8
+
+        /**
          * Whether a manifest binary is a command at all. The JDK keeps `jspawnhelper` and
          * `jexec` in `lib/`: the JVM starts the first by absolute path and the second is a
          * `#!` target, so neither belongs on PATH, where each only showed up as a command
@@ -3528,6 +3536,8 @@ class ToolchainManager(private val context: Context) {
                 }
             }
 
+            addLauncherRows(tc, name, rows)
+
             val gemHome = env?.optString("GEM_HOME", "").orEmpty()
             val ruby = elfPaths["ruby"]
             if (gemHome.isNotEmpty() && ruby != null) {
@@ -3576,6 +3586,52 @@ class ToolchainManager(private val context: Context) {
         refreshTrampolineLinks(rows.keys - setAside)
         Logger.i(tag, "Regenerated toolchain-exec.tsv (${rows.size} commands, " +
             "${envRows.size} variables)")
+    }
+
+    /**
+     * Rows for the binaries a manifest's `launchers` object names, each with the
+     * arguments the row carries ahead of the caller's own:
+     * `{"usr/bin/clangd": ["--resource-dir=$FILESDIR/usr/lib/clang/21"]}`.
+     *
+     * The way into the table for a program of a [isPreloadOnly] toolchain that
+     * a client starts by itself. clangd is the one: a language client spawns it
+     * with no terminal and so no interceptor, and a compiler's own start does
+     * not need this. Started as `linker64 <file>` it takes the loader's
+     * directory for its own and puts `-resource-dir=/apex/.../lib/clang/<major>`
+     * on every compile command, so stddef.h is not found; the argument gives it
+     * the real directory. Everything else it needs comes from the `clang` it
+     * finds on PATH, which is `usr/bin/clang`, and that is why `clang` never gets
+     * a row here: a link in tcbin would be found first and send its sysroot to
+     * `usr/libexec`.
+     *
+     * A launcher is held to what the table can carry. Its path has to be one of
+     * the manifest's own `binaries` and an ELF on disk, and its arguments have to
+     * fit the trampoline's row ([MAX_ROW_ARGS]) and contain neither a tab nor a
+     * line break, which would read as a field or a record of their own. A launcher
+     * that is not is skipped and logged, and nothing else about the toolchain
+     * changes.
+     */
+    private fun addLauncherRows(tc: JSONObject, name: String, rows: MutableMap<String, String>) {
+        val launchers = tc.optJSONObject("launchers") ?: return
+        val shipped = tc.optJSONArray("binaries")
+            ?.let { list -> (0 until list.length()).map { list.optString(it) }.toSet() }.orEmpty()
+        for (relPath in launchers.keys()) {
+            val command = relPath.substringAfterLast('/')
+            val argList = launchers.optJSONArray(relPath)
+            val args = argList?.let { list ->
+                (0 until list.length()).map { expandToolchainValue(list.optString(it)) }
+            }
+            when {
+                command.isEmpty() || relPath !in shipped ->
+                    Logger.w(tag, "No launcher row for $name's $relPath: not one of its binaries")
+                args == null || args.size > MAX_ROW_ARGS || args.any { '\t' in it || '\n' in it } ->
+                    Logger.w(tag, "No launcher row for $name's $command: its arguments " +
+                        "are not a list of at most $MAX_ROW_ARGS the table can carry")
+                !isElfFile(File(context.filesDir, relPath)) ->
+                    Logger.d(tag, "No launcher row for $name's $command: $relPath is not on disk")
+                else -> rows[command] = (listOf(command, "$filesDir/$relPath") + args).joinToString("\t")
+            }
+        }
     }
 
     /**
@@ -3962,8 +4018,9 @@ class ToolchainManager(private val context: Context) {
      * `"type": "process"` task) the command is a file under `filesDir` that
      * the kernel will not execute, and nothing here makes it one.
      *
-     * What still applies to it: the execute bit, `pathDirs`, `env` rows and
-     * removal. Only the two ways of starting a program are skipped.
+     * What still applies to it: the execute bit, `pathDirs`, `env` rows, removal,
+     * and the rows its `launchers` object names ([addLauncherRows]). Only the two
+     * ways of starting a program are skipped, for every binary it does not launch.
      */
     private fun isPreloadOnly(manifest: JSONObject): Boolean =
         manifest.optBoolean("preloadOnly", false)

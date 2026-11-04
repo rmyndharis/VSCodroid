@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add `clangd` to the C/C++ toolchain, so the clangd extension works on C and C++ files.
+- The C/C++ toolchain is an 80 MB download and 280 MB installed, and needs installing again to get `clangd`.
+
 ### Fixed
 
 - Keep the editor origin reserved across backend stops and restarts, using an app-private socket for each editor run.

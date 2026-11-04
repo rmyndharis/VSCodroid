@@ -746,7 +746,7 @@ GMP is the only copyleft library here. Its written source offer sits with the
 others under **GPL Source Code Availability** above, and the LGPL-3.0 text it
 requires is bundled in the base app under **GPL and LGPL License Texts**.
 
-LLVM is `libLLVM.so` and `libclang-cpp.so`. The clang driver, lld, the `llvm-*`
+LLVM is `libLLVM.so` and `libclang-cpp.so`. The clang driver, clangd, lld, the `llvm-*`
 tools and the compiler-rt builtins archive are built from the same source tree,
 so one `LICENSE.TXT` answers for all of them; it ships as
 `usr/share/doc/libllvm/LICENSE.TXT`. Its terms are Apache-2.0 with the LLVM
@@ -800,7 +800,7 @@ The following toolchains are available as optional downloads and have their own 
 
 ### C/C++ (LLVM)
 
-- **Project**: https://llvm.org (clang, lld, compiler-rt and libc++, packaged by Termux)
+- **Project**: https://llvm.org (clang, clangd, lld, compiler-rt and libc++, packaged by Termux)
 - **License**: Apache License v2.0 with LLVM Exceptions (Apache-2.0 WITH LLVM-exception); Termux also declares NCSA for the files not yet relicensed
 - **Copyright**: Copyright (c) LLVM Project contributors
 - **Full license**: `LICENSE.TXT`, which ships inside the pack at `usr/share/doc/libllvm/LICENSE.TXT`, and https://llvm.org/LICENSE.txt
@@ -832,4 +832,4 @@ For questions about licenses, trademarks, or legal notices:
 
 ---
 
-_This document was last updated on October 23, 2026._
+_This document was last updated on November 5, 2026._
