@@ -677,14 +677,75 @@ VSCodroid creates a default SSH config at `~/.ssh/config` on first launch with s
 - ed25519 identity file configured
 - Keepalive enabled
 
-You can edit `~/.ssh/config` to add custom hosts:
+You can edit `~/.ssh/config` to add custom hosts. The default key above is already used for
+every host, so a host needs no `IdentityFile` line unless it uses a different key:
 
 ```
 Host myserver
     HostName 192.168.1.100
+    Port 22
     User deploy
-    IdentityFile ~/.ssh/id_ed25519
 ```
+
+The terminal's `ssh` reads this file because `ssh` there is a shell function that adds
+`-F ~/.ssh/config`. The bundled OpenSSH looks for `~` in a place that does not exist on
+Android, so without the function it would miss the config, the default key and `known_hosts`,
+and print `Failed to add the host to the list of known hosts`. A `-F` you type yourself takes
+over, and `command ssh` runs the bare program. In a config, name any other key by its absolute
+path: run `echo ~/.ssh/work_key` and use what it prints.
+
+### Connecting to a Server
+
+Any server you can reach over the network is one command away:
+
+```bash
+ssh myserver          # a host from ~/.ssh/config
+ssh user@192.168.1.100
+```
+
+For key authentication, generate a key as described above and append the output of
+`cat ~/.ssh/id_ed25519.pub` to `~/.ssh/authorized_keys` on the server. The first connection
+saves the server's host key in `~/.ssh/known_hosts`, and later ones check it.
+
+`scp` and `sftp` are not bundled. To copy one file, pipe it through `ssh`:
+
+```bash
+ssh myserver 'cat /path/on/server/file' > file
+ssh myserver 'cat > /path/on/server/file' < file
+```
+
+### Editing Files on a Server
+
+VS Code's Remote - SSH extension is Microsoft's and is not on Open VSX, and the editor here runs
+on the phone, so a window attached to another machine is not available. The **SSH FS** extension
+(Kelvin Schoofs, in the Extensions view) shows a server's folder in the Explorer next to your own
+and opens a terminal on the server:
+
+1. Install **SSH FS** from the Extensions view.
+2. In a terminal, run `echo ~/.ssh/id_ed25519` and note the path it prints.
+3. Add a connection to `settings.json` (Command Palette, **Preferences: Open User Settings
+   (JSON)**), using the path from step 2 as `privateKeyPath`:
+
+   ```json
+   "sshfs.configs": [
+       {
+           "name": "myserver",
+           "host": "192.168.1.100",
+           "port": 22,
+           "username": "deploy",
+           "privateKeyPath": "/path/printed/in/step/2",
+           "root": "/home/deploy"
+       }
+   ]
+   ```
+
+4. Run **SSH FS: Add as Workspace Folder** and pick `myserver`. Its files appear in the Explorer,
+   and saving a file writes it straight to the server. **SSH FS: Open a remote SSH terminal** gives
+   a shell there.
+
+The server needs its SFTP subsystem, which standard OpenSSH installations enable. Everything the
+editor runs stays on the phone: build and run things in the server terminal, and expect tools that
+need files on a local disk, many language servers among them, not to work on the server's files.
 
 ---
 

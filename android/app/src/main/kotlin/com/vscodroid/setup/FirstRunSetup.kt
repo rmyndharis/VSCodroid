@@ -1813,6 +1813,17 @@ class FirstRunSetup(
                 additions.append(pipBashFunctions())
                 added += "pip/pip3"
             }
+            // The ssh block, guarded as pip's is: every block this app has written
+            // opens with [SSH_BLOCK_HEADER] and defines one `ssh()`, so a definition
+            // beyond that count is the user's, and appending after it would replace
+            // it, since bash takes the last one. A user who wrote their own `ssh`
+            // keeps it, with everything it does or does not read.
+            val ourSshBlocks = SSH_BLOCK_HEADER.toRegex(RegexOption.LITERAL).findAll(content).count()
+            val theirOwnSsh = SSH_DEFINITION.findAll(content).count() > ourSshBlocks
+            if (ourSshBlocks == 0 && !theirOwnSsh) {
+                additions.append(sshBashFunction())
+                added += "ssh"
+            }
             // One rewrite through a temporary file rather than an append per
             // block. A guard that reads a string its own block opens with
             // certifies a partial append: `claude()` is there, its body is not,
@@ -2236,7 +2247,7 @@ case " ${'$'}{NODE_OPTIONS-} " in
 esac
 """
         val content = BASH_ENV_HEADER + preload + npmBashFunctions() + claudeBashFunction() +
-            pipBashFunctions() + """
+            pipBashFunctions() + sshBashFunction() + """
 
 # On-demand toolchain env vars
 [ -f "${'$'}HOME/.vscodroid/toolchain-env.sh" ] && . "${'$'}HOME/.vscodroid/toolchain-env.sh"
@@ -2675,6 +2686,47 @@ __vscodroid_pip_explain() {
     private val PIP3_DEFINITION = Regex("""(?m)^\s*(?:function\s+pip3(?=[\s({]|$)|pip3\s*\(\s*\))""")
 
     private val CLAUDE_DEFINITION = Regex("""(?m)^\s*(?:function\s+claude(?=[\s({]|$)|claude\s*\(\s*\))""")
+
+    /** The comment the ssh block this app writes opens with. */
+    private val SSH_BLOCK_HEADER = "# ssh: shell function."
+
+    /** An `ssh` definition at the start of a line, whoever wrote it, in the spellings bash accepts. */
+    private val SSH_DEFINITION = Regex("""(?m)^\s*(?:function\s+ssh(?=[\s({]|$)|ssh\s*\(\s*\))""")
+
+    /**
+     * `ssh` in a shell, reading the config [setupSshDefaults] writes.
+     *
+     * The bundled OpenSSH is Termux's, and it finds the user's files through the
+     * home directory its build compiled in, `/data/data/com.termux/files/home`, not
+     * through `$HOME`. Run bare it therefore never reads `~/.ssh/config`, so a host
+     * alias in it is "Could not resolve hostname"; it looks for `~/.ssh/id_ed25519`
+     * where no key is, so key authentication is never tried; and it cannot save
+     * `known_hosts`, so every connection is the first one and the warning prints
+     * every time. That config names every path absolutely, and git already reads it
+     * through `GIT_SSH_COMMAND -F`; this gives the shell the same, which is what the
+     * user guide describes `ssh myserver` doing.
+     *
+     * A function, for the reason npm is one: nothing under `filesDir` can be
+     * executed as a wrapper script. Without a readable config the bare command runs,
+     * because `-F` naming a missing file is a fatal error and a user who deleted the
+     * file should still get an ssh. A `-F` typed after this one wins, since ssh keeps
+     * the last.
+     */
+    private fun sshBashFunction(): String = """
+
+$SSH_BLOCK_HEADER The bundled OpenSSH finds ~ at the prefix Termux compiled in, not at this
+# app's home, so run bare it never reads ~/.ssh/config, looks for the key in a path
+# that is not there and cannot save known_hosts. The app's config names every path
+# absolutely, so read it explicitly. A -F typed after this one wins; with no config
+# the bare command runs, because -F on a missing file is an error.
+ssh() {
+    if [ -r "${'$'}HOME/.ssh/config" ]; then
+        command ssh -F "${'$'}HOME/.ssh/config" "${'$'}@"
+    else
+        command ssh "${'$'}@"
+    fi
+}
+"""
 
     /** Only the complete block shipped by earlier releases is replaced. */
     private val legacyClaudeBlock = """
