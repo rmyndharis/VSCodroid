@@ -1,7 +1,7 @@
 # VSCodroid Privacy Policy
 
 **Effective Date: February 13, 2026**
-**Last Updated: November 2, 2026**
+**Last Updated: November 4, 2026**
 
 ## Summary
 
@@ -59,7 +59,7 @@ The app also asks the editor to recommend the Black Formatter extension (`ms-pyt
 Several of the editor's built-in language extensions fetch public metadata over HTTPS when you open or edit matching files, without waiting for an explicit command:
 
 - **JSON schemas**: When you open a JSON file (such as `package.json` or `tsconfig.json`) or a file declaring a `$schema` URL, the built-in JSON language server fetches the schema from the domain the editor or the file names (by default `json.schemastore.org` and the other hosts listed under `json.schemaDownload.trustedDomains`). What goes out is the schema URL, not the contents of your JSON file. You can turn this off with `json.schemaDownload.enable`.
-- **`package.json` package metadata**: When you edit `package.json`, the built-in JSON language server queries `registry.npmjs.org` for package names, descriptions, and latest versions to power completions and hover text (controlled by `npm.fetchOnlinePackageInfo`), and when you hover a dependency inside a folder that contains `package.json`, the built-in `npm` extension runs `npm view` against the configured `npm` registry (`registry.npmjs.org` by default) for the package under the cursor. What goes out is the dependency name or prefix being completed or inspected. Set `npm.fetchOnlinePackageInfo` to `false` and disable the built-in `npm` extension from the Extensions view if you want to stop both lookups.
+- **`package.json` package metadata**: When you edit `package.json`, the built-in `npm` extension queries `registry.npmjs.org` for package names, descriptions, and latest versions to power completions and hover text, and when you hover a dependency inside a folder that contains `package.json`, it runs `npm view` against the configured `npm` registry (`registry.npmjs.org` by default) for the package under the cursor. What goes out is the dependency name or prefix being completed or inspected. Set `npm.fetchOnlinePackageInfo` to `false` and disable the built-in `npm` extension from the Extensions view if you want to stop both lookups.
 - **TypeScript automatic type acquisition**: When you open a JavaScript or TypeScript project, the TypeScript language server can install missing `@types/*` packages from `registry.npmjs.org` into the editor's local cache so completions work for third-party libraries. What goes out is the package names imported or listed in your project. You can turn this off with `js/ts.tsserver.automaticTypeAcquisition.enabled` (set to `false`) or `typescript.disableAutomaticTypeAcquisition` (set to `true`).
 
 You can set these on either the **Remote** or **User** tab in Settings (settings on the **Remote** tab are included in Android Backup; see **Android Backup** below).
