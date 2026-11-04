@@ -120,8 +120,9 @@ VSCodroid is VS Code. If you have used VS Code on desktop, everything works the 
 - Two device folders on the same provider take turns writing, for example a
   folder you closed a moment ago and the one you opened next. While one is
   still saving, a save in the other is held back and retried on its own, and a
-  delete, a new file or a rename there is refused with a notice; repeat it once
-  the first folder has finished.
+  delete, a new file or a rename there waits up to ten seconds for the first
+  folder to finish. If that folder is still writing after that, it is refused
+  with a notice; repeat it once the first folder has finished.
 - A file of a device folder that you delete in the editor is deleted in the
   device folder too, unless the device folder's version is one VSCodroid has not
   read: another app may have changed it since you opened the folder or last
@@ -893,7 +894,9 @@ Beyond the bundled tools (Node.js, Python, Git, Bash), VSCodroid offers addition
 
 The C/C++ toolchain is the largest. Installing a toolchain holds the unpacked copy and the
 installed copy at once, so the install asks for roughly twice the installed size free while
-it runs, which for this one is about 610 MB.
+it runs, which for this one is about 610 MB. Reinstalling or updating a toolchain that is
+already installed asks for less, about one installed size plus its largest file, because the
+copy replaces files that are already on the disk.
 
 ### What You Get For Each Language
 

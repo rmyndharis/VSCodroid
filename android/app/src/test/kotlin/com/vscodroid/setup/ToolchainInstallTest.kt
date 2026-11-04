@@ -330,26 +330,34 @@ class ToolchainInstallTest {
 
     // ── what the HTTP pre-flight asks for ────────────────────────────────
 
-    /** An undownloaded payload cannot prove which existing files it will replace. */
+    /**
+     * A reinstall of the build on disk is charged for one tree plus the largest
+     * file it will replace, not for two trees.
+     *
+     * The payload is not downloaded yet, so the tree it overwrites comes from the
+     * record, and the figure is a reservation rather than a promise: the copy is
+     * measured again from the real files before it starts. Two files rather than
+     * one, because a single file is its own largest and the term cancels the
+     * credit: 30 MB and 10 MB credit 40 MB and ask for room to write the 30.
+     */
     @Test
-    fun `an HTTP reinstall reserves the full staging and destination copies`() {
+    fun `an HTTP reinstall is charged one tree plus the largest file it replaces`() {
         installedBy("com.example.sideloader")
-        val alreadyThere = 40_000_000L
         File(filesDir, "home/.vscodroid/toolchains.json").writeText(
             """[{"name":"java","displayName":"$javaName","installRoot":"usr/opt/java"}]"""
         )
-        sparseFile("usr/opt/java/lib/modules", alreadyThere)
+        sparseFile("usr/opt/java/lib/modules", 30_000_000L)
+        sparseFile("usr/opt/java/bin/java", 10_000_000L)
 
         manager().install("toolchain_java")
 
         assertTrue(failed.await(10, TimeUnit.SECONDS), "the HTTP task never reported an outcome")
-        verify {
-            Logger.e(
-                any(),
-                refusalNaming(toolchainInstallBytes(javaUnpacked, javaDownload)),
-                any(),
-            )
-        }
+        val credited = toolchainInstallBytes(javaUnpacked, javaDownload, InstalledTree(40_000_000L, 30_000_000L))
+        assertTrue(
+            credited < toolchainInstallBytes(javaUnpacked, javaDownload),
+            "the recorded tree earned no credit, so a reinstall is charged as a first install",
+        )
+        verify { Logger.e(any(), refusalNaming(credited), any()) }
     }
 
     /**

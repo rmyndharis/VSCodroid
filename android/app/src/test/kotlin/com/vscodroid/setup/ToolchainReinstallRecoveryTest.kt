@@ -19,6 +19,7 @@ import io.mockk.mockkObject
 import io.mockk.mockkStatic
 import io.mockk.slot
 import io.mockk.unmockkAll
+import io.mockk.verify
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
@@ -209,6 +210,58 @@ class ToolchainReinstallRecoveryTest {
         assertEquals(AssetPackStatus.FAILED to ToolchainFailure.STORAGE, result)
         assertEquals(installedBytes, old.length(), "the space refusal touched the installed payload")
         assertTrue(delivery.isDirectory, "a space refusal must retain the delivered source")
+    }
+
+    /**
+     * Runs a Play reinstall of Java over an installed copy with [available] bytes
+     * free, and says whether the space gate refused it. The delivered file is 30 MB
+     * and replaces a file as large as the registry says the toolchain unpacks to.
+     */
+    private fun playGateRefused(available: Long): Boolean {
+        val root = "usr/lib/jvm/test"
+        val manifest = """{"name":"java","displayName":"Java 21","installRoot":"$root"}"""
+        File(filesDir, "home/.vscodroid/toolchains.json").writeText("[$manifest]")
+        val unpacked = ToolchainRegistry.find("toolchain_java")!!.estimatedSize
+        RandomAccessFile(File(filesDir, "$root/modules").apply { parentFile?.mkdirs() }, "rw")
+            .use { it.setLength(unpacked) }
+        val delivery = File(filesDir, "delivery").apply { mkdirs() }
+        File(delivery, "toolchain_java.json").writeText(manifest)
+        val incoming = File(delivery, "$root/modules").apply { parentFile?.mkdirs() }
+        RandomAccessFile(incoming, "rw").use { it.setLength(30_000_000L) }
+        every { anyConstructed<StatFs>().availableBytes } returns available
+        every { packManager.getPackLocation("toolchain_java") } returns mockk {
+            every { assetsPath() } returns delivery.path
+        }
+        val listener = slot<AssetPackStateUpdateListener>()
+        every { packManager.registerListener(capture(listener)) } just Runs
+        val settled = CountDownLatch(1)
+        val install = manager()
+        install.onStateChange = { _, status, _, _, _ ->
+            if (status == AssetPackStatus.FAILED || status == AssetPackStatus.COMPLETED) settled.countDown()
+        }
+        install.install("toolchain_java")
+        complete(listener.captured)
+        assertTrue(settled.await(10, TimeUnit.SECONDS), "the install never reported an outcome")
+        return runCatching {
+            verify { Logger.e(any(), match { it.startsWith("Not enough disk space for toolchain_java") }, any()) }
+        }.isSuccess
+    }
+
+    /** The Play route asks for what [toolchainCopyBytes] computes, no more and no less. */
+    private val playCopyFigure: Long
+        get() = toolchainCopyBytes(
+            ToolchainRegistry.find("toolchain_java")!!.estimatedSize,
+            ToolchainCopySpace(30_000_000L, 30_000_000L),
+        )
+
+    @Test
+    fun `a Play reinstall is admitted at exactly the copy figure`() {
+        assertFalse(playGateRefused(playCopyFigure), "the gate asked for more than the copy needs")
+    }
+
+    @Test
+    fun `a Play reinstall is refused one byte under the copy figure`() {
+        assertTrue(playGateRefused(playCopyFigure - 1), "the gate admitted a copy that does not fit")
     }
 
     @Test
