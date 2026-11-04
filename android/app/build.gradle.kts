@@ -535,8 +535,13 @@ dependencies {
 
 tasks.withType<Test> {
     useJUnitPlatform()
-    // MockK needs reflective access to Files internals for publication failure tests.
-    jvmArgs("--add-opens=java.base/java.nio.file=ALL-UNNAMED")
+    // MockK needs reflective access to Files internals for publication failure tests,
+    // and to UUID's for the one that forces a temporary name to collide.
+    jvmArgs("--add-opens=java.base/java.nio.file=ALL-UNNAMED", "--add-opens=java.base/java.util=ALL-UNNAMED")
+    // A Unix socket path holds 107 bytes and macOS's default temporary directory is long
+    // enough for a fixture's socket name to pass that, which fails every editor start in
+    // the service tests there, so those fixtures need a short one.
+    File("/tmp").takeIf { it.isDirectory }?.let { systemProperty("java.io.tmpdir", it.canonicalPath) }
 
     // This build script is a genuine input to the unit tests, because one of
     // them reads it: NoticesTest parses the `bundleNotices` task to check that

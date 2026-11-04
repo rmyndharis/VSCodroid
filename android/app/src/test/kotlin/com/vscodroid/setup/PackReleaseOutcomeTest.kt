@@ -80,7 +80,6 @@ class PackReleaseOutcomeTest {
 
     @BeforeEach
     fun setUp() {
-        mockkStatic(Files::class)
         mockkObject(Logger)
         every { Logger.d(any(), any()) } just Runs
         every { Logger.i(any(), any()) } just Runs
@@ -181,6 +180,7 @@ class PackReleaseOutcomeTest {
 
     /** Refuse the real atomic writer's temporary-file open for the install record. */
     private fun blockTheRecordWrite() {
+        mockkStatic(Files::class)
         blockAtomicWritesTo(File(filesDir, "home/.vscodroid/toolchains.json"))
     }
 
