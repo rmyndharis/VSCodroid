@@ -34,6 +34,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Setup that finishes while the app is in the background starts the editor when you come back, not from the background.
 - The first-run failure message scrolls and the Retry button stays below it, so a long message no longer runs under the button in landscape or at a large font size.
 - Keep the caret in view when arrow keys move it in a text box without moving focus out of right-to-left and mixed text.
+- A terminal `ssh` reads `~/.ssh/config`, uses the default key and saves known hosts, as the user guide describes, instead of looking in a path that does not exist on Android.
 
 ### Changed
 
