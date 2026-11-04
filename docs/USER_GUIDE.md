@@ -893,7 +893,9 @@ Beyond the bundled tools (Node.js, Python, Git, Bash), VSCodroid offers addition
 
 The C/C++ toolchain is the largest. Installing a toolchain holds the unpacked copy and the
 installed copy at once, so the install asks for roughly twice the installed size free while
-it runs, which for this one is about 570 MB.
+it runs, which for this one is about 570 MB. Reinstalling or updating a toolchain that is
+already installed asks for less, about one installed size plus its largest file, because the
+copy replaces files that are already on the disk.
 
 ### What You Get For Each Language
 
