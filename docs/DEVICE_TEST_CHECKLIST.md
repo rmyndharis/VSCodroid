@@ -107,6 +107,7 @@
 | SC-13 | Settings fits a phone | On a phone in portrait (about 411 dp wide), tap the Manage gear and choose **Settings**; scroll the list and tap a dropdown. Then set **VSCodroid: UI Scale** to 125% and open Settings again, and turn the phone to landscape. On a tablet, open Settings in landscape. Repeat on a phone 360 dp wide if one is at hand. Record the device width in dp and read the Settings window's right edge with remote debugging if a debug build is at hand | In portrait the Settings window and its list end inside the screen: no description, dropdown (arrow included) or number box is cut at the right edge, and the list can be scrolled. The same at 125%, and in landscape. On a tablet the table of contents beside the list is shown as before. Before the fix the list was 500 px wide on a 411 px page, 131 px past the edge, and the window began 41 px in and ended 30 px past it | | |
 | SC-14 | Landscape with the keyboard up keeps a few lines | On a phone, open a file with at least ten lines, turn to landscape and tap in the editor so the keyboard rises. Read the screen, then put the keyboard away with Back. Repeat with the status bar hidden (**View: Toggle Status Bar Visibility**) before the keyboard rises. On a tablet, do the same in landscape | With the keyboard up the title bar and the status bar are gone and the editor shows about four lines, the one being typed among them; with the keyboard away both are back, and on the tablet they never leave. A status bar you had hidden is still hidden afterwards | | |
 | SC-15 | Landscape with the keyboard up and the terminal open keeps a few lines | On a phone, open a `.js` file, tap Run so the terminal opens, turn to landscape and tap in the editor so the keyboard rises. Put the keyboard away with Back. Then tap in the terminal and type with the keyboard up. Repeat in portrait | With the keyboard up and the editor focused the terminal is out of the way and the editor shows about four lines, the one being typed among them; the terminal you tap into and type in stays; with the keyboard away the terminal is back at its size; portrait never changes | | |
+| SC-16 | The first-run failure screen fits a landscape phone at the largest font | Set the font size to the largest and turn the phone to landscape. On a fresh install with the data partition filled to leave about 1 GB free, launch through SplashActivity and, once the progress bar moves, fill what is left so the unpack runs out of space. Scroll the message, tap Retry with the space still full, then free the space and tap Retry again | The failure screen opens on the message, starting at "Setup failed while:" rather than at the icon; a fading edge shows where lines are hidden and the message scrolls to its last line; Retry stays in view below it and never covers it. With the space still full, Retry shows the storage message with a figure to free; after freeing it, Retry resumes the unpack and reaches the toolchain picker | | |
 
 ## 5. Editor Operations
 
@@ -321,7 +322,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | Device Matrix | 4 | | | |
 | Android Versions | 5 | | | |
 | Keyboard Input | 48 | | | |
-| Screen & Orientation | 15 | | | |
+| Screen & Orientation | 16 | | | |
 | Editor Operations | 17 | | | |
 | Extensions | 8 | | | |
 | Background/Foreground | 9 | | | |
@@ -331,7 +332,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | Terminal & Tools | 18 | | | |
 | SAF & Files | 27 | | | |
 | Display Language | 6 | | | |
-| **Total** | **184** | | | |
+| **Total** | **185** | | | |
 
 **Overall Result**: [ ] PASS / [ ] FAIL
 

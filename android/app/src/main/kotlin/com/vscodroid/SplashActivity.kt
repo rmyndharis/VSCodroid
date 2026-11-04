@@ -11,10 +11,11 @@ import android.widget.LinearLayout
 import android.widget.ProgressBar
 import android.widget.TextView
 import androidx.appcompat.app.AppCompatActivity
-import androidx.constraintlayout.widget.ConstraintLayout
 import androidx.core.content.pm.ShortcutInfoCompat
 import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.drawable.IconCompat
+import androidx.core.view.doOnLayout
+import androidx.core.widget.NestedScrollView
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -292,7 +293,7 @@ class SplashActivity : AppCompatActivity() {
      * [ToolchainActivity]); this one was the exception, because its root carried
      * no id to look up. Nothing else keeps a child off the navigation bar once
      * `drawBehindSystemBars()` has run, and the one child that can reach it is
-     * the Retry button [showSetupError] anchors to the bottom.
+     * the Retry button, which activity_splash.xml anchors to the bottom.
      *
      * A method rather than two padded call sites, so a third cannot arrive
      * unpadded.
@@ -453,56 +454,30 @@ class SplashActivity : AppCompatActivity() {
             // making noise. What has to be spoken is the transition, and this is the
             // only place a failure passes through.
             statusText.announceForAccessibility(message)
-            // Show retry button dynamically
-            val parent = statusText.parent as? android.view.ViewGroup ?: return@runOnUiThread
-            val retryButton = Button(this).apply {
-                id = View.generateViewId()
-                text = getString(R.string.progress_retry)
-                setOnClickListener {
-                    // Reset UI and retry
-                    statusText.text = getString(R.string.extracting_message)
-                    progressBar.visibility = View.VISIBLE
-                    progressBar.progress = 0
-                    // Extraction is about to run again, so the reason the flag
-                    // exists is back. Through the captured root rather than
-                    // findViewById here, where the receiver is the button.
-                    root.keepScreenOn = true
-                    parent.removeView(this)
-                    runSetupWithRetry(setup, statusText, progressBar)
-                }
+            // The button is in activity_splash.xml, gone until now, and the scroll
+            // container above it ends at its top, so a long message scrolls
+            // instead of pushing the only control out of the window. Its own click
+            // hides it again, so the progress screen carries no dead button.
+            val retryButton = findViewById<Button>(R.id.retryButton) ?: return@runOnUiThread
+            retryButton.setOnClickListener {
+                // Reset UI and retry
+                statusText.text = getString(R.string.extracting_message)
+                progressBar.visibility = View.VISIBLE
+                progressBar.progress = 0
+                // Extraction is about to run again, so the reason the flag
+                // exists is back.
+                root.keepScreenOn = true
+                retryButton.visibility = View.GONE
+                runSetupWithRetry(setup, statusText, progressBar)
             }
-            // Centered, below the (hidden) progress bar and against the bottom of
-            // the root. Added without LayoutParams, a ConstraintLayout child lays
-            // out at (0,0), the top-left corner, under the transparent status bar.
-            //
-            // Both vertical constraints, with the bias against the bottom, and
-            // that pair is what keeps the only control on this screen reachable.
-            // The message above it is the failed step plus up to
-            // FirstRunSetup.DETAIL_LIMIT characters of the cause, in a packed
-            // chain that grows downward as it wraps: anchored to the message
-            // alone, a long one in landscape or at a raised font scale pushes the
-            // button past the bottom of the window, and there is no scroll
-            // container to reach it with. Against the bottom it cannot be pushed
-            // anywhere, and it lands inside the padding showSplashLayout applies,
-            // which is what keeps it clear of the navigation bar. The top
-            // constraint stays so it is never drawn above the message it answers.
-            if (parent is ConstraintLayout) {
-                val lp = ConstraintLayout.LayoutParams(
-                    ConstraintLayout.LayoutParams.WRAP_CONTENT,
-                    ConstraintLayout.LayoutParams.WRAP_CONTENT,
-                ).apply {
-                    topToBottom = R.id.progressBar
-                    bottomToBottom = ConstraintLayout.LayoutParams.PARENT_ID
-                    verticalBias = 1f
-                    startToStart = ConstraintLayout.LayoutParams.PARENT_ID
-                    endToEnd = ConstraintLayout.LayoutParams.PARENT_ID
-                    topMargin = (16 * resources.displayMetrics.density).toInt()
-                    bottomMargin = (24 * resources.displayMetrics.density).toInt()
-                }
-                parent.addView(retryButton, lp)
-            } else {
-                parent.addView(retryButton)
-            }
+            retryButton.visibility = View.VISIBLE
+            // A message taller than the window is read from its first line, and the
+            // icon and the name above it are what scrolls away. After the next
+            // layout, when the message has its new height; the scroll view clamps
+            // the offset, so a message that fits moves nothing. Short of the fade
+            // by its own length, or the first line would sit inside the fading edge.
+            val scroll = findViewById<NestedScrollView>(R.id.splashScroll)
+            scroll.doOnLayout { scroll.scrollTo(0, statusText.top - scroll.verticalFadingEdgeLength) }
             // Deliberately NOT moving accessibility focus to the Retry button, and
             // that is a reversal: the first attempt did, and lint's AccessibilityFocus
             // check refused it. It is right. Stealing focus contradicts what a screen
