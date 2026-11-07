@@ -42,6 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A terminal `ssh` reads `~/.ssh/config`, uses the default key and saves known hosts, as the user guide describes, instead of looking in a path that does not exist on Android.
 - A delete, a new file or a rename in a device folder waits up to ten seconds for another folder of the same provider to finish writing, instead of being refused at once.
 - Reinstalling or updating a toolchain over HTTP asks for one installed size plus its largest file of free space, not the first-install figure.
+- The status bar's right-hand entries (line and column, indentation, encoding, line ending, language) stay reachable on a narrow touch screen: the row scrolls with a finger instead of clipping them (#594).
 
 ### Changed
 

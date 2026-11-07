@@ -1,9 +1,10 @@
 /**
  * Syntax check for every JavaScript raw string the Android shell hands to the WebView.
  *
- * Eight of the page scripts have dedicated behavioral harnesses under `scripts/test-*.js`,
+ * Several of the page scripts have dedicated behavioral harnesses under `scripts/test-*.js`,
  * while the remaining injectors (safe-area CSS, touch context menu, list-edit keeper,
- * touch-target CSS, clipboard read fallback, memory-pressure forwarder, bridge token,
+ * touch-target CSS (only its status bar scrolling has one, `test-status-bar-scroll.js`),
+ * clipboard read fallback, memory-pressure forwarder, bridge token,
  * extension callback relay, and the connection health probe) only run inside a live
  * WebView. A syntax error in one of those unharnessed raw strings compiles cleanly in
  * Kotlin, passes every unit test that checks substring wiring, and fails silently at
