@@ -85,13 +85,13 @@
          told the button is there; "try again" left them looking for a gesture
          that does not exist. -->
     <string name="error_storage_full">Espaço de armazenamento insuficiente. Libere pelo menos %1$d MB e toque em Repetir.</string>
-    <string name="error_setup_failed">A configuração falhou. Toque em Repetir ou reinstale o app.</string>
+    <string name="error_setup_failed">A configuração falhou. Toque em Repetir. Se o erro continuar, reinstalar o app pode ajudar, mas apaga os projetos guardados dentro do app.</string>
     <!-- The same failure when setup knows which step it died on. Names the step
          and quotes the exception, because the audience is developers and the
          next thing they do is either free some space or file the message. The
          version without a cause stays for a failure that happens before the
          first progress report. -->
-    <string name="error_setup_failed_at">A configuração falhou durante: %1$s\n\n%2$s\n\nToque em Repetir ou reinstale o app se o erro continuar.</string>
+    <string name="error_setup_failed_at">A configuração falhou durante: %1$s\n\n%2$s\n\nToque em Repetir. Se o erro continuar, reinstalar o app pode ajudar, mas apaga os projetos guardados dentro do app.</string>
 
     <!-- A tap on a link this app handed to Android that no app took. Names the
          scheme rather than the whole address, which can be long and can carry a

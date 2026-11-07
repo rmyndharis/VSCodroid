@@ -85,13 +85,13 @@
          told the button is there; "try again" left them looking for a gesture
          that does not exist. -->
     <string name="error_storage_full">No hay suficiente espacio de almacenamiento. Libera al menos %1$d MB y luego toca Reintentar.</string>
-    <string name="error_setup_failed">La configuración inicial falló. Toca Reintentar o reinstala la aplicación.</string>
+    <string name="error_setup_failed">La configuración inicial falló. Toca Reintentar. Si el error continúa, reinstalar la aplicación puede ayudar, pero borra los proyectos guardados dentro de la aplicación.</string>
     <!-- The same failure when setup knows which step it died on. Names the step
          and quotes the exception, because the audience is developers and the
          next thing they do is either free some space or file the message. The
          version without a cause stays for a failure that happens before the
          first progress report. -->
-    <string name="error_setup_failed_at">La configuración inicial falló durante: %1$s\n\n%2$s\n\nToca Reintentar, o reinstala la aplicación si el error continúa.</string>
+    <string name="error_setup_failed_at">La configuración inicial falló durante: %1$s\n\n%2$s\n\nToca Reintentar. Si el error continúa, reinstalar la aplicación puede ayudar, pero borra los proyectos guardados dentro de la aplicación.</string>
 
     <!-- A tap on a link this app handed to Android that no app took. Names the
          scheme rather than the whole address, which can be long and can carry a
