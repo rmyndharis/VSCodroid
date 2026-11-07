@@ -5900,6 +5900,13 @@ class MainActivity : AppCompatActivity() {
                     // (`minimumHeight === maximumHeight`), so widening an entry is
                     // real estate the layout actually has; making it taller is not.
                     '  .statusbar-item { padding: 0 8px !important; }',
+                    // The right-hand entries are a wrapping row in a bar that clips what
+                    // wraps, and the wrap drops the highest-priority entries first. At 411px
+                    // with a file open that hid six of twelve (Ln/Col, Spaces, UTF-8, LF,
+                    // language mode and status), and the padding above makes each entry
+                    // wider. One row that the script below scrolls by hand keeps them all
+                    // reachable.
+                    '  .part.statusbar > .right-items { flex-wrap: nowrap !important; overflow-x: hidden !important; min-width: 0 !important; }',
                     '  .context-view .action-item { min-height: 40px !important; }',
                     '  .context-view .action-label { padding: 6px 12px !important; }',
                     // A chord beside a menu item is a promise a finger cannot keep.
@@ -5995,6 +6002,26 @@ class MainActivity : AppCompatActivity() {
                     '}'
                 ].join('\n');
                 document.head.appendChild(s);
+
+                // A pan that starts on a status bar entry is taken by the workbench's gesture
+                // layer, so the browser never scrolls the row itself: the touch events stop
+                // before the bubble phase and no pointercancel follows. The row is row-reverse,
+                // so scrollLeft runs from 0 at its right end down to minus the overflow.
+                var strip = null, startX = 0, startLeft = 0;
+                window.addEventListener('touchstart', function(e) {
+                    strip = e.touches.length === 1 && e.target.closest
+                        ? e.target.closest('.part.statusbar > .right-items') : null;
+                    if (strip) { startX = e.touches[0].clientX; startLeft = strip.scrollLeft; }
+                }, { capture: true, passive: true });
+                window.addEventListener('touchmove', function(e) {
+                    if (!strip) return;
+                    if (e.touches.length !== 1) { strip = null; return; }
+                    var overflow = strip.scrollWidth - strip.clientWidth;
+                    strip.scrollLeft = Math.max(-overflow, Math.min(0, startLeft - (e.touches[0].clientX - startX)));
+                }, { capture: true, passive: true });
+                var endPan = function() { strip = null; };
+                window.addEventListener('touchend', endPan, { capture: true, passive: true });
+                window.addEventListener('touchcancel', endPan, { capture: true, passive: true });
             })();
             """.trimIndent(),
             null

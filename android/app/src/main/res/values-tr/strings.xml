@@ -85,13 +85,13 @@
          told the button is there; "try again" left them looking for a gesture
          that does not exist. -->
     <string name="error_storage_full">Yeterli depolama alanı yok. En az %1$d MB yer açın, sonra Yeniden Dene düğmesine dokunun.</string>
-    <string name="error_setup_failed">Kurulum başarısız oldu. Yeniden Dene düğmesine dokunun veya uygulamayı yeniden yükleyin.</string>
+    <string name="error_setup_failed">Kurulum başarısız oldu. Yeniden Dene düğmesine dokunun. Sorun sürerse uygulamayı yeniden yüklemek yardımcı olabilir, ancak uygulamanın içinde saklanan projeleri siler.</string>
     <!-- The same failure when setup knows which step it died on. Names the step
          and quotes the exception, because the audience is developers and the
          next thing they do is either free some space or file the message. The
          version without a cause stays for a failure that happens before the
          first progress report. -->
-    <string name="error_setup_failed_at">Kurulum şu adımda başarısız oldu: %1$s\n\n%2$s\n\nYeniden Dene düğmesine dokunun, sorun sürerse uygulamayı yeniden yükleyin.</string>
+    <string name="error_setup_failed_at">Kurulum şu adımda başarısız oldu: %1$s\n\n%2$s\n\nYeniden Dene düğmesine dokunun. Sorun sürerse uygulamayı yeniden yüklemek yardımcı olabilir, ancak uygulamanın içinde saklanan projeleri siler.</string>
 
     <!-- A tap on a link this app handed to Android that no app took. Names the
          scheme rather than the whole address, which can be long and can carry a
