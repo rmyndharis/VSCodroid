@@ -85,13 +85,13 @@
          told the button is there; "try again" left them looking for a gesture
          that does not exist. -->
     <string name="error_storage_full">Espace de stockage insuffisant. Libérez au moins %1$d Mo, puis appuyez sur Réessayer.</string>
-    <string name="error_setup_failed">Échec de la configuration. Appuyez sur Réessayer ou réinstallez l\'application.</string>
+    <string name="error_setup_failed">Échec de la configuration. Appuyez sur Réessayer. Si le problème persiste, réinstaller l\'application peut aider, mais cela supprime les projets stockés dans l\'application.</string>
     <!-- The same failure when setup knows which step it died on. Names the step
          and quotes the exception, because the audience is developers and the
          next thing they do is either free some space or file the message. The
          version without a cause stays for a failure that happens before the
          first progress report. -->
-    <string name="error_setup_failed_at">Échec de la configuration pendant : %1$s\n\n%2$s\n\nAppuyez sur Réessayer, ou réinstallez l\'application si le problème persiste.</string>
+    <string name="error_setup_failed_at">Échec de la configuration pendant : %1$s\n\n%2$s\n\nAppuyez sur Réessayer. Si le problème persiste, réinstaller l\'application peut aider, mais cela supprime les projets stockés dans l\'application.</string>
 
     <!-- A tap on a link this app handed to Android that no app took. Names the
          scheme rather than the whole address, which can be long and can carry a

@@ -85,13 +85,13 @@
          told the button is there; "try again" left them looking for a gesture
          that does not exist. -->
     <string name="error_storage_full">Недостаточно места в хранилище. Освободите не менее %1$d МБ, затем нажмите «Повторить».</string>
-    <string name="error_setup_failed">Не удалось выполнить настройку. Нажмите «Повторить» или переустановите приложение.</string>
+    <string name="error_setup_failed">Не удалось выполнить настройку. Нажмите «Повторить». Если ошибка повторяется, переустановка приложения может помочь, но удалит проекты, хранящиеся внутри приложения.</string>
     <!-- The same failure when setup knows which step it died on. Names the step
          and quotes the exception, because the audience is developers and the
          next thing they do is either free some space or file the message. The
          version without a cause stays for a failure that happens before the
          first progress report. -->
-    <string name="error_setup_failed_at">Настройка прервалась на шаге: %1$s\n\n%2$s\n\nНажмите «Повторить» или переустановите приложение, если ошибка повторяется.</string>
+    <string name="error_setup_failed_at">Настройка прервалась на шаге: %1$s\n\n%2$s\n\nНажмите «Повторить». Если ошибка повторяется, переустановка приложения может помочь, но удалит проекты, хранящиеся внутри приложения.</string>
 
     <!-- A tap on a link this app handed to Android that no app took. Names the
          scheme rather than the whole address, which can be long and can carry a

@@ -85,13 +85,13 @@
          told the button is there; "try again" left them looking for a gesture
          that does not exist. -->
     <string name="error_storage_full">저장 공간이 부족합니다. 최소 %1$d MB를 확보한 다음 다시 시도를 누르세요.</string>
-    <string name="error_setup_failed">초기 설정에 실패했습니다. 다시 시도를 누르거나 앱을 다시 설치하세요.</string>
+    <string name="error_setup_failed">초기 설정에 실패했습니다. 다시 시도를 누르세요. 계속 실패하면 앱을 다시 설치하면 해결될 수 있지만, 앱 안에 저장된 프로젝트가 삭제됩니다.</string>
     <!-- The same failure when setup knows which step it died on. Names the step
          and quotes the exception, because the audience is developers and the
          next thing they do is either free some space or file the message. The
          version without a cause stays for a failure that happens before the
          first progress report. -->
-    <string name="error_setup_failed_at">다음 단계에서 초기 설정이 실패했습니다: %1$s\n\n%2$s\n\n다시 시도를 누르고, 계속 실패하면 앱을 다시 설치하세요.</string>
+    <string name="error_setup_failed_at">다음 단계에서 초기 설정이 실패했습니다: %1$s\n\n%2$s\n\n다시 시도를 누르세요. 계속 실패하면 앱을 다시 설치하면 해결될 수 있지만, 앱 안에 저장된 프로젝트가 삭제됩니다.</string>
 
     <!-- A tap on a link this app handed to Android that no app took. Names the
          scheme rather than the whole address, which can be long and can carry a

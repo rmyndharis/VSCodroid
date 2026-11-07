@@ -85,13 +85,13 @@
          told the button is there; "try again" left them looking for a gesture
          that does not exist. -->
     <string name="error_storage_full">儲存空間不足。請至少釋出 %1$d MB，然後點選「重試」。</string>
-    <string name="error_setup_failed">初始設定失敗。請點選「重試」，或重新安裝應用程式。</string>
+    <string name="error_setup_failed">初始設定失敗。請點選「重試」。若持續失敗，重新安裝應用程式可能有幫助，但會刪除儲存在應用程式內部的專案。</string>
     <!-- The same failure when setup knows which step it died on. Names the step
          and quotes the exception, because the audience is developers and the
          next thing they do is either free some space or file the message. The
          version without a cause stays for a failure that happens before the
          first progress report. -->
-    <string name="error_setup_failed_at">初始設定在下列步驟失敗：%1$s\n\n%2$s\n\n請點選「重試」；若持續失敗，請重新安裝應用程式。</string>
+    <string name="error_setup_failed_at">初始設定在下列步驟失敗：%1$s\n\n%2$s\n\n請點選「重試」。若持續失敗，重新安裝應用程式可能有幫助，但會刪除儲存在應用程式內部的專案。</string>
 
     <!-- A tap on a link this app handed to Android that no app took. Names the
          scheme rather than the whole address, which can be long and can carry a

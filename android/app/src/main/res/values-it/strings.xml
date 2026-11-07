@@ -85,13 +85,13 @@
          told the button is there; "try again" left them looking for a gesture
          that does not exist. -->
     <string name="error_storage_full">Spazio di archiviazione insufficiente. Libera almeno %1$d MB, poi tocca Riprova.</string>
-    <string name="error_setup_failed">Configurazione non riuscita. Tocca Riprova o reinstalla l\'app.</string>
+    <string name="error_setup_failed">Configurazione non riuscita. Tocca Riprova. Se l\'errore persiste, reinstallare l\'app può aiutare, ma elimina i progetti salvati all\'interno dell\'app.</string>
     <!-- The same failure when setup knows which step it died on. Names the step
          and quotes the exception, because the audience is developers and the
          next thing they do is either free some space or file the message. The
          version without a cause stays for a failure that happens before the
          first progress report. -->
-    <string name="error_setup_failed_at">Configurazione non riuscita durante: %1$s\n\n%2$s\n\nTocca Riprova, oppure reinstalla l\'app se l\'errore persiste.</string>
+    <string name="error_setup_failed_at">Configurazione non riuscita durante: %1$s\n\n%2$s\n\nTocca Riprova. Se l\'errore persiste, reinstallare l\'app può aiutare, ma elimina i progetti salvati all\'interno dell\'app.</string>
 
     <!-- A tap on a link this app handed to Android that no app took. Names the
          scheme rather than the whole address, which can be long and can carry a

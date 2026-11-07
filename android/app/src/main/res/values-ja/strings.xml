@@ -85,13 +85,13 @@
          told the button is there; "try again" left them looking for a gesture
          that does not exist. -->
     <string name="error_storage_full">空き容量が不足しています。%1$d MB 以上を空けてから、「再試行」をタップしてください。</string>
-    <string name="error_setup_failed">セットアップに失敗しました。「再試行」をタップするか、アプリを再インストールしてください。</string>
+    <string name="error_setup_failed">セットアップに失敗しました。「再試行」をタップしてください。それでも失敗する場合、アプリを再インストールすると解決することがありますが、アプリ内に保存されているプロジェクトは削除されます。</string>
     <!-- The same failure when setup knows which step it died on. Names the step
          and quotes the exception, because the audience is developers and the
          next thing they do is either free some space or file the message. The
          version without a cause stays for a failure that happens before the
          first progress report. -->
-    <string name="error_setup_failed_at">セットアップに失敗しました: %1$s\n\n%2$s\n\n「再試行」をタップし、それでも失敗する場合はアプリを再インストールしてください。</string>
+    <string name="error_setup_failed_at">セットアップに失敗しました: %1$s\n\n%2$s\n\n「再試行」をタップしてください。それでも失敗する場合、アプリを再インストールすると解決することがありますが、アプリ内に保存されているプロジェクトは削除されます。</string>
 
     <!-- A tap on a link this app handed to Android that no app took. Names the
          scheme rather than the whole address, which can be long and can carry a

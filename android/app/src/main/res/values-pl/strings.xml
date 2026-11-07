@@ -85,13 +85,13 @@
          told the button is there; "try again" left them looking for a gesture
          that does not exist. -->
     <string name="error_storage_full">Za mało miejsca w pamięci. Zwolnij co najmniej %1$d MB, a następnie dotknij przycisku Ponów.</string>
-    <string name="error_setup_failed">Konfiguracja nie powiodła się. Dotknij przycisku Ponów lub zainstaluj aplikację ponownie.</string>
+    <string name="error_setup_failed">Konfiguracja nie powiodła się. Dotknij przycisku Ponów. Jeśli błąd się powtarza, ponowna instalacja aplikacji może pomóc, ale usuwa projekty przechowywane w aplikacji.</string>
     <!-- The same failure when setup knows which step it died on. Names the step
          and quotes the exception, because the audience is developers and the
          next thing they do is either free some space or file the message. The
          version without a cause stays for a failure that happens before the
          first progress report. -->
-    <string name="error_setup_failed_at">Konfiguracja nie powiodła się podczas: %1$s\n\n%2$s\n\nDotknij przycisku Ponów, a jeśli błąd się powtarza, zainstaluj aplikację ponownie.</string>
+    <string name="error_setup_failed_at">Konfiguracja nie powiodła się podczas: %1$s\n\n%2$s\n\nDotknij przycisku Ponów. Jeśli błąd się powtarza, ponowna instalacja aplikacji może pomóc, ale usuwa projekty przechowywane w aplikacji.</string>
 
     <!-- A tap on a link this app handed to Android that no app took. Names the
          scheme rather than the whole address, which can be long and can carry a
