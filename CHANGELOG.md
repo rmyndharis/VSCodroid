@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.7.0] - 2026-11-07
+
 ### Added
 
 - Add `clangd` to the C/C++ toolchain, so the clangd extension works on C and C++ files.
@@ -1363,7 +1365,8 @@ This release represents the cumulative work across milestones M0 through M5, bri
 - Health check polling for server readiness
 - Android intent handling for "Open with VSCodroid"
 
-[Unreleased]: https://github.com/rmyndharis/VSCodroid/compare/v1.6.0...HEAD
+[Unreleased]: https://github.com/rmyndharis/VSCodroid/compare/v1.7.0...HEAD
+[1.7.0]: https://github.com/rmyndharis/VSCodroid/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/rmyndharis/VSCodroid/compare/v1.5.0...v1.6.0
 [1.5.0]: https://github.com/rmyndharis/VSCodroid/compare/v1.4.0...v1.5.0
 [1.4.0]: https://github.com/rmyndharis/VSCodroid/compare/v1.3.0...v1.4.0
