@@ -1112,6 +1112,30 @@ you in to anything.
 codex --version
 ```
 
+#### With the Codex extension
+
+The Codex extension from Open VSX, published by OpenAI, carries an engine of its own that cannot start on
+Android, so on its own it does nothing. With the toolchain installed, the app starts the toolchain's engine
+in its place and the extension works: sign in with ChatGPT from its panel, and the agent can create and edit
+files in the project and run commands. The `codex` command in a terminal shares that sign-in, and
+`codex login status` says whether it is signed in.
+
+What to know before using it:
+
+- **Space.** The extension is about 420 MB to download and about 1.2 GB once unpacked, on top of the
+  toolchain's 360 MB, and Codex keeps its own data under `~/.codex`: about 150 MB after a few runs, 50 MB of it
+  a catalogue of plugins it fetches when it first starts. A phone short of space may not have room for the
+  extension, or for the next update of the app once it is installed.
+- **Approvals.** The engine's own sandbox is not available on Android: `codex sandbox` answers that it is not
+  supported on this operating system. What is left is the approval prompt. In the runs tried, an edit asked
+  first, and so did a command that would write outside the project folder, while a command inside it ran
+  without asking. A command that is allowed runs with the access the terminal has.
+- **Follow-up messages.** On an emulator with Android System WebView 134, a follow-up message in an existing
+  chat failed with `DisposableStack is not defined`, and a new chat for each task worked. Newer WebViews were
+  not tried.
+- **Processes.** The engine and its helper are two more processes counted against Android's phantom process
+  limit (see [Android Phantom Process Limit](#android-phantom-process-limit)) while the engine runs.
+
 ### Removing Toolchains
 
 Open the Toolchains screen by either route in [Installing After
@@ -1508,7 +1532,7 @@ itself, outside any terminal, and that start is not covered.
 VSCodroid asks the marketplace for the musl build wherever an extension
 publishes one, which is what makes that route possible at all, but the extension
 itself then has to offer a setting that lets its command be prefixed. Almost
-none do.
+none do. The Codex extension is handled by the app instead: see [Codex](#codex).
 
 **How to recognise it.** The extension is installed and enabled, its commands are
 missing from the Command Palette or do nothing when run, and the Problems panel
