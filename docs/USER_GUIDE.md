@@ -1,6 +1,6 @@
 # VSCodroid User Guide
 
-A practical guide to using VSCodroid -- the full VS Code IDE running natively on your Android device.
+A practical guide to using VSCodroid, the full VS Code IDE running natively on your Android device.
 
 ---
 
@@ -26,8 +26,8 @@ A practical guide to using VSCodroid -- the full VS Code IDE running natively on
 
 1. **Install**. Download from the [Play Store](https://play.google.com/store/apps/details?id=com.vscodroid) or [GitHub Releases](https://github.com/rmyndharis/VSCodroid/releases). The core download is roughly 270 MB, and you need about 800 MB free for the extraction that follows.
 2. **Binary extraction**. On first launch, VSCodroid extracts bundled tools (Node.js, Python, Git, Bash, and others) to internal storage. About 603 MB lands on disk, unpacked one file at a time behind a progress bar, so allow minutes rather than seconds on a slower device. The ~800 MB above is that payload plus the working room setup insists on before it will start. It happens on the first launch and again after every app update or reinstall, because extraction follows the installed package's version and update timestamp rather than only what is already unpacked. An update needs far less free space than a fresh install (the app credits what it already holds, so roughly 230 MB for a complete tree rather than 800 MB), but it does re-copy the files and it does take minutes. A first run that is interrupted and retried with the same installed package is the one case that does not start over: files already the right size are left alone.
-3. **Language Picker** -- A prompt asks "What do you code in?" with options for Ruby, Java and C/C++. It comes back at each launch until you answer it with Continue or Skip, and your answer is not final: touch and hold the app icon and pick **Manage toolchains** to add or remove them later. Whatever you select downloads there on the setup screen, one at a time; a download that fails is skipped and the rest continue. Skip goes straight to the editor.
-4. **Ready** -- The VS Code editor loads with terminal, file explorer, and all bundled tools available immediately.
+3. **Language Picker**. A prompt asks "What do you code in?" with options for Ruby, Java and C/C++. It comes back at each launch until you answer it with Continue or Skip, and your answer is not final: touch and hold the app icon and pick **Manage toolchains** to add or remove them later. Whatever you select downloads there on the setup screen, one at a time; a download that fails is skipped and the rest continue. Skip goes straight to the editor.
+4. **Ready**. The VS Code editor loads with terminal, file explorer, and all bundled tools available immediately.
 
 ### Default File Locations
 
@@ -172,10 +172,10 @@ The Command Palette is the fastest way to access any feature. Open it with **Ctr
 
 Common commands:
 
-- `Format Document` -- auto-format the current file
-- `Change Language Mode` -- set syntax highlighting for a file
-- `Preferences: Open Settings (UI)` -- open the settings editor
-- `Preferences: Open Keyboard Shortcuts` -- view and customize shortcuts
+- `Format Document`: auto-format the current file
+- `Change Language Mode`: set syntax highlighting for a file
+- `Preferences: Open Settings (UI)`: open the settings editor
+- `Preferences: Open Keyboard Shortcuts`: view and customize shortcuts
 
 ### Settings
 
@@ -331,7 +331,7 @@ was, and two quick taps send two presses.
 
 #### Modifiers
 
-**Ctrl, Alt, and Shift are sticky** -- tap once to activate for the next keypress. Tap again to deactivate. They highlight when active.
+**Ctrl, Alt, and Shift are sticky**: tap once to activate for the next keypress. Tap again to deactivate. They highlight when active.
 
 Three things behave differently from "the next keypress". Shift stays held for a
 whole trackpad drag, so dragging with Shift on selects text rather than moving
@@ -400,12 +400,12 @@ rg --version      # ripgrep (powers VS Code search)
 
 The Extra Key Row is especially useful in the terminal:
 
-- **Ctrl+C** -- interrupt a running process (tap Ctrl, then tap C on keyboard)
-- **Ctrl+D** -- send EOF / exit the shell
-- **Ctrl+L** -- clear the terminal screen
-- **Tab** -- autocomplete file and directory names
-- **Esc** -- cancel a prompt, or leave copy mode in tmux
-- **Arrow keys** -- navigate command history (Up/Down) and cursor (Left/Right). On a touch device
+- **Ctrl+C**: interrupt a running process (tap Ctrl, then tap C on keyboard)
+- **Ctrl+D**: send EOF / exit the shell
+- **Ctrl+L**: clear the terminal screen
+- **Tab**: autocomplete file and directory names
+- **Esc**: cancel a prompt, or leave copy mode in tmux
+- **Arrow keys**: navigate command history (Up/Down) and cursor (Left/Right). On a touch device
   these come from the trackpad on page 1 of the key row, not from buttons; drag it up or down to
   walk back through history
 
@@ -536,7 +536,7 @@ storage** shows none of those files. So bring the file inside first:
    Files app. A device folder is copied into the app for as long as it is open,
    so pick a folder holding little else. Files over 50 MB are not carried in at
    all, so a very large VSIX has to arrive another way.
-3. Open a terminal (**Ctrl+`**), which starts in that folder, and copy it
+3. Open a terminal (**Ctrl+\`**), which starts in that folder, and copy it
    across: `cp name.vsix ~/`.
 4. Run **Extensions: Install from VSIX...**, pick the file, and choose **Reload
    Now** when the notification offers it.
@@ -557,10 +557,10 @@ the version.
 
 These extensions come bundled with VSCodroid:
 
-- **ESLint** -- JavaScript/TypeScript linting
-- **Prettier** -- code formatting
-- **Tailwind CSS IntelliSense** -- Tailwind autocomplete
-- **Python** -- Python language support
+- **ESLint**: JavaScript/TypeScript linting
+- **Prettier**: code formatting
+- **Tailwind CSS IntelliSense**: Tailwind autocomplete
+- **Python**: Python language support
 
 VSCodroid also ships five of its own, which do not appear in the marketplace:
 the Get Started walkthrough, the Android bridge (device folders, the device
@@ -673,7 +673,7 @@ that helper is not bundled, and the command completes without it.
 
 VSCodroid creates a default SSH config at `~/.ssh/config` on first launch with sensible defaults:
 
-- `StrictHostKeyChecking accept-new` -- auto-accept new host keys on first connection
+- `StrictHostKeyChecking accept-new`: auto-accept new host keys on first connection
 - ed25519 identity file configured
 - Keepalive enabled
 
@@ -726,18 +726,16 @@ and opens a terminal on the server:
 3. Add a connection to `settings.json` (Command Palette, **Preferences: Open User Settings
    (JSON)**), using the path from step 2 as `privateKeyPath`:
 
-   ```json
-   "sshfs.configs": [
-       {
-           "name": "myserver",
-           "host": "192.168.1.100",
-           "port": 22,
-           "username": "deploy",
-           "privateKeyPath": "/path/printed/in/step/2",
-           "root": "/home/deploy"
-       }
-   ]
-   ```
+        "sshfs.configs": [
+            {
+                "name": "myserver",
+                "host": "192.168.1.100",
+                "port": 22,
+                "username": "deploy",
+                "privateKeyPath": "/path/printed/in/step/2",
+                "root": "/home/deploy"
+            }
+        ]
 
 4. Run **SSH FS: Add as Workspace Folder** and pick `myserver`. Its files appear in the Explorer,
    and saving a file writes it straight to the server. **SSH FS: Open a remote SSH terminal** gives
@@ -785,10 +783,10 @@ When running a local dev server (Vite, Next.js, Express, Flask, etc.), you can p
 **inside the editor**, in a tab beside your code:
 
 1. Start the dev server in the terminal:
-   ```bash
-   npm run dev
-   # Output: Local: http://localhost:5173/
-   ```
+
+        npm run dev
+        # Output: Local: http://localhost:5173/
+
 2. Open the Command Palette (**Ctrl+Shift+P**) and run `Simple Browser: Show`
 3. Enter the URL, for example `http://127.0.0.1:5173/`
 
@@ -982,8 +980,8 @@ or completion for Java.
 extension from Open VSX talks to it: see [C and C++](#c-and-c). There is no debugger for either.
 
 **TypeScript.** `npm install typescript` now installs version 7, whose compiler is a native
-program with no Android build, so `npx tsc` stops with `Unable to resolve ... Either your
-platform is unsupported`. Install `typescript@6` instead, which compiles in JavaScript and works
+program with no Android build, so `npx tsc` stops with
+`Unable to resolve ... Either your platform is unsupported`. Install `typescript@6` instead, which compiles in JavaScript and works
 here. The editor's own TypeScript checking is separate and is not affected. Node itself runs
 `.ts` files directly (`node file.ts`) as long as they use only syntax that can be stripped.
 
@@ -1135,19 +1133,19 @@ The status bar shows a phantom process count. This tells you how many background
 
 ### Quick File Navigation
 
-- **Ctrl+P** then start typing a filename -- the fastest way to open files in large projects.
+- **Ctrl+P** then start typing a filename: the fastest way to open files in large projects.
 - **Ctrl+G** to go to a specific line number.
 - **Ctrl+Shift+O** to jump to a symbol (function, class) in the current file.
 
 ### Multi-cursor Editing
 
-- **Ctrl+D** -- select the next occurrence of the current selection.
-- **Ctrl+Shift+L** -- select all occurrences.
+- **Ctrl+D**: select the next occurrence of the current selection.
+- **Ctrl+Shift+L**: select all occurrences.
 - Hold **Alt** and tap to place additional cursors (on external keyboard).
 
 ### Zen Mode
 
-**Ctrl+K Z** enters Zen Mode -- a distraction-free fullscreen editing experience. Press **Esc Esc** (double Esc) to exit.
+**Ctrl+K Z** enters Zen Mode, a distraction-free fullscreen editing experience. Press **Esc Esc** (double Esc) to exit.
 
 ### Saving Battery
 
@@ -1445,7 +1443,7 @@ VSCodroid typically uses 400-700 MB of RAM. On devices with 4 GB or less, you ma
 
 ### os.cpus() Returns Empty
 
-`os.cpus()` returns an empty array on Android. This is cosmetic -- tools that display CPU core counts may show 0, but actual performance is unaffected.
+`os.cpus()` returns an empty array on Android. This is cosmetic: tools that display CPU core counts may show 0, but actual performance is unaffected.
 
 ### Microsoft-only Extensions
 
@@ -1460,9 +1458,9 @@ runtime asks for `epoll_pwait2`, and that call is on the list only from Android
 15 onward.
 
 VSCodroid answers that one call itself, so sign-in and everyday use work on
-Android 13 and 14 as well. If the panel still reports `Claude Code process
-terminated by signal SIGSYS`, or `claude` in a terminal prints `Bad system
-call`, a newer release of the extension is asking for a call VSCodroid does not
+Android 13 and 14 as well. If the panel still reports
+`Claude Code process terminated by signal SIGSYS`, or `claude` in a terminal prints
+`Bad system call`, a newer release of the extension is asking for a call VSCodroid does not
 answer yet. Please report it with your Android version and the extension
 version; there is nothing to change on your side.
 
@@ -1506,8 +1504,8 @@ Palette and read the extension host log; the reason is there and nowhere else.
 
 **One variant is loud rather than silent.** An extension that publishes a
 separate build per platform, with no musl build and no platform-independent one,
-refuses to install at all, with a dialog reading `The 'publisher.name' extension
-is not available in VSCodroid for the Alpine ARM 64 platform.` Alpine is not what
+refuses to install at all, with a dialog reading
+`The 'publisher.name' extension is not available in VSCodroid for the Alpine ARM 64 platform.` Alpine is not what
 your phone is running; it is the build VSCodroid asks for, for the reason above.
 Read that message as "this extension publishes nothing that can run here".
 
@@ -1573,7 +1571,7 @@ Core installation extracts approximately 603 MB to internal storage. With Ruby a
 
 If the app shows a blank screen after opening:
 
-1. Wait 10-15 seconds -- the Node.js server may still be starting.
+1. Wait 10-15 seconds: the Node.js server may still be starting.
 2. If it persists, force-close the app and reopen it.
 3. If the issue continues, clearing app data forces a fresh extraction. **Read the
    warning below before you do it.**
@@ -1635,7 +1633,7 @@ If `node`, `python3`, `git`, or other tools show "command not found":
 
 ### Extensions Not Installing
 
-1. Check your internet connection -- extension search and download require connectivity.
+1. Check your internet connection: extension search and download require connectivity.
 2. Search directly on [open-vsx.org](https://open-vsx.org) to verify the extension exists there.
 3. Some extensions require a newer editor than the one you have. Run **About** from the Command Palette (`Ctrl+Shift+P`) to see which version VSCodroid is built on and compare it with the extension's requirement on open-vsx.org. Marketplace installation selects a compatible release when one is available and refuses the install otherwise. A VSIX requiring a newer editor is also refused; choose an older compatible version.
 
@@ -1644,9 +1642,9 @@ If `node`, `python3`, `git`, or other tools show "command not found":
 If `npm install` fails with errors:
 
 - **EACCES / permission errors** can mean an install step tried to run a program the package downloaded, which Android does not allow inside the app's storage; esbuild is one such package (see [Known Limitations](#packages-with-prebuilt-binaries)). If it is about writing a file or folder (`mkdir`, `open`) rather than running a program, make sure you are working inside `~/projects/` or your home directory, not in a system path.
-- **node-gyp / compilation errors** -- the package requires native compilation. Use a pure JS alternative (see [Known Limitations](#native-npm-packages)).
+- **node-gyp / compilation errors**: the package requires native compilation. Use a pure JS alternative (see [Known Limitations](#native-npm-packages)).
 - **Unsupported platform errors** come from a package whose prebuilt binaries have no Android build, so there is nothing to install (see [Known Limitations](#packages-with-prebuilt-binaries)).
-- **Network timeout** -- check your internet connection. npm uses `--prefer-offline` by default, so cached packages install without network.
+- **Network timeout**: check your internet connection. npm uses `--prefer-offline` by default, so cached packages install without network.
 
 ### Python: Installed, and Then Something Fails
 
@@ -1657,8 +1655,8 @@ If `npm install` fails with errors:
 
 ### Git Push/Pull Fails
 
-- **Permission denied (publickey)** -- generate an SSH key with `ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519` in the terminal and add it to your GitHub/GitLab account. The `-f` is required; see [Generating an SSH Key](#generating-an-ssh-key) for why.
-- **SSL certificate error** -- the CA bundle the terminal uses is built from your device's own trust store: the system roots, plus any certificate authority you installed yourself through Android Settings, under the CA-certificate flow in the device's security settings. git, Python, pip, Ruby and the bundled Node.js (`npm` included, when the bundle file is present) are all given it, so a private or corporate CA works for `git clone`, `pip install` and `npm install` alike, from the next time you open the app -- the bundle is rebuilt at launch, not while the app is running. If you would rather not install a CA on the device, an SSH remote (`git@`) instead of `https://` is still the shortest route to an internal host. Two things that bundle does not reach: pages loaded inside the editor, which use the system roots only, and the optional Java 21 toolchain, which reads its own keystore at `$JAVA_HOME/lib/security/cacerts`. To add a private CA for Java, import its PEM file in the terminal with `keytool -importcert -cacerts -alias my-ca -file ~/ca.pem -storepass changeit -noprompt` (import one certificate per file under a distinct `-alias`; removing and reinstalling the Java 21 toolchain replaces `cacerts`, so repeat the import afterwards). Turning a system root off in Android Settings drops it from the bundle at the next launch for `git`, Python, `curl`, Ruby and Node.js (`https` and `npm`), whereas `pip` (which also loads its vendored `certifi` bundle), the extension host's `fetch` and WebSocket client (which merge Node's compiled-in root list with the bundle), and Java 21 (`cacerts`) keep trusting roots that remain in their own built-in lists.
+- **Permission denied (publickey)**: generate an SSH key with `ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519` in the terminal and add it to your GitHub/GitLab account. The `-f` is required; see [Generating an SSH Key](#generating-an-ssh-key) for why.
+- **SSL certificate error**: the CA bundle the terminal uses is built from your device's own trust store: the system roots, plus any certificate authority you installed yourself through Android Settings, under the CA-certificate flow in the device's security settings. git, Python, pip, Ruby and the bundled Node.js (`npm` included, when the bundle file is present) are all given it, so a private or corporate CA works for `git clone`, `pip install` and `npm install` alike, from the next time you open the app: the bundle is rebuilt at launch, not while the app is running. If you would rather not install a CA on the device, an SSH remote (`git@`) instead of `https://` is still the shortest route to an internal host. Two things that bundle does not reach: pages loaded inside the editor, which use the system roots only, and the optional Java 21 toolchain, which reads its own keystore at `$JAVA_HOME/lib/security/cacerts`. To add a private CA for Java, import its PEM file in the terminal with `keytool -importcert -cacerts -alias my-ca -file ~/ca.pem -storepass changeit -noprompt` (import one certificate per file under a distinct `-alias`; removing and reinstalling the Java 21 toolchain replaces `cacerts`, so repeat the import afterwards). Turning a system root off in Android Settings drops it from the bundle at the next launch for `git`, Python, `curl`, Ruby and Node.js (`https` and `npm`), whereas `pip` (which also loads its vendored `certifi` bundle), the extension host's `fetch` and WebSocket client (which merge Node's compiled-in root list with the bundle), and Java 21 (`cacerts`) keep trusting roots that remain in their own built-in lists.
 
 ### App Uses Too Much Storage
 
@@ -1689,7 +1687,7 @@ This is usually caused by Android's memory management killing background process
 
 1. Close other apps to free RAM.
 2. Reduce the number of open terminal tabs.
-3. Check the process monitor in the status bar -- if phantom count is high, close unused terminals.
+3. Check the process monitor in the status bar: if phantom count is high, close unused terminals.
 4. On devices with 4 GB RAM or less, consider keeping only one project open at a time.
 5. If it keeps happening, send a report; see [Sending a Bug Report](#sending-a-bug-report).
 
