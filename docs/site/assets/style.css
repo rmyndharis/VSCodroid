@@ -484,6 +484,19 @@ pre {
   color: var(--text-faint);
 }
 
+/* Three screenshots at the default width leave a quarter of the row empty on a
+ * desktop; this width fills it. A phone still gets the 62vw cap above. */
+.shots-three {
+  grid-auto-columns: min(300px, 62vw);
+}
+
+.assistants-note {
+  margin: 1.5rem 0 0;
+  max-width: 58ch;
+  font-size: 0.9rem;
+  color: var(--text-dim);
+}
+
 /* --- Prose (the guide and the policy) ----------------------------------- */
 
 .doc {
