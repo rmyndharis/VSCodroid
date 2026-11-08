@@ -96,6 +96,12 @@ def render(source: pathlib.Path) -> "tuple[str, list[tuple[str, str]]]":
     md = markdown.Markdown(extensions=["tables", "fenced_code", "sane_lists"])
     body = md.convert(text)
 
+    # The privacy policy carries two dates on two source lines, which Markdown
+    # joins into one. Keep them on two lines.
+    body = re.sub(
+        r"(Effective Date:[^<]*</strong>)\n(<strong>Last Updated)", r"\1<br>\n\2", body
+    )
+
     # Anchors, added here rather than by the toc extension so the ids match the
     # sidebar exactly and nothing depends on that extension's slug rules.
     entries: "list[tuple[str, str]]" = []
