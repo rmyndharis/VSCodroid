@@ -65,11 +65,14 @@ yarn-error.log*
 /android/toolchain_java/src/main/assets/toolchain_java.json
 /android/toolchain_cpp/src/main/assets/usr/
 /android/toolchain_cpp/src/main/assets/toolchain_cpp.json
+/android/toolchain_codex/src/main/assets/usr/
+/android/toolchain_codex/src/main/assets/toolchain_codex.json
 
 # ===== Toolchain Asset Pack build intermediates =====
 /android/toolchain_ruby/build/
 /android/toolchain_java/build/
 /android/toolchain_cpp/build/
+/android/toolchain_codex/build/
 
 # ===== Bundletool (local AAB testing only) =====
 bundletool.jar

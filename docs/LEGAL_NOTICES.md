@@ -653,7 +653,7 @@ VSCodroid is built using the Android SDK and NDK provided by Google.
 
 ## Google Play Asset Delivery
 
-On Play Store installs, on-demand toolchain packs (Ruby, Java, C/C++) are delivered via Google Play Asset Delivery, a feature of Google Play. On installs that did not come from the Play Store, the same packs are downloaded as ZIPs from this project's GitHub Releases (https://github.com/rmyndharis/VSCodroid/releases), which the terms below do not govern.
+On Play Store installs, on-demand toolchain packs (Ruby, Java, C/C++, Codex) are delivered via Google Play Asset Delivery, a feature of Google Play. On installs that did not come from the Play Store, the same packs are downloaded as ZIPs from this project's GitHub Releases (https://github.com/rmyndharis/VSCodroid/releases), which the terms below do not govern.
 
 - **Terms**: https://play.google.com/about/developer-distribution-agreement.html
 
@@ -805,6 +805,13 @@ The following toolchains are available as optional downloads and have their own 
 - **Copyright**: Copyright (c) LLVM Project contributors
 - **Full license**: `LICENSE.TXT`, which ships inside the pack at `usr/share/doc/libllvm/LICENSE.TXT`, and https://llvm.org/LICENSE.txt
 
+### Codex (OpenAI)
+
+- **Project**: https://github.com/openai/codex (the engine and its code mode helper, packaged by Termux)
+- **License**: Apache License 2.0; the `NOTICE` that travels with it names Ratatui, licensed under the MIT license, as code it includes
+- **Copyright**: Copyright 2025 OpenAI; Ratatui: Copyright (c) 2016-2022 Florian Dehau and (c) 2023-2025 The Ratatui Developers
+- **Full license**: `LICENSE` and `NOTICE`, which ship inside the pack at `usr/share/doc/codex`, and https://www.apache.org/licenses/LICENSE-2.0
+
 ---
 
 ## Trademark Notices
@@ -832,4 +839,4 @@ For questions about licenses, trademarks, or legal notices:
 
 ---
 
-_This document was last updated on November 5, 2026._
+_This document was last updated on November 9, 2026._

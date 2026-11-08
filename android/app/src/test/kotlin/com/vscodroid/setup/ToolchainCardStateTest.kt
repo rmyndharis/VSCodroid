@@ -33,6 +33,21 @@ class ToolchainCardStateTest {
     private fun manager() = ToolchainCardState(ToolchainCardMode.MANAGER)
     private fun picker() = ToolchainCardState(ToolchainCardMode.PICKER)
 
+    /**
+     * The picker asks "What do you code in?" and is a list of languages. The Codex
+     * engine is a tool, so it is on the management screen only, where a person who
+     * has installed the extension goes to add it.
+     */
+    @Test
+    fun `the picker leaves the Codex engine to the manager`() {
+        val inPicker = picker().items.map { it.packName }
+        val inManager = manager().items.map { it.packName }
+
+        assertFalse("toolchain_codex" in inPicker, "the language picker offers the Codex engine: $inPicker")
+        assertTrue("toolchain_codex" in inManager, "the manager does not offer the Codex engine: $inManager")
+        assertEquals(inManager - "toolchain_codex", inPicker, "the picker lost a language the manager has")
+    }
+
     @Nested
     inner class InstalledSet {
 

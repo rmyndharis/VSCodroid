@@ -364,6 +364,7 @@
     <string name="toolchain_ruby_description">Ruby with irb, gem, bundler</string>
     <string name="toolchain_java_description">OpenJDK 21 (javac, jar, jshell)</string>
     <string name="toolchain_cpp_description">C and C++ (clang, lld). Needs the terminal\'s exec interceptor: it does not work with LD_PRELOAD set to null.</string>
+    <string name="toolchain_codex_description">Codex agent engine for the Codex extension, and the codex command</string>
 
     <!-- The checkmark on a selected toolchain card. It is an ImageView with no
          text, so this is the whole of what a screen reader has to announce it. -->

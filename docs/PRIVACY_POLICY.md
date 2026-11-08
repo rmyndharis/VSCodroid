@@ -1,7 +1,7 @@
 # VSCodroid Privacy Policy
 
 **Effective Date: February 13, 2026**
-**Last Updated: November 4, 2026**
+**Last Updated: November 9, 2026**
 
 ## Summary
 
@@ -9,7 +9,7 @@ VSCodroid is a code editor that runs entirely on your Android device. **We** do 
 
 Three exceptions to "nothing leaves the device", all under your control and none involving us. Android's own backup service copies your editor settings to your Google account if you have backup switched on (see **Android Backup** below). Anything you ask the app to fetch (an extension, a toolchain, an `npm install`) is a request you initiated, alongside several online lookups the editor performs on its own: it checks Open VSX for newer versions of your installed extensions and installs them, when you open a Python file without Black Formatter installed it looks that extension up on Open VSX so it can suggest it, and its built-in language features fetch JSON schemas, `npm` package metadata, and TypeScript type definitions when you work with files that use them (see **Network Access**).
 
-The third is different in kind and worth reading before you use it: the app bundles **GitHub Copilot Chat**, and once you sign in to GitHub and use it, what you ask it and the code it attaches as context go to GitHub. That is the one feature here that sends your own work to someone else. It has no account and no chat until you sign in, though while it is enabled it loads and runs in the background from the moment the editor starts, and it can be switched off.
+The third is different in kind and worth reading before you use it: the app bundles **GitHub Copilot Chat**, and once you sign in to GitHub and use it, what you ask it and the code it attaches as context go to GitHub. That is the one feature that ships with the app that sends your own work to someone else. It has no account and no chat until you sign in, though while it is enabled it loads and runs in the background from the moment the editor starts, and it can be switched off. The optional Codex toolchain, which you install yourself, does the same toward OpenAI once you have signed in and used it (see **Codex** below).
 
 ---
 
@@ -84,13 +84,21 @@ Once you are signed in and you use it, **what you send goes to GitHub**. That me
 
 If you would rather it stayed off, use **Disable AI Features** on **GitHub Copilot Chat** in the Extensions view (or set `chat.disableAIFeatures` to `true`); the editor works without it. It ships inside the app rather than being downloaded, so the view offers **Disable AI Features** rather than Uninstall.
 
+### Codex (Optional Toolchain, User-Initiated)
+
+The Codex toolchain installs OpenAI's Codex engine, the program behind the `codex` command. It is not part of the app until you choose it on the Toolchains screen, and it is not offered in the first-run picker.
+
+Once you sign in to OpenAI, or give it an API key, and you use it, **what you send goes to OpenAI**. That means the message you type and what the engine reads or runs on your behalf to answer it, which can include code from your project. That exchange is between you and OpenAI under OpenAI's terms and privacy policy (https://openai.com/policies). VSCodroid does not read it or keep a copy.
+
+Before you have signed in, the engine already does one thing that was measured: on its first start it clones a public catalogue of plugins from `github.com/openai/plugins`, about 50 MB on disk. That request goes to GitHub, under GitHub's privacy policy, and carries none of your files. Whether it sends anything else before you sign in is not something we have established. Removing the toolchain on the Toolchains screen removes the engine.
+
 ### Git Operations (User-Initiated)
 
 When you push, pull, clone or fetch, the bundled Git client reaches the remote you configured: GitHub, GitLab, a self-hosted server, whatever you named. The connection goes through a proxy that runs inside the app, on your device, at `127.0.0.1`. It exists because some bundled programs cannot look up a hostname on Android by themselves, so the lookup happens there instead. For an `https` remote it opens a tunnel and passes the encrypted bytes through without reading them; nothing leaves your device except the connection to the remote you named. VSCodroid adds no destination of its own and keeps no record of where you push.
 
 ### Toolchain Downloads (User-Initiated)
 
-Additional programming language toolchains (Ruby, Java 21, C/C++) can be downloaded on-demand. There are two delivery paths, and the app chooses between them at runtime by asking Android which package installed it:
+Additional toolchains (the Ruby, Java 21 and C/C++ languages, and the Codex engine) can be downloaded on-demand. There are two delivery paths, and the app chooses between them at runtime by asking Android which package installed it:
 
 - **Installed from the Google Play Store** (the installing package is `com.android.vending`): the toolchain arrives as a Google Play Asset Delivery pack, handled by the Google Play Store infrastructure. Google's privacy policy applies to Play Store interactions: https://policies.google.com/privacy.
 - **Installed any other way** -- a sideloaded APK, a debug build, `adb install` -- or when the installing package cannot be read at all: the app downloads a ZIP over HTTPS from this project's GitHub Releases (https://github.com/rmyndharis/VSCodroid/releases), following GitHub's redirect to its release-asset host. GitHub's privacy policy applies to that download.
@@ -136,7 +144,7 @@ To turn it off entirely, use Android's own control: **Settings → Google → Ba
 - We do **not** serve advertisements
 - We do **not** collect device identifiers, IP addresses, or location data
 - We do **not** use cookies for tracking purposes
-- We do **not** share any data with third parties. One thing this app ships does, and it is named rather than tucked under this line: GitHub Copilot Chat sends what you ask it, and the code it attaches as context, to GitHub, once you have signed in and used it. See the section above
+- We do **not** share any data with third parties. One thing this app ships does, and it is named rather than tucked under this line: GitHub Copilot Chat sends what you ask it, and the code it attaches as context, to GitHub, once you have signed in and used it. The Codex toolchain, which you install yourself, sends what you ask it to OpenAI on the same terms. See the sections above
 - We do **not** send Microsoft telemetry. To be exact about how: the telemetry code is still in the editor build, and it is switched off and given nowhere to report to. `telemetryOptIn` is false in the product configuration applied at build time, both `telemetryOptIn` and `enableTelemetry` are set false again at every start, and the built `product.json` carries no telemetry endpoint for it to reach. Disabled and unaddressed, rather than deleted
 
 ## Data Stored on Your Device
@@ -158,6 +166,7 @@ Uninstalling the app or clearing its data through Android Settings removes its p
 VSCodroid itself includes no third-party analytics, advertising, or tracking SDKs. The third-party services it integrates are:
 
 - **GitHub Copilot Chat**: Bundled with the app and configured as the editor's chat provider. It has no account and offers you no chat until you sign in to GitHub. While it is enabled it starts with the editor whether or not you are signed in, and whether it sends anything before you sign in is not something we have established. Once you have signed in and used it, what you ask and the code it attaches as context go to GitHub, under GitHub's terms and privacy statement. It can be turned off from the Extensions view (**Disable AI Features**), but not uninstalled, because it ships as a built-in.
+- **OpenAI (Codex)**: Only if you install the Codex toolchain. On its first start the engine clones a public plugin catalogue from `github.com/openai/plugins`, before you sign in; whether it sends anything else before then is not something we have established. Once you have signed in and used it, what you ask and what it reads or runs to answer go to OpenAI, under OpenAI's terms and privacy policy.
 - **Google Play Asset Delivery**: Used solely for downloading optional language toolchain packs on Play Store installs. This is a Google Play Store feature and is governed by Google's privacy policy.
 - **GitHub Releases and GitHub Pages**: Used for downloading those same toolchain packs on installs that did not come from the Play Store, and for the prebuilt Python packages `pip` is pointed at (see **Package Installation**). Governed by GitHub's privacy policy.
 

@@ -246,6 +246,9 @@ jobs:
       - name: Check toolchain argument parsing with the host compiler
         run: python3 scripts/test-exec-trampoline.py
 
+      - name: Check the self-exe preload library with the host compiler
+        run: python3 scripts/test-selfexe-shim.py
+
       - name: Check release version declarations are read exactly
         run: python3 scripts/test-release-versions.py
 

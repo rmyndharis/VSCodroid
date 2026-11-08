@@ -536,6 +536,7 @@ jobs:
           python3 scripts/test-copilot-compile-guard.py
           python3 scripts/test-patch-sysroot-paths.py
           python3 scripts/test-exec-trampoline.py
+          python3 scripts/test-selfexe-shim.py
           python3 scripts/test-check-server-published.py
           python3 scripts/test-extension-updates.py
 
@@ -666,6 +667,14 @@ jobs:
           ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
         run: bash scripts/build-termux-exec.sh
 
+      # The library the Codex launcher preloads beside the interceptor, so a
+      # program the loader starts is told its real path (scripts/selfexe-shim.c).
+      # Into assets/usr/lib, so after the wipe like the interceptor.
+      - name: Build the self-exe preload library
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
+        run: bash scripts/build-selfexe-shim.sh
+
       # The one binary this repository compiles for the app itself. It is what
       # puts a downloaded toolchain's commands on PATH as real files, so anything
       # that resolves a bare name and execve's the result -- an extension
@@ -772,6 +781,7 @@ jobs:
           bash scripts/download-ruby.sh
           bash scripts/download-java.sh
           bash scripts/download-cpp.sh
+          bash scripts/download-codex.sh
 
       # The unit suite ran on every pull request and on no tag, which put the
       # published build on the wrong side of it. Before the signing keystore is
