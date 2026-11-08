@@ -536,12 +536,11 @@ dependencies {
 tasks.withType<Test> {
     useJUnitPlatform()
     // The whole suite runs in one JVM (no forkEvery), and a Gradle test worker gets a 512 MB
-    // heap unless told otherwise. What the suite retains grows through the run: on a full local
-    // run the heap held 107 MB after a collection in the first two minutes and 392 MB in the
-    // last, with 510 MB in use at the peak. CI died with "OutOfMemoryError: Java heap space" in
-    // the Gradle Test Executor after about 16 and 18 minutes, then passed unchanged on a re-run.
-    // This is a ceiling and not an allocation. It buys room without locating what the late
-    // classes keep.
+    // heap unless told otherwise. What earlier test classes keep reachable, MockK stubs among
+    // it, still counts against that late in the run. CI died with "OutOfMemoryError: Java heap
+    // space" in the Gradle Test Executor after about 16 and 18 minutes, then passed unchanged
+    // on a re-run. This is a ceiling and not an allocation: it adds room and does not locate
+    // what holds the stubs.
     maxHeapSize = "2g"
     // MockK needs reflective access to Files internals for publication failure tests,
     // and to UUID's for the one that forces a temporary name to collide.
