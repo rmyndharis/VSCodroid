@@ -353,6 +353,7 @@
     <string name="toolchain_ruby_description">Ruby와 irb, gem, bundler</string>
     <string name="toolchain_java_description">OpenJDK 21 (javac, jar, jshell)</string>
     <string name="toolchain_cpp_description">C 및 C++ (clang, lld). 터미널의 exec 인터셉터가 필요하며 LD_PRELOAD를 null로 설정하면 동작하지 않습니다.</string>
+    <string name="toolchain_codex_description">Codex 확장과 codex 명령을 위한 Codex 에이전트 엔진</string>
 
     <!-- The checkmark on a selected toolchain card. It is an ImageView with no
          text, so this is the whole of what a screen reader has to announce it. -->

@@ -576,6 +576,9 @@ object Environment {
      */
     const val EXEC_PRELOAD_ASSET = "usr/lib/libtermux-exec.so"
 
+    /** [EXEC_PRELOAD_ASSET]'s neighbour: the same string in the asset tree and in filesDir. */
+    const val SELF_EXE_PRELOAD_ASSET = "usr/lib/libselfexe.so"
+
     /**
      * The exec interceptor a terminal preloads, and the one LD_PRELOAD value
      * that can be written into a setting.
@@ -608,6 +611,15 @@ object Environment {
      */
     fun getExecPreloadPath(context: Context): String =
         "${context.filesDir}/$EXEC_PRELOAD_ASSET"
+
+    /**
+     * The library the Codex launcher preloads beside the exec interceptor, so the
+     * engine is told the real path of its own file (`scripts/selfexe-shim.c`).
+     * Extracted with the rest of `usr/` at setup; the launcher checks it is there,
+     * because Bionic aborts every exec whose preload names a file that is not.
+     */
+    fun getSelfExePreloadPath(context: Context): String =
+        "${context.filesDir}/$SELF_EXE_PRELOAD_ASSET"
 
     fun getGitPath(context: Context): String =
         "${context.applicationInfo.nativeLibraryDir}/libgit.so"

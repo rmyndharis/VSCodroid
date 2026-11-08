@@ -304,6 +304,17 @@ jobs:
           ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
         run: bash scripts/build-termux-exec.sh
 
+      # The library the Codex launcher preloads beside the interceptor, so a
+      # program the loader starts is told its real path (scripts/selfexe-shim.c).
+      # Into assets/usr/lib, so after the wipe like the interceptor. Not skipped
+      # on a cache hit: it compiles in a moment, and a restored usr/ from before
+      # this step existed has no copy of it, which would leave the Codex agent
+      # unable to run a command with every gate green.
+      - name: Build the self-exe preload library
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
+        run: bash scripts/build-selfexe-shim.sh
+
       # The one binary this repository compiles for the app itself rather than
       # taking from Termux. It is what puts a downloaded toolchain's commands on
       # PATH as real files, so anything that resolves a bare name and execve's

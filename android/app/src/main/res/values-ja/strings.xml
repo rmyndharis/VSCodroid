@@ -353,6 +353,7 @@
     <string name="toolchain_ruby_description">Ruby (irb、gem、bundler 付き)</string>
     <string name="toolchain_java_description">OpenJDK 21 (javac、jar、jshell)</string>
     <string name="toolchain_cpp_description">C と C++ (clang、lld)。ターミナルの exec インターセプターが必要です。LD_PRELOAD を null にすると動作しません。</string>
+    <string name="toolchain_codex_description">Codex エージェントエンジン (Codex 拡張機能と codex コマンド用)</string>
 
     <!-- The checkmark on a selected toolchain card. It is an ImageView with no
          text, so this is the whole of what a screen reader has to announce it. -->
