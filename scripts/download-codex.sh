@@ -7,7 +7,8 @@ set -euo pipefail
 # What the pack is: OpenAI's Codex command line agent (Apache-2.0) as Termux
 # builds it for Bionic, and the helper process its code mode needs. What it is
 # not: the extension. The Codex extension in the Open VSX gallery ships a static
-# musl build, which cannot start on Android; this is an engine that can.
+# musl build, which cannot start on Android, so the user installs the extension
+# as usual and the app starts this engine in its place (platform-fix.js).
 #
 # Nothing the base APK already ships is repeated here: the engine needs libssl,
 # libcrypto, libc++_shared and Bionic, and the first three are in assets/usr/lib.
