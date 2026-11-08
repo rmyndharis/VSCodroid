@@ -1124,7 +1124,9 @@ class ToolchainExecTableTest {
                 "exe=${codexEngine.absolutePath}",
                 "preload=${preload.absolutePath}:${selfExe.absolutePath}",
             ),
-            result.second.reader().readLines(),
+            // A host loader that honours LD_PRELOAD says the stand-in files are not
+            // libraries, on stderr, which this run merges into the output.
+            result.second.reader().readLines().filterNot { it.startsWith("ERROR: ld.so: ") },
         )
     }
 
