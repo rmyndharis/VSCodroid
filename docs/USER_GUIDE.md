@@ -1157,8 +1157,8 @@ The status bar shows a phantom process count. This tells you how many background
 
 ### Touch Gestures
 
-The editor and the file tree answer the gestures a phone expects, but nothing
-on screen says so. These are the ones that work.
+The editor, the file tree and the status bar answer the gestures a phone
+expects, but nothing on screen says so. These are the ones that work.
 
 In a file:
 
@@ -1196,6 +1196,14 @@ In the file tree:
   which is how VS Code behaves on a desktop as well.
 - So moving a file is: hold it, tap Cut, hold the folder you want it in, tap
   Paste.
+
+In the status bar:
+
+- On a narrow screen the entries at the right end of the bar do not all fit:
+  line and column, indentation, encoding, line ending and language mode, plus
+  whatever extensions add, such as Go Live. Put a finger on an entry at the
+  right end of the bar and drag to the right to bring the hidden ones into view,
+  then tap one as usual.
 
 ### Keyboard Tips for Touch
 
