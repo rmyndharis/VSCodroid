@@ -1144,7 +1144,7 @@ interface ToolchainManager {
 }
 
 interface Toolchain {
-  id: string; // "ruby", "java", "cpp" -- those three. Rust has no module, no
+  id: string; // "ruby", "java", "cpp", "codex" -- those four. Rust has no module, no
               // asset pack and no ToolchainRegistry entry; it was planned and
               // deferred, and naming it here read as a shipped option
   name: string; // "Java 21"

@@ -619,7 +619,7 @@ cd android && ./gradlew bundleRelease
 ```
 
 This produces an AAB at `android/app/build/outputs/bundle/release/app-release.aab` carrying the
-Ruby, Java and C/C++ toolchains as asset packs. Each declares `deliveryType = "on-demand"`, so none
+Ruby, Java, C/C++ and Codex toolchains as asset packs. Each declares `deliveryType = "on-demand"`, so none
 is downloaded with the app and none counts against the base module's size cap.
 
 ## Continuous Integration
