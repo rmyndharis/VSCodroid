@@ -20,7 +20,7 @@ set -euo pipefail
 #
 # Output:
 #   toolchain-zips/toolchain_ruby.zip  (~11 MB)
-#   toolchain-zips/toolchain_java.zip  (~64 MB)
+#   toolchain-zips/toolchain_java.zip  (~69 MB)
 #   toolchain-zips/toolchain_cpp.zip   (~79 MB)
 #
 # The ZIPs are intended to be attached to GitHub Releases so that sideloaded
