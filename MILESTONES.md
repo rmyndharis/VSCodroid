@@ -289,8 +289,8 @@ M6 (Release)   → Play Store release
    - [x] 4 marketplace extensions bundled offline in `assets/extensions/`:
      - ESLint, Prettier, Python, Tailwind CSS
    - [x] 5 custom VSCodroid extensions:
-     - `vscodroid.vscodroid-welcome-1.9.2`, welcome tab with quick actions
-     - `vscodroid.vscodroid-saf-bridge-1.12.3`, SAF storage integration
+     - `vscodroid.vscodroid-welcome-1.9.3`, welcome tab with quick actions
+     - `vscodroid.vscodroid-saf-bridge-1.12.4`, SAF storage integration
      - `vscodroid.vscodroid-process-monitor-1.4.0`, phantom process monitoring
      - `vscodroid.vscodroid-serve-network-1.3.0`, serve a dev server on the LAN
      - `vscodroid.vscodroid-editor-menus-1.0.0`, Select All in the editor context menu, declared without code so Ctrl+A never waits on an extension host
@@ -411,7 +411,7 @@ M6 (Release)   → Play Store release
 
 2. **On-demand toolchain download scripts** (`scripts/download-ruby.sh`, `download-java.sh`, `download-cpp.sh`)
    - [x] Ruby from Termux `ruby` + libgmp + libyaml. Unpacked size is recorded in `ToolchainRegistry`, which is what every gate reads: 41 MB today, 39.7 MB of it measured, with the C headers a native gem is built against
-   - [x] Java from Termux `openjdk-21` + libandroid-shmem + libandroid-spawn (`openjdk-17` until 21 replaced it, for the Java extension). 179.5 MB unpacked; the registry records 186 MB, which leaves 6.5 MB of room
+   - [x] Java from Termux `openjdk-25` + libandroid-shmem + libandroid-spawn (`openjdk-21` until 25, the current LTS, replaced it, and `openjdk-17` before that). 185.0 MB unpacked in 340 files and a 68.8 MB ZIP; the registry records 192 MB, which leaves 7 MB of room
    - [x] C/C++ from Termux `clang` (with its `clangd`), `libllvm`, `lld`, `llvm`, `libcompiler-rt`, `ndk-sysroot`, `libxml2` and the headers of `python`, minus what the base APK already ships. 272.7 MB unpacked in 3,793 files (the registry records 280 MB) and a 79.1 MB ZIP, of which `clangd` is 18.7 MB. Its compilers start only through the terminal's exec interceptor, so its manifest is `preloadOnly` and the card says that it does not work with `LD_PRELOAD` set to null; `clangd`, which a language client starts without a terminal, is named under `launchers` and gets an exec-table row
    - [x] Each script: download .deb → extract → place in asset pack module → strip → write manifest
    - [x] Each script fails the build on any symbolic link anywhere in the pack. Neither delivery path can carry one: an asset pack cannot hold a link, and `ToolchainManager.extractZip` writes it as a text file holding the target path

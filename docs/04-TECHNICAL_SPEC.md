@@ -1441,7 +1441,7 @@ is intact, not that it is the right tarball.
 ### 7.1 Toolchain Configuration
 
 Toolchains are declared in Kotlin, in `ToolchainRegistry.available`, and both the first-run picker
-and the manage screen are built from that list. Three are shipped, Ruby, Java 21 and C/C++:
+and the manage screen are built from that list. Three are shipped, Ruby, Java 25 and C/C++:
 
 ```kotlin
 ToolchainInfo(
@@ -1455,7 +1455,7 @@ ToolchainInfo(
 )
 ```
 
-The second entry is `toolchain_java`, OpenJDK 21 with `javac`, `jar` and `jshell`. The third is
+The second entry is `toolchain_java`, OpenJDK 25 with `javac`, `jar` and `jshell`. The third is
 `toolchain_cpp`, clang and lld with a minimal sysroot (section 7.5).
 
 The first two are an interpreter and a JVM, and for a long time that was a constraint rather than a
