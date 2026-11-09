@@ -1262,11 +1262,20 @@ jobs:
           # fails if ANY glob below matches nothing, which is what these need:
           # a missing AAB leaves the other six matching, so a release carrying an
           # APK and no AAB is the case a whole-list test cannot see.
+          #
+          # No file may match two patterns. The action uploads every match of every
+          # pattern at once, so a file named twice is uploaded twice at the same
+          # moment, and with overwrite_files (its default) the second replace
+          # answered 404 on the v1.8.0 tag run, after every other asset was up and
+          # before the release was published. The symbols archive is a ZIP too, so
+          # the toolchain ZIPs are named instead of taken as *.zip, and it keeps the
+          # pattern of its own, which is what makes a build without it fail the
+          # release.
           fail_on_unmatched_files: true
           files: |
             artifacts/**/*.apk
             artifacts/**/*.aab
-            artifacts/**/*.zip
+            artifacts/**/toolchain_*.zip
             artifacts/**/toolchains.sha256
             artifacts/**/mapping.txt
             artifacts/**/app-release-symbols.zip
