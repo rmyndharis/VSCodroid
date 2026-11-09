@@ -1994,7 +1994,7 @@ class ToolchainManager(private val context: Context) {
         when (command) {
             "java" -> args += listOf("-Duser.home=$homeDir", "-Djava.io.tmpdir=$tmpDir")
             "keytool" -> args += "-J-Duser.home=$homeDir"
-            "jshell" -> args += listOf("-J-Djdk.lang.Process.launchMechanism=VFORK", "-J-Duser.home=$homeDir")
+            "jshell" -> args += listOf("-J-Djdk.lang.Process.launchMechanism=FORK", "-J-Duser.home=$homeDir")
         }
         return args
     }
@@ -3221,8 +3221,12 @@ class ToolchainManager(private val context: Context) {
                         // or `--class-path` the launcher also passes such an
                         // argument on to jshell, and then drops the last argument of
                         // the line.
-                        // VFORK lets jline start stty, without which Tab and ArrowUp
-                        // do not work, and user.home replaces Termux's compiled-in
+                        // FORK lets jline start stty, without which Tab and ArrowUp
+                        // do not work: the default mechanism starts a spawn helper
+                        // under filesDir, which fails where the exec interceptor is
+                        // not preloaded. VFORK did the same until JDK 25, which
+                        // prints a deprecation notice on every start; FORK does not.
+                        // user.home replaces Termux's compiled-in
                         // home, where the preferences store cannot be written and
                         // exit stalls.
                         lines.add(
@@ -3238,7 +3242,7 @@ class ToolchainManager(private val context: Context) {
                                 "[ -n \"\$chosen\" ] || set -- --execution local \"\$@\"; " +
                                 "$systemLoader \"\$PREFIX/../$relPath\" " +
                                 toolFlags +
-                                "-J-Djdk.lang.Process.launchMechanism=VFORK " +
+                                "-J-Djdk.lang.Process.launchMechanism=FORK " +
                                 "-J-Duser.home=\"\$HOME\" \"\$@\"; }"
                         )
                         continue
