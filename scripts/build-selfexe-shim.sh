@@ -2,7 +2,7 @@
 set -euo pipefail
 
 # Builds the library that gives the Codex engine a truthful /proc/self/exe and
-# a path through /data/user/0.
+# a path through /data/user/0 and through a device folder's name.
 #
 #   ANDROID_NDK_HOME=... ./scripts/build-selfexe-shim.sh
 #
