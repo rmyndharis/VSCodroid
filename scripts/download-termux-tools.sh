@@ -99,7 +99,7 @@ get_sonames() {
         libresolv-wrapper) echo "libresolv_wrapper.so" ;;
         c-ares)            echo "libcares.so" ;;
         # libicudata is the 32 MB data blob the other two are useless without.
-        libicu)            echo "libicui18n.so.78 libicuuc.so.78 libicudata.so.78" ;;
+        libicu)            echo "libicui18n.so.79 libicuuc.so.79 libicudata.so.79" ;;
         libc++)            echo "libc++_shared.so" ;;
         libsqlite)         echo "libsqlite3.so" ;;
         *)                 echo "" ;;
@@ -567,12 +567,12 @@ rm -rf "$ASSETS_DIR/usr/share/doc"
 termux_copy_notices "$ASSETS_DIR/usr" "${REQUIRED_PACKAGES[@]}"
 
 # ICU is the one package whose notice cannot come from Termux. Measured on
-# libicu 78.3: its .deb carries usr/share/doc/libicu/LICENSE holding the
-# fourteen bytes "404: Not Found", and nothing else in the package is a licence
-# file. Shipping those fourteen bytes would discharge nothing, so the file is
-# replaced with the LICENSE from the upstream release Termux builds, taken
-# verbatim from unicode-org/icu at tag release-78.3 -- the tag its own build.sh
-# names through TERMUX_PKG_SRCURL for TERMUX_PKG_VERSION=78.3.
+# libicu 78.3 and again on 79.1: its .deb carries usr/share/doc/libicu/LICENSE
+# holding the fourteen bytes "404: Not Found", and nothing else in the package
+# is a licence file. Shipping those fourteen bytes would discharge nothing, so
+# the file is replaced with the LICENSE from the upstream release Termux builds,
+# taken verbatim from unicode-org/icu at tag release-79.1 -- the tag its own
+# build.sh names through TERMUX_PKG_SRCURL for TERMUX_PKG_VERSION=79.1.
 #
 # Not verified: WHY Termux ships an error page there. Its build.sh reads
 # TERMUX_PKG_LICENSE_FILE="../LICENSE" under a comment calling that path a hack,
@@ -581,18 +581,18 @@ termux_copy_notices "$ASSETS_DIR/usr" "${REQUIRED_PACKAGES[@]}"
 #
 # The text is version-specific and the package version is resolved from a live
 # index, so the two are compared rather than left to a comment nobody re-reads.
-# A libicu bump that nobody re-paired would ship 78.3's LICENSE beside a
-# different ICU, which is the one way this notice goes wrong with every step
-# green. Re-take the text from unicode-org/icu at the matching release tag and
-# move the version here.
+# A libicu bump that nobody re-paired would ship the previous release's LICENSE
+# beside a different ICU, which is the one way this notice goes wrong with
+# every step green. Re-take the text from unicode-org/icu at the matching
+# release tag and move the version here.
 #
 # Matched on the upstream version only. A Termux Version field carries a package
 # revision after the upstream version (measured in the live index: python
-# 3.14.6-1, ruby 3.4.1-2, libicu 78.3 with none yet), and a rebuild of the same
-# ICU arrives as 78.3-1. That is the same LICENSE, so an exact string test would
-# fail every build over a repackaging and send the reader to release-78.3-1, a
+# 3.14.6-1, ruby 3.4.1-2, libicu 79.1 with none yet), and a rebuild of the same
+# ICU arrives as 79.1-1. That is the same LICENSE, so an exact string test would
+# fail every build over a repackaging and send the reader to release-79.1-1, a
 # tag unicode-org/icu does not have.
-ICU_NOTICE_VERSION="78.3"
+ICU_NOTICE_VERSION="79.1"
 ICU_INDEX_VERSION="$(termux_pkg_version libicu)"
 case "$ICU_INDEX_VERSION" in
     "$ICU_NOTICE_VERSION"|"$ICU_NOTICE_VERSION"-*) ;;

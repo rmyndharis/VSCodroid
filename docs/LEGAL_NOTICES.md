@@ -466,12 +466,12 @@ notice beside the binaries, almost all of them under
 `usr/share/doc/<termux package>`, placed by `termux_copy_notices` in
 `scripts/lib/termux-packages.sh`. A directory that is absent, or that holds
 nothing over 128 bytes, fails the build. The floor is there because a file being
-present proves nothing: Termux's `libicu` 78.3 ships fourteen bytes reading
+present proves nothing: Termux's `libicu` 79.1 ships fourteen bytes reading
 `404: Not Found` where its licence should be.
 
 Four packages are exceptions, each measured rather than assumed:
 
-- **ICU**: those fourteen bytes are replaced with ICU 78.3's own `LICENSE`,
+- **ICU**: those fourteen bytes are replaced with ICU 79.1's own `LICENSE`,
   kept here as `licenses/LICENSE.ICU` and taken verbatim from `unicode-org/icu`
   at the tag Termux's own build names. `scripts/download-termux-tools.sh` fails
   the build when the index moves to an ICU that text no longer describes.
@@ -529,7 +529,7 @@ files that carry terms of their own changes.
 | [gdbm](https://www.gnu.org.ua/software/gdbm/) | GPL-3.0 | **yes** | `libgdbm.so`, `libgdbm_compat.so` |
 | [Git](https://git-scm.com) | GPL-2.0 | **yes** | `libgit-remote-curl.so`, `libgit.so` |
 | [GNU Make](https://www.gnu.org/software/make/) | GPL-3.0 | **yes** | `libmake.so` |
-| [ICU](https://icu.unicode.org) | ICU | no | `libicudata.so.78`, `libicui18n.so.78`, `libicuuc.so.78` |
+| [ICU](https://icu.unicode.org) | ICU | no | `libicudata.so.79`, `libicui18n.so.79`, `libicuuc.so.79` |
 | [Kerberos 5](https://web.mit.edu/kerberos/) | MIT | no | `libcom_err.so.3`, `libgssapi_krb5.so.2`, `libk5crypto.so.3`, `libkrb5.so.3`, `libkrb5support.so.0` |
 | [ldns](https://www.nlnetlabs.nl/projects/ldns/) | BSD-3-Clause | no | `libldns.so` |
 | [libandroid-glob](https://github.com/termux/libandroid-glob) | BSD-3-Clause | no | `libandroid-glob.so` |
