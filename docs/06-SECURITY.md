@@ -144,10 +144,10 @@ Releases. Only the first is covered by Play's signing.
 
 | Control             | Implementation                                                                 |
 | ------------------- | ------------------------------------------------------------------------------ |
-| Play delivery       | Toolchains delivered as on-demand asset packs: Ruby, Java 21 and C/C++, those three |
+| Play delivery       | Toolchains delivered as on-demand asset packs: Ruby, Java 21, C/C++ and Codex, those four |
 | Code signing        | Asset packs signed with same key as base APK (Play Store enforced)             |
 | HTTPS delivery      | For non-Play installs, each ZIP is checked against the sha256 the release publishes in `toolchains.sha256` beside it, before anything is extracted. A ZIP the manifest does not name is refused rather than installed unverified |
-| User-initiated only | Toolchains only downloaded when user selects them in Language Picker           |
+| User-initiated only | Toolchains only downloaded when user selects them in Language Picker or on the Toolchains screen |
 | App-private storage | Toolchains extracted to /data/data/com.vscodroid/, inaccessible to other apps  |
 | Sideload integrity  | GitHub Releases APKs include SHA256 checksums for verification                 |
 

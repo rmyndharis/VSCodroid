@@ -239,11 +239,12 @@ adb install android/app/build/outputs/apk/debug/app-debug.apk
 | Metric                                 | Size                 |
 | -------------------------------------- | -------------------- |
 | Play Store download (core)             | ~270 MB              |
-| + Each toolchain (on-demand)           | 11-80 MB per language |
+| + Each toolchain (on-demand)           | 11-134 MB per toolchain |
 | Free space required to install         | ~800 MB              |
 | Extracted to internal storage (core)   | ~603 MB              |
 | Extracted, plus Ruby and Java          | ~830 MB              |
-| Extracted, plus all three toolchains   | ~1,090 MB            |
+| Extracted, plus Ruby, Java and C/C++   | ~1,090 MB            |
+| + Codex, on top of any of these        | +360 MB              |
 | RAM usage (typical)                    | ~400-700 MB          |
 
 The install figure includes the space needed to allocate missing files and directories
