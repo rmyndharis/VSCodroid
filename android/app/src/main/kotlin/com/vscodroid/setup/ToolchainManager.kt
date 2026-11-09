@@ -3571,7 +3571,7 @@ class ToolchainManager(private val context: Context) {
             "xdg-open\t${Environment.getNodePath(context)}\t$filesDir/server/xdg-open.js",
         )
         addNpmRows(rows)
-        addCodexRows(rows, installed)
+        addCodexRows(rows, installed, stateKnown = readable != null)
         val setAside = addGitHelperRows(rows, GIT_EXTENSION_DIST, GIT_HELPER_SCRIPTS) +
             addGitHelperRows(rows, REMOTE_CLI_DIR, listOf(REMOTE_CLI))
         linkServerNode()
@@ -3728,12 +3728,24 @@ class ToolchainManager(private val context: Context) {
      * that always fails reads as the toolchain being broken. Written through the
      * table pass, like the npm launcher, so a moved filesDir is followed, and
      * deleted by the same pass when the toolchain is no longer installed.
+     *
+     * Damage is not absence, as in the carry-over at the top of
+     * [regenerateExecTableLocked]. Over a record that could not be parsed
+     * ([stateKnown] false) the record says nothing, and the one thing that does is
+     * the launcher the last good pass wrote, which only an installed toolchain gets
+     * and which the same pass deletes when it is removed. It stands in for the
+     * record then, so the command does not leave PATH until the record is readable
+     * again while the engine is still on disk and still runs; an engine that is
+     * gone still takes the launcher with it.
      */
-    private fun addCodexRows(rows: LinkedHashMap<String, String>, installed: JSONArray) {
-        val recorded = (0 until installed.length())
-            .any { installed.optJSONObject(it)?.optString("name") == "codex" }
+    private fun addCodexRows(rows: LinkedHashMap<String, String>, installed: JSONArray, stateKnown: Boolean) {
         val engine = File(context.filesDir, CODEX_ENGINE)
         val launcher = File(execTable.parentFile, "codex.sh")
+        val recorded = if (stateKnown) {
+            (0 until installed.length()).any { installed.optJSONObject(it)?.optString("name") == "codex" }
+        } else {
+            launcher.isFile
+        }
         if ("codex" in rows || !recorded || !engine.isFile) {
             // Written beside the table, outside what a removal deletes, and named
             // by no row once the record is gone, so it goes with the toolchain.
