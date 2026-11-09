@@ -13,6 +13,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Codex toolchain is a 134 MB download and 360 MB installed.
 - Start the Codex extension's engine from the Codex toolchain, because the engine the extension ships cannot run on Android.
 
+### Changed
+
+- The Java toolchain is OpenJDK 25 instead of 21, at 69 MB to download and 192 MB installed, up from 64 and 186.
+- A Java 21 installed earlier keeps working until it is removed and installed again.
+
 ### Fixed
 
 - An update removes the ICU libraries an earlier version left on the device, about 38 MB.

@@ -68,7 +68,7 @@ class ToolchainManager(private val context: Context) {
      * [stateFile] is written last, so for the tens of seconds a copy takes,
      * nothing on disk names the directory being filled. A low-memory kill or a
      * force stop in that window leaves up to the whole unpacked tree, about
-     * 180 MB for the Java 21 that ships today, under no manifest at all:
+     * 185 MB for the Java 25 that ships today, under no manifest at all:
      * [getInstalledToolchains] does not name it, no card offers a Remove for it,
      * [uninstallLocked] has no record to work from, and every pass in
      * [repairInstalledToolchains] is driven by that same record. Clearing app
@@ -792,7 +792,7 @@ class ToolchainManager(private val context: Context) {
             // reserve for the unpacked tree; the progress bar divides by what
             // crosses the network, and only when the server sends no
             // Content-Length. Given the unpacked figure, a chunked response left
-            // the Java 21 bar topping out near 30% for the whole transfer.
+            // the Java 25 bar topping out near 30% for the whole transfer.
             downloadViaHttp(info.packName, url, info.estimatedSize, info.downloadSize)
         } else {
             val request = synchronized(this) {
@@ -1298,7 +1298,7 @@ class ToolchainManager(private val context: Context) {
         // A retired pack answers null from the registry -- that pass-through is
         // deliberate and keeps uninstalling one working -- and the elvis then made the
         // whole reservation the 50 MB buffer. A gate that asks for 50 MB before copying
-        // 180 MB, which is what Java 21 unpacks to today, is worse than no gate: it
+        // 185 MB, which is what Java 25 unpacks to today, is worse than no gate: it
         // passes exactly the devices it exists to refuse, and reports success while
         // doing it. That figure moves with the JDK, so re-measure it rather than
         // trusting it here: `du -sk android/toolchain_java/src/main/assets/usr`.
@@ -1543,7 +1543,7 @@ class ToolchainManager(private val context: Context) {
             // `removePack` posts the delete and returns; the Task is how Play says
             // whether it happened. Logging success on the return alone said "freed"
             // for a delete that failed or never ran, and the pack it left behind is
-            // a whole toolchain in `filesDir/assetpacks` -- 180 MB for Java 21 --
+            // a whole toolchain in `filesDir/assetpacks` -- 185 MB for Java 25 --
             // that no space pre-flight here counts, because both of them measure
             // free space rather than what Play is holding. So the one line that
             // would have named the leak was the line asserting it had not happened.
@@ -1994,7 +1994,7 @@ class ToolchainManager(private val context: Context) {
         when (command) {
             "java" -> args += listOf("-Duser.home=$homeDir", "-Djava.io.tmpdir=$tmpDir")
             "keytool" -> args += "-J-Duser.home=$homeDir"
-            "jshell" -> args += listOf("-J-Djdk.lang.Process.launchMechanism=VFORK", "-J-Duser.home=$homeDir")
+            "jshell" -> args += listOf("-J-Djdk.lang.Process.launchMechanism=FORK", "-J-Duser.home=$homeDir")
         }
         return args
     }
@@ -2045,7 +2045,7 @@ class ToolchainManager(private val context: Context) {
      *
      * The install record is written last, so both ways an install can end after
      * the copy has started -- the copy throwing, and the record write failing --
-     * leave up to the whole unpacked size, about 180 MB for the Java 21 that
+     * leave up to the whole unpacked size, about 185 MB for the Java 25 that
      * ships today, under no manifest at all: [getInstalledToolchains] does not
      * name it, the Toolchains screen offers no Remove for it, [uninstallLocked]
      * has no record to work from, and the repair pass only visits records that
@@ -2344,7 +2344,7 @@ class ToolchainManager(private val context: Context) {
                     // The same event the copy into `usr/` already catches in
                     // [installFromDirectoryHoldingPack], one stage earlier and for
                     // the same reason: this writes the whole unpacked tree, about
-                    // 180 MB for the Java 21 that ships today, and a phone that
+                    // 185 MB for the Java 25 that ships today, and a phone that
                     // ran out of room while the download was in flight fails here
                     // rather than there. Left to unwind, it reached the
                     // `catch (e: IOException)` below, which speaks for the
@@ -3221,8 +3221,12 @@ class ToolchainManager(private val context: Context) {
                         // or `--class-path` the launcher also passes such an
                         // argument on to jshell, and then drops the last argument of
                         // the line.
-                        // VFORK lets jline start stty, without which Tab and ArrowUp
-                        // do not work, and user.home replaces Termux's compiled-in
+                        // FORK lets jline start stty, without which Tab and ArrowUp
+                        // do not work: the default mechanism starts a spawn helper
+                        // under filesDir, which fails where the exec interceptor is
+                        // not preloaded. VFORK did the same until JDK 25, which
+                        // prints a deprecation notice on every start; FORK does not.
+                        // user.home replaces Termux's compiled-in
                         // home, where the preferences store cannot be written and
                         // exit stalls.
                         lines.add(
@@ -3238,7 +3242,7 @@ class ToolchainManager(private val context: Context) {
                                 "[ -n \"\$chosen\" ] || set -- --execution local \"\$@\"; " +
                                 "$systemLoader \"\$PREFIX/../$relPath\" " +
                                 toolFlags +
-                                "-J-Djdk.lang.Process.launchMechanism=VFORK " +
+                                "-J-Djdk.lang.Process.launchMechanism=FORK " +
                                 "-J-Duser.home=\"\$HOME\" \"\$@\"; }"
                         )
                         continue
@@ -4443,7 +4447,7 @@ class ToolchainManager(private val context: Context) {
      * "Normally" is the honest word, and what it excludes is worth pricing. An
      * entry goes unmarked when a binary the manifest names is present and will
      * not take the execute bit, and that entry is walked again on the next
-     * launch: for Java 21 a `walkTopDown` over about 180 MB reading the first
+     * launch: for Java 25 a `walkTopDown` over about 185 MB reading the first
      * four bytes of every file, under this lock, for as long as the condition
      * lasts. Retrying is still the right call -- a toolchain whose interpreter
      * has no execute bit is unusable, and the walk is the only thing that can

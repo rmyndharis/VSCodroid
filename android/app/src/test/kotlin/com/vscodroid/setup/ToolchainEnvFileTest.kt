@@ -306,7 +306,7 @@ class ToolchainEnvFileTest {
     private val java = "</p/../$jdk/bin/java><-Duser.home=/h o/me><-Djava.io.tmpdir=/t m/p>"
 
     /** What the jshell wrapper hands the loader ahead of the caller's arguments. */
-    private val jshell = "</p/../$jdk/bin/jshell><-J-Djdk.lang.Process.launchMechanism=VFORK>" +
+    private val jshell = "</p/../$jdk/bin/jshell><-J-Djdk.lang.Process.launchMechanism=FORK>" +
         "<-J-Duser.home=/h o/me>"
 
     /**
@@ -440,7 +440,7 @@ class ToolchainEnvFileTest {
                 "</p/../$jdk/bin/java><-XX:UseSVE=0><-Duser.home=/h o/me><-Djava.io.tmpdir=/t m/p><-version>",
                 "</p/../$jdk/bin/javac><-J-XX:UseSVE=0><-version>",
                 "</p/../$jdk/bin/keytool><-J-XX:UseSVE=0><-J-Duser.home=/h o/me><-list>",
-                "</p/../$jdk/bin/jshell><-J-XX:UseSVE=0><-J-Djdk.lang.Process.launchMechanism=VFORK>" +
+                "</p/../$jdk/bin/jshell><-J-XX:UseSVE=0><-J-Djdk.lang.Process.launchMechanism=FORK>" +
                     "<-J-Duser.home=/h o/me><--execution><local>",
                 "</p/../$jdk/bin/javac><-J-XX:UseSVE=0><-J-Dx=1><A.java>",
             ),

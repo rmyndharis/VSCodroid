@@ -1442,7 +1442,7 @@ is intact, not that it is the right tarball.
 
 Toolchains are declared in Kotlin, in `ToolchainRegistry.available`, and both the first-run picker
 and the manage screen are built from that list, the picker leaving out an entry that sets
-`offeredInPicker = false`. Four are shipped, Ruby, Java 21, C/C++ and Codex:
+`offeredInPicker = false`. Four are shipped, Ruby, Java 25, C/C++ and Codex:
 
 ```kotlin
 ToolchainInfo(
@@ -1456,7 +1456,7 @@ ToolchainInfo(
 )
 ```
 
-The second entry is `toolchain_java`, OpenJDK 21 with `javac`, `jar` and `jshell`. The third is
+The second entry is `toolchain_java`, OpenJDK 25 with `javac`, `jar` and `jshell`. The third is
 `toolchain_cpp`, clang and lld with a minimal sysroot (section 7.5).
 
 The fourth is `toolchain_codex`, OpenAI's Codex engine as Termux builds it for Bionic, with the helper

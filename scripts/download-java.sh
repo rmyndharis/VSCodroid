@@ -18,13 +18,14 @@ WORK_DIR="$ROOT_DIR/toolchains/termux-packages"
 # It also picks the mirror; TERMUX_MIRROR still overrides it.
 . "$SCRIPT_DIR/lib/termux-packages.sh"
 
-# The JDK this pack ships. 21 and not 17 because the Language Support for Java
-# extension needs a JDK of at least 21 to run its language server (version 1.40
-# to 1.57; 1.58 asks for 25), and 17 left every version of it refusing to start.
-# Termux carries 17, 21 and 25 under the same dependencies. Everything below
-# that names the JDK, its directory and the card's label follows this one value;
-# ToolchainRegistry.kt and the strings carry the label as text and have to agree.
-JDK_MAJOR=21
+# The JDK this pack ships: 25, the current LTS. It carried 21 before, and 17
+# before that. The Language Support for Java extension needs a JDK of at least
+# 21 to run its language server and its newest releases ask for 25, which 21
+# does not satisfy. Termux carries 17, 21 and 25 under the same dependencies.
+# Everything below that names the JDK, its directory and the card's label
+# follows this one value; ToolchainRegistry.kt and the strings carry the label
+# as text and have to agree.
+JDK_MAJOR=25
 JDK_NAME="openjdk-$JDK_MAJOR"
 JDK_DIRNAME="java-$JDK_MAJOR-openjdk"
 
@@ -83,8 +84,8 @@ fi
 
 mkdir -p "$PACK_ASSETS/usr/lib/jvm"
 # -RL, not a bare -r. legal/ is the only subtree of this JDK carrying symbolic
-# links: measured on openjdk-21 (re-check on a new major), bin, conf, lib, man, jmods and include carry
-# none between them while legal carries 208, and every one of those points at
+# links: measured on openjdk-25 (re-check on a new major), bin, conf, lib, man, jmods and include carry
+# none between them while legal carries 205, and every one of those points at
 # another module's copy of the same notice.
 #
 # Neither delivery path can carry a link. An Android asset pack cannot hold one,
@@ -220,12 +221,13 @@ rm -rf "$JDK_DIR/man" 2>/dev/null || true
 # Strip jmods (module files, large, not needed at runtime)
 rm -rf "$JDK_DIR/jmods" 2>/dev/null || true
 # Strip the launchers that cannot do their job on a phone, each measured on an API 33
-# emulator with JDK 21: jlink stops with "this runtime image does not contain jmods
-# directory" (the jmods are removed above), jpackage builds platform installers and
-# fails on a null path, jconsole is a GUI and prints nothing, jrunscript reports "script
-# engine for language js can not be found" (no engine ships since JDK 15), and jhsdb
-# attaches through a serviceability library this pack does not carry. Each one read as
-# a broken install rather than as an absent tool.
+# emulator with JDK 21, and still shipped by 25 with the same pieces missing: jlink
+# stops with "this runtime image does not contain jmods directory" (the jmods are
+# removed above), jpackage builds platform installers and fails on a null path, jconsole
+# is a GUI and prints nothing, jrunscript reports "script engine for language js can not
+# be found" (no engine ships since JDK 15), and jhsdb attaches through a serviceability
+# library this pack does not carry. Each one read as a broken install rather than as an
+# absent tool.
 for tool in jlink jpackage jconsole jrunscript jhsdb; do
     rm -f "$JDK_DIR/bin/$tool"
 done

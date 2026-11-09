@@ -352,9 +352,9 @@
          translator must leave alone, but the sentence around them is language,
          and a Kotlin constant is the same sentence in every locale. The registry
          carries the resource id instead. displayName and shortLabel stay plain
-         strings on purpose; "Ruby" and "Java 21" are the products' own names. -->
+         strings on purpose; "Ruby" and "Java 25" are the products' own names. -->
     <string name="toolchain_ruby_description">Ruby mit irb, gem, bundler</string>
-    <string name="toolchain_java_description">OpenJDK 21 (javac, jar, jshell)</string>
+    <string name="toolchain_java_description">OpenJDK 25 (javac, jar, jshell)</string>
     <string name="toolchain_cpp_description">C und C++ (clang, lld). Benötigt den exec-Interceptor des Terminals: Mit LD_PRELOAD auf null funktioniert es nicht.</string>
     <string name="toolchain_codex_description">Codex-Agent-Engine für die Codex-Erweiterung und den Befehl codex</string>
 

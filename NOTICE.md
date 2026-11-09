@@ -181,7 +181,7 @@ base app's `usr/share/doc/python/LICENSE`.
 | LLVM (clang, lld) | Apache 2.0 with LLVM Exceptions | https://llvm.org |
 | Codex (OpenAI) | Apache 2.0 | https://github.com/openai/codex |
 
-OpenJDK's own licence and third-party notice files ship inside the Java pack at `usr/lib/jvm/java-21-openjdk/legal`; Ruby's per-gem licence files likewise ship inside the Ruby pack. LLVM's `LICENSE.TXT` ships inside the C/C++ pack at `usr/share/doc/libllvm`. Codex's `LICENSE` and its `NOTICE`, which names the MIT-licensed Ratatui code it includes, ship inside the Codex pack at `usr/share/doc/codex`.
+OpenJDK's own licence and third-party notice files ship inside the Java pack at `usr/lib/jvm/java-25-openjdk/legal`; Ruby's per-gem licence files likewise ship inside the Ruby pack. LLVM's `LICENSE.TXT` ships inside the C/C++ pack at `usr/share/doc/libllvm`. Codex's `LICENSE` and its `NOTICE`, which names the MIT-licensed Ratatui code it includes, ship inside the Codex pack at `usr/share/doc/codex`.
 
 ## Mirrored Python Wheels
 

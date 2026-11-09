@@ -14,7 +14,7 @@ object ToolchainRegistry {
     data class ToolchainInfo(
         val packName: String,
         val displayName: String,
-        /** Short label for the toolchain card (e.g. "Ruby", "Java 21"). */
+        /** Short label for the toolchain card (e.g. "Ruby", "Java 25"). */
         val shortLabel: String,
         /**
          * The sentence under the name on the toolchain card, as a resource id.
@@ -114,20 +114,20 @@ object ToolchainRegistry {
         ),
         ToolchainInfo(
             packName = "toolchain_java",
-            displayName = "Java 21",
-            shortLabel = "Java 21",
+            displayName = "Java 25",
+            shortLabel = "Java 25",
             descriptionRes = R.string.toolchain_java_description,
-            // 175,268 KiB measured with `du -sk` over the pack's `usr/` tree,
-            // which is 179.5 MB in 4 KiB blocks, in 334 files. The pack carried
-            // OpenJDK 17 until 21 replaced it (the Language Support for Java
-            // extension needs 21 to run its server), and 21 is 24 MB larger.
-            // `download-java.sh` copies with `-RL`, which dereferences the 200
-            // odd symlinks of `legal/`, and `package-toolchains.sh` refuses a
+            // 180,712 KiB measured with `du -sk` over the pack's `usr/` tree,
+            // which is 185.0 MB in 4 KiB blocks, in 340 files. The pack carried
+            // OpenJDK 21 until 25, the current LTS, replaced it, and 25 is 5.5 MB
+            // larger. `download-java.sh` copies with `-RL`, which dereferences the
+            // 205 odd symlinks of `legal/`, and `package-toolchains.sh` refuses a
             // tree above this figure rather than shipping a card that admits a
-            // device to an install it cannot finish. 186,000,000 leaves 6.5 MB
-            // for a point release of openjdk-21, which Termux has made before.
-            estimatedSize = 186_000_000,
-            downloadSize = 64_000_000,
+            // device to an install it cannot finish. 192,000,000 leaves 7 MB
+            // for a point release of openjdk-25, which Termux has made before.
+            // The ZIP is 68,770,750 bytes.
+            estimatedSize = 192_000_000,
+            downloadSize = 69_000_000,
             downloadUrl = "https://github.com/rmyndharis/VSCodroid/releases/latest/download/toolchain_java.zip",
         ),
         ToolchainInfo(

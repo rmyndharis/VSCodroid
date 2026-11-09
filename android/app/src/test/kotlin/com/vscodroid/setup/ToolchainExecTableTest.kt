@@ -1499,7 +1499,7 @@ class ToolchainExecTableTest {
                 "java\t$bin/java\t-XX:UseSVE=0\t-Duser.home=$home\t-Djava.io.tmpdir=$root/cache/tmp",
                 "javac\t$bin/javac\t-J-XX:UseSVE=0",
                 "keytool\t$bin/keytool\t-J-XX:UseSVE=0\t-J-Duser.home=$home",
-                "jshell\t$bin/jshell\t-J-XX:UseSVE=0\t-J-Djdk.lang.Process.launchMechanism=VFORK" +
+                "jshell\t$bin/jshell\t-J-XX:UseSVE=0\t-J-Djdk.lang.Process.launchMechanism=FORK" +
                     "\t-J-Duser.home=$home",
             ),
             toolchainLines().filter { !it.startsWith("\t") },

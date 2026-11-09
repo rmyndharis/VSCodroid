@@ -808,7 +808,7 @@ does not help for a page, and this is the one place where it makes a difference 
 part of the app is asking. Pages are rendered by the system WebView, which trusts the
 device's system roots and nothing else. The terminal does read a CA you installed,
 because the app builds a certificate bundle from both halves of the device trust store
-and hands it to git, Python, pip, Ruby and the bundled Node.js (`npm` included; Java 21 uses
+and hands it to git, Python, pip, Ruby and the bundled Node.js (`npm` included; Java 25 uses
 its own keystore, see [Git Push/Pull Fails](#git-pushpull-fails)). So the same
 certificate can clone or `pip install` fine in the terminal and still be refused in a
 preview tab.
@@ -948,7 +948,7 @@ Beyond the bundled tools (Node.js, Python, Git, Bash), VSCodroid offers addition
 | Language | Download Size | Installed Size | Includes |
 |----------|--------------|----------------|----------|
 | Ruby | 11 MB | 41 MB | ruby, gem, irb, bundler, rake, and the headers native gems build against |
-| Java 21 (OpenJDK) | 64 MB | 186 MB | java, javac, jar, jshell |
+| Java 25 (OpenJDK) | 69 MB | 192 MB | java, javac, jar, jshell |
 | C/C++ (clang) | 80 MB | 280 MB | cc, c++, gcc, g++, clang, clang++, ld, ar, ranlib, nm, strip, objdump, objcopy, readelf, size, clangd (the language server), and the C and C++ headers |
 | Codex | 134 MB | 360 MB | codex, OpenAI's coding agent (see [Codex](#codex)); not a language, so the first-run picker does not offer it |
 
@@ -968,7 +968,7 @@ beyond that differs a great deal, and this is the whole of it, so you can pick w
 | JavaScript and TypeScript (bundled) | `node file` | Yes, the editor's own | js-debug | npm; see the TypeScript note below |
 | Python (bundled) | Yes | Completion and hover from Jedi; no type checking | None | pip, including wheels built for Android (numpy installs and runs) |
 | Ruby | `ruby file` | None | None | gem and bundler; a gem with a compiled part needs the C/C++ toolchain as well (`bcrypt` builds) |
-| Java 21 | `java file` (a single source file) | None | None | None: no Maven or Gradle |
+| Java 25 | `java file` (a single source file) | None | None | None: no Maven or Gradle |
 | C and C++ | Compiles to a temporary file and runs it | clangd, through its extension (see [C and C++](#c-and-c)) | None | None: no CMake or Ninja; `make` works |
 
 **Java here is for compiling and running programs, not an IDE.** The Language
@@ -1693,7 +1693,7 @@ If `npm install` fails with errors:
 ### Git Push/Pull Fails
 
 - **Permission denied (publickey)**: generate an SSH key with `ssh-keygen -t ed25519 -f ~/.ssh/id_ed25519` in the terminal and add it to your GitHub/GitLab account. The `-f` is required; see [Generating an SSH Key](#generating-an-ssh-key) for why.
-- **SSL certificate error**: the CA bundle the terminal uses is built from your device's own trust store: the system roots, plus any certificate authority you installed yourself through Android Settings, under the CA-certificate flow in the device's security settings. git, Python, pip, Ruby and the bundled Node.js (`npm` included, when the bundle file is present) are all given it, so a private or corporate CA works for `git clone`, `pip install` and `npm install` alike, from the next time you open the app: the bundle is rebuilt at launch, not while the app is running. If you would rather not install a CA on the device, an SSH remote (`git@`) instead of `https://` is still the shortest route to an internal host. Two things that bundle does not reach: pages loaded inside the editor, which use the system roots only, and the optional Java 21 toolchain, which reads its own keystore at `$JAVA_HOME/lib/security/cacerts`. To add a private CA for Java, import its PEM file in the terminal with `keytool -importcert -cacerts -alias my-ca -file ~/ca.pem -storepass changeit -noprompt` (import one certificate per file under a distinct `-alias`; removing and reinstalling the Java 21 toolchain replaces `cacerts`, so repeat the import afterwards). Turning a system root off in Android Settings drops it from the bundle at the next launch for `git`, Python, `curl`, Ruby and Node.js (`https` and `npm`), whereas `pip` (which also loads its vendored `certifi` bundle), the extension host's `fetch` and WebSocket client (which merge Node's compiled-in root list with the bundle), and Java 21 (`cacerts`) keep trusting roots that remain in their own built-in lists.
+- **SSL certificate error**: the CA bundle the terminal uses is built from your device's own trust store: the system roots, plus any certificate authority you installed yourself through Android Settings, under the CA-certificate flow in the device's security settings. git, Python, pip, Ruby and the bundled Node.js (`npm` included, when the bundle file is present) are all given it, so a private or corporate CA works for `git clone`, `pip install` and `npm install` alike, from the next time you open the app: the bundle is rebuilt at launch, not while the app is running. If you would rather not install a CA on the device, an SSH remote (`git@`) instead of `https://` is still the shortest route to an internal host. Two things that bundle does not reach: pages loaded inside the editor, which use the system roots only, and the optional Java 25 toolchain, which reads its own keystore at `$JAVA_HOME/lib/security/cacerts`. To add a private CA for Java, import its PEM file in the terminal with `keytool -importcert -cacerts -alias my-ca -file ~/ca.pem -storepass changeit -noprompt` (import one certificate per file under a distinct `-alias`; removing and reinstalling the Java 25 toolchain replaces `cacerts`, so repeat the import afterwards). Turning a system root off in Android Settings drops it from the bundle at the next launch for `git`, Python, `curl`, Ruby and Node.js (`https` and `npm`), whereas `pip` (which also loads its vendored `certifi` bundle), the extension host's `fetch` and WebSocket client (which merge Node's compiled-in root list with the bundle), and Java 25 (`cacerts`) keep trusting roots that remain in their own built-in lists.
 
 ### App Uses Too Much Storage
 
