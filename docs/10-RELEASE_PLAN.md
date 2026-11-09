@@ -172,8 +172,8 @@ unrelated to the versionName. 1.0.0 shipped as 10; 1.1.0 ships as 12, because 11
 was uploaded and burned.
 
 ```kotlin
-versionCode = 18
-versionName = "1.7.0"
+versionCode = 19
+versionName = "1.8.0"
 ```
 
 This document described an encoded scheme, `major * 1_000_000 + minor * 10_000 +
