@@ -174,6 +174,34 @@ class PreExtractionReclaimTest {
     }
 
     /**
+     * An update across an ICU major still sheds the libraries it replaced, and does it
+     * ahead of the pre-flight, which then measures that room as free instead of crediting
+     * it as tree already unpacked. Nothing loads them: the Node runtime in the new APK asks
+     * for the major the APK carries.
+     *
+     * NEGATIVE CONTROL: drop the `pruneSupersededIcu` call from `runSetupLocked`, or move it
+     * behind the pre-flight; the low-storage refusal then returns first and this reddens.
+     */
+    @Test
+    fun `an upgrade short of space still removes the ICU libraries it replaced`() {
+        val lib = File(tmp, "usr/lib")
+        assertTrue(lib.mkdirs())
+        for (name in listOf("libicudata.so.78", "libicui18n.so.78", "libicuuc.so.78", "libz.so.1")) {
+            File(lib, name).writeText("elf")
+        }
+        every { assets.list("usr/lib") } returns
+            arrayOf("libicudata.so.79", "libicui18n.so.79", "libicuuc.so.79", "libz.so.1")
+
+        val result = runBlocking { FirstRunSetup(context(previousVersionCode = 11)).runSetup() }
+
+        assertEquals(FirstRunSetup.SetupResult.LOW_STORAGE, result)
+        assertEquals(
+            listOf("libz.so.1"), lib.list()!!.sorted(),
+            "the replaced ICU libraries survived a low-storage refusal, so the pre-flight kept counting 38 MB it could have had",
+        )
+    }
+
+    /**
      * A context whose SharedPreferences remember what was written to them.
      *
      * The relaxed mock above answers every read with a default and drops every
