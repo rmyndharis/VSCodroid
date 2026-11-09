@@ -341,6 +341,11 @@ class FirstRunSetup(
             if (isUpgrade) {
                 runPreExtractionMigrations(previousVersionCode)
             }
+            // The ICU libraries an update replaced, ahead of the pre-flight for the same
+            // reason, and kept out of the migrations above because they are not tied to
+            // an upgrade: it names only a library this APK carries under another major,
+            // so a retry cannot take anything an earlier attempt of this build wrote.
+            pruneSupersededIcu()
 
             // Pre-flight: enough room for the part of the tree that is not
             // already unpacked, plus what rewriting the rest of it costs.
@@ -4269,6 +4274,39 @@ claude() {
             }
     }
 
+    /**
+     * Removes the ICU libraries in `usr/lib` that an update replaced.
+     *
+     * ICU is versioned by its soname, so `libicuuc.so.78` and `libicuuc.so.79` are two
+     * files, and the Node runtime in the APK asks for exactly one of them. Extraction
+     * writes what the APK carries and never removes, so an update across an ICU major
+     * kept the previous three libraries, about 38 MB of which `libicudata` is 33, and
+     * nothing loads them. No toolchain pack needs them either: none of the nine pack
+     * ZIPs published for 1.5.0, 1.6.0 and 1.7.0 links ICU.
+     *
+     * The decision is [supersededIcuEntries], which names only a library this APK
+     * carries under another major. An unreadable or empty listing removes nothing, a
+     * `usr/lib` that is itself a link is not entered, and [StorageManager.deleteRecursive]
+     * unlinks a link and never follows it. Safe before extraction for the same reason as
+     * the migrations ahead of it: it only deletes, and only what this APK no longer
+     * carries.
+     */
+    private fun pruneSupersededIcu() {
+        val libDir = File(context.filesDir, "usr/lib")
+        if (!hasUnredirectedParent(libDir) || Files.isSymbolicLink(libDir.toPath())) return
+        val shipped = try {
+            context.assets.list("usr/lib")?.toList()
+        } catch (e: IOException) {
+            null
+        }
+        if (shipped.isNullOrEmpty()) return
+        val present = libDir.list()?.toList() ?: return
+        for (name in supersededIcuEntries(present, shipped)) {
+            Logger.i(tag, "Removing $name, which an update replaced")
+            StorageManager.deleteRecursive(File(libDir, name), context.filesDir.parentFile)
+        }
+    }
+
     private fun hasUnredirectedParent(file: File): Boolean = runCatching {
         val base = context.filesDir.canonicalFile
         val expected = File(base, file.relativeTo(context.filesDir).path).absoluteFile
@@ -5922,6 +5960,39 @@ internal fun supersededPythonEntries(present: List<String>, runtime: String): Li
 internal val PYTHON_RUNTIME_NAME = Regex("""^libpython(3\.\d+)\.so$""")
 internal val PYTHON_STDLIB_NAME = Regex("""^python3\.\d+$""")
 internal val PIP_DIST_INFO = Regex("""^pip-\d[0-9A-Za-z._+]*\.dist-info$""")
+
+// Anchored on purpose: only the soname file, `lib<name>.so.<major>`. The development link
+// `libicuuc.so`, a full version such as `libicuuc.so.78.1`, a backup copy and a name that
+// merely contains an ICU name are not matched, so none can be named below.
+internal val ICU_LIBRARY_NAME = Regex("""^(libicu[a-z0-9]+)\.so\.(\d+)$""")
+
+/**
+ * Names the ICU libraries in `usr/lib` that an update replaced, given what the APK carries.
+ *
+ * ICU is versioned by its soname, and the runtime asks for exactly one major. The risk is
+ * one-directional and worth testing on its own, as for [supersededPythonEntries]: naming one
+ * too few wastes 38 MB, naming one too many deletes a library something loads. So a name is
+ * a candidate only when the APK carries the same library under majors that do not include
+ * it. A library the APK does not carry at all is never named, so an APK with no ICU names
+ * nothing, and an APK that carries two majors of one library wants both, so only a third
+ * is named.
+ *
+ * @param present names in `usr/lib`, files and directories alike
+ * @param shipped names the APK carries under `usr/lib`
+ */
+internal fun supersededIcuEntries(present: List<String>, shipped: Collection<String>): List<String> {
+    val carried = HashMap<String, MutableSet<String>>()
+    for (name in shipped) {
+        val (library, major) = ICU_LIBRARY_NAME.matchEntire(name)?.destructured ?: continue
+        carried.getOrPut(library) { HashSet() }.add(major)
+    }
+    if (carried.isEmpty()) return emptyList()
+    return present.filter { name ->
+        val (library, major) = ICU_LIBRARY_NAME.matchEntire(name)?.destructured ?: return@filter false
+        val majors = carried[library]
+        majors != null && major !in majors
+    }
+}
 
 /**
  * Names `pip-<version>.dist-info` directories in `site-packages` that do not
