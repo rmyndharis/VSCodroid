@@ -362,6 +362,7 @@
     <string name="toolchain_ruby_description">Ruby с irb, gem, bundler</string>
     <string name="toolchain_java_description">OpenJDK 21 (javac, jar, jshell)</string>
     <string name="toolchain_cpp_description">C и C++ (clang, lld). Нужен перехватчик exec терминала: не работает, если LD_PRELOAD установлен в null.</string>
+    <string name="toolchain_codex_description">Движок агента Codex для расширения Codex и команды codex</string>
 
     <!-- The checkmark on a selected toolchain card. It is an ImageView with no
          text, so this is the whole of what a screen reader has to announce it. -->

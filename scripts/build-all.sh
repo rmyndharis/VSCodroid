@@ -68,6 +68,8 @@ step 10/11 "Building native addons, the compatibility shim and the exec intercep
 # The exec interceptor the terminals preload. Same constraint as the shim: it
 # lands in assets/usr/lib, so it has to come after the wipe.
 "$SCRIPT_DIR/build-termux-exec.sh"
+# The library the Codex launcher preloads beside it. Also into assets/usr/lib.
+"$SCRIPT_DIR/build-selfexe-shim.sh"
 # Depends on nothing downloaded, so its position here is a convenience. It writes
 # into jniLibs rather than assets/usr/lib, which download-termux-tools.sh wipes,
 # so it is not subject to the ordering constraint the shim above is.

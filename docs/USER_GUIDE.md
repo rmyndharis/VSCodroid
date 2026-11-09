@@ -950,10 +950,11 @@ Beyond the bundled tools (Node.js, Python, Git, Bash), VSCodroid offers addition
 | Ruby | 11 MB | 41 MB | ruby, gem, irb, bundler, rake, and the headers native gems build against |
 | Java 21 (OpenJDK) | 64 MB | 186 MB | java, javac, jar, jshell |
 | C/C++ (clang) | 80 MB | 280 MB | cc, c++, gcc, g++, clang, clang++, ld, ar, ranlib, nm, strip, objdump, objcopy, readelf, size, clangd (the language server), and the C and C++ headers |
+| Codex | 134 MB | 360 MB | codex, OpenAI's coding agent (see [Codex](#codex)); not a language, so the first-run picker does not offer it |
 
-The C/C++ toolchain is the largest. Installing a toolchain holds the unpacked copy and the
+Codex is the largest. Installing a toolchain holds the unpacked copy and the
 installed copy at once, so the install asks for roughly twice the installed size free while
-it runs, which for this one is about 610 MB. Reinstalling or updating a toolchain that is
+it runs, which for this one is about 770 MB. Reinstalling or updating a toolchain that is
 already installed asks for less, about one installed size plus its largest file, because the
 copy replaces files that are already on the disk.
 
@@ -988,7 +989,8 @@ here. The editor's own TypeScript checking is separate and is not affected. Node
 ### Installing During First Run
 
 The Language Picker appears on first launch. Select the languages you want and they
-download in the background.
+download in the background. Codex is a tool and not a language, so the picker does not offer
+it; install it from the Toolchains screen, as described in the next section.
 
 Toolchains are never bundled inside the APK. Play Store installs fetch them as
 on-demand asset packs; sideloaded installs download them over HTTPS from the
@@ -1098,6 +1100,41 @@ Newly built C/C++ packs make `tmpfile()` use `TMPDIR`, and `getpwuid()` use `HOM
 `make -j4` starts four compilers at once, each a process Android counts against its phantom
 process limit (see [Android Phantom Process Limit](#android-phantom-process-limit)); `make -j2` is
 the sensible ceiling on a phone.
+
+### Codex
+
+The **Codex** toolchain installs `codex`, OpenAI's command line coding agent, as a command in the
+terminal. Install it from the Toolchains screen (see [Installing After
+Setup](#installing-after-setup)); the first-run picker does not offer it. Installing it does not sign
+you in to anything.
+
+```bash
+codex --version
+```
+
+#### With the Codex extension
+
+The Codex extension from Open VSX, published by OpenAI, carries an engine of its own that cannot start on
+Android, so on its own it does nothing. With the toolchain installed, the app starts the toolchain's engine
+in its place and the extension works: sign in with ChatGPT from its panel, and the agent can create and edit
+files in the project and run commands. The `codex` command in a terminal shares that sign-in, and
+`codex login status` says whether it is signed in.
+
+What to know before using it:
+
+- **Space.** The extension is about 420 MB to download and about 1.2 GB once unpacked, on top of the
+  toolchain's 360 MB, and Codex keeps its own data under `~/.codex`: about 150 MB after a few runs, 50 MB of it
+  a catalogue of plugins it fetches when it first starts. A phone short of space may not have room for the
+  extension, or for the next update of the app once it is installed.
+- **Approvals.** The engine's own sandbox is not available on Android: `codex sandbox` answers that it is not
+  supported on this operating system. What is left is the approval prompt. In the runs tried, an edit asked
+  first, and so did a command that would write outside the project folder, while a command inside it ran
+  without asking. A command that is allowed runs with the access the terminal has.
+- **Follow-up messages.** On an emulator with Android System WebView 134, a follow-up message in an existing
+  chat failed with `DisposableStack is not defined`, and a new chat for each task worked. Newer WebViews were
+  not tried.
+- **Processes.** The engine and its helper are two more processes counted against Android's phantom process
+  limit (see [Android Phantom Process Limit](#android-phantom-process-limit)) while the engine runs.
 
 ### Removing Toolchains
 
@@ -1495,7 +1532,7 @@ itself, outside any terminal, and that start is not covered.
 VSCodroid asks the marketplace for the musl build wherever an extension
 publishes one, which is what makes that route possible at all, but the extension
 itself then has to offer a setting that lets its command be prefixed. Almost
-none do.
+none do. The Codex extension is handled by the app instead: see [Codex](#codex).
 
 **How to recognise it.** The extension is installed and enabled, its commands are
 missing from the Command Palette or do nothing when run, and the Problems panel
@@ -1561,7 +1598,7 @@ VS Code's web client runs as a single window. You cannot open multiple VS Code w
 
 ### Storage
 
-Core installation extracts approximately 603 MB to internal storage. With Ruby and Java installed, expect around 830 MB, and about 1,090 MB with C/C++ as well. Setup needs about 800 MB free before it starts, which is more than it ends up occupying because extraction needs room to work. If it refuses, it asks for the shortfall it measured rather than the whole figure, so a device part of the way through is asked only for what is missing. Beyond it, keep a few hundred MB free for node_modules, build artifacts and caches.
+Core installation extracts approximately 603 MB to internal storage. With Ruby and Java installed, expect around 830 MB, and about 1,090 MB with C/C++ as well. The Codex toolchain adds about 360 MB. Setup needs about 800 MB free before it starts, which is more than it ends up occupying because extraction needs room to work. If it refuses, it asks for the shortfall it measured rather than the whole figure, so a device part of the way through is asked only for what is missing. Beyond it, keep a few hundred MB free for node_modules, build artifacts and caches.
 
 ---
 

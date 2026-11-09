@@ -24,8 +24,8 @@ class ToolchainRegistryTest {
     inner class CatalogTest {
 
         @Test
-        fun `has exactly 3 toolchains`() {
-            assertEquals(3, ToolchainRegistry.available.size)
+        fun `has exactly 4 toolchains`() {
+            assertEquals(4, ToolchainRegistry.available.size)
         }
 
         @Test
@@ -242,6 +242,37 @@ class ToolchainRegistryTest {
             )
         }
 
+        @Test
+        fun `contains the Codex toolchain`() {
+            val codex = ToolchainRegistry.available.find { it.shortLabel == "Codex" }
+            assertNotNull(codex)
+            assertEquals("toolchain_codex", codex!!.packName)
+            assertEquals("Codex", codex.displayName)
+            assertEquals(
+                "https://github.com/rmyndharis/VSCodroid/releases/latest/download/toolchain_codex.zip",
+                codex.downloadUrl,
+            )
+        }
+
+        /**
+         * A card with no sentence under its name is a defect a translator never
+         * sees, because the resource is simply absent from that locale and the
+         * default is shown. Every locale carries its own line.
+         */
+        @Test
+        fun `the Codex card is described in every locale`() {
+            val res = File("src/main/res")
+            assertTrue(res.isDirectory, "app/src/main/res was not where tests run")
+            val files = res.listFiles { f -> f.isDirectory && f.name.startsWith("values") }
+                .orEmpty().map { File(it, "strings.xml") }.filter { it.isFile }
+            assertTrue(files.size >= 14, "expected the default and thirteen locales, found ${files.size}")
+            for (file in files) {
+                val line = file.readLines().firstOrNull { "name=\"toolchain_codex_description\"" in it }
+                assertNotNull(line, "${file.parentFile.name} has no toolchain_codex_description")
+                assertTrue("Codex" in line!!, "${file.parentFile.name}: the card does not name Codex: $line")
+            }
+        }
+
         /**
          * The card is the one place the user is told what this toolchain needs.
          *
@@ -277,7 +308,7 @@ class ToolchainRegistryTest {
     inner class FindTest {
 
         @ParameterizedTest(name = "find by full pack name: {0}")
-        @ValueSource(strings = ["toolchain_ruby", "toolchain_java", "toolchain_cpp"])
+        @ValueSource(strings = ["toolchain_ruby", "toolchain_java", "toolchain_cpp", "toolchain_codex"])
         fun `finds by full pack name`(packName: String) {
             val result = ToolchainRegistry.find(packName)
             assertNotNull(result, "Should find toolchain by pack name: $packName")
@@ -285,7 +316,7 @@ class ToolchainRegistryTest {
         }
 
         @ParameterizedTest(name = "find by short name: {0} → toolchain_{0}")
-        @CsvSource("ruby,toolchain_ruby", "java,toolchain_java", "cpp,toolchain_cpp")
+        @CsvSource("ruby,toolchain_ruby", "java,toolchain_java", "cpp,toolchain_cpp", "codex,toolchain_codex")
         fun `finds by short name`(shortName: String, expectedPack: String) {
             val result = ToolchainRegistry.find(shortName)
             assertNotNull(result, "Should find toolchain by short name: $shortName")

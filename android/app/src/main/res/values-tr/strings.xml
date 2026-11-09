@@ -356,6 +356,7 @@
     <string name="toolchain_ruby_description">Ruby (irb, gem, bundler)</string>
     <string name="toolchain_java_description">OpenJDK 21 (javac, jar, jshell)</string>
     <string name="toolchain_cpp_description">C ve C++ (clang, lld). Terminalin exec yakalayıcısını gerektirir: LD_PRELOAD null olarak ayarlıysa çalışmaz.</string>
+    <string name="toolchain_codex_description">Codex uzantısı ve codex komutu için Codex ajan motoru</string>
 
     <!-- The checkmark on a selected toolchain card. It is an ImageView with no
          text, so this is the whole of what a screen reader has to announce it. -->

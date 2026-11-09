@@ -61,7 +61,9 @@ data class ToolchainCard(
 class ToolchainCardState(private val mode: ToolchainCardMode) {
 
     /** The cards, in the order they are drawn. */
-    val items: List<ToolchainRegistry.ToolchainInfo> = ToolchainRegistry.available
+    val items: List<ToolchainRegistry.ToolchainInfo> =
+        if (mode == ToolchainCardMode.PICKER) ToolchainRegistry.available.filter { it.offeredInPicker }
+        else ToolchainRegistry.available
 
     private val selected = mutableSetOf<String>()
     private val installed = mutableSetOf<String>()

@@ -67,6 +67,13 @@ object ToolchainRegistry {
         val downloadSize: Long,
         /** Fallback URL for sideloaded installs (no Play Store). Null = Play-only. */
         val downloadUrl: String? = null,
+        /**
+         * Whether the first-run picker offers it. The picker asks "What do you
+         * code in?" and lists languages; a toolchain that is a tool and not a
+         * language is offered on the management screen alone, where nobody is
+         * answering that question.
+         */
+        val offeredInPicker: Boolean = true,
     )
 
     /**
@@ -143,6 +150,22 @@ object ToolchainRegistry {
             estimatedSize = 280_000_000,
             downloadSize = 80_000_000,
             downloadUrl = "https://github.com/rmyndharis/VSCodroid/releases/latest/download/toolchain_cpp.zip",
+        ),
+        ToolchainInfo(
+            packName = "toolchain_codex",
+            displayName = "Codex",
+            shortLabel = "Codex",
+            descriptionRes = R.string.toolchain_codex_description,
+            // 335,548 KiB measured with `du -sk` over the pack's `usr/` tree,
+            // which is 343.6 MB in 4 KiB blocks, in 5 files: the engine at 255
+            // MB and its code-mode helper at 72 MB account for all but 10 KiB
+            // of notices. 360,000,000 leaves 16 MB for a newer build of the
+            // engine: Termux takes whatever the package is on the day the pack
+            // is built, and package-toolchains.sh refuses a tree above this.
+            estimatedSize = 360_000_000,
+            downloadSize = 134_000_000,
+            downloadUrl = "https://github.com/rmyndharis/VSCodroid/releases/latest/download/toolchain_codex.zip",
+            offeredInPicker = false,
         ),
     )
 

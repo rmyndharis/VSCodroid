@@ -198,7 +198,7 @@ flowchart TD
 | Tier                         | What                                                        | How                                                      |
 | ---------------------------- | ----------------------------------------------------------- | -------------------------------------------------------- |
 | **Core (Base APK)**          | Node.js, npm, Python 3, Git, Bash, SSH, tmux, make, ripgrep | Available immediately                                    |
-| **Toolchains (Asset Packs)** | Ruby, Java 21, C/C++                                        | Select in Language Picker: Play Asset Delivery, or direct download on sideloaded installs |
+| **Toolchains (Asset Packs)** | Ruby, Java 21, C/C++, Codex                                 | Select in Language Picker, or on the Toolchains screen for Codex: Play Asset Delivery, or direct download on sideloaded installs |
 
 ## 🔨 Building from Source
 

@@ -967,6 +967,195 @@ class ToolchainExecTableTest {
         assertFalse("${filesDir.absolutePath}/nativeLib/" in text, "the launcher still names the old directory")
     }
 
+    // -- the Codex engine -----------------------------------------------------
+    //
+    // `codex` is a launcher the app writes, not a row for the engine's own file:
+    // started as `linker64 <engine>` the engine is told it is the loader and looks
+    // for its helper there. The launcher preloads the exec interceptor and
+    // libselfexe.so and puts the real path in the environment.
+
+    private val codexEngine get() = File(filesDir, "usr/libexec/codex/lib/codex")
+    private val codexRecord =
+        """[{"name":"codex","installRoot":"usr/libexec/codex","env":{},""" +
+            """"binaries":["usr/libexec/codex/lib/codex","usr/libexec/codex/lib/codex-code-mode-host"]}]"""
+
+    private fun installCodex() {
+        elf("usr/libexec/codex/lib/codex")
+        elf("usr/libexec/codex/lib/codex-code-mode-host")
+        stateFile.writeText(codexRecord)
+    }
+
+    @Test
+    fun `codex is a command a program can start by name`() {
+        installCodex()
+
+        regenerate()
+
+        assertTrue(
+            tableLines().contains("codex\t/system/bin/sh\t${launcher("codex").absolutePath}"),
+            "no row starts codex, so the extension's spawn gets ENOENT:\n" + execTable.readText(),
+        )
+        val link = File(filesDir, "usr/libexec/tcbin/codex").toPath()
+        assertTrue(Files.isSymbolicLink(link), "codex is not on PATH")
+        assertEquals(trampoline, Files.readSymbolicLink(link).toString())
+    }
+
+    /**
+     * The two ELF files are under `<root>/lib/`, so neither is a command. A row
+     * for the engine's own file would start it without the preload and without
+     * its path, which is the start that cannot find its helper.
+     */
+    @Test
+    fun `neither engine file becomes a command of its own`() {
+        installCodex()
+
+        regenerate()
+
+        assertTrue(tableLines().none { "usr/libexec/codex/lib" in it }, execTable.readText())
+        assertFalse(
+            Files.exists(File(filesDir, "usr/libexec/tcbin/codex-code-mode-host").toPath(), LinkOption.NOFOLLOW_LINKS),
+            "the helper is on PATH",
+        )
+    }
+
+    @Test
+    fun `an engine on disk without a toolchain record is not a command`() {
+        elf("usr/libexec/codex/lib/codex")
+        stateFile.writeText("[]")
+
+        regenerate()
+
+        assertTrue(tableLines().none { it.startsWith("codex\t") }, execTable.readText())
+    }
+
+    @Test
+    fun `a record without the engine on disk is not a command`() {
+        stateFile.writeText(codexRecord)
+
+        regenerate()
+
+        assertTrue(tableLines().none { it.startsWith("codex\t") }, execTable.readText())
+    }
+
+    /**
+     * The launcher is one of the toolchain's files, and it is written beside the
+     * table, where a removal does not look. Nothing names it once the record is
+     * gone, so the pass that drops the row drops the file.
+     */
+    @Test
+    fun `the launcher goes with the record`() {
+        installCodex()
+        regenerate()
+        assertTrue(launcher("codex").isFile, "no launcher was written to remove")
+
+        stateFile.writeText("[]")
+        regenerate()
+
+        assertFalse(launcher("codex").exists(), "a removed toolchain left its launcher behind")
+    }
+
+    @Test
+    fun `the launcher goes with the engine`() {
+        installCodex()
+        regenerate()
+        assertTrue(launcher("codex").isFile, "no launcher was written to remove")
+
+        codexEngine.delete()
+        regenerate()
+
+        assertFalse(launcher("codex").exists(), "a launcher for an engine that is gone was left in place")
+    }
+
+    @Test
+    fun `a toolchain that ships codex keeps the name`() {
+        installCodex()
+        elf("usr/opt/other/bin/codex")
+        stateFile.writeText(
+            """[{"name":"other","installRoot":"usr/opt/other","binaries":["usr/opt/other/bin/codex"]},""" +
+                codexRecord.removePrefix("[")
+        )
+
+        regenerate()
+
+        assertEquals(
+            listOf("codex\t${filesDir.absolutePath}/usr/opt/other/bin/codex"),
+            tableLines().filter { it.startsWith("codex\t") },
+            "the app's launcher displaced a toolchain's own command",
+        )
+    }
+
+    /**
+     * What the launcher runs, read off a stand-in for the loader that prints what
+     * it was given. The engine has to be handed to the loader as its first
+     * argument, with the caller's arguments kept whole after it, the interceptor
+     * and the shim preloaded together, and the engine's real path in the variable
+     * the shim answers from.
+     */
+    @Test
+    fun `the launcher starts the engine through the loader with both libraries`() {
+        assumeTrue(File("/bin/sh").canExecute(), "no /bin/sh on this host to run the launcher")
+        installCodex()
+        val preload = File(filesDir, "usr/lib/libtermux-exec.so").apply { parentFile?.mkdirs(); writeText("elf") }
+        val selfExe = File(filesDir, "usr/lib/libselfexe.so").apply { writeText("elf") }
+        regenerate()
+
+        val loader = File(filesDir, "loader-stand-in").apply {
+            writeText(
+                "#!/bin/sh\nfor a in \"\$@\"; do echo \"arg=\$a\"; done\n" +
+                    "echo \"exe=\$TERMUX_EXEC__PROC_SELF_EXE\"\necho \"preload=\$LD_PRELOAD\"\n"
+            )
+            setExecutable(true)
+        }
+        val text = launcher("codex").readText()
+        assertTrue("exec /system/bin/linker64 " in text, text)
+        val copy = File(filesDir, "codex-under-test.sh").apply {
+            writeText(text.replace("/system/bin/linker64", loader.absolutePath))
+        }
+
+        val result = finishTestProcess(
+            ProcessBuilder(listOf("/bin/sh", copy.path, "app-server", "a b", "-c", "x=1"))
+                .redirectErrorStream(true).start()
+        )
+
+        assertEquals(0, result.first, result.second)
+        assertEquals(
+            listOf(
+                "arg=${codexEngine.absolutePath}", "arg=app-server", "arg=a b", "arg=-c", "arg=x=1",
+                "exe=${codexEngine.absolutePath}",
+                "preload=${preload.absolutePath}:${selfExe.absolutePath}",
+            ),
+            // A host loader that honours LD_PRELOAD says the stand-in files are not
+            // libraries, on stderr, which this run merges into the output.
+            result.second.reader().readLines().filterNot { it.startsWith("ERROR: ld.so: ") },
+        )
+    }
+
+    /**
+     * Bionic aborts every exec in an environment whose LD_PRELOAD names a file
+     * that is not there, so a launcher that went ahead would take down the engine
+     * and everything it starts. It stops, and says which file.
+     */
+    @Test
+    fun `the launcher refuses to start when a preload library is missing`() {
+        assumeTrue(File("/bin/sh").canExecute(), "no /bin/sh on this host to run the launcher")
+        installCodex()
+        File(filesDir, "usr/lib/libtermux-exec.so").apply { parentFile?.mkdirs(); writeText("elf") }
+        val selfExe = File(filesDir, "usr/lib/libselfexe.so") // not written
+        regenerate()
+        val loader = File(filesDir, "loader-stand-in").apply {
+            writeText("#!/bin/sh\necho started\n")
+            setExecutable(true)
+        }
+        val copy = File(filesDir, "codex-under-test.sh").apply {
+            writeText(launcher("codex").readText().replace("/system/bin/linker64", loader.absolutePath))
+        }
+
+        val result = finishTestProcess(ProcessBuilder(listOf("/bin/sh", copy.path)).redirectErrorStream(true).start())
+
+        assertEquals(127, result.first, result.second)
+        assertEquals("codex: ${selfExe.absolutePath} is missing", result.second.trim())
+    }
+
     // -- a toolchain that starts only through the preloaded exec --------------
 
     /**

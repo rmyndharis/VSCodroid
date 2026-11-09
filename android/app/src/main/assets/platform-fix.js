@@ -88,4 +88,36 @@ if (process.platform === 'android') {
     }
     return realLoad.apply(this, arguments);
   };
+
+  // The Codex extension ships its engine as a static musl executable, which
+  // Android cannot start, and starts it with child_process.spawn on the path
+  // inside its own directory. The Codex toolchain installs an engine that can
+  // run behind the `codex` command (ToolchainManager.addCodexRows), so that one
+  // spawn is pointed there. Everything else about the call is left as the
+  // extension made it, including its arguments.
+  //
+  // Only while the command exists. Without the toolchain the spawn goes where it
+  // always went and fails the way it always did, which is the honest outcome
+  // for an engine nobody installed.
+  //
+  // Here and not as a link at the extension's path: the extension updates itself
+  // into a new directory with a fresh copy of the unrunnable binary, and a link
+  // would be missing from it until the next time the app came to the foreground.
+  // Only spawn is wrapped, which is the call the extension makes: execFile and
+  // fork reach the same function through a reference of their own.
+  var fs = require('fs');
+  var childProcess = require('child_process');
+  var CODEX_BUNDLED = /[\\/]openai\.chatgpt-[^\\/]+[\\/]bin[\\/][^\\/]+[\\/]codex$/;
+  var realSpawn = childProcess.spawn;
+  childProcess.spawn = function (file) {
+    if (typeof file === 'string' && CODEX_BUNDLED.test(file)) {
+      var command = (process.env.PREFIX || '') + '/libexec/tcbin/codex';
+      if (fs.existsSync(command)) {
+        var args = Array.prototype.slice.call(arguments);
+        args[0] = command;
+        return realSpawn.apply(this, args);
+      }
+    }
+    return realSpawn.apply(this, arguments);
+  };
 }

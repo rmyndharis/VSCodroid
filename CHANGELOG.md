@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Add the Codex toolchain, which installs the `codex` command, to the Toolchains screen. The first-run picker does not offer it.
+- The Codex toolchain is a 134 MB download and 360 MB installed.
+- Start the Codex extension's engine from the Codex toolchain, because the engine the extension ships cannot run on Android.
+
 ## [1.7.0] - 2026-11-07
 
 ### Added

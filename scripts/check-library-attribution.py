@@ -138,10 +138,12 @@ BINARY_MAGIC = (
 # own source and is covered by the root LICENSE; it needs no third-party
 # attribution. Three families qualify. The glibc-shim stubs carry glibc's
 # DT_NEEDED names but contain none of glibc's code; libexec-trampoline.so is
-# compiled here from scripts/exec-trampoline.c against Bionic alone; and the two
+# compiled here from scripts/exec-trampoline.c against Bionic alone; the two
 # Claude Code files are compiled here from scripts/claude-launch.c and
 # scripts/seccomp-shim.c, the second freestanding, so it links against no libc
-# at all -- it is loaded beside musl's and calls the kernel directly.
+# at all -- it is loaded beside musl's and calls the kernel directly; and
+# libselfexe.so is compiled here from scripts/selfexe-shim.c against Bionic
+# alone.
 LIBRARIES = {
     # --- built here, MIT, no third-party obligation ---
     "libglibc-shim.so": ("VSCodroid", "MIT"),
@@ -158,6 +160,7 @@ LIBRARIES = {
     "libexec-trampoline.so": ("VSCodroid", "MIT"),
     "libclaude-launch.so": ("VSCodroid", "MIT"),
     "libseccomp-shim.so": ("VSCodroid", "MIT"),
+    "libselfexe.so": ("VSCodroid", "MIT"),
     # --- copyleft: attribution AND a source offer ---
     "libbash.so": ("Bash", "GPL-3.0"),
     "libgit.so": ("Git", "GPL-2.0"),
@@ -231,9 +234,9 @@ LIBRARIES = {
     "libcares.so": ("c-ares", "MIT"),
     "libsqlite3.so": ("SQLite", "Public Domain"),
     "libc++_shared.so": ("libc++", "NCSA"),
-    "libicuuc.so.78": ("ICU", "ICU"),
-    "libicui18n.so.78": ("ICU", "ICU"),
-    "libicudata.so.78": ("ICU", "ICU"),
+    "libicuuc.so.79": ("ICU", "ICU"),
+    "libicui18n.so.79": ("ICU", "ICU"),
+    "libicudata.so.79": ("ICU", "ICU"),
     "libresolv_wrapper.so": ("libresolv-wrapper", "BSD-3-Clause"),
     "libgssapi_krb5.so.2": ("Kerberos 5", "MIT"),
     "libkrb5.so.3": ("Kerberos 5", "MIT"),

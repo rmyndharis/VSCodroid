@@ -120,5 +120,90 @@ const inWorker = JSON.parse(execFileSync(process.execPath, [workerMain], { encod
 assert.strictEqual(inWorker.os, 'linux', `a worker with the preload in execArgv: os.platform() came out ${inWorker.os}`);
 checked++;
 
+// The Codex extension starts its static musl engine, which Android cannot run,
+// with child_process.spawn on the path inside its own directory. While the
+// toolchain's `codex` command exists that one spawn is pointed at it. A recorder
+// stands in for the real spawn, loaded just ahead of the shipped file, so what is
+// seen is the call that would have been made.
+const RECORD_SPAWN = path.join(tmp, 'record-spawn.js');
+fs.writeFileSync(
+    RECORD_SPAWN,
+    "const cp = require('child_process');\n" +
+        "cp.spawn = function () { console.log(JSON.stringify(Array.prototype.slice.call(arguments))); return 'child'; };\n",
+);
+const CODEX_PREFIX = path.join(tmp, 'usr');
+const CODEX_COMMAND = `${CODEX_PREFIX}/libexec/tcbin/codex`;
+const BUNDLED = `${EXTENSIONS}/openai.chatgpt-26.1021.22027-alpine-arm64/bin/linux-aarch64/codex`;
+const SPAWN_MAIN = path.join(tmp, 'spawn-main.js');
+fs.writeFileSync(
+    SPAWN_MAIN,
+    "const result = require('child_process').spawn(...JSON.parse(process.argv[2]));\n" +
+        "if (result !== 'child') throw new Error('the return value was lost: ' + result);\n",
+);
+function spawnedWith(call, { command = true, prefix = CODEX_PREFIX } = {}) {
+    fs.rmSync(CODEX_COMMAND, { force: true });
+    if (command) {
+        fs.mkdirSync(path.dirname(CODEX_COMMAND), { recursive: true });
+        fs.writeFileSync(CODEX_COMMAND, '');
+    }
+    const env = { ...process.env };
+    if (prefix === null) delete env.PREFIX; else env.PREFIX = prefix;
+    const out = execFileSync(
+        process.execPath,
+        ['--require', FAKE_ANDROID, '--require', RECORD_SPAWN, '--require', FIX, SPAWN_MAIN, JSON.stringify(call)],
+        { env, encoding: 'utf8' },
+    );
+    return JSON.parse(out.trim().split('\n').pop());
+}
+const ARGS = ['-c', 'features.code_mode_host=true', 'app-server'];
+const OPTIONS = { stdio: ['pipe', 'pipe', 'pipe'] };
+
+assert.deepStrictEqual(
+    spawnedWith([BUNDLED, ARGS, OPTIONS]), [CODEX_COMMAND, ARGS, OPTIONS],
+    'the extension\'s engine was not redirected, or its arguments and options changed on the way',
+);
+assert.deepStrictEqual(
+    spawnedWith([BUNDLED, OPTIONS]), [CODEX_COMMAND, OPTIONS],
+    'a call without an argument list lost its options',
+);
+assert.deepStrictEqual(
+    spawnedWith([BUNDLED, ARGS, OPTIONS], { command: false }), [BUNDLED, ARGS, OPTIONS],
+    'the spawn was redirected to a command that is not installed',
+);
+assert.deepStrictEqual(
+    spawnedWith([BUNDLED, ARGS, OPTIONS], { prefix: null }), [BUNDLED, ARGS, OPTIONS],
+    'the spawn was redirected with no PREFIX to say where the command is',
+);
+checked += 4;
+for (const [label, file] of [
+    ['the helper beside the engine', `${BUNDLED}-code-mode-host`],
+    ['the extension\'s ripgrep', BUNDLED.replace(/codex$/, 'rg')],
+    ['another publisher\'s binary of the same name', `${EXTENSIONS}/acme.assistant-1.0.0-alpine-arm64/bin/linux-aarch64/codex`],
+    ['a codex outside any extension', `${tmp}/home/bin/codex`],
+    ['the command itself', CODEX_COMMAND],
+    ['a bare name', 'codex'],
+]) {
+    assert.deepStrictEqual(spawnedWith([file, ARGS, OPTIONS]), [file, ARGS, OPTIONS], `${label}: the spawn was redirected`);
+    checked++;
+}
+
+// The extension host is a worker, and the preload reaches it through execArgv.
+const spawnWorker = path.join(tmp, 'spawn-worker.js');
+fs.mkdirSync(path.dirname(CODEX_COMMAND), { recursive: true });
+fs.writeFileSync(CODEX_COMMAND, '');
+fs.writeFileSync(spawnWorker, `
+const { Worker } = require('worker_threads');
+const env = { ...process.env, PREFIX: ${JSON.stringify(CODEX_PREFIX)} }; delete env.NODE_OPTIONS;
+const w = new Worker(${JSON.stringify(`require('child_process').spawn(${JSON.stringify(BUNDLED)}, ['app-server']);`)},
+    { eval: true, env, execArgv: ['--require', ${JSON.stringify(FAKE_ANDROID)}, '--require', ${JSON.stringify(RECORD_SPAWN)}, '--require', ${JSON.stringify(FIX)}] });
+w.on('error', (e) => { console.error(e); process.exit(1); });
+`);
+const fromWorker = execFileSync(process.execPath, [spawnWorker], { encoding: 'utf8', env: { ...process.env, NODE_OPTIONS: '' } });
+assert.deepStrictEqual(
+    JSON.parse(fromWorker.trim().split('\n').pop()), [CODEX_COMMAND, ['app-server']],
+    'a worker with the preload in execArgv did not redirect the engine',
+);
+checked++;
+
 fs.rmSync(tmp, { recursive: true, force: true });
 console.log(`ok -- ${checked} invocations checked, the override engaged for ${cases.filter((c) => c[4] === 'linux').length}`);

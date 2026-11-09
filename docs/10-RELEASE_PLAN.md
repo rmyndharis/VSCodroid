@@ -132,7 +132,11 @@ on the same server inputs. A publish through `build-vscode-oss.yml` passes `fres
 reads it, so the release notes' claim that a run built the tarball holds. Pull requests and pushes
 keep using it.
 
-Gradle's own dependency and build caches are handled by `gradle/actions/setup-gradle`.
+Gradle's own dependency and build caches are restored and saved by an `actions/cache` step in
+each Gradle job of `build.yml`, `lint.yml` and `r8.yml`, keyed on the Gradle scripts, the version
+catalogue and the wrapper. It saves only after a successful job, which `gradle/actions/setup-gradle`
+does not: that action saves a failed job's cache too and never replaces an entry, which is how an
+empty entry once stood in for the real one. `release.yml` only restores it.
 
 ### 2.4 Scheduled Compatibility Jobs
 
