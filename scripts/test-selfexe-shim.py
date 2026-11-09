@@ -9,6 +9,9 @@ the program that was executed directly.
 The second answer, a path through the platform's `/data/user/0` symlink, is
 tested against a directory of the test's own, which the shim is built to treat as
 `/data/user`: a test cannot create the real one.
+
+The third, the link the app makes to a device folder's copy, needs no stand-in: it
+is recognised by the shape of the directory it sits in, which a test can build.
 """
 
 import os
@@ -21,6 +24,9 @@ from pathlib import Path
 
 SOURCE = Path(__file__).with_name("selfexe-shim.c")
 VAR = "TERMUX_EXEC__PROC_SELF_EXE"
+# The names of two device-folder copies: twelve lowercase hex digits each.
+HASH = "0123456789ab"
+OTHER_HASH = "ba9876543210"
 
 PROBE = r"""
 #include <fcntl.h>
@@ -103,6 +109,45 @@ class SelfExeShimTest(unittest.TestCase):
         (cls.user / "0").symlink_to(cls.data)
         (cls.user / "1").symlink_to(cls.data)
         (cls.other / "0").symlink_to(cls.data)
+        # `saf-mirrors` stands in for the folder the app keeps its device-folder copies
+        # in: a copy at <hash>, and the name the editor opens it by, by-name/<hash>/<name>,
+        # a link to ../../<hash>.
+        cls.mirrors = cls.root / "saf-mirrors"
+        cls.copy = cls.mirrors / HASH
+        cls.copy.mkdir(parents=True)
+        (cls.copy / "notes.txt").write_text("in the copy")
+        (cls.mirrors / OTHER_HASH).mkdir()
+        cls.named = cls.mirrors / "by-name" / HASH
+        cls.named.mkdir(parents=True)
+        (cls.named / "project").symlink_to(f"../../{HASH}")
+        (cls.named / "real").mkdir()
+        (cls.named / "plain").write_text("not a directory")
+        # Links the shim must leave refused: each is something the app does not make.
+        for name, target in (
+            ("other-copy", f"../../{OTHER_HASH}"),  # another copy than the directory names
+            ("absolute", str(cls.copy)),  # the same place, spelled out
+            ("sideways", f"../{HASH}"),  # not the form the app makes
+            ("trailing", f"../../{HASH}/"),
+            ("longer", f"../../{HASH}0"),
+            ("escape", "../../.."),
+        ):
+            (cls.named / name).symlink_to(target)
+        # The same link in a directory that is not where the app makes them. The copy it
+        # names exists in every case, so following it would succeed.
+        cls.misplaced = [
+            cls.lay_out(cls.root / "elsewhere" / "by-name" / HASH),  # no saf-mirrors
+            cls.lay_out(cls.root / "notsaf-mirrors" / "by-name" / HASH),  # a name that only ends in it
+            cls.lay_out(cls.mirrors / "elsewhere" / HASH),  # not under by-name
+            cls.lay_out(cls.mirrors / "by-name" / HASH.upper()),  # not lowercase hex
+            cls.lay_out(cls.mirrors / "by-name" / HASH[:-1]),  # too short
+            cls.lay_out(cls.mirrors / "by-name" / (HASH + "c")),  # too long
+        ]
+        # The right directory and the right link, over a copy that has been replaced by a link.
+        swapped = cls.root / "swapped" / "saf-mirrors"
+        (swapped / "by-name" / HASH).mkdir(parents=True)
+        (swapped / "by-name" / HASH / "project").symlink_to(f"../../{HASH}")
+        (swapped / HASH).symlink_to(cls.data)
+        cls.swapped = swapped / "by-name" / HASH
         opener_c = cls.root / "opener.c"
         opener_c.write_text(OPENER)
         cls.opener = cls.root / "opener"
@@ -114,6 +159,14 @@ class SelfExeShimTest(unittest.TestCase):
              f'-DALIAS_PARENT="{cls.user}"', str(SOURCE), "-o", str(cls.shim)],
             check=True,
         )
+
+    @staticmethod
+    def lay_out(parent):
+        """`parent` named for a copy, holding a link `project` to ../../<its name>, with that copy made."""
+        parent.mkdir(parents=True)
+        (parent.parent.parent / parent.name).mkdir(exist_ok=True)
+        (parent / "project").symlink_to(f"../../{parent.name}")
+        return parent
 
     def ask(self, program, *args, real=None, preload=True):
         env = {k: v for k, v in os.environ.items() if k not in (VAR, "LD_PRELOAD")}
@@ -209,6 +262,49 @@ class SelfExeShimTest(unittest.TestCase):
         env = {**os.environ, "LD_PRELOAD": str(self.shim), VAR: "/data/x/codex"}
         result = subprocess.run([str(self.opener), str(self.user), "0", *self.WALK], env=env, capture_output=True, text=True)
         self.assertEqual(f"ok {self.data} {self.data.stat().st_mode & 0o777:o}", result.stdout.strip())
+
+    # A device folder's name: the link the app makes to a copy, opened the way the same
+    # tool opens each directory of a path.
+    def test_the_link_to_a_copy_is_refused_without_the_library(self):
+        # The control: what the patch tool met in a device folder.
+        self.assertEqual("errno Not a directory", self.opened(self.named, "project", *self.WALK, preload=False))
+
+    def test_the_link_to_a_copy_opens_the_copy_with_it(self):
+        self.assertEqual(f"ok {self.copy} {self.copy.stat().st_mode & 0o777:o}", self.opened(self.named, "project", *self.WALK))
+
+    def test_openat64_opens_the_copy_too(self):
+        self.assertEqual(f"ok {self.copy} {self.copy.stat().st_mode & 0o777:o}", self.opened(self.named, "project", *self.WALK, "wide"))
+
+    def test_only_the_link_the_app_makes_is_followed(self):
+        for name in ("other-copy", "absolute", "sideways", "trailing", "longer", "escape"):
+            self.assertEqual("errno Not a directory", self.opened(self.named, name, *self.WALK), name)
+
+    def test_only_in_a_directory_named_for_a_copy_under_saf_mirrors_by_name(self):
+        for parent in self.misplaced:
+            self.assertEqual("errno Not a directory", self.opened(parent, "project", *self.WALK), str(parent))
+
+    def test_a_copy_that_was_replaced_by_a_link_is_still_refused(self):
+        # The copy is opened without following anything, so a link put in its place is not
+        # a way out of the tree.
+        self.assertEqual("errno Not a directory", self.opened(self.swapped, "project", *self.WALK))
+
+    def test_entries_that_are_not_links_are_untouched(self):
+        real = self.named / "real"
+        self.assertEqual(f"ok {real} {real.stat().st_mode & 0o777:o}", self.opened(self.named, "real", *self.WALK))
+        self.assertEqual("errno Not a directory", self.opened(self.named, "plain", *self.WALK))
+        self.assertEqual("errno No such file or directory", self.opened(self.named, "missing", *self.WALK))
+
+    def test_a_walk_that_follows_the_link_is_untouched(self):
+        for preload in (False, True):
+            self.assertTrue(
+                self.opened(self.named, "project", "path", "directory", preload=preload).startswith(f"ok {self.copy} "),
+                preload,
+            )
+
+    def test_the_named_copy_opens_with_the_variable_set_too(self):
+        env = {**os.environ, "LD_PRELOAD": str(self.shim), VAR: "/data/x/codex"}
+        result = subprocess.run([str(self.opener), str(self.named), "project", *self.WALK], env=env, capture_output=True, text=True)
+        self.assertEqual(f"ok {self.copy} {self.copy.stat().st_mode & 0o777:o}", result.stdout.strip())
 
 
 if __name__ == "__main__":

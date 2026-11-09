@@ -143,7 +143,7 @@ object ToolchainRegistry {
             // point release of clang: package-toolchains.sh refuses to zip a
             // tree above this, and a release tag is where that would be found.
             //
-            // This is also the largest install pre-flight of the three. A first
+            // This is also the largest install pre-flight of the language toolchains. A first
             // install over HTTP holds the staged copy and the one in `usr/` at
             // once, so it asks for about twice this figure plus the buffer.
             // The ZIP is 79,097,187 bytes.

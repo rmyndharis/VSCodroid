@@ -1085,6 +1085,83 @@ class ToolchainExecTableTest {
     }
 
     /**
+     * A record that cannot be parsed says nothing about what is installed. The launcher the
+     * last good pass wrote is the evidence that Codex was, and the engine is still on disk
+     * and still runnable, so the command stays instead of leaving PATH until the record is
+     * readable again.
+     *
+     * NEGATIVE CONTROL: make `addCodexRows` read the record alone (`recorded` from
+     * `installed` whatever `stateKnown` says) and this reddens: the row, the launcher and the
+     * link all go.
+     */
+    @Test
+    fun `an unreadable record keeps the codex command`() {
+        installCodex()
+        regenerate()
+        val written = launcher("codex").readText()
+        val row = "codex\t/system/bin/sh\t${launcher("codex").absolutePath}"
+        assertTrue(tableLines().contains(row), execTable.readText())
+
+        stateFile.writeText(codexRecord.take(40))
+        regenerate()
+
+        assertTrue(tableLines().contains(row), "the codex row was lost over an unreadable record:\n" + execTable.readText())
+        assertEquals(written, launcher("codex").readText(), "the launcher was deleted or rewritten over an unreadable record")
+        val link = File(filesDir, "usr/libexec/tcbin/codex").toPath()
+        assertTrue(Files.isSymbolicLink(link), "codex left PATH over an unreadable record")
+    }
+
+    /**
+     * The same damage does not freeze the launcher's own contents: it names the engine and the
+     * preload libraries by absolute path, so a launcher kept over an unreadable record is
+     * still checked against disk, and one written for a path that has moved is written again.
+     */
+    @Test
+    fun `an unreadable record still rewrites a launcher that names the wrong files`() {
+        installCodex()
+        regenerate()
+        launcher("codex").writeText("#!/bin/sh\nexec /data/app/old/linker64 /data/app/old/codex\n")
+
+        stateFile.writeText(codexRecord.take(40))
+        regenerate()
+
+        assertTrue(
+            codexEngine.absolutePath in launcher("codex").readText(),
+            "the launcher over an unreadable record still names the previous install's files",
+        )
+    }
+
+    /**
+     * Without a launcher there is nothing to say the toolchain was ever installed, and an
+     * unreadable record cannot say it either. An engine file alone does not make a command.
+     */
+    @Test
+    fun `an unreadable record does not make a command of an engine nothing installed`() {
+        elf("usr/libexec/codex/lib/codex")
+        stateFile.writeText(codexRecord.take(40))
+
+        regenerate()
+
+        assertTrue(tableLines().none { it.startsWith("codex\t") }, execTable.readText())
+        assertFalse(launcher("codex").exists(), "a launcher appeared for an engine no record names")
+    }
+
+    /** Damage to the record does not keep a launcher whose engine has gone. */
+    @Test
+    fun `an unreadable record still removes the launcher of an engine that is gone`() {
+        installCodex()
+        regenerate()
+        assertTrue(launcher("codex").isFile, "no launcher was written to remove")
+        codexEngine.delete()
+
+        stateFile.writeText(codexRecord.take(40))
+        regenerate()
+
+        assertFalse(launcher("codex").exists(), "a launcher for an engine that is gone was kept")
+        assertTrue(tableLines().none { it.startsWith("codex\t") }, execTable.readText())
+    }
+
+    /**
      * What the launcher runs, read off a stand-in for the loader that prints what
      * it was given. The engine has to be handed to the loader as its first
      * argument, with the caller's arguments kept whole after it, the interceptor

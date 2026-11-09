@@ -73,7 +73,7 @@ flowchart TD
 **External Systems:**
 - **Open VSX**: Extension search, download, update (HTTPS)
 - **GitHub/GitLab**: Remote git operations (HTTPS/SSH)
-- **Play Asset Delivery**: Ruby, Java 25 and C/C++ packs, for installs whose `installingPackageName` is `com.android.vending` or Play's legacy `com.google.android.feedback` (`ToolchainManager.PLAY_INSTALLERS`)
+- **Play Asset Delivery**: Ruby, Java 25, C/C++ and Codex packs, for installs whose `installingPackageName` is `com.android.vending` or Play's legacy `com.google.android.feedback` (`ToolchainManager.PLAY_INSTALLERS`)
 - **GitHub Releases**: the same toolchains as ZIPs under `releases/latest`, for every other install source
 
 Termux's package repository is a build-time source, not a runtime one: `scripts/download-node.sh`,
@@ -271,7 +271,7 @@ owning extension is what frees a slot.
 - Termux, UserLAnd, and other apps use this approach
 - Requires: Gradle `packagingOptions { jniLibs { useLegacyPackaging = true } }`
 
-**Consequence**: All core binaries (Node.js, Python, Git, bash, tmux, make, ripgrep, ssh) bundled as .so files in the base APK. The three on-demand toolchains, Ruby, Java 25 and C/C++, are delivered as asset packs via Play Store; the user picks them in the first-run toolchain picker (`SplashActivity.showToolchainPicker()`, offered by `continueAfterSetup()` on every launch that gets past setup, until its Continue or Skip button records `toolchain_picker_shown`) and Play Store downloads them automatically. Toolchains are never inside the APK on any channel: `ToolchainManager.install()` picks a delivery path at runtime, and both paths converge on `installFromDirectory()`, which copies the payload into `filesDir/usr`, chmods the binaries its manifest names, and creates its symlinks, so installed toolchains survive app updates. This decision covers what the app installs. It does not restrict what a user runs: the terminal's exec interceptor starts user programs through `/system/bin/linker64`, which is what `termux-exec` does in the Termux build on Google Play. The C/C++ toolchain is the one pack that depends on it: a compiler forks its linker, so its programs start only through that interceptor and fail where it is off (`"LD_PRELOAD": null`) or absent (an extension that starts a process itself).
+**Consequence**: All core binaries (Node.js, Python, Git, bash, tmux, make, ripgrep, ssh) bundled as .so files in the base APK. The four on-demand toolchains, Ruby, Java 25, C/C++ and Codex, are delivered as asset packs via Play Store; the user picks the first three in the first-run toolchain picker (`SplashActivity.showToolchainPicker()`, offered by `continueAfterSetup()` on every launch that gets past setup, until its Continue or Skip button records `toolchain_picker_shown`) and adds Codex from the Toolchains screen, and Play Store downloads them automatically. Toolchains are never inside the APK on any channel: `ToolchainManager.install()` picks a delivery path at runtime, and both paths converge on `installFromDirectory()`, which copies the payload into `filesDir/usr`, chmods the binaries its manifest names, and creates its symlinks, so installed toolchains survive app updates. This decision covers what the app installs. It does not restrict what a user runs: the terminal's exec interceptor starts user programs through `/system/bin/linker64`, which is what `termux-exec` does in the Termux build on Google Play. The C/C++ toolchain is the one pack that depends on it: a compiler forks its linker, so its programs start only through that interceptor and fail where it is off (`"LD_PRELOAD": null`) or absent (an extension that starts a process itself).
 
 ---
 
@@ -315,7 +315,7 @@ owning extension is what frees a slot.
 
 **Status**: Accepted
 
-**Context**: VSCodroid offers language toolchains beyond the bundled core: Ruby, Java 25 and C/C++. Putting them in the base APK would make it very large, and most users want at most one of them. Options: (a) On-demand download from CDN, (b) Play Store install-time asset packs, (c) Play Store on-demand asset packs.
+**Context**: VSCodroid offers toolchains beyond the bundled core: Ruby, Java 25, C/C++ and Codex. Putting them in the base APK would make it very large, and most users want at most one of them. Options: (a) On-demand download from CDN, (b) Play Store install-time asset packs, (c) Play Store on-demand asset packs.
 
 **Decision**: Use Play Store on-demand asset packs for toolchain delivery, with a toolchain picker UI during first-run.
 
@@ -325,7 +325,7 @@ owning extension is what frees a slot.
   `scripts/check-bundle-size.py`; the last measurement was around 270 MiB compressed, and it
   moves with every VS Code bump, so re-measure from the AAB rather than quoting a figure
 - User selects needed languages during first-run, so only what they ask for is downloaded
-- `android/toolchain_ruby/build.gradle.kts`, `android/toolchain_java/build.gradle.kts` and `android/toolchain_cpp/build.gradle.kts` each declare `dynamicDelivery { deliveryType.set("on-demand") }`, and `ToolchainRegistry.available` is the single list the picker and the manage screen read
+- `android/toolchain_ruby/build.gradle.kts`, `android/toolchain_java/build.gradle.kts`, `android/toolchain_cpp/build.gradle.kts` and `android/toolchain_codex/build.gradle.kts` each declare `dynamicDelivery { deliveryType.set("on-demand") }`, and `ToolchainRegistry.available` is the single list the picker and the manage screen read
 - Play Store handles download/install automatically (no manual steps for user)
 - Play Store optimizes delivery per device (only arm64 assets delivered)
 - No custom CDN infrastructure needed for toolchain hosting

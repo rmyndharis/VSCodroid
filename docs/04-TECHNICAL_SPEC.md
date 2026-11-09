@@ -1441,7 +1441,8 @@ is intact, not that it is the right tarball.
 ### 7.1 Toolchain Configuration
 
 Toolchains are declared in Kotlin, in `ToolchainRegistry.available`, and both the first-run picker
-and the manage screen are built from that list. Three are shipped, Ruby, Java 25 and C/C++:
+and the manage screen are built from that list, the picker leaving out an entry that sets
+`offeredInPicker = false`. Four are shipped, Ruby, Java 25, C/C++ and Codex:
 
 ```kotlin
 ToolchainInfo(
@@ -1457,6 +1458,12 @@ ToolchainInfo(
 
 The second entry is `toolchain_java`, OpenJDK 25 with `javac`, `jar` and `jshell`. The third is
 `toolchain_cpp`, clang and lld with a minimal sysroot (section 7.5).
+
+The fourth is `toolchain_codex`, OpenAI's Codex engine as Termux builds it for Bionic, with the helper
+its code mode starts. It is a tool and not a language, so it sets `offeredInPicker = false` and only the
+manage screen offers it. Its two ELF files sit under `<root>/lib/`, which `ToolchainManager` turns into
+no command; `codex` is a launcher the app writes beside the exec table (`addCodexRows`), because the
+engine has to start through the loader with the exec interceptor and `libselfexe.so` preloaded.
 
 The first two are an interpreter and a JVM, and for a long time that was a constraint rather than a
 preference. A toolchain whose compiler forks its own assembler and linker cannot work from a start
@@ -1492,9 +1499,10 @@ Because the payload lands in `filesDir`, an installed toolchain survives an app 
 include(":toolchain_ruby")
 include(":toolchain_java")
 include(":toolchain_cpp")
+include(":toolchain_codex")
 
 // app/build.gradle.kts
-assetPacks += listOf(":toolchain_ruby", ":toolchain_java", ":toolchain_cpp")
+assetPacks += listOf(":toolchain_ruby", ":toolchain_java", ":toolchain_cpp", ":toolchain_codex")
 ```
 
 Each asset pack module:
@@ -1529,10 +1537,11 @@ every non-Play user.
 
 The picker is offered on every launch until it is answered, gated by `toolchain_picker_shown`,
 which only its Continue and Skip buttons write; a kill or an interrupted first run leaves it to be
-offered again on the next launch. It offers exactly what `ToolchainRegistry.available` lists:
+offered again on the next launch. It offers the entries of `ToolchainRegistry.available` that are
+`offeredInPicker`:
 
 ```kotlin
-val toolchains = ToolchainRegistry.available   // toolchain_ruby, toolchain_java, toolchain_cpp
+val toolchains = ToolchainRegistry.available.filter { it.offeredInPicker }   // toolchain_ruby, toolchain_java, toolchain_cpp
 
 fun onUserConfirmed(selected: List<ToolchainInfo>) {
     // Queue them; downloads run one at a time, driven by COMPLETED/FAILED
@@ -1544,7 +1553,7 @@ fun onUserConfirmed(selected: List<ToolchainInfo>) {
 
 1. Every launch, once setup is behind it (`SplashActivity.continueAfterSetup`), check whether
    the picker has been answered
-2. Show the picker with a card per registry entry, quoting each `downloadSize`
+2. Show the picker with a card per offered entry, quoting each `downloadSize`
 3. User selects languages and confirms
 4. Fetch each pack in turn, Play Asset Delivery or HTTPS depending on install source
 5. Show download progress per pack

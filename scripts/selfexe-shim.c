@@ -1,4 +1,4 @@
-// Two answers a program started on Android gets wrong, and that Codex cannot work
+// Three answers a program started on Android gets wrong, and that Codex cannot work
 // without. Preloaded by the Codex launcher and by nothing else.
 //
 // 1. /proc/self/exe.
@@ -42,6 +42,22 @@
 // for a call that was refused with ENOTDIR for it. A symlink the user made,
 // anywhere, is still refused.
 //
+// 3. A device folder's name.
+//
+// A folder opened from the device's storage is edited as a copy,
+// saf-mirrors/<hash>, and the editor opens it as saf-mirrors/by-name/<hash>/<name>,
+// a link to ../../<hash> that the app makes so the folder shows under its own
+// name. That puts a symlink in the middle of every workspace path in such a
+// folder, and the patch tool answers ENOTDIR for it exactly as it does for "0".
+//
+// The copy is opened in its place, and only there: for a call refused with
+// ENOTDIR for a name that is a link to ../../<hash>, in a directory whose own path
+// ends in saf-mirrors/by-name/<that hash>, twelve lowercase hex digits. The copy
+// is then opened by that relative name with O_NOFOLLOW still on, rather than by
+// following the link, so the call that is answered is the one that was checked
+// and a link put in the copy's place stays refused. A link of any other form, or
+// in any other directory, is refused as before.
+//
 // No dependency beyond Bionic's libc, and the raw system calls for the real
 // answers, so nothing here can call back into itself.
 
@@ -73,6 +89,13 @@ extern long syscall(long number, ...);
 #ifndef ALIAS_NAME
 #define ALIAS_NAME "0"
 #endif
+
+// What the app names its device-folder copies (Environment.getSafMirrorDir): a
+// directory under saf-mirrors/by-name named for the copy, by twelve lowercase hex
+// digits, holding links of the form ../../<hash>.
+#define COPY_DIRECTORY "/saf-mirrors/by-name/"
+#define COPY_LINK_PREFIX "../../"
+#define HASH_LENGTH 12
 
 static int is_self_exe(const char *path) {
     return path != NULL && strcmp(path, "/proc/self/exe") == 0;
@@ -110,26 +133,73 @@ static ssize_t resolve(int dirfd, const char *path, char *buf, size_t size) {
     return (ssize_t)length;
 }
 
-// Whether `dirfd` is the directory the alias lives in, asked of the kernel.
-static int names_alias_parent(int dirfd) {
-    if (dirfd < 0) {
-        return 0;
+// The path the kernel reports for an open descriptor, as readlink would copy it
+// into `buf`, or -1 for a descriptor that is not one.
+static ssize_t fd_path(int fd, char *buf, size_t size) {
+    if (fd < 0) {
+        return -1;
     }
     char link[32] = "/proc/self/fd/";
     size_t at = strlen(link);
     char digits[12];
     size_t count = 0;
-    for (unsigned int n = (unsigned int)dirfd; count == 0 || n > 0; n /= 10) {
+    for (unsigned int n = (unsigned int)fd; count == 0 || n > 0; n /= 10) {
         digits[count++] = (char)('0' + n % 10);
     }
     while (count > 0) {
         link[at++] = digits[--count];
     }
     link[at] = '\0';
+    return (ssize_t)syscall(__NR_readlinkat, AT_FDCWD, link, buf, size);
+}
+
+// Whether `dirfd` is the directory the alias lives in, asked of the kernel.
+static int names_alias_parent(int dirfd) {
     // One byte more than the name, so a longer target cannot pass for it.
     char target[sizeof(ALIAS_PARENT) + 1];
-    ssize_t length = (ssize_t)syscall(__NR_readlinkat, AT_FDCWD, link, target, sizeof(target));
+    ssize_t length = fd_path(dirfd, target, sizeof(target));
     return length == (ssize_t)(sizeof(ALIAS_PARENT) - 1) && memcmp(target, ALIAS_PARENT, (size_t)length) == 0;
+}
+
+static int is_hash(const char *digits) {
+    for (size_t i = 0; i < HASH_LENGTH; i++) {
+        char c = digits[i];
+        if (!((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f'))) {
+            return 0;
+        }
+    }
+    return 1;
+}
+
+// Whether `name` in `dirfd` is the link the app makes to a device folder's copy:
+// `dirfd` is saf-mirrors/by-name/<hash> and the link reads ../../<hash>. On a yes,
+// `copy` holds that relative name, terminated, to open in the link's place.
+static int names_copy_link(int dirfd, const char *name, char *copy, size_t size) {
+    if (name[0] == '\0' || strchr(name, '/') != NULL) {
+        return 0;
+    }
+    const size_t directory = sizeof(COPY_DIRECTORY) - 1;
+    const size_t prefix = sizeof(COPY_LINK_PREFIX) - 1;
+    char parent[PATH_MAX];
+    ssize_t length = fd_path(dirfd, parent, sizeof(parent));
+    // A whole buffer may be a path cut short, which proves nothing about its end.
+    if (length < (ssize_t)(directory + HASH_LENGTH) || length >= (ssize_t)sizeof(parent)) {
+        return 0;
+    }
+    const char *hash = parent + length - HASH_LENGTH;
+    if (memcmp(hash - directory, COPY_DIRECTORY, directory) != 0 || !is_hash(hash)) {
+        return 0;
+    }
+    // Two bytes more than the form, so a longer target cannot pass for it.
+    char target[sizeof(COPY_LINK_PREFIX) + HASH_LENGTH + 2];
+    ssize_t link_length = (ssize_t)syscall(__NR_readlinkat, dirfd, name, target, sizeof(target));
+    if (link_length != (ssize_t)(prefix + HASH_LENGTH) || memcmp(target, COPY_LINK_PREFIX, prefix) != 0 ||
+        memcmp(target + prefix, hash, HASH_LENGTH) != 0 || size < prefix + HASH_LENGTH + 1) {
+        return 0;
+    }
+    memcpy(copy, target, prefix + HASH_LENGTH);
+    copy[prefix + HASH_LENGTH] = '\0';
+    return 1;
 }
 
 static int open_at(int dirfd, const char *path, int flags, mode_t mode) {
@@ -137,12 +207,18 @@ static int open_at(int dirfd, const char *path, int flags, mode_t mode) {
     if (fd >= 0 || errno != ENOTDIR) {
         return fd;
     }
-    if ((flags & O_NOFOLLOW) == 0 || path == NULL || strcmp(path, ALIAS_NAME) != 0 ||
-        !names_alias_parent(dirfd)) {
-        errno = ENOTDIR;
-        return -1;
+    char copy[sizeof(COPY_LINK_PREFIX) + HASH_LENGTH];
+    if ((flags & O_NOFOLLOW) != 0 && path != NULL) {
+        if (strcmp(path, ALIAS_NAME) == 0 && names_alias_parent(dirfd)) {
+            return (int)syscall(__NR_openat, dirfd, path, flags & ~O_NOFOLLOW, mode);
+        }
+        if (names_copy_link(dirfd, path, copy, sizeof(copy))) {
+            // The copy by its own name, not the link: still no following.
+            return (int)syscall(__NR_openat, dirfd, copy, flags, mode);
+        }
     }
-    return (int)syscall(__NR_openat, dirfd, path, flags & ~O_NOFOLLOW, mode);
+    errno = ENOTDIR;
+    return -1;
 }
 
 // The build hides every symbol by default; these four are the interface.
