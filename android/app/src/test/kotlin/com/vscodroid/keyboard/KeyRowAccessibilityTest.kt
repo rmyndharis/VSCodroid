@@ -574,7 +574,8 @@ class KeyRowAccessibilityTest {
 
             val body = lines.drop(start).takeWhile { !it.contains("fun applyRoundedBackground") }
             assertTrue(
-                body.any { it.contains("stateDescription = toggleStateDescription(") },
+                body.any { it.contains("toggleStateDescription(isToggle, isToggleActive)") } &&
+                    body.any { it.contains("ViewCompat.setStateDescription(") },
                 "the latch no longer reaches an accessibility service, so a screen reader " +
                     "user can switch a modifier and cannot tell whether it is on. It reads: " +
                     body.joinToString("\n"),

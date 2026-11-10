@@ -68,7 +68,7 @@ data class StartupNotice(val message: String, val terminal: Boolean)
 // can fail on it. It is passed to ServiceCompat.startForeground, which is what
 // decides whether the platform is told a type at all: androidx.core 1.19.0
 // masks the type with 0xFF from API 29 to 33 (read from its bytecode), so on
-// Android 11 to 13 `specialUse` becomes 0 and the platform is told none, a value
+// Android 10 to 13 `specialUse` becomes 0 and the platform is told none, a value
 // the manifest's declared type always contains. The manifest declares the type
 // for every release, and the permissions it names are held where they exist.
 @SuppressLint("InlinedApi")

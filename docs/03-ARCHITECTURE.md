@@ -287,9 +287,9 @@ owning extension is what frees a slot.
 - System WebView updates automatically via Play Store
 - No additional binary size (Chromium adds 100MB+)
 - WebView on Android is Chromium-based, supports all VS Code needs
-- Minimum WebView 125+: the workbench positions every webview (Markdown preview, extension panels, notebook outputs) with CSS anchor positioning, which Chromium has from 125. Android 13 shipped with 105 and the API 30 emulator image carries 91, so a WebView that never updated is below it
+- Minimum WebView 125+: the workbench positions every webview (Markdown preview, extension panels, notebook outputs) with CSS anchor positioning, which Chromium has from 125. Android 13 shipped with 105 and the API 29 and API 30 emulator images carry 91, so a WebView that never updated is below it
 
-**Trade-off**: Dependent on user's WebView version. Mitigation: a runtime version check (`MainActivity.checkWebViewVersion`) warns below the floor. Just below it the editor still opens, but its webviews stay blank; far below it, such as the 91 an API 30 image ships with, the workbench bundle does not parse and the page stays blank behind the dialog.
+**Trade-off**: Dependent on user's WebView version. Mitigation: a runtime version check (`MainActivity.checkWebViewVersion`) warns below the floor. Just below it the editor still opens, but its webviews stay blank; far below it, such as the 91 an API 29 or API 30 image ships with, the workbench bundle does not parse and the page stays blank behind the dialog.
 
 ---
 
@@ -538,7 +538,9 @@ existing install's workspace would leave every terminal starting somewhere the e
 Shared storage stopped being the default because it is served through FUSE, which does not
 implement `symlink(2)`, so `npm install` failed there on the first package shipping an
 executable (npm writes `node_modules/.bin/<name>` as a link). Neither location needs a
-permission and no other app can browse either (Android 11 closed `Android/data`), and Clear
+permission, and from Android 11, which closed `Android/data`, no other app can browse either.
+Android 10 leaves that directory open to any app holding the storage permission, so the shared
+location is never used there, whatever is found in it (`Environment.projectsDirFor`). Clear
 Data wipes both; the shared-storage one is also reachable over MTP and by a few OEM file
 managers. Work that has to survive either belongs in a folder opened through the SAF picker.
 
@@ -604,7 +606,7 @@ colour probe's own WebView records nothing.
 |-------|-----------|---------|
 | Android app | Kotlin, compiled to JVM target 17 | The version AGP 9.3.1 brings (`agp` in `android/gradle/libs.versions.toml`) |
 | Build system | Gradle (Kotlin DSL), pinned by the wrapper and its `distributionSha256Sum` | 9.7.1 (`android/gradle/wrapper/gradle-wrapper.properties`) |
-| UI framework | Android View + WebView | API 30-36 |
+| UI framework | Android View + WebView | API 29-36 |
 | Node.js | Node.js from Termux's `nodejs-lts` package, installed as `libnode.so` by `scripts/download-node.sh` | 24.18.0; the pinned VS Code tag's `remote/.npmrc` `target` names 24.20.0, the same major and so the same `NODE_MODULE_VERSION` |
 | VS Code | Code - OSS, built from MIT source with the diffs in `patches/` | 1.139.1 (pinned in the `VSCODE_VERSION` file at the repo root) |
 | Extension Host | VS Code Extension Host as a worker_thread (patch `0004`); the Pty Host likewise (patch `0003`) | Same as VS Code |

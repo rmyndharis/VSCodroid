@@ -51,7 +51,7 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 
 ### 2.4 Constraints
 
-- ARM64 Android only (API 30+)
+- ARM64 Android only (API 29+)
 - Core binaries arrive in the APK as .so files. Play installs receive optional toolchains through asset packs; non-Play installs fetch verified toolchain ZIPs over HTTPS. Programs under the app's storage cannot be exec'd directly and run through the system dynamic linker instead
 - Open VSX only: Microsoft Marketplace ToS prohibits third-party access
 - Android phantom process limit (32 system-wide) constrains child process count
@@ -252,7 +252,7 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 
 | ID | Requirement | Target | Priority |
 |----|------------|--------|----------|
-| NFR-COMPAT-01 | Minimum Android version | 11 (API 30) | P0 |
+| NFR-COMPAT-01 | Minimum Android version | 10 (API 29) | P0 |
 | NFR-COMPAT-02 | Target Android version | 16 (API 36) | P0 |
 | NFR-COMPAT-03 | Architecture | arm64-v8a only | P0 |
 | NFR-COMPAT-04 | Minimum WebView version | Chrome 125+ | P0 |

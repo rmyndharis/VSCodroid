@@ -24,7 +24,7 @@ TARGET=aarch64-linux-android
 # The app's minSdk. Bionic aborts an exec whose LD_PRELOAD names a library with a
 # symbol it lacks, for everything the launcher starts, so a call newer than the
 # oldest supported device has to fail the build here and not the engine there.
-API=30
+API=29
 
 echo "=== selfexe LD_PRELOAD library ==="
 

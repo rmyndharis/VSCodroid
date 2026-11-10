@@ -70,9 +70,16 @@ attribute is not a method call.
 
 Their scope is not uniform, and an earlier version of this section flattened it.
 API 35+ ignores the two bar COLOURS and paints from the window background, and it
-forces the cutout mode, so those three decide API 30 to 34 and nothing else. It
+forces the cutout mode, so those three decide API 29 to 34 and nothing else. It
 does **not** ignore `enforceNavigationBarContrast`, which still decides whether a
 scrim is drawn behind a 3-button navigation bar on a current image.
+
+The cutout mode is not one value either. `always` is API 30, and Android 10 throws
+"Unknown windowLayoutInDisplayCutoutMode: 3" out of `PhoneWindow.generateLayout` for a
+theme that names it, before any activity starts. So the theme reads
+`@integer/window_cutout_mode`: `shortEdges` by default, which is what Android 10 gets and
+what `EdgeToEdgeApi28` wrote there, and `always` from `values-v30`.
+`ThemeEdgeToEdgeTest` holds both values.
 
 `setDecorFitsSystemWindows` stays in the bundle and that is fine. It is not one
 of the three Play named, and Play Core's asset pack code puts it there

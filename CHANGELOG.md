@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Changed
+
+- The app installs on Android 10 and newer; it needed Android 11.
+
 ## [1.8.0] - 2026-11-09
 
 ### Added

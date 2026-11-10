@@ -13,6 +13,7 @@ import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import androidx.annotation.StringRes
 import androidx.appcompat.widget.AppCompatTextView
+import androidx.core.view.ViewCompat
 import androidx.core.widget.TextViewCompat
 import com.vscodroid.R
 
@@ -306,8 +307,11 @@ class ExtraKeyButton @JvmOverloads constructor(
         //
         // stateDescription rather than isSelected: the platform announces a
         // change to it on its own, and it says "on" instead of "selected",
-        // which is what a latched modifier is.
-        stateDescription = toggleStateDescription(isToggle, isToggleActive)?.let(context::getString)
+        // which is what a latched modifier is. Through ViewCompat because the
+        // platform property is API 30.
+        ViewCompat.setStateDescription(
+            this, toggleStateDescription(isToggle, isToggleActive)?.let(context::getString)
+        )
     }
 
     fun applyRoundedBackground(color: Int) {

@@ -32,6 +32,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/stat.h>
+#include <sys/sysmacros.h>
 #include <sys/types.h>
 #include <unistd.h>
 
@@ -473,7 +474,7 @@ int posix_spawn_file_actions_addchdir(posix_spawn_file_actions_t *acts,
  * copy_file_range, which Bionic gained at API 34.
  *
  * This one is not a symbol Bionic lacks, it is a symbol Bionic lacks *below the
- * minimum this app supports*. minSdk is 30, and the NDK's stub libc for 30, 33,
+ * minimum this app supports*. minSdk is 29, and the NDK's stub libc for 30, 33,
  * 34 and 35 puts the dividing line at 34: absent at 30 and at 33, present at 34.
  * An addon in the shipped tree imports it, so on an Android 13 device, and on
  * every older one the app supports, the forwarder resolved to NULL and aborted
@@ -576,6 +577,63 @@ ssize_t copy_file_range(int fd_in, off64_t *off_in, int fd_out, off64_t *off_out
 
     if (real) return real(fd_in, off_in, fd_out, off_out, len, flags);
     return copy_file_range_fallback(fd_in, off_in, fd_out, off_out, len, flags);
+}
+
+/*
+ * statx, which Bionic gained at API 30.
+ *
+ * The real one is used wherever it exists, looked up in Bionic's libc the way
+ * copy_file_range is above, so Android 11 and later get exactly the call they
+ * always got however an addon came to bind this name.
+ *
+ * On Android 10 there is nothing to forward to: libc has no such symbol, and
+ * the lists that release builds its app seccomp filter from do not name the
+ * system call either (read in bionic at android-10.0.0_r1, not run), so a raw
+ * syscall is not a fallback. The answer is built from fstatat, which is what
+ * glibc does on a kernel without statx.
+ *
+ * Birth time is the one field fstatat cannot supply, and stx_mask says so by
+ * naming the basic set only; callers are required to read the mask.
+ */
+int statx(int dirfd, const char *path, int flags, unsigned mask, struct statx *out) {
+    static int (*real)(int, const char *, int, unsigned, struct statx *);
+    static int looked_up;
+
+    if (!looked_up) {
+        if (!shim_libc) shim_open_handles();
+        if (shim_libc) {
+            *(void **)&real = dlsym(shim_libc, "statx");
+        }
+        looked_up = 1;
+    }
+    if (real) return real(dirfd, path, flags, mask, out);
+
+    struct stat st;
+    /* The sync bits steer a network filesystem and mean nothing to fstatat,
+     * which rejects flags it does not know. */
+    if (fstatat(dirfd, path, &st, flags & ~AT_STATX_SYNC_TYPE) != 0) return -1;
+
+    memset(out, 0, sizeof(*out));
+    out->stx_mask = STATX_BASIC_STATS;
+    out->stx_blksize = (uint32_t)st.st_blksize;
+    out->stx_nlink = (uint32_t)st.st_nlink;
+    out->stx_uid = st.st_uid;
+    out->stx_gid = st.st_gid;
+    out->stx_mode = (uint16_t)st.st_mode;
+    out->stx_ino = st.st_ino;
+    out->stx_size = (uint64_t)st.st_size;
+    out->stx_blocks = (uint64_t)st.st_blocks;
+    out->stx_atime.tv_sec = st.st_atim.tv_sec;
+    out->stx_atime.tv_nsec = (uint32_t)st.st_atim.tv_nsec;
+    out->stx_mtime.tv_sec = st.st_mtim.tv_sec;
+    out->stx_mtime.tv_nsec = (uint32_t)st.st_mtim.tv_nsec;
+    out->stx_ctime.tv_sec = st.st_ctim.tv_sec;
+    out->stx_ctime.tv_nsec = (uint32_t)st.st_ctim.tv_nsec;
+    out->stx_rdev_major = major(st.st_rdev);
+    out->stx_rdev_minor = minor(st.st_rdev);
+    out->stx_dev_major = major(st.st_dev);
+    out->stx_dev_minor = minor(st.st_dev);
+    return 0;
 }
 
 /* ------------------------------------------------------------------------
@@ -927,6 +985,63 @@ __attribute__((noreturn)) void __shim_untranslated(const char *name) {
                         "and has no translating wrapper yet", name);
     abort();
 }
+
+/*
+ * The unwinder entry points an addon imports from libgcc_s.
+ *
+ * Bionic's libc exports them from API 30, and each of these hands straight to
+ * Bionic's wherever it exists, so Android 11 and later run the unwinder they
+ * always ran however an addon came to bind the name. Every one takes at most
+ * three machine words and returns at most one, which on AArch64 is the same
+ * call whatever the C types are, so one shape forwards them all.
+ *
+ * On Android 10 arm64 libc exports none, and these answer only as far as they
+ * can be reached: no addon in the tree imports _Unwind_RaiseException, so
+ * nothing starts an unwind, which leaves the backtrace walk, and that reports
+ * an empty stack. The rest take a context only a walk or a raise can hand out,
+ * and name themselves if that ever stops being true.
+ *
+ * The cost is that a glibc addon gets no backtrace on Android 10. The NDK's
+ * libunwind belongs here once an addon raises or a trace from one is wanted.
+ */
+#define SHIM_URC_END_OF_STACK 5
+
+typedef uintptr_t (*shim_unwind_fn)(uintptr_t, uintptr_t, uintptr_t);
+
+static shim_unwind_fn shim_bionic_unwinder(const char *name) {
+    if (!shim_libc) shim_open_handles();
+    return shim_libc ? (shim_unwind_fn)dlsym(shim_libc, name) : 0;
+}
+
+__attribute__((noreturn)) static void shim_no_unwinder(const char *name) {
+    __android_log_print(ANDROID_LOG_FATAL, "glibc-shim",
+                        "%s was called, and Android 10 has no unwinder to answer it", name);
+    abort();
+}
+
+#define SHIM_UNWINDER(name, without)                                 \
+    uintptr_t name(uintptr_t a, uintptr_t b, uintptr_t c) {          \
+        static shim_unwind_fn real;                                  \
+        static int looked_up;                                        \
+        if (!looked_up) {                                            \
+            real = shim_bionic_unwinder(#name);                      \
+            looked_up = 1;                                           \
+        }                                                            \
+        if (real) return real(a, b, c);                              \
+        without;                                                     \
+    }
+SHIM_UNWINDER(_Unwind_Backtrace, return SHIM_URC_END_OF_STACK)
+SHIM_UNWINDER(_Unwind_FindEnclosingFunction, return 0)
+SHIM_UNWINDER(_Unwind_GetCFA, shim_no_unwinder("_Unwind_GetCFA"))
+SHIM_UNWINDER(_Unwind_GetDataRelBase, shim_no_unwinder("_Unwind_GetDataRelBase"))
+SHIM_UNWINDER(_Unwind_GetIP, shim_no_unwinder("_Unwind_GetIP"))
+SHIM_UNWINDER(_Unwind_GetIPInfo, shim_no_unwinder("_Unwind_GetIPInfo"))
+SHIM_UNWINDER(_Unwind_GetLanguageSpecificData, shim_no_unwinder("_Unwind_GetLanguageSpecificData"))
+SHIM_UNWINDER(_Unwind_GetRegionStart, shim_no_unwinder("_Unwind_GetRegionStart"))
+SHIM_UNWINDER(_Unwind_GetTextRelBase, shim_no_unwinder("_Unwind_GetTextRelBase"))
+SHIM_UNWINDER(_Unwind_Resume, shim_no_unwinder("_Unwind_Resume"))
+SHIM_UNWINDER(_Unwind_SetGR, shim_no_unwinder("_Unwind_SetGR"))
+SHIM_UNWINDER(_Unwind_SetIP, shim_no_unwinder("_Unwind_SetIP"))
 
 /*
  * A stack-protector canary for objects that import one. Bionic keeps its own

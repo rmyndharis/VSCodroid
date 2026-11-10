@@ -1007,14 +1007,14 @@ class CrashReporterTest {
 /**
  * The line the crash log opens with, and the API level it is allowed to need.
  *
- * `minSdk` is 30 and `Thread.threadId()` first appears in the android-36 stub:
+ * `minSdk` is 29 and `Thread.threadId()` first appears in the android-36 stub:
  * `javap` on `java/lang/Thread.class` from `platforms/android-33`, `-34` and
  * `-35` shows `getId()` and nothing else. Nothing backports it here:
  * `coreLibraryDesugaring` is not enabled, and lint did not stop it: `abortOnError`
  * was still false when the call was written.
  *
  * The consequence was not a visible crash. The call sat above `file.writeText`
- * inside `catch (_: Throwable)`, so on 30 to 35 the `NoSuchMethodError` was
+ * inside `catch (_: Throwable)`, so on 29 to 35 the `NoSuchMethodError` was
  * swallowed and no crash log was ever written: `hasPendingCrash()` stayed false,
  * the dialog in `MainActivity.checkPreviousCrash` never appeared, and the crash
  * section of a bug report was empty on every device that had one to report.
@@ -1057,7 +1057,7 @@ class ThreadIdentityTest {
 
         assertEquals(
             emptyList<String>(), offenders,
-            "Thread.threadId() is API 36 and minSdk is 30, with no desugaring to " +
+            "Thread.threadId() is API 36 and minSdk is 29, with no desugaring to " +
                 "bridge the gap. Use Thread.getId(), which has been there since API 1.",
         )
     }

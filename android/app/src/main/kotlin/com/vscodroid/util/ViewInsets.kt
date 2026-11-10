@@ -52,23 +52,24 @@ fun View.padForSystemBars(basePx: Int = 0) {
  * `SHORT_EDGES` for both until it was read from the bytecode.
  * `Api28.adjustLayoutInDisplayCutoutMode` stores `1` (`SHORT_EDGES`);
  * `Api30` stores `3` (`ALWAYS`), and `Api35` extends `Api30` without overriding
- * it. minSdk is 30, so `Api28`, which serves 28 and 29, never ran here and the
- * only implementation that did wrote `ALWAYS`. That is why the theme names
- * `always`: it is what this app already had, not a new choice, and changing it
- * to `shortEdges` to match the old comment would be a real behaviour change.
+ * it. The theme keeps both through `@integer/window_cutout_mode`: `shortEdges`
+ * by default, which is what Android 10 gets, and `always` from values-v30.
+ * Android 10 has no `always`, and naming it there throws "Unknown
+ * windowLayoutInDisplayCutoutMode: 3" out of `PhoneWindow.generateLayout`, so
+ * no activity starts (measured on an API 29 emulator).
  *
  * Nothing is lost by dropping it, because `targetSdk` is 36:
  *
  *  - API 35+ enforces edge-to-edge with no opt-out, and the colour setters
  *    `enableEdgeToEdge` calls there are already no-ops.
- *  - API 30 to 34 still need the opt-in, which is the `setDecorFitsSystemWindows`
+ *  - API 29 to 34 still need the opt-in, which is the `setDecorFitsSystemWindows`
  *    below. That one is not among the three Play names, and Play Core's asset
  *    pack code already puts it in the bundle regardless.
  *  - The scrims were `Color.TRANSPARENT` at every call site, so the deprecated
  *    setters were being asked for what the platform now does by itself.
  *  - The display cutout moves to `android:windowLayoutInDisplayCutoutMode` in
- *    the theme, which is declarative and names `always`, the value API 35+
- *    forces anyway.
+ *    the theme, which is declarative and names `always` from API 30, the value
+ *    API 35+ forces anyway.
  *  - Contrast enforcement moves to `android:enforceStatusBarContrast` and
  *    `android:enforceNavigationBarContrast`, both `false`. This is the piece
  *    the first version of this migration dropped: `Api29.setUp` calls
