@@ -1333,6 +1333,7 @@ flowchart TD
   P --> P41["0041 horizontal panels kept within a narrow viewport"]
   P --> P42["0042 configuration: tolerate non-list folders in a workspace file"]
   P --> P43["0043 server: serve only regular files from serveFile"]
+  P --> P44["0044 touch gestures delivered to targets inside a shadow root"]
 ```
 
 Five of these are load-bearing in ways their titles understate:

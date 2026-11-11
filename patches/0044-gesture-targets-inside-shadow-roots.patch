@@ -1,0 +1,91 @@
+Deliver touch gestures to targets inside a shadow root.
+
+On a touch screen the editor's context menu cannot be scrolled with a finger.
+The menu a long press opens holds 25 items; with the on-screen keyboard up it
+has 406px for 542px of rows, and the only way to the rest is the thin scrollbar
+on its edge.
+
+The chain: Gesture listens for touch events on the document, takes each
+touch's target as the gesture's initial target, and dispatches tap, pan and
+context menu events to every registered target that contains it. The editor
+opens its context menu in a shadow root (EditorOption.useShadowDOM). A touch
+that starts in there reaches a document listener retargeted to the root's
+host, and nothing inside the root contains its own host, so the menu and its
+items, registered targets all, are never dispatched to and the menu's pan
+handler never runs. Items still ran, through the mouse events the browser
+synthesises for a touch nobody handled.
+
+Measured on an API 36 emulator (WebView 134) with a real swipe of 244px inside
+the menu: touch.target was the shadow host while the composed path began at
+the item's label, no gesture event reached the root, the touch events were
+left unhandled, and the menu stayed at 0. The explorer's context menu is the
+same Menu class in the light DOM; in landscape, where both overflow, one drag
+scrolled it 199px and left the editor's at 0.
+
+The composed path of the touchstart still begins at the element that was
+touched, so the initial target is read from there. For a touch outside any
+shadow root that is the element Touch.target already named. With the change
+the same swipe scrolled the editor's menu to its end (138px), a tap on its
+last item ran it, a submenu opened and ran its own item, and a tap outside
+closed the menu. Taps inside the menu now arrive as tap gestures, as they
+already do in every light-DOM menu, in place of the synthesised mouse events.
+
+Other menus opened in a shadow root reach Gesture the same way; only the
+editor's context menu was measured. Node.contains does not cross a shadow
+boundary, so a registered target outside the root no longer receives a
+gesture that began inside it. None did in the measurement above, where the
+touch went unhandled.
+
+diff --git a/src/vs/base/browser/touch.ts b/src/vs/base/browser/touch.ts
+--- a/src/vs/base/browser/touch.ts
++++ b/src/vs/base/browser/touch.ts
+@@ -149,40 +149,47 @@ export class Gesture extends Disposable {
+ 		super.dispose();
+ 	}
+ 
+ 	private onTouchStart(e: TouchEvent): void {
+ 		const timestamp = Date.now(); // use Date.now() because on FF e.timeStamp is not epoch based.
+ 
+ 		if (this.handle) {
+ 			this.handle.dispose();
+ 			this.handle = null;
+ 		}
+ 
+ 		for (let i = 0, len = e.targetTouches.length; i < len; i++) {
+ 			const touch = e.targetTouches.item(i);
+ 
++			// A touch that starts inside a shadow root reaches this document
++			// listener retargeted to the root's host, and no gesture target
++			// inside the root contains the host. A menu opened in a shadow root
++			// therefore got no tap and no pan, and a finger could not scroll it.
++			// The composed path still starts at the element that was touched.
++			const initialTarget = e.composedPath()[0] ?? touch.target;
++
+ 			this.activeTouches[touch.identifier] = {
+ 				id: touch.identifier,
+-				initialTarget: touch.target,
++				initialTarget,
+ 				initialTimeStamp: timestamp,
+ 				initialPageX: touch.pageX,
+ 				initialPageY: touch.pageY,
+ 				rollingTimestamps: [timestamp],
+ 				rollingPageX: [touch.pageX],
+ 				rollingPageY: [touch.pageY]
+ 			};
+ 
+-			const evt = this.newGestureEvent(EventType.Start, touch.target);
++			const evt = this.newGestureEvent(EventType.Start, initialTarget);
+ 			evt.pageX = touch.pageX;
+ 			evt.pageY = touch.pageY;
+ 			this.dispatchEvent(evt);
+ 		}
+ 
+ 		if (this.dispatched) {
+ 			e.preventDefault();
+ 			e.stopPropagation();
+ 			this.dispatched = false;
+ 		}
+ 	}
+ 
+ 	private onTouchEnd(targetWindow: Window, e: TouchEvent): void {
+ 		const timestamp = Date.now(); // use Date.now() because on FF e.timeStamp is not epoch based.

@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- The editor's context menu scrolls with a finger; a drag inside it used to do nothing.
+
 ## [1.8.0] - 2026-11-09
 
 ### Added

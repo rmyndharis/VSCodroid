@@ -364,3 +364,4 @@
 0042 workspace folders list check|out/vs/code/browser/workbench/workbench.js x2|Array.isArray(this.workspaceConfiguration.getFolders())
 0042 workspace folders kept on reload|out/vs/code/browser/workbench/workbench.js|this.workspace.configuration, this.uriIdentityService.extUri) : this.workspace.folders
 0043 regular-file check in serveFile|out/server-main.js|Not a regular file:
+0044 gesture target inside a shadow root|out/vs/code/browser/workbench/workbench.js|composedPath()[0]
