@@ -564,7 +564,34 @@ function gestureTarget() {
   assert.equal(unpatched.target, unpatched.host);
 }
 
-const sections = { activity, 'activity-lifecycle': activityLifecycle, 'activity-overflow': activityOverflow, modal, bars, panel, sash, 'status-toggle': statusToggle, 'panel-save': panelSave, 'panel-round-trip': panelRoundTrip, 'panel-minimum-width': panelMinimumWidth, 'terminal-ranges': terminalRanges, 'gesture-target': gestureTarget };
+function swatchTap() {
+  const text = source('0045');
+  const code = body(text, '(e: GestureEvent) =>');
+  class Element {
+    constructor(swatch) { this.swatch = swatch; }
+    closest(selector) { assert.equal(selector, '.colorpicker-color-decoration'); return this.swatch ?? null; }
+    getBoundingClientRect() { return { left: 100, top: 40, width: 12, height: 10 }; }
+  }
+  const run = (initialTarget, hit) => {
+    const asked = [], opened = [];
+    const scope = {
+      dom: { isHTMLElement: value => value instanceof Element },
+      _editor: { getTargetAtClientPoint(x, y) { asked.push([x, y]); return hit; } },
+    };
+    vm.runInNewContext(`(function(e) ${code})`, scope).call({ onMouseDown(event) { opened.push(event.target); } }, { initialTarget });
+    return { asked, opened };
+  };
+  const swatch = new Element();
+  swatch.swatch = swatch;
+  const target = { type: 'content text' };
+  assert.deepEqual(run(swatch, target), { asked: [[106, 45]], opened: [target] }, 'a tap on a swatch opens the picker at its centre');
+  assert.deepEqual(run(new Element(), target), { asked: [], opened: [] }, 'a tap on other text is left to the caret');
+  assert.deepEqual(run({}, target), { asked: [], opened: [] }, 'a tap whose target is not an element is ignored');
+  assert.deepEqual(run(swatch, null), { asked: [[106, 45]], opened: [] }, 'a swatch the editor cannot resolve opens nothing');
+  assert.match(text, /getContainerDomNode\(\), TouchEventType\.Tap,[\s\S]+\}, true\)\);/, 'listen on the container, in the capture phase');
+}
+
+const sections = { activity, 'activity-lifecycle': activityLifecycle, 'activity-overflow': activityOverflow, modal, bars, panel, sash, 'status-toggle': statusToggle, 'panel-save': panelSave, 'panel-round-trip': panelRoundTrip, 'panel-minimum-width': panelMinimumWidth, 'terminal-ranges': terminalRanges, 'gesture-target': gestureTarget, 'swatch-tap': swatchTap };
 for (const name of process.argv.slice(2).length ? process.argv.slice(2) : Object.keys(sections)) {
   assert.ok(sections[name], `Unknown section ${name}`);
   sections[name]();
