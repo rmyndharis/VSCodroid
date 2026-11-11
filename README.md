@@ -292,8 +292,8 @@ Please read our [Contributing Guide](CONTRIBUTING.md) before submitting a Pull R
 
 Quick links:
 
-- 🐛 [Report a Bug](https://github.com/rmyndharis/VSCodroid/issues/new?template=bug_report.md)
-- 💡 [Request a Feature](https://github.com/rmyndharis/VSCodroid/issues/new?template=feature_request.md)
+- 🐛 [Report a Bug](https://github.com/rmyndharis/VSCodroid/issues/new?template=bug_report.yml)
+- 💡 [Request a Feature](https://github.com/rmyndharis/VSCodroid/issues/new?template=feature_request.yml)
 - 📖 [Documentation](docs/)
 
 ## 📚 Documentation

@@ -1039,7 +1039,7 @@ Include in your bug report:
 
 ## Suggesting Features
 
-Use the [Feature Request template](https://github.com/rmyndharis/VSCodroid/issues/new?template=feature_request.md). Describe:
+Use the [Feature Request template](https://github.com/rmyndharis/VSCodroid/issues/new?template=feature_request.yml). Describe:
 - The problem your feature would solve
 - Your proposed solution
 - Alternatives you have considered
