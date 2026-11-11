@@ -54,7 +54,9 @@ import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
+import androidx.core.view.WindowCompat
 import androidx.core.view.WindowInsetsCompat
+import androidx.core.view.WindowInsetsControllerCompat
 import androidx.lifecycle.lifecycleScope
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
@@ -830,6 +832,35 @@ class MainActivity : AppCompatActivity() {
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
         receiveCallbackIntent(intent)
+    }
+
+    /**
+     * Hides or shows the status and navigation bars. A swipe from the edge brings
+     * them back for a moment and they hide again, so the page's full screen state
+     * is not disturbed by looking at the clock.
+     *
+     * The window's insets follow on their own: both inset listeners ask for the
+     * visible bars, which are zero while these are hidden, so the page grows into
+     * the room and the display cutout keeps its padding.
+     */
+    private fun applyFullScreen(on: Boolean) {
+        val controller = WindowCompat.getInsetsController(window, window.decorView)
+        controller.systemBarsBehavior = WindowInsetsControllerCompat.BEHAVIOR_SHOW_TRANSIENT_BARS_BY_SWIPE
+        if (on) {
+            controller.hide(WindowInsetsCompat.Type.systemBars())
+        } else {
+            controller.show(WindowInsetsCompat.Type.systemBars())
+        }
+    }
+
+    /**
+     * The system brings its bars back when another window has the focus (a
+     * permission prompt, the recents screen), and nothing tells this activity
+     * the choice was undone, so it is made again whenever the focus returns.
+     */
+    override fun onWindowFocusChanged(hasFocus: Boolean) {
+        super.onWindowFocusChanged(hasFocus)
+        if (hasFocus && workspacePrefs.getBoolean(KEY_FULL_SCREEN, false)) applyFullScreen(true)
     }
 
     override fun onResume() {
@@ -3173,6 +3204,13 @@ class MainActivity : AppCompatActivity() {
                 }
                 hidden
             },
+            // Recorded here, on the bridge thread, and only the window is hopped, as the
+            // key row above does. The page asks and never decides: what it reads back
+            // is what the app says the state is.
+            onSetFullScreen = { on ->
+                workspacePrefs.edit { putBoolean(KEY_FULL_SCREEN, on) }
+                runOnUiThread { applyFullScreen(on) }
+            },
             safManager = safManager,
             // Not hopped to the UI thread, unlike the six above. These three
             // carry a download's bytes, and the coordinator guards its own
@@ -3693,6 +3731,8 @@ class MainActivity : AppCompatActivity() {
             // Shows the page's background, not the dismantled workbench, from the moment the
             // page is told to leave until the next one paints
             injectLeaveCurtain()
+            // Lets the editor's View > Toggle Full Screen hide the device's own bars
+            injectFullScreenShim()
             // Route window.open() through AndroidBridge.
             injectWindowOpenOverride()
             // Answers a paste out of Android's clipboard, which the WebView will not
@@ -5809,6 +5849,72 @@ class MainActivity : AppCompatActivity() {
     }
 
     /**
+     * Makes the editor's View > Toggle Full Screen (F11) hide the device's status and
+     * navigation bars.
+     *
+     * The workbench's toggle reads `document.fullscreen`, then asks its container to
+     * `requestFullscreen()` or the document to `exitFullscreen()`. A WebView refuses the
+     * request (it answers a `fullscreenerror`, which the workbench logs and goes on),
+     * so the command did nothing. These answer it instead: the request goes to
+     * [AndroidBridge.setFullScreen], the page's own state follows, and the
+     * `fullscreenchange` the workbench listens for is raised, so the page lays itself
+     * out for what the window now is.
+     *
+     * The state is the app's, recorded in the preferences and read when this is
+     * installed: a page that loads while full screen is on starts as full screen, and
+     * says so with the same event.
+     *
+     * `scripts/test-full-screen.js` runs the script and `FullScreenWiringTest` holds it
+     * to where it is installed.
+     */
+    private fun injectFullScreenShim() {
+        val on = workspacePrefs.getBoolean(KEY_FULL_SCREEN, false)
+        webView?.evaluateJavascript(
+            """
+            (function() {
+                if (window.__vscodroidFullScreen) return;
+                var on = ${if (on) "true" else "false"};
+                function token() { return (window.__vscodroid || {}).authToken; }
+                function property(name, read) {
+                    try { Object.defineProperty(document, name, { configurable: true, get: read }); } catch (e) {}
+                }
+                function announce() { document.dispatchEvent(new Event('fullscreenchange')); }
+                function set(next) {
+                    var t = token();
+                    if (!t || typeof AndroidBridge === 'undefined') {
+                        return Promise.reject(new TypeError('Full screen is not available'));
+                    }
+                    AndroidBridge.setFullScreen(t, next);
+                    if (on !== next) { on = next; announce(); }
+                    return Promise.resolve();
+                }
+                property('fullscreen', function() { return on; });
+                property('fullscreenElement', function() { return on ? document.documentElement : null; });
+                Element.prototype.requestFullscreen = function() { return set(true); };
+                Document.prototype.exitFullscreen = function() { return set(false); };
+                window.__vscodroidFullScreen = true;
+                // The workbench follows `fullscreenchange` from the moment its window
+                // contribution starts, and builds its container after that, but this runs
+                // while it is still starting, so an event raised here can be lost. A page
+                // that starts as full screen says so when the container appears.
+                if (on) {
+                    if (document.querySelector('.monaco-workbench')) {
+                        announce();
+                    } else {
+                        new MutationObserver(function(records, observer) {
+                            if (!document.querySelector('.monaco-workbench')) return;
+                            observer.disconnect();
+                            announce();
+                        }).observe(document, { childList: true, subtree: true });
+                    }
+                }
+            })();
+            """.trimIndent(),
+            null
+        )
+    }
+
+    /**
      * Tells the page that a navigation it was about to leave for was declined here,
      * so the curtain [injectLeaveCurtain] raised for it comes down at once and not
      * after its failsafe. A page with no curtain ignores it.
@@ -7157,6 +7263,9 @@ class MainActivity : AppCompatActivity() {
 
         /** Whether the user has hidden the Extra Key Row. Absent means shown. */
         private const val KEY_EXTRA_KEY_ROW_HIDDEN = "extra_key_row_hidden"
+
+        /** Whether the user has hidden the status and navigation bars. Absent means shown. */
+        private const val KEY_FULL_SCREEN = "full_screen"
 
         /** The WebView version the user was last warned is below the floor. */
         private const val KEY_WEBVIEW_WARNED = "webview_below_minimum_warned"
