@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- **View: Toggle Full Screen** hides the status and navigation bars, and the choice is kept for the next launch.
+
 ## [1.8.0] - 2026-11-09
 
 ### Added

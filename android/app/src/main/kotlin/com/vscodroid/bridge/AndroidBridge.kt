@@ -518,6 +518,8 @@ class AndroidBridge(
     private val onShowAbout: () -> Unit = {},
     /** Flips and persists whether the Extra Key Row is hidden, answering the new state. */
     private val onToggleExtraKeyRow: () -> Boolean = { false },
+    /** Records and applies whether the status and navigation bars are hidden. */
+    private val onSetFullScreen: (Boolean) -> Unit = {},
     private val safManager: SafStorageManager? = null,
     private val onDownloadNamed: (url: String, fileName: String) -> Unit = { _, _ -> },
     private val onDownloadChunk: (requestId: String, base64: String) -> Boolean = { _, _ -> false },
@@ -1356,6 +1358,19 @@ class AndroidBridge(
     fun showAboutDialog(authToken: String) {
         if (!security.validateToken(authToken)) return
         onShowAbout()
+    }
+
+    // -- Full screen --
+
+    /**
+     * Hides or shows the system status and navigation bars, and keeps the choice
+     * for the next launch. The page's own full screen request lands here, so the
+     * editor's View > Toggle Full Screen reaches the device and not a browser tab.
+     */
+    @JavascriptInterface
+    fun setFullScreen(authToken: String, on: Boolean) {
+        if (!security.validateToken(authToken)) return
+        onSetFullScreen(on)
     }
 
     // -- Extra Key Row --

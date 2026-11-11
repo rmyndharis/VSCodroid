@@ -357,6 +357,7 @@ jobs:
           node scripts/test-modifier-release.js
           node scripts/test-composing-enter.js
           node scripts/test-leave-curtain.js
+          node scripts/test-full-screen.js
           node scripts/test-status-bar-scroll.js
           node scripts/test-keyboard-guard.js
           node scripts/test-caret-drag.js

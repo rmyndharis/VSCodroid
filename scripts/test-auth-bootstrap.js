@@ -22,7 +22,8 @@ const callback = method.slice(start, end - 1)
 
 const injections = ['injectSafeAreaCSS', 'injectBridgeRelay', 'injectMemoryPressureHandler',
     'injectTouchTargetCSS', 'injectKeyboardGuard', 'injectTouchContextMenu', 'injectCaretDrag',
-    'injectListEditKeeper', 'injectComposingEnter', 'injectLeaveCurtain', 'injectWindowOpenOverride',
+    'injectListEditKeeper', 'injectComposingEnter', 'injectLeaveCurtain', 'injectFullScreenShim',
+    'injectWindowOpenOverride',
     'injectClipboardReadFallback', 'injectDownloadCapture'];
 
 function run(code, verdict, { staleView = false, stalePage = false } = {}) {

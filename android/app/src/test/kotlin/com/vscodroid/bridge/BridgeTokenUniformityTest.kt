@@ -54,6 +54,7 @@ class BridgeTokenUniformityTest {
         val onOpenRecentFolder: (Uri) -> Unit = mockk(relaxed = true)
         val onShowAbout: () -> Unit = mockk(relaxed = true)
         val onToggleExtraKeyRow: () -> Boolean = mockk(relaxed = true)
+        val onSetFullScreen: (Boolean) -> Unit = mockk(relaxed = true)
         val safManager: SafStorageManager = mockk(relaxed = true)
         // Passed rather than left to default, and that is the whole point of
         // this fixture. Every one of these has a no-op default, so a collaborator
@@ -101,6 +102,7 @@ class BridgeTokenUniformityTest {
             onOpenRecentFolder = onOpenRecentFolder,
             onShowAbout = onShowAbout,
             onToggleExtraKeyRow = onToggleExtraKeyRow,
+            onSetFullScreen = onSetFullScreen,
             safManager = safManager,
             onDownloadNamed = onDownloadNamed,
             onDownloadChunk = onDownloadChunk,
@@ -115,7 +117,8 @@ class BridgeTokenUniformityTest {
         /** Everything the bridge can reach except the validator it is allowed to consult. */
         val collaborators = listOf(
             context, clipboard, onBackPressed, onMinimize,
-            onOpenFolderPicker, onOpenRecentFolder, onShowAbout, onToggleExtraKeyRow, safManager,
+            onOpenFolderPicker, onOpenRecentFolder, onShowAbout, onToggleExtraKeyRow, onSetFullScreen,
+            safManager,
             onDownloadNamed, onDownloadChunk, onDownloadComplete,
             onListMirrors, onReclaimMirror, onAsyncAnswer, diskWork, onWorkspaceRoots,
         )
