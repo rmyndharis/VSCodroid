@@ -217,8 +217,8 @@ const allRawStrings = collectRawStrings();
 const evalScripts = allRawStrings.filter((r) => r.evalCtx || r.docStartCtx);
 assert.strictEqual(
     evalScripts.length,
-    16,
-    `expected 16 raw strings directly in evaluateJavascript(...) call sites, found ${evalScripts.length}`,
+    17,
+    `expected 17 raw strings directly in evaluateJavascript(...) call sites, found ${evalScripts.length}`,
 );
 
 // Rule 2 (independent of call-site formatting): every `private fun inject*` in MainActivity.kt
@@ -231,8 +231,8 @@ const injectDecls = [...mainActivitySrc.matchAll(/^\s*private\s+fun\s+(inject\w+
 );
 assert.strictEqual(
     injectDecls.length,
-    14,
-    `expected 14 private fun inject* declarations in MainActivity.kt, found ${injectDecls.length}`,
+    15,
+    `expected 15 private fun inject* declarations in MainActivity.kt, found ${injectDecls.length}`,
 );
 for (const fn of injectDecls) {
     const match = evalScripts.find((r) => r.enclosingFun === fn);
@@ -267,8 +267,8 @@ const scriptsToParse = [
 ];
 assert.strictEqual(
     scriptsToParse.length,
-    22,
-    `expected 22 total page scripts to parse, found ${scriptsToParse.length}`,
+    23,
+    `expected 23 total page scripts to parse, found ${scriptsToParse.length}`,
 );
 
 // Rule 4: every non-HTML raw string in MainActivity.kt must be covered by scriptsToParse,
@@ -278,8 +278,8 @@ const parsedLocations = new Set(scriptsToParse.map((r) => `${r.rel}:${r.line}`))
 const mainActivityRawStrings = allRawStrings.filter((r) => r.rel.endsWith('/MainActivity.kt'));
 assert.strictEqual(
     mainActivityRawStrings.length,
-    21,
-    `expected 21 total raw strings in MainActivity.kt, found ${mainActivityRawStrings.length}`,
+    22,
+    `expected 22 total raw strings in MainActivity.kt, found ${mainActivityRawStrings.length}`,
 );
 const mainActivityHtmlDocs = mainActivityRawStrings.filter((r) =>
     /^\s*<(?:html|div)\b/i.test(r.body),

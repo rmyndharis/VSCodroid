@@ -1,0 +1,41 @@
+name: Bug Report
+description: Report a bug to help us improve VSCodroid
+title: '[Bug] '
+labels: [bug]
+body:
+  - type: textarea
+    id: description
+    attributes:
+      label: Description
+      description: What you did, what you expected, and what happened instead. Screenshots help.
+    validations:
+      required: true
+  - type: textarea
+    id: steps
+    attributes:
+      label: Steps to Reproduce
+      placeholder: |
+        1. Open '...'
+        2. Tap '...'
+        3. See the error
+  - type: input
+    id: version
+    attributes:
+      label: VSCodroid Version
+      description: '"VSCodroid: About" in the Command Palette shows it, and so does Android Settings > Apps > VSCodroid.'
+      placeholder: 1.8.0
+    validations:
+      required: true
+  - type: input
+    id: device
+    attributes:
+      label: Device and Android Version
+      placeholder: Pixel 8, Android 14
+    validations:
+      required: true
+  - type: textarea
+    id: logs
+    attributes:
+      label: Logs
+      description: 'Run "VSCodroid: Copy Bug Report" from the Command Palette and paste the result. Read it first: the server log can name your files and folders.'
+      render: text

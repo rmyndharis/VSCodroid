@@ -1542,6 +1542,14 @@ missing from the Command Palette or do nothing when run, and the Problems panel
 and status bar stay empty. Run **Developer: Show Logs...** from the Command
 Palette and read the extension host log; the reason is there and nowhere else.
 
+**An example is Kilo Code.** Version 7.8.27 installs and its icon appears in the
+Activity Bar, but its panel stays empty. The log says `Activating extension
+kilocode.kilo-code failed` with `Unsupported platform: android`, raised by
+Playwright, a library the extension carries, and the engine program it ships
+needs `libstdc++`, which VSCodroid does not provide. Neither is something to
+change on your side. For an AI assistant that runs here, see [Codex](#codex);
+GitHub Copilot Chat is built in.
+
 **One variant is loud rather than silent.** An extension that publishes a
 separate build per platform, with no musl build and no platform-independent one,
 refuses to install at all, with a dialog reading

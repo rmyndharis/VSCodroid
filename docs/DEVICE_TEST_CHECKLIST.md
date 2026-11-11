@@ -109,6 +109,7 @@
 | SC-14 | Landscape with the keyboard up keeps a few lines | On a phone, open a file with at least ten lines, turn to landscape and tap in the editor so the keyboard rises. Read the screen, then put the keyboard away with Back. Repeat with the status bar hidden (**View: Toggle Status Bar Visibility**) before the keyboard rises. On a tablet, do the same in landscape | With the keyboard up the title bar and the status bar are gone and the editor shows about four lines, the one being typed among them; with the keyboard away both are back, and on the tablet they never leave. A status bar you had hidden is still hidden afterwards | | |
 | SC-15 | Landscape with the keyboard up and the terminal open keeps a few lines | On a phone, open a `.js` file, tap Run so the terminal opens, turn to landscape and tap in the editor so the keyboard rises. Put the keyboard away with Back. Then tap in the terminal and type with the keyboard up. Repeat in portrait | With the keyboard up and the editor focused the terminal is out of the way and the editor shows about four lines, the one being typed among them; the terminal you tap into and type in stays; with the keyboard away the terminal is back at its size; portrait never changes | | |
 | SC-16 | The first-run failure screen fits a landscape phone at the largest font | Set the font size to the largest and turn the phone to landscape. On a fresh install with the data partition filled to leave about 1 GB free, launch through SplashActivity and, once the progress bar moves, fill what is left so the unpack runs out of space. Scroll the message, tap Retry with the space still full, then free the space and tap Retry again | The failure screen opens on the message, starting at "Setup failed while:" rather than at the icon; a fading edge shows where lines are hidden and the message scrolls to its last line; Retry stays in view below it and never covers it. With the space still full, Retry shows the storage message with a figure to free; after freeing it, Retry resumes the unpack and reaches the toolchain picker | | |
+| SC-17 | Full screen hides the system bars and keeps its choice | Run **View: Toggle Full Screen** from the Command Palette. Swipe in from the top edge, then wait. Turn the phone to landscape. Open a file and tap in it so the keyboard rises, then put the keyboard away. Close the app from recents, open it again, then run the command once more to leave. On a phone with a camera hole, look at the side the hole is on | The status and navigation bars go and the editor grows into the room; the swipe shows the bars for a moment and they hide again without leaving full screen; landscape and the keyboard keep their layout; after a relaunch the bars are still hidden and the command leaves full screen; the camera hole never covers the Activity Bar | | |
 
 ## 5. Editor Operations
 
@@ -324,7 +325,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | Device Matrix | 4 | | | |
 | Android Versions | 6 | | | |
 | Keyboard Input | 48 | | | |
-| Screen & Orientation | 16 | | | |
+| Screen & Orientation | 17 | | | |
 | Editor Operations | 17 | | | |
 | Extensions | 8 | | | |
 | Background/Foreground | 9 | | | |
@@ -334,7 +335,7 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 | Terminal & Tools | 18 | | | |
 | SAF & Files | 27 | | | |
 | Display Language | 6 | | | |
-| **Total** | **187** | | | |
+| **Total** | **188** | | | |
 
 **Overall Result**: [ ] PASS / [ ] FAIL
 
