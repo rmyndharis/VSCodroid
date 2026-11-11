@@ -1,0 +1,5 @@
+blank_issues_enabled: false
+contact_links:
+  - name: Question or How-To
+    url: https://github.com/rmyndharis/VSCodroid/blob/main/docs/USER_GUIDE.md
+    about: The user guide covers the editor, terminal, extensions, Git, SSH and toolchains.

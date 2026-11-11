@@ -1,0 +1,22 @@
+name: Feature Request
+description: Suggest a new feature or improvement for VSCodroid
+title: '[Feature] '
+labels: [enhancement]
+body:
+  - type: textarea
+    id: problem
+    attributes:
+      label: Problem
+      description: The problem this feature would solve, and the use case behind it.
+    validations:
+      required: true
+  - type: textarea
+    id: solution
+    attributes:
+      label: Proposed Solution
+      description: What you would like to happen.
+  - type: textarea
+    id: context
+    attributes:
+      label: Alternatives and Additional Context
+      description: Other approaches you considered, mockups, screenshots or references.
