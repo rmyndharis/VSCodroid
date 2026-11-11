@@ -771,6 +771,15 @@ fun showAboutDialog(authToken: String)
 // Shows the native About dialog with version info, licenses, and links
 ```
 
+#### Full Screen
+
+```kotlin
+@JavascriptInterface
+fun setFullScreen(authToken: String, on: Boolean)
+// Hides or shows the status and navigation bars and keeps the choice for the next launch.
+// Called by the page's own full screen request (View > Toggle Full Screen), not by extensions
+```
+
 #### Extra Key Row
 
 ```kotlin
