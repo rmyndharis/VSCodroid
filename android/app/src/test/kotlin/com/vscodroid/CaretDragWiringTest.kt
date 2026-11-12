@@ -108,7 +108,7 @@ class CaretDragWiringTest {
         )
         val bundle = workbench.readText()
         val script = SourceScan.body(mainActivity(), "private fun injectCaretDrag(")
-        val selectors = Regex("""querySelector(?:All)?\('([^']+)'\)""")
+        val selectors = Regex("""(?:querySelector(?:All)?|closest)\('([^']+)'\)""")
             .findAll(script).joinToString(" ") { it.groupValues[1] }
         val classes = Regex("""\.([a-zA-Z][\w-]*)""")
             .findAll(selectors).map { it.groupValues[1] }.toSet()

@@ -72,7 +72,7 @@ function rect(left, top, width, height) {
  * (200, 100) unless asked otherwise; the editor's scroller spans x 100..400 and y 50..450. The text
  * sits where `page.textAt` says, which a test moves to say that the editor scrolled.
  */
-function newPage({ focused = true, carets = 1, selected = false, sash = false, caretLeft = 200, caretTop = 100,
+function newPage({ focused = true, carets = 1, selected = false, sash = false, swatch = false, caretLeft = 200, caretTop = 100,
     box = { left: 100, top: 50, width: 300, height: 400 } } = {}) {
     const listeners = [];
     const frames = new Map();
@@ -109,8 +109,13 @@ function newPage({ focused = true, carets = 1, selected = false, sash = false, c
             throw new Error(`unexpected selector ${sel}`);
         },
     };
-    const text = { name: 'text', inEditor: true, inLines: true };
-    const sashEl = { name: 'sash', inEditor: true, inLines: false };
+    const text = { name: 'text', inEditor: true, inLines: true, closest: () => null };
+    const sashEl = { name: 'sash', inEditor: true, inLines: false, closest: () => null };
+    // The square the editor draws beside a CSS color. It sits in the lines, on top of the text.
+    const swatchEl = {
+        name: 'swatch', inEditor: true, inLines: true,
+        closest: (sel) => (sel === '.colorpicker-color-decoration' ? swatchEl : null),
+    };
     const menuItem = { name: 'menu item', inEditor: true, inLines: false };
     const appended = [];
     const document = {
@@ -130,7 +135,7 @@ function newPage({ focused = true, carets = 1, selected = false, sash = false, c
             assert.strictEqual(sel, '.monaco-editor.focused', `unexpected selector ${sel}`);
             return focused ? editor : null;
         },
-        elementsFromPoint: () => (sash ? [sashEl, text] : [text]),
+        elementsFromPoint: () => (swatch ? [swatchEl, text] : sash ? [sashEl, text] : [text]),
     };
     const window = {
         addEventListener: (type, fn, opts) => listeners.push({ type, fn, opts }),
@@ -149,7 +154,7 @@ function newPage({ focused = true, carets = 1, selected = false, sash = false, c
 
     let clock = 1000;
     const page = {
-        listeners, taps, wheels, classes, appended, text, sashEl, menuItem, window, frames, textAt,
+        listeners, taps, wheels, classes, appended, text, sashEl, swatchEl, menuItem, window, frames, textAt,
         /** Runs every queued animation frame once, in order, `step` ms after the last. */
         flush(step = 16.7) {
             clock += step;
@@ -470,6 +475,17 @@ check('the caret is aimed at the first element under the point that belongs to t
     page.flush();
     assert.strictEqual(page.taps.length, 1, 'the sash on top hid the text and no tap was sent');
     assert.strictEqual(page.taps[0].initialTarget, page.text);
+});
+
+// The editor opens a color's picker from a tap that begins on its swatch, and a caret that
+// is only being dragged across one would cover the code under the finger with it.
+check('the caret is never aimed at a color swatch', () => {
+    const page = newPage({ swatch: true });
+    page.start(200, 110);
+    page.move(230, 110);
+    page.flush();
+    assert.strictEqual(page.taps.length, 1, 'a point over the swatch got no tap at all');
+    assert.strictEqual(page.taps[0].initialTarget, page.text, 'the tap began on the swatch');
 });
 
 check('nothing is sent when no line is under the point', () => {
