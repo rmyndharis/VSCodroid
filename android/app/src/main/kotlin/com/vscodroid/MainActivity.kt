@@ -5866,12 +5866,15 @@ class MainActivity : AppCompatActivity() {
      * out for what the window now is.
      *
      * The state is the app's, recorded in the preferences and read when this is
-     * installed. A page that loads while full screen is on is told so with the same
-     * event, once the workbench is listening for it, and reads as not full screen until
-     * then. The workbench starts believing it is not, and it restores Zen Mode before
-     * it hears: that asks for full screen by reading `document.fullscreen`, and a page
-     * answering yes turned the request into an exit, so the editor came back from a
-     * restart with the bars shown and the choice lost.
+     * installed. The page is told of it with the same event, and not before the
+     * workbench is listening for it: the workbench builds its container and restores
+     * its layout first, and registers its listener when its start-up returns. Restoring
+     * Zen Mode asks for full screen in that gap, by reading `document.fullscreen`. Until
+     * it has been told the page reads as not full screen and takes such a request
+     * without raising an event. A page that answered yes turned the request into an
+     * exit, so the editor came back from a restart with the bars shown and the choice
+     * lost, and an event raised in the gap by a page that started with full screen off
+     * was lost, which left the workbench out of step with the window until its next resize.
      *
      * `scripts/test-full-screen.js` runs the script and `FullScreenWiringTest` holds it
      * to where it is installed.
@@ -5887,7 +5890,7 @@ class MainActivity : AppCompatActivity() {
                 var on = ${if (on) "true" else "false"};
                 var known = false;
                 // Whether the workbench is listening, so a change can be told as it happens.
-                var armed = !on;
+                var armed = false;
                 function token() { return (window.__vscodroid || {}).authToken; }
                 function property(name, read) {
                     try { Object.defineProperty(document, name, { configurable: true, get: read }); } catch (e) {}
@@ -5913,20 +5916,19 @@ class MainActivity : AppCompatActivity() {
                 Element.prototype.requestFullscreen = function() { return set(true); };
                 Document.prototype.exitFullscreen = function() { return set(false); };
                 window.__vscodroidFullScreen = true;
-                // The workbench follows `fullscreenchange` from the moment its window
-                // contribution starts, and builds its container after that, but this runs
-                // while it is still starting, so an event raised here can be lost. A page
-                // that starts as full screen is told when the container appears.
-                if (on) {
-                    if (document.querySelector('.monaco-workbench')) {
+                // The workbench builds its container and restores its layout, which can ask
+                // for full screen, before it follows `fullscreenchange`: it registers that
+                // listener when its start-up returns, and this runs while it is starting. An
+                // event raised before then is lost, so the page is told when the container
+                // appears, which is a microtask after that return.
+                if (document.querySelector('.monaco-workbench')) {
+                    arm();
+                } else {
+                    new MutationObserver(function(records, observer) {
+                        if (!document.querySelector('.monaco-workbench')) return;
+                        observer.disconnect();
                         arm();
-                    } else {
-                        new MutationObserver(function(records, observer) {
-                            if (!document.querySelector('.monaco-workbench')) return;
-                            observer.disconnect();
-                            arm();
-                        }).observe(document, { childList: true, subtree: true });
-                    }
+                    }).observe(document, { childList: true, subtree: true });
                 }
             })();
             """.trimIndent(),

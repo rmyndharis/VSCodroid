@@ -12,11 +12,12 @@
  * follows `fullscreenchange`: a request has to reach the bridge with the session
  * token, the state the page reads has to move with it, and the event has to be
  * raised once per change, never for a request that changes nothing. A request the
- * page cannot hand to the app has to fail, not pretend. A page that loads while full
- * screen is on has to say so once the workbench is listening, and until then it has to
- * read as not full screen: the workbench's own start (restoring Zen Mode) asks for a
- * toggle by reading `document.fullscreen`, and an answer of "yes" that the workbench has
- * not been told about turns its request into an exit.
+ * page cannot hand to the app has to fail, not pretend. Every page is told its state
+ * once the workbench is listening, which is when its container appears, and until then
+ * it reads as not full screen and raises no event: the workbench's own start (restoring
+ * Zen Mode) asks for a toggle by reading `document.fullscreen` before it registers its
+ * listener, an answer of "yes" that it has not been told about turns the request into an
+ * exit, and an event raised before the listener exists is lost.
  *
  * This extracts the real script and runs it under `vm` against a stub page.
  *
@@ -260,9 +261,30 @@ async function main() {
         assert.strictEqual(p.document.fullscreen, true);
     }
     {
+        // A page that starts off waits for the container as well, and has nothing to say
+        // when it appears.
         const p = page({ on: false, container: false });
-        assert.strictEqual(p.observers.length, 0, 'a page that starts off watches nothing');
+        assert.strictEqual(p.observers.length, 1, 'a page that starts off waits for the container too');
         assert.deepStrictEqual(p.events, []);
+        p.addContainer();
+        assert.deepStrictEqual(p.events, [], 'and the container appearing tells it nothing');
+        assert.strictEqual(p.observers[0].live, false, 'the observer is let go');
+    }
+
+    // The restore case for a page that starts off, as on the first start after an update
+    // that gives Zen Mode its bars: the workbench asks for full screen before it listens.
+    // The event has to wait for the container, because one raised now reaches nobody and
+    // leaves the workbench out of step with the window.
+    {
+        const p = page({ on: false, container: false });
+        await p.container.requestFullscreen();
+        assert.deepStrictEqual(p.calls, [['session', true]], 'the app is asked to enter');
+        assert.strictEqual(p.document.fullscreen, false, 'the page has not been told yet');
+        assert.deepStrictEqual(p.events, [], 'and no event is raised while nobody listens');
+        p.addContainer();
+        assert.deepStrictEqual(p.events, ['fullscreenchange'], 'told once, when the container appears');
+        assert.deepStrictEqual(p.seen, [[true, true]], 'a listener reads full screen while it runs');
+        assert.strictEqual(p.document.fullscreen, true);
     }
 
     // The guard: a second run in the same page installs nothing and announces nothing.
