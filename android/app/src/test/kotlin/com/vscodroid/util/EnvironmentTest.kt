@@ -146,6 +146,37 @@ class EnvironmentTest {
 
             assertEquals("$projectsFilesDir/projects", Environment.getProjectsDir(context))
         }
+
+        /**
+         * Android 10 leaves `Android/data` open to any app holding the storage
+         * permission, so a `projects` directory there is not evidence of an
+         * older install, it is something another app can make. Following it
+         * would hand that app the default workspace.
+         */
+        @Test
+        fun `on Android 10 a directory on shared storage is never followed`() {
+            assertTrue(legacy.mkdirs(), "could not stage the directory another app made")
+
+            assertEquals("$projectsFilesDir/projects", Environment.projectsDirFor(context, 29))
+        }
+
+        /** The same on Android 10 for the link record, which lives beside the directory. */
+        @Test
+        fun `on Android 10 a link naming shared storage is not followed either`() {
+            val link = File(projectsFilesDir, "home/projects")
+            assertTrue(link.parentFile!!.mkdirs(), "could not stage the home directory")
+            Files.createSymbolicLink(link.toPath(), legacy.toPath())
+
+            assertEquals("$projectsFilesDir/projects", Environment.projectsDirFor(context, 29))
+        }
+
+        /** The control: one release later the same directory is an older install's, and is kept. */
+        @Test
+        fun `on Android 11 the same directory is still kept`() {
+            assertTrue(legacy.mkdirs(), "could not stage the directory an older release made")
+
+            assertEquals(legacy.absolutePath, Environment.projectsDirFor(context, 30))
+        }
     }
 
     @Nested

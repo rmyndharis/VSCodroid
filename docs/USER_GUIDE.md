@@ -65,7 +65,10 @@ VSCodroid is VS Code. If you have used VS Code on desktop, everything works the 
   grants access one folder at a time, and not to the top of the storage or of an
   SD card, nor to the Download or Android folder itself, so pick a folder inside
   those. Nothing in `Android/data`, `Android/obb` or `Android/sandbox` can be
-  granted, since Android keeps each app's folder there to that app. A USB drive
+  granted, since Android keeps each app's folder there to that app. Android 10
+  is the exception: its picker also offers the top of the storage and the
+  Download folder. Pick a project folder there as well, because the folder you
+  grant is copied into the app. A USB drive
   can be granted whole. **VSCodroid: Open Recent Folder**, in the same menu,
   lists the folders you have granted, with **Browse device...** at the end to
   add another.
@@ -1587,7 +1590,7 @@ VSCodroid's own screens follow the same list: the setup progress, the toolchain
 picker, and the notifications and dialogs the app puts on screen are translated
 into those thirteen languages too. On Android 13 and later they can be set
 separately from the phone, under Settings, Apps, VSCodroid, Language, and the
-editor follows that choice as well. Android 11 and 12 have no such setting, so
+editor follows that choice as well. Android 10, 11 and 12 have no such setting, so
 there the app and the editor follow the phone's language.
 
 VSCodroid's own commands, settings and the Get Started walkthrough are

@@ -11,6 +11,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **View: Toggle Full Screen** hides the status and navigation bars, and the choice is kept for the next launch.
 
+### Changed
+
+- The app installs on Android 10 and newer; it needed Android 11.
+
 ### Fixed
 
 - The editor's context menu scrolls with a finger; a drag inside it used to do nothing.

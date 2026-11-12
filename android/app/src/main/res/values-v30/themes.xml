@@ -1,0 +1,8 @@
+<?xml version="1.0" encoding="utf-8"?>
+<resources>
+
+    <!-- `always`, which is API 30. Theme.VSCodroid in values reads it as
+         android:windowLayoutInDisplayCutoutMode. -->
+    <integer name="window_cutout_mode">3</integer>
+
+</resources>

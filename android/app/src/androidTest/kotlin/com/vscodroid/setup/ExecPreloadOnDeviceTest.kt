@@ -95,7 +95,7 @@ class ExecPreloadOnDeviceTest {
      * absolute path with no preload. It must not start.
      */
     @Test
-    fun `a payload under filesDir cannot be executed directly`() {
+    fun a_payload_under_filesDir_cannot_be_executed_directly() {
         val result = run(listOf(payload.absolutePath, "--version"), emptyMap())
 
         assertNotEquals(
@@ -112,7 +112,7 @@ class ExecPreloadOnDeviceTest {
      * forked `cat` would read as its own.
      */
     @Test
-    fun `the preload loads into a shell started with it`() {
+    fun the_preload_loads_into_a_shell_started_with_it() {
         val result = sh("cat /proc/\$\$/maps", preloadEnv())
 
         assertEquals("the shell did not start: ${result.second}", 0, result.first)
@@ -124,7 +124,7 @@ class ExecPreloadOnDeviceTest {
 
     /** The subject. Same binary, same mode, same path, exec'd by a preloaded shell. */
     @Test
-    fun `a preloaded shell runs the same payload by absolute path`() {
+    fun a_preloaded_shell_runs_the_same_payload_by_absolute_path() {
         val result = sh("${payload.absolutePath} --version", preloadEnv())
 
         assertEquals("make did not run through the preload: ${result.second}", 0, result.first)
@@ -145,7 +145,7 @@ class ExecPreloadOnDeviceTest {
      * message.
      */
     @Test
-    fun `a preloaded shell runs the payload by a relative path`() {
+    fun a_preloaded_shell_runs_the_payload_by_a_relative_path() {
         val result = sh("cd ${probeRoot.absolutePath} && pwd -P && ./make --version", preloadEnv())
 
         assertEquals("./make did not run through the preload: ${result.second}", 0, result.first)
@@ -158,7 +158,7 @@ class ExecPreloadOnDeviceTest {
      * with it the interceptor reads the line itself and starts the interpreter.
      */
     @Test
-    fun `a script under filesDir runs from a preloaded shell`() {
+    fun a_script_under_filesDir_runs_from_a_preloaded_shell() {
         val script = script("sys_sh.sh", "#!/system/bin/sh\necho script-ok\n")
 
         val result = sh(script.absolutePath, preloadEnv())
@@ -175,7 +175,7 @@ class ExecPreloadOnDeviceTest {
      * runs only through the patch's fallback to `/system/bin/sh`.
      */
     @Test
-    fun `a script naming slash bin slash sh runs from a preloaded shell`() {
+    fun a_script_naming_slash_bin_slash_sh_runs_from_a_preloaded_shell() {
         val script = script("bin_sh.sh", "#!/bin/sh\necho bin-sh-ok\n")
 
         val result = sh(script.absolutePath, preloadEnv())
@@ -191,7 +191,7 @@ class ExecPreloadOnDeviceTest {
      * interceptor and a filesDir target would be refused one hop later.
      */
     @Test
-    fun `a system binary keeps the preload for what it starts`() {
+    fun a_system_binary_keeps_the_preload_for_what_it_starts() {
         val result = sh("/system/bin/env ${payload.absolutePath} --version", preloadEnv())
 
         assertEquals("env lost the preload before starting make: ${result.second}", 0, result.first)
@@ -211,7 +211,7 @@ class ExecPreloadOnDeviceTest {
      * the library being present; the maps case is what shows it loaded.
      */
     @Test
-    fun `a symlink onto a system binary is started as itself`() {
+    fun a_symlink_onto_a_system_binary_is_started_as_itself() {
         val link = File(probeRoot, "sh")
         val linked = run(listOf("/system/bin/ln", "-sf", "/system/bin/sh", link.absolutePath), emptyMap())
         assertEquals(linked.second, 0, linked.first)
@@ -235,7 +235,7 @@ class ExecPreloadOnDeviceTest {
      * the system shell under filesDir, so it can print what it was given.
      */
     @Test
-    fun `a linker started by hand names its payload in the environment`() {
+    fun a_linker_started_by_hand_names_its_payload_in_the_environment() {
         val shell = File(probeRoot, "shell")
         File("/system/bin/sh").copyTo(shell, overwrite = true)
 
@@ -258,7 +258,7 @@ class ExecPreloadOnDeviceTest {
      * that scrubs its environment can arrive in exactly this state.
      */
     @Test
-    fun `a shell without the prefix still finds slash bin slash sh`() {
+    fun a_shell_without_the_prefix_still_finds_slash_bin_slash_sh() {
         val result = sh("/bin/sh -c 'echo no-prefix-ok'", preloadEnv() - "TERMUX__PREFIX")
 
         assertEquals("/bin/sh was not mapped with the prefix unset: ${result.second}", 0, result.first)
@@ -279,7 +279,7 @@ class ExecPreloadOnDeviceTest {
      * second run would say nothing about the library.
      */
     @Test
-    fun `an exec with no argv0 is refused as it is without the preload`() {
+    fun an_exec_with_no_argv0_is_refused_as_it_is_without_the_preload() {
         val control = execveFromJava(payload.absolutePath, "--version")
         assertTrue(
             "app_process did not start the payload through the preload, so this case " +
@@ -303,7 +303,7 @@ class ExecPreloadOnDeviceTest {
      * once that file is there.
      */
     @Test
-    fun `a preload naming a missing file is fatal to the shell itself`() {
+    fun a_preload_naming_a_missing_file_is_fatal_to_the_shell_itself() {
         val missing = File(probeRoot, "nope.so")
         val result = sh("echo ok", preloadEnv() + ("LD_PRELOAD" to missing.absolutePath))
 

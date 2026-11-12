@@ -69,9 +69,8 @@ class ThemeEdgeToEdgeTest {
             // this app's dark editor on API 33 and 34.
             "android:statusBarColor" to "@android:color/transparent",
             "android:navigationBarColor" to "@android:color/transparent",
-            // `always`, which is what Api30 wrote and what API 35+ forces. Not
-            // `shortEdges`: Api28 wrote that and minSdk 30 never reached it.
-            "android:windowLayoutInDisplayCutoutMode" to "always",
+            // Per release, so through a resource: see the test below.
+            "android:windowLayoutInDisplayCutoutMode" to "@integer/window_cutout_mode",
             // Only the navigation default is `true`; the status one is already
             // `false`. Both are pinned so the pair stays visible as one decision, and
             // so a later edit to `true` is refused rather than merely unnoticed.
@@ -86,6 +85,23 @@ class ThemeEdgeToEdgeTest {
                     "holding it and there is nothing else to catch this.",
             )
         }
+    }
+
+    /**
+     * `always` (3) is API 30. Android 10 throws "Unknown
+     * windowLayoutInDisplayCutoutMode: 3" out of `PhoneWindow.generateLayout`
+     * and no activity starts, which lint does not see: the attribute itself is
+     * API 28. So the default has to be `shortEdges` (1), what `Api28` wrote, and
+     * only values-v30 may name `always`, what `Api30` wrote and API 35+ forces.
+     */
+    @Test
+    fun `the cutout mode is one Android 10 knows, and always from API 30`() {
+        fun cutoutMode(dir: String): String? =
+            Regex("""<integer\s+name="window_cutout_mode"\s*>(\d+)</integer>""")
+                .find(File("src/main/res/$dir/themes.xml").readText())?.groupValues?.get(1)
+
+        assertEquals("1", cutoutMode("values"), "the default cutout mode must be shortEdges")
+        assertEquals("3", cutoutMode("values-v30"), "API 30 and later must keep always")
     }
 
     /**

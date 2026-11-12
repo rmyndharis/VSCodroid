@@ -59,7 +59,7 @@ export LC_ALL=C
 # and build-libtermux-exec-direct-ld-preload (termux-exec): the sources go into
 # two static archives, and only the eight exec*() entry points are exported
 # (-fvisibility=hidden, --exclude-libs=ALL). Differences from Termux's build:
-# API 30 instead of 24, no RUNPATH, 16 KB pages, and a GNU build-id. The
+# API 29 instead of 24, no RUNPATH, 16 KB pages, and a GNU build-id. The
 # compile-time defaults (/data/data/com.termux/...) are upstream's; at runtime
 # every path is read from TERMUX_APP__DATA_DIR, TERMUX_APP__LEGACY_DATA_DIR and
 # TERMUX__PREFIX, which Environment.kt exports, so the debug and release
@@ -100,7 +100,7 @@ TARGET=aarch64-linux-android
 # The app's minSdk. Bionic aborts an exec whose LD_PRELOAD names a library with a
 # symbol it lacks, for every program a terminal starts, so a call newer than the
 # oldest supported device has to fail the build here and not the terminal there.
-API=30
+API=29
 
 echo "=== termux-exec LD_PRELOAD library ==="
 

@@ -3,6 +3,7 @@ package com.vscodroid.keyboard
 import android.content.res.Configuration
 import android.view.ViewGroup
 import android.view.accessibility.AccessibilityNodeInfo
+import androidx.core.view.accessibility.AccessibilityNodeInfoCompat
 import androidx.test.core.app.ActivityScenario
 import androidx.test.ext.junit.runners.AndroidJUnit4
 import androidx.test.platform.app.InstrumentationRegistry
@@ -174,7 +175,7 @@ class KeyRowAccessibilityInstrumentedTest {
             assertEquals(
                 "an idle modifier should say it is off, not stay silent",
                 button.context.getString(R.string.key_toggle_off),
-                node().stateDescription?.toString(),
+                AccessibilityNodeInfoCompat.wrap(node()).stateDescription?.toString(),
             )
 
             onMain { button.performAccessibilityAction(AccessibilityNodeInfo.ACTION_CLICK, null) }
@@ -182,14 +183,14 @@ class KeyRowAccessibilityInstrumentedTest {
                 "a latched modifier does not say so, so a screen reader user can switch " +
                     "it on and cannot tell that they did",
                 button.context.getString(R.string.key_toggle_on),
-                node().stateDescription?.toString(),
+                AccessibilityNodeInfoCompat.wrap(node()).stateDescription?.toString(),
             )
 
             onMain { button.performAccessibilityAction(AccessibilityNodeInfo.ACTION_CLICK, null) }
             assertEquals(
                 "switching the modifier off is not published either",
                 button.context.getString(R.string.key_toggle_off),
-                node().stateDescription?.toString(),
+                AccessibilityNodeInfoCompat.wrap(node()).stateDescription?.toString(),
             )
         }
     }
@@ -213,7 +214,7 @@ class KeyRowAccessibilityInstrumentedTest {
             assertNull(
                 "a plain key carries a state description, which would be read out on " +
                     "every key",
-                node().stateDescription,
+                AccessibilityNodeInfoCompat.wrap(node()).stateDescription,
             )
         }
     }

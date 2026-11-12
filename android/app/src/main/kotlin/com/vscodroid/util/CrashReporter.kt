@@ -3,7 +3,9 @@ package com.vscodroid.util
 import android.app.ActivityManager
 import android.app.ApplicationExitInfo
 import android.content.Context
+import android.os.Build
 import android.webkit.RenderProcessGoneDetail
+import androidx.annotation.RequiresApi
 import com.vscodroid.webview.redactToken
 import java.io.File
 import java.io.PrintWriter
@@ -210,19 +212,25 @@ object CrashReporter {
         // trace in a report: an app Android declared not responding (ANR), one
         // killed to free memory (LOW_MEMORY), a native fault (CRASH_NATIVE).
         sb.appendLine("--- Recent Exits (newest first) ---")
-        val exits = try {
-            context.getSystemService(ActivityManager::class.java)
-                ?.getHistoricalProcessExitReasons(context.packageName, 0, RECENT_EXITS)
-        } catch (_: Exception) {
-            null
-        }
-        when {
-            exits == null -> sb.appendLine("(could not be read)")
-            exits.isEmpty() -> sb.appendLine("(none recorded)")
-            // Through both scrubbers like everything else here: the description
-            // is the system's own text, and this report goes to a stranger.
-            else -> exits.forEach {
-                sb.appendLine(redactSecrets(redactToken(exitLine(it, dateFormat))))
+        // Android 10 is the one supported release that keeps no such record:
+        // ApplicationExitInfo arrived in 11.
+        if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q) {
+            sb.appendLine("(not recorded on Android 10)")
+        } else {
+            val exits = try {
+                context.getSystemService(ActivityManager::class.java)
+                    ?.getHistoricalProcessExitReasons(context.packageName, 0, RECENT_EXITS)
+            } catch (_: Exception) {
+                null
+            }
+            when {
+                exits == null -> sb.appendLine("(could not be read)")
+                exits.isEmpty() -> sb.appendLine("(none recorded)")
+                // Through both scrubbers like everything else here: the description
+                // is the system's own text, and this report goes to a stranger.
+                else -> exits.forEach {
+                    sb.appendLine(redactSecrets(redactToken(exitLine(it, dateFormat))))
+                }
             }
         }
         sb.appendLine()
@@ -385,7 +393,7 @@ object CrashReporter {
  * The crashing thread, named and numbered, using the accessor every supported
  * API level has.
  *
- * `Thread.threadId()` is API 36 and `minSdk` is 30, and nothing backports it
+ * `Thread.threadId()` is API 36 and `minSdk` is 29, and nothing backports it
  * here: `coreLibraryDesugaring` is off, and lint did not stop it: `abortOnError`
  * was still false when the call was written. On 30 to 35 the call
  * therefore raises `NoSuchMethodError`, and it sat above `file.writeText` inside
@@ -405,7 +413,7 @@ object CrashReporter {
  * Deprecated in Java", and that warning is about the JDK's own `Thread`, not
  * about the platform this ships against. Do not silence it by switching to
  * `threadId()`. That is the exact call this function exists to avoid, and the
- * paragraph above is what it costs on 30 to 35.
+ * paragraph above is what it costs on 29 to 35.
  */
 internal fun threadIdentity(thread: Thread): String =
     "Thread: ${thread.name} (id=${thread.id})"
@@ -419,6 +427,7 @@ internal fun threadIdentity(thread: Thread): String =
  * measured. The description is the system's own text, which for an ANR names
  * what timed out.
  */
+@RequiresApi(Build.VERSION_CODES.R)
 private fun exitLine(exit: ApplicationExitInfo, dateFormat: SimpleDateFormat): String =
     "${dateFormat.format(Date(exit.timestamp))} ${exit.processName} " +
         "${exitReasonName(exit.reason)} (status ${exit.status}, importance ${exit.importance}, " +
@@ -429,7 +438,7 @@ private fun exitLine(exit: ApplicationExitInfo, dateFormat: SimpleDateFormat): S
  * The name of an `ApplicationExitInfo.REASON_*` value. The platform numbers
  * them from 0 with no gap, so the list is indexed by the value, and
  * `CrashReporterTest` holds it to the constants. Written out rather than read
- * off the constants because the last three are API 33 and 34 and minSdk is 30; a value
+ * off the constants because the last three are API 33 and 34 and minSdk is 29; a value
  * newer than the list is printed as its number.
  */
 internal fun exitReasonName(reason: Int): String =

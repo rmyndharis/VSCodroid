@@ -12,7 +12,7 @@ import javax.xml.parsers.DocumentBuilderFactory
  * different files.
  *
  * Android 11 and below read `android:fullBackupContent`; Android 12 and above
- * read `android:dataExtractionRules`. With `minSdk` 30 both are live, and an
+ * read `android:dataExtractionRules`. With `minSdk` 29 both are live, and an
  * app whose rules disagree backs up one set on one release and another on the
  * next. The set that matters is what is NOT in them: the SSH key generated
  * without a passphrase and the server's connection token sit under `home/` and

@@ -5835,7 +5835,7 @@ private const val SYNC_TIMEOUT_SECONDS = 30L
  * nothing to gain from it.
  *
  * `java.util.Base64` rather than `android.util.Base64` so the encoding is the
- * same object in a unit test as it is on the device. minSdk is 30, well past
+ * same object in a unit test as it is on the device. minSdk is 29, well past
  * the 26 that added it.
  */
 private fun pemOf(cert: Certificate): String =
