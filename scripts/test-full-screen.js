@@ -13,7 +13,10 @@
  * token, the state the page reads has to move with it, and the event has to be
  * raised once per change, never for a request that changes nothing. A request the
  * page cannot hand to the app has to fail, not pretend. A page that loads while full
- * screen is on has to start as full screen and say so.
+ * screen is on has to say so once the workbench is listening, and until then it has to
+ * read as not full screen: the workbench's own start (restoring Zen Mode) asks for a
+ * toggle by reading `document.fullscreen`, and an answer of "yes" that the workbench has
+ * not been told about turns its request into an exit.
  *
  * This extracts the real script and runs it under `vm` against a stub page.
  *
@@ -27,7 +30,12 @@
  * fails the case that has none yet; never announcing once it appears fails that case;
  * not letting the observer go fails the case that reads `live`; dropping the bridge
  * presence check fails the case without a bridge; dropping the guard fails the one that
- * installs twice.
+ * installs twice. For what the page reads before it has been told, the same way:
+ * answering `fullscreen` or `fullscreenElement` from the app's state and not from what
+ * the page was told fails the cases that read them before the container exists; telling
+ * the page before the workbench is listening, or counting it as listening from the start,
+ * fails the restore case; arming without telling fails the announcement; recording what the
+ * page was told after the event and not before fails the cases that read it inside the event.
  */
 'use strict';
 
@@ -73,12 +81,19 @@ function extractScript(on) {
 function page({ on = false, token = 'session', bridge = true, times = 1, container = true } = {}) {
     const calls = [];
     const events = [];
+    // What a listener of the event reads while it runs, which is how the workbench decides
+    // whether the window is full screen: it looks at `fullscreenElement` inside the handler.
+    const seen = [];
     const observers = [];
     const state = { container };
     const documentElement = { name: 'html' };
     const document = {
         documentElement,
-        dispatchEvent(event) { events.push(event.type); return true; },
+        dispatchEvent(event) {
+            events.push(event.type);
+            seen.push([this.fullscreen, this.fullscreenElement === documentElement]);
+            return true;
+        },
         querySelector(selector) {
             assert.strictEqual(selector, '.monaco-workbench', 'only the workbench container is asked for');
             return state.container ? { name: 'workbench' } : null;
@@ -109,7 +124,7 @@ function page({ on = false, token = 'session', bridge = true, times = 1, contain
     if (!bridge) delete context.AndroidBridge;
     for (let i = 0; i < times; i += 1) vm.runInContext(extractScript(on), context);
     return {
-        document, container: new Element(), calls, events, documentElement, observers,
+        document, container: new Element(), calls, events, seen, documentElement, observers,
         /** The workbench builds its container: the page changes, observers are told. */
         addContainer() {
             state.container = true;
@@ -135,6 +150,7 @@ async function main() {
         assert.strictEqual(p.document.fullscreen, true, 'state follows the request');
         assert.strictEqual(p.document.fullscreenElement, p.documentElement, 'an element while on');
         assert.deepStrictEqual(p.events, ['fullscreenchange'], 'one event for one change');
+        assert.deepStrictEqual(p.seen, [[true, true]], 'a listener already reads the new state');
 
         // The same request again changes nothing: the app is told, the page is not.
         await p.container.requestFullscreen();
@@ -146,6 +162,7 @@ async function main() {
         assert.strictEqual(p.document.fullscreen, false, 'state follows the exit');
         assert.strictEqual(p.document.fullscreenElement, null, 'no element once off');
         assert.deepStrictEqual(p.events, ['fullscreenchange', 'fullscreenchange'], 'one event for the exit');
+        assert.deepStrictEqual(p.seen, [[true, true], [false, false]], 'and reads the new state for the exit too');
     }
 
     // What the workbench does: read document.fullscreen, pick the call, ask twice in a row.
@@ -175,13 +192,14 @@ async function main() {
         assert.deepStrictEqual(p.events, []);
     }
 
-    // A page that loads while full screen is on starts as full screen. It says so once the
-    // workbench has built its container, because the workbench follows the event only
-    // after that and an event raised while it is still starting is lost.
+    // A page that loads while full screen is on says so once the workbench has built its
+    // container, because the workbench follows the event only after that and an event
+    // raised while it is still starting is lost. Until then it reads as not full screen,
+    // which is what the workbench itself believes at that point.
     {
         const p = page({ on: true, container: false });
-        assert.strictEqual(p.document.fullscreen, true, 'on at load');
-        assert.strictEqual(p.document.fullscreenElement, p.documentElement);
+        assert.strictEqual(p.document.fullscreen, false, 'not told yet, so not full screen');
+        assert.strictEqual(p.document.fullscreenElement, null, 'and no element either');
         assert.deepStrictEqual(p.events, [], 'nothing is announced before the container exists');
         assert.strictEqual(p.observers.length, 1, 'one observer waits for the container');
         assert.strictEqual(p.observers[0].target, p.document, 'it watches the document');
@@ -192,6 +210,9 @@ async function main() {
         assert.strictEqual(p.observers[0].live, true, 'and keeps waiting');
         p.addContainer();
         assert.deepStrictEqual(p.events, ['fullscreenchange'], 'announced once when the container appears');
+        assert.deepStrictEqual(p.seen, [[true, true]], 'a listener reads full screen while it runs');
+        assert.strictEqual(p.document.fullscreen, true, 'full screen once it has been announced');
+        assert.strictEqual(p.document.fullscreenElement, p.documentElement, 'with its element');
         assert.strictEqual(p.observers[0].live, false, 'the observer is let go');
         p.addContainer();
         assert.deepStrictEqual(p.events, ['fullscreenchange'], 'later changes to the page announce nothing more');
@@ -201,7 +222,42 @@ async function main() {
     {
         const p = page({ on: true });
         assert.deepStrictEqual(p.events, ['fullscreenchange'], 'a page whose container exists announces at once');
+        assert.strictEqual(p.document.fullscreen, true, 'and is full screen from then on');
         assert.strictEqual(p.observers.length, 0, 'and waits for nothing');
+    }
+
+    // The workbench restores Zen Mode while it starts, which is after its container exists
+    // in the page and before the observer has run. It reads `document.fullscreen`, finds
+    // "no", and asks for full screen, which the app is already in. That has to leave the
+    // app in full screen and the event to come when the page is told, not before.
+    {
+        const p = page({ on: true, container: false });
+        const toggle = () => (p.document.fullscreen
+            ? p.document.exitFullscreen() : p.container.requestFullscreen());
+        await toggle();
+        assert.deepStrictEqual(p.calls, [['session', true]], 'the restore asks to enter, never to leave');
+        assert.deepStrictEqual(p.events, [], 'no event before the workbench has been told');
+        p.addContainer();
+        assert.deepStrictEqual(p.events, ['fullscreenchange'], 'told once, when the container appears');
+        assert.strictEqual(p.document.fullscreen, true, 'and full screen after that');
+        assert.deepStrictEqual(p.calls, [['session', true]], 'nothing else reached the app');
+    }
+
+    // A request to leave that comes before the page has been told: the page never heard
+    // that it was full screen, so there is nothing to retract, and the next request to
+    // enter is a change like any other.
+    {
+        const p = page({ on: true, container: false });
+        await p.document.exitFullscreen();
+        assert.deepStrictEqual(p.calls, [['session', false]], 'the app is told to leave');
+        assert.strictEqual(p.document.fullscreen, false);
+        assert.deepStrictEqual(p.events, [], 'the page was never told it was full screen');
+        p.addContainer();
+        assert.deepStrictEqual(p.events, [], 'and the container appearing tells it nothing');
+        assert.strictEqual(p.observers[0].live, false, 'the observer is let go all the same');
+        await p.container.requestFullscreen();
+        assert.deepStrictEqual(p.events, ['fullscreenchange'], 'entering afterwards is announced');
+        assert.strictEqual(p.document.fullscreen, true);
     }
     {
         const p = page({ on: false, container: false });
