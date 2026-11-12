@@ -1255,7 +1255,7 @@ In the status bar:
 
 For more room, hide Android's status and navigation bars: **View > Appearance > Full Screen**, or **View: Toggle Full Screen** in the Command Palette. A swipe from the edge of the screen shows the bars for a moment and they go away again. The same command leaves full screen, and VSCodroid keeps the choice for the next launch.
 
-A camera cutout keeps its band at the top, because the editor cannot go under it. The first time, Android shows its own "Viewing full screen" notice; tap **Got it**. Zen Mode switches full screen on as well and switches it off when it ends, unless you were already in full screen.
+A camera cutout keeps its band, at the top or at the side when the phone is turned, because the editor cannot go under it. The first time, Android shows its own "Viewing full screen" notice; tap **Got it**. Zen Mode switches full screen on as well and switches it off when it ends, unless you were already in full screen.
 
 ---
 
