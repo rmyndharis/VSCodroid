@@ -573,9 +573,11 @@ class KeyRowAccessibilityTest {
             assertTrue(start >= 0, "updateToggleAppearance is no longer where this test looks")
 
             val body = lines.drop(start).takeWhile { !it.contains("fun applyRoundedBackground") }
+            // One statement: the description handed to the setter, not the two names merely
+            // present in the method, which a call left beside a different one also satisfies.
+            val statement = body.joinToString(" ").replace(Regex("\\s+"), " ")
             assertTrue(
-                body.any { it.contains("toggleStateDescription(isToggle, isToggleActive)") } &&
-                    body.any { it.contains("ViewCompat.setStateDescription(") },
+                statement.contains("ViewCompat.setStateDescription( this, toggleStateDescription(isToggle, isToggleActive)"),
                 "the latch no longer reaches an accessibility service, so a screen reader " +
                     "user can switch a modifier and cannot tell whether it is on. It reads: " +
                     body.joinToString("\n"),

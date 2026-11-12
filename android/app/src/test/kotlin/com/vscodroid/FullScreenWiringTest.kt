@@ -67,11 +67,16 @@ class FullScreenWiringTest {
     @Test
     fun `the choice is kept, applied at launch and again when the focus returns`() {
         val source = mainActivity()
+        val callback = SourceScan.body(source, "onSetFullScreen = { on ->")
         assertTrue(
-            source.contains("onSetFullScreen = { on ->") &&
-                source.contains("putBoolean(KEY_FULL_SCREEN, on)"),
+            callback.contains("putBoolean(KEY_FULL_SCREEN, on)"),
             "the bridge callback no longer records the choice, so full screen ends with the " +
                 "next launch.",
+        )
+        assertTrue(
+            callback.contains("runOnUiThread { applyFullScreen(on) }"),
+            "the bridge callback records the choice and no longer applies it, so View > Toggle " +
+                "Full Screen changes nothing on the device until the focus leaves and returns.",
         )
         val shim = SourceScan.body(source, "private fun injectFullScreenShim(")
         assertTrue(
@@ -80,9 +85,9 @@ class FullScreenWiringTest {
                 "is on thinks it is off and the first toggle asks for what is already true.",
         )
         val focus = SourceScan.body(source, "override fun onWindowFocusChanged(")
+            .replace(Regex("\\s+"), " ")
         assertTrue(
-            focus.contains("hasFocus") && focus.contains("KEY_FULL_SCREEN") &&
-                focus.contains("applyFullScreen(true)"),
+            focus.contains("if (hasFocus && workspacePrefs.getBoolean(KEY_FULL_SCREEN, false)) applyFullScreen(true)"),
             "the choice is not applied again when the window gets the focus back. The system " +
                 "shows its bars when a permission prompt or the recents screen takes it.",
         )
@@ -102,11 +107,15 @@ class FullScreenWiringTest {
         val row = SourceScan.withoutComments(
             SourceScan.read("src/main/kotlin/com/vscodroid/keyboard/ExtraKeyRow.kt"),
         )
+        val rowListener = SourceScan.body(row, "fun setupWithRootView(")
         val webView = SourceScan.body(mainActivity(), "private fun applyWindowInsetsPadding(")
-        listOf("ExtraKeyRow.setupWithRootView" to row, "applyWindowInsetsPadding" to webView).forEach { (name, text) ->
+        listOf("ExtraKeyRow.setupWithRootView" to rowListener, "applyWindowInsetsPadding" to webView).forEach { (name, text) ->
             assertTrue(
-                text.contains("insets.getInsets("),
-                "$name no longer reads the visible insets.",
+                text.replace(Regex("\\s+"), " ").contains(
+                    "insets.getInsets( WindowInsetsCompat.Type.systemBars() or WindowInsetsCompat.Type.displayCutout() )",
+                ),
+                "$name no longer reads the visible system bars and the cutout, so a bar the " +
+                    "padding forgot sits over the page, or a cutout covers the Activity Bar.",
             )
             assertTrue(
                 !text.contains("getInsetsIgnoringVisibility"),
