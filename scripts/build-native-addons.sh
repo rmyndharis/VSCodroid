@@ -399,8 +399,8 @@ verify() {
     # Bionic versions each export by the release that added it: LIBC_Q is API 29,
     # LIBC_R is 30, and so on up the alphabet. A strong reference to anything
     # after $MIN_API's letter fails dlopen on that release; a weak one resolves
-    # to null there and is the caller's to test. [R-Z] is everything after Q, so
-    # it moves with MIN_API.
+    # to null there and is the caller's to test. [R-Z] is everything after Q: a
+    # literal, right for a MIN_API of 29 and to be revisited with it.
     local late
     late=$("$READELF" --dyn-syms -W "$out" \
         | awk '$5 == "GLOBAL" && $7 == "UND" && $8 ~ /@LIB[A-Z]*_[R-Z]$/ {print $8}') || return 1
