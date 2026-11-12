@@ -11,6 +11,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - **View: Toggle Full Screen** hides the status and navigation bars, and the choice is kept for the next launch.
 
+### Fixed
+
+- The editor's context menu scrolls with a finger; a drag inside it used to do nothing.
+- A tap on the swatch beside a CSS color opens the color picker.
+
 ## [1.8.0] - 2026-11-09
 
 ### Added
