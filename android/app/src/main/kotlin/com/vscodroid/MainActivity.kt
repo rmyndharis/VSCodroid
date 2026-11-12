@@ -5658,8 +5658,12 @@ class MainActivity : AppCompatActivity() {
                     if (!editor) return;
                     var lines = editor.querySelector('.lines-content');
                     if (!lines || !lines.contains(e.target)) return;
-                    var carets = editor.querySelectorAll('.cursors-layer > .cursor');
-                    if (carets.length !== 1 || editor.querySelector('.selected-text')) return;
+                    // This editor's own: a peek, an inline chat or a comment thread holds an
+                    // editor of its own inside this one, with a caret and selections of its own.
+                    var mine = function(el) { return el.closest('.monaco-editor') === editor; };
+                    var carets = Array.prototype.filter.call(editor.querySelectorAll('.cursors-layer > .cursor'), mine);
+                    var selected = Array.prototype.some.call(editor.querySelectorAll('.selected-text'), mine);
+                    if (carets.length !== 1 || selected) return;
                     var r = carets[0].getBoundingClientRect();
                     if (!r.height) return;
                     if (t.clientX < r.left - GRAB_X || t.clientX > r.right + GRAB_X ||
