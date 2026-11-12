@@ -56,6 +56,8 @@ VSCodroid is VS Code. If you have used VS Code on desktop, everything works the 
   another app saved in them. Such a folder opens with its subfolders and none of
   those files; the editor then says so in a dialog, once per folder each time its
   server starts rather than on every reload, and offers the route below.
+  Android 10 is stricter and denies the listing outright, so there the dialog
+  says the folder does not exist and offers to create it: use the route below.
 - For a folder anywhere else on the device, choose **On the device** in that
   question, or run **VSCodroid: Open Folder from Device**: tap the remote
   indicator at the left end of the status bar, tap the button in the empty
