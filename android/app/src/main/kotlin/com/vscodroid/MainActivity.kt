@@ -5436,7 +5436,10 @@ class MainActivity : AppCompatActivity() {
      *
      * The point a tap is aimed at is the first element under it that belongs to the
      * lines, because the sash on the editor's lower edge is on top of the last pixels
-     * and a tap at one of them found nothing.
+     * and a tap at one of them found nothing. A color swatch is passed over, to the
+     * text behind it: the editor opens a color's picker from a tap that begins on the
+     * swatch, and a drag across one opened it over the code being dragged over, measured
+     * on an API 36 emulator with the finger held there.
      *
      * Measured on an API 36 emulator (WebView 134) with `adb shell input`: a sideways
      * drag from the caret moved it to within one character of the finger, a drag across
@@ -5510,7 +5513,9 @@ class MainActivity : AppCompatActivity() {
                     var stack = document.elementsFromPoint(x, y);
                     var el = null;
                     for (var i = 0; i < stack.length; i++) {
-                        if (drag.lines.contains(stack[i])) {
+                        // Never a color swatch: the editor opens a color's picker from a tap
+                        // that begins on it, and a finger resting there would cover the code.
+                        if (drag.lines.contains(stack[i]) && !stack[i].closest('.colorpicker-color-decoration')) {
                             el = stack[i];
                             break;
                         }
