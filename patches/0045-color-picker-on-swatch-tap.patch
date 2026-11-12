@@ -1,0 +1,96 @@
+Open the color picker when its swatch is tapped.
+
+On a touch screen a tap on the swatch beside a CSS color only places the
+caret. The picker opens from the editor's mouse down event (the default
+editor.colorDecoratorsActivatedOn is clickAndHover), and a tap in the text
+never raises one: the pointer handler ignores a touch pointer's down and moves
+the caret from the tap gesture itself. A finger cannot hover either, so the
+only picker left was the standalone one in the Command Palette, which changes
+nothing in the file until its button is tapped.
+
+Measured on an API 36 emulator (WebView 134): a real tap on the swatch gave
+pointerdown, touchstart, pointerup, touchend and a tap gesture on
+lines-content, no mousedown, and no picker. A mouse press at the same point
+opened it.
+
+Listen for the tap gesture and, when it began on a swatch, hand the swatch's
+position to the code the mouse down runs. The setting still decides: "hover"
+keeps a tap from opening anything. With the change the same tap opened the
+picker, a tap and a drag inside it changed the color in the file as they went,
+and a tap on other text closed it. The tap still places the caret, as the
+click does.
+
+diff --git a/src/vs/editor/contrib/colorPicker/browser/hoverColorPicker/hoverColorPickerContribution.ts b/src/vs/editor/contrib/colorPicker/browser/hoverColorPicker/hoverColorPickerContribution.ts
+--- a/src/vs/editor/contrib/colorPicker/browser/hoverColorPicker/hoverColorPickerContribution.ts
++++ b/src/vs/editor/contrib/colorPicker/browser/hoverColorPicker/hoverColorPickerContribution.ts
+@@ -1,11 +1,13 @@
+ /*---------------------------------------------------------------------------------------------
+  *  Copyright (c) Microsoft Corporation. All rights reserved.
+  *  Licensed under the MIT License. See License.txt in the project root for license information.
+  *--------------------------------------------------------------------------------------------*/
+ 
++import * as dom from '../../../../../base/browser/dom.js';
++import { EventType as TouchEventType, GestureEvent } from '../../../../../base/browser/touch.js';
+ import { Disposable } from '../../../../../base/common/lifecycle.js';
+ import { ICodeEditor, IEditorMouseEvent } from '../../../../browser/editorBrowser.js';
+ import { EditorOption } from '../../../../common/config/editorOptions.js';
+ import { Range } from '../../../../common/core/range.js';
+ import { IEditorContribution } from '../../../../common/editorCommon.js';
+ import { ContentHoverController } from '../../../hover/browser/contentHoverController.js';
+@@ -19,19 +21,38 @@ export class HoverColorPickerContribution extends Disposable implements IEditorC
+ 	static readonly RECOMPUTE_TIME = 1000; // ms
+ 
+ 	constructor(private readonly _editor: ICodeEditor,
+ 	) {
+ 		super();
+ 		this._register(_editor.onMouseDown((e) => this.onMouseDown(e)));
++
++		// A tap on the text never becomes a mouse down: the editor's pointer
++		// handler ignores a touch pointer's down and moves the caret from the
++		// tap gesture itself, so on a touch screen nothing opened the picker
++		// from its swatch. The listener sits on the container because the view's
++		// own node is replaced with every model, and it captures because the
++		// gesture event does not bubble. The swatch is hit-tested at its centre:
++		// the picker needs the range that resolves there.
++		this._register(dom.addDisposableListener(_editor.getContainerDomNode(), TouchEventType.Tap, (e: GestureEvent) => {
++			const swatch = dom.isHTMLElement(e.initialTarget) ? e.initialTarget.closest('.colorpicker-color-decoration') : null;
++			if (!swatch) {
++				return;
++			}
++			const box = swatch.getBoundingClientRect();
++			const target = _editor.getTargetAtClientPoint(box.left + box.width / 2, box.top + box.height / 2);
++			if (target) {
++				this.onMouseDown({ target });
++			}
++		}, true));
+ 	}
+ 
+ 	override dispose(): void {
+ 		super.dispose();
+ 	}
+ 
+-	private onMouseDown(mouseEvent: IEditorMouseEvent) {
++	private onMouseDown(mouseEvent: Pick<IEditorMouseEvent, 'target'>) {
+ 
+ 		const colorDecoratorsActivatedOn = this._editor.getOption(EditorOption.colorDecoratorsActivatedOn);
+ 		if (colorDecoratorsActivatedOn !== 'click' && colorDecoratorsActivatedOn !== 'clickAndHover') {
+ 			return;
+ 		}
+ 		if (!isOnColorDecorator(mouseEvent)) {
+diff --git a/src/vs/editor/contrib/colorPicker/browser/hoverColorPicker/hoverColorPicker.ts b/src/vs/editor/contrib/colorPicker/browser/hoverColorPicker/hoverColorPicker.ts
+--- a/src/vs/editor/contrib/colorPicker/browser/hoverColorPicker/hoverColorPicker.ts
++++ b/src/vs/editor/contrib/colorPicker/browser/hoverColorPicker/hoverColorPicker.ts
+@@ -4,12 +4,12 @@
+  *--------------------------------------------------------------------------------------------*/
+ 
+ import { IPartialEditorMouseEvent, MouseTargetType } from '../../../../browser/editorBrowser.js';
+ import { ColorDecorationInjectedTextMarker } from '../colorDetector.js';
+ 
+ 
+-export function isOnColorDecorator(mouseEvent: IPartialEditorMouseEvent): boolean {
++export function isOnColorDecorator(mouseEvent: Pick<IPartialEditorMouseEvent, 'target'>): boolean {
+ 	const target = mouseEvent.target;
+ 	return !!target
+ 		&& target.type === MouseTargetType.CONTENT_TEXT
+ 		&& target.detail.injectedText?.options.attachedData === ColorDecorationInjectedTextMarker;
+ }

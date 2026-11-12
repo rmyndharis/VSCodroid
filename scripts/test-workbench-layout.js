@@ -537,7 +537,61 @@ function terminalRanges() {
   highlight.call({ _terminal: undefined, _resetNavigationDecorations() { assert.fail('missing terminal must be a no-op'); } }, {});
 }
 
-const sections = { activity, 'activity-lifecycle': activityLifecycle, 'activity-overflow': activityOverflow, modal, bars, panel, sash, 'status-toggle': statusToggle, 'panel-save': panelSave, 'panel-round-trip': panelRoundTrip, 'panel-minimum-width': panelMinimumWidth, 'terminal-ranges': terminalRanges };
+function gestureTarget() {
+  const code = body(source('0044'), 'private onTouchStart(');
+  const run = (text, path) => {
+    const host = { name: 'shadow host' }, started = [];
+    const gesture = {
+      handle: null, dispatched: false, activeTouches: {},
+      newGestureEvent(type, initialTarget) { return { type, initialTarget }; },
+      dispatchEvent(event) { started.push(event); },
+    };
+    const touch = { identifier: 7, target: host, pageX: 10, pageY: 20 };
+    vm.runInNewContext(`(function(e) ${text})`, { EventType: { Start: 'start' } }).call(gesture, {
+      targetTouches: { length: 1, item: () => touch }, composedPath: () => path,
+      preventDefault() {}, stopPropagation() {},
+    });
+    assert.equal(started.length, 1, 'one start event per touch');
+    assert.equal(started[0].initialTarget, gesture.activeTouches[7].initialTarget, 'the start event and the record name the same target');
+    return { target: started[0].initialTarget, host };
+  };
+  const item = { name: 'menu item in the shadow root' };
+  assert.equal(run(code, [item, {}, {}]).target, item, 'a touch in a shadow root starts at the touched element, not its host');
+  const outside = run(code, []);
+  assert.equal(outside.target, outside.host, 'without a composed path the touch target stands');
+  // Control: the unpatched expression hands the gesture the host.
+  const unpatched = run(code.replace('e.composedPath()[0] ?? touch.target', 'touch.target'), [item]);
+  assert.equal(unpatched.target, unpatched.host);
+}
+
+function swatchTap() {
+  const text = source('0045');
+  const code = body(text, '(e: GestureEvent) =>');
+  class Element {
+    constructor(swatch) { this.swatch = swatch; }
+    closest(selector) { assert.equal(selector, '.colorpicker-color-decoration'); return this.swatch ?? null; }
+    getBoundingClientRect() { return { left: 100, top: 40, width: 12, height: 10 }; }
+  }
+  const run = (initialTarget, hit) => {
+    const asked = [], opened = [];
+    const scope = {
+      dom: { isHTMLElement: value => value instanceof Element },
+      _editor: { getTargetAtClientPoint(x, y) { asked.push([x, y]); return hit; } },
+    };
+    vm.runInNewContext(`(function(e) ${code})`, scope).call({ onMouseDown(event) { opened.push(event.target); } }, { initialTarget });
+    return { asked, opened };
+  };
+  const swatch = new Element();
+  swatch.swatch = swatch;
+  const target = { type: 'content text' };
+  assert.deepEqual(run(swatch, target), { asked: [[106, 45]], opened: [target] }, 'a tap on a swatch opens the picker at its centre');
+  assert.deepEqual(run(new Element(), target), { asked: [], opened: [] }, 'a tap on other text is left to the caret');
+  assert.deepEqual(run({}, target), { asked: [], opened: [] }, 'a tap whose target is not an element is ignored');
+  assert.deepEqual(run(swatch, null), { asked: [[106, 45]], opened: [] }, 'a swatch the editor cannot resolve opens nothing');
+  assert.match(text, /getContainerDomNode\(\), TouchEventType\.Tap,[\s\S]+\}, true\)\);/, 'listen on the container, in the capture phase');
+}
+
+const sections = { activity, 'activity-lifecycle': activityLifecycle, 'activity-overflow': activityOverflow, modal, bars, panel, sash, 'status-toggle': statusToggle, 'panel-save': panelSave, 'panel-round-trip': panelRoundTrip, 'panel-minimum-width': panelMinimumWidth, 'terminal-ranges': terminalRanges, 'gesture-target': gestureTarget, 'swatch-tap': swatchTap };
 for (const name of process.argv.slice(2).length ? process.argv.slice(2) : Object.keys(sections)) {
   assert.ok(sections[name], `Unknown section ${name}`);
   sections[name]();
