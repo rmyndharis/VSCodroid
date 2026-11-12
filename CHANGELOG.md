@@ -7,6 +7,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-11-12
+
 ### Added
 
 - **View: Toggle Full Screen** hides the status and navigation bars, and the choice is kept for the next launch.
@@ -14,7 +16,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Changed
 
-- The app installs on Android 10 and newer; it needed Android 11.
+- The minimum Android version is now 10, down from 11.
 
 ### Fixed
 
@@ -1396,7 +1398,8 @@ This release represents the cumulative work across milestones M0 through M5, bri
 - Health check polling for server readiness
 - Android intent handling for "Open with VSCodroid"
 
-[Unreleased]: https://github.com/rmyndharis/VSCodroid/compare/v1.8.0...HEAD
+[Unreleased]: https://github.com/rmyndharis/VSCodroid/compare/v1.9.0...HEAD
+[1.9.0]: https://github.com/rmyndharis/VSCodroid/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/rmyndharis/VSCodroid/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/rmyndharis/VSCodroid/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/rmyndharis/VSCodroid/compare/v1.5.0...v1.6.0
