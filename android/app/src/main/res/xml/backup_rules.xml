@@ -1,7 +1,7 @@
 <?xml version="1.0" encoding="utf-8"?>
 <!--
-  The Android 11 form of the rules in `data_extraction_rules.xml`, which is
-  where the reasoning lives.
+  The Android 10 and 11 form of the rules in `data_extraction_rules.xml`, which
+  is where the reasoning lives.
 
   This is the file Android 10 and 11 (API 29 and 30) read, and the only one
   they read. `android:fullBackupContent` is consulted up to Android 11 and
