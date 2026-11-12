@@ -458,12 +458,14 @@ int posix_spawn_file_actions_addchdir(posix_spawn_file_actions_t *acts,
     static int (*real)(posix_spawn_file_actions_t *, const char *);
     static int looked_up;
 
-    if (!looked_up) {
+    /* Published as copy_file_range's flag is: a thread must not see the flag ahead
+     * of the pointer and answer ENOSYS where the real call exists. */
+    if (!__atomic_load_n(&looked_up, __ATOMIC_ACQUIRE)) {
         if (!shim_libc) shim_open_handles();
         if (shim_libc) {
             *(void **)&real = dlsym(shim_libc, "posix_spawn_file_actions_addchdir_np");
         }
-        looked_up = 1;
+        __atomic_store_n(&looked_up, 1, __ATOMIC_RELEASE);
     }
 
     if (!real) return ENOSYS;
@@ -474,8 +476,9 @@ int posix_spawn_file_actions_addchdir(posix_spawn_file_actions_t *acts,
  * copy_file_range, which Bionic gained at API 34.
  *
  * This one is not a symbol Bionic lacks, it is a symbol Bionic lacks *below the
- * minimum this app supports*. minSdk is 29, and the NDK's stub libc for 30, 33,
- * 34 and 35 puts the dividing line at 34: absent at 30 and at 33, present at 34.
+ * minimum this app supports*. minSdk is 29, and the NDK's stub libc for 29, 30,
+ * 33, 34 and 35 puts the dividing line at 34: absent at 29, 30 and 33, present
+ * at 34.
  * An addon in the shipped tree imports it, so on an Android 13 device, and on
  * every older one the app supports, the forwarder resolved to NULL and aborted
  * the process the first time a file was copied -- while every emulator running
@@ -567,12 +570,15 @@ ssize_t copy_file_range(int fd_in, off64_t *off_in, int fd_out, off64_t *off_out
     static ssize_t (*real)(int, off64_t *, int, off64_t *, size_t, unsigned);
     static int looked_up;
 
-    if (!looked_up) {
+    /* The flag is published after the pointer, with release and acquire, so a
+     * second thread that sees the flag sees the pointer: arm64 does not order two
+     * plain stores, and a thread reading NULL here takes the emulation below. */
+    if (!__atomic_load_n(&looked_up, __ATOMIC_ACQUIRE)) {
         if (!shim_libc) shim_open_handles();
         if (shim_libc) {
             *(void **)&real = dlsym(shim_libc, "copy_file_range");
         }
-        looked_up = 1;
+        __atomic_store_n(&looked_up, 1, __ATOMIC_RELEASE);
     }
 
     if (real) return real(fd_in, off_in, fd_out, off_out, len, flags);
@@ -599,12 +605,14 @@ int statx(int dirfd, const char *path, int flags, unsigned mask, struct statx *o
     static int (*real)(int, const char *, int, unsigned, struct statx *);
     static int looked_up;
 
-    if (!looked_up) {
+    /* Published as copy_file_range's flag is, so Android 11 and later never take
+     * the fstatat answer below on the strength of a flag read ahead of its pointer. */
+    if (!__atomic_load_n(&looked_up, __ATOMIC_ACQUIRE)) {
         if (!shim_libc) shim_open_handles();
         if (shim_libc) {
             *(void **)&real = dlsym(shim_libc, "statx");
         }
-        looked_up = 1;
+        __atomic_store_n(&looked_up, 1, __ATOMIC_RELEASE);
     }
     if (real) return real(dirfd, path, flags, mask, out);
 
@@ -1023,9 +1031,9 @@ __attribute__((noreturn)) static void shim_no_unwinder(const char *name) {
     uintptr_t name(uintptr_t a, uintptr_t b, uintptr_t c) {          \
         static shim_unwind_fn real;                                  \
         static int looked_up;                                        \
-        if (!looked_up) {                                            \
+        if (!__atomic_load_n(&looked_up, __ATOMIC_ACQUIRE)) {        \
             real = shim_bionic_unwinder(#name);                      \
-            looked_up = 1;                                           \
+            __atomic_store_n(&looked_up, 1, __ATOMIC_RELEASE);       \
         }                                                            \
         if (real) return real(a, b, c);                              \
         without;                                                     \
