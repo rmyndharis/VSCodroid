@@ -24,6 +24,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The editor's context menu scrolls with a finger when it does not fit the screen.
 - A tap on the color square beside a CSS color opens the color picker.
+- A finger can drag the caret while a peek view is open.
 
 ## [1.8.0] - 2026-11-09
 
