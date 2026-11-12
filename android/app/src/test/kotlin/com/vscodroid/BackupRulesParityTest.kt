@@ -74,7 +74,7 @@ class BackupRulesParityTest {
     fun `the application names both files, so neither release falls back to everything`() {
         val application = root(manifest).getElementsByTagName("application").item(0) as Element
         assertEquals("@xml/backup_rules", application.getAttribute("android:fullBackupContent")) {
-            "Android 11 reads android:fullBackupContent, and without it backs up the whole data directory"
+            "Android 10 and 11 read android:fullBackupContent, and without it back up the whole data directory"
         }
         assertEquals("@xml/data_extraction_rules", application.getAttribute("android:dataExtractionRules")) {
             "Android 12 and above read android:dataExtractionRules, and without it back up the whole data directory"

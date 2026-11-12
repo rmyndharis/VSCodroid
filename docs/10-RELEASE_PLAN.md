@@ -110,7 +110,7 @@ jobs:
 | Cache | Holds | Key | Rebuilt when |
 |-------|-------|-----|--------------|
 | `downloads-` | The server tarball, the Termux `.deb` files and their index, the npm and musl payloads, the fetched extensions | Hash of `VSCODE_VERSION`, `VSCODE_COMMIT`, `patches/**`, `branding/**` and every `scripts/` file that fetches or verifies one of them | Any of those change |
-| `assets-` | The unpacked tree that goes into the APK: `assets/vscode-reh/`, `assets/usr/`, `assets/extensions/` and `jniLibs/arm64-v8a/` | The same hash inputs | Any of those change |
+| `assets-` | The unpacked tree that goes into the APK: `assets/vscode-reh/`, `assets/usr/`, `assets/extensions/`, `assets/nls/`, `jniLibs/arm64-v8a/` and `server/vscode-reh/` | The NDK version and a superset of those inputs: the build scripts and sources of the addons, the glibc shim, the exec interceptor, the trampoline and the Claude shim, and the extensions tree | Any of those change |
 
 Both declare `restore-keys`, so a miss on the exact key still restores the newest older entry.
 That matters for correctness, not just speed: on an `assets-` hit the fetch step and its digest
@@ -439,8 +439,9 @@ with no section naming the version a user installed.
    shrinker run on the release build type alone, and r8.yml proves only that
    they finish: a member reached by name that no keep rule covers is removed
    without an error, and no debug build and no CI job shows it.
-   - Timing: dispatch only after step 3 has landed. An APK still carrying the
-     previous versionCode upgrades without re-running setup, and tests nothing
+   - Timing: dispatch only after step 3 has landed, so the run builds the
+     versionName and versionCode being released: the upgrade below then runs
+     setup for that version, and the commit the run built is the commit to tag
    - Server: the run below starts by comparing every input of the server build
      with the commit the `server-<version>` tag points at, and fails with the
      files that differ when main has moved one since the last publish

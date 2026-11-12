@@ -395,7 +395,7 @@ object CrashReporter {
  *
  * `Thread.threadId()` is API 36 and `minSdk` is 29, and nothing backports it
  * here: `coreLibraryDesugaring` is off, and lint did not stop it: `abortOnError`
- * was still false when the call was written. On 30 to 35 the call
+ * was still false when the call was written. On 29 to 35 the call
  * therefore raises `NoSuchMethodError`, and it sat above `file.writeText` inside
  * a `catch (_: Throwable)`: the write never happened, `hasPendingCrash()` stayed
  * false, the dialog in `MainActivity.checkPreviousCrash` never appeared, and the

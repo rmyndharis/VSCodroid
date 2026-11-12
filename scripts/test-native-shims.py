@@ -3,6 +3,7 @@
 
 from pathlib import Path
 import subprocess
+import sys
 import tempfile
 import unittest
 
@@ -16,7 +17,7 @@ def function(path, start, end):
     return source[offset:source.index(end, offset)]
 
 
-def compile_and_run(source):
+def compile_and_run(source, flags=(), args=()):
     with tempfile.TemporaryDirectory() as directory:
         root = Path(directory)
         file = root / "case.c"
@@ -24,9 +25,9 @@ def compile_and_run(source):
         file.write_text(source)
         subprocess.run([
             "cc", "-Wall", "-Wextra", "-Werror", "-fsanitize=undefined",
-            "-fno-sanitize-recover=all", str(file), "-o", str(binary),
+            "-fno-sanitize-recover=all", str(file), "-o", str(binary), *flags,
         ], check=True, timeout=30)
-        subprocess.run([str(binary)], cwd=root, check=True, timeout=10)
+        subprocess.run([str(binary), *args], cwd=root, check=True, timeout=10)
 
 
 def strerror_fixture():
@@ -140,6 +141,187 @@ static long sys6(long nr, long sig, long act, long old, long size, long e, long 
 }
 BODY
 '''.replace("STRUCTURES", structures).replace("BODY", body)
+
+
+def statx_fixture():
+    """The statx fallback, as Android 10 runs it, against the kernel's own statx.
+
+    Android 10's libc has no statx, so the shim answers from fstatat. Here the shim's
+    handles are absent, which is the same path, and glibc's statx is the reference.
+    """
+    source = (ROOT / "scripts/glibc-shim.c").read_text()
+    head = "int statx(int dirfd, const char *path, int flags, unsigned mask, struct statx *out) {"
+    offset = source.index(head)
+    body = source[offset:source.index("\n}\n", offset)] + "\n}\n"
+    return r"""
+#define _GNU_SOURCE
+#include <assert.h>
+#include <dlfcn.h>
+#include <errno.h>
+#include <fcntl.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <string.h>
+#include <sys/stat.h>
+#include <sys/sysmacros.h>
+#include <unistd.h>
+
+static void *shim_libc;
+static void shim_open_handles(void) {}
+BODY
+
+static int failures;
+
+static void same(const char *what, int dirfd, const char *path, int flags) {
+    unsigned mask = STATX_BASIC_STATS | STATX_BTIME;
+    struct statx real, shim;
+    memset(&real, 0xAA, sizeof real);
+    memset(&shim, 0x55, sizeof shim);
+    errno = 0;
+    int real_result = statx(dirfd, path, flags, mask, &real);
+    int real_errno = errno;
+    errno = 0;
+    int shim_result = shim_statx(dirfd, path, flags, mask, &shim);
+    int shim_errno = errno;
+    if (real_result != shim_result || (real_result != 0 && real_errno != shim_errno)) {
+        printf("FAIL %s: real %d/%d shim %d/%d\n", what, real_result, real_errno, shim_result, shim_errno);
+        failures++;
+        return;
+    }
+    if (real_result != 0) return;
+#define SAME(field) if (real.field != shim.field) { \
+        printf("FAIL %s: %s differs\n", what, #field); failures++; }
+    SAME(stx_blksize) SAME(stx_nlink) SAME(stx_uid) SAME(stx_gid) SAME(stx_mode)
+    SAME(stx_ino) SAME(stx_size) SAME(stx_blocks)
+    SAME(stx_atime.tv_sec) SAME(stx_atime.tv_nsec) SAME(stx_mtime.tv_sec) SAME(stx_mtime.tv_nsec)
+    SAME(stx_ctime.tv_sec) SAME(stx_ctime.tv_nsec)
+    SAME(stx_rdev_major) SAME(stx_rdev_minor) SAME(stx_dev_major) SAME(stx_dev_minor)
+    /* The mask says what is supplied: the basic set, and no birth time. */
+    if ((shim.stx_mask & STATX_BASIC_STATS) != STATX_BASIC_STATS || (shim.stx_mask & STATX_BTIME)) {
+        printf("FAIL %s: mask %x\n", what, shim.stx_mask);
+        failures++;
+    }
+    if (shim.stx_attributes || shim.stx_attributes_mask || shim.stx_btime.tv_sec) {
+        printf("FAIL %s: fields the fallback cannot know are not zero\n", what);
+        failures++;
+    }
+}
+
+int main(void) {
+    int fd = open("file", O_CREAT | O_RDWR | O_TRUNC, 0640);
+    assert(fd >= 0 && write(fd, "hello", 5) == 5);
+    /* Distinct access and modification times, so a swapped field cannot hide behind equal ones. */
+    struct timespec times[2] = {{1000, 500000000}, {2000, 250000000}};
+    assert(futimens(fd, times) == 0);
+    /* An owner that is not the one running the test, where it may be set, so a dropped field shows. */
+    if (fchown(fd, 12345, 12346) != 0) { /* not allowed: the file keeps its owner, which is not root */ }
+    assert(symlink("file", "link") == 0);
+    assert(mkdir("dir", 0700) == 0);
+    int directory = open(".", O_RDONLY | O_DIRECTORY);
+    assert(directory >= 0);
+
+    same("regular file", AT_FDCWD, "file", 0);
+    same("directory", AT_FDCWD, "dir", 0);
+    same("link followed", AT_FDCWD, "link", 0);
+    same("link not followed", AT_FDCWD, "link", AT_SYMLINK_NOFOLLOW);
+    same("device numbers", AT_FDCWD, "/dev/null", 0);
+    same("an open descriptor", fd, "", AT_EMPTY_PATH);
+    same("relative to a directory descriptor", directory, "file", 0);
+    same("sync bits fstatat would refuse", AT_FDCWD, "file", AT_STATX_FORCE_SYNC);
+    same("no sync", AT_FDCWD, "file", AT_STATX_DONT_SYNC);
+    same("missing path", AT_FDCWD, "nowhere/x", 0);
+    same("a file used as a directory", AT_FDCWD, "file/x", 0);
+    same("bad descriptor", 9999, "file", 0);
+    same("empty path without the flag", AT_FDCWD, "", 0);
+
+    /* Rust's availability probe passes no path and no buffer, and expects EFAULT. */
+    errno = 0;
+    int probe = shim_statx(0, NULL, 0, STATX_BASIC_STATS | STATX_BTIME, NULL);
+    if (probe != -1 || errno != EFAULT) {
+        printf("FAIL probe: %d errno %d\n", probe, errno);
+        failures++;
+    }
+    return failures != 0;
+}
+""".replace("BODY", body.replace("int statx(", "int shim_statx(", 1))
+
+
+def unwind_fixture():
+    """The unwinder entry points, with and without a unwinder behind them."""
+    source = (ROOT / "scripts/glibc-shim.c").read_text()
+    offset = source.index("#define SHIM_URC_END_OF_STACK ")
+    body = source[offset:source.index("\n/*\n * A stack-protector canary", offset)]
+    names = ["_Unwind_Backtrace", "_Unwind_FindEnclosingFunction", "_Unwind_GetCFA",
+             "_Unwind_GetDataRelBase", "_Unwind_GetIP", "_Unwind_GetIPInfo",
+             "_Unwind_GetLanguageSpecificData", "_Unwind_GetRegionStart",
+             "_Unwind_GetTextRelBase", "_Unwind_Resume", "_Unwind_SetGR", "_Unwind_SetIP"]
+    for name in names:
+        assert "SHIM_UNWINDER(" + name + "," in body, name + " is no longer defined by the shim"
+    renames = "\n".join("#define %s shim%s" % (n, n) for n in names)
+    return r"""
+#define _GNU_SOURCE
+#include <assert.h>
+#include <dlfcn.h>
+#include <pthread.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <stdlib.h>
+
+#define ANDROID_LOG_FATAL 7
+static int __android_log_print(int priority, const char *tag, const char *format, ...) {
+    (void)priority; (void)tag; (void)format;
+    return 0;
+}
+static void *shim_libc;
+static int with_unwinder;
+/* A libc that has an unwinder stands for Android 11 and later; none stands for Android 10. */
+static void shim_open_handles(void) {
+    if (with_unwinder) shim_libc = dlopen("libgcc_s.so.1", RTLD_NOW);
+}
+/* The shim's definitions, renamed so the program can also use the real unwinder. */
+RENAMES
+BODY
+
+static int frames, nonzero;
+static uintptr_t visit(uintptr_t context, uintptr_t argument) {
+    (*(int *)argument)++;
+    /* Forwarded with two words the real function ignores, as a caller built for the shape would. */
+    if (shim_Unwind_GetIP(context, 0x1234, 0x5678)) __atomic_add_fetch(&nonzero, 1, __ATOMIC_RELAXED);
+    return 0;
+}
+static void *walk(void *unused) {
+    (void)unused;
+    int count = 0;
+    uintptr_t result = shim_Unwind_Backtrace((uintptr_t)visit, (uintptr_t)&count, 0);
+    __atomic_add_fetch(&frames, count, __ATOMIC_RELAXED);
+    return (void *)result;
+}
+
+int main(int argc, char **argv) {
+    (void)argv;
+    with_unwinder = argc > 1;
+    if (!with_unwinder) {
+        /* Android 10: an empty stack, 5 being _URC_END_OF_STACK, and no call into a missing unwinder. */
+        int count = 0;
+        uintptr_t result = shim_Unwind_Backtrace((uintptr_t)visit, (uintptr_t)&count, 0);
+        uintptr_t found = shim_Unwind_FindEnclosingFunction((uintptr_t)main, 0, 0);
+        printf("backtrace %lu (want 5), calls %d (want 0), enclosing %lu (want 0)\n",
+               (unsigned long)result, count, (unsigned long)found);
+        return !(result == 5 && count == 0 && found == 0);
+    }
+    /* Android 11 and later: every call reaches the real unwinder, from racing first calls too. */
+    pthread_t threads[8];
+    for (int i = 0; i < 8; i++) pthread_create(&threads[i], 0, walk, 0);
+    int wrong = 0;
+    for (int i = 0; i < 8; i++) {
+        void *result;
+        pthread_join(threads[i], &result);
+        if ((uintptr_t)result != 5) wrong++;
+    }
+    printf("%d frames, %d with an address, %d results other than end of stack\n", frames, nonzero, wrong);
+    return !(frames >= 16 && nonzero >= 16 && wrong == 0);
+}
+""".replace("RENAMES", renames).replace("BODY", body)
 
 
 class NativeShimTest(unittest.TestCase):
@@ -403,6 +585,19 @@ int main(void) {
     return 0;
 }
 '''.replace("BODY", body))
+
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "needs the kernel's own statx to compare with")
+    def test_statx_fallback_matches_the_kernel(self):
+        # The probe passes no path on purpose and the kernel answers EFAULT, which the
+        # sanitizer would call a null argument to a function glibc declares never to take one.
+        compile_and_run(statx_fixture(), flags=["-ldl", "-fno-sanitize=nonnull-attribute"])
+
+    @unittest.skipUnless(sys.platform.startswith("linux"), "needs libgcc_s as the unwinder behind the shim")
+    def test_unwinder_shims_answer_without_an_unwinder_and_forward_with_one(self):
+        source = unwind_fixture()
+        compile_and_run(source, flags=["-ldl", "-pthread"])
+        compile_and_run(source, flags=["-ldl", "-pthread"], args=["forward"])
 
 
 if __name__ == "__main__":

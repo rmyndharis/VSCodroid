@@ -151,7 +151,7 @@ test source.
 
 ### 3.2 Instrumented Tests
 
-109 tests across twenty classes, in `android/app/src/androidTest/`. They
+131 tests across 24 classes, in `android/app/src/androidTest/`. They
 need an `arm64-v8a` device or emulator, because the app ships that ABI alone.
 Counted from the sources (`grep -cE '^\s*@Test'` over the directory), because no
 run covers the whole set and none of it is scheduled. Nothing holds this figure
@@ -180,6 +180,10 @@ to the suite; `android/app/src/androidTest/README.md` states the total that
 | **PipGuidanceOnDeviceTest** | The generated interactive pip helpers and the noninteractive `BASH_ENV`, run through the APK's `libbash.so` with a substituted Python: build failures keep stderr and exit status and get the toolchain advice once per shell, missing packages get none, successful calls stay quiet, and an older helper is upgraded without repeated appends | arm64 device |
 | **ProfileExtensionPreservationOnDeviceTest** | Bundled-extension extraction and manifest reconciliation with the real APK assets in isolated storage: a named profile keeps an older copy of an extension the user installed while the default profile advances, a profile's entry for one of the app's own extensions follows the update, and unreferenced copies are removed | arm64 device |
 | **SafDataPreservationInstrumentedTest** | A file-backed DocumentsProvider in a separate process: watched saves and creations come back byte for byte on reopening; a stable delivered save follows an external deletion across two reopens, while an undelivered edit with unchanged length and timestamp survives; a failed upload-journal write refuses the save and keeps both copies; a local edit that overlaps a blocked provider read survives the download; directory deletes keep provider-only or changed children; cleanup retains unrecorded workspace bytes and reclaims a vouched mirror, with temporary grants only and no persisted-revocation proof | arm64 device, the debug build |
+| **EditorGatewayOnDeviceTest** | The native relay between the editor's public port and its Unix socket: binary bytes and the Host header pass through, the response survives the client's half-close, Unicode socket paths work, a silent backend read resumes after its polling timeout, a full listen backlog bounds connection setup, and a missing backend or a withdrawal keeps the frontend reserved | arm64 device or emulator |
+| **ResourceFileOnDeviceTest** | Opening a published resource file on the device's real filesystem: regular and empty files use the opened file and close its descriptor, a link inside the published tree still resolves to its target, spaces and Unicode in the root keep access, and a file replaced by a link, a parent replaced, a directory or a FIFO cannot expose an unpublished file or make the open wait | arm64 device or emulator |
+| **SafDirectoryWatchTeardownTest** | A directory walk that finishes after shutdown cannot register observers or adopt the replacement watch session, and a stale directory removal cannot release the replacement's observers | arm64 device or emulator |
+| **StorageAnchoredCleanupTest** | Cleanup of app storage against real filesystem semantics: it accepts the canonical target of the context root and both spellings under a trusted alias, rejects a redirected ancestor inside the app root, keeps an opened directory anchored after its path becomes a link, and keeps the removed byte count when one subtree is unreadable | arm64 device or emulator |
 
 **Framework**: AndroidJUnit4 + Espresso + UI Automator (JUnit 4, on device)
 

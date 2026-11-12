@@ -66,8 +66,8 @@
 
     <!-- The theme keepStartColor names for a light editor. Empty here on purpose:
          the starting window is a theme API from Android 12 and its white
-         background is declared in values-v31, so Android 11 never parses an
-         attribute it does not have. Nothing names this style below API 31. The
+         background is declared in values-v31, so Android 10 and 11 never parse
+         an attribute they do not have. Nothing names this style below API 31. The
          declaration stays so the resource has a default, which is what a
          reference from code needs. -->
     <style name="Theme.VSCodroid.LightStart" />

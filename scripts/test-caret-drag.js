@@ -72,7 +72,7 @@ function rect(left, top, width, height) {
  * (200, 100) unless asked otherwise; the editor's scroller spans x 100..400 and y 50..450. The text
  * sits where `page.textAt` says, which a test moves to say that the editor scrolled.
  */
-function newPage({ focused = true, carets = 1, selected = false, sash = false, swatch = false, caretLeft = 200, caretTop = 100,
+function newPage({ focused = true, carets = 1, selected = false, nested = false, sash = false, swatch = false, caretLeft = 200, caretTop = 100,
     box = { left: 100, top: 50, width: 300, height: 400 } } = {}) {
     const listeners = [];
     const frames = new Map();
@@ -92,23 +92,37 @@ function newPage({ focused = true, carets = 1, selected = false, sash = false, s
         name: 'scroller',
         getBoundingClientRect: () => rect(box.left, box.top, box.width, box.height),
     };
+    // What a caret or a selection answers to closest('.monaco-editor'): the editor it belongs to.
+    const ownedBy = (owner) => ({ closest: (sel) => (sel === '.monaco-editor' ? owner : null) });
     const caretRects = Array.from({ length: carets }, () => ({
+        ...ownedBy(null),
         getBoundingClientRect: () => rect(caretLeft, caretTop, 2, 19),
     }));
+    // An editor inside this one (a peek, an inline chat, a comment thread) has a caret, and
+    // may have a selection, of its own, and both are found by a query on the outer editor.
+    const nestedEditor = { name: 'nested editor' };
+    const nestedCaret = {
+        ...ownedBy(nestedEditor),
+        getBoundingClientRect: () => rect(caretLeft + 60, caretTop + 80, 2, 19),
+    };
+    const nestedSelection = { ...ownedBy(nestedEditor) };
     const editor = {
         name: 'editor',
         dispatchEvent: (ev) => { wheels.push(ev); },
         querySelectorAll(sel) {
-            assert.strictEqual(sel, '.cursors-layer > .cursor', `unexpected selector ${sel}`);
-            return caretRects;
+            if (sel === '.cursors-layer > .cursor') return nested ? [...caretRects, nestedCaret] : caretRects;
+            if (sel === '.selected-text') {
+                return [...(selected ? [{ ...ownedBy(editor) }] : []), ...(nested ? [nestedSelection] : [])];
+            }
+            throw new Error(`unexpected selector ${sel}`);
         },
         querySelector(sel) {
-            if (sel === '.selected-text') return selected ? {} : null;
             if (sel === '.lines-content') return lines;
             if (sel === '.monaco-scrollable-element') return scroller;
             throw new Error(`unexpected selector ${sel}`);
         },
     };
+    caretRects.forEach((c) => { c.closest = (sel) => (sel === '.monaco-editor' ? editor : null); });
     const text = { name: 'text', inEditor: true, inLines: true, closest: () => null };
     const sashEl = { name: 'sash', inEditor: true, inLines: false, closest: () => null };
     // The square the editor draws beside a CSS color. It sits in the lines, on top of the text.
@@ -358,6 +372,23 @@ check('a touch that turns out to be a scroll, or starts far from the caret, keep
     const far = newPage();
     far.start(350, 300);
     assert.ok(!far.pointer('pointermove', 360, 300).propagationStopped);
+});
+
+// A peek, an inline chat or a comment thread holds an editor inside the focused one. Its
+// caret and its selection are found by a query on the outer editor, and are not the outer
+// editor's: counting them left a drag unable to start while one was open.
+check('an editor nested in this one does not count as an extra caret or a selection', () => {
+    const page = newPage({ nested: true });
+    page.start(200, 110);
+    assert.ok(page.move(230, 110).defaultPrevented, 'a nested editor stopped the drag from starting');
+
+    const own = newPage({ nested: true, selected: true });
+    own.start(200, 110);
+    assert.ok(!own.move(230, 110).defaultPrevented, 'the outer editor has a selection of its own, which a drag would drop');
+
+    const two = newPage({ nested: true, carets: 2 });
+    two.start(200, 110);
+    assert.ok(!two.move(230, 110).defaultPrevented, 'the outer editor has two carets of its own');
 });
 
 check('a selection, several carets or a second finger leave the touch alone', () => {

@@ -607,11 +607,11 @@ colour probe's own WebView records nothing.
 | Android app | Kotlin, compiled to JVM target 17 | The version AGP 9.3.1 brings (`agp` in `android/gradle/libs.versions.toml`) |
 | Build system | Gradle (Kotlin DSL), pinned by the wrapper and its `distributionSha256Sum` | 9.7.1 (`android/gradle/wrapper/gradle-wrapper.properties`) |
 | UI framework | Android View + WebView | API 29-36 |
-| Node.js | Node.js from Termux's `nodejs-lts` package, installed as `libnode.so` by `scripts/download-node.sh` | 24.18.0; the pinned VS Code tag's `remote/.npmrc` `target` names 24.20.0, the same major and so the same `NODE_MODULE_VERSION` |
+| Node.js | Node.js from Termux's `nodejs-lts` package, installed as `libnode.so` by `scripts/download-node.sh` | Whatever `nodejs-lts` the Termux index names on the day of the build (24.22.2 in v1.8.0's `build-manifest.txt`); the pinned VS Code tag's `remote/.npmrc` `target` names 24.20.0, the same major and so the same `NODE_MODULE_VERSION` |
 | VS Code | Code - OSS, built from MIT source with the diffs in `patches/` | 1.139.1 (pinned in the `VSCODE_VERSION` file at the repo root) |
 | Extension Host | VS Code Extension Host as a worker_thread (patch `0004`); the Pty Host likewise (patch `0003`) | Same as VS Code |
 | Terminal | node-pty spawning bash on a real PTY (tmux bundled as a standalone tool) | Latest |
-| Toolchain delivery | Play Asset Delivery packs, or `releases/latest` ZIPs for non-Play installs | Ruby, Java 25, C/C++ |
+| Toolchain delivery | Play Asset Delivery packs, or `releases/latest` ZIPs for non-Play installs | Ruby, Java 25, C/C++ and Codex |
 | SCM | Git from Termux, as `libgit.so` and `libgit-remote-curl.so` plus `usr/lib/git-core` | Whatever the Termux index names at build time |
 | Python | Python 3 from Termux, fetched by `scripts/download-python.sh` | Whatever the Termux index names at build time; read it from `assets/usr/lib/libpython*.so` |
 | C++ stdlib | `libc++_shared.so` from Termux's `libc++` package, in `assets/usr/lib` | Whatever `scripts/download-termux-tools.sh` resolves |
