@@ -31,6 +31,10 @@ JDK_DIRNAME="java-$JDK_MAJOR-openjdk"
 
 REQUIRED_PACKAGES=(
     "$JDK_NAME"
+    # The JDK's trust store. openjdk-25 25.0.5-2 stopped carrying its own
+    # lib/security/cacerts and links it to this package's file instead, at a path
+    # that exists on no device here. See the step that puts the file in place.
+    ca-certificates-java
     libandroid-shmem
     libandroid-spawn
     # Not a component that ships: it carries usr/share/LICENSES, the shared
@@ -98,7 +102,37 @@ mkdir -p "$PACK_ASSETS/usr/lib/jvm"
 #
 # A dangling link upstream makes this fail rather than pass silently, which is
 # the right direction and not a reason to go back to -r.
+#
+# One link in this tree does dangle, and it is not a notice. Since 25.0.5-2 the
+# JDK's lib/security/cacerts is a link to
+# /data/data/com.termux/files/usr/etc/tls/certs/java/cacerts, a file that belongs
+# to ca-certificates-java, so -L stops on it and the build with it. Dropping the
+# link would pass every other gate and ship a JDK with no certificate
+# authorities, which refuses every TLS connection on first use, so the file takes
+# the link's place before the copy. An older openjdk-25 carried the file itself,
+# and that needs nothing.
+CACERTS_LINK="$JDK_SRC/lib/security/cacerts"
+CACERTS_FILE="extracted/ca-certificates-java/data/data/com.termux/files/usr/etc/tls/certs/java/cacerts"
+if [ -L "$CACERTS_LINK" ]; then
+    if [ ! -s "$CACERTS_FILE" ]; then
+        echo "  ERROR: $JDK_NAME links lib/security/cacerts to $(readlink "$CACERTS_LINK")" >&2
+        echo "         and ca-certificates-java does not carry it at" >&2
+        echo "         $CACERTS_FILE" >&2
+        exit 1
+    fi
+    rm "$CACERTS_LINK"
+    cp "$CACERTS_FILE" "$CACERTS_LINK"
+fi
 cp -RL "$JDK_SRC" "$PACK_ASSETS/usr/lib/jvm/$JDK_DIRNAME"
+
+# What the step above exists for, asked of the result and not of the input: nothing
+# else looks at this file. A real keystore of Mozilla's roots is about 130 KB.
+PACK_CACERTS="$PACK_ASSETS/usr/lib/jvm/$JDK_DIRNAME/lib/security/cacerts"
+if [ ! -f "$PACK_CACERTS" ] || [ "$(wc -c < "$PACK_CACERTS" | tr -d ' ')" -lt 50000 ]; then
+    echo "  ERROR: the pack's lib/security/cacerts is missing or too small to hold" >&2
+    echo "         the certificate authorities; Java would trust nothing" >&2
+    exit 1
+fi
 
 # Copy shared library dependencies
 echo ""

@@ -178,6 +178,7 @@ base app's `usr/share/doc/python/LICENSE`.
 |----------|---------|-----|
 | Ruby | BSD 2-Clause | https://www.ruby-lang.org |
 | OpenJDK | GPL v2 + Classpath | https://openjdk.org |
+| Mozilla CA certificate list (the JDK's trust store) | MPL 2.0 | https://curl.se/docs/caextract.html |
 | LLVM (clang, lld) | Apache 2.0 with LLVM Exceptions | https://llvm.org |
 | Codex (OpenAI) | Apache 2.0 | https://github.com/openai/codex |
 

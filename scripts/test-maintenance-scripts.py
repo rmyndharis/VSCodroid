@@ -470,6 +470,41 @@ esac
                 self.assertEqual(0, result["status"], result)
                 self.assertEqual(str(expected), result["stdout"], result)
 
+    def test_java_pack_gets_its_trust_store_from_ca_certificates_java(self):
+        text = (SOURCE / "scripts/download-java.sh").read_text()
+        begin = text.index('CACERTS_LINK="$JDK_SRC/lib/security/cacerts"')
+        tail = 'Java would trust nothing" >&2\n    exit 1\nfi\n'
+        phase = text[begin:text.index(tail, begin) + len(tail)]
+        prefix = ("set -euo pipefail\nJDK_NAME=openjdk-25\nJDK_DIRNAME=java-25-openjdk\n"
+                  'JDK_SRC="$PWD/jdk"\nPACK_ASSETS="$PWD/pack"\nmkdir -p "$PACK_ASSETS/usr/lib/jvm"\n')
+        link = "/data/data/com.termux/files/usr/etc/tls/certs/java/cacerts"
+        package_file = "extracted/ca-certificates-java/data/data/com.termux/files/usr/etc/tls/certs/java/cacerts"
+        for label, jdk_entry, from_package, status, size, message in (
+                ("dangling link, file in the package", "link", 60000, 0, 60000, ""),
+                ("dangling link, nothing in the package", "link", None, 1, None, "does not carry it"),
+                ("the JDK carries the file itself", 60000, None, 0, 60000, ""),
+                ("a file too small to be a trust store", 10, None, 1, None, "too small"),
+                ("no entry at all", None, None, 1, None, "missing or too small")):
+            with self.subTest(label=label):
+                case = self.root / label.replace(" ", "-").replace(",", "")
+                (case / "jdk/lib/security").mkdir(parents=True)
+                entry = case / "jdk/lib/security/cacerts"
+                if jdk_entry == "link":
+                    os.symlink(link, entry)
+                elif jdk_entry is not None:
+                    entry.write_bytes(b"k" * jdk_entry)
+                if from_package is not None:
+                    write(case / package_file, "")
+                    (case / package_file).write_bytes(b"p" * from_package)
+                result = run(["/bin/bash", "-c", prefix + phase], case)
+                self.assertEqual(status, result["status"], result)
+                packed = case / "pack/usr/lib/jvm/java-25-openjdk/lib/security/cacerts"
+                if status == 0:
+                    self.assertFalse(packed.is_symlink(), result)
+                    self.assertEqual(size, packed.stat().st_size, result)
+                else:
+                    self.assertIn(message, result["stderr"], result)
+
     def test_offline_termux_packages_never_attempt_a_download(self):
         library = SOURCE / "scripts/lib/termux-packages.sh"
         payload = b"cached package bytes"
