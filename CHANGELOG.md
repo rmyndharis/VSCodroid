@@ -10,6 +10,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **View: Toggle Full Screen** hides the status and navigation bars, and the choice is kept for the next launch.
+- Zen Mode hides the status and navigation bars too, and shows them again when it ends.
 
 ### Changed
 

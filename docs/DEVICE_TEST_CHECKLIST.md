@@ -34,7 +34,7 @@
 | AV-3 | Android 15 (API 35) | Full install + test | All features work | | |
 | AV-4 | Android 16 (API 36) | Full install + test | All features work, 16KB pages OK | | |
 | AV-5 | Android 11 (API 30) | Update Android System WebView to the floor first (the stock one on an API 30 image is 91, and the editor page stays blank on it), then full install + test | All features work; no notification prompt is shown; a light editor theme starts on the dark window | | |
-| AV-6 | Android 10 (API 29) | Update Android System WebView to the floor first (the stock one on an API 29 image is 91, and the editor page stays blank on it), then full install + test | All features work (minimum supported); no notification prompt is shown; a light editor theme starts on the dark window; the folder picker also offers the whole storage and Download; a bug report says recent exits are not recorded | | |
+| AV-6 | Android 10 (API 29) | Update Android System WebView to the floor first (the stock one on an API 29 image is 91, and the editor page stays blank on it), then full install + test | All features work (minimum supported); no notification prompt is shown; a light editor theme starts on the dark window; the folder picker also offers the whole storage and Download; a typed `/sdcard/Documents` in the app's-storage dialog says the folder does not exist; a bug report says recent exits are not recorded | | |
 
 ## 3. Keyboard Input
 
