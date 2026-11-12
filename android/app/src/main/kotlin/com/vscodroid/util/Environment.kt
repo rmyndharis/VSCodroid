@@ -2,6 +2,7 @@ package com.vscodroid.util
 
 import android.content.Context
 import android.net.Uri
+import android.os.Build
 import android.system.Os
 import com.vscodroid.setup.ToolchainManager
 import java.io.File
@@ -333,12 +334,13 @@ object Environment {
      * the user's work on shared storage.
      *
      * It used to be `getExternalFilesDir(null)/projects` for everyone, chosen so
-     * that a file manager could reach the code. That reachability is gone:
-     * Android 11 closed `Android/data` to other apps and to the system Files
-     * app, and minSdk here is 30, which is that release, so no supported device
-     * has it. A few routes
+     * that a file manager could reach the code. That reachability is gone from
+     * Android 11, which closed `Android/data` to other apps and to the system
+     * Files app. A few routes
      * remain (MTP over USB, some OEM managers), which is how the folder gets
-     * deleted from outside at all, but nothing a user can rely on.
+     * deleted from outside at all, but nothing a user can rely on. Android 10,
+     * the oldest release this installs on, did not close it, and is answered
+     * separately in [projectsDirFor].
      *
      * What did not go away is the filesystem. Shared storage is served through
      * FUSE, which does not implement `symlink(2)` at all, so every symlink an
@@ -365,9 +367,25 @@ object Environment {
      * stay reachable from outside the app still belongs in a folder opened
      * through the SAF picker. Neither of those changed with the location.
      */
-    fun getProjectsDir(context: Context): String {
+    fun getProjectsDir(context: Context): String =
+        projectsDirFor(context, Build.VERSION.SDK_INT)
+
+    /**
+     * [getProjectsDir] for a named release, which is what lets a test ask about
+     * Android 10.
+     *
+     * There the shared location is never the answer. Android 10 still lets any
+     * app holding the storage permission, and the Files app, create and write
+     * under `Android/data/<this package>`, and no install on it can have a
+     * shared-storage workspace of its own: the app did not install there while
+     * that was the default. So a `projects` directory found there was put there
+     * by something else, and answering with it would move the default workspace
+     * onto storage that something else reads and writes.
+     */
+    internal fun projectsDirFor(context: Context, sdkInt: Int): String {
         val filesDir = context.filesDir.absolutePath
         val internal = "$filesDir/projects"
+        if (sdkInt == Build.VERSION_CODES.Q) return internal
         val externalDir = context.getExternalFilesDir(null) ?: return internal
         val legacy = File(externalDir, "projects")
         if (legacy.isDirectory) return legacy.absolutePath

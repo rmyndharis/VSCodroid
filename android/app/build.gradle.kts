@@ -136,7 +136,7 @@ android {
 
     defaultConfig {
         applicationId = "com.vscodroid"
-        minSdk = 30
+        minSdk = 29
         // Held at 36 on purpose, and lint's OldTargetApi is answered rather than
         // ignored. Targeting 37 blocks local network access by default, so a dev
         // server running here stops being reachable from another device on the

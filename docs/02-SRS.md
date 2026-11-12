@@ -51,7 +51,7 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 
 ### 2.4 Constraints
 
-- ARM64 Android only (API 30+)
+- ARM64 Android only (API 29+)
 - Core binaries arrive in the APK as .so files. Play installs receive optional toolchains through asset packs; non-Play installs fetch verified toolchain ZIPs over HTTPS. Programs under the app's storage cannot be exec'd directly and run through the system dynamic linker instead
 - Open VSX only: Microsoft Marketplace ToS prohibits third-party access
 - Android phantom process limit (32 system-wide) constrains child process count
@@ -93,7 +93,7 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 |----|------------|----------|-----------|
 | FR-FS-01 | System SHALL provide a file explorer panel showing workspace files | P0 | M1 |
 | FR-FS-02 | System SHALL support create, rename, delete, move operations on files and folders | P0 | M1 |
-| FR-FS-03 | System SHALL default the workspace to `filesDir/projects`, internal storage, on a new install, and SHALL keep `getExternalFilesDir(null)/projects` for an install that already has that directory or whose `~/projects` link points there (`Environment.getProjectsDir`). Shared storage cannot hold a symbolic link, which broke `npm install` there. Both are app-private in the sense that matters here, no storage permission reaches either; both are wiped by Clear Data, and the shared-storage one is reachable over MTP on some devices | P0 | M0 |
+| FR-FS-03 | System SHALL default the workspace to `filesDir/projects`, internal storage, on a new install, and SHALL keep `getExternalFilesDir(null)/projects` for an install that already has that directory or whose `~/projects` link points there (`Environment.getProjectsDir`), except on Android 10, where it never follows that directory because any app holding the storage permission can create it there. Shared storage cannot hold a symbolic link, which broke `npm install` there. Both are app-private in the sense that matters here, no storage permission reaches either; both are wiped by Clear Data, and the shared-storage one is reachable over MTP on some devices | P0 | M0 |
 | FR-FS-04 | System SHALL support opening folders as workspace root | P0 | M1 |
 | FR-FS-05 | System SHALL support multi-root workspaces. A `.code-workspace` opens, survives a relaunch and is written back when it sits in a device folder (`workbenchTarget`, `workbenchUrl`, `MainActivity`). Two limits are deliberate and neither is a defect to file: the Android picker cannot select one, because it is `ACTION_OPEN_DOCUMENT_TREE` and that returns a directory only; and roots spanning two device folders are not synchronised simultaneously, because exactly one folder is watched at a time (`watchedSafFolder`, `SafSyncEngine.startWatching`). A root outside any copied device folder does not resolve, and the workbench draws it in the warning colour with a `!`; a root inside a second previously copied device folder resolves in `saf-mirrors/`, so `MainActivity` shows `saf_workspace_multiple_folders` once per workspace generation when `publishWorkspaceRoots` spans two or more device-folder copies, telling the user that edits in the unwatched copies stay inside VSCodroid until those folders are opened directly. This row read as unqualified until 2026-08-30, when the shell could not name a workspace at all | P2 | M2 |
 | FR-FS-06 | System SHOULD support accessing files from external storage via SAF | P2 | M4 |
@@ -252,7 +252,7 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 
 | ID | Requirement | Target | Priority |
 |----|------------|--------|----------|
-| NFR-COMPAT-01 | Minimum Android version | 11 (API 30) | P0 |
+| NFR-COMPAT-01 | Minimum Android version | 10 (API 29) | P0 |
 | NFR-COMPAT-02 | Target Android version | 16 (API 36) | P0 |
 | NFR-COMPAT-03 | Architecture | arm64-v8a only | P0 |
 | NFR-COMPAT-04 | Minimum WebView version | Chrome 125+ | P0 |
@@ -311,7 +311,7 @@ VSCodroid is NOT a cloud IDE, a Termux wrapper, or a custom editor. It is the ac
 | Phantom process limit (API 31+) | Max 32 system-wide. Must minimize child processes |
 | Foreground Service restrictions (API 34+) | Must declare specialUse type with justification |
 | 16KB page alignment (API 36) | All native binaries must be compiled with 16KB page support |
-| Scoped storage (API 30+) | App has limited access to external storage without SAF or permissions |
+| Scoped storage (API 29+) | App has limited access to external storage without SAF or permissions |
 
 ### 5.2 WebView Constraints
 

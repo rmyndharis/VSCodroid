@@ -2,6 +2,7 @@ package com.vscodroid.setup
 
 import android.app.Activity
 import android.content.Context
+import android.os.Build
 import android.os.StatFs
 import androidx.annotation.StringRes
 import com.vscodroid.BuildConfig
@@ -2119,8 +2120,13 @@ class ToolchainManager(private val context: Context) {
     private fun shouldUseHttpFallback(): Boolean {
         installSourceIsPlay?.let { return !it }
         val isPlay = try {
-            val source = context.packageManager.getInstallSourceInfo(context.packageName)
-            val installer = source.installingPackageName
+            // Android 10 is the one supported release without InstallSourceInfo.
+            val installer = if (Build.VERSION.SDK_INT == Build.VERSION_CODES.Q) {
+                @Suppress("DEPRECATION")
+                context.packageManager.getInstallerPackageName(context.packageName)
+            } else {
+                context.packageManager.getInstallSourceInfo(context.packageName).installingPackageName
+            }
             Logger.d(tag, "Install source: $installer")
             // `com.google.android.feedback` is the Play Store's own legacy
             // package name and is still the installer of record on installs made

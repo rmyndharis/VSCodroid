@@ -314,9 +314,13 @@ Two locations, and the difference matters to a user rather than only to a reader
 | Settings, secrets, the server tree, bundled runtimes, installed toolchains, and the mirrors of folders opened through SAF | App-private internal storage, `/data/data/com.vscodroid/`. No other app can read it |
 | The default workspace, `projects/`                                  | Internal storage, `filesDir/projects`, on a new install. An install that already has `getExternalFilesDir(null)/projects` keeps it (`Environment.getProjectsDir`): shared storage cannot hold a symbolic link, which is what broke `npm install` there, but moving an existing install's files behind the user's back is not a fix |
 
-Android 11 closed `Android/data` to other apps and to the system Files app, and `minSdk` here is 30,
-which is that release, so an install still on the shared-storage location is not sharing in the pre-Android-11 sense. What
-survives there is MTP over USB and a few OEM file managers, which is enough that such a user can lose
+Android 11 closed `Android/data` to other apps and to the system Files app, so from that release an
+install still on the shared-storage location is not sharing in the pre-Android-11 sense. Android 10, the
+oldest release supported, did not close it: any app holding the storage permission can create and write
+that directory. No install on Android 10 can have a workspace there, since the app did not install on it
+while that was the default, so on Android 10 the location is never used, whatever is found in it
+(`Environment.projectsDirFor`). What
+survives there from Android 11 is MTP over USB and a few OEM file managers, which is enough that such a user can lose
 the projects tree from outside the app, and enough that "app-private" is the wrong word for that
 location. Clear Data wipes both.
 

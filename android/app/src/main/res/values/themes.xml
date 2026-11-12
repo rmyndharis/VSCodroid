@@ -24,7 +24,7 @@
              Attributes rather than Window.setStatusBarColor/setNavigationBarColor,
              which is the whole point: Play flags those two calls in the bundle, and
              the attribute form is not bytecode. API 35+ ignores both and paints the
-             bars from the window background regardless, so this decides API 30 to
+             bars from the window background regardless, so this decides API 29 to
              34 only. Without it those draw the Material3 default, which is blue
              against this app's dark editor: measured on an API 33 emulator. -->
         <item name="android:statusBarColor">@android:color/transparent</item>
@@ -32,10 +32,13 @@
 
         <!-- Declarative, and it replaces what androidx's enableEdgeToEdge() set
              from code. API 35+ forces `always` whatever is asked for, so this
-             only decides API 30 to 34 (30 is the first release that has `always`);
-             naming the value the platform settles on keeps them the same. See
+             only decides API 29 to 34; naming the value the platform settles on
+             keeps them the same. A resource and not the literal, because `always`
+             is API 30 and Android 10 refuses a mode it does not know: the window
+             throws "Unknown windowLayoutInDisplayCutoutMode: 3" and no activity
+             starts. See window_cutout_mode below and in values-v30, and
              util/ViewInsets.drawBehindSystemBars. -->
-        <item name="android:windowLayoutInDisplayCutoutMode">always</item>
+        <item name="android:windowLayoutInDisplayCutoutMode">@integer/window_cutout_mode</item>
 
         <!-- The bars stay transparent rather than having the platform paint a scrim
              behind them. This is the fifth thing enableEdgeToEdge() did and the one
@@ -56,7 +59,7 @@
              Attributes rather than the setters for the same reason as the colours:
              Play scans bytecode and an attribute is not a call. Both are API 29
              attributes, read from the platform's api-versions.xml, and minSdk is
-             30, so no version-qualified copy is needed. -->
+             29, so no version-qualified copy is needed. -->
         <item name="android:enforceStatusBarContrast">false</item>
         <item name="android:enforceNavigationBarContrast">false</item>
     </style>
@@ -68,5 +71,9 @@
          declaration stays so the resource has a default, which is what a
          reference from code needs. -->
     <style name="Theme.VSCodroid.LightStart" />
+
+    <!-- `shortEdges`, the widest mode Android 10 has and the one androidx's
+         enableEdgeToEdge() wrote there. values-v30 raises it to `always`. -->
+    <integer name="window_cutout_mode">1</integer>
 
 </resources>

@@ -56,9 +56,13 @@ NODE_VERSION="${NODE_VERSION:-24.18.0}"
 NODE_HEADERS_SHA256="6c7d41d83c3481d2301115b8ce4a44b7d4fbfa52859b1aac14f445d460137887"
 
 TARGET=aarch64-linux-android
-# The app's minSdk, so the compiler refuses a libc call the oldest supported
-# device does not have.
+# One level above the app's minSdk, which is 29, and on purpose: libc++'s headers
+# pick the timed wait from this number, and at 29 they pick the wall clock for
+# every release (see cond-clockwait.c). The one call that costs on Android 10 is
+# wrapped there, and verify() refuses any other name Bionic gained after
+# $MIN_API, which is the check the compiler made when the two levels were equal.
 API=30
+MIN_API=29
 
 # Android 16 requires 16 KB-aligned segments. NDK r28+ defaults to this and r27
 # does not, so passing it explicitly is what makes the result independent of
@@ -391,6 +395,19 @@ verify() {
             "it must link with ADDON_LINK_FLAGS" >&2
         return 1
     fi
+
+    # Bionic versions each export by the release that added it: LIBC_Q is API 29,
+    # LIBC_R is 30, and so on up the alphabet. A strong reference to anything
+    # after $MIN_API's letter fails dlopen on that release; a weak one resolves
+    # to null there and is the caller's to test. [R-Z] is everything after Q: a
+    # literal, right for a MIN_API of 29 and to be revisited with it.
+    local late
+    late=$("$READELF" --dyn-syms -W "$out" \
+        | awk '$5 == "GLOBAL" && $7 == "UND" && $8 ~ /@LIB[A-Z]*_[R-Z]$/ {print $8}') || return 1
+    if [ -n "$late" ]; then
+        echo "  ERROR: $name needs what Bionic gained after API $MIN_API:" $late >&2
+        return 1
+    fi
     printf '  ok   %-24s %8s bytes\n' "$name" "$(wc -c < "$out" | tr -d ' ')"
 }
 
@@ -443,13 +460,19 @@ WATCHER_SRC=$(fetch @parcel/watcher "$WATCHER_VERSION" "$WATCHER_SHA256" \
 #
 # Android has inotify, so that backend is the one that matters; watchman stays
 # compiled in and inert because nothing serves its socket here.
+#
+# CLOCKWAIT_FLAGS because Debounce waits with a timeout, which at API $API is
+# pthread_cond_clockwait, and Android 10 has no such function.
+"$CC" -c -fPIC -O2 -o "$WORK_DIR/cond-clockwait.o" "$SCRIPT_DIR/cond-clockwait.c"
+CLOCKWAIT_FLAGS=(-Wl,--wrap=pthread_cond_clockwait "$WORK_DIR/cond-clockwait.o")
 compile "$WATCHER_SRC" "$OUTPUT_ROOT/node_modules/@parcel/watcher/build/Release/watcher.node" \
     src/binding.cc src/Watcher.cc src/Backend.cc src/DirTree.cc src/Glob.cc \
     src/Debounce.cc \
     src/watchman/BSER.cc src/watchman/WatchmanBackend.cc \
     src/shared/BruteForceBackend.cc src/linux/InotifyBackend.cc src/unix/legacy.cc \
     -- -fexceptions -DNAPI_DISABLE_CPP_EXCEPTIONS \
-       -DWATCHMAN -DINOTIFY -DBRUTE_FORCE -DNODE_GYP_MODULE_NAME=watcher
+       -DWATCHMAN -DINOTIFY -DBRUTE_FORCE -DNODE_GYP_MODULE_NAME=watcher \
+       "${CLOCKWAIT_FLAGS[@]}"
 verify "$OUTPUT_ROOT/node_modules/@parcel/watcher/build/Release/watcher.node" @parcel/watcher || failed=1
 check_pair @parcel/watcher "$WATCHER_VERSION" "$OUTPUT_ROOT/node_modules/@parcel/watcher/package.json" || failed=1
 
@@ -599,6 +622,7 @@ mkdir -p "$(dirname "$ZEROMQ_OUT")"
     "${PAGE_SIZE_FLAGS[@]}" \
     -DNAPI_CPP_EXCEPTIONS -DZMQ_STATIC \
     -DNODE_GYP_MODULE_NAME=zeromq -DBUILDING_NODE_EXTENSION \
+    "${CLOCKWAIT_FLAGS[@]}" \
     -I"$NODE_INCLUDE" \
     -I"$ZEROMQ_SRC/node_modules/node-addon-api" \
     -I"$LIBZMQ_PREFIX/include" \

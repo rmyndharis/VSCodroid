@@ -13,6 +13,7 @@ import android.view.HapticFeedbackConstants
 import android.view.MotionEvent
 import androidx.annotation.StringRes
 import androidx.appcompat.widget.AppCompatTextView
+import androidx.core.view.ViewCompat
 import androidx.core.widget.TextViewCompat
 import com.vscodroid.R
 
@@ -224,7 +225,7 @@ class ExtraKeyButton @JvmOverloads constructor(
         // AppCompatTextView, which carries @RestrictTo and is meant only for
         // calls from inside AppCompat itself. Same work underneath: the wrapper
         // passes its four arguments straight through to the platform method on
-        // API 27 and above, and minSdk here is 30, so the compatibility branch
+        // API 27 and above, and minSdk here is 29, so the compatibility branch
         // below that is never taken.
         TextViewCompat.setAutoSizeTextTypeUniformWithConfiguration(
             this, 8, 13, 1, TypedValue.COMPLEX_UNIT_SP
@@ -306,8 +307,11 @@ class ExtraKeyButton @JvmOverloads constructor(
         //
         // stateDescription rather than isSelected: the platform announces a
         // change to it on its own, and it says "on" instead of "selected",
-        // which is what a latched modifier is.
-        stateDescription = toggleStateDescription(isToggle, isToggleActive)?.let(context::getString)
+        // which is what a latched modifier is. Through ViewCompat because the
+        // platform property is API 30.
+        ViewCompat.setStateDescription(
+            this, toggleStateDescription(isToggle, isToggleActive)?.let(context::getString)
+        )
     }
 
     fun applyRoundedBackground(color: Int) {
