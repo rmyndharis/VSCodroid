@@ -75,9 +75,7 @@ class FullScreenWiringTest {
         )
         val shim = SourceScan.body(source, "private fun injectFullScreenShim(")
         assertTrue(
-            shim.contains("getBoolean(KEY_FULL_SCREEN, false)") || source.contains(
-                "val on = workspacePrefs.getBoolean(KEY_FULL_SCREEN, false)",
-            ),
+            shim.contains("getBoolean(KEY_FULL_SCREEN, false)"),
             "the script is not told the saved state, so a page that loads while full screen " +
                 "is on thinks it is off and the first toggle asks for what is already true.",
         )

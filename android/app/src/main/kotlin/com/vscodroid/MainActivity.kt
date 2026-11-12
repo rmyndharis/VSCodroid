@@ -5861,8 +5861,12 @@ class MainActivity : AppCompatActivity() {
      * out for what the window now is.
      *
      * The state is the app's, recorded in the preferences and read when this is
-     * installed: a page that loads while full screen is on starts as full screen, and
-     * says so with the same event.
+     * installed. A page that loads while full screen is on is told so with the same
+     * event, once the workbench is listening for it, and reads as not full screen until
+     * then. The workbench starts believing it is not, and it restores Zen Mode before
+     * it hears: that asks for full screen by reading `document.fullscreen`, and a page
+     * answering yes turned the request into an exit, so the editor came back from a
+     * restart with the bars shown and the choice lost.
      *
      * `scripts/test-full-screen.js` runs the script and `FullScreenWiringTest` holds it
      * to where it is installed.
@@ -5873,38 +5877,49 @@ class MainActivity : AppCompatActivity() {
             """
             (function() {
                 if (window.__vscodroidFullScreen) return;
+                // What the app is in, and what the page has been told: the page starts as
+                // not full screen and is told only through `fullscreenchange`.
                 var on = ${if (on) "true" else "false"};
+                var known = false;
+                // Whether the workbench is listening, so a change can be told as it happens.
+                var armed = !on;
                 function token() { return (window.__vscodroid || {}).authToken; }
                 function property(name, read) {
                     try { Object.defineProperty(document, name, { configurable: true, get: read }); } catch (e) {}
                 }
-                function announce() { document.dispatchEvent(new Event('fullscreenchange')); }
+                function tell() {
+                    if (known === on) return;
+                    known = on;
+                    document.dispatchEvent(new Event('fullscreenchange'));
+                }
+                function arm() { armed = true; tell(); }
                 function set(next) {
                     var t = token();
                     if (!t || typeof AndroidBridge === 'undefined') {
                         return Promise.reject(new TypeError('Full screen is not available'));
                     }
                     AndroidBridge.setFullScreen(t, next);
-                    if (on !== next) { on = next; announce(); }
+                    on = next;
+                    if (armed) tell();
                     return Promise.resolve();
                 }
-                property('fullscreen', function() { return on; });
-                property('fullscreenElement', function() { return on ? document.documentElement : null; });
+                property('fullscreen', function() { return known; });
+                property('fullscreenElement', function() { return known ? document.documentElement : null; });
                 Element.prototype.requestFullscreen = function() { return set(true); };
                 Document.prototype.exitFullscreen = function() { return set(false); };
                 window.__vscodroidFullScreen = true;
                 // The workbench follows `fullscreenchange` from the moment its window
                 // contribution starts, and builds its container after that, but this runs
                 // while it is still starting, so an event raised here can be lost. A page
-                // that starts as full screen says so when the container appears.
+                // that starts as full screen is told when the container appears.
                 if (on) {
                     if (document.querySelector('.monaco-workbench')) {
-                        announce();
+                        arm();
                     } else {
                         new MutationObserver(function(records, observer) {
                             if (!document.querySelector('.monaco-workbench')) return;
                             observer.disconnect();
-                            announce();
+                            arm();
                         }).observe(document, { childList: true, subtree: true });
                     }
                 }
