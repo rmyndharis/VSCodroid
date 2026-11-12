@@ -7,19 +7,24 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+## [1.9.0] - 2026-11-12
+
 ### Added
 
 - **View: Toggle Full Screen** hides the status and navigation bars, and the choice is kept for the next launch.
-- Zen Mode hides the status and navigation bars too, and shows them again when it ends.
+- Zen Mode hides the status and navigation bars too, and shows them again when it ends, unless full screen was already on.
 
 ### Changed
 
-- The app installs on Android 10 and newer; it needed Android 11.
+- The minimum Android version is now 10, down from 11.
+- The Java toolchain trusts Mozilla's list of certificate authorities instead of OpenJDK's own.
+- A Java toolchain installed earlier keeps OpenJDK's list until it is removed and installed again.
 
 ### Fixed
 
-- The editor's context menu scrolls with a finger; a drag inside it used to do nothing.
-- A tap on the swatch beside a CSS color opens the color picker.
+- The editor's context menu scrolls with a finger when it does not fit the screen.
+- A tap on the color square beside a CSS color opens the color picker.
+- A finger can drag the caret while a peek view is open.
 
 ## [1.8.0] - 2026-11-09
 
@@ -1396,7 +1401,8 @@ This release represents the cumulative work across milestones M0 through M5, bri
 - Health check polling for server readiness
 - Android intent handling for "Open with VSCodroid"
 
-[Unreleased]: https://github.com/rmyndharis/VSCodroid/compare/v1.8.0...HEAD
+[Unreleased]: https://github.com/rmyndharis/VSCodroid/compare/v1.9.0...HEAD
+[1.9.0]: https://github.com/rmyndharis/VSCodroid/compare/v1.8.0...v1.9.0
 [1.8.0]: https://github.com/rmyndharis/VSCodroid/compare/v1.7.0...v1.8.0
 [1.7.0]: https://github.com/rmyndharis/VSCodroid/compare/v1.6.0...v1.7.0
 [1.6.0]: https://github.com/rmyndharis/VSCodroid/compare/v1.5.0...v1.6.0
