@@ -12,16 +12,18 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **View: Toggle Full Screen** hides the status and navigation bars, and the choice is kept for the next launch.
-- Zen Mode hides the status and navigation bars too, and shows them again when it ends.
+- Zen Mode hides the status and navigation bars too, and shows them again when it ends, unless full screen was already on.
 
 ### Changed
 
 - The minimum Android version is now 10, down from 11.
+- The Java toolchain trusts Mozilla's list of certificate authorities instead of OpenJDK's own.
+- A Java toolchain installed earlier keeps OpenJDK's list until it is removed and installed again.
 
 ### Fixed
 
-- The editor's context menu scrolls with a finger; a drag inside it used to do nothing.
-- A tap on the swatch beside a CSS color opens the color picker.
+- The editor's context menu scrolls with a finger when it does not fit the screen.
+- A tap on the color square beside a CSS color opens the color picker.
 
 ## [1.8.0] - 2026-11-09
 
