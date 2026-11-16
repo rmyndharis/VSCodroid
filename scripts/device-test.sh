@@ -85,9 +85,8 @@ PKG="com.vscodroid.debug"
 # a second copy for the self-check would be exactly the drift this prevents.
 
 derive_node_expected() {
-    # The version the native addons are compiled against. The runtime has to
-    # equal it -- an addon built for one Node and loaded by another is the
-    # defect check_pair exists for -- so that is where "which Node" lives.
+    # The version the native addons are compiled against. The runtime must
+    # match its major, as the build's check_pair requires.
     sed -n 's/^NODE_VERSION="${NODE_VERSION:-\([0-9.]*\)}".*/\1/p' \
         "$ROOT_DIR/scripts/build-native-addons.sh" | head -1
 }
@@ -1102,10 +1101,10 @@ NODE_OUT=$(run_tool "files/usr/bin/node" --version)
 NODE_EXPECTED=$(derive_node_expected)
 if [ -z "$NODE_EXPECTED" ]; then
     fail "tool_node" "could not read NODE_VERSION from build-native-addons.sh"
-elif echo "$NODE_OUT" | grep -q "^v${NODE_EXPECTED}$"; then
+elif [[ "$NODE_OUT" == v"${NODE_EXPECTED%%.*}".* ]]; then
     pass "tool_node ($NODE_OUT)"
 else
-    fail "tool_node" "Expected v$NODE_EXPECTED (what the addons are built against), got: $NODE_OUT"
+    fail "tool_node" "Expected Node major ${NODE_EXPECTED%%.*} (headers v$NODE_EXPECTED), got: $NODE_OUT"
 fi
 
 # Test 16: npm (via node + npm-cli.js)

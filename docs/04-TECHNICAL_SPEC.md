@@ -1062,17 +1062,20 @@ which reads compositions itself, is left alone, and so is an `input` with no sel
 such as an email box, whose selection could not be put back: each keeps a composed letter,
 and the latch is spent.
 
-A key or a touch that moves the editor's caret while the soft keyboard is still composing a
-word ends that composition. Chromium keeps an EditContext composition's range where it was
-when the page moves the selection (crbug 379170477), so a keyboard that recomposes the word
-at the new caret wrote it over the old range, and End, a trackpad drag, accepting a
-suggestion or a tap elsewhere garbled the line. `MainActivity.injectKeyboardGuard` blurs and
-refocuses the composing host in the same task as the caret move, from a window capture
-`keydown` listener for the arrows, Home, End, PageUp, PageDown, Tab, Backspace and Delete,
-and from the editor's own `-monaco-gesturetap` and `-monaco-gesturecontextmenu`. It does so
-before the editor handles the key or the tap, except where an open suggestion list takes a
-key without modifiers, or a tap. Up, Down, PageUp and PageDown that move the list's highlight
-end nothing, and Tab accepting the highlighted suggestion or a tap on a row end the
+A key or a touch that moves the editor's caret, or a key that types, while the soft keyboard is
+still composing a word ends that composition. Chromium keeps an EditContext composition's range
+where it was when the page moves the selection (crbug 379170477), so a keyboard that recomposes
+the word at the new caret wrote it over the old range, and End, a trackpad drag, accepting a
+suggestion, a tap elsewhere, or a `{` from the key row or an Enter inside the word garbled the
+line. `MainActivity.injectKeyboardGuard` blurs and refocuses the composing host in the same task
+as the caret move, from a window capture `keydown` listener for the arrows, Home, End, PageUp,
+PageDown, Tab, Enter, Backspace and Delete, and for a key that types one character, alone or with
+Shift, and from the editor's own `-monaco-gesturetap` and `-monaco-gesturecontextmenu`. The
+keyboard's own events while it composes (key `Unidentified`, key code 229) and chords with Ctrl,
+Alt or Meta do not count. It does so before the editor handles the key or the tap, except where
+an open suggestion list takes a key without modifiers, or a tap, and with the list showing a
+character is left alone. Up, Down, PageUp and PageDown that move the list's highlight end
+nothing, and Tab or Enter accepting the highlighted suggestion or a tap on a row end the
 composition after the list has acted, because ending a composition makes the editor
 refilter the list and highlight its first row again. With no list open, a quick suggestion
 can still be pending when a cursor key moves the caret, scheduled 10 ms after the last letter
@@ -1444,7 +1447,17 @@ it and `window.__vscodroidKeyboardDismissed` puts the hold back, so the next scr
 leaves it down; without that the host kept no `inputmode` and Chromium raised the keyboard
 again for any touch on it. A keyboard reported down while nothing
 that takes text has focus is taken as one Chromium took down as focus left text, and the hook
-keeps what a tap or typing counted (above).
+keeps what a tap or typing counted (above). For a fixed 4 s window after a
+text field took focus, the hook waits for the window's end before
+checking again: a file opened for the first time can focus its new host before the half-second
+dismissal timer runs while the keyboard is still on its way back up or briefly bounces down
+and up again, and holding that host at once would take or keep the keyboard down. If the
+keyboard is still reported down when the 4 s window ends the hold is put on then; an incoming
+visible report clears the pending hide mark and cancels any pending late check so it does not
+fire stale, without ending the 4 s window early. A dismissal whose hide report preceded the last
+tap on text is ignored, so a delayed callback from an already answered hide cannot undo that
+tap. A scroll inside the 4 s window can still
+raise a keyboard put away with Back, as a scroll inside the half second always could.
 
 With the keyboard up, `inputmode="none"` on the focused host takes it down only where no
 hardware keyboard is attached: Chromium's `ImeAdapterImpl.updateState` hides the keyboard when

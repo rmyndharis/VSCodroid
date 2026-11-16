@@ -1328,6 +1328,7 @@ class VSCodroidWebViewClient(
         onNavigationStarted(url)
         disposeAuthPage()
         AuthTabWindow.beginPage()
+        (view as? EditorWebView)?.textEditorHold?.end()
         trustedAuthOrigin(url)?.let { authPage = AuthPage(view, AuthTabWindow.pageGeneration(), it) }
         // The URL the activity navigates to carries the connection token in its
         // query, so this is one of the two callbacks handed the very string
@@ -1448,6 +1449,7 @@ class VSCodroidWebViewClient(
         if (request.isForMainFrame) {
             disposeAuthPage()
             AuthTabWindow.beginPage()
+            (view as? EditorWebView)?.textEditorHold?.end()
             Logger.e(tag, "Page load error: ${error.errorCode} - ${error.description}")
         }
     }

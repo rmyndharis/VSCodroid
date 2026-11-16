@@ -106,6 +106,21 @@ class KeyboardRotationCallSiteTest {
     }
 
     @Test
+    fun `a wait answered without the focus is asked again and native input is left alone`() {
+        val later = mutableListOf<Runnable>()
+        every { view.postDelayed(any(), 50L) } answers { later += firstArg<Runnable>(); events += "again"; true }
+        turn()
+        every { view.isFocused } returns false
+        every { view.hasWindowFocus() } returns false
+        reply.captured.onReceiveValue("\"wait\"")
+        assertEquals(listOf("evaluate", "again"), events)
+        later.single().run()
+        assertEquals(listOf("evaluate", "again", "evaluate"), events)
+        reply.captured.onReceiveValue("true")
+        assertEquals(listOf("evaluate", "again", "evaluate"), events)
+    }
+
+    @Test
     fun `no view needs no input work`() {
         setView(null)
         turn()

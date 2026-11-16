@@ -844,13 +844,13 @@ async function main() {
     // token, so handing it to the system browser is answered "Forbidden."
     const ORIGIN = 'http://127.0.0.1:13337';
 
-    function windowOpen(answer, url) {
-        const seen = { bridge: 0, orig: 0, navigated: null };
+    function windowOpen(answer, url, origin = ORIGIN) {
+        const seen = { bridge: 0, orig: 0, navigated: null, url: null };
         const win = {
             __vscodroid: { authToken: 'test-token' },
             open() { seen.orig++; return 'fell through to the WebView'; },
             location: {
-                origin: ORIGIN,
+                origin,
                 set href(value) { seen.navigated = value; },
                 get href() { return seen.navigated; },
             },
@@ -858,11 +858,39 @@ async function main() {
         vm.runInNewContext(override, {
             window: win,
             AndroidBridge: {
-                openExternalUrl() { seen.bridge++; return answer; },
+                openExternalUrl(url) { seen.bridge++; seen.url = url; return answer; },
             },
         });
         return { ...seen, result: win.open(url), calls: seen };
     }
+
+    for (const [origin, address] of [
+        [ORIGIN, 'http://127.0.0.1:13337/x'],
+        [ORIGIN, 'HTTP://127.0.0.1:13337/x'],
+        ['http://localhost:13337', 'HTTP://LOCALHOST:13337/x'],
+    ]) {
+        const blocked = windowOpen('', address, origin);
+        assert.strictEqual(blocked.calls.navigated, null, address);
+        assert.strictEqual(blocked.calls.bridge, 0, address);
+        assert.strictEqual(blocked.calls.orig, 0, address);
+        assert.ok(blocked.result, address);
+    }
+    for (const address of [
+        'HTTP://127.0.0.1:13337/',
+        'HTTP://127.0.0.1:13337/?folder=CaseSensitive%2FPath#Fragment',
+    ]) {
+        const own = windowOpen('', address);
+        assert.strictEqual(own.calls.navigated, address);
+        assert.strictEqual(own.calls.bridge, 0);
+        assert.strictEqual(own.calls.orig, 0);
+    }
+    const upperExternal = windowOpen('', 'HTTPS://example.com/Path?Query=Case#Fragment');
+    assert.strictEqual(upperExternal.calls.bridge, 1);
+    assert.strictEqual(upperExternal.calls.url, 'HTTPS://example.com/Path?Query=Case#Fragment');
+    assert.strictEqual(upperExternal.calls.orig, 0);
+    const nonHttp = windowOpen('', 'mailto:Case@Example.com');
+    assert.strictEqual(nonHttp.calls.bridge, 0);
+    assert.strictEqual(nonHttp.calls.orig, 1);
 
     const claimed = windowOpen('', 'https://example.com/docs');
     assert.strictEqual(claimed.calls.bridge, 1, 'window.open never reached the bridge');

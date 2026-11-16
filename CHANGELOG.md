@@ -7,7 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
-## [1.9.0] - 2026-11-12
+## [1.9.0] - 2026-11-16
 
 ### Added
 
@@ -24,6 +24,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Characters typed on the soft keyboard no longer disappear from terminal commands.
+- In the terminal, the first character typed after Enter is no longer lost when typing fast.
+- In the terminal, a word still underlined is kept when Enter follows at once or the terminal loses focus.
+- The keyboard no longer goes away after a file is opened for the first time from Quick Open.
+- The keyboard no longer goes away a moment after the screen is turned, as it did on some phones.
+- A keyboard put away with Back stays down when the screen is turned right after, or while a word is still underlined.
+- After the screen is turned with the keyboard put away, a scroll no longer brings the keyboard back.
 - Turning the screen while the keyboard underlines a word no longer doubles the word, writes it over another word of the line or deletes text after the caret.
 - After a turn of the screen with a word underlined, the next letter typed can still, rarely, be lost or replace the word's last letter.
 - Tapping into a word or opening a file no longer counts as an edit on a keyboard that underlines words, so the file is not saved again and Undo gains no empty step.
@@ -35,6 +42,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Ctrl then C or X on the extra key row copies and cuts in the editor and in text boxes.
 - Enter on a keyboard that underlines words carries a Ctrl or Alt latched on the extra key row, and the latch no longer reaches the next letter.
 - Pasting while the soft keyboard still underlines a word no longer repeats the pasted text or the word.
+- Inside a word the soft keyboard underlines, a character or Tab from the extra key row, or Enter on a hardware keyboard, no longer garbles the word.
 - On a keyboard that underlines words, a suggestion list that opened by itself follows the letters typed, so Tab from the extra key row or Enter on a hardware keyboard no longer puts an older suggestion over the word.
 - With several cursors, a letter or Backspace typed on a keyboard that underlines words acts at every cursor instead of copying the first cursor's word to the others.
 - With several cursors, a suggestion or a correction from the keyboard goes to the first cursor, and the other cursors are dropped.
