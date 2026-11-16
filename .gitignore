@@ -129,6 +129,7 @@ logs/
 # ===== AI Agents =====
 # Claude Code
 CLAUDE.md
+.agents/
 .claude/
 # Cursor
 .cursor/
