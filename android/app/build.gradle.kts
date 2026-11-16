@@ -211,8 +211,8 @@ android {
 
         // The biggest single file in that tree, which is what an install that
         // already holds the tree needs rather than the total. Extraction writes
-        // through <dest>.tmp~ and renames, so re-unpacking over an existing tree
-        // needs room for one more copy of one file at a time, at 1.139.1 the
+        // through a uniquely named sibling temporary file and renames, so re-unpacking
+        // over an existing tree needs room for one more copy of one file at a time, at 1.139.1 the
         // Copilot extension's 91.8 MiB runtime.node, and not for a second copy of
         // the tree. FirstRunSetup.requiredExtractionBytes is where the two meet.
         //

@@ -188,6 +188,7 @@ Open the Command Palette (**Ctrl+Shift+P**) and run `Preferences: Open Settings 
 VSCodroid stores settings in `~/.vscodroid/`. Key defaults:
 
 - Word wrap is on, in the editor and in the diff editor.
+- Enter accepts an editor suggestion only when it changes the text (`editor.acceptSuggestionOnEnter` is `smart`), so pressing Enter after a word already in the file starts a new line.
 - Git path is preconfigured to the bundled Git binary.
 - The terminal profile points to the bundled Bash.
 
@@ -998,8 +999,9 @@ download in the background. Codex is a tool and not a language, so the picker do
 it; install it from the Toolchains screen, as described in the next section.
 
 Toolchains are never bundled inside the APK. Play Store installs fetch them as
-on-demand asset packs; sideloaded installs download them over HTTPS from the
-[latest GitHub Release](https://github.com/rmyndharis/VSCodroid/releases/latest).
+on-demand asset packs; sideloaded installs download them over HTTPS from this app
+version's GitHub Release when the asset is available, falling back to the
+[latest release](https://github.com/rmyndharis/VSCodroid/releases/latest).
 Either way they land in the app's own storage and survive app updates.
 
 ### Installing After Setup
@@ -1187,7 +1189,7 @@ The status bar shows a phantom process count. This tells you how many background
 
 ### Zen Mode
 
-**Ctrl+K Z** enters Zen Mode, a distraction-free fullscreen editing experience. Press **Esc Esc** (double Esc) to exit.
+Use **View: Toggle Zen Mode** in the Command Palette to enter or leave Zen Mode, a distraction-free fullscreen editing experience. On a hardware keyboard, **Ctrl+K Z** enters it and **Esc Esc** (double Esc) leaves it.
 
 ### Saving Battery
 
@@ -1557,6 +1559,16 @@ Playwright, a library the extension carries, and the engine program it ships
 needs `libstdc++`, which VSCodroid does not provide. Neither is something to
 change on your side. For an AI assistant that runs here, see [Codex](#codex);
 GitHub Copilot Chat is built in.
+
+**Another is Google Antigravity, and this one is loud.** Version 1.12.0 installs
+and adds its icon to the Activity Bar, and its panel then reads `Couldn't load
+this view` with `spawn .../.gemini/bin/agy EACCES`. That is the second wall: the
+extension downloads its engine into the app's storage and starts it itself. The
+engine is a build for Android and does start from a terminal, as
+`~/.gemini/bin/agy`, where it asks for a Google sign-in. The panel is another
+matter: it shows a page that the engine serves, and that page names the places
+that may display it. An extension panel of this editor is not among them, so the
+panel would not load here even with the engine running.
 
 **One variant is loud rather than silent.** An extension that publishes a
 separate build per platform, with no musl build and no platform-independent one,

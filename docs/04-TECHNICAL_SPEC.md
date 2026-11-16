@@ -524,15 +524,15 @@ The bootstrap script that Node.js executes:
 
 ```
 server.js responsibilities:
-1. Parse command-line arguments (port, host, extensions-dir, etc.)
-2. Set up VS Code product.json overrides
-3. Preload dns-proxy.js into the editor server it forks, and pass platform-fix.js in its execArgv so the extension host, whose environment has no NODE_OPTIONS, loads it too
-4. Launch vscode-reh server entry point
-5. Configure Extension Host as worker_thread
-6. Spawn a shell per terminal through node-pty, on a real PTY
-7. Listen on localhost:PORT
-8. Serve vscode-web static files
-9. Handle WebSocket connections for RPC
+1. Parse the app's host, port, socket and directory arguments.
+2. Prepare the editor product overrides and workbench page additions.
+3. Preload dns-proxy.js and pass platform-fix.js to the child process.
+4. Fork the Code - OSS server, record its identity and propagate its exit.
+5. Forward the private socket and selected directory arguments to the child.
+
+EditorGateway owns the app's loopback port and forwards requests to the child socket.
+The Code - OSS server serves the workbench and WebSocket RPC; its extension host runs
+in a worker thread and its terminal service starts shells through node-pty.
 ```
 
 Step 3 is a `--require=<path>` on the child's `execArgv`, not a listener in this
@@ -627,6 +627,7 @@ $NATIVE_LIB_DIR/libnode.so \
   $FILES_DIR/server/server.js \
   --host=127.0.0.1 \
   --port=$PORT \
+  --socket-path=$BACKEND_SOCKET \
   --extensions-dir=$HOME/.vscodroid/extensions \
   --user-data-dir=$HOME/.vscodroid \
   --server-data-dir=$HOME/.vscodroid \

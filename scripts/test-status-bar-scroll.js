@@ -264,6 +264,177 @@ check('running the script again installs nothing twice', () => {
     assert.strictEqual(page.listeners.length, 4);
 });
 
+function makeStatusPage({ stripRect = { left: 134, right: 407, width: 273 }, items, deferRaf = false } = {}) {
+    const listeners = [];
+    const appended = [];
+    const observers = { resize: [], mutation: [] };
+    const rafQueue = [];
+    let scrollLeft = 0;
+    const itemEls = items.map((spec) => ({
+        id: spec.id,
+        style: { visibility: '' },
+        getBoundingClientRect: () => ({
+            left: spec.left - scrollLeft,
+            right: spec.right - scrollLeft,
+            width: spec.right - spec.left,
+        }),
+        closest(selector) {
+            return selector === STRIP_SELECTOR ? strip : null;
+        },
+    }));
+    const statusbarEl = {
+        getBoundingClientRect: () => ({ left: 0, right: 407, width: 407 }),
+        querySelector: (selector) => (selector === '.right-items' ? strip : null),
+    };
+    const strip = {
+        scrollWidth: 668,
+        clientWidth: stripRect.width,
+        get scrollLeft() { return scrollLeft; },
+        set scrollLeft(v) { scrollLeft = v; },
+        getBoundingClientRect: () => ({ ...stripRect }),
+        querySelectorAll: (selector) => (selector === '.statusbar-item' ? itemEls : []),
+    };
+    const document = {
+        getElementById: (id) => appended.find((e) => e.id === id) || null,
+        createElement: () => ({ id: '', textContent: '' }),
+        head: { appendChild: (el) => appended.push(el) },
+        body: {},
+        querySelector(selector) {
+            if (selector === STRIP_SELECTOR) return strip;
+            if (selector === '.part.statusbar') return statusbarEl;
+            return null;
+        },
+    };
+    const window = {
+        addEventListener: (type, fn, options) => listeners.push({ type, fn, options }),
+    };
+    class ResizeObserver {
+        constructor(fn) { this.fn = fn; this.targets = []; observers.resize.push(this); }
+        observe(el) { this.targets.push(el); }
+    }
+    class MutationObserver {
+        constructor(fn) { this.fn = fn; this.targets = []; observers.mutation.push(this); }
+        observe(el, opts) { this.targets.push({ el, opts }); }
+        disconnect() {}
+    }
+    const context = vm.createContext({
+        window,
+        document,
+        ResizeObserver,
+        MutationObserver,
+        requestAnimationFrame: (fn) => (deferRaf ? rafQueue.push(fn) : fn()),
+    });
+    return {
+        strip, statusbarEl, itemEls, stripRect, listeners, observers, rafQueue,
+        entry: itemEls[0],
+        run: () => vm.runInContext(SCRIPT, context),
+        flushFrame() {
+            const batch = rafQueue.splice(0, rafQueue.length);
+            for (const fn of batch) fn();
+            return batch.length;
+        },
+        fire(type, event) {
+            for (const l of listeners.filter((x) => x.type === type)) l.fn(event);
+        },
+    };
+}
+
+check('right-side status items crossing either strip edge are hidden instead of clipped mid-word', () => {
+    const page = makeStatusPage({
+        items: [
+            { id: 'status.notifications', left: 363, right: 407 },
+            { id: 'status.workbench.keyboardLayout', left: 119, right: 210 },
+            { id: 'status.editor.mode', left: 35, right: 119 },
+        ],
+    });
+    page.run();
+    assert.strictEqual(page.itemEls[0].style.visibility, '');
+    assert.strictEqual(page.itemEls[1].style.visibility, 'hidden', 'partially clipped left item must be hidden');
+    assert.strictEqual(page.itemEls[2].style.visibility, 'hidden', 'offscreen left item must be hidden');
+});
+
+check('panning reveals newly in-bounds items whole and hides items pushed past the right edge', () => {
+    const page = makeStatusPage({
+        items: [
+            { id: 'status.notifications', left: 363, right: 407 },
+            { id: 'status.workbench.keyboardLayout', left: 119, right: 210 },
+            { id: 'status.editor.mode', left: 35, right: 119 },
+        ],
+    });
+    page.run();
+    drag(page, page.entry, 200, 320);
+    assert.strictEqual(page.strip.scrollLeft, -120);
+    assert.strictEqual(page.itemEls[0].style.visibility, 'hidden', 'item clipped on right edge must hide');
+    assert.strictEqual(page.itemEls[1].style.visibility, '', 'whole item inside strip must appear');
+    assert.strictEqual(page.itemEls[2].style.visibility, '', 'whole item brought into view must appear');
+});
+
+check('resize and status bar mutations refresh visibility without adding window listeners', () => {
+    const specs = [
+        { id: 'status.notifications', left: 363, right: 407 },
+        { id: 'status.workbench.keyboardLayout', left: 210, right: 300 },
+    ];
+    const page = makeStatusPage({ items: specs });
+    page.run();
+    assert.deepStrictEqual(
+        page.listeners.map((l) => l.type).sort(),
+        ['touchcancel', 'touchend', 'touchmove', 'touchstart'],
+    );
+    assert.strictEqual(page.itemEls[1].style.visibility, '');
+    page.stripRect.left = 250;
+    assert.ok(page.observers.resize.length > 0, 'expected ResizeObserver on status strip');
+    page.observers.resize.forEach((o) => o.fn());
+    assert.strictEqual(page.itemEls[1].style.visibility, 'hidden');
+    page.stripRect.left = 134;
+    assert.ok(page.observers.mutation.length > 0, 'expected MutationObserver on statusbar');
+    page.observers.mutation.forEach((o) => o.fn());
+    assert.strictEqual(page.itemEls[1].style.visibility, '');
+});
+
+check('bursts of resize and status mutations coalesce into at most one pass per animation frame', () => {
+    const specs = [
+        { id: 'status.notifications', left: 363, right: 407 },
+        { id: 'status.editor.selection', left: 210, right: 300 },
+    ];
+    let itemRectReads = 0;
+    const page = makeStatusPage({ items: specs, deferRaf: true });
+    const origRect = page.itemEls[1].getBoundingClientRect;
+    page.itemEls[1].getBoundingClientRect = () => { itemRectReads++; return origRect(); };
+    page.run();
+    const initialReads = itemRectReads;
+    assert.strictEqual(initialReads, 1);
+    assert.strictEqual(page.rafQueue.length, 0);
+
+    // Only `.right-items` gets subtree/characterData observation (`.left-items` noise does not trigger it).
+    const mutTargets = page.observers.mutation[0].targets;
+    const stripTarget = mutTargets.find((t) => t.el === page.strip);
+    const barTarget = mutTargets.find((t) => t.el === page.statusbarEl);
+    assert.ok(stripTarget && stripTarget.opts.subtree === true && !stripTarget.opts.attributes);
+    assert.ok(barTarget && barTarget.opts.childList === true && !barTarget.opts.subtree);
+
+    // Simulate repeated caret-move updates and strip resizes inside one frame.
+    page.stripRect.left = 250;
+    for (let i = 0; i < 5; i++) {
+        page.observers.mutation.forEach((o) => o.fn());
+        page.observers.resize.forEach((o) => o.fn());
+    }
+    assert.strictEqual(page.rafQueue.length, 1, 'multiple notifications in one frame must schedule at most one pass');
+    assert.strictEqual(itemRectReads, initialReads, 'queued update must wait for requestAnimationFrame');
+
+    assert.strictEqual(page.flushFrame(), 1);
+    assert.strictEqual(itemRectReads, initialReads + 1, 'flushing the frame runs syncRightStrip once');
+    assert.strictEqual(page.itemEls[1].style.visibility, 'hidden');
+
+    // Flushing clears syncQueued so subsequent frames schedule cleanly again.
+    page.stripRect.left = 134;
+    page.observers.mutation.forEach((o) => o.fn());
+    page.observers.mutation.forEach((o) => o.fn());
+    assert.strictEqual(page.rafQueue.length, 1, 'the next frame must schedule one new pass after flush');
+    assert.strictEqual(page.flushFrame(), 1);
+    assert.strictEqual(itemRectReads, initialReads + 2);
+    assert.strictEqual(page.itemEls[1].style.visibility, '');
+});
+
 let failed = 0;
 for (const { name, fn } of cases) {
     try {

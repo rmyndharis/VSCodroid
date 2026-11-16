@@ -163,7 +163,7 @@ and the LGPL-3.0 text it requires ships in the base app, which is the only
 licences screen a device installing the Ruby pack has.
 
 LLVM is libLLVM.so and libclang-cpp.so, and the clang driver, lld, the llvm-*
-tools, the compiler-rt builtins archive and the libc++ headers come from the
+tools, clangd, the compiler-rt builtins archive and the libc++ headers come from the
 same source tree. ndk-sysroot is the bionic and kernel headers, the libc++
 headers and the crt objects, and its three `.so` files are one-line linker
 scripts. The kernel's interface headers are GPL-2.0 WITH Linux-syscall-note and
@@ -179,7 +179,7 @@ base app's `usr/share/doc/python/LICENSE`.
 | Ruby | BSD 2-Clause | https://www.ruby-lang.org |
 | OpenJDK | GPL v2 + Classpath | https://openjdk.org |
 | Mozilla CA certificate list (the JDK's trust store) | MPL 2.0 | https://curl.se/docs/caextract.html, licence text https://mozilla.org/MPL/2.0/ |
-| LLVM (clang, lld) | Apache 2.0 with LLVM Exceptions | https://llvm.org |
+| LLVM (clang, lld, clangd) | Apache 2.0 with LLVM Exceptions | https://llvm.org |
 | Codex (OpenAI) | Apache 2.0 | https://github.com/openai/codex |
 
 OpenJDK's own licence and third-party notice files ship inside the Java pack at `usr/lib/jvm/java-25-openjdk/legal`; Ruby's per-gem licence files likewise ship inside the Ruby pack. LLVM's `LICENSE.TXT` ships inside the C/C++ pack at `usr/share/doc/libllvm`. Codex's `LICENSE` and its `NOTICE`, which names the MIT-licensed Ratatui code it includes, ship inside the Codex pack at `usr/share/doc/codex`.

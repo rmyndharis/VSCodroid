@@ -128,4 +128,57 @@ class ToolchainPickerSkipTargetTest {
             "startDownloads must still apply system-bar padding to progressRoot",
         )
     }
+
+    @Test
+    fun `progress title and rows sit inside a scroll container above the pinned cancel button`() {
+        val progressLayout = File("src/main/res/layout/layout_toolchain_progress.xml")
+        check(progressLayout.isFile) {
+            "layout_toolchain_progress.xml not found at ${progressLayout.absolutePath}"
+        }
+        val all = DocumentBuilderFactory.newInstance().newDocumentBuilder()
+            .parse(progressLayout).getElementsByTagName("*")
+        fun progressView(id: String): Element {
+            for (i in 0 until all.length) {
+                val element = all.item(i) as Element
+                if (element.getAttribute("android:id") == "@+id/$id") return element
+            }
+            throw AssertionError("no view with id $id in layout_toolchain_progress.xml")
+        }
+
+        val scroll = progressView("progressScroll")
+        assertEquals("androidx.core.widget.NestedScrollView", scroll.tagName)
+        assertEquals("@+id/cancelButton", scroll.getAttribute("app:layout_constraintBottom_toTopOf"))
+        assertEquals("true", scroll.getAttribute("android:fillViewport"))
+
+        for (childId in listOf("progressTitle", "progressContainer")) {
+            var node = progressView(childId).parentNode
+            var insideScroll = false
+            while (node != null) {
+                if ((node as? Element)?.getAttribute("android:id") == "@+id/progressScroll") {
+                    insideScroll = true
+                    break
+                }
+                node = node.parentNode
+            }
+            org.junit.jupiter.api.Assertions.assertTrue(
+                insideScroll,
+                "$childId must sit inside progressScroll so queued toolchains can scroll at large font scale",
+            )
+        }
+
+        val cancel = progressView("cancelButton")
+        var node = cancel.parentNode
+        while (node != null) {
+            org.junit.jupiter.api.Assertions.assertNotEquals(
+                "@+id/progressScroll",
+                (node as? Element)?.getAttribute("android:id"),
+                "cancelButton must stay pinned outside progressScroll",
+            )
+            node = node.parentNode
+        }
+        assertEquals("parent", cancel.getAttribute("app:layout_constraintBottom_toBottomOf"))
+        org.junit.jupiter.api.Assertions.assertTrue(meetsMinimumTouchHeight(cancel)) {
+            "cancelButton must meet the 48dp minimum touch height"
+        }
+    }
 }

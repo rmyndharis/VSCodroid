@@ -247,9 +247,9 @@ made through `addJavascriptInterface` does not return to JavaScript until the Ko
 method has finished, and the relay makes its calls from the workbench page's own main
 frame, so the thread it holds is the one the editor renders and takes input on.
 `getStorageBreakdown`, `listSafMirrors`, `reclaimSafMirror` and `clearCaches` all walk
-directory trees before they can answer, and the app's own extracted tree is around 800 MB
-before a project is opened (`BuildConfig.EXTRACTED_ASSET_BYTES`, computed at build time
-from `assets/`, so measure it rather than quoting this figure); answered inline they froze
+directory trees before they can answer, and the app's own extracted tree can be hundreds of megabytes
+before a project is opened (`BuildConfig.EXTRACTED_ASSET_BYTES` is computed at build time
+from `assets/`); answered inline they froze
 the workbench for the length of the walk, and no `WebViewRenderProcessClient` is installed
 anywhere, so nothing detected it.
 
@@ -467,7 +467,7 @@ fun getStorageBreakdown(authToken: String, replyId: String): String
 //
 // TAKES AS LONG AS THE DISK. Every figure is a directory walk and "total" walks
 // filesDir again on top, so on an install carrying the extracted server tree
-// (~800 MB before a project is opened) this runs for far longer than a relay
+// this runs for far longer than a relay
 // hop, which is why it does not answer where the caller waits. See the note at
 // the head of this section.
 
@@ -725,7 +725,7 @@ fun listSshKeys(authToken: String): String
 #### Toolchain Control
 
 `ToolchainRegistry.available` is the source for what these can name. It lists Ruby,
-Java 25 and C/C++, and nothing else.
+Java 25, C/C++ and Codex.
 
 ```kotlin
 @JavascriptInterface

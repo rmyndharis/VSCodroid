@@ -111,4 +111,16 @@ class CrashDialogExitTest {
                     .map { it.trim() },
         )
     }
+
+    @Test
+    fun `dialogs with stacked buttons and long scrolling bodies keep their buttons reachable`() {
+        for (method in listOf("showAboutDialog", "showLicensesDialog", "checkPreviousCrash")) {
+            val methodCode = code(SourceScan.body(source, "fun $method(")).joinToString("\n")
+            assertTrue(
+                methodCode.contains("showWithReachableButtons(") && !methodCode.contains(".show()"),
+                "$method must open its AlertDialog through showWithReachableButtons so stacked " +
+                    "buttons are not cut at font scale 2.0",
+            )
+        }
+    }
 }

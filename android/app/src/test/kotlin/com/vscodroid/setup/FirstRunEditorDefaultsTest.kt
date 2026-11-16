@@ -143,6 +143,169 @@ class FirstRunEditorDefaultsTest {
     }
 
     /**
+     * Keyboards that insert letters outside a composition open the word suggestion
+     * list while typing prose, and upstream's `"on"` accepts the focused suggestion
+     * on Enter even when it equals the word just typed, consuming the line break.
+     *
+     * Like the preferences above, `"smart"` belongs in `configurationDefaults` and
+     * never in `Machine/settings.json`, so a clean install and an upgraded install
+     * both receive it while any value the user sets in User or Remote settings wins
+     * and stays untouched across launches.
+     */
+    @Test
+    fun `Enter accepts a suggestion by default only when it changes the text`() {
+        val contributed = JSONObject(welcomeManifest())
+            .getJSONObject("contributes")
+            .getJSONObject("configurationDefaults")
+
+        assertEquals(
+            "smart",
+            contributed.optString("editor.acceptSuggestionOnEnter"),
+            "without `smart` in configurationDefaults, Enter after a word already in the " +
+                "file accepts that same word from the suggestion list instead of breaking the line",
+        )
+
+        createDefaultSettings()
+        val cleanMachine = settingsText()
+        assertTrue(
+            !cleanMachine.contains("\"editor.acceptSuggestionOnEnter\""),
+            "editor.acceptSuggestionOnEnter must not be written into Machine/settings.json, " +
+                "which outranks the user's own settings:\n$cleanMachine",
+        )
+
+        val settingsFile = File(Environment.getMachineSettingsPath(context))
+        settingsFile.writeText(
+            """
+            {
+                "editor.acceptSuggestionOnEnter": "on",
+                "editor.wordWrap": "on",
+                "git.path": "/stale/libgit.so"
+            }
+            """.trimIndent(),
+        )
+        FirstRunSetup(context).updateSettingsNativeLibPaths()
+
+        val afterUpgradePass = JSONObject(settingsFile.readText())
+        assertTrue(
+            !afterUpgradePass.has("editor.wordWrap"),
+            "the fixture did not run the one-shot prune pass on the existing settings file",
+        )
+        assertEquals(
+            "on",
+            afterUpgradePass.optString("editor.acceptSuggestionOnEnter"),
+            "an existing settings file with editor.acceptSuggestionOnEnter set to `on` by hand " +
+                "must keep `on` across the settings refresh and one-shot migration pass",
+        )
+    }
+
+    /**
+     * Bundled Prettier (`esbenp.prettier-vscode`) ships alongside the built-in
+     * TypeScript/JavaScript, JSON, CSS/SCSS/Less and HTML/Handlebars formatters,
+     * and is the sole bundled formatter for Markdown, YAML, Docker Compose,
+     * GraphQL and Vue. Without a language-scoped default, `Format Document` on a
+     * fresh profile stops to ask which formatter to use whenever two are active.
+     *
+     * Scoping `editor.defaultFormatter` per language in `configurationDefaults`
+     * places the choice in VS Code's `DEFAULT` (`defaultOverrides`) layer: Python
+     * and `ignore` stay untouched, `Machine/settings.json` stays clean so local
+     * User and Workspace settings outrank the default, and any formatter entry a
+     * person wrote into `Machine/settings.json` survives upgrades untouched.
+     */
+    @Test
+    fun `Prettier is the contributed default formatter only for bundled languages it formats`() {
+        val contributed = JSONObject(welcomeManifest())
+            .getJSONObject("contributes")
+            .getJSONObject("configurationDefaults")
+
+        assertTrue(
+            !contributed.has("editor.defaultFormatter"),
+            "editor.defaultFormatter must not be set globally in configurationDefaults, " +
+                "where it would claim Python and Ignore files that Prettier cannot format",
+        )
+        assertTrue(
+            !contributed.has("[python]") && !contributed.has("[ignore]"),
+            "[python] and [ignore] must remain unset in configurationDefaults",
+        )
+
+        val expectedLanguages = listOf(
+            "css",
+            "dockercompose",
+            "graphql",
+            "handlebars",
+            "html",
+            "javascript",
+            "javascriptreact",
+            "json",
+            "jsonc",
+            "less",
+            "markdown",
+            "scss",
+            "typescript",
+            "typescriptreact",
+            "vue",
+            "yaml",
+        )
+        val actualLanguageBlocks = contributed.keys()
+            .asSequence()
+            .filter { it.startsWith("[") && it.endsWith("]") }
+            .sorted()
+            .toList()
+        assertEquals(
+            expectedLanguages.map { "[$it]" },
+            actualLanguageBlocks,
+            "configurationDefaults must scope editor.defaultFormatter to the exact sixteen " +
+                "shipped languages that bundled Prettier formats",
+        )
+        for (lang in expectedLanguages) {
+            val block = contributed.getJSONObject("[$lang]")
+            assertEquals(
+                setOf("editor.defaultFormatter"),
+                block.keys().asSequence().toSet(),
+                "[$lang] must only set editor.defaultFormatter",
+            )
+            assertEquals(
+                "esbenp.prettier-vscode",
+                block.optString("editor.defaultFormatter"),
+                "[$lang] must default editor.defaultFormatter to esbenp.prettier-vscode",
+            )
+        }
+
+        createDefaultSettings()
+        val cleanMachine = settingsText()
+        assertTrue(
+            !cleanMachine.contains("editor.defaultFormatter"),
+            "editor.defaultFormatter must not be written into Machine/settings.json, " +
+                "which outranks the user's own settings:\n$cleanMachine",
+        )
+
+        val settingsFile = File(Environment.getMachineSettingsPath(context))
+        settingsFile.writeText(
+            """
+            {
+                "[javascript]": {
+                    "editor.defaultFormatter": "vscode.typescript-language-features"
+                },
+                "editor.wordWrap": "on",
+                "git.path": "/stale/libgit.so"
+            }
+            """.trimIndent(),
+        )
+        FirstRunSetup(context).updateSettingsNativeLibPaths()
+
+        val afterUpgradePass = JSONObject(settingsFile.readText())
+        assertTrue(
+            !afterUpgradePass.has("editor.wordWrap"),
+            "the fixture did not run the one-shot prune pass on the existing settings file",
+        )
+        assertEquals(
+            "vscode.typescript-language-features",
+            afterUpgradePass.getJSONObject("[javascript]").optString("editor.defaultFormatter"),
+            "a person's formatter override in settings.json must stay untouched across " +
+                "updateSettingsNativeLibPaths and the one-shot migration pass",
+        )
+    }
+
+    /**
      * The premise the reason above rests on. If Copilot stops shipping the bar
      * is empty and the reason for hiding it is a different one, which is worth
      * being told by a red case rather than by a reader who trusted the comment.

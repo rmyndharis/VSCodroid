@@ -115,7 +115,7 @@ class ToolchainManager(private val context: Context) {
      *
      * Built by [toolchainIoExecutor] rather than by `newSingleThreadExecutor`,
      * whose thread is a core thread and is therefore never reclaimed. Nothing
-     * shuts this down and nothing can: nine call sites each build their own
+     * shuts this down and nothing can: multiple call sites each build their own
      * [ToolchainManager] and none of them owns the object long enough to know
      * when the work is finished. `SplashActivity.onCreate` alone builds two and
      * submits on both, on every launch, into a process kept alive by the
@@ -436,9 +436,8 @@ class ToolchainManager(private val context: Context) {
          * env file generated from it.
          *
          * Deliberately on the companion rather than on the instance, because an
-         * instance field would serialise nothing here. Nine call sites each
-         * build their own [ToolchainManager] -- six in `SplashActivity`, plus
-         * `ToolchainActivity`, `AndroidBridge` and `Environment` -- each with
+         * instance field would serialise nothing here. Activities, the bridge and
+         * `Environment` each build [ToolchainManager] instances, each with
          * its own single-thread executor, so the executors serialise their own
          * work and nothing serialises theirs against each other. Two of them
          * overlapping on one file is not hypothetical: the repair pass fires
@@ -2233,7 +2232,7 @@ class ToolchainManager(private val context: Context) {
         ioExecutor.execute {
             // Per download, not per class. The finally below deletes this
             // directory whole, and it used to be one constant path shared by
-            // every ToolchainManager in the process: nine call sites each build
+            // every ToolchainManager in the process: multiple call sites each build
             // their own, ioExecutor is an instance field so it serialises
             // nothing across them, and rotating ToolchainActivity or cancelling
             // the first-run queue leaves an earlier download still running. Two
@@ -4646,7 +4645,7 @@ class ToolchainManager(private val context: Context) {
  * A staging directory belonging to one download rather than to the class.
  *
  * The path used to be a constant, and the `finally` that cleans up deletes the
- * directory whole. Nine call sites each construct their own `ToolchainManager`
+ * directory whole. Multiple call sites each construct their own `ToolchainManager`
  * and `ioExecutor` is an instance field, so it serialises nothing between them:
  * rotating the toolchain screen, or cancelling the first-run queue and reaching
  * the picker again, leaves an earlier download still running against the same
@@ -4685,7 +4684,7 @@ internal const val IO_THREAD_KEEPALIVE_MS = 30_000L
  * times out when it has been idle for [IO_THREAD_KEEPALIVE_MS] and is created
  * again on the next submission. A core thread never times out, and that default
  * is what made the lifetime a problem here, because nothing in this class or in
- * any caller ever shuts one down: nine call sites each construct their own
+ * any caller ever shuts one down: multiple call sites each construct their own
  * manager, `SplashActivity.onCreate` constructs two of them per launch and
  * submits on both, and the process outlives the screens because the server runs
  * in a foreground service. Every launch therefore parked two more threads that

@@ -24,7 +24,7 @@
 #
 # It needs a device or emulator, and nothing runs it automatically. That is a
 # measured conclusion rather than an omission: GitHub's arm64 runners expose no
-# /dev/kvm, and nine of the eleven bundled executables ask for
+# /dev/kvm, and eleven of the fourteen bundled binaries ask for
 # /system/bin/linker64, so executing them anywhere needs an Android system image
 # -- 2.1 GB, inside a partitioned disk image. The issue tracker carries the
 # evidence and the options.

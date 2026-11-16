@@ -97,4 +97,32 @@ class MenuSeparatorFloorTest {
                 }
             }
     }
+
+    @Test
+    fun `menu item highlights fill the enlarged row and labels clear the check column`() {
+        assertTrue(
+            injected.contains(".context-view .monaco-menu .action-menu-item") &&
+                injected.contains("min-height: 40px") &&
+                injected.contains("height: auto"),
+            "MainActivity floors .context-view .action-item at 40px without expanding .action-menu-item",
+        )
+        assertTrue(
+            injected.contains("max-height: none") &&
+                injected.contains("2em") &&
+                !injected.contains("padding: 6px 12px !important"),
+            "MainActivity sets 12px left padding and inherits 100% max-height on .context-view menu labels",
+        )
+    }
+
+    @Test
+    fun `titlebar chat toggle and more actions expand to touch-usable targets`() {
+        val pillRule = Regex("""\.part\.titlebar \.agent-status-pill\s*\{[^}]+\}""").find(injected)?.value
+        val chatRule = Regex("""\.part\.titlebar \.agent-status-badge-section\.sparkle \.action-container\s*\{[^}]+\}""")
+            .find(injected)?.value
+        val moreRule = Regex("""\.part\.titlebar \.agent-status-badge-section\.sparkle \.dropdown-action-container\s*\{[^}]+\}""")
+            .find(injected)?.value
+        assertTrue(pillRule != null && pillRule.contains("height:"), "titlebar pill height missing in coarse sheet")
+        assertTrue(chatRule != null && chatRule.contains("min-width: 36px"), "titlebar Chat toggle min-width < 36px")
+        assertTrue(moreRule != null && moreRule.contains("width: 32px"), "titlebar More Actions width < 32px")
+    }
 }

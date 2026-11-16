@@ -71,27 +71,38 @@ class ToolchainCardLayoutTest {
             ?.removePrefix("@id/")
 
     @Test
-    fun `the status badge ends where the action button begins`() {
+    fun `the status badge and progress bar sit on their own full-width rows above the action button`() {
+        val badge = view("statusBadge")
+        val progress = view("downloadProgress")
+        val button = view("actionButton")
+
         assertEquals(
-            "actionButton", target(view("statusBadge"), "layout_constraintEnd_toStartOf"),
-            "nothing relates the badge and the button horizontally, so a label long " +
-                "enough draws one on top of the other",
+            "parent", badge.getAttributeNS(res, "layout_constraintStart_toStartOf"),
+            "the status badge must start at the parent's start",
+        )
+        assertEquals(
+            "parent", badge.getAttributeNS(res, "layout_constraintEnd_toEndOf"),
+            "the status badge must span to the parent's end so the action button cannot squeeze it to zero width",
+        )
+        assertEquals(
+            "toolchainSize", target(badge, "layout_constraintTop_toBottomOf"),
+            "the status badge must sit below toolchainSize",
+        )
+        assertEquals(
+            "statusBadge", target(progress, "layout_constraintTop_toBottomOf"),
+            "the progress bar must sit below statusBadge in the vertical chain",
+        )
+        assertEquals(
+            "downloadProgress", target(button, "layout_constraintTop_toBottomOf"),
+            "the action button must sit below downloadProgress so it never shares a row with the badge or progress bar",
         )
     }
 
-    /**
-     * The constraint above only helps a view that can give way.
-     *
-     * At wrap_content the badge takes the width its text asks for and the end
-     * constraint is a preference ConstraintLayout is free to overrule, which is the
-     * same overlap arrived at by a longer route. At 0dp the badge is what is left
-     * after the button, and a label too long for that wraps instead.
-     */
     @Test
-    fun `the badge is the view that yields`() {
+    fun `the badge spans the full constrained width`() {
         assertEquals(
             "0dp", view("statusBadge").getAttributeNS(androidNs, "layout_width"),
-            "the badge claims its full text width, so the end constraint is advisory",
+            "the badge must use 0dp match-constraints width across the card",
         )
     }
 

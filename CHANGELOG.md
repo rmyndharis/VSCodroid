@@ -12,13 +12,15 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Added
 
 - **View: Toggle Full Screen** hides the status and navigation bars, and the choice is kept for the next launch.
-- Zen Mode hides the status and navigation bars too, and shows them again when it ends, unless full screen was already on.
+- Zen Mode hides the status and navigation bars too, and shows them again when it ends unless full screen was already on.
 
 ### Changed
 
 - The minimum Android version is now 10, down from 11.
-- The Java toolchain trusts Mozilla's list of certificate authorities instead of OpenJDK's own.
-- A Java toolchain installed earlier keeps OpenJDK's list until it is removed and installed again.
+- Enter accepts an editor suggestion by default only when it changes the text, so pressing Enter after a word already in the file starts a new line.
+- Format Document uses the bundled Prettier for JavaScript, TypeScript, JSON, CSS, HTML and the other languages it covers without asking which formatter to use; a formatter chosen in Settings still wins.
+- The Java toolchain checks HTTPS connections against Mozilla's list of trusted certificate authorities instead of OpenJDK's own.
+- A Java toolchain installed earlier keeps OpenJDK's certificate list until it is removed and installed again.
 
 ### Fixed
 
@@ -28,6 +30,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A chord started from the extra key row, such as Esc Esc, Ctrl+K Z or Ctrl+K Ctrl+S, keeps the keyboard up and takes the next key as its second key.
 - Ctrl then C or X on the extra key row copies and cuts in the editor and in text boxes.
 - Enter on a keyboard that underlines words carries a Ctrl or Alt latched on the extra key row, and the latch no longer reaches the next letter.
+- A check mark in a menu no longer covers the first letter of its item, and an item's highlight covers its whole row.
+- A status bar item at the edge of a narrow screen is hidden whole instead of cut in the middle of a word.
+- The Chat buttons in the title bar open and close with one tap.
+- The selected item of the activity bar is no longer cut at its edge, and the UI Scale list no longer has a tooltip over its first row.
+- At the largest font and display sizes, the buttons of the About, Open Source Licenses and crash report dialogs stay on screen, and so does Cancel while toolchains install.
+- The Installed badge on a toolchain card and the Ctrl and Shift labels on the extra key row are no longer cut off at a large font size.
 - The Chat side bar no longer opens for a moment on the first launch.
 - A download saved over an existing file replaces it whole instead of leaving the end of the old file behind.
 - A download that fails or is cancelled before it has fully arrived leaves the file it was to replace as it was; a failure while that file is being replaced can still leave it partly written.
@@ -44,6 +52,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A restart of the editor's server no longer leaves the previous editor process running when its record file could not be written.
 - Starting the app no longer removes the files of a toolchain download or install that is still in progress.
 - Reading a device folder no longer keeps the processor busy while the app that provides the folder has no data to give.
+- The description of the C/C++ toolchain names clangd beside clang and lld.
 - The editor server's log files keep recording after one failed switch to a new file.
 - The process count in the status bar no longer shows a reading dated in the future as current.
 - The app's log files and crash reports no longer record a password inside a URL, or the editor's internal run key from a page message.
