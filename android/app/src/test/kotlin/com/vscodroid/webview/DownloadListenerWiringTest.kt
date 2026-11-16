@@ -172,7 +172,7 @@ class DownloadListenerWiringTest {
         val report = withoutComments(host())
             .lines()
             .dropWhile { !it.contains("val message = when (outcome)") }
-            .takeWhile { !it.contains("Toast.makeText(") }
+            .takeWhile { !it.contains("AppNotices.showNotice(") }
 
         assertTrue(report.isNotEmpty()) {
             "the download outcome message is gone from MainActivity.kt, so this test is " +

@@ -372,7 +372,7 @@ class SplashLaunchGuardTest {
     fun `the reason for a failure is not put in front of a user who has left`() {
         val body = code(bodyOf("private fun startDownloads("))
 
-        val toast = body.indexOf("Toast.makeText")
+        val toast = body.indexOf("AppNotices.showNotice(")
         assertTrue(toast > 0, "startDownloads no longer says why a pack failed at all")
         val guard = body.indexOf("isFinishing")
         assertTrue(

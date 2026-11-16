@@ -127,7 +127,7 @@ class ActivityRetentionTest {
         // WriteBackNoticeWiringTest pins the wiring itself; this only refuses a
         // fix that removes the subject.
         notices.forEach { marker ->
-            assertTrue(code(blockAt(marker)).contains("Toast.makeText(")) {
+            assertTrue(code(blockAt(marker)).contains("AppNotices.showNotice(")) {
                 "$marker no longer puts anything on screen"
             }
         }

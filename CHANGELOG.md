@@ -36,6 +36,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The selected item of the activity bar is no longer cut at its edge, and the UI Scale list no longer has a tooltip over its first row.
 - At the largest font and display sizes, the buttons of the About, Open Source Licenses and crash report dialogs stay on screen, and so does Cancel while toolchains install.
 - The Installed badge on a toolchain card and the Ctrl and Shift labels on the extra key row are no longer cut off at a large font size.
+- On Android 12 and later, a notice too long for two lines is shown whole in a dialog while the app is on screen, instead of being cut off.
+- A long notice that arrives while the app is in the background is shown whole in a dialog at the next return to the app, unless the app's process ended in between.
 - The Chat side bar no longer opens for a moment on the first launch.
 - A download saved over an existing file replaces it whole instead of leaving the end of the old file behind.
 - A download that fails or is cancelled before it has fully arrived leaves the file it was to replace as it was; a failure while that file is being replaced can still leave it partly written.

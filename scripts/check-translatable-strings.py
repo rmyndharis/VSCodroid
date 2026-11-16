@@ -93,7 +93,7 @@ from pathlib import Path
 # in this app today; see the docstring on why the list is not longer.
 SINKS = (
     # Toast and AlertDialog.
-    "makeText", "setTitle", "setMessage", "setPositiveButton", "setNegativeButton",
+    "makeText", "showNotice", "setTitle", "setMessage", "setPositiveButton", "setNegativeButton",
     "setNeutralButton", "setItems", "setSingleChoiceItems", "setMultiChoiceItems",
     # Views.
     "setText", "setHint", "setContentDescription", "setStateDescription",

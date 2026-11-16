@@ -382,7 +382,7 @@ class ToolchainScreenRetentionTest {
     fun `a stopped screen shows nothing, not merely a destroyed one`() {
         val shown = body("private fun showPackState(")
         val gate = shown.indexOf("lifecycle.currentState.isAtLeast(Lifecycle.State.STARTED)")
-        val toast = shown.indexOf("Toast.makeText")
+        val toast = shown.indexOf("AppNotices.showNotice(")
         val confirm = shown.indexOf("askForCellularConfirmation()")
 
         assertTrue(

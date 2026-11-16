@@ -683,7 +683,7 @@ class AuthCallbackCallSiteTest {
          */
         val RESOURCE = Regex("""getString\(R\.string\.\w+\)""")
 
-        const val TOAST = "Toast.makeText("
+        const val TOAST = "AppNotices.showNotice("
     }
 
     /**
@@ -999,7 +999,7 @@ class AuthCallbackCallSiteTest {
             .takeWhile { it != "    }" }
         check(body.isNotEmpty()) { "receiveCallbackIntent not found; this test is measuring nothing" }
 
-        val toasts = body.filter { it.contains("Toast.makeText(") }
+        val toasts = body.filter { it.contains("AppNotices.showNotice(") }
         assertEquals(
             2, toasts.size,
             "expected the restart message and the expiry message, found ${toasts.size}: $toasts",
