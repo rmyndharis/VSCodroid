@@ -17,10 +17,10 @@ import java.io.File
  * shown, and the editor never loaded. `HeldPortReadinessTest` cannot see that,
  * because its child prints whatever the fixture tells it to.
  *
- * The packaged tree is fetched rather than tracked, so the first case is skipped
- * where it is absent, which is the CI unit-test job. It runs wherever the tree has
- * been fetched, which is every local build and every device run. `assets/server.js`
- * is tracked, so the second case always runs.
+ * The packaged tree is fetched rather than tracked, so the first case skips in
+ * local checkouts where it is absent. Both PR and release unit jobs supply the
+ * server and reject an unexpected skip. `assets/server.js` is tracked, so the
+ * second case always runs.
  */
 class ServerListeningLineWireTest {
 

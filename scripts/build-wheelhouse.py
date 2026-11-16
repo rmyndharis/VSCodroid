@@ -319,7 +319,8 @@ def check_elves(wheel_path, unpacked):
     for directory in list(DEVICE_LIB_DIRS) + vendor_dirs(unpacked):
         lib_args += ["--lib-dir", str(directory)]
 
-    objects = sorted(unpacked.rglob("*.so"))
+    objects = sorted(p for p in unpacked.rglob("*.so*")
+                     if re.search(r"\.so(?:\.[0-9]+)*$", p.name))
     for obj in objects:
         result = subprocess.run(
             [sys.executable, str(VERIFY_ELF), str(obj), *lib_args],

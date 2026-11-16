@@ -799,7 +799,11 @@ jobs:
       # so the figure that decides the storage pre-flight was measured by nobody.
       - name: Run unit tests
         working-directory: android
-        run: ./gradlew testDebugUnitTest
+        # Recheck the fetched server and packs rather than restoring cached results.
+        run: ./gradlew testDebugUnitTest --rerun
+
+      - name: Check unit test skips
+        run: python3 scripts/check-unit-test-skips.py android/app/build/test-results/testDebugUnitTest
 
       # The other half of what lint.yml is for. The block above re-runs its
       # python and node gates on a tag, and stopped short of the task the
@@ -1254,10 +1258,22 @@ jobs:
       # Only mapping.txt. R8 writes seeds/usage/configuration/resources beside it
       # and those describe its decisions, not a stack trace; r8.yml keeps the
       # whole directory for exactly that purpose.
+      - name: Check whether release notes already exist
+        id: release-notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if body="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq '.body // ""' 2>/dev/null)" && [ -n "$(printf '%s' "$body" | tr -d '[:space:]')" ]; then
+            echo "generate=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "generate=true" >> "$GITHUB_OUTPUT"
+          fi
+
       - name: Create GitHub Release
         uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:
-          generate_release_notes: true
+          generate_release_notes: ${{ steps.release-notes.outputs.generate == 'true' }}
           # Defaults to false, which is how a release publishes one asset short
           # and stays green. Per pattern rather than per release, the action
           # fails if ANY glob below matches nothing, which is what these need:

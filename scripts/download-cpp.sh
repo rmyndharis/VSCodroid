@@ -120,7 +120,37 @@ is_relocatable() {
 echo "=== Downloading C/C++ (clang) Toolchain ==="
 echo ""
 
-mkdir -p "$WORK_DIR"
+# Termux ndk-sysroot ships eight Linux kernel-header pairs whose names differ
+# only by case (such as linux/netfilter/xt_CONNMARK.h and xt_connmark.h). On a
+# case-insensitive volume unpacking and copying overwrite one with the other.
+require_case_sensitive() {
+    local dir="$1" probe_a probe_b
+    mkdir -p "$dir"
+    probe_a="${dir%/}/.case-check-$$-a"
+    probe_b="${dir%/}/.case-check-$$-A"
+    rm -f "$probe_a" "$probe_b"
+    : > "$probe_a"
+    if test -e "$probe_b"; then
+        rm -f "$probe_a"
+        if [ "${ALLOW_CASE_INSENSITIVE:-}" = "1" ]; then
+            echo "  WARNING: $dir is on a case-insensitive volume (ALLOW_CASE_INSENSITIVE=1)." >&2
+            echo "  Eight netfilter header pairs collapse to one file each; a pack built this" >&2
+            echo "  way is for a local test only." >&2
+            return 0
+        fi
+        echo "  ERROR: $dir is on a case-insensitive volume." >&2
+        echo "  Termux ndk-sysroot includes eight header pairs whose names differ only by" >&2
+        echo "  case (for example xt_CONNMARK.h and xt_connmark.h); unpacking or copying" >&2
+        echo "  here collapses each pair to one file." >&2
+        echo "  Move the build directory onto a case-sensitive volume, or set" >&2
+        echo "  ALLOW_CASE_INSENSITIVE=1 to build a pack for a local test only." >&2
+        exit 1
+    fi
+    rm -f "$probe_a"
+}
+
+require_case_sensitive "$WORK_DIR"
+require_case_sensitive "$PACK_ASSETS"
 cd "$WORK_DIR"
 
 # --- Step 1: the package index, its signature, and what it resolves to ---

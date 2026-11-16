@@ -79,7 +79,7 @@ BASELINE = ROOT / "android/app/lint-baseline.xml"
 GRADLE = ROOT / "android/app/build.gradle.kts"
 
 # The sentence in build.gradle.kts's lint block that states the count. Matched
-# after the Kotlin line comments are stripped and joined, because the number and
+# after the Kotlin comments are stripped and joined, because the number and
 # the filename sit on either side of a line break.
 STATED_COUNT = re.compile(r"\b(\d+) issues recorded in lint-baseline\.xml\b")
 
@@ -111,11 +111,19 @@ HOW_TO_EDIT = (
     "android/app/build.gradle.kts."
 )
 
+# Keep quoted text intact so a glob or URL cannot start a comment.
+COMMENTS = re.compile(
+    r'""".*?"""|"(?:\\.|[^"\\\r\n])*"|'
+    r"(?P<comment>/\*.*?\*/|//[^\n]*)", re.DOTALL)
+
 
 def comment_prose(text: str) -> str:
-    """Every Kotlin line comment in the file, joined into one line."""
-    said = [line.strip()[2:] for line in text.splitlines()
-            if line.strip().startswith("//")]
+    """Kotlin comment prose, joined into one line."""
+    said = []
+    for match in COMMENTS.finditer(text):
+        comment = match.group("comment")
+        if comment:
+            said.append(comment[2:-2] if comment.startswith("/*") else comment[2:])
     return re.sub(r"\s+", " ", " ".join(said)).strip()
 
 
@@ -181,8 +189,9 @@ def main() -> int:
         print(f"  ok     the baseline holds the {len(entries)} entries "
               f"build.gradle.kts states")
 
-    code = {line.strip() for line in gradle_text.splitlines()
-            if not line.strip().startswith("//")}
+    code_text = COMMENTS.sub(
+        lambda match: "" if match.group("comment") else match.group(), gradle_text)
+    code = {line.strip() for line in code_text.splitlines()}
     unset = [flag for flag in LINT_FLAGS if flag not in code]
     if unset:
         print(f"  FAIL   build.gradle.kts no longer sets {' or '.join(unset)}")
@@ -192,8 +201,6 @@ def main() -> int:
     else:
         print("  ok     lint fails the build on errors and warnings alike")
 
-    code_text = "\n".join(line for line in gradle_text.splitlines()
-                          if not line.strip().startswith("//"))
     informational = set(re.findall(r'"([^"]+)"', " ".join(
         m.group(1) for m in INFORMATIONAL.finditer(code_text))))
     raised = [i for i in SDK_INDEX_WARNINGS if i not in informational]

@@ -15,6 +15,7 @@ import sys
 import tempfile
 import types
 import unittest
+import xml.etree.ElementTree as ET
 import zipfile
 
 
@@ -363,6 +364,162 @@ class MaintenanceScriptsTest(unittest.TestCase):
         self.assertTrue(result["controls_pass"], json.dumps(result, indent=2))
         self.assertTrue(result["fixed_contract_pass"], json.dumps(result, indent=2))
 
+    def test_unit_test_skips_require_an_explicit_case_allowlist(self):
+        checker = SOURCE / "scripts/check-unit-test-skips.py"
+        self.assertTrue(checker.is_file(), "unit test skips have no policy check")
+        results = self.root / "results"
+        results.mkdir()
+        report = results / "TEST-fixture.xml"
+        packs = [
+            ("com.vscodroid.setup.ToolchainCppPackTest", name) for name in (
+                "the manifest the script writes asks for what the manager honours()",
+                "installing it makes every command name resolve to a program and starts nothing by hand()",
+                "uninstalling it leaves no file of its own behind()",
+            )
+        ] + [("com.vscodroid.setup.ToolchainRegistryTest$CatalogTest",
+              "no recorded size is under the tree its pack ships()")]
+
+        def check(cases, allowed=False, skipped=None):
+            suite = ET.Element("testsuite", tests=str(len(cases)), skipped=str(
+                sum(skip for _, _, skip in cases) if skipped is None else skipped))
+            for cls, name, skip in cases:
+                case = ET.SubElement(suite, "testcase", classname=cls, name=name)
+                if skip:
+                    ET.SubElement(case, "skipped", message="input is absent")
+            ET.ElementTree(suite).write(report, encoding="utf-8")
+            return run([sys.executable, "-I", str(checker), str(results)] +
+                       (["--allow-pack-skips"] if allowed else []), self.root)
+
+        for allowed in (False, True):
+            with self.subTest(kind="executed", allowed=allowed):
+                self.assertEqual(0, check([("Example", "runs()", False)], allowed)["status"])
+            for cls, name in packs:
+                with self.subTest(kind="pack", cls=cls, name=name, allowed=allowed):
+                    result = check([(cls, name, True)], allowed)
+                    self.assertEqual(0 if allowed else 1, result["status"], result)
+                    self.assertIn(name, result["stdout"])
+            for cls, name in [("Example", "UnexpectedCase()"), (packs[0][0], "new case()"),
+                              ("OtherClass", packs[0][1])]:
+                with self.subTest(kind="unexpected", cls=cls, name=name, allowed=allowed):
+                    result = check([(cls, name, True)], allowed)
+                    self.assertEqual(1, result["status"], result)
+                    self.assertIn(cls + "." + name, result["stdout"])
+        for cases, skipped in [([], 0), ([("Example", "hidden skip()", True)], 0),
+                               ([("Example", "runs()", False)], 1)]:
+            with self.subTest(kind="invalid counts", cases=cases, skipped=skipped):
+                self.assertEqual(1, check(cases, skipped=skipped)["status"])
+        report.write_text("<broken>")
+        self.assertEqual(1, run([sys.executable, "-I", str(checker), str(results)], self.root)["status"])
+        report.unlink()
+        for directory in (results, self.root / "missing"):
+            with self.subTest(kind="no reports", directory=str(directory)):
+                self.assertEqual(1, run([sys.executable, "-I", str(checker), str(directory)],
+                                        self.root)["status"])
+
+    def test_lint_policy_flags_must_be_live_code(self):
+        fixture = self.root / "lint-policy"
+        (fixture / "scripts").mkdir(parents=True)
+        (fixture / "android/app").mkdir(parents=True)
+        checker = fixture / "scripts/check-lint-baseline.py"
+        shutil.copy2(SOURCE / "scripts/check-lint-baseline.py", checker)
+        shutil.copy2(SOURCE / "android/app/lint-baseline.xml", fixture / "android/app")
+        original = (SOURCE / "android/app/build.gradle.kts").read_text()
+        gradle = fixture / "android/app/build.gradle.kts"
+        self.assertEqual(1, original.count("    lint {"))
+        for flag in ("abortOnError", "warningsAsErrors"):
+            assignment = f"        {flag} = true"
+            self.assertEqual(1, original.count(assignment))
+            commented = f"        {flag} = false\n        /*\n{assignment}\n        */"
+            cases = {
+                "live": (assignment, 0, ""),
+                "block-comment": (commented, 1, ""),
+                "line-comment": (f"        {flag} = false\n        // {flag} = true", 1, ""),
+                "absent": ("", 1, ""),
+            }
+            for style, quote in (("ordinary", '"'), ("triple-quoted", '"""')):
+                glob = f"    val probeGlob = {quote}META-INF/*{quote}\n"
+                url = f"    val probeUrl = {quote}file:///{quote}\n"
+                cases[f"block-marker-string-{style}"] = (assignment, 0, glob)
+                cases[f"line-marker-string-{style}"] = (assignment, 0, url)
+                cases[f"block-comment-after-string-{style}"] = (commented, 1, url)
+            for name, (replacement, status, prefix) in cases.items():
+                with self.subTest(flag=flag, case=name):
+                    text = original.replace(assignment, replacement, 1)
+                    gradle.write_text(text.replace("    lint {", prefix + "    lint {", 1))
+                    result = run([sys.executable, "-I", "-B", str(checker)], fixture)
+                    self.assertEqual(status, result["status"], result)
+                    if status:
+                        self.assertIn(f"no longer sets {flag} = true", result["stdout"], result)
+
+    def test_build_step_check_refuses_an_empty_pr_script_set(self):
+        fixture = self.root / "build-steps"
+        shutil.copytree(SOURCE / "scripts", fixture / "scripts")
+        shutil.copytree(SOURCE / ".github/workflows", fixture / ".github/workflows")
+        (fixture / "android/app").mkdir(parents=True)
+        shutil.copy2(SOURCE / "android/app/build.gradle.kts", fixture / "android/app")
+        shutil.copy2(SOURCE / "CONTRIBUTING.md", fixture)
+        checker = fixture / "scripts/check-build-steps.py"
+
+        def check():
+            return subprocess.run([sys.executable, str(checker)], cwd=fixture,
+                                  capture_output=True, text=True, timeout=30)
+
+        healthy = check()
+        self.assertEqual(0, healthy.returncode, healthy.stdout + healthy.stderr)
+        release = fixture / ".github/workflows/release.yml"
+        text = release.read_text()
+        command = "run: bash scripts/download-python.sh"
+        self.assertIn(command, text)
+        release.write_text(text.replace(command, "run: echo skipped", 1))
+        missing = check()
+        self.assertNotEqual(0, missing.returncode, missing.stdout + missing.stderr)
+        self.assertIn("download-python.sh", missing.stdout)
+        build = fixture / ".github/workflows/build.yml"
+        text = build.read_text()
+        self.assertGreater(text.count("bash scripts/"), 0)
+        build.write_text(text.replace("bash scripts/", "bash ./scripts/"))
+        changed = check()
+        self.assertNotEqual(0, changed.returncode, changed.stdout + changed.stderr)
+        self.assertIn("no scripts found in build.yml's build job", changed.stdout)
+
+    def test_wheelhouse_checks_versioned_shared_objects(self):
+        verifier = types.ModuleType("fixture_elf_verifier")
+        verifier.__file__ = str(SOURCE / "scripts/verify-android-elf.py")
+        exec(compile(Path(verifier.__file__).read_text(), verifier.__file__, "exec"), verifier.__dict__)
+        builder = types.ModuleType("fixture_wheelhouse")
+        builder.__file__ = str(SOURCE / "scripts/build-wheelhouse.py")
+        exec(compile(Path(builder.__file__).read_text(), builder.__file__, "exec"), builder.__dict__)
+        wheel = self.root / "fixture.whl"
+        tree = self.root / "unpacked"
+        tree.mkdir()
+        self.assertEqual(0, builder.check_elves(wheel, tree))
+
+        good = bytearray(verifier.synthetic_elf(None))
+        struct.pack_into("<H", good, 16, 3)
+        bad = bytearray(good)
+        struct.pack_into("<Q", bad, 64 + 48, 4096)
+        sample = tree / "libfixture.so.1"
+        sample.write_bytes(bad)
+        direct = subprocess.run([sys.executable, verifier.__file__, str(sample)],
+                                capture_output=True, text=True, timeout=30)
+        self.assertNotEqual(0, direct.returncode, direct.stdout + direct.stderr)
+        self.assertIn("Android 16 needs 0x4000", direct.stdout)
+        sample.unlink()
+
+        for name in ("libfixture.so", "libfixture.so.1", "libfixture.so.1.2"):
+            with self.subTest(name=name):
+                sample = tree / name
+                sample.write_bytes(bad)
+                output = io.StringIO()
+                with contextlib.redirect_stderr(output), self.assertRaises(SystemExit):
+                    builder.check_elves(wheel, tree)
+                self.assertIn("Android 16 needs 0x4000", output.getvalue())
+                sample.write_bytes(good)
+                self.assertEqual(1, builder.check_elves(wheel, tree))
+                sample.unlink()
+        (tree / "fixture.so.txt").write_text("not a shared object")
+        self.assertEqual(0, builder.check_elves(wheel, tree))
+
     def test_verify_rejects_a_tree_containing_only_unsupported_addons(self):
         self.assert_contract(forwarders(SOURCE / "scripts/gen-glibc-forwarders.py", self.root / "addons"))
 
@@ -534,6 +691,69 @@ termux_download_packages fixture
                              {"TERMUX_OFFLINE": offline, "EXPECTED": hashlib.sha256(payload).hexdigest()})
                 self.assertEqual(expected_status, result["status"], result)
                 self.assertEqual(expected_network, (case / "network-attempt").exists(), result)
+
+    def test_download_cpp_rejects_case_insensitive_volume(self):
+        text = (SOURCE / "scripts/download-cpp.sh").read_text()
+        begin = text.index('echo "=== Downloading C/C++ (clang) Toolchain ==="')
+        end = text.index("# --- Step 1:", begin)
+        guard = text[begin:end]
+        prefix = ('set -euo pipefail\n'
+                  'WORK_DIR="$PWD/work"\n'
+                  'PACK_ASSETS="$PWD/pack"\n')
+        cases = (
+            ("simulated-work-insensitive", "1", "0", None, 1, ("work", "ALLOW_CASE_INSENSITIVE=1")),
+            ("simulated-pack-insensitive", "0", "1", None, 1, ("pack", "ALLOW_CASE_INSENSITIVE=1")),
+            ("simulated-override-insensitive", "1", "1", "1", 0,
+             ("WARNING:", "Eight netfilter header pairs collapse", "local test only")),
+            ("simulated-both-sensitive", "0", "0", None, 0, ()),
+        )
+        for label, work_ci, pack_ci, override, expected_status, expected_stderr in cases:
+            with self.subTest(label=label):
+                case = self.root / label
+                case.mkdir(parents=True)
+                shim = (
+                    f'SIM_WORK_CI={work_ci}\n'
+                    f'SIM_PACK_CI={pack_ci}\n'
+                    'test() {\n'
+                    '    case "${1:-}:${2:-}" in\n'
+                    '        -e:*/work/.case-check-*-A) [ "$SIM_WORK_CI" = "1" ] && return 0 || return 1 ;;\n'
+                    '        -e:*/pack/.case-check-*-A) [ "$SIM_PACK_CI" = "1" ] && return 0 || return 1 ;;\n'
+                    '        *) builtin test "$@" ;;\n'
+                    '    esac\n'
+                    '}\n'
+                )
+                env = {"ALLOW_CASE_INSENSITIVE": override} if override is not None else None
+                result = run(["/bin/bash", "-c", prefix + shim + guard], case, env)
+                if expected_status != 0:
+                    self.assertNotEqual(0, result["status"], result)
+                    self.assertIn("case-insensitive", result["stderr"], result)
+                else:
+                    self.assertEqual(0, result["status"], result)
+                for fragment in expected_stderr:
+                    self.assertIn(fragment, result["stderr"], result)
+                for sub in ("work", "pack"):
+                    if (case / sub).exists():
+                        self.assertEqual([], list((case / sub).glob(".case-check-*")), result)
+
+        for label, override in (("real-host-filesystem", None), ("real-host-filesystem-override", "1")):
+            with self.subTest(label=label):
+                case = self.root / label
+                (case / "probe").mkdir(parents=True)
+                (case / "probe/lower").write_text("")
+                host_case_insensitive = (case / "probe/LOWER").exists()
+                env = {"ALLOW_CASE_INSENSITIVE": override} if override is not None else None
+                result = run(["/bin/bash", "-c", prefix + guard], case, env)
+                if host_case_insensitive and override != "1":
+                    self.assertNotEqual(0, result["status"], result)
+                    self.assertIn("case-insensitive", result["stderr"], result)
+                else:
+                    self.assertEqual(0, result["status"], result)
+                    if host_case_insensitive:
+                        self.assertIn("WARNING:", result["stderr"], result)
+                        self.assertIn("local test only", result["stderr"], result)
+                for sub in ("work", "pack"):
+                    if (case / sub).exists():
+                        self.assertEqual([], list((case / sub).glob(".case-check-*")), result)
 
 
 if __name__ == "__main__":
