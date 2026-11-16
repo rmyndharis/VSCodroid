@@ -147,6 +147,28 @@ class EditorGatewayTest {
     }
 
     @Test
+    fun aPortReleasedWhileItsListenerWaitsForAClientCanBeBoundAtOnce() {
+        // Closing a channel that a thread is waiting on in accept returns before the kernel lets
+        // the port go: on Linux a bind in that moment is refused, from one time in ten to one
+        // in three when measured with this class. release has to wait for that thread, or a
+        // start that releases a temporary port and binds it again lands on a third one.
+        // Repeated, because one round can pass by luck; macOS frees the port at once and
+        // passes either way.
+        val loopback = InetAddress.getByName("127.0.0.1")
+        repeat(100) { round ->
+            val port = gateway.bind(0)
+            Thread.sleep(2) // long enough for the accept thread to be waiting
+
+            assertTrue(gateway.release(port))
+            try {
+                java.net.ServerSocket(port, 0, loopback).close()
+            } catch (failure: java.net.BindException) {
+                fail<Unit>("round $round: port $port could not be bound right after release returned", failure)
+            }
+        }
+    }
+
+    @Test
     fun releaseOfAnotherPortLeavesTheListenerBound() {
         val bound = gateway.bind(0)
 

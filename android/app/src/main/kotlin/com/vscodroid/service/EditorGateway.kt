@@ -110,22 +110,29 @@ internal class EditorGateway : Closeable {
      * an origin taken only because the usual one was busy, given up when the editor
      * is stopped so that the next start can bind the usual one; see
      * `ProcessManager.releaseAwayOrigin`. Open connections, the selected backend and an
-     * unsaid notice that it was away go with it, and the accept thread ends with its
-     * channel. A client it accepted that has not been given a backend yet is closed
-     * rather than given the backend of a listener bound later; see [accept].
+     * unsaid notice that it was away go with it. It returns once the accept thread has
+     * left its channel, or after [ACCEPT_END_WAIT_MS] if that thread has not ended by
+     * then; the port cannot be bound again before the thread has left. A client it
+     * accepted that has not been given a backend yet is closed rather than given the
+     * backend of a listener bound later; see [accept].
      */
     fun release(port: Int): Boolean {
-        val (channel, retired) = synchronized(lock) {
+        val (channel, retired, acceptor) = synchronized(lock) {
             val current = listener ?: return false
             if (current.socket().localPort != port) return false
             listener = null
             backend = null
             awayFromHome = 0
             generation++
-            current to connections.toList()
+            Triple(current, connections.toList(), acceptThread.also { acceptThread = null })
         }
         runCatching { channel.close() }
         retired.forEach { it.close() }
+        // The port stays bound until the thread waiting in accept has left the channel, and
+        // close returns before that: a bind of the same port in that moment is refused. A
+        // caller that releases in order to bind again, here or in another program, is told
+        // only once that thread has ended, or the wait has run out.
+        if (acceptor !== Thread.currentThread()) acceptor?.join(ACCEPT_END_WAIT_MS)
         return true
     }
 
@@ -335,12 +342,15 @@ internal class EditorGateway : Closeable {
         runCatching { listener?.close() }
         retired.forEach { it.close() }
         workers.shutdownNow()
-        acceptThread?.join(2000)
+        acceptThread?.join(ACCEPT_END_WAIT_MS)
         workers.awaitTermination(3, TimeUnit.SECONDS)
     }
 
     companion object {
         val instance: EditorGateway by lazy { EditorGateway() }
+
+        // How long release and close wait for the accept thread to leave its channel.
+        private const val ACCEPT_END_WAIT_MS = 2000L
     }
 }
 
