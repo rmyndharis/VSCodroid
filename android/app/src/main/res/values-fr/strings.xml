@@ -227,6 +227,12 @@
     <!-- Shown when a save could not be written out to the device folder. Names the
          consequence rather than the error: the user's next decision is whether to
          copy the file out before uninstalling, not which exception was thrown. -->
+    <string name="saf_device_copy_preserved">Copie de l\'appareil à côté : %1$s.</string>
+    <plurals name="saf_device_copies_preserved">
+        <item quantity="one">%1$d modification conservée. Cherchez .device- suivi d\'une heure.</item>
+        <item quantity="many">%1$d modifications conservées. Cherchez .device- suivi d\'une heure.</item>
+        <item quantity="other">%1$d modifications conservées. Cherchez .device- suivi d\'une heure.</item>
+    </plurals>
     <string name="saf_write_back_failed">%1$s n\'est pas arrivé dans le dossier de l\'appareil. La seule copie se trouve dans VSCodroid.</string>
 
     <!-- Shown once after a folder opens when documents in it could not be copied into
@@ -267,6 +273,12 @@
          never had, which is what saf_directory_kept says. -->
     <string name="saf_directory_changed_kept">%1$s a été conservé dans le dossier de l\'appareil : une autre application a peut-être modifié un fichier qu\'il contient depuis que l\'éditeur l\'a lu ou enregistré pour la dernière fois. Supprimez-le à cet endroit si vous n\'en avez plus besoin.</string>
     <string name="saf_delete_refused">%1$s n\'a pas pu être supprimé du dossier de l\'appareil et réapparaîtra à la prochaine ouverture du dossier. Supprimez-le dans le gestionnaire de fichiers de l\'appareil.</string>
+    <string name="saf_local_copy_preserved">Copie de l\'application à côté : %1$s.</string>
+    <plurals name="saf_local_copies_preserved">
+        <item quantity="one">%1$d modification de l\'application conservée. Cherchez .local- suivi d\'une heure.</item>
+        <item quantity="many">%1$d modifications de l\'application conservées. Cherchez .local- suivi d\'une heure.</item>
+        <item quantity="other">%1$d modifications de l\'application conservées. Cherchez .local- suivi d\'une heure.</item>
+    </plurals>
 
     <!-- Removing the local copy of a device folder, from the storage screen. The
          mirror named by a hash the screen holds no longer exists: the user picked it

@@ -227,6 +227,10 @@
     <!-- Shown when a save could not be written out to the device folder. Names the
          consequence rather than the error: the user's next decision is whether to
          copy the file out before uninstalling, not which exception was thrown. -->
+    <string name="saf_device_copy_preserved">裝置修改已保留在旁邊：%1$s。</string>
+    <plurals name="saf_device_copies_preserved">
+        <item quantity="other">已保留 %1$d 處裝置修改。請尋找 .device- 和時間。</item>
+    </plurals>
     <string name="saf_write_back_failed">%1$s 未送達裝置資料夾。唯一的副本在 VSCodroid 內。</string>
 
     <!-- Shown once after a folder opens when documents in it could not be copied into
@@ -263,6 +267,10 @@
          never had, which is what saf_directory_kept says. -->
     <string name="saf_directory_changed_kept">%1$s 已保留在裝置資料夾中：自編輯器上次讀取或儲存其中的某個檔案以來，其他應用程式可能已變更該檔案。若不再需要，請在該處刪除。</string>
     <string name="saf_delete_refused">無法從裝置資料夾中刪除 %1$s，下次開啟該資料夾時它會再次出現。請在裝置的檔案管理員中刪除。</string>
+    <string name="saf_local_copy_preserved">應用程式內修改已保留在旁邊：%1$s。</string>
+    <plurals name="saf_local_copies_preserved">
+        <item quantity="other">已保留 %1$d 處應用程式內修改。請尋找 .local- 和時間。</item>
+    </plurals>
 
     <!-- Removing the local copy of a device folder, from the storage screen. The
          mirror named by a hash the screen holds no longer exists: the user picked it

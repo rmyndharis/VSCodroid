@@ -227,6 +227,12 @@
     <!-- Shown when a save could not be written out to the device folder. Names the
          consequence rather than the error: the user's next decision is whether to
          copy the file out before uninstalling, not which exception was thrown. -->
+    <string name="saf_device_copy_preserved">Edição do dispositivo ao lado: %1$s.</string>
+    <plurals name="saf_device_copies_preserved">
+        <item quantity="one">%1$d edição mantida. Procure .device- seguido de um horário.</item>
+        <item quantity="many">%1$d edições mantidas. Procure .device- seguido de um horário.</item>
+        <item quantity="other">%1$d edições mantidas. Procure .device- seguido de um horário.</item>
+    </plurals>
     <string name="saf_write_back_failed">%1$s não chegou à pasta do dispositivo. A única cópia está dentro do VSCodroid.</string>
 
     <!-- Shown once after a folder opens when documents in it could not be copied into
@@ -267,6 +273,12 @@
          never had, which is what saf_directory_kept says. -->
     <string name="saf_directory_changed_kept">%1$s continua na pasta do dispositivo: outro app pode ter alterado um arquivo dentro dela desde a última vez que o editor o leu ou salvou. Exclua por lá se não precisar mais.</string>
     <string name="saf_delete_refused">Não foi possível excluir %1$s da pasta do dispositivo, então ele voltará na próxima vez que a pasta for aberta. Exclua-o no gerenciador de arquivos do dispositivo.</string>
+    <string name="saf_local_copy_preserved">Edição do aplicativo ao lado: %1$s.</string>
+    <plurals name="saf_local_copies_preserved">
+        <item quantity="one">%1$d edição do aplicativo mantida. Procure .local- seguido de um horário.</item>
+        <item quantity="many">%1$d edições do aplicativo mantidas. Procure .local- seguido de um horário.</item>
+        <item quantity="other">%1$d edições do aplicativo mantidas. Procure .local- seguido de um horário.</item>
+    </plurals>
 
     <!-- Removing the local copy of a device folder, from the storage screen. The
          mirror named by a hash the screen holds no longer exists: the user picked it

@@ -339,6 +339,40 @@ class SafWorkspaceUsageTest : SafInitialSyncTestBase() {
         assertTrue(initBridgeBody.contains("published"))
     }
 
+    @Test
+    fun `openRecentFolder claims the mirror only when the folder grant is still held`() {
+        val security = mockk<SecurityManager>()
+        every { security.validateToken("valid") } returns true
+        val opened = mutableListOf<Uri>()
+        val bridge = AndroidBridge(
+            context,
+            security,
+            mockk<ClipboardBridge>(relaxed = true),
+            onBackPressed = { false },
+            onMinimize = {},
+            safManager = replacement,
+            onOpenRecentFolder = { opened += it },
+        )
+        granted.set(false)
+        assertFalse(replacement.hasPersistedPermission(folder))
+
+        bridge.openRecentFolder("valid", folder.toString())
+
+        assertEquals(listOf(folder), opened)
+        assertTrue(
+            manager.reclaimMirror(mirror.name, force = true) >= 0L,
+            "openRecentFolder claimed a mirror whose folder grant was already revoked",
+        )
+
+        assertTrue(mirror.mkdirs())
+        granted.set(true)
+        assertTrue(replacement.hasPersistedPermission(folder))
+
+        bridge.openRecentFolder("valid", folder.toString())
+
+        assertEquals(SafStorageManager.RECLAIM_IN_USE, manager.reclaimMirror(mirror.name, force = true))
+    }
+
     private fun finishWorkers() {
         workers.forEach { it.thread.join(5_000) }
         workers.filter { it.thread.isAlive }.forEach { it.thread.interrupt() }

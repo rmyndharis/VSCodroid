@@ -228,6 +228,11 @@
     <!-- Shown when a save could not be written out to the device folder. Names the
          consequence rather than the error: the user's next decision is whether to
          copy the file out before uninstalling, not which exception was thrown. -->
+    <string name="saf_device_copy_preserved">Device edit kept beside file: %1$s.</string>
+    <plurals name="saf_device_copies_preserved">
+        <item quantity="one">%1$d device edit kept. Look for .device- and a time.</item>
+        <item quantity="other">%1$d device edits kept. Look for .device- and a time.</item>
+    </plurals>
     <string name="saf_write_back_failed">%1$s did not reach the device folder. The only copy is inside VSCodroid.</string>
 
     <!-- Shown once after a folder opens when documents in it could not be copied into
@@ -267,6 +272,11 @@
          never had, which is what saf_directory_kept says. -->
     <string name="saf_directory_changed_kept">%1$s was kept in the device folder: another app may have changed a file in it since the editor last read or saved that file. Delete it there if you no longer need it.</string>
     <string name="saf_delete_refused">%1$s could not be deleted from the device folder, so it comes back the next time the folder is opened. Delete it in the file manager on your device.</string>
+    <string name="saf_local_copy_preserved">App edit kept beside file: %1$s.</string>
+    <plurals name="saf_local_copies_preserved">
+        <item quantity="one">%1$d app edit kept. Look for .local- and a time.</item>
+        <item quantity="other">%1$d app edits kept. Look for .local- and a time.</item>
+    </plurals>
 
     <!-- Removing the local copy of a device folder, from the storage screen. The
          mirror named by a hash the screen holds no longer exists: the user picked it

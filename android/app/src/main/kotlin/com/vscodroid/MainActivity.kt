@@ -82,6 +82,7 @@ import com.vscodroid.setup.ToolchainManager
 import com.vscodroid.storage.FolderBusyException
 import com.vscodroid.storage.SafFolderInfo
 import com.vscodroid.storage.SafStorageManager
+import com.vscodroid.storage.SafSyncEngine
 import com.vscodroid.util.Logger
 import com.vscodroid.util.MainThreadWatch
 import com.vscodroid.util.Notices
@@ -795,6 +796,19 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
+        safManager.onDeviceCopiesPreserved { copies ->
+            val message = if (copies.size == 1) {
+                appContext.getString(R.string.saf_device_copy_preserved, preservedDeviceNameForNotice(copies.single().name))
+            } else {
+                appContext.resources.getQuantityString(
+                    R.plurals.saf_device_copies_preserved, copies.size, copies.size
+                )
+            }
+            toMainThread.post {
+                Toast.makeText(appContext, message, Toast.LENGTH_LONG).show()
+            }
+        }
+
         // The same silence, a whole folder at a time: a folder created in the editor
         // that did not arrive whole on the device. One notice per folder, and the cap
         // gets its own wording because it is a limit this app chose rather than the
@@ -867,6 +881,25 @@ class MainActivity : AppCompatActivity() {
         // reads as the editor undoing a deletion by itself.
         safManager.onDeleteRefused { refused ->
             val message = appContext.getString(R.string.saf_delete_refused, refused.name)
+            toMainThread.post {
+                Toast.makeText(appContext, message, Toast.LENGTH_LONG).show()
+            }
+        }
+
+        safManager.onLocalCopiesPreserved { copies ->
+            if (copies.isEmpty()) return@onLocalCopiesPreserved
+            val message = if (copies.size == 1) {
+                appContext.getString(
+                    R.string.saf_local_copy_preserved,
+                    preservedLocalNameForNotice(copies.single().name),
+                )
+            } else {
+                appContext.resources.getQuantityString(
+                    R.plurals.saf_local_copies_preserved,
+                    copies.size,
+                    copies.size,
+                )
+            }
             toMainThread.post {
                 Toast.makeText(appContext, message, Toast.LENGTH_LONG).show()
             }
@@ -7875,6 +7908,26 @@ internal const val SYNC_PROGRESS_INTERVAL_MS = 100L
  */
 internal fun syncProgressIsDue(done: Int, total: Int, sinceLastMs: Long): Boolean =
     done >= total || sinceLastMs >= SYNC_PROGRESS_INTERVAL_MS
+
+/** Keeps the device suffix visible in a short notice. */
+internal fun preservedDeviceNameForNotice(name: String): String =
+    preservedCopyNameForNotice(name, SafSyncEngine.DEVICE_COPY_SUFFIX)
+
+/** Keeps the local suffix visible in a short notice. */
+internal fun preservedLocalNameForNotice(name: String): String =
+    preservedCopyNameForNotice(name, SafSyncEngine.LOCAL_COPY_SUFFIX)
+
+private fun preservedCopyNameForNotice(name: String, suffixMarker: String): String {
+    val maxCodePoints = 32
+    if (name.codePointCount(0, name.length) <= maxCodePoints) return name
+    val marker = name.lastIndexOf(suffixMarker)
+    val suffixStart = if (marker >= 0) marker else name.offsetByCodePoints(name.length, -18)
+    val suffix = name.substring(suffixStart)
+    val suffixLength = suffix.codePointCount(0, suffix.length)
+    val prefixLength = (maxCodePoints - 3 - suffixLength).coerceAtLeast(0)
+        .coerceAtMost(name.codePointCount(0, suffixStart))
+    return name.substring(0, name.offsetByCodePoints(0, prefixLength)) + "..." + suffix
+}
 
 /**
  * What to call [dir] in a notice about it.

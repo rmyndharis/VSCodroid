@@ -227,6 +227,11 @@
     <!-- Shown when a save could not be written out to the device folder. Names the
          consequence rather than the error: the user's next decision is whether to
          copy the file out before uninstalling, not which exception was thrown. -->
+    <string name="saf_device_copy_preserved">Geräteänderung daneben: %1$s.</string>
+    <plurals name="saf_device_copies_preserved">
+        <item quantity="one">%1$d Geräteänderung behalten. Suchen Sie .device- und eine Uhrzeit.</item>
+        <item quantity="other">%1$d Geräteänderungen behalten. Suchen Sie .device- und eine Uhrzeit.</item>
+    </plurals>
     <string name="saf_write_back_failed">%1$s hat den Geräteordner nicht erreicht. Die einzige Kopie liegt in VSCodroid.</string>
 
     <!-- Shown once after a folder opens when documents in it could not be copied into
@@ -265,6 +270,11 @@
          never had, which is what saf_directory_kept says. -->
     <string name="saf_directory_changed_kept">%1$s wurde im Geräteordner behalten: Eine andere App hat möglicherweise eine Datei darin geändert, seit der Editor diese zuletzt gelesen oder gespeichert hat. Löschen Sie den Ordner dort, wenn Sie ihn nicht mehr brauchen.</string>
     <string name="saf_delete_refused">%1$s konnte nicht aus dem Geräteordner gelöscht werden und erscheint beim nächsten Öffnen des Ordners wieder. Löschen Sie den Eintrag in der Dateiverwaltung des Geräts.</string>
+    <string name="saf_local_copy_preserved">App-Änderung daneben: %1$s.</string>
+    <plurals name="saf_local_copies_preserved">
+        <item quantity="one">%1$d App-Änderung behalten. Suchen Sie .local- und eine Uhrzeit.</item>
+        <item quantity="other">%1$d App-Änderungen behalten. Suchen Sie .local- und eine Uhrzeit.</item>
+    </plurals>
 
     <!-- Removing the local copy of a device folder, from the storage screen. The
          mirror named by a hash the screen holds no longer exists: the user picked it

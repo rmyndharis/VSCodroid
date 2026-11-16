@@ -227,6 +227,10 @@
     <!-- Shown when a save could not be written out to the device folder. Names the
          consequence rather than the error: the user's next decision is whether to
          copy the file out before uninstalling, not which exception was thrown. -->
+    <string name="saf_device_copy_preserved">端末の変更を横に保存: %1$s。</string>
+    <plurals name="saf_device_copies_preserved">
+        <item quantity="other">端末の変更を %1$d 件保存しました。.device- と時刻を探してください。</item>
+    </plurals>
     <string name="saf_write_back_failed">%1$s はデバイスのフォルダーに届きませんでした。唯一のコピーは VSCodroid の中にあります。</string>
 
     <!-- Shown once after a folder opens when documents in it could not be copied into
@@ -263,6 +267,10 @@
          never had, which is what saf_directory_kept says. -->
     <string name="saf_directory_changed_kept">%1$s はデバイスのフォルダーに残しました。中のファイルを、エディターが最後に読み込むか保存したあとに、他のアプリが変更した可能性があるためです。不要な場合は、デバイス側で削除してください。</string>
     <string name="saf_delete_refused">%1$s をデバイスのフォルダーから削除できませんでした。次にフォルダーを開いたときに再び表示されます。デバイスのファイル管理アプリで削除してください。</string>
+    <string name="saf_local_copy_preserved">アプリの変更を横に保存: %1$s。</string>
+    <plurals name="saf_local_copies_preserved">
+        <item quantity="other">アプリの変更を %1$d 件保存しました。.local- と時刻を探してください。</item>
+    </plurals>
 
     <!-- Removing the local copy of a device folder, from the storage screen. The
          mirror named by a hash the screen holds no longer exists: the user picked it

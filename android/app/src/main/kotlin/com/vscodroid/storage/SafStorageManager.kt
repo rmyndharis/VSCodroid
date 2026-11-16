@@ -92,6 +92,11 @@ class SafStorageManager(context: Context) {
         }
     }
 
+    /** Reports each live preservation, or one batch for an initial sync. */
+    fun onDeviceCopiesPreserved(announce: (List<File>) -> Unit) {
+        syncEngine.onDeviceCopiesPreserved = announce
+    }
+
     /**
      * Whether the caller that read [last] off the throttle is the one that gets to speak.
      *
@@ -166,6 +171,11 @@ class SafStorageManager(context: Context) {
                 announce(file)
             }
         }
+    }
+
+    /** Reports each preserved mirror copy, or one batch for an initial sync. */
+    fun onLocalCopiesPreserved(announce: (List<File>) -> Unit) {
+        syncEngine.onLocalCopiesPreserved = announce
     }
 
     /**

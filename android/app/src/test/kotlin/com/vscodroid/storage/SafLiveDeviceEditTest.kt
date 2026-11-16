@@ -96,6 +96,7 @@ class SafLiveDeviceEditTest {
     /** What the engine's held-back saves are timed by, `SystemClock.elapsedRealtime()`. */
     private var clock = 0L
     private val failed = mutableListOf<File>()
+    private val preservedNotices = mutableListOf<List<File>>()
 
     /** What the engine said it kept in the device folder when a delete would have taken it. */
     private val kept = mutableListOf<File>()
@@ -105,6 +106,7 @@ class SafLiveDeviceEditTest {
      * changed since the editor read it, rather than because the editor never had it.
      */
     private val keptAsChanged = mutableListOf<Boolean>()
+    private val localPreservedNotices = mutableListOf<List<File>>()
 
     /** Whether the device holds `notes.txt` at all; the editor can delete and make it again. */
     private var deviceHasDocument = true
@@ -241,6 +243,14 @@ class SafLiveDeviceEditTest {
         every { context.filesDir } returns File(root, "files").apply { mkdirs() }
         engine = SafSyncEngine(context)
         engine.onWriteBackFailed = { failed += it }
+        runCatching { engine.javaClass.getDeclaredField("onDeviceCopiesPreserved") }.getOrNull()?.let { listener ->
+            listener.isAccessible = true
+            listener.set(engine, { files: List<File> -> preservedNotices += files })
+        }
+        runCatching { engine.javaClass.getDeclaredField("onLocalCopiesPreserved") }.getOrNull()?.let { listener ->
+            listener.isAccessible = true
+            listener.set(engine, { files: List<File> -> localPreservedNotices += files })
+        }
         engine.onKeptOnDevice = { file, _, changed ->
             kept += file
             keptAsChanged += changed
@@ -583,6 +593,28 @@ class SafLiveDeviceEditTest {
             "the save replaced another app's edit with no copy of it anywhere",
         )
         assertEquals("typed in the editor", deviceText, "the save did not reach the device")
+        assertEquals(listOf(listOf("notes.txt.device-$editedAt")), preservedNotices.map { batch -> batch.map { it.name } })
+    }
+
+    @Test
+    fun `a sync that preserves two device edits reports one batch with both names`() {
+        otherText = "original other"
+        open()
+        editOnDevice("changed notes")
+        otherText = "changed other"
+        otherModified += 60_000
+        val notesStamp = deviceModified
+        val otherStamp = otherModified
+        File(mirror, "notes.txt").apply { writeText("local notes"); setLastModified(deviceModified + 60_000) }
+        File(mirror, "other.txt").apply { writeText("local other"); setLastModified(otherModified + 60_000) }
+
+        open()
+
+        assertEquals(1, preservedNotices.size)
+        assertEquals(
+            setOf("notes.txt.device-$notesStamp", "other.txt.device-$otherStamp"),
+            preservedNotices.single().map { it.name }.toSet(),
+        )
     }
 
     @Test
@@ -597,6 +629,7 @@ class SafLiveDeviceEditTest {
             "this app's own earlier save was kept as if another app had written it",
         )
         assertEquals("second save", deviceText)
+        assertTrue(preservedNotices.isEmpty(), "identical device bytes were announced as a preserved edit")
     }
 
     /**
@@ -1033,6 +1066,7 @@ class SafLiveDeviceEditTest {
         assertEquals(1, writes, "a save went over a device copy nothing could read")
         assertEquals("first save", deviceText)
         assertEquals(listOf(File(mirror, "notes.txt").absolutePath), failed.map { it.absolutePath })
+        assertTrue(preservedNotices.isEmpty(), "a failed preservation was announced as kept")
     }
 
     /**
@@ -2251,6 +2285,60 @@ class SafLiveDeviceEditTest {
         assertEquals("editor save", File(mirror, "notes.txt").readText())
         assertTrue(deviceCopies().isEmpty())
         assertEquals(1, failed.size)
+    }
+
+    @Test
+    fun `a sync that sets aside one diverged mirror copy as local announces its name and an identical copy is silent`() {
+        open()
+        editOnDevice("newer on device")
+        File(mirror, "notes.txt").apply {
+            writeText("older local edit")
+            setLastModified(deviceModified - 1_000)
+        }
+
+        open()
+
+        assertEquals(1, localPreservedNotices.size, "one local copy notice was expected")
+        val noticed = localPreservedNotices.single().single()
+        assertTrue(noticed.name.startsWith("notes.txt" + SafSyncEngine.LOCAL_COPY_SUFFIX))
+        assertEquals("older local edit", noticed.readText())
+        assertEquals("newer on device", File(mirror, "notes.txt").readText())
+
+        localPreservedNotices.clear()
+        editOnDevice("same bytes")
+        File(mirror, "notes.txt").apply {
+            writeText("same bytes")
+            setLastModified(deviceModified - 1_000)
+        }
+
+        open()
+
+        assertTrue(localPreservedNotices.isEmpty(), "identical mirror bytes were announced as a preserved local copy")
+    }
+
+    @Test
+    fun `a sync that sets aside multiple diverged mirror copies as local reports one batch`() {
+        otherText = "initial other"
+        open()
+        editOnDevice("device notes")
+        otherText = "device other"
+        otherModified = deviceModified
+        File(mirror, "notes.txt").apply {
+            writeText("local notes")
+            setLastModified(deviceModified - 1_000)
+        }
+        val conflictDir = File(mirror, "other.txt")
+        assertTrue(conflictDir.delete())
+        assertTrue(conflictDir.mkdirs())
+        File(conflictDir, "child.txt").writeText("local dir child")
+
+        open()
+
+        assertEquals(1, localPreservedNotices.size, "one batched notice was expected for one initial sync")
+        val batchNames = localPreservedNotices.single().map { it.name }
+        assertEquals(2, batchNames.size)
+        assertTrue(batchNames.any { it.startsWith("notes.txt" + SafSyncEngine.LOCAL_COPY_SUFFIX) })
+        assertTrue(batchNames.any { it.startsWith("other.txt" + SafSyncEngine.LOCAL_COPY_SUFFIX) })
     }
 
     private companion object {

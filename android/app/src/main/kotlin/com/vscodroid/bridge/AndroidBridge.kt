@@ -958,7 +958,7 @@ class AndroidBridge(
     fun openRecentFolder(authToken: String, uriString: String) {
         if (!security.validateToken(authToken)) return
         val uri = uriString.toUri()
-        safManager?.let { it.claimMirrorOpen(it.getMirrorDir(uri)) }
+        safManager?.let { if (it.hasPersistedPermission(uri)) it.claimMirrorOpen(it.getMirrorDir(uri)) }
         // Null, and printed as such, only for a bridge built with no SAF manager,
         // which is also a bridge whose open callback defaults to doing nothing.
         // Production has no such caller: `MainActivity` passes both together.
