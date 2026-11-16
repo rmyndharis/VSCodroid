@@ -157,9 +157,8 @@ jobs:
           # rebuilds, re-signs and replaces the assets of a release that is
           # already public, with a tree of everything merged since, still
           # labelled the same versionName and versionCode.
-          # FirstRunSetup.setupIsStale compares
-          # exactly those two fields, so every device already on that version
-          # installs the new tree and skips extraction and migrations entirely.
+          # FirstRunSetup.setupIsStale also compares the package update time,
+          # but migrations are version-based and release identity is ambiguous.
           #
           # Forty zeros means the tag is new. TAG_WAS equal to TAG_NOW means it
           # was re-pushed at the same commit, which rebuilds the same tree and is
@@ -233,8 +232,7 @@ jobs:
 
           if [ "$tag_version" != "$version_name" ]; then
             echo "::error::Tag $TAG does not match versionName $version_name in $gradle_file." \
-                 "Existing installs gate first-run setup on versionName, so releasing this" \
-                 "would skip extraction and migrations for every upgrading user."
+                 "The tag must identify the versionName in the package and release notes."
             exit 1
           fi
 

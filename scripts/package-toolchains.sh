@@ -184,9 +184,8 @@ for tc in "${REQUESTED[@]}"; do
     # a tree of 154.8 MB.
     #
     # ToolchainRegistryTest asks the same question and cannot answer it where it
-    # matters: the pack trees are gitignored, so its measurement finds nothing and
-    # the case is skipped on every automated run. The tree is on disk by
-    # definition here, one step before it becomes a release asset.
+    # matters when pack trees are absent: it skips each unavailable tree. The
+    # tree is on disk here, one step before it becomes a release asset.
     #
     # Each file is rounded up to a 4 KiB block, which is what makes the figure
     # comparable with the constant. The KDoc on estimatedSize says to measure with

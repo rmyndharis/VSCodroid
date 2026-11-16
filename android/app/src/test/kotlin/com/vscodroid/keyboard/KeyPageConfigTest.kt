@@ -433,5 +433,34 @@ class KeyPageConfigTest {
                 assertEquals(0, pads.size, "Page ${i + 1} should NOT have GesturePad")
             }
         }
+
+        @Test
+        fun `every key label fits inside the minimum key width at font scale 2_0`() {
+            val buttonSource = File("src/main/kotlin/com/vscodroid/keyboard/ExtraKeyButton.kt")
+            assertTrue(buttonSource.isFile, "ExtraKeyButton.kt not found at ${buttonSource.absolutePath}")
+            val stripped = buttonSource.readText()
+                .replace(Regex("/\\*.*?\\*/", RegexOption.DOT_MATCHES_ALL), "")
+                .replace(Regex("//[^\\n]*"), "")
+                .replace(Regex("\\s+"), " ")
+            assertTrue(
+                stripped.contains(
+                    "TextViewCompat.setAutoSizeTextTypeUniformWithConfiguration( " +
+                        "this, KEY_MIN_TEXT_SP, KEY_MAX_TEXT_SP, 1, TypedValue.COMPLEX_UNIT_SP )"
+                ),
+                "ExtraKeyButton must configure uniform SP auto-sizing from KEY_MIN_TEXT_SP to KEY_MAX_TEXT_SP",
+            )
+
+            val innerWidthDp = MIN_TOUCH_TARGET_DP - 2 * (KEY_HORIZONTAL_PADDING_DP + KEY_GAP_DP)
+            val minTextDpAtMaxScale = KEY_MIN_TEXT_SP * 2.0
+            val monospaceAdvanceDp = minTextDpAtMaxScale * 0.6
+            for (button in KeyPages.defaults.flatMap { it.items }.filterIsInstance<KeyItem.Button>()) {
+                val neededDp = button.label.length * monospaceAdvanceDp
+                assertTrue(
+                    neededDp <= innerWidthDp,
+                    "label '${button.label}' (${button.label.length} chars) needs ${neededDp}dp at " +
+                        "${KEY_MIN_TEXT_SP}sp (font scale 2.0), exceeding ${innerWidthDp}dp inner width",
+                )
+            }
+        }
     }
 }

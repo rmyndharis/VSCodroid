@@ -266,15 +266,45 @@ class TouchContextMenuWiringTest {
             "native-edit-context",
             "menubar-menu-items-holder",
             "menubar-menu-button",
+            "monaco-dropdown-with-primary",
+            "quick-input-box",
             "-monaco-gesturetap",
         )
-            .forEach { name ->
-                assertTrue(
-                    bundle.contains(name),
-                    "the packaged workbench no longer mentions `$name`, so the script now " +
-                        "matches nothing there. Open a menu over the DevTools protocol and " +
-                        "read the class names it renders with.",
-                )
-            }
+                .forEach { name ->
+                    assertTrue(
+                        bundle.contains(name),
+                        "the packaged workbench no longer mentions `$name`, so the script now " +
+                            "matches nothing there. Open a menu over the DevTools protocol and " +
+                            "read the class names it renders with.",
+                    )
+                }
+    }
+
+    @Test
+    fun `titlebar dropdown with primary does not double-dispatch touch taps`() {
+        val script = body("private fun injectTouchContextMenu(")
+        val tap = listener(script, "'-monaco-gesturetap'")
+        assertTrue(
+            tap.contains("monaco-dropdown-with-primary") &&
+                tap.contains(".action-container") &&
+                tap.contains(".dropdown-action-container") &&
+                tap.contains("stopImmediatePropagation"),
+            "touching Toggle Chat or More Actions dispatches -monaco-gesturetap twice " +
+                "(inner child plus monaco-dropdown-with-primary), toggling Chat twice or closing " +
+                "the More Actions dropdown immediately",
+        )
+    }
+
+    @Test
+    fun `quick input box hover tooltip is suppressed on coarse pointers`() {
+        val script = body("private fun injectTouchContextMenu(")
+        val hover = listener(script, "addEventListener('mouseover'")
+        assertTrue(
+            hover.contains("COARSE") &&
+                hover.contains(".quick-input-box") &&
+                hover.contains("stopPropagation"),
+            "coarse-pointer hover on .quick-input-box opens a delayed tooltip directly below " +
+                "the input over the first QuickPick row",
+        )
     }
 }

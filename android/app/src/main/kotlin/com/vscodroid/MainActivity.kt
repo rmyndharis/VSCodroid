@@ -55,6 +55,7 @@ import com.vscodroid.util.WebViewVersion
 import androidx.activity.result.contract.ActivityResultContracts
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
+import androidx.appcompat.widget.LinearLayoutCompat
 import androidx.core.content.ContextCompat
 import androidx.core.view.ViewCompat
 import androidx.core.view.WindowCompat
@@ -1366,9 +1367,8 @@ class MainActivity : AppCompatActivity() {
      * The picker is the only thing that ever started a watcher, so a folder
      * reached any of those ways was served read-write with nothing syncing it.
      * Every save, every `git checkout`, every terminal write stayed in the mirror
-     * and never reached the device folder, and nothing on screen said so. If the
-     * grant later lapsed, the launch reclaim deleted the mirror and the work with
-     * it, having never existed anywhere the user could see.
+     * and never reached the device folder, and nothing on screen said so. Older
+     * launch reclamation could also delete the mirror after its grant lapsed.
      *
      * A mirror whose folder has no grant any more cannot be adopted: the workbench
      * still lists it in Open Recent after the recent list drops it and releases the
@@ -1793,8 +1793,7 @@ class MainActivity : AppCompatActivity() {
     /**
      * The local copies of device folders, as the JSON the storage screen renders.
      *
-     * Runs on the WebView's bridge thread and walks every mirror twice, once to
-     * size it and once to ask whether the device folder holds everything in it.
+     * Runs on the WebView's bridge thread and walks every mirror to size it.
      * That is slow enough to be worth naming, and the alternative is worse: a
      * screen that offers a removal without saying what it costs is the shape this
      * whole feature exists to replace.
@@ -3645,9 +3644,8 @@ class MainActivity : AppCompatActivity() {
      * something. A folder that is gone (deleted, storage unmounted) would pin
      * the WebView to a dead path, which is the same reason [folderFromUrl] stats
      * the folder it reads. And a device-folder mirror whose grant has lapsed is
-     * worse than useless: nothing would sync it, the launch reclaim pass is
-     * entitled to delete it out from under the editor, and the user would go on
-     * editing in the belief that their work is reaching the device.
+     * not synced: a user could keep editing in the belief that their work is
+     * reaching the device. Launch reclamation now leaves the mirror itself alone.
      */
     private fun rememberedWorkspaceFolder(): String? = rememberedFolderToReopen(
         remembered = workspacePrefs.getString(KEY_LAST_FOLDER, null),
@@ -4972,6 +4970,12 @@ class MainActivity : AppCompatActivity() {
                         target.classList.contains('menubar-menu-button')) {
                         e.stopImmediatePropagation();
                     }
+                    if (origin && origin.closest &&
+                        (origin.closest('.action-container') || origin.closest('.dropdown-action-container')) &&
+                        target && target.classList &&
+                        target.classList.contains('monaco-dropdown-with-primary')) {
+                        e.stopImmediatePropagation();
+                    }
                 }, true);
 
                 // Every open menu's action bar, across the page and the shadow hosts.
@@ -5114,6 +5118,12 @@ class MainActivity : AppCompatActivity() {
                 document.querySelectorAll('.shadow-root-host').forEach(function(h) {
                     if (h.shadowRoot) adopt(h.shadowRoot);
                 });
+                document.addEventListener('mouseover', function(e) {
+                    if (!window.matchMedia(COARSE).matches) return;
+                    if (e.target && e.target.closest && e.target.closest('.quick-input-box')) {
+                        e.stopPropagation();
+                    }
+                }, true);
             })();
             """.trimIndent(),
             null
@@ -6099,7 +6109,7 @@ class MainActivity : AppCompatActivity() {
                     // The 44 on the next line is also TOUCH_ACTION_HEIGHT in patch 0030,
                     // which sizes the overflow from it. ActivityBarItemSizeTest fails when
                     // the two differ; change both together.
-                    '  .activitybar .action-item { min-height: 44px !important; min-width: 44px !important; }',
+                    '  .activitybar .action-item { min-height: 44px !important; }',
                     '  .activitybar .action-label { min-height: 44px !important; }',
                     // Horizontal padding only. The status bar is a fixed 22px part
                     // (`minimumHeight === maximumHeight`), so widening an entry is
@@ -6113,7 +6123,8 @@ class MainActivity : AppCompatActivity() {
                     // reachable.
                     '  .part.statusbar > .right-items { flex-wrap: nowrap !important; overflow-x: hidden !important; min-width: 0 !important; }',
                     '  .context-view .action-item { min-height: 40px !important; }',
-                    '  .context-view .action-label { padding: 6px 12px !important; }',
+                    '  .context-view .monaco-menu .action-menu-item { height: auto !important; min-height: 40px !important; }',
+                    '  .context-view .action-label:not(.separator) { max-height: none !important; padding: 6px 12px 6px 2em !important; }',
                     // A chord beside a menu item is a promise a finger cannot keep.
                     // The items run on a tap regardless (measured: Rename Symbol
                     // opened its box from a touch with no focus in the menu), so
@@ -6170,6 +6181,13 @@ class MainActivity : AppCompatActivity() {
                     '  .part.statusbar .statusbar-item { font-size: 13px !important; }',
                     '  .tabs-container .tab .label-name { font-size: 14px !important; }',
                     '  .monaco-list-row { font-size: 13px !important; }',
+                    '  .part.titlebar .agent-status-pill { box-sizing: border-box !important; height: 34px !important; }',
+                    '  .part.titlebar .agent-status-badge-section.sparkle .action-container { min-width: 36px !important; padding: 0 !important; box-sizing: border-box !important; }',
+                    '  .part.titlebar .agent-status-badge-section.sparkle .action-container .action-label { width: 100% !important; height: 100% !important; padding: 0 !important; box-sizing: border-box !important; }',
+                    '  .part.titlebar .agent-status-badge-section.sparkle .dropdown-action-container { width: 32px !important; box-sizing: border-box !important; }',
+                    '  .part.titlebar .agent-status-badge-section.sparkle .dropdown-action-container .monaco-dropdown,',
+                    '  .part.titlebar .agent-status-badge-section.sparkle .dropdown-action-container .dropdown-label,',
+                    '  .part.titlebar .agent-status-badge-section.sparkle .dropdown-action-container .action-label { width: 100% !important; height: 100% !important; padding: 0 !important; box-sizing: border-box !important; display: flex !important; align-items: center !important; justify-content: center !important; }',
                     '}',
                     // Gated on width, not on the pointer: what goes wrong here is a
                     // 480px box in a narrower viewport, and a phone with a mouse or a
@@ -6212,10 +6230,78 @@ class MainActivity : AppCompatActivity() {
                 // layer, so the browser never scrolls the row itself: the touch events stop
                 // before the bubble phase and no pointercancel follows. The row is row-reverse,
                 // so scrollLeft runs from 0 at its right end down to minus the overflow.
+                // Any entry crossing either edge of `.right-items` is hidden whole so no item is
+                // sliced mid-word.
+                var STRIP_SELECTOR = '.part.statusbar > .right-items';
+                function syncRightStrip() {
+                    if (typeof document.querySelector !== 'function') return;
+                    var row = document.querySelector(STRIP_SELECTOR);
+                    if (!row || typeof row.querySelectorAll !== 'function' ||
+                        typeof row.getBoundingClientRect !== 'function') return;
+                    var sr = row.getBoundingClientRect();
+                    if (!(sr.width > 0)) return;
+                    var items = row.querySelectorAll('.statusbar-item');
+                    var next = new Array(items.length);
+                    for (var i = 0; i < items.length; i++) {
+                        if (typeof items[i].getBoundingClientRect !== 'function' || !items[i].style) continue;
+                        var ir = items[i].getBoundingClientRect();
+                        if (ir.width <= 0) { next[i] = ''; continue; }
+                        next[i] = (ir.left < sr.left - 0.5 || ir.right > sr.right + 0.5) ? 'hidden' : '';
+                    }
+                    for (var j = 0; j < items.length; j++) {
+                        if (next[j] !== undefined && items[j].style.visibility !== next[j]) {
+                            items[j].style.visibility = next[j];
+                        }
+                    }
+                }
+                var syncQueued = false;
+                function scheduleSync() {
+                    if (typeof requestAnimationFrame !== 'function') { syncRightStrip(); return; }
+                    if (syncQueued) return;
+                    syncQueued = true;
+                    requestAnimationFrame(function() {
+                        syncQueued = false;
+                        attachStatusObservers();
+                    });
+                }
+                var observedStatusbar = null;
+                var observedStrip = null;
+                var observedMutBar = null;
+                var observedMutStrip = null;
+                var resizeObs = typeof ResizeObserver === 'function' ? new ResizeObserver(scheduleSync) : null;
+                var statusMutObs = typeof MutationObserver === 'function' ? new MutationObserver(scheduleSync) : null;
+                function attachStatusObservers() {
+                    if (typeof document.querySelector !== 'function') return false;
+                    var bar = document.querySelector('.part.statusbar');
+                    var row = document.querySelector(STRIP_SELECTOR);
+                    if (!bar && !row) return false;
+                    if (resizeObs) {
+                        if (row && row !== observedStrip) { resizeObs.observe(row); observedStrip = row; }
+                        if (bar && bar !== observedStatusbar) { resizeObs.observe(bar); observedStatusbar = bar; }
+                    }
+                    if (statusMutObs) {
+                        if (row && row !== observedMutStrip) {
+                            statusMutObs.observe(row, { childList: true, subtree: true, characterData: true });
+                            observedMutStrip = row;
+                        }
+                        if (bar && bar !== observedMutBar) {
+                            statusMutObs.observe(bar, { childList: true });
+                            observedMutBar = bar;
+                        }
+                    }
+                    syncRightStrip();
+                    return true;
+                }
+                if (!attachStatusObservers() && typeof MutationObserver === 'function' && document.body) {
+                    var bootObs = new MutationObserver(function() {
+                        if (attachStatusObservers()) bootObs.disconnect();
+                    });
+                    bootObs.observe(document.body, { childList: true, subtree: true });
+                }
                 var strip = null, startX = 0, startLeft = 0;
                 window.addEventListener('touchstart', function(e) {
                     strip = e.touches.length === 1 && e.target.closest
-                        ? e.target.closest('.part.statusbar > .right-items') : null;
+                        ? e.target.closest(STRIP_SELECTOR) : null;
                     if (strip) { startX = e.touches[0].clientX; startLeft = strip.scrollLeft; }
                 }, { capture: true, passive: true });
                 window.addEventListener('touchmove', function(e) {
@@ -6223,8 +6309,9 @@ class MainActivity : AppCompatActivity() {
                     if (e.touches.length !== 1) { strip = null; return; }
                     var overflow = strip.scrollWidth - strip.clientWidth;
                     strip.scrollLeft = Math.max(-overflow, Math.min(0, startLeft - (e.touches[0].clientX - startX)));
+                    syncRightStrip();
                 }, { capture: true, passive: true });
-                var endPan = function() { strip = null; };
+                var endPan = function() { strip = null; syncRightStrip(); };
                 window.addEventListener('touchend', endPan, { capture: true, passive: true });
                 window.addEventListener('touchcancel', endPan, { capture: true, passive: true });
             })();
@@ -6873,15 +6960,16 @@ class MainActivity : AppCompatActivity() {
         // what the licences dialog carries is the GPL's written offer of source,
         // and the repository link is the answer to the question that offer
         // raises.
-        AlertDialog.Builder(this)
-            .setTitle(getString(R.string.about_title))
-            .setMessage(getString(R.string.about_body, version, disclaimer))
-            .setPositiveButton(getString(R.string.dialog_ok), null)
-            .setNeutralButton(getString(R.string.about_licenses)) { _, _ -> showLicensesDialog() }
-            .setNegativeButton(getString(R.string.about_privacy_policy)) { _, _ ->
-                openInBrowser("https://rmyndharis.github.io/VSCodroid/privacy-policy.html")
-            }
-            .show()
+        showWithReachableButtons(
+            AlertDialog.Builder(this)
+                .setTitle(getString(R.string.about_title))
+                .setMessage(getString(R.string.about_body, version, disclaimer))
+                .setPositiveButton(getString(R.string.dialog_ok), null)
+                .setNeutralButton(getString(R.string.about_licenses)) { _, _ -> showLicensesDialog() }
+                .setNegativeButton(getString(R.string.about_privacy_policy)) { _, _ ->
+                    openInBrowser("https://rmyndharis.github.io/VSCodroid/privacy-policy.html")
+                }
+        )
     }
 
     /**
@@ -6901,17 +6989,44 @@ class MainActivity : AppCompatActivity() {
      * not open is replaced in place by a line naming it.
      */
     private fun showLicensesDialog() {
-        AlertDialog.Builder(this)
-            .setTitle(getString(R.string.licenses_title))
-            .setView(scrollableNotice(Notices.read { assets.open(it) }))
-            .setPositiveButton(getString(R.string.dialog_ok), null)
-            .setNegativeButton(getString(R.string.licenses_full_texts)) { _, _ ->
-                showLicenseTextsDialog()
-            }
-            .setNeutralButton(getString(R.string.licenses_source_code)) { _, _ ->
-                openInBrowser("https://github.com/rmyndharis/VSCodroid")
-            }
-            .show()
+        showWithReachableButtons(
+            AlertDialog.Builder(this)
+                .setTitle(getString(R.string.licenses_title))
+                .setView(scrollableNotice(Notices.read { assets.open(it) }))
+                .setPositiveButton(getString(R.string.dialog_ok), null)
+                .setNegativeButton(getString(R.string.licenses_full_texts)) { _, _ ->
+                    showLicenseTextsDialog()
+                }
+                .setNeutralButton(getString(R.string.licenses_source_code)) { _, _ ->
+                    openInBrowser("https://github.com/rmyndharis/VSCodroid")
+                }
+        )
+    }
+
+    /**
+     * Keeps all action buttons of a multi-button [AlertDialog] visible while the
+     * body text scrolls above them.
+     *
+     * When the action buttons do not fit on one row, AppCompat's `ButtonBarLayout`
+     * stacks them vertically and sets its minimum height to the first button plus
+     * 16 dp. `AlertDialogLayout.tryOnMeasure` reserves only that minimum height
+     * for `buttonPanel` before giving the remaining dialog height to
+     * `contentPanel` or `customPanel`, so any scrolling body consumes the rest of
+     * the dialog and leaves the lower buttons cut or pushed below the lower edge.
+     * Giving the body panel weight 1 and letting `LinearLayoutCompat` measure the
+     * vertical stack reserves the full stacked `buttonPanel` height and shrinks
+     * only the scrolling body panel when the dialog reaches the window's height
+     * limit.
+     */
+    private fun showWithReachableButtons(builder: AlertDialog.Builder) {
+        val dialog = builder.show()
+        val contentPanel = dialog.findViewById<View>(androidx.appcompat.R.id.contentPanel)
+        val customPanel = dialog.findViewById<View>(androidx.appcompat.R.id.customPanel)
+        val buttonPanel = dialog.findViewById<View>(androidx.appcompat.R.id.buttonPanel)
+        (contentPanel?.layoutParams as? LinearLayoutCompat.LayoutParams)?.weight = 1f
+        (customPanel?.layoutParams as? LinearLayoutCompat.LayoutParams)?.weight = 1f
+        buttonPanel?.id = View.NO_ID
+        buttonPanel?.requestLayout()
     }
 
     /**
@@ -7208,25 +7323,26 @@ class MainActivity : AppCompatActivity() {
         val lastCrash = CrashReporter.getLastCrash() ?: return
         // Truncate for display
         val preview = if (lastCrash.length > 500) lastCrash.take(500) + "\n..." else lastCrash
-        AlertDialog.Builder(this)
-            .setTitle(getString(R.string.crash_title))
-            .setMessage(getString(R.string.crash_message, preview))
-            .setPositiveButton(getString(R.string.crash_dismiss)) { _, _ -> CrashReporter.clearCrashLogs() }
-            .setNeutralButton(getString(R.string.crash_copy_report)) { _, _ ->
-                lifecycleScope.launch {
-                    copyBugReport()
-                    CrashReporter.clearCrashLogs()
+        showWithReachableButtons(
+            AlertDialog.Builder(this)
+                .setTitle(getString(R.string.crash_title))
+                .setMessage(getString(R.string.crash_message, preview))
+                .setPositiveButton(getString(R.string.crash_dismiss)) { _, _ -> CrashReporter.clearCrashLogs() }
+                .setNeutralButton(getString(R.string.crash_copy_report)) { _, _ ->
+                    lifecycleScope.launch {
+                        copyBugReport()
+                        CrashReporter.clearCrashLogs()
+                    }
                 }
-            }
-            // The third exit, and the one most people take. Back and a tap outside
-            // cancel the dialog without running either button, and the guard above
-            // is false only once the files are gone, so the same modal came back
-            // over the loading editor on every later launch and there was nothing
-            // on screen offering a way to stop it. Clearing here is what the user
-            // believes the gesture already did.
-            .setOnCancelListener { CrashReporter.clearCrashLogs() }
-            .setCancelable(true)
-            .show()
+                // The third exit, and the one most people take. Back and a tap outside
+                // cancel the dialog without running either button, and the guard above
+                // is false only once the files are gone, so the same modal came back
+                // over the loading editor on every later launch and there was nothing
+                // on screen offering a way to stop it. Clearing here is what the user
+                // believes the gesture already did.
+                .setOnCancelListener { CrashReporter.clearCrashLogs() }
+                .setCancelable(true)
+        )
     }
 
     /**

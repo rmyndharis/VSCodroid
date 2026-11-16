@@ -40,14 +40,11 @@ class SafStorageManager(context: Context) {
     /**
      * The application context, whatever the caller handed over.
      *
-     * Both production callers construct this with an Activity, and one of them
-     * ([com.vscodroid.SplashActivity]) then starts [reclaimRevokedMirrors], whose
+     * A caller may supply an Activity. [com.vscodroid.SplashActivity] starts
+     * [reclaimRevokedMirrors], whose
      * detached thread captures this object and through it whatever Context it
-     * holds. That thread outlives the Activity by construction (the file says so
-     * where the thread is started), and its duration is the recursive delete of a
-     * project-sized mirror, so an Activity kept here stays reachable, with its
-     * Window and its ContextImpl, through exactly the minutes when `MainActivity`,
-     * the WebView renderer and the Node server are all starting.
+     * holds. The thread can outlive the Activity, so holding the Activity here
+     * would retain its Window and ContextImpl while startup continues.
      *
      * Nothing here needs an Activity: what is read is `contentResolver`, `filesDir`
      * (through [com.vscodroid.util.Environment]) and the preferences file, all
@@ -1117,26 +1114,8 @@ class SafStorageManager(context: Context) {
             evicted
         }
 
-        // The grant goes with the list entry, and until it did there was no way
-        // out at all: the reclaim pass judges a mirror by whether a permission is
-        // still persisted, so a folder that fell off this list kept its grant,
-        // looked live for ever, and its mirror could never be reclaimed by
-        // anything the app does.
-        //
-        // Safe to do here only because of what the reclaim pass refuses to delete,
-        // and that clause has been wrong once already. It used to read "a mirror
-        // holding a write that never reached the device", meaning the upload
-        // journal, which records write-backs that were ATTEMPTED and failed. A
-        // file never queued for write-back at all leaves no journal entry, and
-        // several routes end there: anything under SKIP_DIRECTORIES, so a `.git`
-        // from a terminal clone; a file below a directory past the watch cap;
-        // anything written while no watcher ran; and a copy the initial sync kept
-        // for being newer than the device document. Every one of those is the
-        // user's only copy, and eviction at the eleventh folder deleted it.
-        //
-        // The gate now asks the record instead, which has to prove a mirror is
-        // disposable rather than look for evidence that it is not. See
-        // SafSyncEngine.holdsOnlyVouchedCopies.
+        // The grant goes with the list entry. Releasing it does not delete the
+        // mirror; a local copy can contain work not present on the device.
         for (gone in dropped) {
             try {
                 context.contentResolver.releasePersistableUriPermission(

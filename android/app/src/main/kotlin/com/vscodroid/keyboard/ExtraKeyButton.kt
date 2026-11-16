@@ -227,8 +227,15 @@ class ExtraKeyButton @JvmOverloads constructor(
         // passes its four arguments straight through to the platform method on
         // API 27 and above, and minSdk here is 29, so the compatibility branch
         // below that is never taken.
+        //
+        // The floor is 5sp rather than 8sp because the unit is SP and scales with
+        // the user's font scale: at font scale 2.0 an 8sp floor becomes 16dp,
+        // where "ctrl" and "shift" exceed the 36dp inner width of a 48dp key and
+        // wrap their trailing letters onto a hidden second line. At 5sp (10dp at
+        // font scale 2.0) five monospace letters fit inside 36dp while shorter
+        // labels still grow up to 13sp (26dp).
         TextViewCompat.setAutoSizeTextTypeUniformWithConfiguration(
-            this, 8, 13, 1, TypedValue.COMPLEX_UNIT_SP
+            this, KEY_MIN_TEXT_SP, KEY_MAX_TEXT_SP, 1, TypedValue.COMPLEX_UNIT_SP
         )
 
         // Rounded corner background. This is also what applies the key's
@@ -354,7 +361,8 @@ class ExtraKeyButton @JvmOverloads constructor(
      * the gap moved off the layout params.
      */
     private fun applyKeyPadding() {
-        setPadding(dpToPx(4 + KEY_GAP_DP), dpToPx(6), dpToPx(4 + KEY_GAP_DP), dpToPx(6))
+        val horizontal = dpToPx(KEY_HORIZONTAL_PADDING_DP + KEY_GAP_DP)
+        setPadding(horizontal, dpToPx(6), horizontal, dpToPx(6))
     }
 
     private fun dpToPx(dp: Int): Int =
@@ -415,3 +423,6 @@ internal fun toggleStateDescription(isToggle: Boolean, isActive: Boolean): Int? 
  * leaving the view, and the finger's target, the full share of the row.
  */
 internal const val KEY_GAP_DP = 2
+internal const val KEY_HORIZONTAL_PADDING_DP = 4
+internal const val KEY_MIN_TEXT_SP = 5
+internal const val KEY_MAX_TEXT_SP = 13

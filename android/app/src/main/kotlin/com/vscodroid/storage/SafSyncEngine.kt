@@ -2549,40 +2549,11 @@ class SafSyncEngine(private val context: Context) {
         "${escapeRecordPath(path)}\t$lastModified\t$length"
 
     /**
-     * Whether every file under [mirrorDir] is one this app can prove it copied from the
-     * device folder, unchanged since.
+     * Whether every file under [mirrorDir] matches an entry in the synced record.
      *
-     * The question the reclaim pass has to answer before deleting a mirror, and it is
-     * narrower than the one it used to ask. That pass reads [uploadsInFlight], which
-     * records write-backs that were ATTEMPTED and failed. A file that was never queued
-     * for write-back at all has no journal entry, and there are several ways to be in
-     * that state: anything under [SKIP_DIRECTORIES], so a `.git` from a terminal clone;
-     * a file below a directory past [MAX_WATCHED_DIRECTORIES]; anything written while no
-     * watcher was running; a mirror copy [initialSync] kept for being newer than the
-     * device document, which it never uploads; entries past the upload cap; and jobs the
-     * queue dropped on [stopWatching]. Each of those is the user's only copy, and the
-     * journal cannot see any of them.
-     *
-     * So the test is inverted: rather than look for evidence a file is precious, require
-     * evidence that it is disposable. The record beside the mirror is that evidence and
-     * already exists. [recordIdentity] writes one line per file the device is known to
-     * hold, and this compares against it in the same format, so a file absent from the
-     * record, or present but no longer the bytes recorded for it, means the mirror holds
-     * something the device does not.
-     *
-     * "The device holds it" rather than "this app copied it", and the difference is not
-     * pedantry. A file the editor wrote and the watcher delivered is recorded too, once a
-     * sync has read both sides and found them equal. It was never copied here, and it is
-     * still disposable, because deleting the mirror does not destroy it. So is a file
-     * whose line a held-back or failed fetch carried forward: the mirror holds the copy an
-     * earlier record vouched for, which nobody edited since, of a document the device still
-     * holds, in that version or a newer one.
-     *
-     * Fails closed, in three directions, all deliberate. A missing record, a record whose
-     * first line is not [RECORD_HEADER], and an unreadable directory each return false
-     * and keep the mirror. That is the same direction [reconcileDeletions] takes when it
-     * cannot vouch for a path, and the cost of being wrong here is disk rather than the
-     * user's only copy.
+     * Compares the files with the synced record and fails closed if the record is
+     * missing, malformed or a directory cannot be read. This predicate does not
+     * delete a mirror; launch reclamation leaves mirrors in place.
      *
      * Symlinks are not followed: `walkTopDown` reports the link itself, and [isLink]
      * sends it down the not-a-plain-file branch, so a link out of the mirror can neither
@@ -3953,12 +3924,9 @@ class SafSyncEngine(private val context: Context) {
      * class has no screen and should not reach for one. The layer that owns a screen
      * decides how to say it.
      *
-     * A failed upload leaves its journal entry in place, which
-     * `SafStorageManager.mayReclaim` reads. A refusal before the write begins, either
-     * [refuseUnreadDocument] or an unavailable upload journal, has no new entry. What
-     * covers it is [holdsOnlyVouchedCopies], which refuses to reclaim a mirror holding
-     * any file the `.synced` record cannot vouch for, and a file that was never written
-     * back never is.
+     * A failed upload leaves its journal entry for a later initial sync. A refusal
+     * before the write begins, either [refuseUnreadDocument] or an unavailable
+     * upload journal, has no new entry. The local copy remains in the mirror.
      *
      * What was missing is the user knowing, and that is a different fact from the data
      * being safe. A save that never reached the device folder looks exactly like one
@@ -4184,10 +4152,8 @@ class SafSyncEngine(private val context: Context) {
      * or rename of the file itself and [consumeStaleUploadsUnder] for a directory that
      * left the mirror, and each of them was the last pass that could reach that line
      * while the file was gone. Deferring to a writer that then fails here left it
-     * standing, and a standing line is not inert: `SafStorageManager.mayReclaim` reads it
-     * as the mirror holding a write the device never received, so the launch pass keeps
-     * that mirror and the device-folder screen reports it as holding work the device
-     * folder does not have. So the test here is the one [consumeStaleUploadsUnder]
+     * standing in the journal, which a later initial sync reads. The test here is the
+     * one [consumeStaleUploadsUnder]
      * applies, the file being there, asked at the moment this writer is the only party
      * that knows the line is now unowned.
      *
@@ -4310,8 +4276,8 @@ class SafSyncEngine(private val context: Context) {
      * retried: the writer would retire a line nobody ever wrote and leave the real one
      * standing under a path that has gone, which nothing can consume afterwards
      * ([consumeStaleUploadsUnder] never sees a claimed departure, and [initialSync]'s
-     * repair needs the file the line names to be there), so `SafStorageManager.mayReclaim`
-     * would refuse that mirror for a save that did reach the device. Both records staying
+     * repair needs the file the line names to be there), leaving a stale journal line
+     * after a save that did reach the device. Both records staying
      * at the old name is the recoverable half of the pair: the writer's release still
      * names the line it is filed under.
      */
@@ -4383,10 +4349,8 @@ class SafSyncEngine(private val context: Context) {
      * [initialSync]'s call is guarded by the file still existing, and [clearUploadsUnder]
      * runs only once the whole mirror is going away. One write-back that gave up followed
      * by a directory move no rename claimed therefore left a line standing for the life of
-     * the install, and a stranded line is not inert: `SafStorageManager.mayReclaim` reads
-     * any line under a mirror as that mirror holding a write the device never received, so
-     * the launch pass kept it and the device-folder screen described it as holding work
-     * the device folder does not have.
+     * the install. A later initial sync reads that journal, so the stale line needs
+     * retirement when the path is gone.
      *
      * A line whose file is still there is left alone, and that is the whole distinction:
      * something is at that path again, a directory recreated under the same name or a
@@ -5257,15 +5221,8 @@ class SafSyncEngine(private val context: Context) {
                     // up left one standing, deliberately, and nothing ever retired it
                     // once the file it names went away. Since a file rename arrives here
                     // as MOVED_FROM, one failed save followed by renaming the file in the
-                    // editor was enough to strand a line for ever, and a stranded line is
-                    // not inert: `SafStorageManager.mayReclaim` reads any line under a
-                    // mirror as "this mirror holds a write that never reached the device",
-                    // so the launch pass kept the mirror and the storage screen described
-                    // it as holding work the device does not, all on the strength of a file
-                    // that is not there. Not that the removal is refused: the bridge
-                    // extension sends `force` for exactly the rows this mislabels, so what
-                    // the user gets is a modal saying the copy holds files that exist
-                    // nowhere else and then the deletion they asked for.
+                    // editor was enough to strand a journal line for a path that no
+                    // longer exists. A later initial sync reads that journal.
                     // The claims are what keep this off a path somebody is streaming
                     // into right now; see [consumeStaleUploadRecord].
                     if (!File(job.localPath).isFile) consumeStaleUploadRecord(job.localPath)

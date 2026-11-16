@@ -562,7 +562,7 @@ class FirstRunSetup(
             // prefix everything on PATH resolves through. Losing one silently
             // left an install that reached the editor and could never serve it,
             // with markSetupComplete() certifying the result and isFirstRun()
-            // keyed on versionName or versionCode, so nothing tried again until
+            // keyed on versionName, versionCode and package update time, so nothing tried again until
             // the app updated. Nothing on device checks these trees are complete --
             // verify-server-tree.py checks the build, not the install.
             //
@@ -789,7 +789,7 @@ class FirstRunSetup(
      * they only ever need creating. This one can need repairing.
      *
      * Creating it once per version was not enough. isFirstRun() gates on
-     * versionName or versionCode, so a folder deleted after setup stayed missing
+     * versionName, versionCode and package update time, so a folder deleted after setup stayed missing
      * through every relaunch and force-stop: the explorer was empty, new files could not be
      * saved, and terminals started in a directory that was not there. The only
      * ways back were clearing app data or installing a new version.
@@ -2241,8 +2241,8 @@ class FirstRunSetup(
                 // fail, and the file was then absent -- outside the `isFile`
                 // test this branch re-enters through, outside every per-launch
                 // appender's own `exists()` guard, and outside createBashrc,
-                // which runSetupLocked reaches only when versionName or
-                // versionCode moves. So one launch that could not write turned a
+                // which runSetupLocked reaches only when the package identity
+                // changes (versionName, versionCode or update time). So one launch that could not write turned a
                 // repairable install into one nothing repairs until the next app
                 // update. [writeBashrc] renames over the path instead: a failed
                 // write leaves the bad file exactly where it was, and this
@@ -3292,7 +3292,7 @@ claude() {
             // Thrown, not logged. This runs only from runSetupLocked, whose
             // markSetupComplete() is the last statement of the same try block --
             // so swallowing the failure certifies an install that has no
-            // .bashrc, and isFirstRun() is keyed on versionName or versionCode,
+            // .bashrc, and isFirstRun() is keyed on versionName, versionCode and package update time,
             // so nothing writes one until the app updates. The every-launch repairs cannot
             // cover it either: createNpmWrappers, ensureToolchainEnvSourcing
             // and ensurePromptFix all open with `if (bashrc.exists())`.
@@ -3361,8 +3361,8 @@ claude() {
             // pair of reasons. `writeText` creates and truncates before writing
             // a byte, so a write that failed left a file the guard above
             // accepts for ever, and this writer is reached only from
-            // runSetupLocked, which isFirstRun() gates on versionName or
-            // versionCode: no per-launch repair reads this path at all. What
+            // runSetupLocked, which isFirstRun() gates on versionName,
+            // versionCode and package update time: no per-launch repair reads this path at all. What
             // that costs is confined to INTERACTIVE LOGIN shells, which is what
             // a tmux window is. Those read .bash_profile and never .bashrc or
             // BASH_ENV, so they come up with no prompt, no aliases and no

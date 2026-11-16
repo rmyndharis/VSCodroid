@@ -84,4 +84,15 @@ class ActivityBarItemSizeTest {
                 "item the other does not draw",
         )
     }
+
+    @Test
+    fun `the stylesheet keeps items inside the narrow activity bar without horizontal clipping`() {
+        val rule = Regex("""\.activitybar \.action-item\s*\{[^}]+\}""").find(stylesheet)?.value
+        assertNotNull(rule, "MainActivity no longer declares .activitybar .action-item")
+        assertTrue(
+            !rule!!.contains("min-width"),
+            "MainActivity sets min-width: 44px on .activitybar .action-item inside a 32/36px rail, " +
+                "pushing the selected item edge past the clipped activity bar boundary",
+        )
+    }
 }

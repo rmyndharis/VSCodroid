@@ -1076,9 +1076,8 @@ class AndroidBridge(
      * which folder is holding the disk and decide about that folder rather than about
      * a total.
      *
-     * Every copy is walked twice before the list exists, once to size it and once
-     * to ask whether the device folder holds everything in it, so this takes as
-     * long as the disk is big; see [answerLater].
+     * Every copy is walked to size it before the list exists, so this can take
+     * time proportional to its contents; see [answerLater].
      *
      * The posted answer is `[]` when no SAF manager is wired up, which is
      * indistinguishable from an install that has copied no device folder, as it
