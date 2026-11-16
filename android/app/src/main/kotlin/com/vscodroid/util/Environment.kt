@@ -194,6 +194,7 @@ object Environment {
             "PYTHONPYCACHEPREFIX" to "$cacheDir/pycache",
             "GIT_EXEC_PATH" to "$filesDir/usr/lib/git-core",
             "GIT_TEMPLATE_DIR" to "$filesDir/usr/share/git-core/templates",
+            "GIT_CONFIG_SYSTEM" to "$filesDir/usr/etc/gitconfig",
             "GIT_SSH_COMMAND" to "$nativeLibDir/libssh.so -F $homeDir/.ssh/config",
             // Directory lookup must not restore roots excluded from the bundle.
             "GIT_SSL_CAPATH" to "$filesDir/usr/etc/tls",

@@ -104,7 +104,7 @@ class ComposingEnterWiringTest {
         assertTrue(
             Regex("""if\s*\(!\w+\.dispatchEvent\(enter\)\)\s*e\.preventDefault\(\)""")
                 .containsMatchIn(script),
-            "the real key's default no longer follows the replacement's. Cancelled " +
+            "an unmodified key's default no longer follows the replacement's. Cancelled " +
                 "unconditionally, Enter in a multi-line setting stops inserting a line.",
         )
         assertTrue(

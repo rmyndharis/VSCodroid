@@ -35,6 +35,40 @@ class ServerLogTest {
     }
 
     @Test
+    fun `append redacts run ids in plain and escaped JSON`() {
+        val runId = "aaaaaaaa-bbbb-4ccc-8ddd-eeeeeeeeeeee"
+        val log = ServerLog(logFile())
+        listOf(
+            """{"runId":"$runId","pid":4242}""",
+            """{\"runId\":\"$runId\",\"pid\":4242}""",
+            "run_id=$runId pid=4242",
+        ).forEach(log::append)
+        val lines = logFile().readLines()
+        assertEquals(3, lines.size)
+        assertTrue(lines.all { "4242" in it && "<redacted>" in it }, lines.toString())
+        assertFalse(runId in logFile().readText(), lines.toString())
+        assertEquals(logFile().readText(), redactSecrets(logFile().readText()))
+    }
+
+    @Test
+    fun `append redacts proxy URL passwords and preserves the endpoint`() {
+        val credential = "0123456789abcdef".repeat(4)
+        val log = ServerLog(logFile())
+        listOf("http", "https").forEach { scheme ->
+            log.append("HTTP_PROXY=$scheme://vscodroid:$credential@127.0.0.1:41234")
+            log.append("""{"proxy":"$scheme://vscodroid:$credential@127.0.0.1:41234"}""")
+        }
+        val lines = logFile().readLines()
+        assertEquals(4, lines.size)
+        assertTrue(lines.all { "vscodroid:<redacted>@127.0.0.1:41234" in it }, lines.toString())
+        assertFalse(credential in logFile().readText(), lines.toString())
+        assertEquals(logFile().readText(), redactSecrets(logFile().readText()))
+        listOf("http://127.0.0.1:41234/path@file", "https://example.invalid/path").forEach {
+            assertEquals(it, redactSecrets(it))
+        }
+    }
+
+    @Test
     fun `quoted passwords retain no suffix after an escaped quote`() {
         val lines = listOf(
             """{"DB_PASSWORD":"prefix \" PRIVATE_SUFFIX"}""",

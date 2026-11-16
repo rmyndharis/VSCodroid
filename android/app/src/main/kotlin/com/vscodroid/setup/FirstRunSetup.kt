@@ -16,6 +16,7 @@ import org.json.JSONObject
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
+import java.io.InputStream
 import java.io.OutputStream
 import java.nio.file.Files
 import java.nio.file.LinkOption
@@ -88,12 +89,12 @@ class FirstRunSetup(
      * move it. A bar stuck at 0% for minutes is what makes someone force-quit,
      * and that costs the whole extraction.
      *
-     * Assigning is therefore a handover: the newest screen wins, and
-     * [detachProgress] gives it back only if it is still the one installed.
+     * A resumed screen claims it through [attachProgress], including the latest
+     * message and percent; [detachProgress] releases only that screen's sink.
      */
     var onProgress: ((message: String, percent: Int) -> Unit)?
         get() = progressSink
-        set(value) { progressSink = value }
+        set(value) { attachProgress(value) }
 
     enum class SetupResult { SUCCESS, LOW_STORAGE, ERROR }
 
@@ -191,9 +192,13 @@ class FirstRunSetup(
         // instead, and let whoever waited find the work already done. The
         // winner's markSetupComplete() flips isFirstRun() before the lock is
         // released.
-        if (!isFirstRun()) return@withLock SetupResult.SUCCESS
-        beforeUnpack()
-        runSetupLocked()
+        try {
+            if (!isFirstRun()) return@withLock SetupResult.SUCCESS
+            beforeUnpack()
+            runSetupLocked()
+        } finally {
+            synchronized(progressLock) { lastProgress = null }
+        }
     }
 
     internal data class ExtractionSpace(
@@ -202,12 +207,27 @@ class FirstRunSetup(
         val extensionBytes: Long,
         val missingOverhead: Long,
         val largestExistingFile: Long,
+        val skippedExtensionBytes: Long,
+        val largestSelectedAssetBytes: Long,
     )
 
-    /** Measures reusable APK files and allocation overhead without following destination links. */
+    /** Measures selected APK files, skipped extensions and allocation overhead without following links. */
     internal fun extractionSpace(): ExtractionSpace {
         val assets = context.assets
         val roots = assets.list("")?.toSet() ?: throw IOException("Could not list bundled assets")
+        val bundledExtensions = if ("extensions" in roots) {
+            assets.list("extensions") ?: throw IOException("Could not list extensions")
+        } else {
+            emptyArray()
+        }
+        val extensionsToExtract = if (bundledExtensions.isNotEmpty()) {
+            bundledExtensionsToExtract(
+                File(context.filesDir, "home/.vscodroid/extensions"),
+                bundledExtensions.toList(),
+            )
+        } else {
+            emptyList()
+        }
         val destinations = listOf(
             "vscode-reh" to "server/vscode-reh",
             "usr" to "usr",
@@ -215,22 +235,20 @@ class FirstRunSetup(
         ) + listOf("server.js", "process-monitor.js", "platform-fix.js", "dns-proxy.js", "xdg-open.js")
             .map { it to "server/$it" }
         var largestExistingFile = 0L
+        var skippedExtensionBytes = 0L
+        var largestSelectedAssetBytes = 0L
 
-        fun measure(assetPath: String, destination: File, missingParent: Boolean): Pair<Long, Long> {
-            val children = assets.list(assetPath) ?: throw IOException("Could not list $assetPath")
-            val reusable = !missingParent && !Files.isSymbolicLink(destination.toPath())
-            if (children.isNotEmpty()) {
-                val missing = !reusable || !destination.isDirectory
-                var credit = 0L
-                var overhead = if (missing) EXTRACTION_BLOCK_BYTES else 0L
-                for (child in children) {
-                    val measured = measure("$assetPath/$child", File(destination, child), missing)
-                    credit += measured.first
-                    overhead += measured.second
-                }
-                return credit to overhead
+        fun measureLength(
+            length: Long,
+            destination: File,
+            reusable: Boolean,
+            skipped: Boolean,
+        ): Pair<Long, Long> {
+            if (skipped) {
+                skippedExtensionBytes += length
+                return 0L to 0L
             }
-            val length = assets.open(assetPath).use { it.available().toLong() }
+            largestSelectedAssetBytes = maxOf(largestSelectedAssetBytes, length)
             if (reusable && destination.isFile) {
                 val credit = minOf(length, destination.length())
                 largestExistingFile = maxOf(largestExistingFile, credit)
@@ -241,9 +259,89 @@ class FirstRunSetup(
             return 0L to EXTRACTION_BLOCK_BYTES + rounding
         }
 
+        lateinit var measureChild: (String, File, Boolean, Boolean) -> Pair<Long, Long>
+
+        fun measureChildren(
+            assetPath: String,
+            children: Array<String>,
+            destination: File,
+            reusable: Boolean,
+            skipped: Boolean,
+        ): Pair<Long, Long> {
+            val missing = !skipped && (!reusable || !destination.isDirectory)
+            var credit = 0L
+            var overhead = if (missing) EXTRACTION_BLOCK_BYTES else 0L
+            for (child in children) {
+                val skipChild = skipped || (assetPath == "extensions" && child !in extensionsToExtract)
+                val measured = measureChild("$assetPath/$child", File(destination, child), missing, skipChild)
+                credit += measured.first
+                overhead += measured.second
+            }
+            return credit to overhead
+        }
+
+        // Open children first; Android's AssetManager fails open() on folders
+        // with IOException, avoiding a list() syscall on every regular file.
+        // Zero-length streams still check list() in case an entry is a folder.
+        measureChild = { assetPath, destination, missingParent, skipped ->
+            val reusable = !skipped && !missingParent && !Files.isSymbolicLink(destination.toPath())
+            val opened = try {
+                assets.open(assetPath)
+            } catch (_: IOException) {
+                null
+            }
+            if (opened != null) {
+                val length = opened.use { it.available().toLong() }
+                val children = if (length == 0L) {
+                    try {
+                        assets.list(assetPath)
+                    } catch (_: IOException) {
+                        emptyArray()
+                    } ?: throw IOException("Could not list $assetPath")
+                } else {
+                    null
+                }
+                if (!children.isNullOrEmpty()) {
+                    measureChildren(assetPath, children, destination, reusable, skipped)
+                } else {
+                    measureLength(length, destination, reusable, skipped)
+                }
+            } else {
+                val children = assets.list(assetPath) ?: throw IOException("Could not list $assetPath")
+                if (children.isEmpty()) {
+                    throw IOException("Could not open or list $assetPath")
+                }
+                measureChildren(assetPath, children, destination, reusable, skipped)
+            }
+        }
+
+        fun measureDirectoryRoot(assetPath: String, destination: File, missingParent: Boolean): Pair<Long, Long> {
+            val children = assets.list(assetPath) ?: throw IOException("Could not list $assetPath")
+            val reusable = !missingParent && !Files.isSymbolicLink(destination.toPath())
+            if (children.isNotEmpty()) {
+                return measureChildren(assetPath, children, destination, reusable, skipped = false)
+            }
+            val length = assets.open(assetPath).use { it.available().toLong() }
+            return measureLength(length, destination, reusable, skipped = false)
+        }
+
         val measured = destinations.filter { it.first in roots }.associate { (asset, destination) ->
             val target = File(context.filesDir, destination)
-            asset to measure(asset, target, !hasUnredirectedParent(target))
+            val missingParent = !hasUnredirectedParent(target)
+            val result = when (asset) {
+                "vscode-reh", "usr" -> measureDirectoryRoot(asset, target, missingParent)
+                "extensions" -> {
+                    val reusable = !missingParent && !Files.isSymbolicLink(target.toPath())
+                    if (bundledExtensions.isNotEmpty()) {
+                        measureChildren("extensions", bundledExtensions, target, reusable, skipped = false)
+                    } else {
+                        val length = assets.open(asset).use { it.available().toLong() }
+                        measureLength(length, target, reusable, skipped = false)
+                    }
+                }
+                else -> measureChild(asset, target, missingParent, false)
+            }
+            asset to result
         }
         return ExtractionSpace(
             measured.filterKeys { it != "usr" && it != "extensions" }.values.sumOf { it.first },
@@ -251,6 +349,8 @@ class FirstRunSetup(
             measured["extensions"]?.first ?: 0,
             measured.values.sumOf { it.second },
             largestExistingFile,
+            skippedExtensionBytes,
+            largestSelectedAssetBytes,
         )
     }
 
@@ -379,8 +479,12 @@ class FirstRunSetup(
             val installed = space.serverBytes +
                 sharedTreeCredit(space.usrBytes, bundledUsrBytes, 0) +
                 sharedTreeCredit(space.extensionBytes, bundledExtensionBytes, 0)
+            val selectedAssetBytes = (assetBytes - space.skippedExtensionBytes).coerceAtLeast(0)
+            val selectedLargestAsset = if (space.skippedExtensionBytes > 0) {
+                minOf(largestAssetBytes, space.largestSelectedAssetBytes)
+            } else largestAssetBytes
             val required = requiredExtractionBytes(
-                assetBytes, largestAssetBytes, installed,
+                selectedAssetBytes, selectedLargestAsset, installed,
                 maxOf(extractedTreeBytes, space.largestExistingFile), space.missingOverhead,
             )
             // Short of room, and the caches are the one thing this app can give
@@ -491,7 +595,7 @@ class FirstRunSetup(
             //  - the partial tree is left on disk when the user gives up, and
             //    deliberately: it is what makes the retry affordable. Deleting
             //    it would hand the next attempt the full figure again.
-            val incomplete = mutableListOf<String>()
+            val incomplete = mutableListOf<Pair<String, String>>()
 
             // The reh-web download carries the web client inside this same tree,
             // so this one extraction is both the server and the workbench.
@@ -512,9 +616,10 @@ class FirstRunSetup(
                 "server/vscode-reh",
                 byteProgress(serverMessage, SERVER_PROGRESS_START, SERVER_PROGRESS_END, BuildConfig.BUNDLED_SERVER_BYTES),
             )
-            if (!extracted) incomplete += "vscode-reh"
+            if (!extracted) incomplete += "vscode-reh" to serverMessage
 
-            reportProgress(context.getString(R.string.setup_step_bootstrap), 60)
+            val bootstrapMessage = context.getString(R.string.setup_step_bootstrap)
+            reportProgress(bootstrapMessage, 60)
             // xdg-open.js is not a bootstrap script and is never required by one:
             // it is the program the execution trampoline runs for the command
             // `xdg-open`, and it lands here because this is where the trampoline's
@@ -522,7 +627,7 @@ class FirstRunSetup(
             for (script in listOf(
                 "server.js", "process-monitor.js", "platform-fix.js", "dns-proxy.js", "xdg-open.js",
             )) {
-                if (!extractAssetFile(script, "server/$script")) incomplete += script
+                if (!extractAssetFile(script, "server/$script")) incomplete += script to bootstrapMessage
             }
 
             // The same byte counter, because this step is long enough to read as
@@ -536,7 +641,7 @@ class FirstRunSetup(
                 "usr",
                 byteProgress(toolsMessage, USR_PROGRESS_START, USR_PROGRESS_END, bundledUsrBytes),
             )
-            if (!usrExtracted) incomplete += "usr"
+            if (!usrExtracted) incomplete += "usr" to toolsMessage
 
             if (incomplete.isNotEmpty()) {
                 // With the cause, when a write reported one. The synthetic message
@@ -544,7 +649,8 @@ class FirstRunSetup(
                 // told the user "could not unpack vscode-reh" and never the word
                 // disk, on a screen whose only control is Retry.
                 val cause = firstWriteFailure?.let { ": $it" }.orEmpty()
-                throw IOException("could not unpack ${incomplete.joinToString(", ")}$cause")
+                currentStep = incomplete.first().second
+                throw IOException("could not unpack ${incomplete.joinToString(", ") { it.first }}$cause")
             }
             // Extraction merges; it never removes. An upgrade that changes the
             // bundled Python therefore writes the new stdlib beside the old one
@@ -600,7 +706,7 @@ class FirstRunSetup(
 
             val elapsed = System.currentTimeMillis() - startTime
             Logger.i(tag, "First-run setup completed in ${elapsed}ms")
-            logStorageUse(available, (assetBytes - installed).coerceAtLeast(0), space.missingOverhead)
+            logStorageUse(available, (selectedAssetBytes - installed).coerceAtLeast(0), space.missingOverhead)
             SetupResult.SUCCESS
         } catch (e: Exception) {
             Logger.e(tag, "First-run setup failed", e)
@@ -739,53 +845,125 @@ class FirstRunSetup(
         onBytes: ((Long) -> Unit)? = null,
         required: Boolean = false,
     ): Boolean {
+        // Known directory roots start here and list directly. Only assets.list()
+        // throwing IOException falls back to extractAssetFile; a failure while
+        // inspecting or copying a child stays on that child rather than winding
+        // back here to treat the root as an absent optional file.
+        val assets = try {
+            context.assets.list(assetPath)
+        } catch (e: IOException) {
+            Logger.d(tag, "Treating $assetPath as file (not directory)")
+            return extractAssetFile(assetPath, destPath, onBytes, required = required)
+        } ?: run {
+            Logger.w(tag, "Could not list the assets under $assetPath; treating it as unpacked would certify an empty tree")
+            return false
+        }
+        if (assets.isEmpty()) {
+            return extractAssetFile(assetPath, destPath, onBytes, required = required)
+        }
+        return extractAssetChildren(assetPath, destPath, assets, onBytes)
+    }
+
+    private fun extractAssetChildren(
+        assetPath: String,
+        destPath: String,
+        assets: Array<String>,
+        onBytes: ((Long) -> Unit)?,
+    ): Boolean {
         val destDir = File(context.filesDir, destPath)
-        return try {
-            // A listing that cannot be read is a failure, not an empty subtree.
-            // It answered true, i.e. "all of this is unpacked", and the whole
-            // abort in [runSetupLocked] hangs off that boolean: a null at the
-            // `vscode-reh` root would have reported a complete extraction with
-            // zero files written, left `incomplete` empty, run
-            // markSetupComplete() and flipped isFirstRun() false for the life of
-            // the install. `list` answers an empty array rather than null for a
-            // path that is not there, so this is reached only when the platform
-            // itself could not answer, and the safe direction for a function
-            // whose contract is "false only when the copy failed" is false.
-            //
-            // The same at a leaf, deliberately, and worth saying because this
-            // recurses: a null for `vscode-reh/out/server-main.js` aborts the
-            // install just as a null for `vscode-reh` does. Falling through to
-            // [extractAssetFile] instead would be harmless only while the asset
-            // can still be opened, and would be the original defect when it
-            // cannot. Positively listed children remain required when opened.
-            // The IOException below is a different signal and is
-            // degraded rather than refused, because that is how the platform
-            // says "this path is a file, not a directory".
-            val assets = context.assets.list(assetPath) ?: run {
+        if (!hasUnredirectedParent(destDir) || Files.isSymbolicLink(destDir.toPath())) {
+            Logger.w(tag, "Not extracting assets through a redirected directory")
+            // Named, because a link the user made is not cleared by Retry and
+            // the abort would otherwise print only which tree was incomplete.
+            if (firstWriteFailure == null) firstWriteFailure = "$destPath is, or sits behind, a symbolic link"
+            return false
+        }
+        destDir.mkdirs()
+        // Every child is attempted even after one fails, so the log names
+        // all of them rather than only the first.
+        var ok = true
+        for (asset in assets) {
+            if (!extractAssetChild("$assetPath/$asset", "$destPath/$asset", onBytes)) ok = false
+        }
+        return ok
+    }
+
+    private fun extractAssetChild(
+        assetPath: String,
+        destPath: String,
+        onBytes: ((Long) -> Unit)?,
+    ): Boolean {
+        val opened = try {
+            context.assets.open(assetPath)
+        } catch (openError: IOException) {
+            // Only open() failing may fall back to directory listing; an I/O
+            // failure while inspecting or copying an opened stream fails only
+            // this child so sibling entries are still attempted.
+            return extractAssetListedDirectory(assetPath, destPath, onBytes, openError)
+        }
+        val availableBytes = try {
+            opened.available()
+        } catch (e: IOException) {
+            closeStreamQuietly(opened)
+            if (firstWriteFailure == null) firstWriteFailure = e.message
+            Logger.w(tag, "Could not inspect asset $assetPath: ${e.message}")
+            return false
+        }
+        if (availableBytes == 0) {
+            val assets = try {
+                context.assets.list(assetPath)
+            } catch (_: IOException) {
+                emptyArray()
+            } ?: run {
+                closeStreamQuietly(opened)
                 Logger.w(tag, "Could not list the assets under $assetPath; treating it as unpacked would certify an empty tree")
                 return false
             }
-            if (assets.isEmpty()) {
-                return extractAssetFile(assetPath, destPath, onBytes, required = required)
+            if (assets.isNotEmpty()) {
+                closeStreamQuietly(opened)
+                return extractAssetChildren(assetPath, destPath, assets, onBytes)
             }
-            if (!hasUnredirectedParent(destDir) || Files.isSymbolicLink(destDir.toPath())) {
-                Logger.w(tag, "Not extracting assets through a redirected directory")
-                // Named, because a link the user made is not cleared by Retry and
-                // the abort would otherwise print only which tree was incomplete.
-                if (firstWriteFailure == null) firstWriteFailure = "$destPath is, or sits behind, a symbolic link"
-                return false
-            }
-            destDir.mkdirs()
-            // Every child is attempted even after one fails, so the log names
-            // all of them rather than only the first.
-            var ok = true
-            for (asset in assets) {
-                if (!extractAssetDir("$assetPath/$asset", "$destPath/$asset", onBytes, required = true)) ok = false
-            }
-            ok
+        }
+        return try {
+            extractAssetStream(opened, destPath, onBytes)
         } catch (e: IOException) {
-            Logger.d(tag, "Treating $assetPath as file (not directory)")
-            extractAssetFile(assetPath, destPath, onBytes, required = required)
+            if (firstWriteFailure == null) firstWriteFailure = e.message
+            Logger.w(tag, "Could not extract asset $assetPath: ${e.message}")
+            false
+        }
+    }
+
+    /** Descends into a listed directory child after `assets.open` rejects it as non-file. */
+    private fun extractAssetListedDirectory(
+        assetPath: String,
+        destPath: String,
+        onBytes: ((Long) -> Unit)?,
+        openError: IOException,
+    ): Boolean {
+        val assets = try {
+            context.assets.list(assetPath)
+        } catch (listError: IOException) {
+            if (firstWriteFailure == null) firstWriteFailure = listError.message
+            Logger.w(tag, "Could not open or list $assetPath: ${listError.message}")
+            return false
+        }
+        if (assets == null) {
+            Logger.w(tag, "Could not list the assets under $assetPath; treating it as unpacked would certify an empty tree")
+            return false
+        }
+        if (assets.isEmpty()) {
+            if (firstWriteFailure == null) firstWriteFailure = openError.message
+            Logger.w(tag, "Could not open listed asset $assetPath: ${openError.message}")
+            return false
+        }
+        return extractAssetChildren(assetPath, destPath, assets, onBytes)
+    }
+
+    /** Closes [stream] when discarding an unused opening without masking an earlier result. */
+    private fun closeStreamQuietly(stream: InputStream) {
+        try {
+            stream.close()
+        } catch (_: IOException) {
         }
     }
 
@@ -806,8 +984,6 @@ class FirstRunSetup(
         sameLengthIsCurrent: Boolean = false,
         required: Boolean = false,
     ): Boolean {
-        val destFile = File(context.filesDir, destPath)
-
         // Opening the asset is separated from writing it so the two failures can
         // be told apart. They are not the same event: an absent optional asset
         // is routine in builds that skip a download script, while a
@@ -825,7 +1001,16 @@ class FirstRunSetup(
                 Logger.d(tag, "Asset not found: $assetPath (will be available after build)")
                 return true
             }
+        return extractAssetStream(input, destPath, onBytes, sameLengthIsCurrent)
+    }
 
+    private fun extractAssetStream(
+        input: InputStream,
+        destPath: String,
+        onBytes: ((Long) -> Unit)? = null,
+        sameLengthIsCurrent: Boolean = false,
+    ): Boolean {
+        val destFile = File(context.filesDir, destPath)
         var cause: String? = null
         val written = input.use { stream ->
             if (!hasUnredirectedParent(destFile)) {
@@ -1330,6 +1515,13 @@ class FirstRunSetup(
      * git pointing into an install that no longer exists.
      */
     fun setupGitCore() {
+        val config = File(context.filesDir, "usr/etc/gitconfig")
+        if (!config.exists() || config.length() == 0L) {
+            config.parentFile?.mkdirs()
+            writeAtomically(config, { Logger.w(tag, it) }) { out ->
+                out.write("[core]\n\tpager = cat\n".toByteArray())
+            }
+        }
         val nativeLibDir = context.applicationInfo.nativeLibraryDir
         val gitCorePath = File(context.filesDir, "usr/lib/git-core")
         val manifestFile = File(gitCorePath, "gitcore-symlinks")
@@ -3438,22 +3630,7 @@ claude() {
         return writeAtomically(settingsFile) { it.write(content.toByteArray()) }
     }
 
-    private fun extractBundledExtensions() {
-        val extensionsDir = File(context.filesDir, "home/.vscodroid/extensions")
-        extensionsDir.mkdirs()
-
-        val bundled = try {
-            context.assets.list("extensions") ?: emptyArray()
-        } catch (e: IOException) {
-            Logger.d(tag, "No bundled extensions in assets")
-            emptyArray()
-        }
-
-        if (bundled.isEmpty()) {
-            Logger.d(tag, "No bundled extensions found")
-            return
-        }
-
+    private fun bundledExtensionsToExtract(extensionsDir: File, bundled: List<String>): List<String> {
         // Which of these need unpacking is [bundledDirsToExtract]'s decision and
         // its doc carries the reasoning. The short version: asking `exists()`
         // alone asked whether a directory carrying this version string had ever
@@ -3501,8 +3678,27 @@ claude() {
         val listedByDefault = manifestEntryDirs(manifestFile)
             ?.takeIf { entries -> entries.none { it.second.isEmpty() } }
             ?.mapTo(HashSet()) { it.second }
-        val toExtract =
-            bundledDirsToExtract(installed, bundled.toList(), abandoned, uninstalled, listedByDefault)
+        return bundledDirsToExtract(installed, bundled, abandoned, uninstalled, listedByDefault)
+    }
+
+    private fun extractBundledExtensions() {
+        val extensionsDir = File(context.filesDir, "home/.vscodroid/extensions")
+        extensionsDir.mkdirs()
+
+        val bundled = try {
+            context.assets.list("extensions") ?: emptyArray()
+        } catch (e: IOException) {
+            Logger.d(tag, "No bundled extensions in assets")
+            emptyArray()
+        }
+
+        if (bundled.isEmpty()) {
+            Logger.d(tag, "No bundled extensions found")
+            return
+        }
+
+        val manifestFile = File(extensionsDir, "extensions.json")
+        val toExtract = bundledExtensionsToExtract(extensionsDir, bundled.toList())
         // One counter across the whole loop, so the bar reflects the step rather
         // than restarting per extension. Its total is what the APK bundles, so a
         // run re-unpacking only some of the directories stops the bar short of
@@ -4350,8 +4546,11 @@ claude() {
         // The single funnel every step already reports through, which is why the
         // failing step can be named without threading a parameter through the
         // twenty call sites below.
-        currentStep = message
-        progressSink?.invoke(message, percent)
+        synchronized(progressLock) {
+            currentStep = message
+            lastProgress = message to percent
+            progressSink?.invoke(message, percent)
+        }
     }
 
     /**
@@ -4409,6 +4608,22 @@ claude() {
         @Volatile
         private var progressSink: ((message: String, percent: Int) -> Unit)? = null
 
+        private val progressLock = Any()
+        private var lastProgress: Pair<String, Int>? = null
+
+        /**
+         * Claims the sink and replays the current run's latest update in order.
+         *
+         * This is a leaf lock: only field writes and the sink call belong here.
+         * A sink must only post UI work, without waiting or taking another lock.
+         */
+        fun attachProgress(sink: ((message: String, percent: Int) -> Unit)?) {
+            synchronized(progressLock) {
+                progressSink = sink
+                lastProgress?.let { sink?.invoke(it.first, it.second) }
+            }
+        }
+
         /**
          * Drops [sink] if it is still the installed one.
          *
@@ -4420,7 +4635,9 @@ claude() {
          * new one, so ordering alone would have covered that one.
          */
         fun detachProgress(sink: ((message: String, percent: Int) -> Unit)?) {
-            if (sink != null && progressSink === sink) progressSink = null
+            synchronized(progressLock) {
+                if (sink != null && progressSink === sink) progressSink = null
+            }
         }
 
         /** How much of an exception message is worth putting on a splash screen. */

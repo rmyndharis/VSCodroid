@@ -510,6 +510,67 @@ function snapshot(total, terminals, langservers, budget = { idle: 5, soft: 8, er
     );
 }
 
+// A backward clock change cannot turn a stopped writer's old file live again.
+{
+    const tmp = fs.mkdtempSync(path.join(BASE_TMP, 'vscodroid-clock-'));
+    const file = path.join(tmp, 'vscodroid-processes.json');
+    const writtenAt = 1800000000000;
+    const content = JSON.stringify({ ...snapshot(20, 9, 6), timestamp: writtenAt });
+    fs.writeFileSync(file, content);
+    const originalNow = Date.now;
+    const originalInterval = global.setInterval;
+    const originalClear = global.clearInterval;
+    const originalItem = vscodeStub.window.createStatusBarItem;
+    const originalTmp = process.env.TMPDIR;
+    let now = writtenAt + 60000;
+    let poll;
+    let item;
+    let extension;
+    try {
+        Date.now = () => now;
+        global.setInterval = (callback) => { poll = callback; return 1; };
+        global.clearInterval = () => {};
+        vscodeStub.window.createStatusBarItem = (...args) => (item = originalItem(...args));
+        process.env.TMPDIR = tmp;
+        shown.length = 0;
+        delete require.cache[require.resolve(EXTENSION)];
+        extension = require(EXTENSION);
+        extension.activate({ subscriptions: [] });
+        const limit = extension.STALE_AFTER_MS;
+        const observed = [];
+        for (const age of [60000, -3600000, -3480000, -1, 0, limit, limit + 1]) {
+            now = writtenAt + age;
+            const before = shown.length;
+            poll();
+            commands.get('vscodroid.showProcesses')();
+            observed.push({
+                age, text: item.text, notifications: shown.length - before,
+                staleDetails: /^No process data/.test(printed[0]),
+            });
+            assert.strictEqual(fs.readFileSync(file, 'utf8'), content, 'the stopped writer changed its file');
+        }
+        console.log('snapshot clock observations: ' + JSON.stringify(observed));
+        assert.deepStrictEqual(observed, [
+            { age: 60000, text: '$(pulse) --', notifications: 0, staleDetails: true },
+            { age: -3600000, text: '$(pulse) --', notifications: 0, staleDetails: true },
+            { age: -3480000, text: '$(pulse) --', notifications: 0, staleDetails: true },
+            { age: -1, text: '$(pulse) --', notifications: 0, staleDetails: true },
+            { age: 0, text: '$(pulse) 20', notifications: 1, staleDetails: false },
+            { age: limit, text: '$(pulse) 20', notifications: 0, staleDetails: false },
+            { age: limit + 1, text: '$(pulse) --', notifications: 0, staleDetails: true },
+        ], 'a future snapshot was presented as a live count');
+    } finally {
+        if (extension) extension.deactivate();
+        Date.now = originalNow;
+        global.setInterval = originalInterval;
+        global.clearInterval = originalClear;
+        vscodeStub.window.createStatusBarItem = originalItem;
+        if (originalTmp === undefined) delete process.env.TMPDIR;
+        else process.env.TMPDIR = originalTmp;
+        fs.rmSync(tmp, { recursive: true, force: true });
+    }
+}
+
 // The details view promises no reclaim, even off a snapshot that still names one.
 //
 // `budget.reclaim` was the count at which process-monitor.js signalled idle

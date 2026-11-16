@@ -72,7 +72,9 @@ class KeyInjectorShiftTest {
     private fun shiftOnlyBranch(): String {
         KeyInjector(webView).setupModifierInterceptor()
         val installed = script.captured
-        val guard = "if (!mod.ctrl && !mod.alt) {"
+        // Ctrl, Alt, or a chord the row started that is waiting for its second key:
+        // the three things the listener acts on. Shift alone is none of them.
+        val guard = "if (!mod.ctrl && !mod.alt && !chordLive()) {"
         val start = installed.indexOf(guard)
         assertTrue(
             start >= 0,

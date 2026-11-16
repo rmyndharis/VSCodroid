@@ -140,8 +140,8 @@ internal fun resourceOutcome(path: String, resourceRoots: List<String>): Resourc
  */
 internal fun resolveWebviewResource(requestedPath: String, roots: List<String>): File? {
     val canonical = canonicalOrNull(requestedPath) ?: return null
-    // The server's run note holds the key that authenticates its listener, and it
-    // sits under the server root. Refused by name rather than by path because a
+    // The server's run note and its temporary copy hold the listener's key under
+    // the server root. Refused by name rather than by path because a
     // name needs no context; a workspace file of that name is not worth serving.
     if (!resourcePathIsPublished(canonical, roots)) return null
     // Compared with the separator appended: a root's name is also a prefix of
@@ -150,8 +150,11 @@ internal fun resolveWebviewResource(requestedPath: String, roots: List<String>):
     return File(canonical)
 }
 
-private fun resourcePathIsPublished(path: String, roots: List<String>): Boolean =
-    path.substringAfterLast('/') != EDITOR_PID_FILE && roots.any { path.startsWith("$it/") }
+private fun resourcePathIsPublished(path: String, roots: List<String>): Boolean {
+    val name = path.substringAfterLast('/')
+    return name != EDITOR_PID_FILE && name != "$EDITOR_PID_FILE.tmp" &&
+        roots.any { path.startsWith("$it/") }
+}
 
 internal fun openResourceFile(file: File, roots: List<String>): FileInputStream {
     try {

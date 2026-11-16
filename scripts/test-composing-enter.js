@@ -32,6 +32,9 @@
  * they are on a real KeyboardEvent, so assigning one does nothing and only
  * `Object.defineProperty` changes it. `isTrusted` is an own property, as on a
  * real one.
+ * The combined cases also run the modifier interceptor, then type a letter by
+ * insertText, insertCompositionText or EditContext. DOM dispatch, keybinding
+ * acceptance, focus and the input method are modeled; native insets are not.
  *
  * NEGATIVE CONTROL, measured: against the script as it was before the fill
  * (main at 2ff780ca) the three cases that expect code Enter fail, with the
@@ -98,14 +101,19 @@ class FakeKeyboardEvent {
     get code() { return this.init.code || ''; }
     get keyCode() { return this.init.keyCode || 0; }
     get ctrlKey() { return !!this.init.ctrlKey; }
+    get altKey() { return !!this.init.altKey; }
+    get metaKey() { return !!this.init.metaKey; }
     get shiftKey() { return !!this.init.shiftKey; }
     get isComposing() { return !!this.init.isComposing; }
+    get bubbles() { return !!this.init.bubbles; }
+    get cancelable() { return !!this.init.cancelable; }
 }
 
 class FakeCompositionEvent {
     constructor(type, init = {}) {
         this.type = type;
         this.data = init.data;
+        this.bubbles = !!init.bubbles;
     }
 }
 
@@ -141,7 +149,7 @@ function press(init, { latched, inEditor = false, inQuickInput = false, trusted 
             (inQuickInput && selector.includes('.quick-input-widget')) ? {} : null),
         dispatchEvent: (ev) => {
             dispatched.push(ev.type === 'keydown'
-                ? `keydown ${ev.key} ${ev.code} ${ev.keyCode}`
+                ? `keydown ${ev.key} ${ev.code} ${ev.keyCode}${ev.ctrlKey ? ' ctrl' : ''}${ev.altKey ? ' alt' : ''}${ev.shiftKey ? ' shift' : ''}`
                 : `${ev.type} ${ev.data}`);
             return true;
         },
@@ -223,14 +231,22 @@ cases.push(['a composing Enter with Shift latched is replaced and spends the lat
         stopped: true,
         dispatched: ['compositionend alpha', 'keydown Enter Enter 13'],
     })]);
-cases.push(['a composing Enter with Ctrl and Shift latched leaves the latch for the row',
-    press({ ...gboardEnter, isComposing: true }, { latched: { ctrl: true, shift: true } }),
-    outcome({
-        isComposing: true,
-        stopped: true,
-        dispatched: ['compositionend alpha', 'keydown Enter Enter 13'],
-        latch: { ...CLEAR, ctrl: true, shift: true },
-    })]);
+const enterLatches = [
+    { ctrl: true }, { alt: true }, { ctrl: true, alt: true },
+    { ctrl: true, shift: true }, { alt: true, shift: true },
+    { ctrl: true, alt: true, shift: true },
+];
+for (const latched of enterLatches) {
+    const names = Object.keys(latched).join('+');
+    cases.push([`a composing Enter carries and spends ${names}`,
+        press({ ...gboardEnter, isComposing: true }, { latched }),
+        outcome({
+            isComposing: true,
+            stopped: true,
+            prevented: true,
+            dispatched: ['compositionend alpha', `keydown Enter Enter 13 ${Object.keys(latched).join(' ')}`],
+        })]);
+}
 cases.push(['a composing Enter inside the editor is left alone',
     press({ ...gboardEnter, isComposing: true }, { latched: NO_LATCH, inEditor: true }),
     outcome({ isComposing: true })]);
@@ -262,6 +278,142 @@ cases.push(['a composing PageDown in an editor inside the quick input, as Quick 
     press(composingKey('PageDown'), { ...inQuickInput, inEditor: true }), keepsComposing('PageDown')]);
 cases.push(['a composing PageDown that a script built is left alone',
     press(composingKey('PageDown'), { ...inQuickInput, trusted: false }), keepsComposing('PageDown')]);
+
+// Run both page scripts together: accepting Enter cancels its default, so no
+// beforeinput follows it to spend a modifier before the next character.
+const injectorSource = fs.readFileSync(path.join(path.dirname(MAIN_ACTIVITY), 'keyboard/KeyInjector.kt'), 'utf8');
+const injectorMethod = injectorSource.indexOf('fun setupModifierInterceptor()');
+const injectorStart = injectorSource.indexOf('"""', injectorMethod) + 3;
+const injectorEnd = injectorSource.indexOf('""".trimIndent()', injectorStart);
+assert(injectorMethod >= 0 && injectorStart > injectorMethod && injectorEnd > injectorStart,
+    'could not extract the modifier interceptor');
+// These cases type Latin letters, so no punctuation lookup or modifier keyup is needed.
+const interceptor = injectorSource.slice(injectorStart, injectorEnd)
+    .replace('$keyLookup', '{}').replace('$RELEASE_MODIFIERS_JS', 'function releaseModifiers() {}');
+assert(!interceptor.includes('$'), 'unhandled interpolation in the modifier interceptor');
+
+function acceptedThenTyped(latched, route) {
+    const timers = [];
+    const listen = (node) => Object.assign(node, {
+        listeners: [],
+        addEventListener(type, fn, capture) { this.listeners.push({ type, fn, capture: !!capture }); },
+        removeEventListener(type, fn) { this.listeners = this.listeners.filter((l) => l.type !== type || l.fn !== fn); },
+    });
+    const window = listen({});
+    const document = listen({});
+    function dispatch(target, event) {
+        let stopped = false;
+        Object.assign(event, {
+            target, defaultPrevented: false,
+            preventDefault() { if (this.cancelable) this.defaultPrevented = true; },
+            stopPropagation() { stopped = true; },
+            stopImmediatePropagation() { stopped = true; },
+            composedPath: () => [target, document, window],
+        });
+        const outer = window.event;
+        window.event = event;
+        try {
+            const phases = [[window, true], [document, true], [target, true], [target, false]];
+            if (event.bubbles) phases.push([document, false], [window, false]);
+            for (const [node, capture] of phases) {
+                for (const l of node.listeners.slice()) {
+                    if (l.type !== event.type || l.capture !== capture) continue;
+                    l.fn(event);
+                    if (stopped) return !event.defaultPrevented;
+                }
+            }
+            return !event.defaultPrevented;
+        } finally { window.event = outer; }
+    }
+    const element = (props) => {
+        const node = listen(props);
+        node.dispatchEvent = (event) => dispatch(node, event);
+        return node;
+    };
+    const input = element({
+        tagName: 'INPUT', classList: { contains: () => false }, closest: () => null,
+        value: 'file', selectionStart: 4, selectionEnd: 4,
+        setSelectionRange(start, end) { this.selectionStart = start; this.selectionEnd = end; },
+    });
+    class EditContext {
+        constructor() { listen(this); this.text = ''; this.selectionStart = this.selectionEnd = 0; }
+        updateText(start, end, text) { this.text = this.text.slice(0, start) + text + this.text.slice(end); }
+        updateSelection(start, end) { this.selectionStart = start; this.selectionEnd = end; }
+        dispatchEvent(event) { for (const l of this.listeners.slice()) if (l.type === event.type) l.fn(event); }
+    }
+    const own = new EditContext();
+    own.text = 'file'; own.selectionStart = own.selectionEnd = 4;
+    const host = element({
+        tagName: 'DIV', classList: { contains: (name) => name === 'native-edit-context' }, editContext: own,
+        focus() { document.activeElement = host; dispatch(host, { type: 'focusin', bubbles: true }); },
+        blur() { document.activeElement = null; dispatch(host, { type: 'focusout', bubbles: true }); },
+    });
+    document.activeElement = input;
+    const make = function(type, init) { return { type, ...init }; };
+    const context = vm.createContext({
+        window, document, navigator: { userAgent: '' }, EditContext,
+        KeyboardEvent: FakeKeyboardEvent, CompositionEvent: FakeCompositionEvent,
+        InputEvent: make, TextUpdateEvent: make,
+        setTimeout(fn) { timers.push(fn); }, requestAnimationFrame(fn) { timers.push(fn); },
+    });
+    vm.runInContext(interceptor, context);
+    vm.runInContext(extractScript(), context);
+    const flush = () => { for (const fn of timers.splice(0)) fn(); };
+    const mods = () => {
+        const m = window.__vscodroid;
+        return { ctrl: !!m.ctrl, alt: !!m.alt, shift: !!m.shift };
+    };
+    const nextChords = [];
+    let accepted = null;
+    // Binding resolution and focus after acceptance are the modeled boundary.
+    window.addEventListener('keydown', (event) => {
+        const flags = { ctrl: event.ctrlKey, alt: event.altKey, shift: event.shiftKey };
+        if (event.key === 'a') nextChords.push(flags);
+        if (event.key === 'Enter' && event.code === 'Enter' && !event.isComposing) {
+            accepted = flags;
+            event.preventDefault();
+            if (route === 'EditContext') host.focus();
+        }
+    }, false);
+    input.dispatchEvent(new FakeCompositionEvent('compositionupdate', { data: 'file', bubbles: true }));
+    Object.assign(window.__vscodroid, CLEAR, latched);
+    flush();
+    const enter = new FakeKeyboardEvent('keydown', { ...gboardEnter, isComposing: true, bubbles: true, cancelable: true });
+    Object.defineProperty(enter, 'isTrusted', { value: true });
+    const cancelled = !input.dispatchEvent(enter);
+    const afterEnter = mods();
+    flush();
+    if (route === 'EditContext') {
+        const ec = host.editContext;
+        ec.dispatchEvent({ type: 'compositionstart' });
+        const start = ec.selectionStart;
+        ec.updateText(start, ec.selectionEnd, 'a');
+        ec.updateSelection(start + 1, start + 1);
+        ec.dispatchEvent({ type: 'textupdate', text: 'a', updateRangeStart: start, updateRangeEnd: start });
+    } else {
+        if (route === 'insertCompositionText') {
+            input.dispatchEvent(new FakeCompositionEvent('compositionupdate', { data: 'a', bubbles: true }));
+        }
+        const allowed = input.dispatchEvent({ type: 'beforeinput', inputType: route, data: 'a', bubbles: true,
+            cancelable: route === 'insertText' });
+        if (allowed) {
+            input.value += 'a'; input.selectionStart = input.selectionEnd = input.value.length;
+            input.dispatchEvent({ type: 'input', inputType: route, data: 'a', bubbles: true });
+        }
+    }
+    flush();
+    return { accepted, cancelled, afterEnter, value: route === 'EditContext' ? own.text : input.value, nextChords };
+}
+
+for (const latched of [{}, { shift: true }, ...enterLatches]) {
+    const names = Object.keys(latched).join('+') || 'no modifier';
+    for (const route of ['insertText', 'insertCompositionText', 'EditContext']) {
+        cases.push([`accepted composing Enter with ${names} leaves the next ${route} letter literal`,
+            acceptedThenTyped(latched, route),
+            { accepted: { ...CLEAR, ...latched, shift: !!((latched.ctrl || latched.alt) && latched.shift) },
+                cancelled: true, afterEnter: CLEAR, value: 'filea', nextChords: [] }]);
+    }
+}
 
 let failed = 0;
 for (const [name, got, want] of cases) {

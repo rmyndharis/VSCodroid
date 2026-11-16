@@ -421,6 +421,13 @@ jobs:
         working-directory: android
         run: ./gradlew assembleDebug
 
+      # First-run setup opens an asset entry to learn that it is a file and
+      # lists an entry only when it does not open or opens empty, so no asset
+      # path may be both a file and a folder. Asked of the archive, on every
+      # pull request.
+      - name: Refuse an asset path that is both a file and a folder
+        run: python3 scripts/check-asset-table.py android/app/build/outputs/apk/debug/app-debug.apk
+
       - name: Upload debug APK
         uses: actions/upload-artifact@cf430e030ddbb5b0abf93d22962f4752f3646cd9 # v7.0.2
         with:

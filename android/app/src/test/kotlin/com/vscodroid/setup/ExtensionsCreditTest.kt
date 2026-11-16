@@ -60,7 +60,11 @@ class ExtensionsCreditTest {
         assets = mockk()
         every { assets.list(any()) } returns emptyArray()
         every { assets.list("") } returns arrayOf("extensions")
-        every { assets.open(any()) } answers { java.io.ByteArrayInputStream(ByteArray(4096)) }
+        every { assets.open(any()) } answers {
+            val path = firstArg<String>()
+            if (!path.endsWith("/extension.js")) throw java.io.IOException("Not a file: $path")
+            java.io.ByteArrayInputStream(ByteArray(4096))
+        }
 
         context = mockk(relaxed = true)
         every { context.filesDir } returns filesDir

@@ -97,6 +97,12 @@ if [ ! -d "$RUBY_USR/bin" ]; then
     echo "  ERROR: no bin directory in the ruby package at $RUBY_USR/bin" >&2
     exit 1
 fi
+for launcher in ruby irb gem bundle bundler rake; do
+    if [ ! -f "$RUBY_USR/bin/$launcher" ]; then
+        echo "  ERROR: required Ruby launcher missing: $RUBY_USR/bin/$launcher" >&2
+        exit 1
+    fi
+done
 for src in "$RUBY_USR/bin"/*; do
     [ -f "$src" ] || [ -L "$src" ] || continue
     cp -L "$src" "$PACK_ASSETS/usr/bin/$(basename "$src")"
@@ -280,6 +286,15 @@ OWNED_PATHS="\"usr/include/ruby-$RUBY_MINOR\""
 for doc in "$PACK_ASSETS"/usr/share/doc/*/; do
     [ -d "$doc" ] && OWNED_PATHS+=",\"usr/share/doc/$(basename "$doc")\""
 done
+RUBY_GEM_DIRS=()
+for dir in "$PACK_ASSETS"/usr/lib/ruby/gems/*; do
+    if [ -d "$dir" ]; then RUBY_GEM_DIRS+=("$dir"); fi
+done
+if [ "${#RUBY_GEM_DIRS[@]}" -ne 1 ]; then
+    echo "ERROR: expected exactly one RubyGems ABI directory in the Ruby pack" >&2
+    exit 1
+fi
+RUBY_GEM_ABI="${RUBY_GEM_DIRS[0]##*/}"
 cat > "$PACK_ASSETS/toolchain_ruby.json" << EOF
 {
     "name": "ruby",
@@ -288,7 +303,7 @@ cat > "$PACK_ASSETS/toolchain_ruby.json" << EOF
     "binaries": $BINARIES,
     "env": {
         "GEM_HOME": "\$HOME/.gem/ruby",
-        "GEM_PATH": "\$HOME/.gem/ruby:\$FILESDIR/usr/lib/ruby/gems",
+        "GEM_PATH": "\$HOME/.gem/ruby:\$FILESDIR/usr/lib/ruby/gems/$RUBY_GEM_ABI",
         "RUBYLIB": "\$FILESDIR/usr/lib/ruby/$RUBY_MINOR:\$FILESDIR/usr/lib/ruby/$RUBY_MINOR/aarch64-linux-android",
         "RUBYOPT": "-rrubygems"
     },

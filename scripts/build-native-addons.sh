@@ -722,6 +722,7 @@ class Logger {
 		this._level = globalLevel;
 		this._raw = false;
 		this._reported = false;
+		this._dropped = false;
 		// Deliberately not caught: a logger that cannot open its file must
 		// reject, so the caller's own catch prints why. Swallowing here is
 		// what turns an unwritable log directory back into silence.
@@ -766,7 +767,16 @@ class Logger {
 	}
 
 	_write(level, message) {
-		if (level < this._level || this._fd === null) return;
+		if (level < this._level || this._dropped) return;
+		if (this._fd === null) {
+			try {
+				this._fd = fs.openSync(this._filepath, 'a');
+				this._size = fs.fstatSync(this._fd).size;
+			} catch (err) {
+				this._report(err);
+				return;
+			}
+		}
 		const line = this._raw
 			? `${message}\n`
 			: `${stamp()} [${LEVEL_NAMES[level]}] ${message}\n`;
@@ -799,6 +809,7 @@ class Logger {
 	clearFormatters() { this._raw = true; }
 
 	drop() {
+		this._dropped = true;
 		if (this._fd === null) return;
 		try { fs.closeSync(this._fd); } catch (err) { this._report(err); }
 		this._fd = null;
@@ -875,6 +886,42 @@ roller.setLevel(0);
 for (let i = 0; i < 12; i++) roller.info(`line-${i}-padded-to-force-a-roll`);
 roller.drop();
 if (!fs.existsSync(path.join(dir, "roll.1.log"))) fail("the 64-byte limit did not roll the file");
+
+// A temporary rotation error must not disable a live logger, while drop stays final.
+for (const fault of ['rename', 'open']) {
+	for (const dropAfterFailure of [false, true]) {
+		const file = path.join(dir, `${fault}-${dropAfterFailure}.log`);
+		const recovering = await spdlog.createAsyncRotatingLogger('recovery', file, 64, 3);
+		recovering.clearFormatters();
+		recovering.info('before-failure');
+		const rename = fs.renameSync;
+		const open = fs.openSync;
+		let faultCount = 0;
+		const denied = () => { faultCount++; return Object.assign(new Error('temporary rotation refusal'), { code: 'EACCES' }); };
+		try {
+			fs.renameSync = function (from, to) {
+				if (fault === 'rename' && from === file) throw denied();
+				return rename.call(this, from, to);
+			};
+			fs.openSync = function (name, flags, ...rest) {
+				if (fault === 'open' && name === file && flags === 'a') throw denied();
+				return open.call(this, name, flags, ...rest);
+			};
+			recovering.info('x'.repeat(80));
+			if (dropAfterFailure) recovering.drop();
+		} finally {
+			fs.renameSync = rename;
+			fs.openSync = open;
+		}
+		if (faultCount !== 1) fail(`${fault}: the controlled rotation error was not reached once`);
+		recovering.info('after-recovery');
+		const wroteAfter = fs.existsSync(file) && fs.readFileSync(file, 'utf8').includes('after-recovery');
+		if (wroteAfter === dropAfterFailure) fail(`${fault}: ${dropAfterFailure ? 'drop reopened the logger' : 'the live logger did not recover'}`);
+		recovering.drop();
+		recovering.info('after-drop');
+		if (fs.existsSync(file) && fs.readFileSync(file, 'utf8').includes('after-drop')) fail(`${fault}: drop allowed another write`);
+	}
+}
 
 fs.rmSync(dir, { recursive: true, force: true });
 if (failed) process.exit(1);

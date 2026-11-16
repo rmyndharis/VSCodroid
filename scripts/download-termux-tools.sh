@@ -483,19 +483,10 @@ for file in "$GIT_CORE_SRC"/*; do
             # daemon, git http-backend, git imap-send, scalar and the rest) that
             # fail either way. Only the message changes.
             #
-            # Size is what makes the rule stop here, not reachability, and the
-            # branch above is not a claim that what it copies works. Everything
-            # git EXECS is equally dead, shell script or ELF: the eleven with a
-            # shebang (git-submodule, git-subtree, git-mergetool,
-            # git-filter-branch and the rest) fail exactly as the measurement
-            # above shows. What survives the same policy is what a shell SOURCES
-            # rather than execs, because sourcing is a read: git-sh-setup,
-            # git-sh-i18n and git-mergetool--lib. Those three are the reason the
-            # text is kept, and the eleven ride along because all fourteen
-            # together are 132 KiB against the 15.05 MiB dropped here. Making
-            # the exec'd ones work is a different change: setupGitCore would
-            # have to symlink each into nativeLibraryDir and libexec-trampoline
-            # would need a row per name.
+            # Shell commands kept above are launched through the system shell by
+            # ToolchainManager's execution table. Their three sourced libraries
+            # (git-sh-setup, git-sh-i18n and git-mergetool--lib) remain ordinary
+            # text. That route does not make these standalone ELF helpers runnable.
             echo "  Skipping unexecutable helper: $name"
             COPIED=$((COPIED - 1))
         fi

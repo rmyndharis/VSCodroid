@@ -156,6 +156,7 @@ REQUIRED_STEPS = {
         "Copy the server for unit tests",
         "Run unit tests",
         "Check unit test skips",
+        "Refuse an asset path that is both a file and a folder",
     ),
     "codeoss-build.yml": (
         "Verify the server tarball",
@@ -180,6 +181,7 @@ REQUIRED_STEPS = {
         "Check every shipped toolchain library is attributed",
         "Refuse an asset the base module and a pack both ship",
         "Check the shipped permissions against the privacy policy",
+        "Refuse an asset path that is both a file and a folder",
         "Require every artifact, and report its size",
         "Generate checksums",
     ),

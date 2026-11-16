@@ -93,6 +93,18 @@ class LogRelayRedactionTest {
     }
 
     @Test
+    fun `page credentials are scrubbed from both relay fields at every level`() {
+        val tagSecret = "dummy-tag-credential"
+        val messageSecret = "dummy-message-credential"
+        listOf("debug", "info", "warn", "error", "something-else").forEach { level ->
+            bridge.logToNative("accepted", level, "relay password=$tagSecret", "failed api_key=$messageSecret")
+        }
+        assertTrue(logged.size == 5, "the authenticated relay did not emit every level: $logged")
+        assertTrue(logged.all { "relay password=<redacted>" in it && "failed api_key=<redacted>" in it }, logged.toString())
+        assertTrue(logged.none { tagSecret in it || messageSecret in it }, logged.toString())
+    }
+
+    @Test
     fun `a rejected session token relays nothing`() {
         // The pre-existing guard, pinned because the test above depends on it
         // being the ONLY reason nothing is logged when it should be.

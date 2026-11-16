@@ -6,6 +6,7 @@ import android.webkit.ValueCallback
 import android.webkit.WebChromeClient
 import android.webkit.WebView
 import com.vscodroid.util.Logger
+import com.vscodroid.util.redactSecrets
 
 /**
  * @param openFileChooser starts the device file picker and reports whether it
@@ -92,10 +93,10 @@ class VSCodroidWebChromeClient(
         // Whether the token ever actually reaches here is not established -- the
         // server consumes it on `/` and redirects, so the document URL afterwards
         // should not hold it. "Should" is the reason this is redacted anyway.
-        val message = redactToken(
+        val message = redactSecrets(redactToken(
             "[JS:${consoleMessage.sourceId()}:${consoleMessage.lineNumber()}] " +
                 consoleMessage.message()
-        )
+        ))
         when (consoleMessage.messageLevel()) {
             ConsoleMessage.MessageLevel.ERROR -> Logger.e(tag, message)
             ConsoleMessage.MessageLevel.WARNING -> Logger.w(tag, message)

@@ -277,6 +277,24 @@ class PublishedResourceRootsTest {
         assertNull(resolveWebviewResource(File(filesDir, "server/$EDITOR_PID_FILE").path, roots))
     }
 
+    @Test
+    fun `a temporary server run note and its symlink are not webview resources`() {
+        val roots = publishedResourceRoots(contextWith(externalDir))
+        val server = File(filesDir, "server").apply { mkdirs() }
+        val note = File(server, "$EDITOR_PID_FILE.tmp").apply {
+            writeText("""{"pid":4242,"runId":"dummy-run-key"}""")
+        }
+        val alias = File(server, "run-note.css")
+        Files.createSymbolicLink(alias.toPath(), note.toPath())
+        val ordinary = File(server, "ordinary.tmp").apply { writeText("ordinary resource") }
+        assertEquals(ResourceOutcome.Serve(ordinary.canonicalFile), resourceOutcome(ordinary.path, roots))
+        assertEquals("dummy-run-key", org.json.JSONObject(note.readText()).getString("runId"))
+        for (file in listOf(note, alias)) {
+            assertNull(resolveWebviewResource(file.path, roots), "the run key was published through ${file.name}")
+            assertEquals(ResourceOutcome.Refused, resourceOutcome(file.path, roots))
+        }
+    }
+
     /**
      * The control for the refusals above, and separately a check that roots are
      * canonicalised.

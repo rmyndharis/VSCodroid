@@ -138,7 +138,11 @@ class ExtractionAllocationTest {
     @Test
     fun `setup includes the allocation of many small missing files before recording an attempt`() {
         listings["usr"] = Array(20_000) { "file-$it" }
-        every { assets.open(any()) } answers { ByteArrayInputStream(byteArrayOf(1)) }
+        every { assets.open(any()) } answers {
+            val path = firstArg<String>()
+            if (path in listings) throw IOException("Not a file: $path")
+            ByteArrayInputStream(byteArrayOf(1))
+        }
 
         assertEquals(FirstRunSetup.SetupResult.LOW_STORAGE, runWithSpace(20_000, 1, 140 * 1_048_576L))
         assertEquals(emptyList<String>(), writtenKeys)
@@ -150,6 +154,8 @@ class ExtractionAllocationTest {
         listings[""] = arrayOf("vscode-reh")
         listings["vscode-reh"] = Array(32) { "new-$it" }
         every { assets.open(any()) } answers {
+            val path = firstArg<String>()
+            if (path in listings) throw IOException("Not a file: $path")
             object : InputStream() {
                 override fun available() = (8 * mib).toInt()
                 override fun read(): Int = throw IOException("Stop after preflight")
@@ -171,7 +177,9 @@ class ExtractionAllocationTest {
         listings[""] = arrayOf("vscode-reh", "usr")
         listings["vscode-reh"] = Array(20_000) { "file-$it" }
         every { assets.open(any()) } answers {
-            val size = if (firstArg<String>() == "usr/one") toolBytes.toInt() else 1
+            val path = firstArg<String>()
+            if (path in listings) throw IOException("Not a file: $path")
+            val size = if (path == "usr/one") toolBytes.toInt() else 1
             object : InputStream() {
                 override fun available() = size
                 override fun read(): Int = throw IOException("Stop after preflight")

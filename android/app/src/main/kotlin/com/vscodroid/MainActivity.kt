@@ -20,8 +20,12 @@ import android.net.Uri
 import android.os.Handler
 import android.os.IBinder
 import android.os.Looper
+import android.os.ParcelFileDescriptor
 import android.os.SystemClock
 import android.provider.DocumentsContract
+import android.system.ErrnoException
+import android.system.Os
+import android.system.OsConstants
 import android.text.util.Linkify
 import android.view.KeyEvent
 import android.view.MotionEvent
@@ -36,7 +40,6 @@ import android.widget.TextView
 import android.widget.Toast
 import java.io.File
 import java.security.MessageDigest
-import java.io.OutputStream
 import java.lang.ref.WeakReference
 import java.util.concurrent.CountDownLatch
 import java.util.concurrent.TimeUnit
@@ -83,9 +86,11 @@ import com.vscodroid.util.MainThreadWatch
 import com.vscodroid.util.Notices
 import com.vscodroid.util.ServerLog
 import com.vscodroid.util.redactSecrets
+import com.vscodroid.webview.DocumentMeasure
 import com.vscodroid.webview.DownloadCoordinator
 import com.vscodroid.webview.DownloadHost
 import com.vscodroid.webview.DownloadOutcome
+import com.vscodroid.webview.OpenDocument
 import com.vscodroid.webview.VSCodroidWebChromeClient
 import com.vscodroid.webview.VSCodroidWebView
 import com.vscodroid.webview.VSCodroidWebViewClient
@@ -554,8 +559,60 @@ class MainActivity : AppCompatActivity() {
             }
         }
 
-        override fun openDestination(destination: Uri): OutputStream? =
-            contentResolver.openOutputStream(destination)
+        /**
+         * Measured through a descriptor of its own opened read-only, never through the one the
+         * download writes with: "wt" truncates on the platform's providers, so a document
+         * measured after that open would always look empty.
+         */
+        override fun measureDestination(destination: Uri): DocumentMeasure? {
+            val pfd = contentResolver.openFileDescriptor(destination, "r") ?: return null
+            pfd.use {
+                val fd = it.fileDescriptor
+                val stat = Os.fstat(fd)
+                if (!OsConstants.S_ISREG(stat.st_mode)) return DocumentMeasure(length = null)
+                // A file system with no blocks at all is a pseudo one that says nothing about
+                // room, and taking its zero at face value would refuse every save.
+                val free = try {
+                    Os.fstatvfs(fd).takeIf { vfs -> vfs.f_blocks > 0 }?.let { vfs -> vfs.f_bavail * vfs.f_frsize }
+                } catch (e: ErrnoException) {
+                    null
+                }
+                return DocumentMeasure(stat.st_size, occupied = stat.st_blocks * 512, free = free)
+            }
+        }
+
+        override fun destinationName(destination: Uri): String? {
+            return contentResolver.query(
+                destination,
+                arrayOf(DocumentsContract.Document.COLUMN_DISPLAY_NAME),
+                null,
+                null,
+                null,
+            )?.use { cursor ->
+                val index = cursor.getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME)
+                if (index >= 0 && cursor.moveToFirst()) cursor.getString(index)?.takeIf { it.isNotBlank() } else null
+            }
+        }
+
+        /**
+         * Opened as a descriptor rather than a stream, so that when the provider hands back a
+         * regular file its length can be read and cut: the platform's providers open mode "w"
+         * without truncating, and a provider may ignore the "t" of "wt". A pipe has neither.
+         */
+        override fun openDestination(destination: Uri, mode: String): OpenDocument? {
+            val pfd = contentResolver.openFileDescriptor(destination, mode) ?: return null
+            val fd = pfd.fileDescriptor
+            val isFile = try {
+                OsConstants.S_ISREG(Os.fstat(fd).st_mode)
+            } catch (e: ErrnoException) {
+                false
+            }
+            return OpenDocument(
+                ParcelFileDescriptor.AutoCloseOutputStream(pfd),
+                length = if (isFile) ({ Os.fstat(fd).st_size }) else null,
+                truncate = if (isFile) ({ size: Long -> Os.ftruncate(fd, size) }) else null,
+            )
+        }
 
         /**
          * Deletes a document a failed download created.
@@ -646,7 +703,13 @@ class MainActivity : AppCompatActivity() {
             // a Toast.
             runOnUiThread { Toast.makeText(this@MainActivity, message, Toast.LENGTH_SHORT).show() }
         }
-    })
+    },
+        // A lambda because this initializer runs before the Activity has a context to ask;
+        // the coordinator asks only on its provider thread, during a download.
+        stagingDir = { cacheDir },
+        // The app's files and cache share a filesystem.
+        stagingRoom = { StorageManager.getAvailableStorage(this@MainActivity) },
+    )
 
     private val serviceConnection = object : ServiceConnection {
         override fun onServiceConnected(name: ComponentName?, service: IBinder?) {
@@ -5188,7 +5251,7 @@ class MainActivity : AppCompatActivity() {
      * same element in its place. Its `keyCode` is defined on the event itself,
      * because the workbench derives the key from `keyCode` and not from `key`.
      * The input already holds the composed word, so its value is left alone.
-     * The real key's default follows the replacement's: it is cancelled only
+     * An unmodified key's default follows the replacement's: it is cancelled only
      * when a workbench handler cancelled the replacement. Cancelling it always
      * is the obvious shape and swallows a newline, because a multi-line setting
      * is a textarea whose Enter no handler inserts.
@@ -5269,10 +5332,15 @@ class MainActivity : AppCompatActivity() {
      * the same row latch without changing its physical modifier flags. An
      * identically shaped hardware Enter follows that same next-keypress rule;
      * Ctrl, Alt and Meta chords keep their existing handling. The replacement of
-     * a composing Enter spends a lone Shift the same way: it is built without
-     * Shift, and once a binding accepts it no `beforeinput` follows either, so
+     * a composing Enter spends a lone Shift without applying it too; once a
+     * binding accepts it no `beforeinput` follows either, so
      * on Gboard 12.4 a Shift latched over Quick Open's composing file name stood
      * after the file opened (measured on API 33, two runs of three).
+     *
+     * With Ctrl or Alt latched, the replacement instead carries every latched
+     * modifier, including Shift, as the non-composing Enter's `beforeinput`
+     * does. It spends them before dispatch. As on that path, an unhandled
+     * chord inserts no newline and leaves no modifier for the next letter.
      *
      * The third case is not Enter. The key row presses PageUp, PageDown, Home,
      * End and the trackpad's Left and Right as real keys (`NAVIGATION_KEYS` in
@@ -5357,15 +5425,20 @@ class MainActivity : AppCompatActivity() {
                     if (!target || (target.tagName !== 'INPUT' && target.tagName !== 'TEXTAREA')) return;
                     if (target.closest('.monaco-editor, .xterm')) return;
                     e.stopImmediatePropagation();
-                    // The replacement carries no Shift either, so a lone latched
-                    // Shift is spent here too. See the KDoc.
                     var latch = window.__vscodroid;
-                    if (latch && !latch.ctrl && !latch.alt) latch.shift = false;
+                    var ctrl = !!(latch && latch.ctrl), alt = !!(latch && latch.alt);
+                    var shift = !!(latch && latch.shift && (ctrl || alt));
+                    if (latch) latch.ctrl = latch.alt = latch.shift = false;
                     target.dispatchEvent(new CompositionEvent('compositionend', { data: composing, bubbles: true }));
-                    var enter = new KeyboardEvent('keydown', { key: 'Enter', code: 'Enter', bubbles: true, cancelable: true });
+                    var enter = new KeyboardEvent('keydown', {
+                        key: 'Enter', code: 'Enter', ctrlKey: ctrl, altKey: alt, shiftKey: shift,
+                        bubbles: true, cancelable: true
+                    });
                     Object.defineProperty(enter, 'keyCode', { value: 13 });
                     Object.defineProperty(enter, 'which', { value: 13 });
                     if (!target.dispatchEvent(enter)) e.preventDefault();
+                    // The modifier interceptor cancels an unhandled chord's edit too.
+                    if (ctrl || alt) e.preventDefault();
                 }, true);
             })();
             """.trimIndent(),

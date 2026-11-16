@@ -179,14 +179,17 @@ class DownloadWriteBlockingTest {
             }
         }
 
-        override fun openDestination(destination: Uri): OutputStream {
+        /** Every document here is one the picker has just created for a new name: empty. */
+        override fun measureDestination(destination: Uri) = DocumentMeasure(length = 0L)
+
+        override fun openDestination(destination: Uri, mode: String): OpenDocument {
             if (blockOpens) {
                 insideCall.countDown()
                 release.await(5, TimeUnit.SECONDS)
             }
             stream = BlockingStream()
             documents[destination] = stream
-            return stream
+            return OpenDocument(stream)
         }
 
         override fun discardDestination(destination: Uri) {

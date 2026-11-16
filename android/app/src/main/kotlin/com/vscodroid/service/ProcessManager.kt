@@ -619,6 +619,12 @@ class ProcessManager internal constructor(
             // Only confirmed process absence permits cleanup without sending a signal.
             StorageManager.deleteFile(recordedSocket, context.filesDir.parentFile)
         }
+        // A failed pid-note write leaves this owner only in memory. Retire it
+        // before the next spawn replaces the identity Stop would need.
+        if (editorNote == null) {
+            val previousRunId = synchronized(readinessLock) { serverRunId }
+            reapOwnedEditor(previousRunId)
+        }
         unboundRefusalLogged = false
         // Below the adoption branch, which returned above: an adopted server holds
         // the token it started with in memory and must keep the file that names it.

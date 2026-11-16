@@ -472,6 +472,122 @@ class ToolchainDigestInstallTest {
         assertTrue(recorded().contains("\"test\""), "the install was reported but not recorded: ${recorded()}")
     }
 
+    @Test
+    fun `launch cleanup keeps an active download with an old staging timestamp`() =
+        keepActiveStageDuringLaunch("download")
+
+    @Test
+    fun `launch cleanup keeps files already extracted by an active download`() =
+        keepActiveStageDuringLaunch("extract")
+
+    @Test
+    fun `launch cleanup keeps the source of an install already copying`() =
+        keepActiveStageDuringLaunch("install")
+
+    private fun keepActiveStageDuringLaunch(phase: String) {
+        val payload = ByteArray(256 * 1024).also { java.util.Random(71).nextBytes(it) }
+        val library = "shared library payload".toByteArray()
+        zipBytes = ByteArrayOutputStream().also { out ->
+            ZipOutputStream(out).use { zip ->
+                for ((name, bytes) in listOf(
+                    "usr/lib/libtest.so" to library,
+                    "usr/opt/test/payload.bin" to payload,
+                    "toolchain_test.json" to """{"name":"test","displayName":"Test","installRoot":"usr/opt/test","libs":["libtest.so"]}""".toByteArray(),
+                )) {
+                    zip.putNextEntry(ZipEntry(name))
+                    zip.write(bytes)
+                    zip.closeEntry()
+                }
+            }
+        }.toByteArray()
+        publishFrom("/download")
+        publishManifest("$zipDigest  toolchain_test.zip\n")
+        val reached = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        val downloading = manager()
+        fun pause() {
+            reached.countDown()
+            assertTrue(release.await(30, TimeUnit.SECONDS), "launch cleanup did not release $phase")
+        }
+        when (phase) {
+            "download" -> {
+                val recordEvent = downloading.onStateChange
+                var held = false
+                downloading.onStateChange = { pack, status, percent, why, transfer ->
+                    recordEvent?.invoke(pack, status, percent, why, transfer)
+                    if (!held && status == AssetPackStatus.DOWNLOADING && percent in 1..84) {
+                        held = true
+                        pause()
+                    }
+                }
+            }
+            "extract" -> {
+                mockkConstructor(java.util.zip.ZipInputStream::class)
+                every { anyConstructed<java.util.zip.ZipInputStream>().nextEntry } answers {
+                    (callOriginal() as ZipEntry?).also {
+                        if (it?.name == "usr/opt/test/payload.bin") pause()
+                    }
+                }
+            }
+            "install" -> every {
+                Logger.i(any(), "Installing toolchain: test (from toolchain_test)")
+            } answers { pause() }
+            else -> error("unknown phase $phase")
+        }
+        downloading.install("toolchain_test")
+        try {
+            assertTrue(reached.await(30, TimeUnit.SECONDS), "$phase was not reached: $events; $reasons")
+            assertTrue(ToolchainManager.packsDownloading().containsKey("toolchain_test"))
+            val root = File(context.cacheDir, "toolchain-download")
+            val active = root.listFiles()!!.single()
+            val old = System.currentTimeMillis() - 2 * ABANDONED_DOWNLOAD_AGE_MS
+            assertTrue(active.setLastModified(old))
+            val samePack = File(root, "toolchain_test-earlier").apply { mkdirs(); setLastModified(old) }
+            val abandoned = File(root, "toolchain_other-earlier").apply { mkdirs(); setLastModified(old) }
+            val fresh = File(root, "toolchain_other-fresh").apply { mkdirs() }
+            val extractedLibrary = File(active, "toolchain_test/usr/lib/libtest.so")
+            if (phase != "download") assertTrue(extractedLibrary.isFile)
+
+            val launching = ToolchainManager(context)
+            launching.repairInstalledToolchains()
+            awaitLaunchPass(launching)
+
+            assertTrue(active.isDirectory, "launch cleanup removed the $phase source")
+            if (phase != "download") assertTrue(extractedLibrary.isFile)
+            assertTrue(samePack.isDirectory, "all staging for a live pack must stay")
+            assertFalse(abandoned.exists(), "an unrelated old stage was not reclaimed")
+            assertTrue(fresh.isDirectory, "an unrelated fresh stage was reclaimed")
+        } finally {
+            release.countDown()
+            awaitLaunchPass(downloading)
+        }
+        assertTrue(statuses().contains(AssetPackStatus.COMPLETED), "$events; $reasons")
+        assertTrue(reasons.isEmpty(), "$reasons")
+        assertTrue(payload.contentEquals(File(filesDir, "usr/opt/test/payload.bin").readBytes()))
+        assertTrue(library.contentEquals(File(filesDir, "usr/lib/libtest.so").readBytes()))
+    }
+
+    @Test
+    fun `launch cleanup keeps staging while an install claim has no HTTP transfer`() {
+        val root = File(context.cacheDir, "toolchain-download/toolchain_test-earlier").apply { mkdirs() }
+        assertTrue(root.setLastModified(System.currentTimeMillis() - 2 * ABANDONED_DOWNLOAD_AGE_MS))
+        val installing = ToolchainManager(context)
+        val claim = ToolchainManager::class.java.getDeclaredMethod("claimPack", String::class.java, Boolean::class.javaPrimitiveType)
+            .apply { isAccessible = true }
+        val release = ToolchainManager::class.java.getDeclaredMethod("releasePackClaim", String::class.java)
+            .apply { isAccessible = true }
+        assertTrue(claim.invoke(installing, "toolchain_test", false) as Boolean)
+        assertFalse(ToolchainManager.packsDownloading().containsKey("toolchain_test"))
+        try {
+            val launching = ToolchainManager(context)
+            launching.repairInstalledToolchains()
+            awaitLaunchPass(launching)
+            assertTrue(root.isDirectory, "an install's staging was reclaimed")
+        } finally {
+            release.invoke(installing, "toolchain_test")
+        }
+    }
+
     /**
      * The ZIP path installs from its own staging tree, so a removal of Play's copy of
      * the pack, which a cancel on a Play install posts, is none of its business.

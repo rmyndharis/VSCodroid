@@ -347,12 +347,19 @@ termux_copy_notices "$PACK_ASSETS/usr" "${REQUIRED_PACKAGES[@]}"
 echo ""
 echo "Writing manifest.json..."
 
+JDK_BIN_DIR="$JDK_DIR/bin"
+for launcher in java javac jar jshell; do
+    if [ ! -f "$JDK_BIN_DIR/$launcher" ]; then
+        echo "  ERROR: required Java launcher missing: $JDK_BIN_DIR/$launcher" >&2
+        exit 1
+    fi
+done
+
 # Collect all binaries in bin/
 BINARIES='['
 SYMLINKS='{'
 FIRST_BIN=true
 FIRST_SYM=true
-JDK_BIN_DIR="$JDK_DIR/bin"
 if [ -d "$JDK_BIN_DIR" ]; then
     for bin in "$JDK_BIN_DIR"/*; do
         [ -f "$bin" ] || [ -L "$bin" ] || continue

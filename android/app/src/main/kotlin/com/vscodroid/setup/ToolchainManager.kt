@@ -291,6 +291,13 @@ class ToolchainManager(private val context: Context) {
             "git-editor.sh", "git-editor-empty.sh",
         )
 
+        private const val GIT_CORE_DIR = "usr/lib/git-core"
+        private val GIT_CORE_SCRIPTS = listOf(
+            "git-submodule", "git-mergetool", "git-filter-branch", "git-subtree",
+            "git-merge-octopus", "git-merge-one-file", "git-merge-resolve",
+            "git-difftool--helper", "git-quiltimport", "git-request-pull", "git-web--browse",
+        )
+
         /** Appended to a git helper's name for the shipped script its link replaced. */
         private const val GIT_HELPER_SUFFIX = ".script"
 
@@ -1885,6 +1892,7 @@ class ToolchainManager(private val context: Context) {
             // Left false, the next launch walks the tree once and marks it then.
             manifest.put(KEY_EXEC_REPAIRED, execBitsSet)
             state.put(manifest)
+            backfillToolchainEnv(state)
             // The record is what the install consists of, as far as everything
             // else is concerned. Without it getInstalledToolchains() does not
             // name the toolchain, the environment below is regenerated from a
@@ -2150,31 +2158,50 @@ class ToolchainManager(private val context: Context) {
     }
 
     /**
-     * The install root the record already holds for [name], or null.
+     * The existing payload the record names for this build, without shared directories or links.
      *
      * [downloadViaHttp] gates on free space before the ZIP carrying the incoming
      * manifest has been fetched, so the persisted record is the only witness
-     * available then of where a previous install of this toolchain put its tree.
+     * available then of where a previous install of this toolchain put its files.
      * A lookup by name rather than through the registry, because an entry can
      * outlive its registry row and because the record is what those files were
      * actually written from.
      *
-     * Null unless the record's `displayName` is [displayName], the registry's name for
+     * No credit unless the record's `displayName` is [displayName], the registry's name for
      * the build about to be downloaded. A reinstall only overwrites the recorded tree
      * when the root stays put, and the one pack that moved it, Java 17 to 21, kept
      * the name `java`: the old tree would be credited against one written beside it.
      * A record that names no build gets no credit either.
      */
-    private fun recordedInstallRoot(name: String, displayName: String?): File? {
+    private fun recordedInstallSpace(name: String, displayName: String?, recordedBytes: Long): InstalledTree {
         val state = readState()
         for (i in 0 until state.length()) {
             val entry = state.optJSONObject(i) ?: continue
             if (entry.optString("name") != name) continue
-            if (displayName == null || entry.optString("displayName") != displayName) return null
-            val root = entry.optString("installRoot", "")
-            return if (root.isEmpty()) null else File(context.filesDir, root)
+            if (displayName == null || entry.optString("displayName") != displayName) return InstalledTree.NONE
+            val paths = buildSet {
+                add(entry.optString("installRoot", ""))
+                ownedPaths(entry).forEach { add(it.relativeTo(context.filesDir).path) }
+                entry.optJSONArray("binaries")?.let { values ->
+                    for (j in 0 until values.length()) add(values.optString(j, ""))
+                }
+                entry.optJSONArray("libs")?.let { values ->
+                    for (j in 0 until values.length()) add("usr/lib/${values.optString(j, "")}")
+                }
+            }.filter(::isOwnedPathName).mapNotNull(::confinedToolchainPath)
+                .filterNot { Files.isSymbolicLink(it.toPath()) }
+            var bytes = 0L
+            var largest = 0L
+            for (path in paths) {
+                // A binary or owned subtree may already be covered by another recorded root.
+                if (paths.any { it != path && path.toPath().startsWith(it.toPath()) }) continue
+                val found = installedTreeSpace(path, context.filesDir, recordedBytes)
+                bytes = minOf(recordedBytes, bytes + found.bytes)
+                largest = maxOf(largest, found.largestFile)
+            }
+            return InstalledTree(bytes, minOf(bytes, largest))
         }
-        return null
+        return InstalledTree.NONE
     }
 
     /**
@@ -2236,21 +2263,18 @@ class ToolchainManager(private val context: Context) {
 
                 // Reserve the stage that holds the most at once, crediting a tree of
                 // this build that is already installed. The incoming payload is not
-                // on disk yet, so the credit comes from the RECORD: its install root
-                // is where a previous install of this toolchain put its files, and it
+                // on disk yet, so the credit comes from the RECORD: its payload paths
+                // are where a previous install of this toolchain put its files, and it
                 // only counts when the record names the build about to be downloaded
-                // ([recordedInstallRoot] compares `displayName`; Java 17 and 21 share
+                // ([recordedInstallSpace] compares `displayName`; Java 17 and 21 share
                 // a pack name and not a root). The credit is an assumption about a
                 // payload nobody has read, so a credited install is measured again
                 // from the real files once they are extracted, below.
                 val stat = StatFs(context.filesDir.absolutePath)
                 val availableBytes = stat.availableBytes
-                val installed = installedTreeSpace(
-                    recordedInstallRoot(
-                        toolchainShortName(packName),
-                        ToolchainRegistry.find(packName)?.displayName,
-                    ),
-                    context.filesDir,
+                val installed = recordedInstallSpace(
+                    toolchainShortName(packName),
+                    ToolchainRegistry.find(packName)?.displayName,
                     unpackedBytes,
                 )
                 val requiredBytes = toolchainInstallBytes(unpackedBytes, downloadBytes, installed)
@@ -3583,7 +3607,8 @@ class ToolchainManager(private val context: Context) {
         addNpmRows(rows)
         addCodexRows(rows, installed, stateKnown = readable != null)
         val setAside = addGitHelperRows(rows, GIT_EXTENSION_DIST, GIT_HELPER_SCRIPTS) +
-            addGitHelperRows(rows, REMOTE_CLI_DIR, listOf(REMOTE_CLI))
+            addGitHelperRows(rows, REMOTE_CLI_DIR, listOf(REMOTE_CLI)) +
+            addGitHelperRows(rows, GIT_CORE_DIR, GIT_CORE_SCRIPTS)
         linkServerNode()
         val binDir = File(context.filesDir, "usr/bin")
         addInstalledScriptRows(rows, binDir, File(binDir, "python3").absolutePath, "python", "pip")
@@ -3599,9 +3624,8 @@ class ToolchainManager(private val context: Context) {
             Logger.e(tag, "Could not write toolchain-exec.tsv; it still holds the previous table")
             return
         }
-        // The git helpers are reached by the absolute path the extension exports,
-        // never by name, and the remote CLI's own directory is already first on a
-        // terminal's PATH, so none of them gets a link here.
+        // Git finds these helpers through its extension paths or GIT_EXEC_PATH;
+        // the remote CLI is already on PATH. None needs a second link here.
         refreshTrampolineLinks(rows.keys - setAside)
         Logger.i(tag, "Regenerated toolchain-exec.tsv (${rows.size} commands, " +
             "${envRows.size} variables)")
@@ -3920,7 +3944,7 @@ class ToolchainManager(private val context: Context) {
     }
 
     /**
-     * Makes the git extension's helper scripts runnable, and answers the names it
+     * Makes bundled shell helper scripts runnable, and answers the names it
      * gave rows to.
      *
      * The built-in git extension exports `GIT_ASKPASS`, `SSH_ASKPASS` and
@@ -3947,6 +3971,8 @@ class ToolchainManager(private val context: Context) {
      * of file and was refused the same way, with "Permission denied" from every
      * terminal. The kept copy stays in the same directory because the script
      * finds the server tree from its own path.
+     * Git's own commands use the same links, while their sourced libraries stay
+     * readable under GIT_EXEC_PATH.
      */
     private fun addGitHelperRows(
         rows: LinkedHashMap<String, String>,
@@ -3967,7 +3993,12 @@ class ToolchainManager(private val context: Context) {
             }
             if (!kept.isFile) continue
             if (current != target && !relink(link, target)) continue
-            rows.putIfAbsent(name, "$name\t$SYSTEM_SHELL\t${kept.absolutePath}")
+            // git-sh-setup uses $0 for usage and can invoke it again; keep the
+            // runnable name while sourcing the saved text with the caller's arguments.
+            val arguments = if (dir == GIT_CORE_DIR) {
+                "-c\t. \"\$0$GIT_HELPER_SUFFIX\"\t${link.absolutePath}"
+            } else kept.absolutePath
+            rows.putIfAbsent(name, "$name\t$SYSTEM_SHELL\t$arguments")
             served += name
         }
         return served
@@ -4265,7 +4296,7 @@ class ToolchainManager(private val context: Context) {
             try {
                 // Before the derived files below are written from the record, so
                 // that the variable is in the env file and the exec table of this
-                // launch. A value the record already has is never overwritten.
+                // launch. Custom values in the record are kept.
                 backfillToolchainEnvSync()
             } catch (e: Exception) {
                 Logger.w(tag, "Could not add a toolchain's new environment: ${e.message}")
@@ -4324,16 +4355,19 @@ class ToolchainManager(private val context: Context) {
      * between the user and the retry, which then refuses for want of space.
      *
      * Only entries older than [ABANDONED_DOWNLOAD_AGE_MS] are touched, and a
-     * directory whose timestamp cannot be read is left alone. A running download
-     * must never have its staging directory pulled out from under it, and the
-     * cost of leaving one an extra day is a day of disk.
+     * directory whose timestamp cannot be read is left alone. A pack with a
+     * transfer or install outstanding keeps all its staging directories, even
+     * when a clock change makes the active one look old.
      */
     private fun sweepAbandonedDownloadsSync() {
         val root = File(context.cacheDir, "toolchain-download")
         val entries = root.listFiles() ?: return
+        // A transfer publishes its claim before creating its directory, so list first.
+        val inFlight = packsDownloading().keys + installsInFlight
         val now = System.currentTimeMillis()
         var removed = 0
         for (entry in entries) {
+            if (inFlight.any { entry.name.startsWith("$it-") }) continue
             if (!isAbandonedDownload(entry.lastModified(), now)) continue
             StorageManager.deleteRecursive(entry, context.filesDir.parentFile)
             if (!entry.exists() && !Files.isSymbolicLink(entry.toPath())) removed++
@@ -4500,14 +4534,18 @@ class ToolchainManager(private val context: Context) {
     }
 
     /**
-     * Adds the [ENV_BACKFILL] variables an installed toolchain's record lacks.
+     * Adds missing [ENV_BACKFILL] variables and repairs Ruby's legacy gem path.
      *
-     * Runs on every launch and writes only when something is missing, so a record
-     * that has them costs one read. A key the record already holds is left as it
-     * is, whatever its value.
+     * Runs on every launch and writes only when a record changes. Existing values
+     * are kept except for the exact unversioned GEM_PATH shipped with Ruby.
      */
     private fun backfillToolchainEnvSync() = synchronized(stateLock) {
         val state = readState()
+        if (backfillToolchainEnv(state)) writeState(state)
+    }
+
+    /** Repairs older manifests in memory, so an install needs only its existing record write. */
+    private fun backfillToolchainEnv(state: JSONArray): Boolean {
         var changed = false
         for (i in 0 until state.length()) {
             val entry = state.optJSONObject(i) ?: continue
@@ -4519,8 +4557,18 @@ class ToolchainManager(private val context: Context) {
                     changed = true
                 }
             }
+            val legacyGemPath = "\$HOME/.gem/ruby:\$FILESDIR/usr/lib/ruby/gems"
+            if (entry.optString("name") == "ruby" && env.optString("GEM_PATH") == legacyGemPath) {
+                val rubyLib = env.optString("RUBYLIB").substringBefore(':')
+                val abi = rubyLib.removePrefix("\$FILESDIR/usr/lib/ruby/")
+                // The record names the installed ABI, which can predate this app.
+                if (abi != rubyLib && Regex("""\d+\.\d+\.\d+""").matches(abi)) {
+                    env.put("GEM_PATH", "$legacyGemPath/$abi")
+                    changed = true
+                }
+            }
         }
-        if (changed) writeState(state)
+        return changed
     }
 
     /**

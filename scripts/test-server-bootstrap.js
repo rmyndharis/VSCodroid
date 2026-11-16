@@ -188,6 +188,11 @@ const BLACK_FORMATTER = 'ms-python.black-formatter';
 // The script that starts the page on the last theme; see INITIAL_THEME_MARKER.
 const INITIAL_THEME_MARKER = 'vscodroid-initial-theme';
 
+// The script that hands the workbench its first layout decision; see
+// CONFIGURATION_DEFAULTS_MARKER.
+const CONFIGURATION_DEFAULTS_MARKER = 'vscodroid-configuration-defaults';
+const SECONDARY_SIDE_BAR = 'workbench.secondarySideBar.defaultVisibility';
+
 // The object the app gives the page to post its colour to, read from the Kotlin
 // side, so that a page script posting under another name fails here.
 const PAGE_COLOR_OBJECT = (() => {
@@ -671,7 +676,7 @@ async function exitingBootstrapPreservesReplacementNote() {
     // server.js, where nothing else would notice a missing bracket until a device
     // silently stopped applying the list.
     const bodies = [...once.matchAll(/<script>\n([\s\S]*?)\n\t\t<\/script>/g)].map((m) => m[1]);
-    assert.strictEqual(bodies.length, 3, `expected the three injected scripts, got ${bodies.length}`);
+    assert.strictEqual(bodies.length, 4, `expected the four injected scripts, got ${bodies.length}`);
     bodies.forEach((b) => new Function(b)); // eslint-disable-line no-new-func -- a parse check
 
     // The page is also given the extension recommendations, and they have to land
@@ -722,6 +727,46 @@ async function exitingBootstrapPreservesReplacementNote() {
             entry.onFileOpen.some((c) => c.languages.includes('python')),
             'nothing recommends the formatter for Python',
         );
+
+        // The layout decides which side bars to open once, before the welcome
+        // extension's contributed defaults exist, so the one that keeps the Chat bar
+        // shut has to be in the construction options themselves. Under
+        // `configurationDefaults`, which the browser's default configuration
+        // registers when it is built; anywhere else in the settings is read by
+        // nothing.
+        assert.strictEqual(
+            settings.configurationDefaults?.[SECONDARY_SIDE_BAR], 'hidden',
+            `${SECONDARY_SIDE_BAR} did not reach the page's configurationDefaults`,
+        );
+
+        // The same script on a page that already carries defaults of its own: the
+        // entries stay, and a value already given for the key is the page's choice.
+        const body = bodies.find((b) => b.includes(CONFIGURATION_DEFAULTS_MARKER));
+        assert.ok(body, 'no injected script carries the configuration defaults marker');
+        const carried = { configurationDefaults: { 'editor.fontSize': 20, [SECONDARY_SIDE_BAR]: 'visible' } };
+        const carriedEl = {
+            getAttribute: () => JSON.stringify(carried),
+            setAttribute: (_name, value) => Object.assign(carried, JSON.parse(value)),
+        };
+        new Function('document', body)({ // eslint-disable-line no-new-func
+            getElementById: (id) => (id === 'vscode-workbench-web-configuration' ? carriedEl : null),
+        });
+        assert.strictEqual(carried.configurationDefaults['editor.fontSize'], 20,
+            'the script dropped a default the page already carried');
+        assert.strictEqual(carried.configurationDefaults[SECONDARY_SIDE_BAR], 'visible',
+            'the script overwrote a value the page already gave for the key');
+
+        // The extension contributes the same default for the same key, and that is the
+        // value a device ends up on once the extension host is up. A second copy that
+        // drifts would start the page one way and settle it another, which is the flash
+        // this removes turned into a different one.
+        const extensions = path.join(__dirname, '..', 'android/app/src/main/assets/extensions');
+        const welcome = fs.readdirSync(extensions).filter((n) => n.startsWith('vscodroid.vscodroid-welcome-'));
+        assert.strictEqual(welcome.length, 1, `expected one bundled welcome extension, got ${welcome.length}`);
+        const contributed = JSON.parse(fs.readFileSync(path.join(extensions, welcome[0], 'package.json'), 'utf8'))
+            .contributes.configurationDefaults[SECONDARY_SIDE_BAR];
+        assert.strictEqual(settings.configurationDefaults[SECONDARY_SIDE_BAR], contributed,
+            `the page starts on a different ${SECONDARY_SIDE_BAR} than the welcome extension contributes`);
     }
 
     const twice = boot(dir);
@@ -1693,7 +1738,7 @@ async function exitingBootstrapPreservesReplacementNote() {
     const page = fs.readFileSync(pagePath, 'utf8');
     const injected = [...page.matchAll(/<script nonce="\{\{WORKBENCH_SCRIPT_NONCE\}\}">\n(\t\t\t\/\* vscodroid-[\s\S]*?)\n\t\t<\/script>/g)];
     assert.strictEqual(
-        injected.length, 3,
+        injected.length, 4,
         `the injected scripts do not carry the page's nonce, so its policy refuses them:\n${page}`,
     );
     assert.ok(!/\n\t\t<script>\n/.test(page), 'a bare <script> was injected into a page trusted by nonce');
@@ -1714,6 +1759,10 @@ async function exitingBootstrapPreservesReplacementNote() {
     assert.ok(
         /Could not widen the trusted link domains/.test(run.output),
         `a page this cannot extend should be named:\n${run.output}`,
+    );
+    assert.ok(
+        /Could not add the first-layout defaults/.test(run.output),
+        `the first-layout defaults should name a page they cannot extend:\n${run.output}`,
     );
     fs.rmSync(dir, { recursive: true, force: true });
 }

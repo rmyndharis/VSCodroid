@@ -157,24 +157,13 @@ class SetupAbortsOnIncompleteTreeTest {
     }
 
     /**
-     * And the same one level down, which is not a corollary: `extractAssetDir`
-     * recurses into itself, so the refusal above is reached once per path in the
-     * tree and a leaf is where all but a handful of them are.
-     *
-     * Aborting there too is the intended answer, and it is pinned here rather
-     * than left to be inferred from a case that only stubs the root. Degrading a
-     * leaf to the old `?: emptyArray()` sends it to `extractAssetFile`, which is
-     * harmless exactly when the asset can still be opened and is the original
-     * defect when it cannot: an asset it fails to open is reported as absent,
-     * which answers true, so an unanswerable listing would certify a tree with a
-     * file missing from it. The same reasoning as at the root, one level down.
-     *
-     * NEGATIVE CONTROL: restore `?: emptyArray()` in `extractAssetDir`. This
-     * fixture can open the asset, so the leaf extracts and the run reports
-     * SUCCESS, which is what both assertions below refuse.
+     * When a listed child under the server tree cannot be opened, [extractAssetChild]
+     * falls back to listing it as a directory, and a null or empty listing must
+     * abort the install rather than certifying an empty subtree.
      */
     @Test
-    fun `an entry under the server tree the platform cannot list is not certified either`() {
+    fun `an unopenable entry under the server tree the platform cannot list is not certified either`() {
+        every { assets.open("vscode-reh/server-main.js") } throws java.io.IOException("unreadable listed asset")
         every { assets.list("vscode-reh/server-main.js") } returns null
 
         val result = runBlocking { FirstRunSetup(context).runSetup() }
@@ -182,7 +171,26 @@ class SetupAbortsOnIncompleteTreeTest {
         assertNotEquals(
             FirstRunSetup.SetupResult.SUCCESS,
             result,
-            "a listing the platform could not answer was read as an unpacked file",
+            "an unopenable entry whose listing returned null was certified as unpacked",
+        )
+        assertFalse(
+            File(filesDir, "server/vscode-reh/server-main.js").exists(),
+            "nothing was written, so reporting anything but a failure certifies an empty tree",
+        )
+        verify(exactly = 0) { editor.putString(SETUP_VERSION_KEY, any()) }
+    }
+
+    @Test
+    fun `an unopenable entry under the server tree whose listing is empty aborts required extraction`() {
+        every { assets.open("vscode-reh/server-main.js") } throws java.io.IOException("unreadable listed asset")
+        every { assets.list("vscode-reh/server-main.js") } returns emptyArray()
+
+        val result = runBlocking { FirstRunSetup(context).runSetup() }
+
+        assertNotEquals(
+            FirstRunSetup.SetupResult.SUCCESS,
+            result,
+            "an unopenable entry whose listing was empty was certified as unpacked",
         )
         assertFalse(
             File(filesDir, "server/vscode-reh/server-main.js").exists(),
@@ -346,7 +354,7 @@ class SetupAbortsOnIncompleteTreeTest {
         blockTheServerWrite()
         val setup = FirstRunSetup(context, 0, 0, 0, 0)
         assertEquals(FirstRunSetup.SetupResult.ERROR, runBlocking { setup.runSetup() })
-        assertEquals(SetupStepStrings.text("setup_step_tools").trimEnd('.', ' ', '\u2026'),
+        assertEquals(SetupStepStrings.text("setup_step_server").trimEnd('.', ' ', '\u2026'),
             setup.lastFailure!!.step)
         every { assets.list("") } throws IllegalStateException("asset listing unavailable")
 

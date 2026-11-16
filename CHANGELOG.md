@@ -25,7 +25,29 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The editor's context menu scrolls with a finger when it does not fit the screen.
 - A tap on the color square beside a CSS color opens the color picker.
 - A finger can drag the caret while a peek view is open.
+- A chord started from the extra key row, such as Esc Esc, Ctrl+K Z or Ctrl+K Ctrl+S, keeps the keyboard up and takes the next key as its second key.
+- Ctrl then C or X on the extra key row copies and cuts in the editor and in text boxes.
+- Enter on a keyboard that underlines words carries a Ctrl or Alt latched on the extra key row, and the latch no longer reaches the next letter.
+- The Chat side bar no longer opens for a moment on the first launch.
+- A download saved over an existing file replaces it whole instead of leaving the end of the old file behind.
+- A download that fails or is cancelled before it has fully arrived leaves the file it was to replace as it was; a failure while that file is being replaced can still leave it partly written.
+- The notice after a download names the file as it was saved when its name was changed in the save dialog.
+- `git log`, `git diff` and other paged git commands print in the terminal instead of stopping with a pager error.
+- Clone Repository in Source Control completes, with and without submodules.
+- `irb`, `rake` and the other gems bundled with the Ruby toolchain start, on new and existing installs.
+- The first start after an install or an update shows the setup screen at once instead of a dark, empty window.
+- The setup bar moves from the start instead of standing empty while the app measures the storage space it needs.
+- The setup screen shows its progress again after a return from another setup screen.
+- A setup error names the step that failed.
+- Setup no longer asks for storage space for bundled extensions it will skip.
+- Reinstalling the C/C++ toolchain from a GitHub release counts its files already installed when it checks for storage space.
+- A restart of the editor's server no longer leaves the previous editor process running when its record file could not be written.
+- Starting the app no longer removes the files of a toolchain download or install that is still in progress.
 - Reading a device folder no longer keeps the processor busy while the app that provides the folder has no data to give.
+- The editor server's log files keep recording after one failed switch to a new file.
+- The process count in the status bar no longer shows a reading dated in the future as current.
+- The app's log files and crash reports no longer record a password inside a URL, or the editor's internal run key from a page message.
+- A Markdown preview or an extension's view can no longer read the editor's internal run key from a temporary file.
 
 ## [1.8.0] - 2026-11-09
 
