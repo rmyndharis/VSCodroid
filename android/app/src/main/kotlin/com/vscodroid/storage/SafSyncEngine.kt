@@ -14,6 +14,7 @@ import java.io.Closeable
 import java.io.File
 import java.io.IOException
 import java.io.InputStream
+import java.io.InterruptedIOException
 import java.io.OutputStream
 import java.io.PushbackInputStream
 import java.nio.channels.Channels
@@ -7014,20 +7015,49 @@ class SafSyncEngine(private val context: Context) {
             }
         }
 
+        /** Waits for a non-blocking provider without spinning or waiting forever without bytes. */
+        internal class StreamReader(
+            private val idleWaitMs: Long = PROVIDER_CLAIM_WAIT_MS,
+            private val pauseMs: Long = 10L,
+            private val nanoTime: () -> Long = System::nanoTime,
+            private val pause: (Long) -> Unit = Thread::sleep,
+        ) {
+            fun read(input: InputStream, buffer: ByteArray, offset: Int = 0, length: Int = buffer.size - offset): Int {
+                var idleSince: Long? = null
+                while (true) {
+                    val count = input.read(buffer, offset, length)
+                    if (count != 0 || length == 0) return count
+                    if (Thread.currentThread().isInterrupted) {
+                        throw InterruptedIOException("The stream read was interrupted")
+                    }
+                    val now = nanoTime()
+                    val started = idleSince ?: now.also { idleSince = it }
+                    val left = idleWaitMs - TimeUnit.NANOSECONDS.toMillis(now - started)
+                    if (left <= 0) throw IOException("The stream supplied no bytes before its wait expired")
+                    try {
+                        pause(minOf(pauseMs, left))
+                    } catch (_: InterruptedException) {
+                        Thread.currentThread().interrupt()
+                        throw InterruptedIOException("The stream read was interrupted")
+                    }
+                }
+            }
+        }
+
         /**
          * The SHA-256 of what [input] holds and how many bytes that is, or null as soon as
          * it holds more than [limit].
          */
-        private fun sha256(input: InputStream, limit: Long): Pair<ByteArray, Long>? {
+        private fun sha256(input: InputStream, limit: Long, reader: StreamReader = StreamReader()): Pair<ByteArray, Long>? {
             val digest = MessageDigest.getInstance("SHA-256")
             val buffer = ByteArray(COPY_BUFFER_SIZE)
             var total = 0L
-            var read = input.read(buffer)
+            var read = reader.read(input, buffer)
             while (read >= 0) {
                 total += read
                 if (total > limit) return null
                 digest.update(buffer, 0, read)
-                read = input.read(buffer)
+                read = reader.read(input, buffer)
             }
             return digest.digest() to total
         }
@@ -7037,14 +7067,13 @@ class SafSyncEngine(private val context: Context) {
          * answers how many that was: zero for an end that came first, where `read` says -1.
          *
          * `InputStream.readNBytes(byte[], int, int)` with the same contract, which is API 33.
-         * The loop is the one the JDK's own default runs, so a short read is waited out and
-         * not taken for the end of the document, which is what the three comparisons above
-         * depend on.
+         * Short reads are waited out rather than taken for the end of the document.
+         * Zero-byte provider reads use [StreamReader]'s bounded wait.
          */
-        private fun readFully(input: InputStream, buffer: ByteArray, length: Int): Int {
+        private fun readFully(input: InputStream, buffer: ByteArray, length: Int, reader: StreamReader = StreamReader()): Int {
             var filled = 0
             while (filled < length) {
-                val count = input.read(buffer, filled, length - filled)
+                val count = reader.read(input, buffer, filled, length - filled)
                 if (count < 0) break
                 filled += count
             }
@@ -7055,15 +7084,15 @@ class SafSyncEngine(private val context: Context) {
          * Copies [input] into [output] and answers how many bytes that was, or null as soon as
          * it holds more than [limit], having written no more than [limit] of them.
          */
-        private fun copyAtMost(input: InputStream, output: OutputStream, limit: Long): Long? {
+        private fun copyAtMost(input: InputStream, output: OutputStream, limit: Long, reader: StreamReader = StreamReader()): Long? {
             val buffer = ByteArray(COPY_BUFFER_SIZE)
             var total = 0L
-            var read = input.read(buffer)
+            var read = reader.read(input, buffer)
             while (read >= 0) {
                 total += read
                 if (total > limit) return null
                 output.write(buffer, 0, read)
-                read = input.read(buffer)
+                read = reader.read(input, buffer)
             }
             return total
         }
