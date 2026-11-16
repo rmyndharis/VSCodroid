@@ -22,7 +22,7 @@ const callback = method.slice(start, end - 1)
 
 const injections = ['injectSafeAreaCSS', 'injectBridgeRelay', 'injectMemoryPressureHandler',
     'injectTouchTargetCSS', 'injectKeyboardGuard', 'injectTouchContextMenu', 'injectCaretDrag',
-    'injectListEditKeeper', 'injectComposingEnter', 'injectLeaveCurtain', 'injectFullScreenShim',
+    'injectListEditKeeper', 'injectComposingEnter', 'injectTerminalTypedCharacters', 'injectLeaveCurtain', 'injectFullScreenShim',
     'injectWindowOpenOverride',
     'injectClipboardReadFallback', 'injectDownloadCapture'];
 

@@ -5,14 +5,14 @@
     of the page, which is exactly where VS Code anchors the chat toolbar, so the
     model picker and Send button could be seen but never tapped.
 -->
-<LinearLayout xmlns:android="http://schemas.android.com/apk/res/android"
+<com.vscodroid.keyboard.BackObserverLayout xmlns:android="http://schemas.android.com/apk/res/android"
     android:id="@+id/webViewContainer"
     android:layout_width="match_parent"
     android:layout_height="match_parent"
     android:orientation="vertical">
 
     <!-- VS Code Web UI rendered in WebView -->
-    <WebView
+    <com.vscodroid.webview.EditorWebView
         android:id="@+id/webView"
         android:layout_width="match_parent"
         android:layout_height="0dp"
@@ -25,4 +25,4 @@
         android:layout_height="wrap_content"
         android:visibility="gone" />
 
-</LinearLayout>
+</com.vscodroid.keyboard.BackObserverLayout>

@@ -27,9 +27,11 @@ import android.system.ErrnoException
 import android.system.Os
 import android.system.OsConstants
 import android.text.util.Linkify
+import android.view.InputDevice
 import android.view.KeyEvent
 import android.view.MotionEvent
 import android.view.View
+import android.view.ViewConfiguration
 import android.webkit.CookieManager
 import android.webkit.RenderProcessGoneDetail
 import android.webkit.WebResourceRequest
@@ -73,6 +75,8 @@ import com.vscodroid.bridge.AndroidBridge
 import com.vscodroid.bridge.AuthTabWindow
 import com.vscodroid.bridge.ClipboardBridge
 import com.vscodroid.bridge.SecurityManager
+import com.vscodroid.keyboard.BackObserverLayout
+import com.vscodroid.keyboard.EdgeBackGesture
 import com.vscodroid.keyboard.ExtraKeyRow
 import com.vscodroid.keyboard.HardwareTyping
 import com.vscodroid.keyboard.KeyInjector
@@ -94,6 +98,7 @@ import com.vscodroid.webview.DocumentMeasure
 import com.vscodroid.webview.DownloadCoordinator
 import com.vscodroid.webview.DownloadHost
 import com.vscodroid.webview.DownloadOutcome
+import com.vscodroid.webview.EditorWebView
 import com.vscodroid.webview.OpenDocument
 import com.vscodroid.webview.VSCodroidWebChromeClient
 import com.vscodroid.webview.VSCodroidWebView
@@ -122,6 +127,7 @@ import org.json.JSONArray
 import org.json.JSONException
 import org.json.JSONObject
 import kotlin.concurrent.thread
+import kotlin.math.roundToInt
 import kotlinx.coroutines.CancellationException
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.NonCancellable
@@ -149,10 +155,18 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         now = { SystemClock.uptimeMillis() },
         imeVisible = { extraKeyRow?.imeVisible == true },
         onDismissed = {
+            // A keyboard the person put away is not one to answer yes for: the hold of the editor answer ends with it.
+            endTextEditorHold()
             webView?.evaluateJavascript(
                 "if (window.__vscodroidKeyboardDismissed) window.__vscodroidKeyboardDismissed();",
                 null,
             )
+        },
+        onReport = { state -> logKeyboardHidden(state) },
+        onExplicitDismissed = { ageMs ->
+            endTextEditorHold()
+            val gestureAtMs = System.currentTimeMillis() - ageMs
+            webView?.evaluateJavascript("window.__vscodroidKeyboardDismissed && window.__vscodroidKeyboardDismissed(true, $gestureAtMs);", null)
         },
     )
 
@@ -972,7 +986,14 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
      */
     override fun onWindowFocusChanged(hasFocus: Boolean) {
         super.onWindowFocusChanged(hasFocus)
+        logWindowFocus(hasFocus)
         if (hasFocus && workspacePrefs.getBoolean(KEY_FULL_SCREEN, false)) applyFullScreen(true)
+    }
+
+    override fun onPause() {
+        super.onPause()
+        // A window that is leaving is not one to answer yes for.
+        endTextEditorHold()
     }
 
     override fun onResume() {
@@ -1334,15 +1355,17 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
      * The manifest's `configChanges` keeps the activity across a turn of the phone,
      * a resize or a fold, so this is where one is seen. The keyboard is reported
      * hidden with it and comes back by itself, [keyboardDismissal] must not hold
-     * the page's editor down for that. Finish any composing word and release the
-     * old native input connection before the keyboard edits the new selection, the
-     * second only while the person is aimed at text: the refocus it makes reaches
+     * the page's editor down for that. Let the keyboard commit its word before
+     * finishing the composition and releasing the old native input connection,
+     * the second only while the person is aimed at text: the refocus it makes reaches
      * the page's focus handler as a new focus, which after a drag outside text
      * holds the host and takes a keyboard that stayed up away.
      */
     override fun onConfigurationChanged(newConfig: Configuration) {
         super.onConfigurationChanged(newConfig)
-        keyboardDismissal.turned()
+        armTextEditorHold(keyboardDismissal.turned())
+        edgeBackGesture.lifted()
+        keyboardDismissal.edgeLifted()
         finishKeyboardCompositionOnTurn()
         // The keyboard the extra key row stood aside for is gone, a Bluetooth one
         // asleep or unpaired, and the soft keyboard is what is left. A touch would
@@ -1352,28 +1375,48 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         }
     }
 
+    private var keyboardCompositionTurn = 0
+
     private fun finishKeyboardCompositionOnTurn() {
         val targetView = webView ?: return
         val generation = AuthTabWindow.pageGeneration()
-        targetView.evaluateJavascript(
-            """
-            (function() {
-                if (typeof window.__vscodroidFinishComposition !== 'function') return false;
-                var element = document.activeElement;
-                window.__vscodroidFinishComposition();
-                var aimed = typeof window.__vscodroidAimedAtText === 'function' && window.__vscodroidAimedAtText();
-                return !!(aimed && element && element === document.activeElement && element.editContext &&
-                    element.getAttribute('inputmode') !== 'none');
-            })();
-            """.trimIndent(),
-        ) { editable ->
-            if (editable != "true" || webView !== targetView ||
-                AuthTabWindow.pageGeneration() != generation || isFinishing || isDestroyed ||
-                !targetView.isFocused || !targetView.hasWindowFocus()) return@evaluateJavascript
-            // Release the old native input connection as well as the page's composing range.
-            targetView.clearFocus()
-            targetView.requestFocus()
+        val turn = ++keyboardCompositionTurn
+        var attempts = 0
+        fun attempt(start: Boolean) {
+            if (webView !== targetView || keyboardCompositionTurn != turn ||
+                AuthTabWindow.pageGeneration() != generation || isFinishing || isDestroyed) return
+            attempts += 1
+            targetView.evaluateJavascript(
+                """
+                (function() {
+                    if (typeof window.__vscodroidFinishCompositionOnTurn !== 'function') return false;
+                    return window.__vscodroidFinishCompositionOnTurn($start);
+                })();
+                """.trimIndent(),
+            ) { editable ->
+                if (webView !== targetView || keyboardCompositionTurn != turn ||
+                    AuthTabWindow.pageGeneration() != generation || isFinishing || isDestroyed) return@evaluateJavascript
+                if (editable == "\"wait\"") {
+                    // Asked again with or without the focus: the window can lose it for a
+                    // moment after a turn, and a poll dropped there leaves the page's wait standing.
+                    if (Logger.debugEnabled && (!targetView.isFocused || !targetView.hasWindowFocus())) {
+                        Logger.d(
+                            tag,
+                            "turn wait asked again without the focus: focused=${targetView.isFocused} " +
+                                "windowFocus=${targetView.hasWindowFocus()} attempt=$attempts",
+                        )
+                    }
+                    targetView.postDelayed({ attempt(false) }, 50L)
+                } else if (editable == "true") {
+                    // Release the old native connection only after the page's wait has ended too,
+                    // and only to a view that still has the focus.
+                    if (!targetView.isFocused || !targetView.hasWindowFocus()) return@evaluateJavascript
+                    targetView.clearFocus()
+                    targetView.requestFocus()
+                }
+            }
         }
+        attempt(true)
     }
 
     override fun onTrimMemory(level: Int) {
@@ -2264,6 +2307,7 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
 
     private fun setupWebView() {
         AuthTabWindow.beginPage()
+        endTextEditorHold()
         webView = findViewById(R.id.webView)
         webView?.let { wv ->
             VSCodroidWebView.configure(wv)
@@ -2286,6 +2330,14 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
             // has to come back with one.
             wv.setDownloadListener { url, _, contentDisposition, _, _ ->
                 downloads.onDownloadStart(url, contentDisposition)
+            }
+            // The refocus a turn makes (clearFocus, then requestFocus) anchors [KeyboardDismissal.AFTER_REFOCUS_MS] for later hide reports and extends
+            // [TextEditorHold.refocused]. A WebView rebuilt for a renderer crash comes through here as well.
+            wv.onFocusChangeListener = View.OnFocusChangeListener { _, hasFocus ->
+                if (hasFocus) {
+                    keyboardDismissal.refocused()
+                    (wv as? EditorWebView)?.textEditorHold?.refocused()
+                }
             }
             wv.webViewClient = bootstrapClient()
             // Show a loading placeholder while Node.js starts
@@ -2543,8 +2595,60 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         // The keyboard guard holds the keyboard down again once it has gone.
         extraKeyRow?.onImeVisibilityChanged = { visible ->
             webView?.evaluateJavascript("window.__vscodroidImeVisible = $visible;", null)
+            if (visible) keyboardDismissal.shown()
             if (!visible) keyboardDismissal.hidden()
         }
+        // Where the platform hands the activity a Back ahead of the soft keyboard, the keyboard a person closes with it is told apart from one the
+        // system took away: see [KeyboardDismissal.backSeen].
+        findViewById<BackObserverLayout>(R.id.webViewContainer).onBack = { eventTimeMs ->
+            keyboardDismissal.backSeen(eventTimeMs)
+            endTextEditorHold()
+        }
+    }
+
+    /**
+     * One debug line for each report of the keyboard hidden: what the decision that follows reads ([state], from [KeyboardDismissal.describe]) and what
+     * the WebView says about itself at that moment: whether it is a text editor to the input method without the hold (the system hides a keyboard when
+     * a focused view is none), the hold's state, whether the view holds the focus and whether the window does. Ages and flags only: no text, no token, no path.
+     */
+    private fun logKeyboardHidden(state: String) {
+        val view = webView
+        val editor = view as? EditorWebView
+        Logger.d(
+            tag,
+            "keyboard hidden: $state editor=${editor?.realTextEditor()} ${editor?.textEditorHold?.describe()} focused=${view?.isFocused} windowFocus=${view?.hasWindowFocus()}",
+        )
+    }
+
+    /**
+     * One debug line at each change of the window's focus, written before the platform's own call in the same message ([android.view.ViewRootImpl] hands the
+     * focus change to the views and then tells the input method service, with the answer of the focused view): what that answer is about to be. The window
+     * flag, whether the WebView holds the view focus, the class of the view that does, the real answer and the hold's state, and the decision's ages. Class
+     * names, ages and flags only: no text, no token, no path.
+     */
+    private fun logWindowFocus(hasFocus: Boolean) {
+        if (!Logger.debugEnabled) return
+        val view = webView as? EditorWebView
+        Logger.d(
+            tag,
+            "window focus: has=$hasFocus webViewFocused=${view?.isFocused} focusOwner=${window.decorView.findFocus()?.javaClass?.simpleName} " +
+                "editor=${view?.realTextEditor()} ${view?.textEditorHold?.describe()} ${keyboardDismissal.describe()}",
+        )
+    }
+
+    /**
+     * Called from [onConfigurationChanged]. Holds the WebView's answer "text editor" through the turn that [keyboardUp] says found the keyboard up, when the page is an
+     * editor to the platform right now: the window gains the focus again after a turn, and a window that says it has no editor then loses its keyboard. See
+     * [com.vscodroid.webview.TextEditorHold]. A turn that found the keyboard down, or a page that is not an editor, arms nothing and ends a hold
+     * that an earlier turn left.
+     */
+    private fun armTextEditorHold(keyboardUp: Boolean) {
+        val view = webView as? EditorWebView ?: return
+        if (keyboardUp && view.realTextEditor()) view.textEditorHold.arm() else view.textEditorHold.end()
+    }
+
+    private fun endTextEditorHold() {
+        (webView as? EditorWebView)?.textEditorHold?.end()
     }
 
     /**
@@ -2662,13 +2766,103 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
      * from under the finger before the tap was over, and a tap is placed on the page
      * as it is when the finger lifts. Delivered first, the tap lands on the page the
      * finger was put on and only then does the page give way.
+     *
+     * The pair of touch events a back gesture makes is noted here too: [noteEdgeBackGesture].
      */
     override fun dispatchTouchEvent(ev: MotionEvent): Boolean {
         val handled = super.dispatchTouchEvent(ev)
+        noteEdgeBackGesture(ev)
         if (ev.actionMasked == MotionEvent.ACTION_UP && HardwareTyping.isScreenTouch(ev.source)) {
             extraKeyRow?.hiddenForHardwareKeyboard = false
         }
         return handled
+    }
+
+    private val edgeBackGesture = EdgeBackGesture()
+
+    /**
+     * Observation only, after the delegate, like [noteHardwareTyping]: a finger that went down within a side's `systemGestures()` back-gesture region and was
+     * cancelled by the system, or flicked inward past touch slop and lifted within [KeyboardDismissal.EDGE_PAIR_MS], is the back gesture, and where the activity
+     * is not handed the Back key ahead of the keyboard (Android 13 and 14 with the keyboard up, and Android 16 for an app that targets 36) it is the one trace of
+     * a Back the activity gets ([KeyboardDismissal.edgeGesture]). Three-button navigation reports zero width on both sides so nothing is armed, missing insets
+     * before attach arm nothing, and touches inside the top status/cutout inset or bottom gesture strip are not armed. Read here and not in the root layout because
+     * a layout is handed the cancel only while one of its views holds the touch, and a touch that goes down on the padding the insets leave beside a cutout has no
+     * such view; the activity is handed every event of the window.
+     */
+    private fun noteEdgeBackGesture(ev: MotionEvent) {
+        when (ev.actionMasked) {
+            MotionEvent.ACTION_DOWN -> {
+                val toolType = ev.getToolType(0)
+                val pointerSupported = HardwareTyping.isScreenTouch(ev.source) &&
+                    (toolType == MotionEvent.TOOL_TYPE_FINGER || toolType == MotionEvent.TOOL_TYPE_STYLUS)
+                val rootInsets = window.decorView.rootWindowInsets?.let {
+                    WindowInsetsCompat.toWindowInsetsCompat(it, window.decorView)
+                }
+                val topInset = rootInsets
+                    ?.getInsets(WindowInsetsCompat.Type.statusBars() or WindowInsetsCompat.Type.displayCutout())
+                    ?.top ?: 0
+                val gestureInsets = rootInsets?.getInsets(WindowInsetsCompat.Type.systemGestures())
+                val bottomInset = gestureInsets?.bottom ?: 0
+                val windowHeight = window.decorView.height.toFloat()
+                if (!pointerSupported || ev.y < topInset.toFloat() ||
+                    (bottomInset > 0 && windowHeight > 0f && ev.y >= windowHeight - bottomInset.toFloat())
+                ) {
+                    edgeBackGesture.lifted()
+                    keyboardDismissal.edgeLifted()
+                    return
+                }
+                val touchSlop = ViewConfiguration.get(this).scaledTouchSlop.toFloat()
+                if (edgeBackGesture.down(
+                        ev.x,
+                        window.decorView.width.toFloat(),
+                        gestureInsets?.left,
+                        gestureInsets?.right,
+                        ev.y,
+                        touchSlop,
+                    )
+                ) {
+                    keyboardDismissal.edgeDown()
+                } else {
+                    keyboardDismissal.edgeLifted()
+                }
+            }
+            MotionEvent.ACTION_MOVE -> edgeBackGesture.move(ev.x, ev.y)
+            MotionEvent.ACTION_POINTER_DOWN, MotionEvent.ACTION_POINTER_UP -> {
+                edgeBackGesture.lifted()
+                keyboardDismissal.edgeLifted()
+            }
+            MotionEvent.ACTION_UP -> {
+                val spanMs = ev.eventTime - ev.downTime
+                val trace = edgeBackGesture.finishUp(ev.x, ev.y, spanMs, KeyboardDismissal.EDGE_PAIR_MS)
+                finishEdgeTouch("up", spanMs, trace, trace?.matched == true, ev.eventTime)
+            }
+            MotionEvent.ACTION_CANCEL -> {
+                val spanMs = ev.eventTime - ev.downTime
+                val trace = edgeBackGesture.finishCancel(ev.x, ev.y)
+                finishEdgeTouch("cancel", spanMs, trace, trace != null, ev.eventTime)
+            }
+        }
+    }
+
+    private fun finishEdgeTouch(
+        ended: String,
+        spanMs: Long,
+        trace: EdgeBackGesture.EndTrace?,
+        recordPair: Boolean,
+        eventTimeMs: Long,
+    ) {
+        if (trace == null) {
+            keyboardDismissal.edgeLifted()
+            return
+        }
+        if (recordPair) keyboardDismissal.edgeGesture(spanMs, eventTimeMs) else keyboardDismissal.edgeLifted()
+        val counted = recordPair && spanMs in 0L until KeyboardDismissal.EDGE_PAIR_MS
+        Logger.d(
+            tag,
+            "edge back gesture: ended=$ended counted=$counted span=${spanMs}ms " +
+                "dx=${trace.horizontalTravelPx.roundToInt()}px maxInward=${trace.maxInwardPx.roundToInt()}px " +
+                keyboardDismissal.describe(),
+        )
     }
 
     private fun requestNotificationPermission() {
@@ -3010,6 +3204,7 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         // afterwards should be told it is. recreateWebView clears this for the
         // same reason when it throws the loaded page away.
         workbenchLoaded = false
+        endTextEditorHold()
         // Answered from the control rather than by each caller, so the two pages
         // cannot drift apart on it: the one whose control is the reload is the
         // one that refuses an unasked reload, and the gave-up page, whose control
@@ -3942,6 +4137,7 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
             // Makes Enter on the soft keyboard commit an inline edit or a Quick Open pick,
             // and the quick input's keys work while a word is composing
             injectComposingEnter()
+            injectTerminalTypedCharacters()
             // Shows the page's background, not the dismantled workbench, from the moment the
             // page is told to leave until the next one paints
             injectLeaveCurtain()
@@ -4240,7 +4436,20 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
      * emulator with Gboard 12.4 with the hook skipped in that gap over
      * DevTools, and with this rule built in on API 33 and 37 emulators, with
      * Gboard 12.4 and 17.7.4, for files opened from Quick Open and created in
-     * New File. The test is what has focus, so Back while an extension's
+     * New File. For a fixed 4 s window after a text field took focus, a
+     * dismissal report waits for the end of that window and checks again: when
+     * the file finishes loading and focuses its new host before the half-second
+     * timer runs, while the keyboard is still rising or briefly bounces down
+     * and up again inside 4 s, text already has focus at the call and holding
+     * it then would take or keep the keyboard down; if the keyboard is still
+     * reported down when the 4 s window ends it is held. A visible report
+     * clears the pending hide mark and cancels any pending late check so it
+     * does not fire stale, without ending the 4 s window early. A dismissal
+     * whose hide report preceded the last tap on text is ignored, so a
+     * half-second callback arriving after a tap cannot undo that tap. A scroll
+     * inside the 4 s window can still raise a keyboard put away with
+     * Back, as a scroll inside the half second always could. The test otherwise
+     * is what has focus, so Back while an extension's
      * webview has focus, an iframe, is read the same way, as is the keyboard
      * Chromium takes down when a terminal that was typed into goes away: what a
      * tap or typing counted stays, and an editor focused next without a touch
@@ -4353,10 +4562,11 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
      * `alpha3` over `alp` left `alpha3ha3`. Blurring and refocusing the host
      * ends the composition in the same task as the caret move, so the keyboard
      * starts again from the new caret. That runs for the arrows, Home, End,
-     * PageUp, PageDown, Tab, Backspace and Delete from a window capture
-     * `keydown`, whatever sends them, for the editor's own
-     * `-monaco-gesturetap` and `-monaco-gesturecontextmenu` (a long press)
-     * inside `.monaco-editor`, and for `window.__vscodroidFinishComposition`;
+     * PageUp, PageDown, Tab, Enter, Backspace and Delete, and for a key that
+     * types a character (below), from a window capture `keydown`, whatever
+     * sends them, for the editor's own `-monaco-gesturetap` and
+     * `-monaco-gesturecontextmenu` (a long press) inside `.monaco-editor`, and
+     * for `window.__vscodroidFinishComposition`;
      * only for a focused host that has an `editContext` and is in the script's
      * `composing` set, and with `reapplying` set, so the focus handler leaves
      * the refocus and `inputmode` alone.
@@ -4364,15 +4574,15 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
      * It runs before the editor handles the key or the tap, except where an
      * open suggestion list takes a key without modifiers, or a tap. Ending a
      * composition makes the editor refilter the list and highlight its first
-     * row again, so ending it first would make Tab accept the first suggestion
-     * instead of the highlighted one. Up, Down, PageUp and PageDown that move
-     * the list's highlight move no caret and end nothing. Tab accepting the
-     * highlighted suggestion and a tap on a row end it after the list has
-     * acted, still in the same task, from a listener added while the event is
-     * on its way down: it runs after the ones already registered where it is
-     * added, window for a key, where the workbench's keybindings run in the
-     * bubble phase, and the target for a gesture, which does not bubble. When
-     * the event is stopped before that listener, a zero timeout ends it
+     * row again, so ending it first would make Tab or Enter accept the first
+     * suggestion instead of the highlighted one. Up, Down, PageUp and PageDown
+     * that move the list's highlight move no caret and end nothing. Tab or
+     * Enter accepting the highlighted suggestion and a tap on a row end it after
+     * the list has acted, still in the same task, from a listener added while
+     * the event is on its way down: it runs after the ones already registered
+     * where it is added, window for a key, where the workbench's keybindings run
+     * in the bubble phase, and the target for a gesture, which does not bubble.
+     * When the event is stopped before that listener, a zero timeout ends it
      * instead, in a later task. A long press on the list ends nothing. With no
      * list open, ending a composition that typed makes the editor schedule a
      * quick suggestion 10 ms later, patch 0025 scheduling none for one that
@@ -4380,13 +4590,46 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
      * the caret: otherwise the list opened at the key's destination, such as
      * after End on a line ending in an identifier.
      *
+     * A key that types a character ends it too, and so does Enter, in the same
+     * listener and for the same reason. The key row's characters and a hardware
+     * keyboard's reach the page as real keys, and the page inserts the
+     * character, or the newline, at the caret while the keyboard still holds its
+     * composition over the old range, which the keyboard then writes its word
+     * over. On an API 29 emulator with Gboard 8.0.4 and WebView 160, a tap
+     * between the O and the R of `WORD ONE` and then `{` from the key row left
+     * `RDD ONE`, and a real Enter from `adb shell input keyevent` left the same
+     * `RDD ONE` with the newline gone; Auto Save wrote both. A key counts when
+     * its `key` is one character, counted in code points so that one outside the
+     * BMP is one, with no Ctrl, Alt or Meta held and a key code other than 229.
+     * The keyboard's own events while it composes, which carry key
+     * `Unidentified` (`Process` on a desktop) and key code 229, do not count,
+     * since ending the word on them would end it at every letter: four letters
+     * tapped on Gboard in a row grew one composition and ended nothing. A chord
+     * does not count, and the key row's latched modifiers are announced as
+     * chords. `isComposing` is not read: it is false on the row's keys and on
+     * the keyboard's own events alike, so it separates nothing. Enter is
+     * finished as Tab is, after the list when the list takes it, because the
+     * editor binds both to the same command. With this code installed over
+     * DevTools rather than built in, the same tap and `{` left `WO{RD ONE` in
+     * three runs, still so after 10 s and on disk, and the same tap and Enter
+     * left `WO` and `RD ONE` on two lines.
+     *
+     * No character counts while the suggestion list is showing. A commit
+     * character accepts the list's focused row too, but from the editor's
+     * typing, which runs once the key has been dispatched (`onWillType` is fired
+     * when the text arrives), and ending the word before the key, or after the
+     * keybindings as for Tab, makes the editor refilter the list and focus its
+     * first row again before that accept. The word is then left as it was, and
+     * so is the hazard: the old behaviour.
+     *
      * Measured on an API 33 emulator with Gboard 12.4, with this code installed
      * over DevTools rather than built in: End, Home, PageUp, the trackpad in
      * all four directions, Gboard's Backspace at the start of a line, a tap
      * elsewhere in the file and a long press left the text intact; Down twice
      * then Tab inserted the third suggestion and a tap on a row inserted that
-     * row, both intact; a double tap still selected the word; and typing, the
-     * Command Palette and the Explorer's rename box never set it off.
+     * row, both intact; a double tap still selected the word; and typing on the
+     * keyboard, the Command Palette and the Explorer's rename box never set it
+     * off.
      * `scripts/test-keyboard-guard.js` runs this part of the script.
      *
      * Commands and extensions are not keys or gestures this guard handles.
@@ -4505,7 +4748,9 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                 // word in again, reversed and several times over: measured on an
                 // API 33 emulator with Gboard, `xyz` then a tap on the Search icon
                 // left `xyzzyxzyxzyx` in the file. So a composing host is left as
-                // it is; the next focus it takes is answered by the handler below.
+                // it is while the composition is open; a dismissal hold waiting on
+                // it runs when the composition ends, and the next focus is answered
+                // by the handler below.
                 //
                 // The editor composes through EditContext, whose composition
                 // events fire on `element.editContext` and never reach the
@@ -4515,27 +4760,59 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                 // EditContext.
                 var composing = new WeakSet();
                 var watched = new WeakSet();
+                var holdAfterComposition = null;
+                // The host the page itself is blurring and focusing again (refocusHost), while it does.
+                var refocusing = null;
+                var compositionTurn = null;
+                function cancelCompositionTurn() {
+                    if (!compositionTurn) return;
+                    if (compositionTurn.timer !== null) clearTimeout(compositionTurn.timer);
+                    clearTimeout(compositionTurn.expiry);
+                    compositionTurn = null;
+                }
                 // A word started in the focused host while the keyboard is not
                 // held down is the user typing. Without this, a tap outside text
                 // that leaves focus in a composing host clears aimedAtText while
                 // the keyboard stays up, and the next refocus of that host takes
-                // the keyboard away mid-typing.
+                // the keyboard away mid-typing. During a turn wait, a composition
+                // opened by the keyboard with unchanged text is finished in the
+                // next task instead of cancelling the turn or counting as a tap.
                 function composeStarted(element) {
                     composing.add(element);
+                    if (compositionTurn && compositionTurn.element === element) {
+                        scheduleCompositionTurnFinish();
+                        return;
+                    }
                     if (element === document.activeElement && element.getAttribute('inputmode') !== 'none') aimedAtText = true;
+                }
+                function composeEnded(element) {
+                    composing.delete(element);
+                    if (holdAfterComposition === element) {
+                        holdAfterComposition = null;
+                        if (element === document.activeElement || element === refocusing) apply(element);
+                    }
                 }
                 function watch(element) {
                     var context = element.editContext;
                     if (!context || watched.has(context)) return;
                     watched.add(context);
                     context.addEventListener('compositionstart', function() { composeStarted(element); });
-                    context.addEventListener('compositionend', function() { composing.delete(element); });
+                    context.addEventListener('compositionend', function() { composeEnded(element); });
+                    context.addEventListener('textupdate', function() {
+                        if (!compositionTurn || compositionTurn.element !== element) return;
+                        if (turnUnchanged()) {
+                            scheduleCompositionTurnFinish();
+                        } else {
+                            cancelCompositionTurn();
+                            if (element === document.activeElement && element.getAttribute('inputmode') !== 'none') aimedAtText = true;
+                        }
+                    });
                 }
                 document.addEventListener('compositionstart', function(e) {
                     if (e.target && e.target.matches && e.target.matches(EDITING_HOST)) composeStarted(e.target);
                 }, true);
                 document.addEventListener('compositionend', function(e) {
-                    if (e.target) composing.delete(e.target);
+                    if (e.target) composeEnded(e.target);
                 }, true);
                 // Typing in any box with the keyboard up is aiming at text too.
                 // The Command Palette opened from a menu is typed into with the
@@ -4562,7 +4839,12 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                 // one that takes focus later.
                 var blurred = null;
                 document.addEventListener('focusout', function(e) {
-                    composing.delete(e.target);
+                    if (!reapplying && compositionTurn && compositionTurn.element === e.target) cancelCompositionTurn();
+                    if (e.target) {
+                        composing.delete(e.target);
+                        // Kept through the page's own refocus of the host: its focusin is skipped while reapplying.
+                        if (holdAfterComposition === e.target && refocusing !== e.target) holdAfterComposition = null;
+                    }
                     blurred = e.target;
                     queueMicrotask(function() { blurred = null; });
                 }, true);
@@ -4616,6 +4898,9 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                 // finishComposition() below ends one on purpose, and only where
                 // a key or a tap moves the caret.
                 function letTheKeyboardUp() {
+                    letUpAt = ++stamp;
+                    holdAfterComposition = null;
+                    cancelLateCheck();
                     aimedAtText = true;
                     heldAtFocus = null;
                     restorePolicy();
@@ -4659,6 +4944,7 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                     if (!manualHost) return;
                     manualHost.virtualKeyboardPolicy = 'auto';
                     manualHost = null;
+                    if (window.__vscodroidImeVisible === false && !aimedAtText) applyAll();
                 }
                 // Whether the workbench's own touch gesture took the touch as a
                 // tap. The activity bar, the status bar and the tabs act on that
@@ -4797,12 +5083,18 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                 // decided to raise the keyboard. Blurring and refocusing puts
                 // the attribute in place before focus is granted rather than a
                 // moment after.
+                var textFocusedAt = -Infinity;
+                var textFocusedWallAt = -Infinity;
                 document.addEventListener('focusin', function(e) {
                     var target = e.target;
                     // Watched on every focus, whatever else is decided here, so a
                     // composition that starts after this is known to apply().
                     if (target && target.matches && target.matches(EDITING_HOST)) watch(target);
                     if (reapplying) return;
+                    if (target && target.matches && target.matches(TEXT)) {
+                        textFocusedAt = performance.now();
+                        textFocusedWallAt = Date.now();
+                    }
                     // A touch on text is still in the air. Whether the keyboard
                     // may come up is the pointerup handler's to answer, and
                     // answering it here would raise it for a scroll.
@@ -4854,7 +5146,12 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                 function finishComposition() {
                     var element = composingHost();
                     if (!element) return;
+                    cancelCompositionTurn();
+                    refocusHost(element);
+                }
+                function refocusHost(element) {
                     reapplying = true;
+                    refocusing = element;
                     element.blur();
                     // A word typed into a host held under a keyboard that is up,
                     // after a drag outside text say, is ended by now, so the
@@ -4865,15 +5162,98 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                         element.removeAttribute('inputmode');
                     }
                     element.focus();
+                    refocusing = null;
                     reapplying = false;
                 }
                 window.__vscodroidFinishComposition = finishComposition;
-                // Whether the last touch left the person aimed at text. A refocus the
-                // guard did not make reaches the focus handler as a new focus, and
-                // after a drag or a long press outside text it holds the host, which
-                // puts a keyboard that is up away on a phone. Kotlin asks before it
-                // refocuses the WebView on a turn of the screen.
-                window.__vscodroidAimedAtText = function() { return aimedAtText === true; };
+                function turnUnchanged() {
+                    if (!compositionTurn) return false;
+                    var element = compositionTurn.element;
+                    var context = element.editContext;
+                    return element === document.activeElement && context === compositionTurn.context &&
+                        context.text === compositionTurn.text && context.selectionStart === compositionTurn.start &&
+                        context.selectionEnd === compositionTurn.end;
+                }
+                function isTerminalTextarea(element) {
+                    return Boolean(element && element.classList && element.classList.contains('xterm-helper-textarea'));
+                }
+                function nativeTurnReady(element) {
+                    return !!(aimedAtText && element === document.activeElement &&
+                        (element.editContext || isTerminalTextarea(element)) &&
+                        element.getAttribute('inputmode') !== 'none');
+                }
+                function finishCompositionTurn() {
+                    if (!turnUnchanged()) { cancelCompositionTurn(); return; }
+                    var turn = compositionTurn;
+                    if (turn.timer !== null) {
+                        clearTimeout(turn.timer);
+                        turn.timer = null;
+                    }
+                    if (!turn.refocused || composing.has(turn.element)) {
+                        turn.refocused = true;
+                        refocusHost(turn.element);
+                    }
+                    turn.finished = true;
+                }
+                function scheduleCompositionTurnFinish() {
+                    if (!turnUnchanged()) { cancelCompositionTurn(); return; }
+                    // One refocus from here per turn: a keyboard that reopens the
+                    // word after it is left to the poll that ends the turn, or to
+                    // the turn's own clock, and is not refocused at every reopen.
+                    if (compositionTurn.timer !== null || compositionTurn.finished) return;
+                    var turn = compositionTurn;
+                    turn.timer = setTimeout(function() {
+                        if (compositionTurn !== turn) return;
+                        turn.timer = null;
+                        finishCompositionTurn();
+                    }, 0);
+                }
+                window.addEventListener('pagehide', cancelCompositionTurn);
+                // A keyboard can commit its own word or reopen a range at a turn.
+                // Ending the composition before a commit makes that commit insert
+                // a second copy; cancelling on a same-text compositionstart or
+                // textupdate leaves a reopened range active without refocusing
+                // either input connection. Finish in the task after such an event
+                // so a commit and its compositionend complete first, while any
+                // change to text or selection cancels the turn.
+                window.__vscodroidFinishCompositionOnTurn = function(start) {
+                    var element = document.activeElement;
+                    if (start) {
+                        cancelCompositionTurn();
+                        if (!element) return false;
+                        var context = element.editContext;
+                        if (!context) {
+                            if (!isTerminalTextarea(element)) return false;
+                            // The refocus blurs the field, xterm empties it,
+                            // and the word still under composition is lost.
+                            if (composing.has(element)) return false;
+                            return nativeTurnReady(element);
+                        }
+                        if (!composing.has(element)) return nativeTurnReady(element);
+                        compositionTurn = {
+                            element: element, context: context, text: context.text,
+                            start: context.selectionStart, end: context.selectionEnd,
+                            until: performance.now() + 1000, timer: null,
+                            refocused: false, finished: false
+                        };
+                        // A poll the activity does not make again leaves the turn
+                        // standing, so it ends by this clock whether or not anyone
+                        // polls: the activity's wait is a second, a poll under load
+                        // has been seen to answer after three.
+                        var turn = compositionTurn;
+                        turn.expiry = setTimeout(function() {
+                            if (compositionTurn === turn) cancelCompositionTurn();
+                        }, 5000);
+                    }
+                    if (!turnUnchanged()) { cancelCompositionTurn(); return false; }
+                    // Commits arriving later than one second can still race the fallback.
+                    if (!compositionTurn.finished && composing.has(element) &&
+                        performance.now() < compositionTurn.until) return 'wait';
+                    finishCompositionTurn();
+                    var ready = nativeTurnReady(element);
+                    cancelCompositionTurn();
+                    return ready;
+                };
                 // Ending a composition can make the editor refilter an open
                 // suggest list and focus its first item again, so a Tab or tap
                 // the list takes ends it only after the list has acted, still
@@ -4896,7 +5276,10 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                 }
                 // Whether the open suggest list takes the key rather than the
                 // caret, by the editor's own keybinding conditions for a key
-                // pressed alone: Tab accepts the focused suggestion; Up, Down,
+                // pressed alone: Tab and Enter accept the focused suggestion
+                // (Enter also depends on `acceptSuggestionOnEnter`, which is
+                // not read: a list that does not take it is finished after the
+                // keybindings, still before the newline is typed); Up, Down,
                 // PageUp and PageDown move the list's focus unless it holds a
                 // single suggestion that is already focused. The list is marked
                 // `visible` 100 ms after it opens, so a key in those first
@@ -4912,18 +5295,55 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                     var list = document.querySelector('.suggest-widget.visible');
                     if (!list || e.ctrlKey || e.altKey || e.shiftKey || e.metaKey) return false;
                     var focused = list.querySelector('.monaco-list-row.focused');
-                    if (e.key === 'Tab') return !!focused;
+                    if (e.key === 'Tab' || e.key === 'Enter') return !!focused;
                     if (!/^(ArrowUp|ArrowDown|PageUp|PageDown)$/.test(e.key)) return false;
                     return !focused || list.querySelectorAll('.monaco-list-row').length > 1;
                 }
+                // A key that types a character, alone or with Shift. The page
+                // inserts it at the caret while the keyboard still holds its
+                // composition over the old range, and the keyboard then writes
+                // its word over that range: a tap between the O and the R of
+                // `WORD ONE` and `{` from the key row left `RDD ONE`. Ended
+                // first, as for a caret key, the keyboard starts again from the
+                // text as it is after the character.
+                //
+                // Told apart by the event alone. The keyboard's own events
+                // while it composes carry key `Unidentified` (`Process` on a
+                // desktop) and key code 229 and no character, and ending the
+                // word on them would end it at every letter. A chord with Ctrl,
+                // Alt or Meta types nothing, and the key row's latched
+                // modifiers are announced as exactly that. Every named key is
+                // longer than one character; Enter, which moves the caret to
+                // the next line, is one of the caret keys below. A character
+                // outside the BMP is two UTF-16 units, so the key is counted in
+                // code points, which the `u` flag makes `[\s\S]` match as one.
+                // `isComposing` is not read. It is false on the key row's keys
+                // and on the keyboard's own events alike (measured with Gboard
+                // 8.0.4), so it separates nothing, and a WebView that set it on
+                // the row's keys would switch this off.
+                var ONE_CHARACTER = /^[\s\S]$/u;
+                function typesCharacter(e) {
+                    return ONE_CHARACTER.test(e.key) && e.keyCode !== 229 && !e.ctrlKey && !e.altKey && !e.metaKey;
+                }
                 // Window capture runs before the editor's own keydown handler.
                 // A key the open list takes moves no caret and ends nothing,
-                // except Tab, whose accept does and is finished after it.
-                var CARET_KEYS = /^(Arrow(Left|Right|Up|Down)|Home|End|PageUp|PageDown|Tab|Backspace|Delete)$/;
+                // except Tab and Enter, whose accept does and is finished after
+                // it. A character is left to the editor while the list is
+                // showing: a commit character accepts the list's focused row
+                // first, from the editor's typing, which runs once this keydown
+                // has been dispatched, so ending the word here, or after the
+                // keybindings as for Tab, would make the editor refilter the
+                // list and focus its first row again before that accept.
+                var CARET_KEYS = /^(Arrow(Left|Right|Up|Down)|Home|End|PageUp|PageDown|Tab|Enter|Backspace|Delete)$/;
                 window.addEventListener('keydown', function(e) {
-                    if (!CARET_KEYS.test(e.key) || !composingHost()) return;
+                    if (!composingHost()) return;
+                    if (typesCharacter(e)) {
+                        if (!document.querySelector('.suggest-widget.visible')) finishComposition();
+                        return;
+                    }
+                    if (!CARET_KEYS.test(e.key)) return;
                     if (!suggestTakes(e)) finishComposition();
-                    else if (e.key === 'Tab') finishAfter(e);
+                    else if (e.key === 'Tab' || e.key === 'Enter') finishAfter(e);
                 }, true);
                 // A touch moves the caret only in the editor's own gestures,
                 // dispatched from touchend: a tap, and a long press, which opens
@@ -4942,26 +5362,104 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                 // Called from Kotlin when the soft keyboard goes away. Without
                 // it a keyboard put away with Back left the focused host without
                 // inputmode, and the next touch on it, a scroll included, raised
-                // the keyboard again. A host still composing is left to apply()'s
-                // usual rule. Kotlin calls it half a second after the report and
-                // not for a turn of the phone, because on a device with no
-                // hardware keyboard the hold written here takes a visible
-                // keyboard down for real (KeyboardDismissal).
+                // the keyboard again. A host still composing keeps its attribute
+                // until a real compositionend while it still has focus (and drops
+                // the pending hold on focusout without writing inputmode on a
+                // blurred host, where the next focus is answered by focusin) so
+                // Chromium does not restart input mid-word, unless the keyboard
+                // came back up or a tap on text let it up first. Kotlin calls it
+                // half a second after the report and not for a turn of the phone,
+                // because on a device with no hardware keyboard the hold written
+                // here takes a visible keyboard down for real (KeyboardDismissal).
+                // Passing true for byPerson marks a hide Kotlin knows came from
+                // a Back key or an edge back gesture, with gestureAtMs giving the
+                // wall-clock timestamp when that Back or gesture completed: that
+                // still honors the hiddenAt < letUpAt guard (a hide already
+                // answered by a tap on text is void, flag or no flag) and clears
+                // heldAtFocus, and skips the 4 s wait after focus only when the
+                // Back or gesture is not older than the latest text focus (so an
+                // aborted edge peek before Quick Open focused its input still
+                // waits out the focus window, while a real Back or pair after
+                // that focus holds at once regardless of call delivery delay).
                 //
-                // Only a keyboard that goes down while text has focus counts as
-                // put away, so Back with an extension's webview focused is not
-                // one. Chromium takes it down itself when focus leaves text, and
+                // When byPerson is omitted or not true (the hide was claimed by
+                // no turn and had no seen Back or edge gesture behind it), only
+                // a keyboard that goes down while text has focus counts as put
+                // away, so Back with an extension's webview focused is not one.
+                // Chromium takes it down itself when focus leaves text, and
                 // Enter can do that on its way into an editor: Quick Open on a
                 // file not open yet takes the old editor's host away and leaves
                 // focus on the page while the file loads, and New File leaves it
                 // on the Explorer's list. Read as a keyboard put away, that
                 // cleared aimedAtText, and the file typed for opened held, with
                 // the keyboard down. Kept, the new host's focus raises it again.
-                window.__vscodroidKeyboardDismissed = function() {
+                // The file can also finish loading and focus its host before the
+                // half-second timer fires, while the keyboard is still down from
+                // the gap or not yet reported up: text then has focus at the
+                // call, and holding it then takes the rising keyboard back down.
+                // For a fixed 4 s window after a text field took focus, the
+                // hook waits for the window's end and checks again: even if
+                // Kotlin briefly reports the keyboard visible inside that window
+                // before another hide, a dismissal inside 4 s defers until
+                // the window closes, and if it is still reported down then the
+                // hold is written. An incoming visible report clears hiddenAt,
+                // clears any pending post-composition hold, and cancels any
+                // pending late check so it does not fire stale.
+                // A dismissal whose hide report preceded the last tap on text
+                // is void, so a delayed callback from an already answered hide
+                // neither arms a check nor holds the host. A scroll inside the
+                // 4 s window can still raise the keyboard, as a scroll inside
+                // the half second always could.
+                var RECENT_FOCUS_MS = 4000;
+                var lateCheck = 0;
+                var imeVisible = window.__vscodroidImeVisible;
+                var stamp = 0;
+                var hiddenAt = imeVisible === false ? ++stamp : 0;
+                var letUpAt = 0;
+                function cancelLateCheck() {
+                    if (lateCheck) { clearTimeout(lateCheck); lateCheck = 0; }
+                }
+                Object.defineProperty(window, '__vscodroidImeVisible', {
+                    configurable: true,
+                    enumerable: true,
+                    get: function() { return imeVisible; },
+                    set: function(v) {
+                        imeVisible = v;
+                        if (v === false) {
+                            hiddenAt = ++stamp;
+                        } else if (v === true) {
+                            hiddenAt = 0;
+                            holdAfterComposition = null;
+                            cancelLateCheck();
+                        }
+                    }
+                });
+                window.addEventListener('pagehide', function() {
+                    holdAfterComposition = null;
+                    cancelLateCheck();
+                });
+                window.__vscodroidKeyboardDismissed = function(byPerson, gestureAtMs) {
+                    cancelLateCheck();
+                    if (hiddenAt && hiddenAt < letUpAt) return;
+                    heldAtFocus = null;
+                    var focusAge = performance.now() - textFocusedAt;
+                    var explicit = byPerson === true &&
+                        !(Number.isFinite(gestureAtMs) && gestureAtMs < textFocusedWallAt);
+                    if (!explicit) {
+                        var wait = RECENT_FOCUS_MS - focusAge;
+                        if (wait > 0) {
+                            lateCheck = setTimeout(function() {
+                                lateCheck = 0;
+                                if (window.__vscodroidImeVisible === false) window.__vscodroidKeyboardDismissed();
+                            }, Math.ceil(wait));
+                            return;
+                        }
+                    }
                     restorePolicy();
                     var focused = document.activeElement;
                     if (focused && focused.matches && focused.matches(TEXT)) aimedAtText = false;
-                    heldAtFocus = null;
+                    holdAfterComposition = focused && focused.matches &&
+                        focused.matches(EDITING_HOST) && composing.has(focused) ? focused : null;
                     applyAll();
                 };
                 applyAll();
@@ -5614,6 +6112,110 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                     // The modifier interceptor cancels an unhandled chord's edit too.
                     if (ctrl || alt) e.preventDefault();
                 }, true);
+            })();
+            """.trimIndent(),
+            null
+        )
+    }
+
+    /**
+     * Keeps xterm's soft-key snapshot and composition-end timers behind the input they read,
+     * and sends an ended composition before the next key, the next composition or the field's
+     * blur can make xterm drop it.
+     */
+    private fun injectTerminalTypedCharacters() {
+        webView?.evaluateJavascript(
+            """
+            (function() {
+                if (window.__vscodroidTerminalTypedCharacters) return;
+                window.__vscodroidTerminalTypedCharacters = true;
+                var timeout = window.setTimeout, cancel = window.clearTimeout;
+                var key = null, held = null, ended = [];
+                function isTerm(el) {
+                    return !!(el && el.classList && el.classList.contains('xterm-helper-textarea'));
+                }
+                function finish(pending) {
+                    var i = ended.indexOf(pending);
+                    if (pending === held) held = null;
+                    else if (i >= 0) ended.splice(i, 1);
+                    else return;
+                    cancel.call(window, pending.id);
+                    pending.callback.apply(window, pending.args);
+                }
+                // Every pending send of an ended composition on the field, oldest first. The first sends and clears
+                // xterm's flag, so another armed for the same composition then sends nothing, as on xterm's own timers.
+                function finishEnded(target) {
+                    ended.filter(function(p) { return p.target === target; }).forEach(function(p) { finish(p); });
+                }
+                window.addEventListener('keydown', function(e) {
+                    // Finish the soft-key comparison before a following key can clear the field,
+                    // and finish any pending composition end update before the next key handles it.
+                    if (held && e.target === held.target && (e.keyCode !== 229 || held.comp)) finish(held);
+                    // A key makes xterm finalize only the current composition and skip an ended
+                    // one whose own send has not run yet, so send that one first.
+                    if (e.keyCode !== 229) finishEnded(e.target);
+                    key = e.isTrusted && e.keyCode === 229 && isTerm(e.target) ? e : null;
+                }, true);
+                window.addEventListener('keydown', function() { key = null; }, false);
+                window.addEventListener('compositionupdate', function(e) {
+                    if (held && e.target === held.target) finish(held);
+                    key = e.isTrusted && isTerm(e.target) ? e : null;
+                }, true);
+                window.addEventListener('compositionupdate', function() { key = null; }, false);
+                window.addEventListener('compositionstart', function(e) {
+                    // Send an ended composition before the next one starts, as its own timer would have.
+                    finishEnded(e.target);
+                }, true);
+                window.addEventListener('blur', function(e) {
+                    // xterm empties its field in the field's own blur handler, and the compositionend of a word the
+                    // blur commits comes just before it, in the same task: send what is pending while the field holds it.
+                    finishEnded(e.target);
+                }, true);
+                window.addEventListener('compositionend', function(e) {
+                    // Not asked to be trusted: Android's WebView delivers compositionend without the trusted
+                    // mark, and xterm arms its send for any compositionend on its field.
+                    key = isTerm(e.target) ? e : null;
+                }, true);
+                window.addEventListener('compositionend', function() { key = null; }, false);
+                window.addEventListener('input', function(e) {
+                    if (held && e.target === held.target) finish(held);
+                }, true);
+                window.setTimeout = function(callback, delay) {
+                    var text = typeof callback === 'function'
+                        ? Function.prototype.toString.call(callback)
+                        : '';
+                    if (key && key.eventPhase !== 0 && !held &&
+                        (delay === 0 || delay === undefined) &&
+                        ((key.type === 'keydown' && text.indexOf('_textareaChangeTimer') >= 0) ||
+                            (key.type === 'compositionupdate' && text.indexOf('_compositionPosition.end') >= 0))) {
+                        var pending = {
+                            target: key.target, callback: callback,
+                            args: Array.prototype.slice.call(arguments, 2),
+                            comp: key.type === 'compositionupdate'
+                        };
+                        held = pending;
+                        // A cancelled edit may produce no input; do not retain its timer indefinitely.
+                        pending.id = timeout.call(window, function() { finish(pending); }, 100);
+                        return pending.id;
+                    }
+                    if (key && key.eventPhase !== 0 && key.type === 'compositionend' &&
+                        (delay === 0 || delay === undefined) && text.indexOf('_isSendingComposition') >= 0) {
+                        // The composition's own send keeps its time but stays within reach of the next key.
+                        var end = {
+                            target: key.target, callback: callback,
+                            args: Array.prototype.slice.call(arguments, 2)
+                        };
+                        ended.push(end);
+                        end.id = timeout.call(window, function() { finish(end); }, 0);
+                        return end.id;
+                    }
+                    return timeout.apply(this, arguments);
+                };
+                window.clearTimeout = function(id) {
+                    if (held && held.id === id) held = null;
+                    ended = ended.filter(function(p) { return p.id !== id; });
+                    return cancel.apply(this, arguments);
+                };
             })();
             """.trimIndent(),
             null
@@ -6530,14 +7132,14 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                     // host, which left the editor half dead; measured on an
                     // emulator.
                     var root = window.location.origin + '/';
-                    if (url && url.indexOf(root) === 0) {
+                    if (url && url.slice(0, root.length).toLowerCase() === root.toLowerCase()) {
                         var next = url.charAt(root.length);
                         if (next === '' || next === '?' || next === '#') {
                             window.location.href = url;
                         }
                         return window;
                     }
-                    if (url && /^https?:/.test(url) && typeof AndroidBridge !== 'undefined') {
+                    if (url && /^https?:/i.test(url) && typeof AndroidBridge !== 'undefined') {
                         var t = (window.__vscodroid || {}).authToken;
                         // Only claim the click if the bridge actually opened it.
                         // `openExternalUrl` answers with a reason when the launch itself
@@ -7277,7 +7879,7 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         (wv.webViewClient as? VSCodroidWebViewClient)?.disposeAuthPage()
         wv.destroy()
 
-        val newWebView = WebView(this)
+        val newWebView = EditorWebView(this)
         newWebView.id = R.id.webView
         // Weight, not the default wrap_content: the replacement has to claim the
         // height the key row leaves, the same as the one declared in the layout.

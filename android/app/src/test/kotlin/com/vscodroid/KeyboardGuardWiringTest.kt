@@ -266,6 +266,52 @@ class KeyboardGuardWiringTest {
     }
 
     @Test
+    fun `native turn recovery waits with the page and abandons stale callbacks`() {
+        val body = SourceScan.body(mainActivity(), "private fun finishKeyboardCompositionOnTurn()")
+        val callback = body.substringAfter(") { editable ->")
+        val pending = SourceScan.body(callback, "if (editable == \"\\\"wait\\\"\")")
+        val ready = SourceScan.body(callback, "else if (editable == \"true\")")
+        assertTrue(body.contains("__vscodroidFinishCompositionOnTurn(\$start)"))
+        assertTrue(body.contains("attempt(true)"), "a new turn must start a fresh page wait")
+        assertTrue(pending.contains("postDelayed({ attempt(false) }, 50L)"))
+        assertFalse(pending.contains("clearFocus()"), "a pending commit still needs the old native connection")
+        assertFalse(pending.contains("requestFocus()"))
+        assertTrue(ready.contains("targetView.clearFocus()"))
+        assertTrue(ready.contains("targetView.requestFocus()"))
+        for (call in listOf("targetView.clearFocus()", "targetView.requestFocus()")) {
+            assertTrue(body.split(call).size == 2, "native refocus must occur only in the ready branch: $call")
+        }
+        val beforeDispatch = body.substringBefore("targetView.evaluateJavascript(")
+        val beforeAnswer = callback.substringBefore("if (editable ==")
+        for (part in listOf(beforeDispatch, beforeAnswer)) {
+            for (guard in listOf(
+                "webView !== targetView", "keyboardCompositionTurn != turn",
+                "AuthTabWindow.pageGeneration() != generation", "isFinishing", "isDestroyed",
+            )) assertTrue(part.contains(guard), "a stale turn must stop before dispatch and before acting: $guard")
+        }
+        assertFalse(
+            beforeAnswer.contains("isFocused") || beforeAnswer.contains("hasWindowFocus"),
+            "a wait is asked again whether or not the view has the focus: a poll dropped for lack of it leaves the page's turn standing",
+        )
+        assertFalse(pending.contains("return"), "a wait is never dropped on its way to the next poll")
+        assertTrue(ready.contains("!targetView.isFocused"))
+        assertTrue(ready.contains("!targetView.hasWindowFocus()"))
+        assertTrue(
+            ready.indexOf("!targetView.hasWindowFocus()") < ready.indexOf("targetView.clearFocus()"),
+            "native input is released only to a view that has the focus",
+        )
+        val guard = SourceScan.withoutComments(SourceScan.body(mainActivity(), "private fun injectKeyboardGuard()"))
+        assertTrue(
+            guard.contains("scheduleCompositionTurnFinish()"),
+            "same-text composition events during a turn must schedule immediate completion",
+        )
+        assertFalse(
+            SourceScan.body(guard, "function composeStarted(").contains("compositionTurn = null"),
+            "a keyboard reopening a composition during a turn must not cancel turn recovery",
+        )
+    }
+
+    @Test
     fun `a scroll is not a tap`() {
         val source = mainActivity()
 
@@ -353,5 +399,257 @@ class KeyboardGuardWiringTest {
                 "scripts/package-assets.sh to check the guard against the shipped bundle",
         )
         return workbench.readText()
+    }
+
+    /**
+     * Turning the phone wires [com.vscodroid.keyboard.KeyboardDismissal.refocused] and [com.vscodroid.webview.TextEditorHold.refocused] to the WebView focus
+     * listener, and removes both the turn ask (`askKeyboardAgainAfterTurn`) and the insets animation observer (`observeImeAnimation`) so debuggable and
+     * release builds behave identically.
+     */
+    @Test
+    fun `webView focus wires refocus and neither the turn ask nor the insets animation callback remains`() {
+        val source = mainActivity()
+        val setup = SourceScan.withoutComments(SourceScan.body(source, "private fun setupWebView()"))
+        assertTrue(
+            Regex("""onFocusChangeListener = View\.OnFocusChangeListener \{ _, hasFocus ->\s+if \(hasFocus\) \{\s+keyboardDismissal\.refocused\(\)\s+\(wv as\? EditorWebView\)\?\.textEditorHold\?\.refocused\(\)""").containsMatchIn(setup),
+            "setupWebView no longer tells keyboardDismissal and the hold of the editor answer when the WebView takes the focus.",
+        )
+        assertFalse(
+            source.contains("askAfterTurnWhereAsked") || source.contains("askKeyboardAgainAfterTurn") || source.contains("onLostAfterTurn"),
+            "the ask after a turn must stay removed.",
+        )
+        assertFalse(
+            source.contains("observeImeAnimation") || source.contains("setWindowInsetsAnimationCallback") || source.contains("userDrivenAnimation"),
+            "the insets animation callback must stay removed so debuggable and release builds behave identically.",
+        )
+    }
+
+    /**
+     * Where the platform hands the activity a Back ahead of the soft keyboard, [com.vscodroid.keyboard.KeyboardDismissal.backSeen] is how a keyboard a
+     * person closes with it stays down inside a turn's window. The wiring is the window's content being the observer, the observer reporting the Back
+     * key and passing every event on, and the activity connecting the two; the debug line is written at every hidden report, in debuggable builds only.
+     */
+    @Test
+    fun `a Back seen ahead of the keyboard reaches keyboardDismissal and every hidden report is logged`() {
+        val layout = SourceScan.read("src/main/res/layout/activity_main.xml")
+        assertTrue(
+            Regex("""<com\.vscodroid\.keyboard\.BackObserverLayout\b[^>]*android:id="@\+id/webViewContainer"""").containsMatchIn(layout),
+            "the root of activity_main.xml is no longer the BackObserverLayout, so no Back is seen ahead of the keyboard and a Back inside a turn's window is taken for the turn's.",
+        )
+        val observer = SourceScan.withoutComments(SourceScan.read("src/main/kotlin/com/vscodroid/keyboard/BackObserverLayout.kt"))
+        assertTrue(
+            observer.contains("override fun dispatchKeyEventPreIme(event: KeyEvent): Boolean") &&
+                observer.contains("event.keyCode == KeyEvent.KEYCODE_BACK") &&
+                observer.contains("return super.dispatchKeyEventPreIme(event)") &&
+                observer.contains("onBack(event.eventTime)"),
+            "BackObserverLayout no longer reports the Back key from dispatchKeyEventPreIme and passes the event on: consuming it would stop the keyboard closing.",
+        )
+        val activity = mainActivity()
+        val setup = SourceScan.body(activity, "private fun setupExtraKeyRow()")
+        assertTrue(
+            Regex("""findViewById<BackObserverLayout>\(R\.id\.webViewContainer\)\.onBack = \{ eventTimeMs ->\s+keyboardDismissal\.backSeen\(eventTimeMs\)\s+endTextEditorHold\(\)\s+\}""").containsMatchIn(setup),
+            "setupExtraKeyRow no longer connects the Back the window sees, with its key event's time, to keyboardDismissal.backSeen and to the end of the hold of the editor answer.",
+        )
+        assertTrue(
+            Regex("""private val keyboardDismissal = KeyboardDismissal\([\s\S]*?onReport = \{ state -> logKeyboardHidden\(state\) \}""").containsMatchIn(activity),
+            "keyboardDismissal no longer hands each report of hidden to logKeyboardHidden, so a run on a device has no line to read.",
+        )
+        val log = SourceScan.body(activity, "private fun logKeyboardHidden(")
+        assertTrue(
+            log.contains("Logger.d(") && !log.contains("Logger.i(") && !log.contains("Logger.w(") &&
+                log.contains("\$state") && log.contains("realTextEditor()") && log.contains("textEditorHold") &&
+                log.contains("view?.isFocused") && log.contains("view?.hasWindowFocus()"),
+            "the line for a hidden report no longer carries the decision's state and the WebView's own (its real answer, the hold, the focus), or is written outside debuggable builds.",
+        )
+        assertFalse(
+            log.contains("evaluateJavascript") || log.contains("url") || log.contains("Token"),
+            "the line for a hidden report reaches into the page, a URL or a token.",
+        )
+    }
+
+    /**
+     * The back gesture leaves a pair in the window's touch events (a finger down at an edge, cancelled by the system), which is how a Back is seen where the key is
+     * not handed to the activity. The rule is run by `EdgeBackGestureTest` and `KeyboardDismissalTest`; this holds the wiring: the activity noting the pair from
+     * `dispatchTouchEvent` after the delegate has had the event, answering what the delegate answered, and handing the cancel of an edge touch to the dismissal.
+     */
+    @Test
+    fun `the pair of a back gesture reaches keyboardDismissal from the window's touch events, which are passed on unchanged`() {
+        val activity = mainActivity()
+        val touch = SourceScan.withoutComments(SourceScan.body(activity, "override fun dispatchTouchEvent("))
+        assertTrue(
+            Regex("""val handled = super\.dispatchTouchEvent\(ev\)\s+noteEdgeBackGesture\(ev\)""").containsMatchIn(touch) && touch.contains("return handled"),
+            "dispatchTouchEvent no longer lets the delegate have the event first, notes the pair after it and answers what the delegate answered: " +
+                "the touch the page gets would change, or the back gesture would never be noted.",
+        )
+        val note = SourceScan.withoutComments(SourceScan.body(activity, "private fun noteEdgeBackGesture("))
+        val finish = SourceScan.withoutComments(SourceScan.body(activity, "private fun finishEdgeTouch("))
+        assertTrue(
+            note.contains("MotionEvent.ACTION_DOWN ->") &&
+                note.contains("WindowInsetsCompat.Type.systemGestures()") &&
+                note.contains("gestureInsets?.bottom") &&
+                note.contains("scaledTouchSlop") &&
+                note.contains("edgeBackGesture.down(") &&
+                note.contains("MotionEvent.ACTION_MOVE -> edgeBackGesture.move(ev.x, ev.y)") &&
+                note.contains("MotionEvent.ACTION_UP ->") &&
+                note.contains("edgeBackGesture.finishUp(") &&
+                note.contains("MotionEvent.ACTION_CANCEL ->") &&
+                note.contains("edgeBackGesture.finishCancel(") &&
+                note.contains("ev.eventTime - ev.downTime") &&
+                finish.contains("keyboardDismissal.edgeGesture(spanMs, eventTimeMs)") &&
+                note.contains("finishEdgeTouch(\"up\", spanMs, trace, trace?.matched == true, ev.eventTime)") &&
+                note.contains("finishEdgeTouch(\"cancel\", spanMs, trace, trace != null, ev.eventTime)"),
+            "noteEdgeBackGesture no longer tracks edge touches from down/move through up/cancel with systemGestures insets, " +
+                "event timestamps, scaledTouchSlop, and bottom strip exclusion: a Back by gesture or quick flick would be misjudged.",
+        )
+        assertTrue(
+            finish.contains("if (trace == null)") &&
+                finish.contains("Logger.d(") &&
+                finish.contains("ended=") &&
+                finish.contains("span=") &&
+                finish.contains("dx=") &&
+                finish.contains("keyboardDismissal.describe()"),
+            "finishEdgeTouch must log one debug line with ended state, span, horizontal travel, and describe() on an armed touch end.",
+        )
+        assertFalse(
+            note.contains("evaluateJavascript") || note.contains("url") || note.contains("Token") || note.contains("return true") || note.contains("consume") ||
+                finish.contains("evaluateJavascript") || finish.contains("url") || finish.contains("Token"),
+            "noteEdgeBackGesture reaches into the page, a URL or a token, or answers for the event: it is an observation of the touch and nothing else.",
+        )
+        val layout = SourceScan.withoutComments(SourceScan.read("src/main/kotlin/com/vscodroid/keyboard/BackObserverLayout.kt"))
+        assertFalse(
+            layout.contains("dispatchTouchEvent") || layout.contains("onTouchEvent"),
+            "BackObserverLayout reads touch events: the pair is read by the activity, which is handed every event, and a layout only the ones a child holds.",
+        )
+    }
+
+    /**
+     * The WebView keeps its answer "text editor" through a turn that found the keyboard up and the page an editor ([com.vscodroid.webview.TextEditorHold]; the
+     * rule is run by `TextEditorHoldTest`). The wiring is the class being the view, in the layout and in the replacement a renderer crash builds; the turn arming
+     * the hold from what the dismissal says about the keyboard and from the WebView's own real answer; and every end the hold has: a Back the activity saw, a
+     * keyboard the person put away, the activity pausing. The window's focus change is written down before the platform asks, in debuggable builds only.
+     */
+    @Test
+    fun `the editor answer is held through a turn that found the keyboard up, and ends with a Back, a dismissal and a pause`() {
+        val layout = SourceScan.read("src/main/res/layout/activity_main.xml")
+        assertTrue(
+            Regex("""<com\.vscodroid\.webview\.EditorWebView\b[^>]*android:id="@\+id/webView"""").containsMatchIn(layout),
+            "the WebView of activity_main.xml is no longer an EditorWebView, so no turn holds the editor answer.",
+        )
+        val activity = mainActivity()
+        val recreate = SourceScan.withoutComments(SourceScan.body(activity, "private fun recreateWebView()"))
+        assertTrue(
+            recreate.contains("val newWebView = EditorWebView(this)"),
+            "recreateWebView builds a plain WebView: after a renderer crash no turn holds the editor answer.",
+        )
+        val turn = SourceScan.withoutComments(SourceScan.body(activity, "override fun onConfigurationChanged("))
+        assertTrue(
+            turn.contains("armTextEditorHold(keyboardDismissal.turned())"),
+            "onConfigurationChanged no longer arms the hold from what keyboardDismissal says about the keyboard at the turn.",
+        )
+        val arm = SourceScan.withoutComments(SourceScan.body(activity, "private fun armTextEditorHold("))
+        assertTrue(
+            arm.contains("if (keyboardUp && view.realTextEditor()) view.textEditorHold.arm() else view.textEditorHold.end()"),
+            "the hold is no longer armed only for a keyboard that was up and a page that is an editor to the platform, or no longer ended by a turn that arms nothing.",
+        )
+        val dismissal = Regex("""private val keyboardDismissal = KeyboardDismissal\([\s\S]*?onDismissed = \{([\s\S]*?)\},\s+onReport""").find(activity)
+        assertTrue(
+            dismissal != null && dismissal.groupValues[1].contains("endTextEditorHold()"),
+            "a keyboard the person put away no longer ends the hold of the editor answer.",
+        )
+        val webViewClient = SourceScan.withoutComments(SourceScan.read("src/main/kotlin/com/vscodroid/webview/VSCodroidWebViewClient.kt"))
+        assertTrue(
+            SourceScan.body(webViewClient, "override fun onPageStarted(").contains("textEditorHold?.end()") &&
+                SourceScan.body(webViewClient, "override fun onReceivedError(").contains("textEditorHold?.end()"),
+            "VSCodroidWebViewClient must end an armed TextEditorHold on same-WebView page navigation or main-frame load error.",
+        )
+        assertTrue(
+            Regex("""private val keyboardDismissal = KeyboardDismissal\([\s\S]*?onExplicitDismissed = \{\s*ageMs\s*->[\s\S]*?System\.currentTimeMillis\(\)\s*-\s*ageMs[\s\S]*?__vscodroidKeyboardDismissed\(true,\s*\${'$'}gestureAtMs\)""")
+                .containsMatchIn(activity),
+            "keyboardDismissal must pass byPerson=true and the gesture's wall-clock timestamp (System.currentTimeMillis() - ageMs) via onExplicitDismissed while keeping unflagged onDismissed for default dismissals",
+        )
+        val guard = SourceScan.body(activity, "private fun injectKeyboardGuard(")
+        assertTrue(
+            guard.contains("Date.now()") &&
+                guard.contains("gestureAtMs < textFocusedWallAt") &&
+                guard.contains("element === document.activeElement"),
+            "injectKeyboardGuard must track wall-clock focus time alongside performance.now() for explicit gesture comparison, and apply deferred composition holds only while focused.",
+        )
+        val focusout = guard.substring(guard.indexOf("addEventListener('focusout'"), guard.indexOf(", true);", guard.indexOf("addEventListener('focusout'")))
+        assertTrue(
+            !focusout.contains("composeEnded(") && focusout.contains("holdAfterComposition"),
+            "focusout must drop pending holdAfterComposition without calling composeEnded/apply on a blurred host.",
+        )
+        val windowFocus = SourceScan.withoutComments(SourceScan.body(activity, "override fun onWindowFocusChanged("))
+        assertFalse(
+            windowFocus.contains("endTextEditorHold") || activity.contains("hasTurnYoungerThan"),
+            "onWindowFocusChanged must not end TextEditorHold on focus loss, and hasTurnYoungerThan must be removed.",
+        )
+        val pause = SourceScan.withoutComments(SourceScan.body(activity, "override fun onPause()"))
+        assertTrue(
+            pause.contains("endTextEditorHold()"),
+            "a window that is pausing no longer ends the hold of the editor answer.",
+        )
+        val focus = SourceScan.withoutComments(SourceScan.body(activity, "private fun logWindowFocus("))
+        assertTrue(
+            focus.contains("Logger.d(") && !focus.contains("Logger.i(") && !focus.contains("Logger.w(") &&
+                focus.contains("findFocus()") && focus.contains("realTextEditor()") && focus.contains("keyboardDismissal.describe()"),
+            "the line for a change of the window's focus no longer carries the focus owner, the real answer and the decision's ages, or is written outside debuggable builds.",
+        )
+        assertFalse(
+            focus.contains("evaluateJavascript") || focus.contains("url") || focus.contains("Token"),
+            "the line for a change of the window's focus reaches into the page, a URL or a token.",
+        )
+        assertTrue(
+            SourceScan.withoutComments(SourceScan.body(activity, "override fun onWindowFocusChanged(")).contains("logWindowFocus(hasFocus)"),
+            "onWindowFocusChanged no longer writes the line for a change of the window's focus.",
+        )
+        val view = SourceScan.withoutComments(SourceScan.read("src/main/kotlin/com/vscodroid/webview/EditorWebView.kt"))
+        assertTrue(
+            view.contains("override fun onCheckIsTextEditor(): Boolean {") && view.contains("textEditorHold.answer(real)") &&
+                view.contains("fun realTextEditor(): Boolean = super.onCheckIsTextEditor()"),
+            "EditorWebView no longer answers through the hold, or no longer offers the real answer.",
+        )
+    }
+
+    // ---- Additional wiring checks on TextEditorHold and edge back gesture observation
+
+    @Test
+    fun `page reload and error page end an armed TextEditorHold`() {
+        val activity = mainActivity()
+        val errorPage = SourceScan.withoutComments(SourceScan.body(activity, "private fun showErrorPage("))
+        val beginPageEndsHold = activity.contains("AuthTabWindow.beginPage()") &&
+            Regex("""AuthTabWindow\.beginPage\(\)[\s\S]{0,160}endTextEditorHold\(\)""").containsMatchIn(activity)
+        val errorEndsHold = errorPage.contains("endTextEditorHold()")
+        assertTrue(
+            beginPageEndsHold && errorEndsHold,
+            "TextEditorHold stays armed across same-WebView page reloads/navigations (beginPageEndsHold=$beginPageEndsHold), " +
+                "and error pages (errorEndsHold=$errorEndsHold)",
+        )
+    }
+
+    @Test
+    fun `noteEdgeBackGesture handles multi-touch pointer up, screen-touch filtering and top-corner exclusion`() {
+        val activity = mainActivity()
+        val note = SourceScan.withoutComments(SourceScan.body(activity, "private fun noteEdgeBackGesture("))
+        val handlesPointerUp = note.contains("ACTION_POINTER_UP") || note.contains("ACTION_POINTER_DOWN")
+        val checksTouchSource = note.contains("isScreenTouch") || note.contains("TOOL_TYPE_STYLUS")
+        val checksVerticalOrExclusion = note.contains("ev.y") || note.contains("systemGestureExclusion")
+        assertTrue(
+            handlesPointerUp && checksTouchSource && checksVerticalOrExclusion,
+            "noteEdgeBackGesture produces false edge pairs on multi-touch pointer lift + later cancel (handlesPointerUp=$handlesPointerUp), " +
+                "stylus/non-finger input (checksTouchSource=$checksTouchSource), and status-bar corner notification-shade pulls (checksVerticalOrExclusion=$checksVerticalOrExclusion)",
+        )
+    }
+
+    @Test
+    fun `noteEdgeBackGesture passes systemGestures insets to EdgeBackGesture`() {
+        val activity = mainActivity()
+        val note = SourceScan.withoutComments(SourceScan.body(activity, "private fun noteEdgeBackGesture("))
+        assertTrue(
+            note.contains("WindowInsetsCompat.Type.systemGestures()") &&
+                note.contains("gestureInsets?.bottom") &&
+                Regex("""edgeBackGesture\.down\([\s\S]*?gestureInsets\?\.left,\s*gestureInsets\?\.right""").containsMatchIn(note),
+            "noteEdgeBackGesture must read WindowInsetsCompat.Type.systemGestures(), exclude bottom gesture insets, and pass the left and right insets to edgeBackGesture.down",
+        )
     }
 }

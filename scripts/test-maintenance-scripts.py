@@ -543,6 +543,25 @@ class MaintenanceScriptsTest(unittest.TestCase):
     def test_failed_build_or_install_never_clears_app_data(self):
         self.assert_contract(device_setup(SOURCE / "scripts/device-test.sh", self.root / "setup"))
 
+    def test_node_runtime_matches_header_major(self):
+        text = (SOURCE / "scripts/device-test.sh").read_text()
+        begin = text.index('NODE_OUT=$(run_tool "files/usr/bin/node" --version)')
+        phase = text[begin:text.index("# Test 16: npm", begin)]
+        preamble = '''run_tool() { printf '%s\\n' "$RUNTIME"; }
+derive_node_expected() { printf '%s\\n' '24.18.0'; }
+pass() { printf 'PASS %s\\n' "$1"; }
+fail() { printf 'FAIL %s: %s\\n' "$1" "$2"; exit 1; }
+'''
+        for runtime, status in (("v24.18.0", 0), ("v24.22.3", 0),
+                                ("v25.0.0", 1), ("v240.0.0", 1)):
+            with self.subTest(runtime=runtime):
+                result = run(["/bin/bash", "-c", preamble + phase], self.root,
+                             {"RUNTIME": runtime})
+                self.assertEqual(status, result["status"], result)
+                self.assertIn(runtime, result["stdout"])
+                if status:
+                    self.assertIn("24", result["stdout"])
+
     def test_ca_diagnostic_skips_only_an_explicitly_empty_trust_store(self):
         text = (SOURCE / "scripts/device-test.sh").read_text()
         begin = text.index('CA_BUNDLE_REL="')
