@@ -24,12 +24,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Fixed
 
+- Turning the screen while the keyboard underlines a word no longer doubles the word, writes it over another word of the line or deletes text after the caret.
+- After a turn of the screen with a word underlined, the next letter typed can still, rarely, be lost or replace the word's last letter.
+- Tapping into a word or opening a file no longer counts as an edit on a keyboard that underlines words, so the file is not saved again and Undo gains no empty step.
+- The first letter typed into a file just opened no longer repeats the file's first word on a keyboard that underlines words.
 - The editor's context menu scrolls with a finger when it does not fit the screen.
 - A tap on the color square beside a CSS color opens the color picker.
 - A finger can drag the caret while a peek view is open.
 - A chord started from the extra key row, such as Esc Esc, Ctrl+K Z or Ctrl+K Ctrl+S, keeps the keyboard up and takes the next key as its second key.
 - Ctrl then C or X on the extra key row copies and cuts in the editor and in text boxes.
 - Enter on a keyboard that underlines words carries a Ctrl or Alt latched on the extra key row, and the latch no longer reaches the next letter.
+- Pasting while the soft keyboard still underlines a word no longer repeats the pasted text or the word.
+- On a keyboard that underlines words, a suggestion list that opened by itself follows the letters typed, so Tab from the extra key row or Enter on a hardware keyboard no longer puts an older suggestion over the word.
+- With several cursors, a letter or Backspace typed on a keyboard that underlines words acts at every cursor instead of copying the first cursor's word to the others.
+- With several cursors, a suggestion or a correction from the keyboard goes to the first cursor, and the other cursors are dropped.
+- An inlay hint that appears while a Korean syllable is being typed no longer splits the syllable.
+- A touch just outside the editor's suggestion list closes the list instead of accepting its first suggestion.
 - A check mark in a menu no longer covers the first letter of its item, and an item's highlight covers its whole row.
 - A status bar item at the edge of a narrow screen is hidden whole instead of cut in the middle of a word.
 - The Chat buttons in the title bar open and close with one tap.
@@ -62,6 +72,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A delete in a device folder that gave up waiting for another write no longer keeps its folder from being deleted later.
 - A folder renamed or moved in a device folder that does not reach the device is reported once, with each file edited in it just before, instead of twice or not at all.
 - Choosing a recent device folder whose permission was withdrawn no longer blocks removing its local copy in Manage Device Folder Storage until the app restarts.
+- With a device folder open, Open Folder > In the app's storage starts in `~/projects` instead of in the folder that holds the app's copies of device folders.
 - Returning to the app no longer reloads the editor a second time when it finished loading while the app was in the background.
 - The browser's return to the app after a sign-in is accepted once; a repeat of the same return is ignored.
 - The Jupyter extension's kernel picker lists its kernels, so notebook cells can run.

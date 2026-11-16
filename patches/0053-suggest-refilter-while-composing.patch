@@ -1,0 +1,108 @@
+Refilter an open suggestion list while a keyboard composes on Android.
+
+An Android keyboard composes whole words: every key while the word is
+underlined is an update of one open composition. SuggestModel refilters an
+open list on a content change only when the editor is not composing, and
+does not follow the caret while it composes, so a list that was open when
+the composition went on kept the items of the word as it stood when the
+list was computed. Accepting an item replaces from the item's start to the
+caret, getOverwriteInfo adding the columns the caret moved since, and by
+then that covered every letter composed after the list was computed. On an
+API 33 emulator with Gboard 12.4, after a turn of the screen and back in a
+file holding twox on another line, the list was open with twox focused
+over line twox; y and z, composed into the same word, left it as it was,
+and the key row's Tab turned line twoxyz into line twox, on the disk too,
+in three runs of three. A hardware Enter did the same in two runs of two.
+The keyboard's own Enter does not accept an item. In plain typing on a
+fresh line the whole word was one composition and no list opened before
+it ended, in three runs of three; the list came while a composition went
+on after the turn, when the keyboard had reopened the word under the
+caret and a letter went into it.
+
+On Android a content change while composing now refilters an open list, as
+a typed key does elsewhere: the list narrows to the composed word, a list
+that opened by itself (a quick suggestion, a trigger character, the members
+after a period) closes when nothing fits, and a deletion that moves the
+caret left asks the providers again. Only an open session is refiltered:
+_refilterWhileComposing returns when there is no trigger state, so a
+composition update never opens a list, and one is armed at the
+composition's end as before (patch 0025). An update that rewrites a word
+with its own text, as a keyboard does when it reopens one, makes no edit
+since patch 0048, so it raises no content change and does not touch the
+list. Other platforms keep their behaviour: a desktop input method's
+composition still waits for its end, where a dead key's lone accent cannot
+be used for filtering.
+
+The filter is the editor's: the word before the caret, matched character
+by character. A Korean syllable being built is a jamo or part of a
+syllable (ㅎ, then 하, then 한), which rarely starts a word of the file, so
+a list that opened by itself closes at the first one that fits nothing,
+and the syllable's end arms a new one as before. Japanese kana match only
+kana words. A pinyin keyboard's Latin letters filter like any letters, so a
+list can stay open over them. An item can still be accepted in the middle
+of a composition, by Tab or a hardware Enter, as before; it now fits what
+was composed, and the accept, an edit across the open composition,
+restarts input (patch 0046), so the keyboard ends its composition at the
+accepted text. A list opened by hand, with Ctrl+Space, that stops fitting
+is frozen with its items, as on every platform, and Tab still accepts its
+focused item over the composed word.
+
+With the patch built, on the API 33 emulator with Gboard 12.4 and WebView
+134, the same steps kept line twoxyz in five runs of five, on the disk too,
+the key row's Tab in three and a hardware Enter in two: the list was open
+on twox after x and closed at y, where nothing in the file fits twoxy, so
+the Tab indented and the Enter made a new line. Plain typing on a fresh
+line opened no list in three runs of three. With a list open, a Backspace
+inside the composing word widened it and a word tapped on the keyboard's
+strip closed it, two runs each. In a file of 3002 words, ten letters
+composed with a list open raised no long task in two runs, and the list's
+new rows came 8 to 39 ms after each key as read by a poll every 25 ms; no
+run without the patch was made on that file.
+
+On an API 36 emulator with Gboard 18.5 and WebView 134, with a list opened
+by hand, a Korean syllable was composed whole in three runs and a Japanese
+word in three. In the Korean runs the list stayed frozen where nothing fit
+and followed where an item did; in the Japanese runs it followed the word.
+Nothing was accepted unasked, and no list opened during a composition with
+none open before. The key row's Tab in the middle of a composition accepted
+the focused item over the composed text, once on each keyboard, and input
+restarted once.
+
+Not measured: a member list that narrows under composed letters. Gboard
+12.4 commits a letter typed right after a period without composing it, so
+the list after a period was narrowed by the editor's ordinary path in three
+runs of three.
+
+diff --git a/src/vs/editor/contrib/suggest/browser/suggestModel.ts b/src/vs/editor/contrib/suggest/browser/suggestModel.ts
+index 22d9ec5..625b0d5 100644
+--- a/src/vs/editor/contrib/suggest/browser/suggestModel.ts
++++ b/src/vs/editor/contrib/suggest/browser/suggestModel.ts
+@@ -214,6 +214,8 @@ export class SuggestModel implements IDisposable {
+ 			// e.g. ¨ + u makes ü but just ¨ cannot be used for filtering
+ 			if (!editorIsComposing && this._triggerState !== undefined) {
+ 				this._refilterCompletionItems();
++			} else if (editorIsComposing && isAndroid) {
++				this._refilterWhileComposing();
+ 			}
+ 		}));
+ 
+@@ -429,6 +431,19 @@ export class SuggestModel implements IDisposable {
+ 		}
+ 	}
+ 
++	// An Android keyboard composes whole words: every key while a word is underlined is an update
++	// of one open composition, and the filter above skips them all, so an open list kept the items
++	// of the word as it stood when the list was computed, and Tab or a hardware Enter replaced
++	// everything typed since with the focused item. An open list follows the composed word here as
++	// it follows typing elsewhere. Only an open session is refiltered: with none, nothing opens
++	// before the composition ends, where a list is armed as before.
++	private _refilterWhileComposing(): void {
++		if (this._triggerState === undefined) {
++			return;
++		}
++		this._refilterCompletionItems();
++	}
++
+ 	private _doTriggerQuickSuggest(): void {
+ 
+ 		if (QuickSuggestionsOptions.isAllOff(this._editor.getOption(EditorOption.quickSuggestions))) {

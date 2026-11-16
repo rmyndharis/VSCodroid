@@ -16,6 +16,16 @@ the file is there but cannot be read, which says nothing about upstream. It sees
 only whether the direct call leaves those two bodies: a deferral inside
 _updateEditContext itself would pass.
 
+0046 also needs these synchronous calls to recognise the input method's own
+work while its origin flags are still set. Later work, such as a delayed
+format-on-type edit, is outside those flags and can end an unconverted word.
+A deferred update can mistake even the synchronous keyboard edit for an
+external one. Rework that origin check too if either caller is deferred.
+0047 initializes the same text and selection caches at construction, without
+queuing a restart; this gate checks the later listeners, not that initial call.
+0048 compares an input update with that same pre-event cache before deciding
+whether it changes the text; deferring either listener invalidates that premise too.
+
 build-vscode-oss.sh runs this on the patched tree, check-patches-apply.sh on
 upstream's before any patch, so a patch that stops applying first cannot hide
 it. 0022 touches neither caller, so both read the same text; a rework of 0022

@@ -21,10 +21,28 @@ alone, as it did before. That check is load-bearing: executeCommand on an id tha
 registered waits up to 30 seconds for an activation event before it rejects. A question that
 cannot be shown, or a command that fails, falls back to the typed dialog and logs a warning.
 
+The typed dialog starts in the parent of the folder that is open. For a folder opened from
+shared storage that is the app's copy of it under saf-mirrors, which holds nothing to open
+but the copies of other folders, so "In the app's storage" started there and the way to the
+projects folder was to type its path. When the folder that is open, or the last active file
+when none is, is inside saf-mirrors and ~/projects exists, the dialog now starts in
+~/projects (a link to the projects folder). Every other start is as before: a folder in the
+projects folder starts in its parent, and with nothing open the dialog starts in the home
+folder, where projects is listed.
+
 diff --git a/src/vs/workbench/services/dialogs/browser/fileDialogService.ts b/src/vs/workbench/services/dialogs/browser/fileDialogService.ts
-index 4a519ac..6d7ede5 100644
+index 4a519ac..38147fb 100644
 --- a/src/vs/workbench/services/dialogs/browser/fileDialogService.ts
 +++ b/src/vs/workbench/services/dialogs/browser/fileDialogService.ts
+@@ -12,7 +12,7 @@ import { memoize } from '../../../../base/common/decorators.js';
+ import { HTMLFileSystemProvider } from '../../../../platform/files/browser/htmlFileSystemProvider.js';
+ import { localize } from '../../../../nls.js';
+ import { getMediaOrTextMime } from '../../../../base/common/mime.js';
+-import { basename } from '../../../../base/common/resources.js';
++import { basename, joinPath } from '../../../../base/common/resources.js';
+ import { getActiveWindow, triggerDownload, triggerUpload } from '../../../../base/browser/dom.js';
+ import Severity from '../../../../base/common/severity.js';
+ import { VSBuffer } from '../../../../base/common/buffer.js';
 @@ -21,6 +21,11 @@ import { Iterable } from '../../../../base/common/iterator.js';
  import { WebFileSystemAccess } from '../../../../platform/files/browser/webFileSystemAccess.js';
  import { EmbeddedCodeEditorWidget } from '../../../../editor/browser/widget/codeEditor/embeddedCodeEditorWidget.js';
@@ -37,7 +55,7 @@ index 4a519ac..6d7ede5 100644
  
  export class FileDialogService extends AbstractFileDialogService implements IFileDialogService {
  
-@@ -83,6 +88,10 @@ export class FileDialogService extends AbstractFileDialogService implements IFil
+@@ -83,10 +88,14 @@ export class FileDialogService extends AbstractFileDialogService implements IFil
  	}
  
  	async pickFolderAndOpen(options: IPickAndOpenOptions): Promise<void> {
@@ -48,7 +66,12 @@ index 4a519ac..6d7ede5 100644
  		const schema = this.getFileSystemSchema(options);
  
  		if (!options.defaultUri) {
-@@ -96,6 +105,42 @@ export class FileDialogService extends AbstractFileDialogService implements IFil
+-			options.defaultUri = await this.defaultFolderPath(schema);
++			options.defaultUri = await this.outsideDeviceCopies(await this.defaultFolderPath(schema), schema);
+ 		}
+ 
+ 		if (this.shouldUseSimplified(schema)) {
+@@ -96,6 +105,56 @@ export class FileDialogService extends AbstractFileDialogService implements IFil
  		throw new Error(localize('pickFolderAndOpen', "Can't open folders, try adding a folder to the workspace instead."));
  	}
  
@@ -86,6 +109,20 @@ index 4a519ac..6d7ede5 100644
 +			this.logService.warn('[FileDialogService] Open Folder from Device failed, using the path dialog', error);
 +			return false;
 +		}
++	}
++
++	/**
++	 * The path dialog starts in the parent of the folder that is open. For a folder of the phone's shared
++	 * storage that is the app's copy of it, under saf-mirrors, which holds nothing to open but the copies
++	 * of other folders. Start in the projects folder instead (~/projects is a link to it) when it exists.
++	 */
++	private async outsideDeviceCopies(uri: URI, schema: string): Promise<URI> {
++		if (!isAndroid || !/\/saf-mirrors(\/|$)/.test(uri.path)) {
++			return uri;
++		}
++
++		const projects = joinPath(await this.preferredHome(schema), 'projects');
++		return await this.fileService.exists(projects) ? projects : uri;
 +	}
 +
  	async pickWorkspaceAndOpen(options: IPickAndOpenOptions): Promise<void> {

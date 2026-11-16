@@ -101,6 +101,20 @@ class MenuSeparatorFloorTest {
     @Test
     fun `menu item highlights fill the enlarged row and labels clear the check column`() {
         assertTrue(
+            mobileMenuBlock.contains(".action-menu-item") &&
+                mobileMenuBlock.contains("min-height: 44px") &&
+                mobileMenuBlock.contains("height: auto"),
+            "workbench.css raises .action-item to 44px while leaving .action-menu-item at 24px, " +
+                "so the hover/focus highlight covers only a 24px strip above the label",
+        )
+        assertTrue(
+            mobileMenuBlock.contains("max-height: none") &&
+                mobileMenuBlock.contains("2em") &&
+                !mobileMenuBlock.contains("padding: 8px 24px 8px 12px"),
+            "workbench.css caps label max-height at 100% of 24px and sets 12px left padding, " +
+                "overlapping the 2em check mark with the first letter",
+        )
+        assertTrue(
             injected.contains(".context-view .monaco-menu .action-menu-item") &&
                 injected.contains("min-height: 40px") &&
                 injected.contains("height: auto"),

@@ -481,8 +481,8 @@ def main(tree):
     # upstream's, so a VS Code bump can change it, and the Kotlin side would
     # then wait for a line nobody prints: every start alive and bound, the poll
     # giving up, the editor never loaded. ServerListeningLineWireTest asks the
-    # same question of a fetched tree, and is skipped where none is fetched,
-    # which is the CI unit-test job; this runs on every packaged tree.
+    # same question and skips only in local checkouts without a fetched server.
+    # Both PR and release unit jobs supply it; this runs on every packaged tree.
     listening = "Extension host agent listening on"
     server_main = tree / "out/server-main.js"
     try:
@@ -517,6 +517,19 @@ def main(tree):
               "the page no longer relays `uri`, so the per-request secret in its "
               "query never reaches MainActivity and any forged sign-in callback "
               "naming an armed request id would be accepted")
+
+    # The terminal typing injector identifies these callbacks by their member names.
+    xterm = tree / "node_modules/@xterm/xterm/lib/xterm.js"
+    try:
+        xterm_text = xterm.read_text()
+        check("_textareaChangeTimer" in xterm_text,
+              "xterm retains the terminal typing timer member")
+        check("_compositionPosition.end" in xterm_text,
+              "xterm retains the terminal composition end member")
+        check("_isSendingComposition" in xterm_text,
+              "xterm retains the terminal composition send member")
+    except OSError as e:
+        check(False, "xterm terminal typing timer is readable", str(e))
 
     # server.js appends its own <script> to workbench.html at every start, by
     # matching the configuration element the page carries, and three things reach
@@ -893,6 +906,25 @@ def self_test() -> int:
                 print(f"  FAIL   self-test: with the default theme {name!r}, no line read {want!r}")
                 return 1
     print("  ok     self-test: a default theme the tree does not contribute is refused")
+    with tempfile.TemporaryDirectory() as tmp:
+        tree = pathlib.Path(tmp)
+        library = tree / "node_modules/@xterm/xterm/lib/xterm.js"
+        library.parent.mkdir(parents=True)
+        for member, label in (
+            ("_textareaChangeTimer", "xterm retains the terminal typing timer member"),
+            ("_compositionPosition.end", "xterm retains the terminal composition end member"),
+            ("_isSendingComposition", "xterm retains the terminal composition send member"),
+        ):
+            for text, verdict in ((member, "ok      "), ("renamedMember", "FAIL    ")):
+                library.write_text(text)
+                out = io.StringIO()
+                failed = False
+                with contextlib.redirect_stdout(out):
+                    main(tree)
+                if verdict + label not in out.getvalue():
+                    print(f"  FAIL   self-test: {label} rename was not detected")
+                    return 1
+    print("  ok     self-test: xterm timer, composition end and composition send member renames are refused")
     return 0
 
 
