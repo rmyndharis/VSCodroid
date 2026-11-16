@@ -131,6 +131,30 @@ class EditorGatewayTest {
     }
 
     @Test
+    fun releaseFreesItsPortAndTheGatewayCanBindAgain() {
+        // For an origin taken only because the usual one was busy: given up at a stop,
+        // so that the next start in the same process can bind the usual port. Not
+        // close(), which would leave a gateway that can never bind again.
+        val first = gateway.bind(0)
+
+        assertTrue(gateway.release(first))
+        assertNull(gateway.boundPort)
+        java.net.ServerSocket(first, 0, InetAddress.getByName("127.0.0.1")).close()
+
+        val second = gateway.bind(0)
+        assertTrue(second > 0)
+        assertEquals(second, gateway.boundPort)
+    }
+
+    @Test
+    fun releaseOfAnotherPortLeavesTheListenerBound() {
+        val bound = gateway.bind(0)
+
+        assertFalse(gateway.release(bound + 1))
+        assertEquals(bound, gateway.boundPort)
+    }
+
+    @Test
     fun preservesHttpHostAndBinaryResponse() {
         val (path, server) = backend("http")
         val port = gateway.bind(0)
@@ -495,4 +519,67 @@ class EditorGatewayTest {
 
     private fun SocketChannel.socketInput() = java.nio.channels.Channels.newInputStream(this)
     private fun SocketChannel.socketOutput() = java.nio.channels.Channels.newOutputStream(this)
+    @Test
+    fun releaseDuringBackendConnectDoesNotRelayOrCloseTheReplacementClient() {
+        val (oldPath, oldServer) = backend("released-connect")
+        val (newPath, newServer) = backend("replacement-connect")
+        val entered = CountDownLatch(1)
+        val proceed = CountDownLatch(1).also { releases.add(it) }
+        val oldDisconnected = CountDownLatch(1)
+        val first = AtomicBoolean(true)
+        connected = {
+            if (first.compareAndSet(true, false)) {
+                entered.countDown()
+                assertTrue(proceed.await(3, TimeUnit.SECONDS))
+            }
+        }
+        worker {
+            oldServer.accept().use {
+                assertEquals(-1, it.socketInput().read(), "released client bytes reached the retired backend")
+                oldDisconnected.countDown()
+            }
+        }
+        val port = gateway.bind(0)
+        gateway.selectBackend(oldPath, "released-owner")
+        val old = client()
+        old.getOutputStream().write("old request".toByteArray())
+        assertTrue(entered.await(3, TimeUnit.SECONDS))
+        assertTrue(gateway.release(port))
+        assertEquals(-1, old.getInputStream().read())
+        gateway.bind(0)
+        gateway.selectBackend(newPath, "replacement-owner")
+        worker { newServer.accept().use { it.socketOutput().write(27) } }
+        client().use { assertEquals(27, it.getInputStream().read()) }
+        proceed.countDown()
+        assertTrue(oldDisconnected.await(3, TimeUnit.SECONDS))
+        assertNotNull(gateway.boundPort)
+    }
+
+    @Test
+    fun clientAcceptedBeforeReleaseMustNotReachTheNextBackend() {
+        val originalPort = gateway.bind(0)
+        gateway.selectBackend(File(directory, "old.sock"), "old-owner")
+        val listenerThread = EditorGateway::class.java.getDeclaredField("acceptThread")
+            .apply { isAccessible = true }.get(gateway) as Thread
+        val lock = EditorGateway::class.java.getDeclaredField("lock")
+            .apply { isAccessible = true }.get(gateway)
+        val reachedNewBackend = CountDownLatch(1)
+        every { connectEditorBackend(any()) } answers {
+            reachedNewBackend.countDown()
+            mockk<EditorBackend>(relaxed = true)
+        }
+        synchronized(lock) {
+            resources.add(Socket(InetAddress.getByName("127.0.0.1"), originalPort))
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(10)
+            while (listenerThread.state != Thread.State.BLOCKED && System.nanoTime() < deadline) Thread.sleep(1)
+            assertEquals(Thread.State.BLOCKED, listenerThread.state, "the old listener did not reach its target-selection lock")
+            assertTrue(listenerThread.stackTrace.any { it.className == EditorGateway::class.java.name && it.methodName == "accept" })
+            assertTrue(gateway.release(originalPort))
+            gateway.bind(0)
+            gateway.selectBackend(File(directory, "new.sock"), "new-owner")
+        }
+        assertFalse(reachedNewBackend.await(2, TimeUnit.SECONDS),
+            "a client from the released listener was routed to the next listener's backend")
+    }
+
 }

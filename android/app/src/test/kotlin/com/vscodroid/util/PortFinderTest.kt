@@ -161,7 +161,7 @@ class PortFinderTest {
                 // stay green.
                 //
                 // The fallback is not a harmless second answer. It hands back a
-                // port from the kernel's ephemeral range, which getOrAllocatePort
+                // port from the kernel's ephemeral range, which rememberHome
                 // deliberately refuses to remember, so the workbench origin stops
                 // being stable across cold starts and the IndexedDB behind it is
                 // dropped on every launch.
@@ -179,9 +179,37 @@ class PortFinderTest {
     inner class RememberedPortTest {
 
         @Test
-        fun `remembers the port it allocated`() {
-            val first = PortFinder.getOrAllocatePort(context)
-            assertEquals(first, stored, "the allocated port must be persisted")
+        fun `allocating remembers nothing`() {
+            // A port about to be tried is not yet a port that worked: another program can
+            // take it before the bind. Home is written after the bind, by rememberHome.
+            PortFinder.getOrAllocatePort(context)
+            assertEquals(0, stored, "getOrAllocatePort must not write; a bound port becomes home through rememberHome")
+        }
+
+        @Test
+        fun `the first port bound becomes home`() {
+            val port = PortFinder.findAvailablePort()
+            assertTrue(port < EPHEMERAL_BASE, "precondition failed: the scan range was already full")
+
+            PortFinder.rememberHome(context, port)
+
+            assertEquals(port, stored, "the first port an install binds must be remembered as its home")
+        }
+
+        @Test
+        fun `a remembered home is never replaced`() {
+            // An install whose port moved before home existed keeps the port it moved to:
+            // its present storage lives there. Replacing it with any later port, even one
+            // that was bound, would strand that storage the way the old move did.
+            val home = PortFinder.findAvailablePort()
+            assertTrue(home < EPHEMERAL_BASE, "precondition failed: the scan range was already full")
+            val other = hold(home).use { PortFinder.findAvailablePort() }
+            assertNotEquals(home, other, "precondition failed: the scan did not step over $home")
+            stored = home
+
+            PortFinder.rememberHome(context, other)
+
+            assertEquals(home, stored, "a remembered home must survive any later port")
         }
 
         @Test
@@ -196,6 +224,7 @@ class PortFinderTest {
             try {
                 val port = PortFinder.getOrAllocatePort(context)
                 assertTrue(port >= EPHEMERAL_BASE, "precondition failed: the scan range was not exhausted")
+                PortFinder.rememberHome(context, port)
                 assertEquals(0, stored, "an ephemeral port must not be persisted")
             } finally {
                 held.forEach { it.close() }
@@ -208,7 +237,7 @@ class PortFinderTest {
             // only briefly full, the next cold start returns to the origin this
             // install has been using, with its IndexedDB intact.
             // Taken before the range is held, so it is a port inside the scan range --
-            // the only kind getOrAllocatePort is willing to remember. Asserted rather
+            // the only kind rememberHome is willing to remember. Asserted rather
             // than assumed: if something else already owns the whole range, the scan
             // returns an ephemeral port here, and remembering one of those would make
             // the assertion below pass without exercising the branch at all.
@@ -259,31 +288,26 @@ class PortFinderTest {
         }
 
         @Test
-        fun `does not drift back to a lower port once it has moved`() {
-            // Allocating twice over a free scan base cannot see whether the
-            // port was remembered. findAvailablePort() scans upward from a
-            // fixed default, so while that default is free -- the ordinary case --
-            // a fresh scan returns the same number the remembered branch would
-            // have. Both calls move together, and the assertion holds with the
-            // branch deleted.
-            //
-            // Holding the first port forces the two paths apart: the remembered
-            // port is now the higher one, and only a scan would go back down to
-            // the lower one. Drifting back is not harmless -- it is a second
-            // origin change, and it discards whatever the workbench stored under
-            // the port we had just moved to.
-            val first = PortFinder.getOrAllocatePort(context)
+        fun `goes back to its home port once it is free again`() {
+            // A port taken while home is held serves that process only. Remembered,
+            // it moved the workbench to a new origin for good: everything stored under
+            // home stayed behind, never read again, although the next cold start
+            // found home free.
+            val home = PortFinder.findAvailablePort()
+            assertTrue(home < EPHEMERAL_BASE, "precondition failed: the scan range was already full")
+            stored = home
 
-            val moved = hold(first).use {
+            val moved = hold(home).use {
                 PortFinder.getOrAllocatePort(context).also { moved ->
-                    assertNotEquals(first, moved, "a held port cannot be reused")
+                    assertNotEquals(home, moved, "a held port cannot be reused")
                 }
             }
 
+            assertEquals(home, stored, "the port taken while $home was held must not replace it")
             assertEquals(
-                moved, PortFinder.getOrAllocatePort(context),
-                "once $first was free again the remembered $moved must still win; " +
-                    "returning $first would empty the storage keyed to $moved",
+                home, PortFinder.getOrAllocatePort(context),
+                "once $home is free again it must be used again; staying on $moved strands " +
+                    "the storage keyed to $home",
             )
         }
 
@@ -325,12 +349,14 @@ class PortFinderTest {
 
         @Test
         fun `moves off a remembered port that something else has taken`() {
-            val first = PortFinder.getOrAllocatePort(context)
+            val first = PortFinder.findAvailablePort()
+            assertTrue(first < EPHEMERAL_BASE, "precondition failed: the scan range was already full")
+            stored = first
 
             hold(first).use {
                 val second = PortFinder.getOrAllocatePort(context)
                 assertNotEquals(first, second, "a taken port cannot be reused")
-                assertEquals(second, stored, "the new port must replace the old one")
+                assertEquals(first, stored, "the port taken for this process must not replace home")
             }
         }
     }

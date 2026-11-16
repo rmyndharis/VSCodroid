@@ -366,6 +366,15 @@ class NodeService : Service() {
     fun lastStartupNotice(): StartupNotice? = startupNotice
 
     /**
+     * The home port this process had to start without, once, or 0; see
+     * [ProcessManager.takeAwayFromHome].
+     *
+     * Not a [StartupNotice]: those mean the server is not serving, and a client that
+     * finds one does not load the editor. This one is said while the editor is up.
+     */
+    fun takeAwayFromHome(): Int = processManager.takeAwayFromHome()
+
+    /**
      * Posts the foreground notification again.
      *
      * There is exactly one reason to need this, and it is not a refresh of stale
@@ -509,6 +518,9 @@ class NodeService : Service() {
         // whatever was left of the previous run's allowance.
         endFailureEpisode()
         processManager.stopServer()
+        // A temporary origin, taken because home was busy, goes with the stop: the
+        // process outlives the service, and opening the editor again must try home.
+        processManager.releaseAwayOrigin()
         ServiceCompat.stopForeground(this, ServiceCompat.STOP_FOREGROUND_REMOVE)
         removeNotification()
         stopSelf()

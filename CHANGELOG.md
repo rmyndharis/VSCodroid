@@ -50,6 +50,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Setup no longer asks for storage space for bundled extensions it will skip.
 - Reinstalling the C/C++ toolchain from a GitHub release counts its files already installed when it checks for storage space.
 - A restart of the editor's server no longer leaves the previous editor process running when its record file could not be written.
+- When another app holds the editor's port at startup, the editor says so and returns to your settings and sign-ins at the next start instead of losing them for good.
 - Starting the app no longer removes the files of a toolchain download or install that is still in progress.
 - Reading a device folder no longer keeps the processor busy while the app that provides the folder has no data to give.
 - A notice says so when a save finds that another app changed the file in the device folder and the device's version is kept beside it as `<name>.device-<time>`.
@@ -59,6 +60,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A delete in a device folder that gave up waiting for another write no longer keeps its folder from being deleted later.
 - A folder renamed or moved in a device folder that does not reach the device is reported once, with each file edited in it just before, instead of twice or not at all.
 - Choosing a recent device folder whose permission was withdrawn no longer blocks removing its local copy in Manage Device Folder Storage until the app restarts.
+- Returning to the app no longer reloads the editor a second time when it finished loading while the app was in the background.
+- The browser's return to the app after a sign-in is accepted once; a repeat of the same return is ignored.
+- The Jupyter extension's kernel picker lists its kernels, so notebook cells can run.
 - The description of the C/C++ toolchain names clangd beside clang and lld.
 - The editor server's log files keep recording after one failed switch to a new file.
 - The process count in the status bar no longer shows a reading dated in the future as current.

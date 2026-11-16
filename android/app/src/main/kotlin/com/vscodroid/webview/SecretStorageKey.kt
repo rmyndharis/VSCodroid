@@ -1,9 +1,12 @@
 package com.vscodroid.webview
 
 import android.content.Context
+import com.vscodroid.util.Logger
 import java.io.File
 import java.io.FileOutputStream
 import java.io.IOException
+import java.nio.channels.FileChannel
+import java.nio.file.StandardOpenOption
 import java.security.SecureRandom
 
 /**
@@ -25,7 +28,12 @@ import java.security.SecureRandom
  * which the backup rules leave out, so a backed-up key would be a key to
  * nothing on the device it was restored to.
  */
-class SecretStorageKey(private val file: File) {
+class SecretStorageKey internal constructor(
+    private val file: File,
+    private val syncDirectory: (File) -> Unit,
+) {
+
+    constructor(file: File) : this(file, ::fsyncDirectory)
 
     private var cached: ByteArray? = null
 
@@ -52,10 +60,17 @@ class SecretStorageKey(private val file: File) {
         staged.setReadable(true, true)
         staged.setWritable(true, true)
         if (!staged.renameTo(file)) throw IOException("could not move ${staged.name} into place")
+        try {
+            syncDirectory(dir)
+        } catch (e: Exception) {
+            Logger.w(TAG, "Could not sync directory for ${file.name} (${e.javaClass.simpleName})")
+        }
         return key
     }
 
     companion object {
+        private const val TAG = "SecretStorageKey"
+
         /** What the workbench accepts, and nothing else: `byteLength !== 256/8` throws. */
         const val KEY_BYTES = 32
         const val FILE_NAME = "secret-storage.key"
@@ -73,5 +88,15 @@ class SecretStorageKey(private val file: File) {
                 instance ?: SecretStorageKey(File(context.noBackupFilesDir, FILE_NAME))
                     .also { instance = it }
             }
+
+        /**
+         * Flushes the parent directory entry after [File.renameTo] so the new key
+         * filename survives power loss before another process reads it back.
+         */
+        internal fun fsyncDirectory(dir: File) {
+            FileChannel.open(dir.toPath(), StandardOpenOption.READ).use { channel ->
+                channel.force(true)
+            }
+        }
     }
 }

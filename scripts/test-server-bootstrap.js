@@ -339,12 +339,13 @@ if (process.getuid && process.getuid() !== 0) {
     fs.rmSync(dir, { recursive: true, force: true });
 }
 
-// 5b. The Python extension is let use the proposed APIs its manifest declares, and nothing
-//     else is. The workbench strips a declared proposal from every extension the server does
-//     not name, and ms-python.python then fails to activate at its first read of one. The
-//     server names an extension by `--enable-proposed-api <id>`; the same flag with no id
-//     turns the check off for every extension on the phone, so what matters here is the
-//     shape the bootstrap emits: the flag once, followed by exactly that id.
+// 5b. The Python, Jupyter, and Jupyter Renderers extensions are let use the proposed APIs their
+//     manifests declare, and nothing else is. The workbench strips a declared proposal from every
+//     extension the server does not name, causing testObserver / notebookKernelSource failures or
+//     dropping contribNotebookStaticPreloads. The server names an extension by
+//     `--enable-proposed-api <id>`, collected into a string[] across repeated flags; the same flag
+//     with no id turns the check off for every extension on the phone, so what matters here is the
+//     shape the bootstrap emits: the flag three times, each followed by one of those three ids.
 {
     const dir = fixture(UPSTREAM, {
         serverMain: "require('fs').writeFileSync(require('path').join(__dirname, 'argv.json'), " +
@@ -354,15 +355,11 @@ if (process.getuid && process.getuid() !== 0) {
     const argvFile = path.join(dir, 'vscode-reh', 'out', 'argv.json');
     assert.ok(fs.existsSync(argvFile), `the editor server was never launched:\n${run.output}`);
     const argv = JSON.parse(fs.readFileSync(argvFile, 'utf8'));
-    const at = argv.indexOf('--enable-proposed-api');
-    assert.ok(at >= 0, `the Python extension is not let use its proposed APIs: ${JSON.stringify(argv)}`);
-    assert.strictEqual(
-        argv.lastIndexOf('--enable-proposed-api'), at,
-        `the flag is given more than once: ${JSON.stringify(argv)}`,
-    );
-    assert.strictEqual(
-        argv[at + 1], 'ms-python.python',
-        `the flag must name the one extension that needs it: ${JSON.stringify(argv)}`,
+    const flagIndices = argv.reduce((acc, arg, i) => (arg === '--enable-proposed-api' ? [...acc, i] : acc), []);
+    assert.deepStrictEqual(
+        flagIndices.map((i) => argv[i + 1]),
+        ['ms-python.python', 'ms-toolsai.jupyter', 'ms-toolsai.jupyter-renderers'],
+        `the flag must appear three times naming Python, Jupyter, and Jupyter Renderers: ${JSON.stringify(argv)}`,
     );
     assert.ok(
         !argv.some((arg) => /^--enable-proposed-api=/.test(arg)),

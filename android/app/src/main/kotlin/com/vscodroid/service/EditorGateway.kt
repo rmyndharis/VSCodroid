@@ -39,6 +39,12 @@ internal class EditorGateway : Closeable {
     private var generation = 0L
     private var closed = false
     private var acceptThread: Thread? = null
+    // The home port this origin stands in for, until the page has been told; 0 at home. Kept with the
+    // listener rather than with a ProcessManager, which a recreated service replaces while the listener
+    // lives on: see [noteAwayFromHome].
+    private var awayFromHome = 0
+    // How many listeners bind has opened, never decremented: see [listenersOpened].
+    private var opened = 0L
     private val connections = mutableSetOf<Connection>()
     private val workers = ThreadPoolExecutor(
         0, MAX_CONNECTIONS * 2, 30, TimeUnit.SECONDS, SynchronousQueue(),
@@ -49,6 +55,28 @@ internal class EditorGateway : Closeable {
         get() = synchronized(lock) { listener?.takeIf { it.isOpen }?.socket()?.localPort }
 
     fun isBound(port: Int): Boolean = port > 0 && boundPort == port
+
+    /**
+     * How many listeners [bind] has opened in this gateway's life.
+     *
+     * A bind that returns the listener already there opens none. Read before and after
+     * a span of work, it tells whether a listener bound at the end was opened in that
+     * span, which the port number cannot: a listener released and opened again on the
+     * same port has the same number and a higher count.
+     */
+    val listenersOpened: Long get() = synchronized(lock) { opened }
+
+    /**
+     * Records which home port the origin just bound stands in for, or 0 when it is home itself.
+     *
+     * The notice belongs to the origin: it is said on the first page served from it, by whichever
+     * ProcessManager serves that page. A service the system recreates in the same process starts on
+     * the origin this gateway still holds and has no reason to set it again.
+     */
+    fun noteAwayFromHome(home: Int) = synchronized(lock) { awayFromHome = home }
+
+    /** The home port the current origin stands in for, once; 0 afterwards and at home. */
+    fun takeAwayFromHome(): Int = synchronized(lock) { awayFromHome.also { awayFromHome = 0 } }
 
     fun bind(port: Int): Int = synchronized(lock) {
         if (closed) throw IOException("Editor gateway is closed")
@@ -66,11 +94,39 @@ internal class EditorGateway : Closeable {
             throw failure
         }
         listener = channel
+        opened++
         acceptThread = Thread({ accept(channel) }, "VSCodroid editor listener").apply {
             isDaemon = true
             start()
         }
         channel.socket().localPort
+    }
+
+    /**
+     * Closes the listener when it is the one on [port], leaving this gateway able to
+     * [bind] again; answers whether it did.
+     *
+     * Not [close], which ends the gateway for the life of the process. This is for
+     * an origin taken only because the usual one was busy, given up when the editor
+     * is stopped so that the next start can bind the usual one; see
+     * `ProcessManager.releaseAwayOrigin`. Open connections, the selected backend and an
+     * unsaid notice that it was away go with it, and the accept thread ends with its
+     * channel. A client it accepted that has not been given a backend yet is closed
+     * rather than given the backend of a listener bound later; see [accept].
+     */
+    fun release(port: Int): Boolean {
+        val (channel, retired) = synchronized(lock) {
+            val current = listener ?: return false
+            if (current.socket().localPort != port) return false
+            listener = null
+            backend = null
+            awayFromHome = 0
+            generation++
+            current to connections.toList()
+        }
+        runCatching { channel.close() }
+        retired.forEach { it.close() }
+        return true
     }
 
     fun selectBackend(path: File, owner: String) {
@@ -105,9 +161,12 @@ internal class EditorGateway : Closeable {
                 client.socket().tcpNoDelay = true
                 client.socket().sendBufferSize = BUFFER_BYTES * 2
                 client.socket().receiveBufferSize = BUFFER_BYTES * 2
+                // The backend is the one selected for the listener that accepted the client. A listener
+                // released between the accept and this lock is no longer [listener], and the backend
+                // selected meanwhile belongs to the one bound after it, which this client never reached.
                 val connection = synchronized(lock) {
                     val target = backend
-                    if (closed || target == null || connections.size >= MAX_CONNECTIONS) null
+                    if (closed || listener !== channel || target == null || connections.size >= MAX_CONNECTIONS) null
                     else Connection(client, target).also { connections.add(it) }
                 }
                 if (connection == null) {

@@ -8,6 +8,7 @@ import com.vscodroid.util.Logger
 import io.mockk.every
 import io.mockk.just
 import io.mockk.mockk
+import io.mockk.spyk
 import io.mockk.mockkConstructor
 import io.mockk.mockkObject
 import io.mockk.unmockkAll
@@ -3046,6 +3047,38 @@ class AdoptionTest {
         )
     }
 
+    @Test
+    fun `an editor that survived on a temporary port is adopted there, not at home`() {
+        // A start that found home busy records its editor on the port it took. If
+        // that editor outlives the application process, the next cold start must
+        // adopt it where it is: starting from home would neither adopt it nor end
+        // it, since both compare the note's port with the start's, and the person's
+        // terminals would go on running in a process nothing tracks.
+        val survivor = StubServer(200, commit).also { stub = it }
+        val home = if (survivor.port == 13337) 13338 else 13337
+        remember(home)
+        recordEditorServer(pid = 4242, port = survivor.port)
+
+        assertTrue(manager.startServer(), "adopting is a successful start")
+        assertTrue(manager.isAdopted(), "the survivor on the temporary port must be adopted")
+        assertEquals(survivor.port, manager.port, "and the start must stay on the survivor's origin")
+    }
+
+    @Test
+    fun `a dead editor recorded on a temporary port leaves the start at home`() {
+        // The other half: a note is not a survivor. A start that followed a note of
+        // a process that is gone would keep the person away from home for nothing.
+        val survivor = StubServer(200, commit).also { stub = it }
+        val home = if (survivor.port == 13337) 13338 else 13337
+        remember(home)
+        recordEditorServer(pid = 4242, port = survivor.port)
+        File(tempDir, "proc/4242").deleteRecursively()
+
+        assertTrue(manager.startServer())
+        assertFalse(manager.isAdopted(), "nothing of ours survives to adopt")
+        assertEquals(home, manager.port, "the start must go home")
+    }
+
     /** Spawns over a holder with no note, which is not ours to adopt, and waits for the exit. */
     private fun spawnOverStranger() {
         serving(200)
@@ -4226,6 +4259,40 @@ class AdoptionTest {
             assertFalse(starter.isAlive || stopper?.isAlive == true || watch?.isAlive == true)
         }
     }
+    @Test
+    fun aLiveNoteFailingBuildProofMustNotDisplaceAFreeHome() {
+        val foreign = StubServer(200, "different-build").also { stub = it }
+        val home = ServerSocket(0, 0, InetAddress.getByName("127.0.0.1")).use { it.localPort }
+        assertTrue(PortFinder.isPortAvailable(home))
+        remember(home)
+        recordEditorServer(pid = 4242, port = foreign.port)
+        manager.killRecordedProcess = {
+            foreign.stop()
+            File(tempDir, "proc/4242").deleteRecursively()
+        }
+        assertTrue(manager.startServer())
+        assertFalse(manager.isAdopted(), "the build proof must still prevent adoption")
+        assertEquals(home, manager.port, "an unproved note must not move the replacement editor away from a free home")
+    }
+
+    @Test
+    fun aRecycledEditorPidForAnotherRunMustNotDivertAFreeHome() {
+        val foreign = StubServer(200, commit).also { stub = it }
+        val home = ServerSocket(0, 0, InetAddress.getByName("127.0.0.1")).use { it.localPort }
+        assertTrue(PortFinder.isPortAvailable(home))
+        remember(home)
+        recordEditorServer(pid = 4242, port = foreign.port)
+        val currentOwner = UUID.randomUUID().toString()
+        foreign.proofKey = currentOwner
+        File(tempDir, "proc/4242/environ").writeText("VSCODROID_SERVER_RUN_ID=$currentOwner\u0000")
+        val killed = AtomicBoolean(false)
+        manager.killRecordedProcess = { killed.set(true) }
+        assertTrue(manager.startServer())
+        assertFalse(manager.isAdopted(), "a recycled editor pid must not authenticate the stale note")
+        assertFalse(killed.get(), "ownership verification must prevent killing the different run")
+        assertEquals(home, manager.port, "a stale note whose recorded run is absent must not divert a free home")
+    }
+
 }
 
 /**
@@ -4871,4 +4938,519 @@ class HeapOverrideLatchTest {
         assertEquals(0, heapKillsForValue(storedValue = 1024, storedKills = 3, currentValue = 900))
         assertEquals(0, heapKillsForValue(storedValue = 0, storedKills = 3, currentValue = 1024))
     }
+}
+
+/**
+ * The home port: the one an install's workbench storage lives under, kept when a
+ * start finds it busy.
+ *
+ * The page's origin includes the port, and the WebView keeps the workbench's
+ * settings, sign-ins and open editors per origin. A port taken because home was
+ * busy therefore serves its process only; remembered in home's place, it moved
+ * the editor to a new origin for good, and everything stored under home stayed
+ * behind with nothing said, although the next cold start found home free.
+ *
+ * Each application process here is a real [EditorGateway] of its own, since the
+ * gateway is what holds the port for the life of a process, and a busy port is
+ * held by a real socket on 127.0.0.1, so the gateway's bind and [PortFinder]'s
+ * probe meet it the way they would on a device. Preferences are a stand-in that
+ * keeps what is written under the port's key.
+ */
+class HomePortTest {
+
+    @TempDir
+    lateinit var tempDir: File
+
+    private lateinit var contextMock: Context
+    private var stored = 0
+    private var writes = 0
+    private val gateways = mutableListOf<EditorGateway>()
+    private val managers = mutableListOf<ProcessManager>()
+    private val holders = mutableListOf<ServerSocket>()
+
+    @BeforeEach
+    fun setUp() {
+        mockkObject(Logger)
+        every { Logger.w(any(), any(), any()) } just Runs
+        every { Logger.w(any(), any()) } just Runs
+        every { Logger.i(any(), any()) } just Runs
+        every { Logger.d(any(), any()) } just Runs
+        every { Logger.e(any(), any(), any()) } just Runs
+        every { Logger.e(any(), any()) } just Runs
+
+        mockkObject(Environment)
+        every { Environment.getNodePath(any()) } returns "/bin/echo"
+        every { Environment.getServerScript(any()) } returns "server.js"
+        every { Environment.buildProcessEnvironment(any(), any()) } returns emptyMap()
+        every { Environment.getExtensionsDir(any()) } returns "extensions"
+        every { Environment.getUserDataDir(any()) } returns "data"
+        every { Environment.getLogsDir(any()) } returns "logs"
+
+        stored = 0
+        writes = 0
+        val editor = mockk<android.content.SharedPreferences.Editor>(relaxed = true)
+        every { editor.putInt("server_port", any()) } answers {
+            stored = secondArg()
+            writes++
+            editor
+        }
+        val prefs = mockk<android.content.SharedPreferences>(relaxed = true)
+        every { prefs.getInt("server_port", any()) } answers { stored }
+        every { prefs.edit() } returns editor
+
+        contextMock = mockk<Context>(relaxed = true)
+        every { contextMock.cacheDir } returns tempDir
+        every { contextMock.filesDir } returns tempDir
+        every { contextMock.getSharedPreferences(any(), any()) } returns prefs
+    }
+
+    @AfterEach
+    fun tearDown() {
+        managers.forEach { it.stopServer() }
+        gateways.forEach { it.close() }
+        holders.forEach { runCatching { it.close() } }
+        unmockkAll()
+    }
+
+    /** A gateway for one application process. */
+    private fun gateway(): EditorGateway = EditorGateway().also { gateways += it }
+
+    /** A manager as a new service creates it, on [gateway]: nothing bound by it yet. */
+    private fun manager(gateway: EditorGateway): ProcessManager =
+        ProcessManager(contextMock, gateway).also { managers += it }
+
+    /** Another program on [port], until the test closes it. */
+    private fun hold(port: Int): ServerSocket =
+        ServerSocket(port, 0, InetAddress.getByName("127.0.0.1")).also { holders += it }
+
+    /** A port the scan would hand out now, so one [PortFinder.rememberHome] accepts. */
+    private fun freePort(): Int = PortFinder.findAvailablePort().also {
+        assertTrue(it < 32768, "precondition failed: the scan range was already full")
+    }
+
+    private fun start(manager: ProcessManager): Boolean {
+        val exited = CountDownLatch(1)
+        manager.onServerCrashed = { exited.countDown() }
+        val started = manager.startServer()
+        assertTrue(exited.await(5, TimeUnit.SECONDS), "watchdog never reported the exit")
+        return started
+    }
+
+    /** The end of an application process: its server stopped and its gateway gone. */
+    private fun endProcess(manager: ProcessManager, gateway: EditorGateway) {
+        manager.stopServer()
+        gateway.close()
+    }
+
+    @Test
+    fun `a home port busy at one start is used again at the next`() {
+        val home = freePort()
+        stored = home
+        val holder = hold(home)
+        val firstGateway = gateway()
+        val first = manager(firstGateway)
+
+        assertTrue(start(first))
+        assertNotEquals(home, first.port, "a held home cannot be bound")
+        assertEquals(home, stored, "the port taken while $home was held must not replace it")
+
+        endProcess(first, firstGateway)
+        holder.close()
+        val second = manager(gateway())
+
+        assertTrue(start(second))
+        assertEquals(
+            home, second.port,
+            "with $home free again the next start must use it: the workbench's storage lives there",
+        )
+        assertEquals(home, stored)
+    }
+
+    @Test
+    fun `a start away from home says so once`() {
+        val home = freePort()
+        stored = home
+        hold(home)
+        val manager = manager(gateway())
+
+        assertTrue(start(manager))
+        assertEquals(home, manager.takeAwayFromHome(), "the person must be told the start could not use $home")
+        assertEquals(0, manager.takeAwayFromHome(), "and told once")
+
+        assertTrue(start(manager), "a restart in the same process")
+        assertEquals(0, manager.takeAwayFromHome(), "a restart in the same process is not a new start away from home")
+    }
+
+    @Test
+    fun `a start at home says nothing`() {
+        val home = freePort()
+        stored = home
+        val manager = manager(gateway())
+
+        assertTrue(start(manager))
+        assertEquals(home, manager.port)
+        assertEquals(0, manager.takeAwayFromHome())
+    }
+
+    @Test
+    fun `an install that has already moved stays on the port it moved to`() {
+        // Before home was kept, one busy start moved an install for good, and its
+        // present storage lives under the port it moved to. That port is the
+        // remembered one and so it is home; the scan's first free port, under which
+        // only older storage lies, is not.
+        val scanFirst = freePort()
+        val moved = ServerSocket(scanFirst, 0, InetAddress.getByName("127.0.0.1")).use {
+            PortFinder.findAvailablePort()
+        }
+        assertNotEquals(scanFirst, moved, "precondition failed: the scan did not step over $scanFirst")
+        stored = moved
+        val manager = manager(gateway())
+
+        assertTrue(start(manager))
+        assertEquals(moved, manager.port, "the port an install already moved to must stay its home")
+        assertEquals(moved, stored)
+        assertEquals(0, manager.takeAwayFromHome())
+    }
+
+    @Test
+    fun `a home port busy at every start stays home, and the temporary port stays the same`() {
+        val home = freePort()
+        stored = home
+        hold(home)
+        val firstGateway = gateway()
+        val first = manager(firstGateway)
+
+        assertTrue(start(first))
+        val away = first.port
+        assertNotEquals(home, away)
+        assertEquals(home, first.takeAwayFromHome())
+
+        endProcess(first, firstGateway)
+        val second = manager(gateway())
+
+        assertTrue(start(second))
+        assertEquals(
+            away, second.port,
+            "with $home still held the next start must take the same temporary port, so that " +
+                "what is stored there stays together",
+        )
+        assertEquals(home, second.takeAwayFromHome(), "and say so again: it is another start away from home")
+        assertEquals(home, stored, "home is still the remembered port")
+        assertEquals(0, writes, "nothing was written over it")
+    }
+
+    @Test
+    fun `a fresh install remembers the port it bound`() {
+        val manager = manager(gateway())
+
+        assertTrue(start(manager))
+        assertEquals(manager.port, stored, "the first port an install binds is its home")
+        assertEquals(0, manager.takeAwayFromHome())
+    }
+
+    @Test
+    fun `a stop gives up a temporary origin, so the next start can go home`() {
+        // The application process outlives a stopped service, and its gateway keeps
+        // the port it bound. Without this, opening the editor again in that process
+        // inherited the temporary port, whatever had become of home.
+        val home = freePort()
+        stored = home
+        val holder = hold(home)
+        val gateway = gateway()
+        val first = manager(gateway)
+
+        assertTrue(start(first))
+        first.stopServer()
+        holder.close()
+        first.releaseAwayOrigin()
+        assertNull(gateway.boundPort, "the temporary origin must be given up at a stop")
+
+        val second = manager(gateway)
+        assertTrue(start(second))
+        assertEquals(home, second.port, "the next start in the same process must go home")
+    }
+
+    @Test
+    fun `a stop never gives up home`() {
+        val home = freePort()
+        stored = home
+        val gateway = gateway()
+        val manager = manager(gateway)
+
+        assertTrue(start(manager))
+        manager.stopServer()
+        manager.releaseAwayOrigin()
+
+        assertEquals(home, gateway.boundPort, "home stays reserved against other programs while the process lives")
+    }
+    @Test
+    fun stoppedStartMustNotBindAfterTemporaryRelease() {
+        val home = freePort()
+        stored = home
+        hold(home)
+        val gateway = spyk(EditorGateway()).also { gateways += it }
+        val manager = manager(gateway)
+        val entered = CountDownLatch(1)
+        val proceed = CountDownLatch(1)
+        val first = AtomicBoolean(true)
+        val result = AtomicReference<Boolean>()
+        val failure = AtomicReference<Throwable>()
+        every { gateway.bind(any()) } answers {
+            if (first.compareAndSet(true, false)) {
+                entered.countDown()
+                check(proceed.await(10, TimeUnit.SECONDS))
+            }
+            callOriginal()
+        }
+        val starter = thread {
+            try { result.set(manager.startServer()) } catch (e: Throwable) { failure.set(e) }
+        }
+        try {
+            assertTrue(entered.await(10, TimeUnit.SECONDS))
+            manager.stopServer()
+            manager.releaseAwayOrigin()
+        } finally {
+            proceed.countDown()
+            starter.join(10_000)
+        }
+        assertFalse(starter.isAlive)
+        assertNull(failure.get())
+        assertEquals(false, result.get(), "the stopped generation must be rejected")
+        assertNull(gateway.boundPort, "a canceled start bound a temporary origin after Stop had already tried to release it")
+    }
+
+    @Test
+    fun stoppedInheritedStartMustNotRebindAfterRelease() {
+        val home = freePort()
+        stored = home
+        val holder = hold(home)
+        val gateway = spyk(EditorGateway()).also { gateways += it }
+        val temporary = freePort()
+        gateway.bind(temporary)
+        val manager = manager(gateway)
+        val entered = CountDownLatch(1)
+        val proceed = CountDownLatch(1)
+        val result = AtomicReference<Boolean>()
+        val failure = AtomicReference<Throwable>()
+        every { gateway.bind(any()) } answers {
+            entered.countDown()
+            check(proceed.await(10, TimeUnit.SECONDS))
+            callOriginal()
+        }
+        val starter = thread {
+            try { result.set(manager.startServer()) } catch (e: Throwable) { failure.set(e) }
+        }
+        try {
+            assertTrue(entered.await(10, TimeUnit.SECONDS))
+            manager.stopServer()
+            manager.releaseAwayOrigin()
+            assertNull(gateway.boundPort, "Stop must first release the inherited temporary listener")
+            holder.close()
+        } finally {
+            proceed.countDown()
+            starter.join(10_000)
+        }
+        assertFalse(starter.isAlive)
+        assertNull(failure.get())
+        assertEquals(false, result.get())
+        assertTrue(PortFinder.isPortAvailable(home), "home is free while the refused temporary bind remains")
+        assertNull(gateway.boundPort, "the stopped start recreated an inherited listener after Stop released it")
+    }
+
+    @Test
+    fun stoppedInheritedStartLeavesTheListenerItDidNotOpen() {
+        // The other side of the row above: a start that found a temporary listener bound and is
+        // refused by a stop that did not release it (a stop other than the notification's) must
+        // not take that listener away; the process keeps it until such a release.
+        val home = freePort()
+        stored = home
+        hold(home)
+        val gateway = spyk(EditorGateway()).also { gateways += it }
+        val temporary = freePort()
+        gateway.bind(temporary)
+        val manager = manager(gateway)
+        val entered = CountDownLatch(1)
+        val proceed = CountDownLatch(1)
+        val result = AtomicReference<Boolean>()
+        val failure = AtomicReference<Throwable>()
+        every { gateway.bind(any()) } answers {
+            entered.countDown()
+            check(proceed.await(10, TimeUnit.SECONDS))
+            callOriginal()
+        }
+        val starter = thread {
+            try { result.set(manager.startServer()) } catch (e: Throwable) { failure.set(e) }
+        }
+        try {
+            assertTrue(entered.await(10, TimeUnit.SECONDS))
+            manager.stopServer()
+            assertEquals(temporary, gateway.boundPort, "this stop releases nothing")
+        } finally {
+            proceed.countDown()
+            starter.join(10_000)
+        }
+        assertFalse(starter.isAlive)
+        assertNull(failure.get())
+        assertEquals(false, result.get())
+        assertEquals(temporary, gateway.boundPort, "a refused start released a listener it did not open")
+    }
+
+    private fun verifyReplacementWaitsForOldRefusal(freeHome: Boolean) {
+        val home = freePort()
+        stored = home
+        val holder = hold(home)
+        val gateway = spyk(EditorGateway()).also { gateways += it }
+        val old = manager(gateway)
+        val entered = CountDownLatch(1)
+        val proceed = CountDownLatch(1)
+        val first = AtomicBoolean(true)
+        val oldResult = AtomicReference<Boolean>()
+        val newResult = AtomicReference<Boolean>()
+        val failure = AtomicReference<Throwable>()
+        every { gateway.bind(any()) } answers {
+            val bound = callOriginal()
+            if (first.compareAndSet(true, false)) {
+                entered.countDown()
+                check(proceed.await(10, TimeUnit.SECONDS))
+            }
+            bound
+        }
+        val starter = thread {
+            try { oldResult.set(old.startServer()) } catch (e: Throwable) { failure.set(e) }
+        }
+        val replacement = manager(gateway)
+        var replacementThread: Thread? = null
+        try {
+            assertTrue(entered.await(10, TimeUnit.SECONDS))
+            old.stopServer()
+            old.releaseAwayOrigin()
+            assertNull(gateway.boundPort)
+            if (freeHome) holder.close()
+            val waiting = thread {
+                try { newResult.set(start(replacement)) } catch (e: Throwable) { failure.set(e) }
+            }
+            replacementThread = waiting
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(3)
+            while (waiting.state != Thread.State.BLOCKED && System.nanoTime() < deadline) Thread.sleep(1)
+            assertEquals(Thread.State.BLOCKED, waiting.state)
+            assertTrue(waiting.stackTrace.any {
+                it.className == ProcessManager::class.java.name && it.methodName == "startServer"
+            }, "the replacement must wait in the process-wide start lock")
+            assertNull(gateway.boundPort, "replacement bound before the old start finished cleanup")
+        } finally {
+            proceed.countDown()
+            starter.join(10_000)
+            replacementThread?.join(10_000)
+        }
+        assertFalse(starter.isAlive)
+        assertFalse(replacementThread?.isAlive == true)
+        assertNull(failure.get())
+        assertEquals(false, oldResult.get())
+        assertEquals(true, newResult.get())
+        assertEquals(replacement.port, gateway.boundPort)
+        if (freeHome) assertEquals(home, replacement.port) else assertNotEquals(home, replacement.port)
+        assertEquals(if (freeHome) 0 else home, replacement.takeAwayFromHome())
+    }
+
+    @Test
+    fun replacementAwayStartWaitsForOldRefusalAndKeepsItsListener() = verifyReplacementWaitsForOldRefusal(false)
+
+    @Test
+    fun replacementHomeWaitsForOldRefusalAndHasNoAwayNotice() = verifyReplacementWaitsForOldRefusal(true)
+
+    private fun verifyHomeTakenAfterSurvivorRelease(takeAwayToo: Boolean) {
+        val home = freePort()
+        stored = home
+        val holder = hold(home)
+        val away = freePort()
+        val gateway = spyk(EditorGateway()).also { gateways += it }
+        gateway.bind(away)
+        gateway.noteAwayFromHome(home)
+        val manager = manager(gateway)
+        manager.portField = away
+        holder.close()
+        every { gateway.release(away) } answers {
+            val released = callOriginal()
+            if (released) {
+                hold(home)
+                if (takeAwayToo) hold(away)
+            }
+            released
+        }
+        val leave = ProcessManager::class.java.getDeclaredMethod(
+            "leaveUnadoptedSurvivorsPort", EditorGateway::class.java, Int::class.javaPrimitiveType,
+        ).apply { isAccessible = true }
+        assertEquals(true, leave.invoke(manager, gateway, home))
+        assertEquals(manager.port, gateway.boundPort)
+        assertNotEquals(home, manager.port)
+        if (takeAwayToo) assertNotEquals(away, manager.port) else assertEquals(away, manager.port)
+        assertEquals(home, stored)
+        assertEquals(0, writes)
+        assertEquals(home, manager.takeAwayFromHome())
+        assertEquals(0, manager.takeAwayFromHome())
+    }
+
+    @Test
+    fun homeTakenAfterSurvivorReleaseFallsBackToThePreviousPort() = verifyHomeTakenAfterSurvivorRelease(false)
+
+    @Test
+    fun homeAndAwayTakenAfterReleaseFallBackToAnotherPort() = verifyHomeTakenAfterSurvivorRelease(true)
+
+    @Test
+    fun changingOtherHoldersChangesTheTemporaryOrigin() {
+        val home = freePort()
+        stored = home
+        hold(home)
+        val firstGateway = gateway()
+        val first = manager(firstGateway)
+        assertTrue(start(first))
+        val temporary = first.port
+        endProcess(first, firstGateway)
+        hold(temporary)
+        val second = manager(gateway())
+        assertTrue(start(second))
+        assertNotEquals(temporary, second.port, "the temporary origin is stable only while the set of busy ports is stable")
+        assertEquals(home, stored)
+    }
+
+    @Test
+    fun anExistingOutsideRangeHomeIsPreserved() {
+        val home = ServerSocket(0, 0, InetAddress.getByName("127.0.0.1")).use { it.localPort }
+        assertTrue(home !in 13337 until 13401)
+        stored = home
+        val manager = manager(gateway())
+        assertTrue(start(manager))
+        assertEquals(home, manager.port)
+        assertEquals(home, stored)
+        assertEquals(0, manager.takeAwayFromHome())
+    }
+
+    @Test
+    fun allScanPortsBusyLeavesFreshHomeUnset() {
+        for (port in 13337 until 13401) {
+            try { hold(port) } catch (_: java.net.BindException) { }
+        }
+        val manager = manager(gateway())
+        assertTrue(start(manager))
+        assertTrue(manager.port !in 13337 until 13401)
+        assertEquals(0, stored)
+        assertEquals(0, manager.takeAwayFromHome())
+    }
+
+    @Test
+    fun unconsumedAwayNoticeSurvivesCachedServiceRecreation() {
+        val home = freePort()
+        stored = home
+        hold(home)
+        val gateway = gateway()
+        val first = manager(gateway)
+        assertTrue(start(first))
+        assertNotEquals(home, first.port)
+        first.stopServer()
+        val replacement = manager(gateway)
+        assertTrue(start(replacement))
+        assertEquals(home, replacement.takeAwayFromHome(),
+            "the first page after a service recreation must not silently lose its pending away notice")
+    }
+
 }

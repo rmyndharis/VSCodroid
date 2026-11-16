@@ -70,6 +70,7 @@
          about to become reachable again, and a user who is not told which
          setting to look for has nothing to search on. -->
     <string name="heap_override_suspended">반복된 충돌로 settings.json의 사용자 지정 메모리 제한이 해제되었습니다. 다른 값을 시도하려면 vscodroid.server.heapCeilingMb를 변경하고 앱을 다시 시작하세요.</string>
+    <string name="notice_editor_away_from_home">다른 앱이 %1$d번 포트를 사용 중이어서 설정과 로그인 정보를 불러오지 못했습니다. 데이터는 안전합니다. 그 앱을 종료한 뒤 알림에서 VSCodroid를 중지하고 다시 여세요.</string>
     <!-- The figure is passed in rather than written here, and it is the
          SHORTFALL the refusal measured, not the size of the unpack: this asks
          the user to free it, and what they have to free is what the device is

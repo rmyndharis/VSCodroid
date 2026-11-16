@@ -70,6 +70,7 @@
          about to become reachable again, and a user who is not told which
          setting to look for has nothing to search on. -->
     <string name="heap_override_suspended">由于反复崩溃，settings.json 中的自定义内存上限已被关闭。请修改 vscodroid.server.heapCeilingMb 并重新启动应用，以尝试其他数值。</string>
+    <string name="notice_editor_away_from_home">另一个应用正在使用端口 %1$d，因此您的设置和登录信息未能加载。它们没有丢失：请关闭该应用，从通知中停止 VSCodroid，然后重新打开它。</string>
     <!-- The figure is passed in rather than written here, and it is the
          SHORTFALL the refusal measured, not the size of the unpack: this asks
          the user to free it, and what they have to free is what the device is

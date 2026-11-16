@@ -41,13 +41,14 @@ object PortFinder {
     private val LOOPBACK: InetAddress = InetAddress.getByName("127.0.0.1")
 
     /**
-     * The port this install last served on, or 0 when there is none.
+     * This install's home port, the one its workbench storage lives under, or 0
+     * when there is none yet.
      *
      * Split out of [getOrAllocatePort] because the two answer different questions
      * and only one of them is allowed to move. [getOrAllocatePort] answers "what can
-     * be bound now", so a held port makes it walk to a free one and take the
-     * workbench's storage with it. A caller deciding whether the HOLDER is worth
-     * adopting needs the port itself, held or not, and needs it before that walk.
+     * be bound now", so a held port makes it walk to a free one for the process.
+     * A caller deciding whether the HOLDER is worth adopting needs the port itself,
+     * held or not, and needs it before that walk.
      *
      * The single reader of [KEY_PORT], so the two cannot drift into disagreeing
      * about which key the remembered port lives under.
@@ -56,21 +57,24 @@ object PortFinder {
         context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).getInt(KEY_PORT, 0)
 
     /**
-     * The port this install serves the workbench on, stable across cold starts.
+     * The port to bind now: the remembered one while it is free, another one otherwise.
      *
      * The port is part of the WebView's origin, and the browser keys IndexedDB and
      * localStorage by origin. Every extension's `globalState` lives in the first
      * and the sealed extension secrets in the second, so a
      * freshly allocated port on each launch silently emptied all of it: sessions
      * signed out, extension state reset, with nothing in any log to connect it to
-     * the port. The chosen port is therefore remembered and reused whenever it is
-     * still free.
+     * the port. The remembered port is therefore reused whenever it is free.
      *
-     * Moving to a different port is still correct when the old one is taken; it
-     * costs the workbench storage held under the old origin, so it is logged.
+     * Nothing is written here. A port taken because the remembered one is busy
+     * serves this process only: written over the remembered one, it moved the
+     * workbench to a new origin for good, so one start with another program on the
+     * port left the user's settings, sign-ins and open editors behind the old
+     * origin, never read again and with nothing said, while the next cold start
+     * would have found the old port free. [rememberHome] writes the first port an
+     * install binds, and nothing ever replaces it.
      */
     fun getOrAllocatePort(context: Context): Int {
-        val prefs = context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE)
         val remembered = rememberedPort(context)
         if (remembered != 0 && isPortAvailable(remembered)) {
             return remembered
@@ -80,28 +84,32 @@ object PortFinder {
         if (remembered != 0) {
             Logger.w(
                 TAG,
-                "Port $remembered is taken, moving to $port. " +
-                    "Workbench storage keyed to the old origin is lost.",
+                "Port $remembered is taken; this process uses $port, and the next " +
+                    "cold start tries $remembered again.",
             )
         }
-        // Only a port from the scan range is worth remembering. The fallback in
-        // findAvailablePort() returns one from the kernel's ephemeral range, and
-        // the comment on DEFAULT_PORT explains why that is the wrong thing to
-        // write here: an unrelated outbound socket can be holding such a port at
-        // the moment of the next launch, which sends the workbench to a new
-        // origin and drops the IndexedDB behind the old one. Persisting it would
-        // also be one-way -- once remembered, the port never migrates back to the
-        // stable range even after the congestion that forced it has cleared.
-        //
-        // Leaving the previous value in place is deliberate: the next cold start
-        // retries the port this install has been using, which is exactly right if
-        // the range was only briefly full. This is persistence only; the port is
-        // still returned and still reused for the whole process lifetime through
-        // ProcessManager's cached _port.
-        if (port in DEFAULT_PORT until DEFAULT_PORT + SCAN_RANGE) {
-            prefs.edit { putInt(KEY_PORT, port) }
-        }
         return port
+    }
+
+    /**
+     * Makes [port] this install's home port, when it has none yet.
+     *
+     * Called with the first port a start actually bound, so a port that was only
+     * found free and then lost to another program before the bind never becomes
+     * home. A home already remembered is never replaced, which keeps an install
+     * whose port moved before this rule existed on the port its present storage
+     * lives under.
+     *
+     * Only a port from the scan range is worth remembering. The fallback in
+     * findAvailablePort() returns one from the kernel's ephemeral range, and the
+     * comment on DEFAULT_PORT explains why that is the wrong thing to write here:
+     * an unrelated outbound socket can be holding such a port at the moment of the
+     * next launch, which sends the workbench to a new origin. Leaving home unset
+     * instead makes the next cold start scan the range again.
+     */
+    fun rememberHome(context: Context, port: Int) {
+        if (rememberedPort(context) != 0 || port !in DEFAULT_PORT until DEFAULT_PORT + SCAN_RANGE) return
+        context.getSharedPreferences(PREFS_NAME, Context.MODE_PRIVATE).edit { putInt(KEY_PORT, port) }
     }
 
     /**

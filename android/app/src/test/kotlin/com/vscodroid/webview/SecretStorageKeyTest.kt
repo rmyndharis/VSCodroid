@@ -1,11 +1,20 @@
 package com.vscodroid.webview
 
+import com.vscodroid.util.Logger
+import io.mockk.Runs
+import io.mockk.every
+import io.mockk.just
+import io.mockk.mockkObject
+import io.mockk.slot
+import io.mockk.unmockkObject
 import org.junit.jupiter.api.Assertions.assertArrayEquals
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
 import java.io.File
+import java.io.IOException
 import java.nio.file.Files
 import java.nio.file.attribute.PosixFilePermissions
 
@@ -59,5 +68,53 @@ class SecretStorageKeyTest {
             "rw-------",
             PosixFilePermissions.toString(Files.getPosixFilePermissions(file.toPath())),
         )
+    }
+
+    @Test
+    fun `create fsyncs parent directory after moving staged key into place`() {
+        val syncedDirs = mutableListOf<File>()
+        var keyPresentDuringSync = false
+        var stagedAbsentDuringSync = false
+        val store = SecretStorageKey(file) { dir ->
+            keyPresentDuringSync = file.isFile && file.length() == SecretStorageKey.KEY_BYTES.toLong()
+            stagedAbsentDuringSync = !File(dir, "${file.name}.tmp").exists()
+            SecretStorageKey.fsyncDirectory(dir)
+            syncedDirs += dir
+        }
+
+        val created = store.bytes()
+        val reread = store.bytes()
+
+        assertArrayEquals(created, reread)
+        assertEquals(listOf(file.parentFile), syncedDirs)
+        assertTrue(keyPresentDuringSync, "parent directory sync must run after rename into place")
+        assertTrue(stagedAbsentDuringSync, "staged temp file must already be renamed away before directory sync")
+    }
+
+    @Test
+    fun `a directory sync failure still keeps and returns the created key`(@TempDir tempDir: File) {
+        val dir = File(tempDir, "noBackupFilesDir").apply { mkdirs() }
+        val file = File(dir, SecretStorageKey.FILE_NAME)
+        val loggedMessage = slot<String>()
+        mockkObject(Logger)
+        try {
+            every { Logger.w("SecretStorageKey", capture(loggedMessage)) } just Runs
+            every { Logger.w("SecretStorageKey", capture(loggedMessage), any()) } just Runs
+            val key = SecretStorageKey(file) { throw IOException("sync failed") }
+
+            val created = key.bytes()
+
+            assertEquals(SecretStorageKey.KEY_BYTES, created.size)
+            assertTrue(file.isFile)
+            assertArrayEquals(created, file.readBytes())
+            assertArrayEquals(created, SecretStorageKey(file).bytes())
+            assertTrue(loggedMessage.isCaptured)
+            assertTrue(loggedMessage.captured.contains(file.name))
+            assertTrue(loggedMessage.captured.contains("IOException"))
+            assertFalse(loggedMessage.captured.contains(dir.absolutePath))
+            assertFalse(loggedMessage.captured.contains(dir.name))
+        } finally {
+            unmockkObject(Logger)
+        }
     }
 }

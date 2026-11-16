@@ -363,7 +363,7 @@ sequenceDiagram
 
 **Protocol**: VS Code's built-in `IExtHostRpcProtocol` over WebSocket. Binary frames for efficiency.
 
-The relay preserves the HTTP `Host` header and WebSocket bytes without parsing or rewriting them. Each editor run listens on its own filesystem socket under app-private storage. Stopping or replacing that backend leaves the public port bound, so another process cannot take over the workbench origin while the app is alive. With no selected backend, the gateway answers new connections with HTTP 503. A backend restart uses the same public port; a surviving editor remains routed while its exited bootstrap is adopted again.
+The relay preserves the HTTP `Host` header and WebSocket bytes without parsing or rewriting them. Each editor run listens on its own filesystem socket under app-private storage. Stopping or replacing that backend leaves the public port bound, so another process cannot take over the workbench origin while the app is alive. A start that finds the remembered port busy binds another one for that process only and says so when the editor opens; the remembered port stays the one every later start tries first, and a Stop from the notification gives the temporary one up. With no selected backend, the gateway answers new connections with HTTP 503. A backend restart uses the same public port; a surviving editor remains routed while its exited bootstrap is adopted again.
 
 ### 5.2 Kotlin ↔ WebView
 

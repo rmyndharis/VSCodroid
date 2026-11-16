@@ -2077,6 +2077,38 @@ class CallbackRelayDecisionTest {
     }
 
     @Test
+    fun `a delivered callback is written only once and a failed write can be retried`() {
+        val view = mockk<android.webkit.WebView>(relaxed = true)
+        val client = mockk<com.vscodroid.webview.VSCodroidWebViewClient>(relaxed = true)
+        val replies = mutableListOf<android.webkit.ValueCallback<String>>()
+        var calls = 0
+        every { view.webViewClient } returns client
+        every { client.authPage(view) } answers {
+            com.vscodroid.webview.VSCodroidWebViewClient.AuthPage(
+                view, AuthTabWindow.pageGeneration(), "http://127.0.0.1:13337",
+            )
+        }
+        every { view.evaluateJavascript(any(), any()) } answers {
+            calls++
+            secondArg<android.webkit.ValueCallback<String>?>()?.let { replies += it }
+        }
+        setField("webView", view)
+        every { activity["handleExtensionCallback"](any<Uri>(), any<String>()) } answers { callOriginal() }
+
+        deliver(payload())
+        deliver(payload())
+        assertEquals(1, calls, "a return already in flight was sent twice")
+        assertEquals(1, replies.size)
+        replies[0].onReceiveValue("false")
+        deliver(payload())
+        assertEquals(2, replies.size, "a failed delivery must be retriable")
+        replies[1].onReceiveValue("true")
+        deliver(payload())
+        assertEquals(2, replies.size, "a delivered return was sent again")
+        assertNull(AuthTabWindow.armedAt(requestId))
+    }
+
+    @Test
     fun `the right secret inside the window is relayed under the same id`() {
         deliver(payload(id = requestId, nonce = secret))
 
@@ -2152,5 +2184,94 @@ class CallbackRelayDecisionTest {
         assertEquals(emptyList<String>(), relayedIds)
         assertEquals(emptyList<String>(), toastMessages)
         assertEquals(1_000L, AuthTabWindow.armedAt(requestId))
+    }
+}
+
+class CallbackSingleUseTest {
+    private val nonce = "a".repeat(32)
+    private val document = "d".repeat(32)
+
+    @BeforeEach
+    fun begin() = AuthTabWindow.beginPage()
+
+    @AfterEach
+    fun finish() = AuthTabWindow.beginPage()
+
+    private fun issue() {
+        assertTrue(AuthTabWindow.register("1", nonce, document, AuthTabWindow.pageGeneration()))
+        AuthTabWindow.launched(AuthTabWindow.arm(listOf("1"), nonce, 100L))
+    }
+
+    private fun claim(
+        id: String = "1", generation: Long = AuthTabWindow.pageGeneration(),
+        documentId: String = document, offered: String = nonce,
+    ): Any? = AuthTabWindow::class.java.getMethod(
+        "claimDelivery", String::class.java, Long::class.javaPrimitiveType, String::class.java, String::class.java,
+    ).invoke(AuthTabWindow, id, generation, documentId, offered)
+
+    private fun complete(delivery: Any, delivered: Boolean) {
+        AuthTabWindow::class.java.getMethod("finishDelivery", delivery.javaClass, Boolean::class.javaPrimitiveType)
+            .invoke(AuthTabWindow, delivery, delivered)
+    }
+
+    @Test
+    fun `delivery is claimed once and failure permits a retry`() {
+        issue()
+        val first = assertNotNullAndReturn(claim())
+        assertNull(claim())
+        complete(first, false)
+        val second = assertNotNullAndReturn(claim())
+        complete(second, true)
+        assertNull(claim())
+        assertNull(AuthTabWindow.armedAt("1"))
+        assertTrue(AuthTabWindow.arm(listOf("1"), nonce, 200L).isEmpty())
+    }
+
+    @Test
+    fun `only the matching live identity can be claimed and an in-flight delivery keeps its slot`() {
+        for (id in 1..32) {
+            assertTrue(AuthTabWindow.register(id.toString(), nonce, document, AuthTabWindow.pageGeneration(), 0L))
+        }
+        AuthTabWindow.launched(AuthTabWindow.arm(listOf("1"), nonce, 100L))
+        val generation = AuthTabWindow.pageGeneration()
+        assertNull(claim(generation = generation - 1))
+        assertNull(claim(documentId = "e".repeat(32)))
+        assertNull(claim(offered = "b".repeat(32)))
+        assertNull(claim(id = "2"))
+        val inFlight = assertNotNullAndReturn(claim())
+        val later = 100L + AUTH_TAB_WINDOW_MILLIS + 1
+        assertFalse(AuthTabWindow.register("33", nonce, document, generation, later))
+        complete(inFlight, false)
+        assertTrue(AuthTabWindow.register("33", nonce, document, generation, later))
+    }
+
+    @Test
+    fun `old completion cannot retire a new page request`() {
+        issue()
+        val old = assertNotNullAndReturn(claim())
+        AuthTabWindow.beginPage()
+        issue()
+        val current = assertNotNullAndReturn(claim())
+        complete(old, true)
+        assertNull(claim())
+        complete(current, false)
+        assertNotNull(claim())
+    }
+
+    @Test
+    fun `the relay claims before writing and finishes from the page result`() {
+        val src = File("src/main/kotlin/com/vscodroid/MainActivity.kt").readText()
+        val body = src.substringAfter("private fun handleExtensionCallback(").substringBefore("\n    /**")
+        val claim = body.indexOf("AuthTabWindow.claimDelivery(")
+        val evaluate = body.indexOf("targetView.evaluateJavascript(")
+        val finish = body.indexOf("AuthTabWindow.finishDelivery(")
+        assertTrue(claim >= 0 && claim < evaluate && evaluate < finish)
+        assertTrue(body.contains("return true;"))
+        assertTrue(body.contains("result == \"true\""))
+    }
+
+    private fun assertNotNullAndReturn(value: Any?): Any {
+        assertNotNull(value)
+        return value!!
     }
 }

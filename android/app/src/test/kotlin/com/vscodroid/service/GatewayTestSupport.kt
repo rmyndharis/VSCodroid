@@ -24,7 +24,19 @@ internal fun mockEditorGateway(): EditorGateway {
     var bound: Int? = null
     every { EditorGateway.instance } returns gateway
     every { gateway.boundPort } answers { bound }
-    every { gateway.bind(any()) } answers { firstArg<Int>().also { bound = it } }
+    // A bind with nothing bound opens a listener, as the real gateway counts them in listenersOpened.
+    var opened = 0L
+    every { gateway.bind(any()) } answers { firstArg<Int>().also { if (bound == null) opened++; bound = it } }
+    every { gateway.listenersOpened } answers { opened }
     every { gateway.isBound(any()) } answers { firstArg<Int>() > 0 }
+    // Release and the away notice as the real gateway has them: release answers true and unbinds only
+    // for the port that is bound, and takes an unsaid notice with it; the notice is said once.
+    var away = 0
+    every { gateway.release(any()) } answers {
+        val port = firstArg<Int>()
+        if (port > 0 && bound == port) { bound = null; away = 0; true } else false
+    }
+    every { gateway.noteAwayFromHome(any()) } answers { away = firstArg() }
+    every { gateway.takeAwayFromHome() } answers { away.also { away = 0 } }
     return gateway
 }
