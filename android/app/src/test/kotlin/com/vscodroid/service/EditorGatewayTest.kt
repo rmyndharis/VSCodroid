@@ -149,7 +149,7 @@ class EditorGatewayTest {
     @Test
     fun aPortReleasedWhileItsListenerWaitsForAClientCanBeBoundAtOnce() {
         // Closing a channel that a thread is waiting on in accept returns before the kernel lets
-        // the port go: on Linux a bind in that moment is refused, from one time in ten to two
+        // the port go: on Linux a bind in that moment is refused, from one time in ten to one
         // in three when measured with this class. release has to wait for that thread, or a
         // start that releases a temporary port and binds it again lands on a third one.
         // Repeated, because one round can pass by luck; macOS frees the port at once and
