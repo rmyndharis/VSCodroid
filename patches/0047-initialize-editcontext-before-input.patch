@@ -1,0 +1,85 @@
+Initialize the EditContext before the first input.
+
+A new editor at the default line 1, column 1 sent no cursor-change event,
+so its EditContext stayed empty when the keyboard connected. On the base
+Android build with Gboard 12.4 and WebView 134, accepting a file from Quick
+Open left that empty buffer focused until the first key. The letter's
+compositionstart then filled it and the editor restarted input. Typing one
+a before SEED BETA 1 produced aSEEDSEEDSEEDSEED BETA 1: the keyboard
+recomposed the word against the first letter's range instead of the word's
+current range.
+
+At the end of NativeEditContext construction, read the view model's primary
+selection, start the buffer at its first line, and synchronize the native
+text, selection and caches through the existing update method. An explicit
+initialization argument excludes this write from queuing an input restart,
+even if the host is focused before the next microtask. Later updates use
+the default argument and keep the existing input, selection and restart
+rules. The first compositionstart finds the text already synchronized.
+
+Every editor using NativeEditContext gets this initialization on every
+supported platform, including diff and peek editors, Source Control and
+chat inputs where enabled, and read-only and unfocused editors. It copies
+the primary selection's lines: one at the default caret, more for an
+existing multiline selection. A distant caret does not copy the preceding
+file, but a very long line still costs its full length. Restoring a saved
+view later can replace this first window and can queue an ordinary input
+restart; only the initial call is excluded. The write changes neither the
+document nor focus and sends no screen-reader notification. An invalid
+model selection retains the existing no-update behavior. Textarea inputs
+and the plain Quick Open input are unchanged. The eager copy's main-thread
+cost and assistive behavior have not been measured.
+
+With both editor changes built, on API 33 with Gboard 12.4 and WebView 134,
+three Quick Open runs focused the new buffer with SEED BETA 1 and selection
+0..0 already present; one a left aSEED BETA 1 each time. No updateText filled
+the buffer during that letter's compositionstart, and no blur from
+workbench.js occurred during its input sequence. These runs used the
+constructor initialization, without a helper priming the new context or
+refocusing it. On API 36 with Gboard 15.9 and WebView 149, where the keyboard
+did not underline the word, the same open-and-type sequence left aHello
+World! from Hello World!. With 0048 also built, on an API 34 emulator with
+Gboard 12.4 and WebView 157, three runs left aSEED BETA 1; a build without
+this change had put the letter at offset 3 on an API 33 emulator with Gboard
+12.4 and WebView 157 (SEEaD BETA 1, two runs).
+
+This removes the empty-buffer and late-initialization steps. It does not
+reject a recomposition with a stale native range if the keyboard still sends
+one, nor does it correct a selection the keyboard explicitly requests.
+Other NativeEditContext users are reached by the same constructor in the
+source; the file-opening runs do not establish their device behavior.
+
+diff --git a/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts b/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
+--- a/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
++++ b/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
+@@ -298,6 +298,11 @@
+ 				this._updateEditContext();
+ 			}
+ 		}));
++
++		// The initial selection emits no cursor event, so fill the buffer before the host takes focus.
++		this._primarySelection = context.viewModel.getPrimaryCursorState().modelState.selection;
++		this._editContextStart = new Position(this._primarySelection.startLineNumber, 1);
++		this._updateEditContext(true);
+ 	}
+ 
+ 	// --- Public methods ---
+@@ -465,7 +470,7 @@
+ 		this.domNode.domNode.setAttribute('tabindex', String(options.get(EditorOption.tabIndex)));
+ 	}
+ 
+-	private _updateEditContext(): void {
++	private _updateEditContext(initializing = false): void {
+ 		const editContextState = this._getNewEditContextState();
+ 		if (!editContextState) {
+ 			return;
+@@ -487,7 +492,8 @@
+ 		this._editContextPrimarySelection = editContextState.editContextPrimarySelection;
+ 		this._previousEditContextSelection = new OffsetRange(editContextState.selectionStartOffset, editContextState.selectionEndOffset);
+ 		// An edit or a selection of the input method's own is in its copy of the text already.
+-		if (isAndroid && !this._applyingInputMethodEdit && !this._keepEditContextStart &&
++		// Initial state predates the input connection and must not queue a restart either.
++		if (!initializing && isAndroid && !this._applyingInputMethodEdit && !this._keepEditContextStart &&
+ 			(newText !== oldText || !this._previousEditContextSelection.equals(oldSelection))) {
+ 			this._restartInputIfUnheard(oldText, oldSelection, wasComposing);
+ 		}

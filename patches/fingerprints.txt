@@ -336,6 +336,7 @@
 # 1.139.1 workbench.js, so a match means the patch arrived. It cannot tell a patch
 # that kept the id and dropped the prompt; the manifest hash covers an edited patch.
 0031 open folder offers the system picker|out/vs/code/browser/workbench/workbench.js|vscodroid.openFolderFromDevice
+0031 open folder starts in projects, not in a device copy|out/vs/code/browser/workbench/workbench.js|saf-mirrors(
 
 # 0032's pattern is the name of the constant it adds. Member names survive the bundler
 # (0029 relies on the same), and the literal is 0 times in the shipped 1.139.1 workbench.js.
@@ -366,3 +367,66 @@
 0043 regular-file check in serveFile|out/server-main.js|Not a regular file:
 0044 gesture target inside a shadow root|out/vs/code/browser/workbench/workbench.js|composedPath()[0]
 0045 color picker opened by a swatch tap|out/vs/code/browser/workbench/workbench.js|closest(".colorpicker-color-decoration")
+0046 editcontext composition snapshot|out/vs/code/browser/workbench/workbench.js|composing:
+0046 editcontext composition tracking|out/vs/code/browser/workbench/workbench.js x6|this._compositionOpen
+0047 editcontext initial cursor|out/vs/code/browser/workbench/workbench.js|getPrimaryCursorState().modelState.selection
+0047 editcontext initial window|out/vs/code/browser/workbench/workbench.js|this._primarySelection.startLineNumber
+0048 unchanged input text|out/vs/code/browser/workbench/workbench.js|this._previousEditContextText.slice(
+0048 unchanged input bounds|out/vs/code/browser/workbench/workbench.js|this._previousEditContextText.length
+0049 same text at every cursor|out/vs/code/browser/workbench/workbench.js|this._cursorsHoldSameText(
+0049 several cursors|out/vs/code/browser/workbench/workbench.js|getCursorStates().length>1
+0049 buffer held while cursors go|out/vs/code/browser/workbench/workbench.js|this._dismissingCursors
+0049 primary kept when the others go|out/vs/code/browser/workbench/workbench.js|[this._context.viewModel.getPrimaryCursorState()]
+# 0050 rows for the stack. Each pattern is a member or call that the patch adds to nativeEditContext.ts. Member names are properties, which minification keeps, and each pattern
+# is found in what the patch itself adds. The comment above a row says what that row pins.
+
+# The test that an update's text is already held in a stretch of the buffer that contains or touches the caret, which is what a stale write of a remembered word is.
+0050 text touching the caret|out/vs/code/browser/workbench/workbench.js|this._textTouchesCaret(
+# The exemption of a rewrite of the same length, of the range that ends at the caret, in a composition that has typed, which a keyboard in step sends.
+0050 typed composition exempt|out/vs/code/browser/workbench/workbench.js|this._isInStepRewrite(
+# The read of the flag that says whether the open composition has typed anything since it started.
+0050 composition typed flag read|out/vs/code/browser/workbench/workbench.js|this._compositionTyped&&
+# The forced restart that a refusal asks for: it happens whatever the buffer holds, so that the keyboard reads the buffer and the caret again.
+0050 restart forced after a refusal|out/vs/code/browser/workbench/workbench.js|this._beforeRewrite.force=
+# The test for a reopened word written back short: the part of the range before the caret is written over the whole range, with the caret inside it, so the tail after the caret is dropped.
+0050 tail drop on reopen|out/vs/code/browser/workbench/workbench.js|this._isTailDropOnReopen(
+# The bound on forced restarts: after six without a change of text an update is no longer refused.
+0050 bound on forced restarts|out/vs/code/browser/workbench/workbench.js|this._refusalRestarts<6
+# The call that follows an edit the editor applied: it marks the composition as typed and starts the restart count again.
+0050 flag and count after an applied edit|out/vs/code/browser/workbench/workbench.js|this._afterAppliedEdit(
+# The test for the next letter arriving over the stale range of a refusal that stands.
+0050 typed over a stale range|out/vs/code/browser/workbench/workbench.js|this._isTypedOverStaleRange(
+# The record of a refusal that stands, for the range and the buffer it was made on, until the model is edited or a composition starts.
+0050 refusal stands for its range until the model is edited|out/vs/code/browser/workbench/workbench.js|this._standingRefusal=
+# The test for one letter written over a reopened word of more than one unit.
+0050 one unit written over a reopened word|out/vs/code/browser/workbench/workbench.js|this._isOneUnitOverWord(
+# The restart count is kept for one version of the model and starts again when the model changes.
+0050 restart count belongs to a version of the model|out/vs/code/browser/workbench/workbench.js|this._refusalRestartsVersion
+# The letter test: one letter or digit of an alphabet, counted in code points.
+0050 one letter of an alphabet|out/vs/code/browser/workbench/workbench.js|this._isOneLetter(
+# The test for a remembered word written over text that lies wholly after the caret while the caret is asked to stay.
+0050 stale write over text after the caret|out/vs/code/browser/workbench/workbench.js|this._isStaleWriteAfterCaret(
+# The test for the range's own text written back with units added at its end while the caret is asked to stay at that end.
+0050 growth of the range's text after the caret|out/vs/code/browser/workbench/workbench.js|this._isGrowthAfterCaret(
+# The test for an update that replaces text with a text that is not the range's own and asks for the caret to stay where it was, which is not the end of what it writes, with nothing typed in the composition.
+0050 untyped write keeping the caret|out/vs/code/browser/workbench/workbench.js|this._isUntypedWriteKeepingCaret(
+# The test for an update that inserts text at the caret, in a composition that has typed nothing, and asks for the caret to stay where it was, which is before the text it inserts.
+0050 untyped insertion keeping the caret|out/vs/code/browser/workbench/workbench.js|this._isUntypedInsertKeepingCaret(
+# The test for an update that replaces the text that ends at the caret, in a composition that has typed, and asks for the caret to stay where it was, which is not the end of what it writes.
+0050 typed write keeping the caret|out/vs/code/browser/workbench/workbench.js|this._isTypedWriteKeepingCaret(
+
+# The guard: an update whose range ends beyond the end of the buffer names text that the buffer does not hold, and is refused in any composition state.
+0050 range beyond the buffer refused|out/vs/code/browser/workbench/workbench.js|this._isBeyondBuffer(
+# Past the bound an update is passed with its range clamped to the end of the buffer, so no unit that the buffer does not hold is replaced.
+0050 update clamped to the buffer|out/vs/code/browser/workbench/workbench.js|updateRangeEnd:this._previousEditContextText.length,selectionStart:
+# 0051 rows for the stack. Each pattern is a member or call that the patch adds to nativeEditContext.ts. Member names are properties, which minification keeps, and each pattern
+# is found in what the patch itself adds. The comment above a row says what that row pins.
+# The test that the caret is the one the buffer was last built for, so that a cursor event leaves the buffer where it is.
+0051 buffer kept while the caret stays|out/vs/code/browser/workbench/workbench.js|this._caretUnmoved(
+# The count of carets the buffer was built for, which limits keeping the buffer to a single caret.
+0051 buffer kept for one caret only|out/vs/code/browser/workbench/workbench.js|this._editContextCursorCount
+# The count is taken where the buffer is built and again where the other carets are dropped, so the assignment is there twice. The second copy is the one that keeps the buffer when no edit follows the drop.
+0051 count taken when the other carets are dropped|out/vs/code/browser/workbench/workbench.js x2|this._editContextCursorCount=this._cursorCount
+0052 suggest list tap bounds|out/vs/code/browser/workbench/workbench.js|this._onListTap(
+# The call that refilters an open suggestion list on a content change while a composition is open, on Android.
+0053 suggest refilter while composing|out/vs/code/browser/workbench/workbench.js|this._refilterWhileComposing()

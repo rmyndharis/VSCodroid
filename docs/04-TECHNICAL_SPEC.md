@@ -1081,8 +1081,252 @@ nothing, and it opens the list wherever the caret then ends a word. Patch 0023 c
 a cursor key moves the caret; without it, End on a line ending in an identifier, or a trackpad
 drag down onto one, opened the list there, and Enter then accepted a suggestion instead of
 starting a new line. The word is committed as typed, so on a Japanese keyboard the kana are
-committed unconverted. A caret moved by a command, such as Undo, Find or Go to Line, is not
-covered.
+committed unconverted. Commands and extensions are not keys or gestures this guard handles.
+Patch 0046 ends a composition still open after an edit changes the buffer. On the built
+editor with Gboard 12.4 and WebView 134 on API 33, long-press Paste and hardware Ctrl+V each
+left `helloabXYZ` with one editor restart; Edit > Paste left the same text with none,
+composition having ended when the menu opened. With Gboard 8.0.4 and WebView 134 on API 29,
+a built-editor long-press paste also left `helloabXYZ` with one editor restart. In these
+composing paste traces the keyboard's next update used the new 0..10 range. With Gboard 12.4
+on WebView 149 the same pastes landed once as well.
+
+From the source, Undo and Redo, a snippet, an extension's edit, and Enter accepting a
+suggestion also reach the rule if composition remains open when the command changes the
+buffer. That Enter route was not exercised by the measured suggestion-list sequences:
+on the combined build Gboard 12.4 committed `alp` and a newline in one textupdate, without
+an Enter key reaching the list; on Gboard 8.0.4's baseline, composition ended before Enter
+accepted `alpha1`. Find, Go to Line or a jump that moves the buffer to another line's text
+is also a source-only route. A within-line move that changes no buffer text remains
+uncovered, as does stale keyboard text carried across a focus move with no buffer rewrite.
+
+The editor saves whether a composition was open at the first rewrite of a pending batch
+and, at the existing microtask, restarts input if text changed and composition is still
+open. The unchanged-selection rule from 0024 remains in place. A composition the guard
+already ended adds no second restart for the new reason. The input method's synchronous
+work, including typing and plain Enter, stays excluded; later work caused by typing does
+not. In particular, a delayed format-on-type edit can commit an unconverted word; that
+option is off by default at this pin. An empty commit can leave the open mark until blur
+or compositionend, costing one extra restart at a later non-IME edit that changes text.
+Coalescing is per pending batch: ending composition can itself make another edit.
+
+The existing closing rules run at composition-end. On the built editor with Gboard 12.4
+and WebView 134, a single pasted `(` over underlined `helloab` produced `helloab()`, then
+`helloab(x)` after `x`, with two editor restarts that settled. The added closer keeps the
+caret's offset, so 0024 causes the second restart. From the source, a quote can close too
+where its setting permits it; a longer paste or a single non-opener adds no closer. The
+word is committed as typed and the keyboard can refresh its suggestion strip. Delayed
+formatting and unconverted Japanese, Korean and Chinese input still need device checks.
+The combined editor kept the four Enter flows described below on Gboard 12.4 with no
+editor restart from Enter; key-row Tab accepting `alpha1` kept one guard restart.
+
+A file opened at line 1, column 1 could connect the keyboard to an empty EditContext:
+the initial cursor had not moved, so no cursor event filled its buffer. The first letter's
+compositionstart filled it instead and queued 0024's unchanged-selection restart. Patch
+0047 fills the native text, selection and synchronization caches at the end of construction,
+before the host first takes focus. It reads the current primary cursor, so a recreated
+context starts at the existing selection rather than assuming 1:1. Only that initial write
+is excluded from the restart scheduler; a saved view restored afterward can replace the
+window and queue an ordinary restart.
+
+With both patches built, three Quick Open runs on API 33 with Gboard 12.4 and WebView 134
+focused the buffer with `SEED BETA 1` and selection 0..0 already present. One `a` left
+`aSEED BETA 1` each time, with no late initialization in compositionstart and no blur from
+workbench.js at the first key. On API 36 with Gboard 15.9 and WebView 149, which did not
+underline the word, opening `Hello World!` and typing `a` gave `aHello World!`. The first
+letter was also right with Gboard 12.4 on WebView 149, with Gboard 8.0.4 on API 29, and from a
+hardware keyboard. On an API 34 emulator with Gboard 12.4 and WebView 157, with the three
+patches built, three runs left `aSEED BETA 1`, where a build without them had put the letter
+at offset 3 (`SEEaD BETA 1`, two runs on an API 33 emulator).
+
+From the source, initialization reaches every NativeEditContext on supported platforms:
+both diff sides, peek editors, Source Control and chat inputs where enabled, and read-only
+and unfocused editors. The window covers the primary selection's lines, one at the default
+caret and more for a multiline selection. A distant caret does not copy the preceding
+file; a very long line still costs its full length. This changes neither the document nor
+focus and sends no screen-reader notification. Its main-thread cost, assistive behavior
+and those other editor surfaces are not established by the file-opening runs. Textarea
+inputs are unchanged. It neither rejects a stale recomposition delivered afterward nor
+overrides a selection the keyboard requests.
+
+Patch 0048 keeps an unchanged word out of the model's edit path on Android. Gboard can
+reopen the word by sending its existing text as a replacement for the same range. From
+the source, that replacement otherwise advances the model version, can dirty a saved
+file and schedule Auto Save, and can leave an undo entry with no visible effect. The
+replacement is compared with the cached text from before the event, not the native
+buffer that already contains the input method's result. The new return requires a
+collapsed cached selection: a commit over selected text still types at every cursor.
+With several cursors, an equal update is skipped only when the requested selection
+is unchanged, keeping every cursor and avoiding a copy of the primary word over the
+other words. A moved selection with several cursors keeps the old composition edit
+path only where 0049, below, leaves the update to that path. With one cursor, a
+requested move uses the existing explicit keyboard-selection path. Composition state
+is retained. Actual typing, a same-length correction, deletion and a stale-range
+update whose text is longer than its range still use the edit path. This is separate
+from initializing the buffer: 0047 supplies the word before focus, and 0048 keeps the
+keyboard's later unchanged-word update from editing that document.
+
+With the three patches built, a saved file that was opened or tapped into, with nothing
+typed, kept its modification time and contents while the keyboard underlined the word: on
+API 29 with Gboard 8.0.4, in the app's storage and in a device folder, and on API 33 with
+Gboard 12.4 on WebView 134 and 149. Without 0048 the same tap wrote the file again with
+identical bytes one second later, Auto Save being on by default, and with 0047 alone so did
+the first open. One Undo after a paste over an underlined word restored the word. With two
+carets after different words and nothing typed, both lines stayed as they were, where an
+editor built without 0046 to 0048 copied the first word over the second and saved it. On an
+API 34 emulator with Gboard 12.4 and WebView 157, a tap into a word wrote nothing and one
+Undo removed a paste, three runs each. Typing with several carets on a keyboard that
+underlines words was still wrong with these three patches: the keyboard's update carries its
+whole composed word, which replaced the word before every caret, and with two carets after
+`alpha` and `bravo` one `x` left `alphax` on both lines in three runs. Patch 0049 changes
+that.
+
+Patch 0049 applies a keyboard's update at every cursor only where it means the same there. On
+Android, with several cursors, an update that reaches outside the primary selection is left to
+the old path, the same edit at every cursor, only when every cursor is collapsed and holds,
+around it, the very text the update replaces at the primary caret, with no line break in that
+text and no two of those stretches overlapping: a word typed at several carets and then
+corrected, completed or converted still reaches all of them. Otherwise text typed at the
+primary caret is typed at every cursor, and one character deleted before it is deleted before
+every cursor. Anything else that changes the text or moves the selection, a suggestion or a
+correction at cursors that hold different words, a deletion of more than one character, an
+insertion long enough to be a paste, a cursor with a selection, is applied to the primary
+cursor alone and the other cursors are dropped, as they are when the keyboard sets a
+selection; dropping them writes nothing to the keyboard's buffer. An update that changes no
+text and keeps its selection leaves every cursor where it was. The patch states what that
+costs: a Backspace over an emoji drops the other cursors, a one-letter word replaced by a
+suggestion cannot be told from a Backspace and reaches every cursor, a completion that only
+appends is typed at every cursor, and the deletion counts UTF-16 units. With the patch built,
+on an API 29 emulator with Gboard 8.0.4 and on an API 33 emulator with Gboard 12.4, both with
+WebView 134, two carets after `alpha` and `bravo` and one `x` gave `alphax` and `bravox`, and
+a Backspace `alpha` and `bravo`, in three runs on each. A tapped suggestion replaced the first
+word alone and left one caret in three runs on each (`alphabet` and `bravox` on Gboard 8.0.4),
+and with the same word at both carets it replaced both and kept both carets in two runs on
+each. On a later build with the patch, on the API 33 emulator, a Backspace with the second
+caret on an empty line joined that line to the one above, and after a combining mark at the
+second caret only the mark went (`ab` and `qe`), two runs each. Three carets, two carets on
+one line and an autocorrection with several carets have not been run on a device.
+
+Patch 0050 refuses a keyboard update that does not fit what the open composition has typed, or
+that reaches past the text the editor holds. After a turn of the screen, or after an edit the
+keyboard did not make, such as the key row's Tab inside a word, a keyboard can go on from a
+range it kept from before, because Chromium keeps a composition's range where it was when the
+page changes the text. The word the keyboard remembers is then written over other characters,
+or again at the caret: with a Tab between `WO` and `RD` of `WORD ONE` the line became `RD  RD
+ONE`, and after a turn `line two` and one typed `x` became `line twotwox`. On Android, while a
+composition is open and the selection is collapsed, the editor judges each update by its
+range, its text and the caret it asks for, against the text it holds and against whether the
+composition has typed anything since it started. An update that a keyboard in step with the
+editor would not send is not applied: the model and every cursor stay as they were, the
+keyboard's buffer is written back to the model's text and caret, and input restarts, the
+editing host blurred and focused again, so that the keyboard reads the text again. A
+composition that has typed is given more room than one that only reopened a word, because a
+Hangul syllable, a kana or a corrected word rewrites the text before the caret while it is
+typed. An update whose range ends beyond the buffer is refused in every state, with a
+composition open or not: the keyboard keeps the offsets of a buffer it was given earlier, the
+editor read the units past its own buffer as units to replace after the caret, and the typed
+edit replaced them across line breaks, so that the lines below the caret were deleted. The
+forced restarts are counted for one version of the model, and after six with no change of text
+the next such update is applied as the editor without the patch applies it, so that input
+never stops answering; a range that reaches beyond the buffer is cut at the buffer's end
+first, so that nothing after the buffer is replaced. What is refused is a set of shapes; the
+set and its cases are in the patch's description, with what the rules cost: a correction of an
+earlier word that keeps the caret where it was is not applied either, and the typo stays. The
+known limit is a letter typed after a turn while the keyboard still holds the range it
+reopened. The keyboard can send that letter alone over the word, which is refused, so the
+letter is lost; or over a single reopened letter, which is what a Hangul or kana step looks
+like, so it is applied and replaces the last letter of the word (`line twx`). A person sees
+either at once. Measured on an Android 12 emulator with Gboard 10.8 and WebView 134, with a
+word typed, a turn to landscape and back and one letter about eight seconds later: on a build
+of the release's sources 21 of 30 runs ended damaged, 20 of them with the word doubled (`line
+twotwox`, `line wordwordx`), on the disk too. With the rules built, 100 of 101 runs were
+right, and the one that was not ended `line twx`; with the patch as it is, 26 of 28 more were
+right, and the two that were not lost the letter. Counted over the runs on builds that did not
+type the letter themselves, the letter came alone in 4 of 105 runs in which the keyboard had a
+range open on a line reached by a tap (the exact 95% interval is 1.0 to 9.5%) and in 2 of 107
+on a new line (0.2 to 6.6%): over the whole word in 3 and over its last letter in 3. On an
+Android 13 emulator with Gboard 12.4 the same steps ended right in 30 of 30 runs, twenty on
+the nine rules and ten on the patch as it is. A write that ends beyond the buffer, dispatched
+into the editor after the turn with the keyboard attached, in three states of the composition,
+deleted the lines below the caret in 12 of 12 runs on a build without the refusal and in none
+of 30 with it; on an Android 13 emulator with Gboard 12.4 the refusal held in 15 of 15. Sent
+again and again, the update was passed once after six refusals with its text typed at the end
+of the buffer and the lines after it whole, in 5 of 5 and 7 of 7 runs on the two emulators.
+
+Patch 0051 keeps the EditContext buffer where it is while the caret has not moved. After an
+Enter typed on the keyboard at the end of a line, the buffer keeps its start on the line above
+(0024, below), so a word typed on the new line is composed in a buffer of two lines. The view
+sends the cursor again, with its model position unchanged, when some line of the file wraps
+anew, as a turn of the screen makes it in a file with a line wider than the screen, and when
+text it draws inside a line arrives, such as the hint for a parameter's name. The editor took
+that for a move of the caret, started the buffer at the caret's line and wrote it again, with
+other text before the caret and the caret at another offset. With no composition open Android
+told the keyboard only that the selection had moved, and Gboard 9.4, 10.8 and 12.4 then put
+the word they had composed in again at the caret (`line twotwo`, which Auto Save wrote); with
+a syllable open the editor restarted input in the middle of it and the next jamo began a new
+one. On Android, a cursor event that leaves the primary selection where the buffer was last
+built for, outside an edit of the keyboard's, now keeps the buffer's start and the lines it
+holds after the selection's. A tap, a cursor key, a selection, a command that moves the caret,
+a paste or an undo still moves the buffer to the caret's line. It holds for a single caret
+only, and only if a single caret was there when the buffer was built: a second caret on a line
+the buffer holds types where the keyboard cannot see it, so adding, moving or removing a caret
+moves the buffer as before. An edit made through the editor that changes the text of a kept
+buffer now meets the existing restart for a changed text, which costs the keyboard's
+suggestions and ends an open syllable there. Measured with a word typed on a new line under a
+line wider than the screen and a turn to landscape and back: on a build without the patch the
+word was doubled in 9 of 10 runs on an API 34 emulator with Gboard 12.4 and WebView 157, in 5
+of 10 on an API 33 emulator with Gboard 12.4 and WebView 134 and in 7 of 10 on an API 30
+emulator with Gboard 9.4 and WebView 134. With an earlier form of the patch, the only difference
+between the two builds, it was doubled in 0 of 10 on the first two; on a later build that also
+carries a later form of 0050 and the app waiting for the keyboard's own commit before a turn
+ends the composition, in 0 of 10 on each (in one of those thirty runs the letter typed after
+the turn was written over the word the keyboard had reopened, which is 0050's matter). With
+the hint for a parameter's name, which is off by default, arriving between the jamo of a
+Korean syllable on an API 36 emulator with Gboard 15.9 and WebView 134, `f(한)` came out wrong
+in 3 of 3 runs without the patch (`f(ㅎ하ㄴ)` twice, `f(ㅎㄴ)` once) and right in 3 of 3 on
+each of two builds with it. Those runs came before the patch took its count of carets at the
+moment the other carets are dropped; a drop with no edit after it, as in a read-only editor,
+has source checks only. The keyboard can still write its word again by itself: on a later
+build with the patch, in one run in 40 on the API 33 emulator the line became `line twotwo`,
+the keyboard inserting `two` at the caret and asking for the caret to stay before it, an
+update that 0050 refuses.
+
+Patch 0052 closes the suggestion list at a touch that the browser hands to a row from outside
+the list. A touch on the editor line just above the list can arrive with a suggestion row's
+text as its target, and the list accepted that row though the finger was outside it: with `al`
+typed, a touch at the end of the word, 1.05 to 1.48 CSS px above the list, wrote `almost` in
+10 of 10 runs on an API 31 emulator with Gboard 10.8 and WebView 134. The list's tap handler
+now compares the gesture's page coordinates with the list's page rectangle and, outside it,
+runs the editor's own command that hides the suggestions instead of accepting the row. The
+touch does not move the caret, so a second one is needed for that. A mouse and a touch inside
+the list are handled as before, and the gesture dispatch and other lists are unchanged. With
+the patch built, on an API 35 emulator with Gboard 14.2 and WebView 149, touches 1.5 and 6 CSS
+px above the list still reached the first row's text and now accepted nothing and closed the
+list, the typed `al` left as it was; touches 10 and 16 CSS px above landed on the line and
+left the list open; a touch on the first row and one on the last accepted that row; and the
+editor's context menu, whose touches 0044 delivers, still scrolled under a finger. Each of
+those was one touch, and every touch was injected: a finger on a phone has not been measured.
+
+Patch 0053 lets an open suggestion list follow the letters of a composition. A keyboard that
+composes keeps the whole word underlined, so every key while a word is underlined is an update
+of one open composition, and the suggest model refiltered an open list only while the editor
+was not composing. A list that was open when a composition went on kept the items of the word
+as it stood when the list was computed, and accepting one replaced everything composed since:
+on an API 33 emulator with Gboard 12.4 and WebView 134, after a turn of the screen and back in
+a file that holds `twox` on another line, `y` and `z` composed into `line twox` left `twox`
+focused, and the key row's Tab turned `line twoxyz` into `line twox`, on the disk too, in 3 of
+3 runs; a hardware Enter did the same in 2 of 2. On Android a content change while composing
+now refilters an open list as a typed key does: the list narrows to the composed word, and a
+list that opened by itself closes when nothing fits. Only an open list is refiltered, so a
+composition update never opens one, and a list is armed at the composition's end as before
+(0025). A list opened by hand that stops fitting stays frozen with its items, as on every
+platform, and Tab still accepts its focused item over the composed word. Other platforms keep
+their behaviour. With the patch built, the same steps kept `line twoxyz` in 5 of 5 runs, the
+key row's Tab in three and a hardware Enter in two, and plain typing on a fresh line opened no
+list in 3 of 3. On an API 36 emulator with Gboard 18.5 and WebView 134, a Korean syllable and
+a Japanese word composed under a list opened by hand came out whole in three runs each, and no
+list opened during a composition with none open before. A member list that narrows under
+composed letters has not been measured: Gboard 12.4 commits a letter typed right after a
+period without composing it.
 
 Gboard 12.4 also sends Enter as a key press when the caret is inside an underlined word or at
 its start, as after a tap on the word or Home, and at once recomposes the word after the
@@ -1352,6 +1596,14 @@ flowchart TD
   P --> P43["0043 server: serve only regular files from serveFile"]
   P --> P44["0044 touch gestures delivered to targets inside a shadow root"]
   P --> P45["0045 color picker opened by a tap on its swatch"]
+  P --> P46["0046 EditContext: restart input after an edit crosses an open composition"]
+  P --> P47["0047 EditContext: initialize the buffer before the first input"]
+  P --> P48["0048 EditContext: do not edit a word the input method rewrites unchanged"]
+  P --> P49["0049 EditContext: a keyboard's update reaches every cursor only where it means the same"]
+  P --> P50["0050 EditContext: refuse a keyboard update that does not fit what the composition typed"]
+  P --> P51["0051 EditContext: keep the buffer where it is while the caret does not move"]
+  P --> P52["0052 suggest: a retargeted touch outside the list closes it"]
+  P --> P53["0053 suggest: an open list follows the letters of a composition"]
 ```
 
 Five of these are load-bearing in ways their titles understate:

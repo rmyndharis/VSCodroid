@@ -1,0 +1,331 @@
+Apply a keyboard's update at every cursor only where it means the same.
+
+With several cursors, a keyboard that composes a word sends the whole word
+and its change as one update, for the range the word occupies at the
+primary cursor. The editor replaced that many characters before every
+cursor with the primary's word. On an API 33 emulator with Gboard 12.4 and
+WebView 149, two carets after alpha and bravo and one typed x gave alphax
+and alphax, and Auto Save wrote it; a Backspace then gave alpha and alpha.
+Patch 0048 stops the same overwrite for an update that changes no text. It
+does not touch an update that does.
+
+On Android, with more than one cursor, an update that reaches outside the
+primary selection first meets a test for whether every cursor holds the
+same text where it applies. They do when every cursor is collapsed, the
+update's range lies in the cached text with the primary caret inside it
+and no line break in it, and the text from as many units before each
+cursor as the caret is from the range's start to as many after as the
+caret is from its end is exactly the text of the range, with no two of
+those spans overlapping. Replacing that many units before and after every
+cursor with the update's text is then the same edit at each of them, and
+the update is left to the code that was there before: the same edit at
+every cursor, with the same composition bookkeeping and the same writes to
+the input method's buffer. A word typed at several carets and then
+autocorrected, replaced by a suggestion, capitalised, converted from kana
+or romaji or redrawn by a glide, or an emoji replaced or deleted, still
+reaches every cursor.
+
+An update that fails that test goes one of three ways. Text typed at the
+primary caret is typed at every cursor, as a first letter is. That is an
+update whose text is the cached text of its range with the typed text
+inserted at the caret, whose requested selection is collapsed right after
+it, with every cursor collapsed. One character deleted before the primary
+caret is deleted before every cursor, as a Backspace is: the update's text
+is the cached text without it, the requested selection is collapsed where
+it began, every cursor is collapsed, and no cursor would lose half of a
+surrogate pair. A longer deletion is not a Backspace: Gboard 8.0.4,
+recorded on a device, sends a tapped suggestion as the whole range of the
+word replaced by nothing and then the suggestion typed at the caret, and
+the first of those two updates, applied at every cursor, deleted the words
+the other cursors hold. Anything else, a replacement at cursors that hold
+different text, a suggestion, a deletion of more than one character, a
+correction away from the caret, an insertion long enough to be a paste or
+with a line break before its end, a cursor with a selection, applies to
+the primary cursor alone. The other cursors are dropped, from source
+'keyboard' with reason Explicit as a selection the input method sets drops
+them, and the update then takes the path it takes with one cursor,
+including the exit for an update that changes no text, so the typing that
+follows meets one cursor. An update that changes no text and keeps its
+selection leaves every cursor where it was, as before. One cursor, other
+platforms, and an update that stays inside the primary selection are
+untouched, so typing over selections made with Ctrl+D still replaces all
+of them. Trimming the update to what every cursor shares was tried and is
+not sound: the same change means different things at cursors that hold
+different words.
+
+Dropping the cursors writes nothing to the input method's buffer. Blink
+has applied the keyboard's change to it when textupdate fires and the
+model has not, so the cursor event would have put the old text and caret
+back over the change and the edit that follows would have written the new
+ones again, two writes that an update with one cursor never makes. The
+buffer also keeps its start, which a cursor event for another reason moves
+to the caret's line, away from the lines the keyboard holds. The existing
+flag for a selection the keyboard set keeps the start, and a new one keeps
+the writes out.
+
+What it costs. Where the cursors hold different text, a replacement used
+to overwrite the other cursors' text with the first cursor's; it is now
+applied to the first cursor alone and the others are dropped. So is a
+deletion of more than one character, a Backspace over an emoji (two units)
+included, since one update does not say whether it is several Backspaces
+or the edit of a word, and only the second is meant at cursors that hold
+other words; so is a one-character deletion in which any cursor would lose
+half of a surrogate pair. A one-letter word replaced through the pair of
+updates above cannot be told from a Backspace, so its deletion reaches
+every cursor and so does the typing that follows. A completion that only
+appends to a word is typed at every cursor, as the letters would be. Where
+the cursors hold the same text, what is still dropped is an update the
+same-text test does not accept: one whose range does not contain the
+caret, such as the correction of an earlier word with the caret at the end
+of the line; one whose range holds a line break; one with a cursor that
+has a selection; and one with two cursors closer than the span it
+replaces. A composition that began with several cursors and lost them ends
+without the end-of-composition rules, which run only when the editor can
+tell what was inserted at every cursor. In the model of the undo stack
+that the checks use, one Undo after the drop restores the text, and the
+dropped cursors come back with it only when the typing before the drop is
+in the same undo step. With two cursors on one line, an edit at the second
+lies inside the keyboard's own text, so the buffer is rewritten once after
+the edit, as it was before. A Backspace at the start of a line at a cursor
+other than the first joins that line to the one above, as it did.
+
+Source checks run the real emit and type methods over the real composition
+and typing operations, with the model, the cursor list, the undo stack and
+the EditContext replaced by adapters, on a host Node and not the Android
+runtime. They cover alpha and bravo typed and deleted with two cursors,
+three, two on one line and the second above the first; the same word at
+every cursor, typed, deleted, replaced by a suggestion and reopened with
+the caret moved; empty lines, romaji to kana and Hangul; a letter inside a
+word; a correction, a suggestion, an equal update that moves the caret, a
+selected second cursor, an emoji for an emoji, and deletions that would
+cut a pair; two selections over equal words; and the suggestion sent as
+the word deleted and then the new word typed, as recorded on a device,
+with different words, the same word, three cursors, a one-letter word, a
+next-word prediction and a completion that only appends. With one cursor,
+and off Android, every update leaves the same records as before, buffer
+writes included. So does an update whose cursors hold the same text, in 17
+hand-written rows and in 14,504 random updates, in each of which the
+cursors also came out with the same edit. Today's code made the same edit
+at every cursor in all 85,344 small configurations of a separate run whose
+spans do not overlap, and lost an edit and a cursor in the 456 whose spans
+do, which is why the test asks for none. An update that drops the cursors
+makes the same writes to the buffer, leaves the same caches and queues the
+same restarts as the same update with one cursor, in ten hand-written
+sequences, two of them with a buffer that starts above the caret's line,
+and in 27,004 random ones. 55,592 of 60,000 random updates agree with a
+rule written separately, and the rest are ones the adapters cannot model.
+All 54,355,006 small updates of an exhaustive run agree with the rules for
+typed text and for one character deleted, covering every caret, every
+range, lone surrogate halves and ranges outside the text, and so do all
+11,966,288 small documents of a second one with the same-text test. The
+suggestion sent as two updates agrees with a rule written separately in
+all 23,712 small cases of a third, where the code before this change
+differs from it in at least 11,076. 22 deliberate breakages of the code,
+among them either flag left out, the test that the caret lies inside the
+update's range, each condition of the same-text test and the one-character
+test, each fail one of those checks.
+
+Built into the editor, on an API 29 emulator with Gboard 8.0.4 and WebView
+134: two carets after alpha and bravo, one x and one Backspace, gave
+alphax and bravox and then alpha and bravo in three runs, and with alpha
+at both carets alphax twice and then alpha twice in two. A tap on the
+suggestion alphabet with alphax and bravox left alphabet and bravox with
+one caret in three runs, and with alphax at both carets alphabet on both
+lines with two carets in two. On an API 33 emulator with Gboard 12.4 and
+WebView 134 the same keys gave the same lines, in three runs with alpha
+and bravo and in two with alpha at both carets. There a tap on the
+suggestion alpha x left alpha x and a space on the first line and bravox
+on the second with one caret in three runs, and alpha x and a space on
+both lines with two carets in two. On a later build with this change, on
+that emulator, a Backspace with the second caret on an empty line joined
+that line to the one above and left one caret, and after a combining mark
+at the second caret only the mark went, in two runs each. Not run on a
+device: three carets, two carets on one line, and an autocorrection with
+several carets. Typing after a drop was seen in two runs of Korean at two
+carets on an API 36 emulator with Gboard 15.9 and WebView 134, on a build
+with an earlier form of 0051: the keyboard ended the composition that was
+open at the drop and composed the next keys at the cursor that stayed.
+
+diff --git a/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts b/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
+--- a/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
++++ b/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
+@@ -80,6 +80,9 @@ export class NativeEditContext extends AbstractEditContext {
+ 	private _keepEditContextStart = false;
+ 	// While an edit the input method sent is applied, which its own copy of the text holds already.
+ 	private _applyingInputMethodEdit = false;
++	// While the cursors an input method's update says nothing about are dismissed, which writes nothing
++	// to the buffer: it holds the input method's change already and the model does not yet.
++	private _dismissingCursors = false;
+ 	// From a Backspace key press to its release, which keeps the buffer as it is: see _onKeyDown.
+ 	private _deletingByKey = false;
+ 	// An open EditContext composition, set at compositionstart and cleared at compositionend or blur.
+@@ -471,6 +474,9 @@ export class NativeEditContext extends AbstractEditContext {
+ 	}
+ 
+ 	private _updateEditContext(initializing = false): void {
++		if (this._dismissingCursors) {
++			return;
++		}
+ 		const editContextState = this._getNewEditContextState();
+ 		if (!editContextState) {
+ 			return;
+@@ -540,14 +546,36 @@ export class NativeEditContext extends AbstractEditContext {
+ 		const selectionStartOffset = this._previousEditContextSelection.start;
+ 		this._previousEditContextSelection = new OffsetRange(e.selectionStart, e.selectionEnd);
+ 
+-		if (isAndroid && ((e.text === '' && e.updateRangeStart === e.updateRangeEnd) ||
+-			(selectionStartOffset === selectionEndOffset &&
+-				((e.selectionStart === selectionStartOffset && e.selectionEnd === selectionEndOffset) ||
+-					this._context.viewModel.getCursorStates().length === 1) &&
+-				e.updateRangeStart >= 0 && e.updateRangeEnd <= this._previousEditContextText.length &&
+-				e.updateRangeEnd - e.updateRangeStart === e.text.length &&
+-				this._previousEditContextText.slice(e.updateRangeStart, e.updateRangeEnd) === e.text))) {
+-			// Compare the cache: the native buffer already includes the input method's change.
++		// With several cursors, an update that reaches outside the primary selection is about the
++		// text around the primary caret. Where every cursor holds that same text, replacing as many
++		// characters before and after each of them with the update's text is one edit at every cursor,
++		// which is what a word typed at several carets and then corrected, converted or suggested
++		// needs, and it is left to the code below. Where they differ, the same number of characters
++		// before every cursor wrote the primary's word over the others'. Two things still mean the same
++		// at every cursor: text typed at the primary caret, and one character deleted before it. They
++		// go to every cursor as that text and that character, which is what a first letter or a
++		// Backspace does. A longer deletion is not a Backspace: a keyboard that replaces a word sends
++		// the word's whole range as deleted and then the new word as typed, and applied at every
++		// cursor the first deletes words the other cursors do not hold. Anything else, a replacement,
++		// a suggestion, a longer deletion, a correction away from the caret, a selection somewhere, is
++		// applied to the primary cursor alone: the others are dropped, as a selection the input method
++		// sets drops them, and the update then takes the path it takes with one cursor, so the typing
++		// that follows meets one cursor. An update that changes no text and keeps its selection leaves
++		// the cursors as they are.
++		if (isAndroid && (e.updateRangeStart < selectionStartOffset || e.updateRangeEnd > selectionEndOffset) &&
++			this._context.viewModel.getCursorStates().length > 1 && !this._isSelectionOnly(e, selectionStartOffset, selectionEndOffset) &&
++			!this._cursorsHoldSameText(e, selectionStartOffset, selectionEndOffset)) {
++			const input = this._inputAtEveryCursor(e, selectionStartOffset, selectionEndOffset);
++			if (input) {
++				this._expectedCaretOffset = e.selectionStart;
++				this._onType(viewController, input);
++				this._expectedCaretOffset = undefined;
++				return;
++			}
++			this._dismissOtherCursors();
++		}
++
++		if (this._isSelectionOnly(e, selectionStartOffset, selectionEndOffset)) {
+ 			// No text changed: the input method set its selection, as Gboard does for a space bar swipe
+ 			// and before it commits a suggestion, or sent nothing at all. The selection goes where it
+ 			// asked, an earlier line the buffer holds included, and the buffer keeps its start and its
+@@ -607,6 +635,114 @@ export class NativeEditContext extends AbstractEditContext {
+ 		this._expectedCaretOffset = undefined;
+ 	}
+ 
++	// Whether the update changes no text. It replaces nothing with nothing, or its text is the cached
++	// text of its range, with a collapsed selection that it keeps or, with a single cursor, moves.
++	// Compare the cache: the native buffer already includes the input method's change.
++	private _isSelectionOnly(e: ITextUpdateEvent, selectionStartOffset: number, selectionEndOffset: number): boolean {
++		return isAndroid && ((e.text === '' && e.updateRangeStart === e.updateRangeEnd) ||
++			(selectionStartOffset === selectionEndOffset &&
++				((e.selectionStart === selectionStartOffset && e.selectionEnd === selectionEndOffset) ||
++					this._context.viewModel.getCursorStates().length === 1) &&
++				e.updateRangeStart >= 0 && e.updateRangeEnd <= this._previousEditContextText.length &&
++				e.updateRangeEnd - e.updateRangeStart === e.text.length &&
++				this._previousEditContextText.slice(e.updateRangeStart, e.updateRangeEnd) === e.text));
++	}
++
++	// Whether the update replaces the same text at every cursor: every cursor is collapsed, the
++	// update's range lies in the cached text with the primary caret inside it and no line break in
++	// it, and the text from as many units before each cursor as the caret is from the range's start
++	// to as many after as the caret is from its end is exactly the text of the range, with those
++	// extents not overlapping. Replacing that many units before and after every cursor with the
++	// update's text is then the same edit at each of them, as the editor applies it.
++	private _cursorsHoldSameText(e: ITextUpdateEvent, selectionStartOffset: number, selectionEndOffset: number): boolean {
++		const cursors = this._context.viewModel.getCursorStates();
++		const cache = this._previousEditContextText;
++		if (selectionStartOffset !== selectionEndOffset || cursors.some(cursor => !cursor.modelState.selection.isEmpty()) ||
++			e.updateRangeStart < 0 || e.updateRangeEnd > cache.length ||
++			selectionStartOffset < e.updateRangeStart || selectionStartOffset > e.updateRangeEnd) {
++			return false;
++		}
++		const old = cache.slice(e.updateRangeStart, e.updateRangeEnd);
++		if (old.includes('\n')) {
++			return false;
++		}
++		const caret = selectionStartOffset - e.updateRangeStart;
++		const model = this._context.viewModel.model;
++		const extents: Range[] = [];
++		for (const cursor of cursors) {
++			const position = cursor.modelState.selection.getPosition();
++			const extent = Range.fromPositions(
++				CompositionOperation.positionBefore(model, position, caret),
++				CompositionOperation.positionAfter(model, position, old.length - caret));
++			if (model.getValueInRange(extent, EndOfLinePreference.LF) !== old) {
++				return false;
++			}
++			extents.push(extent);
++		}
++		extents.sort((a, b) => a.startLineNumber - b.startLineNumber || a.startColumn - b.startColumn);
++		return extents.every((extent, i) => i === 0 || extents[i - 1].getEndPosition().isBeforeOrEqual(extent.getStartPosition()));
++	}
++
++	// What an update reaching outside the primary selection comes to at every cursor, where it has one
++	// meaning: the text inserted at the primary caret, or the one character deleted before it, read
++	// against the cached text of the update's range. Only with every cursor collapsed, the requested
++	// selection collapsed where the insertion or the deletion leaves the caret, an insertion short
++	// enough to be typed, and for a deletion no surrogate in what any cursor would lose, so that no
++	// pair is ever cut in half.
++	private _inputAtEveryCursor(e: ITextUpdateEvent, selectionStartOffset: number, selectionEndOffset: number): ITypeData | undefined {
++		const cursors = this._context.viewModel.getCursorStates();
++		const cache = this._previousEditContextText;
++		if (selectionStartOffset !== selectionEndOffset || e.selectionStart !== e.selectionEnd ||
++			cursors.some(cursor => !cursor.modelState.selection.isEmpty()) ||
++			e.updateRangeStart < 0 || e.updateRangeEnd > cache.length ||
++			selectionStartOffset < e.updateRangeStart || selectionStartOffset > e.updateRangeEnd) {
++			return undefined;
++		}
++		const old = cache.slice(e.updateRangeStart, e.updateRangeEnd);
++		const caret = selectionStartOffset - e.updateRangeStart;
++		const before = old.slice(0, caret);
++		const after = old.slice(caret);
++		const typed = e.text.length - old.length;
++		if (typed > 0) {
++			const text = e.text.slice(caret, caret + typed);
++			if (e.text === before + text + after && e.selectionStart === selectionStartOffset + typed &&
++				!isLowSurrogate(text.charCodeAt(0)) && !isHighSurrogate(text.charCodeAt(text.length - 1)) &&
++				!this._isPastedByInputMethod(text)) {
++				return { text, replacePrevCharCnt: 0, replaceNextCharCnt: 0, positionDelta: 0 };
++			}
++			return undefined;
++		}
++		const deleted = -typed;
++		if (deleted === 1 && deleted <= caret && e.text === before.slice(0, caret - deleted) + after &&
++			e.selectionStart === selectionStartOffset - deleted) {
++			const model = this._context.viewModel.model;
++			if (cursors.every(cursor => {
++				const position = cursor.modelState.selection.getPosition();
++				const start = CompositionOperation.positionBefore(model, position, deleted);
++				return !/[\ud800-\udfff]/.test(model.getValueInRange(Range.fromPositions(start, position), EndOfLinePreference.LF));
++			})) {
++				return { text: '', replacePrevCharCnt: deleted, replaceNextCharCnt: 0, positionDelta: 0 };
++			}
++		}
++		return undefined;
++	}
++
++	// Keeps the primary cursor and drops the others, from source 'keyboard' with reason Explicit as a
++	// selection the input method sets does, so a quick suggestion still pending is dropped with them.
++	// The buffer holds the input method's change and the model does not yet, so nothing is written to
++	// it while the cursors go, and it keeps its start: the edit that follows writes it, as it does
++	// for one cursor.
++	private _dismissOtherCursors(): void {
++		this._dismissingCursors = true;
++		this._keepEditContextStart = true;
++		try {
++			this._context.viewModel.setCursorStates('keyboard', CursorChangeReason.Explicit, [this._context.viewModel.getPrimaryCursorState()]);
++		} finally {
++			this._keepEditContextStart = false;
++			this._dismissingCursors = false;
++		}
++	}
++
+ 	private _onType(viewController: ViewController, typeInput: ITypeData): void {
+ 		this._applyingInputMethodEdit = true;
+ 		if (typeInput.replacePrevCharCnt || typeInput.replaceNextCharCnt || typeInput.positionDelta) {

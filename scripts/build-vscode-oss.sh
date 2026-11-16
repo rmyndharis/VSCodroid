@@ -765,7 +765,8 @@ cat >> "$WORKBENCH_CSS" << 'CSSEOF'
 /* VSCodroid: Mobile-friendly hamburger menu overrides */
 .menubar-menu-items-holder { min-width: 280px !important; }
 .monaco-menu .monaco-action-bar.vertical .action-item { min-height: 44px !important; }
-.monaco-menu .monaco-action-bar.vertical .action-label { font-size: 14px !important; padding: 8px 24px 8px 12px !important; line-height: 28px !important; }
+.monaco-menu .monaco-action-bar.vertical .action-menu-item { height: auto !important; min-height: 44px !important; }
+.monaco-menu .monaco-action-bar.vertical .action-label:not(.separator) { font-size: 14px !important; max-height: none !important; padding: 8px 24px 8px 2em !important; line-height: 28px !important; }
 .monaco-menu .submenu-indicator { font-size: 16px !important; }
 .monaco-menu .keybinding { font-size: 12px !important; }
 .monaco-menu .monaco-action-bar.vertical .action-label.separator { margin: 4px 8px !important; min-height: 0 !important; padding: 0 !important; line-height: normal !important; }

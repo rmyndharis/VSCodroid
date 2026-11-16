@@ -1,0 +1,960 @@
+Refuse an update that writes over an earlier stretch or past the buffer.
+
+After the screen turns, Gboard reopens the word before the caret and
+then sends the text of that word as an update of a range it kept from
+before: Chromium keeps the range of a composition where it was when the
+page changes the text. In a line holding line two with the caret at its
+end, two is written into 0..4 or into 7..8 with the caret left where it
+was, and the line becomes two two or line twtwo; with line word it
+becomes word word, and a longer remembered text grows it further
+(twotwo, twotwowo). The key row's Tab inside a word does the mirror:
+with the caret between WO and RD of WORD ONE the editor puts two spaces
+there (WO  RD ONE, caret 4), the keyboard reopens and sends WO for 0..2,
+which is that range's own text, and then RD, the word after the caret,
+for 0..2 with the caret asked at 4, and the line becomes RD  RD ONE. A
+keyboard that composes and is not Gboard does a third thing: with the
+caret at the start of SEED BETA 1 and an a typed (0..0, caret 1) it
+joins the letter to the word that follows and 423 to 518 ms later writes
+aSEED over the letter (0..1, caret asked at 1), which gives aSEEDSEED
+BETA 1. The editor applied each of these updates to the model. On an API
+31 emulator with Gboard 10.8, 10 of 20 turns of the screen to landscape
+and back, on a build without this patch, left the line damaged this way;
+the Tab did it in 3 of 3 runs with Gboard 12.4 and in 2 of 3 on Gboard
+10.8; the third form did it in 2 of 3 runs on HeliBoard 4.2.
+
+A reopened word can also be written back short. With the caret inside the
+word, Gboard 12.4 writes the part of the word up to the caret over the
+whole range it kept and asks for the caret to stay: the text after the
+caret that the range covers is dropped, and the keyboard goes on with the
+same range, so its next update takes the characters after it as well. In a
+line holding twzox with the caret between the z and the o it wrote twz
+over 5..10 and the line became twz; in alpha beta Charlie delta with the
+caret inside beta it wrote bet over 6..10, then bet over the same range
+again, which took the space, and then betz over it, which put the z on the
+capital.
+
+On Android, while a composition is open and the selection is collapsed,
+an update is refused when it asks for the caret to stay where it was,
+replaces a range that is not empty and ends at or before the caret with
+text that is not that range's own text, and the text it writes is
+exactly a stretch of the buffer of its own length that contains the
+caret or touches it: the stretch right before the caret, the one right
+after it, or one that spans it. One kind of update that fits this is not
+refused: a rewrite, with a text of the same length, of the range that
+ends at the caret, in a composition that has already typed, that is, one
+in which an update that changed the text was applied since its
+compositionstart. A keyboard in step sends it when a Hangul syllable
+gains a letter, when the word being composed grows in place or is
+corrected (a kana or a multi-tap letter cycles, an autocorrect), and a
+rule that refused it whenever the text after the caret holds the new
+text refused it for a Korean keyboard each time the next characters were
+the word being formed: on an API 36 emulator with Gboard 15.9 (Korean,
+2-Bulsik), a line holding 가나 with the caret at its start, with the
+consonant and then the vowel typed, sent ㄱ over 0..0 and then 가 over
+0..1 with the caret kept, and the second update, refused, left the line
+as ㄱ가나 where 가가나 was typed; the Japanese 12-key keyboard of the same
+Gboard did the same when a kana was toggled (a line holding い with the
+caret at its start, あ tapped and tapped again to い, sent あ over 0..0 and
+then い over 0..1, and the refused second update left あい where いい was
+typed, in 3 of 3 runs); the Korean keyboard rewrites the whole word so
+far at each key, so a longer word typed in front of an identical one
+meets the same refusal. Nor is one unit written over one unit: a kana
+toggled by a 12-key keyboard on a reopened word, beside an identical
+kana, is that, and no recorded stale write is (they are words, or one
+unit over a word). A stale write comes as the first update of a
+composition that only reopened a word, which has typed nothing, and it
+stays refused. A refused update changes nothing in the model, with one
+cursor or several: every cursor stays where it was. The input method's
+buffer is written back to the model's text and the primary caret where
+the update was applied to it, and input restarts, so the keyboard reads
+the text and the caret again and does not go on with the range it kept.
+Several refusals in one task restart input once, and nothing restarts if
+the editor host no longer has the focus when the task's rewrites are
+done. The rule keeps one flag, whether the composition that is open has
+typed: it is cleared at compositionstart and set after the editor has
+applied an update that changes the text (the model's version has moved),
+and the exemption above and the rule below read it. Apart from that an
+update is judged on what it says and on what the editor holds when it
+arrives.
+
+A second rule covers the tail drop. While a composition that has typed
+nothing is open and the selection is collapsed, an update is refused when
+it keeps the caret, its range starts before the caret and ends after it
+inside the buffer, and its text is exactly the part of the range before
+the caret and not the range's own text. A range whose own text is that
+text repeated is passed: that is a keyboard taking a doubled word back
+(twotwo to two). A composition that has typed is not judged by this rule,
+as by the exemption above. Its refusal is the same as the other one:
+nothing changes in the model, the buffer is written back, input restarts.
+
+A refusal stands until the model is edited or a composition starts, and
+for the range it refused of the buffer it was made on. While it stands,
+a third kind of update over that same range is refused as well: the part
+of the range before the caret and at least one more unit written over
+the whole range, with the caret asked right after the text, the range
+starting before the caret and ending after it inside the buffer, and the
+text after the caret that the range covers not at the end of the text.
+That is the letter typed next arriving as the stale range of a keyboard
+that has just been refused (in alpha beta Charlie delta, after the
+refused bet over 6..10, betz over 6..10 with the caret asked at 10,
+which would put the z on the character after the word). On its own the
+shape is passed: a suggestion taken with the caret inside a word can
+have it (alpha with the caret after al, all written over 0..5 with the
+caret at 3), and nothing has been refused before it. A text that keeps
+the tail (betza) is not this shape. The state is the model's version,
+the range and the model position of the start of the buffer at the last
+refusal, compared with those of the update when it arrives. A refusal
+over another range does not make the shape refused, nor does one made on
+another buffer: a suggestion at another word, brought up by a tap onto
+another line with the model not edited, is passed. A composition that
+starts is the keyboard's picture read again, which is what the restart
+is for, and ends the refusal.
+
+What is refused is narrow by shape. A keyboard in step keeps the caret
+on the same characters, so after an edit of the text before the caret it
+asks for the caret at its old offset moved by the change in length, and
+an update that does so is never refused by the first two rules when the
+length changes: typing, Backspace, the autocorrect or completion of the
+word before the caret, a suggestion, a conversion with the caret after
+its text. An update that replaces a range is passed as well when it asks
+for the caret moved by the change in length, as typing does: a keyboard
+that sends the word with the letter just typed as the replacement of the
+word's range (0..5, alphax, the caret asked at 6) is typing, at every
+cursor, and the rule passes it for the caret it asks for and not for the
+range it names. An update that changes the length before the caret and
+asks for the caret to stay at its old offset is out of step by its own
+shape; it is refused when its text is a stretch of the buffer that
+contains or touches the caret, which is what the recorded writes are,
+and a repeated syllable cannot be told from them. A rewrite of an
+earlier stretch with a text of the same length keeps the caret by
+construction, and it is refused only when its text is such a stretch and
+differs from the range's own; when its range ends at the caret it is
+passed as well in a composition that has typed. The first three rules
+never refuse the same update: the first needs the range to end at or
+before the caret, the other two need it to end after it, and the text of
+the second is as long as the part before the caret while the text of the
+third is longer.
+
+Restarts are bounded by a count of the forced restarts that are made,
+kept for one version of the model. After six of them without a change of
+text an update is no longer refused: it is applied as the editor without
+this patch applies it, so that a keyboard that answers every restart
+with the same update, or a pick the rules cannot tell from a stale
+write, is not refused for ever and the person is not left with input
+that does nothing until something else is typed. The count starts again
+after an update that changes the text has been applied by the editor,
+that is when the text of the update differs from the cached text of its
+range and the model's version is not the one it had before the edit, and
+after any other edit of the model (Enter by beforeinput, a paste, a cut,
+an undo), because the count belongs to the version of the model it was
+made on. A restart counts where its blur and focus happen: refusals
+handed over in one task make one restart and count once, and a refusal
+while the editor host does not have the focus makes none and counts for
+nothing. An update that the editor discards (a read-only editor, a
+cursor that loses its edit) does not start the count again, nor does an
+update that names a range with its own text, a selection that moves, an
+empty update, a new composition or a change of focus; the restarts the
+editor makes after a rewrite of the buffer are not counted. A keyboard
+that is refused twice, once for the range of the word and once for the
+range of its last letter, as it was in three of 40 runs on a device (283
+to 324 ms apart), is well inside it. What it costs: the seventh update
+of the shape is applied, and the letter or the word it carries may do
+what the stale write does; the count starts again when text changes. The
+member, the version it belongs to, the guard at the refusal, the count
+in the restart and the reset are marked in the source as the parts of
+the bound and go together.
+
+What it costs. A correction of an earlier word that keeps the caret in
+place and produces a text that the buffer holds in a stretch that
+contains or touches the caret is refused and input restarts; the typo
+stays. The first case is the very word that stands before the caret (teh
+the, the first word corrected to the with the caret at the end); the
+mirror is the very word that follows the caret (teh the with the caret
+between the space and the); and a stretch that spans the caret is the
+third (xabx, ab written over the x with the caret between the a and the
+b). A repeated syllable is refused too: in haha with the caret at the
+end, the last a replaced by ha with the caret asked at 4 cannot be told
+from the recorded stale writes. So is the first update of a composition
+that only reopened a word when it rewrites, with the same length, the
+range that ends at the caret and the text after the caret holds the new
+text (a suggestion tapped on a reopened word): it cannot be told from
+the Tab. The second rule refuses, with the tail drops, what has the same
+shape: a take-back that drops part of a repeated word (twotwowo with the
+caret at 6, twotwo written over 0..8), and the deletion of the rest of a
+word sent as a rewrite of the whole word (hello world with the caret at
+2, he written over 0..5). A text that the buffer holds only away from
+the caret passes. Not recognised: a write of the remembered text with
+the caret moved by the change in length, one whose text is not such a
+stretch, one written when the remembered text no longer stands there, a
+stale write that is a same-length rewrite of the range that ends at the
+caret and arrives in a composition that had already typed (it has the
+shape of a word that grows in place, which the Korean and Japanese
+keyboards above send in step, so it is passed), a tail drop that arrives
+in a composition that has typed, the update that a keyboard sends for
+the next typed letter if it still holds its old range (range 0..4, text
+twox, caret asked at 4), a range that reaches past the caret with a text
+that is not the part before it (the shape of a brace typed inside a
+word, which another change handles), the letter typed arriving as the
+replacement of the whole word (line x), and a word sent again as an
+insertion at the caret (HeliBoard at a turn). The letter typed over a
+stale range is refused only while a refusal stands: with nothing refused
+before it, it is applied, the letter lands and the tail is lost (alpha
+betz Charlie delta). A refusal stands for the range it refused of the
+buffer it was made on only: over another word, or on another line, the
+same shape is applied, and over the same word of the same composition it
+is refused until the model is edited; a composition that starts ends it.
+The restart is the keyboard's blur and focus, so it ends the open
+composition each time.
+
+A reopened word can also be written over by one letter. After the screen
+turns, Gboard 12.4 reopens the word at the caret (the word before it, or
+the one it is in) with its own text and nothing typed; the first letter
+typed is then written over the whole range it reopened and asks for the
+caret right after it: in a line holding line two with the caret at its
+end, x over 5..8 with the caret asked at 6, and the line becomes line x;
+in a line holding alpha beta Charlie delta with the caret between the l
+and the t of delta, z over 19..24 with the caret asked at 20, and the
+line becomes alpha beta Charlie z. The third rule does not see it: it
+needs a refusal that stands and a text longer than the part of the range
+before the caret. Of the 33,690 recorded updates of 3,286 recordings, 32
+have this shape, one in each of 32 runs; 10 of them are the tail drop of
+the second rule as well, which refuses it too (the letter is the first
+unit of the range and the caret is right after it). Of the other 22, 17
+are in runs that ended with the word gone or cut, 3 in runs that ended
+intact, where the build refused the letter and it was typed again, and 2
+in runs without a record of how they ended. No Korean or Japanese update
+has the shape. On Android, while a composition is open that has typed
+nothing since its compositionstart and the selection is collapsed, an
+update is refused when it writes one letter or digit of an alphabet over
+a range that is longer than that unit and that the caret is inside or at
+the end of, and asks for the caret right after it. One unit is one code
+point: a letter outside the basic plane is two units long and is judged
+as one. The unit is not refused when it is the first unit of a range of
+two units, which is what a Backspace on a reopened two-letter word
+writes (a longer word that starts with the unit is refused). A selected
+word typed over has a selection that is not collapsed and is not
+touched. A unit of Han, kana or Hangul stands for a longer reading, and
+a symbol is not what the stale writes were: one kanji for two kana, or a
+symbol or an emoji from the suggestions, is not judged; none of the 32
+recorded updates is one.
+
+A remembered word can also be written over text that lies after the
+caret. After the screen turns, Gboard 12.4 reopens two letters of the
+next word with their own text and the caret asked to stay (be over 6..8
+of alpha beta Charlie delta with the caret at 2), twice, and then writes
+the word it remembered over them with the caret asked at 2: alpha over
+6..8, and the line becomes alpha alphata Charlie delta; sent again,
+alpha alphaphata Charlie delta (an API 34 emulator with Gboard 12.4).
+The first rule reads only ranges that end at or before the caret. On
+Android, while a composition is open that has typed nothing and the
+selection is collapsed, an update is refused when it asks for the caret
+to stay where it was and replaces a range that is not empty and lies
+wholly after the caret with a text that is not empty and is not the
+range's own. No keyboard rewrites text after the caret and leaves the
+caret before it for a person: the corrections of a word lie at or before
+the caret, and text written after it moves the caret into or after the
+text. The rule keeps no state, so the same update sent again is refused
+again. Of the 33,690 recorded updates of 3,286 recordings, 2 have the
+shape, in 2 runs: one in a run that ended damaged, the one above, and
+one in a run without a record of how it ended; both were applied by the
+build they were sent to.
+
+A remembered word can also be written back grown. With the caret at the
+end of the last word of a line, after two turns of the screen, Gboard
+12.4 on an API 33 emulator reopened the word at the end of the previous
+line with its own text (twox over 34..38, the caret at 47), then the
+right word (two over 44..47), and 135 ms after a new composition wrote
+the right word's range with the remembered word: twox over 44..47 with
+the caret asked at 47, which is the range's text and an x, the caret
+before the x. The line became line twox, an x nobody typed, and the x
+typed ten seconds later arrived as twoxx over the same range and gave
+line twoxxx. A letter typed at the end of a word asks for the caret
+after it. On Android, while a composition is open that has typed nothing
+and the selection is collapsed, an update is refused when it asks for
+the caret to stay where it was, which is the end of the range it
+replaces, the range is not empty, and its text is longer than the
+range's text and starts with it. The rule keeps no state. Of the 33,690
+recorded updates of 3,286 recordings, 89 have the shape, in 79 runs, and
+86 of them are refused by the first rule already. The 3 others write the
+remembered word and an x over the range of the word: twox over 44..47
+above, in a run that ended damaged, and twox over 35..38 and over 25..28
+in two runs that ended intact, where the build refused them.
+
+A write that nobody typed can also keep the caret where it was while it
+replaces text, wherever the text comes from. After the screen turns,
+Gboard 12.4 on an API 33 emulator reopened the word at the end of the
+last line of a buffer holding line twox and line two with its own text
+(two over 15..18, the caret at 18) and, in the same composition and with
+nothing typed in it, wrote line over the same range with the caret asked
+at 18: not after the new text, which is at 19, and not where a keyboard
+in step asks for it after a change of length. The line became line line,
+and the letter typed next gave line linxe; 2 of 20 turns of the screen
+to landscape and back, on a build with the rules above, left the line
+damaged this way. No rule above sees it: the text it writes, line, is
+not a stretch of the buffer that touches the caret, and the fifth and
+sixth rules need a range after the caret or a text that grows the
+range's own. The text of such a write is the range's text at another
+time, so what it says does not tell it from a rewrite; where it puts the
+caret does. On Android, while a composition is open that has typed
+nothing since its compositionstart and the selection is collapsed before
+and in the update, an update is refused when it asks for the caret to
+stay at the offset it had, the range it replaces is not empty and inside
+the buffer, its text is not the range's own, and that offset is not the
+end of what it writes. The rule keeps no state and reads nothing but the
+update, the buffer and the flag that the other rules read. Of the 33,690
+recorded updates of 3,286 recordings, 435 have the shape (2 of them
+write the empty text), in 387 runs, and every one asks for the caret at
+the offset it had. 427 are refused by the rules above already, 266 of
+them in runs that ended intact. 8 are not: the one above and a second of
+the same shape, two writes of a word as nothing (two over 5..8 as the
+empty text, the caret kept at 8, which left line x), a doubled word cut
+back (wotwotwo over 6..14 written as two, the caret kept at 8, which
+left line ttwxo), a space written over ana in the first line of a buffer
+(63..66, the caret kept at 75), which the build refused, and two writes
+over the first word of a buffer on a build without these rules, which
+left WORD ONE as RDD ONE and as RDNEEsecondecond. 5 of the 8 are in runs
+that ended with the text damaged, one in a run that ended intact, where
+the build refused it, and 2 in runs without a record of how they ended;
+none was applied in a run that ended intact. No Korean or Japanese
+update has the shape: the 1,729 recorded updates of Korean, Japanese or
+Chinese text that replace a range in an open composition all ask for the
+caret at the end of what they write, and all are on a composition that
+has typed. A keyboard that corrects an earlier word asks for the caret
+moved by the change in length, and a suggestion or a correction taken at
+the word asks for it after the text; neither is refused.
+
+What the seventh rule costs. A correction of an earlier word that keeps
+the caret at the offset it had, with the caret not at the end of what it
+writes, is refused and input restarts: the typo stays. The refusal does
+not depend on the text, so it widens the first cost above. No recorded
+keyboard sent one; one that corrects a word of the same length and asks
+for the caret where it was would (the over 0..3 of teh quick with the
+caret asked at 9). The same update sent again is refused until six
+restarts have been made without a change of text, and the seventh is
+applied. Not recognised: a stale write that asks for the caret at the
+end of what it writes, or moved by the change in length, which is what a
+suggestion taken asks for (lin over 5..8 of line two with the caret
+asked at 8 gives line lin).
+
+A reopened word can also be written again at the caret as an insertion.
+After the screen turns, Gboard 12.4 reopens the word before the caret
+with an update that changes nothing (an empty range at the caret, no
+text, the caret asked to stay), and, a second or so later and with
+nothing typed in the composition, writes that word again as an insertion
+at the caret, asking for the caret at the offset it had: before the text
+it inserts. In a line holding line two with the caret at its end, two
+inserted at 8..8 with the caret asked at 8, and the line becomes line
+twotwo; the letter typed next gives line twoxtwo, on the screen and on
+the disk. No rule above sees it: every rule above needs a range that is
+not empty. The text of such an insertion is what the buffer already
+holds before the caret, so what it says does not tell it from a word
+that is new; where it puts the caret does, because every other insertion
+at the caret in the recordings asks for the caret after its text. On
+Android, while a composition is open that has typed nothing since its
+compositionstart and the selection is collapsed before and in the
+update, an update is refused when its range is empty, at the caret and
+inside the buffer, its text is not empty, and it asks for the caret at
+the offset it had. The rule keeps no state and reads nothing but the
+update, the buffer and the flag that the other rules read. Of the 33,690
+recorded updates of 3,286 recordings, 74 insert text at the caret and
+ask for the caret before it; 73 of them are in a composition that has
+typed nothing, and all 73 write again the text that stands right before
+the caret, after an update with an empty range at the same place, 200 ms
+to 5.1 s earlier (72 of those updates opened the composition). 58 are in
+runs that ended with the text damaged, 4 in runs that ended intact (3
+where the keyboard took the doubled word back itself some time later, 1
+that the build refused), and 11 in runs without a record of how they
+ended. The 5,384 updates that insert at the caret in such a composition
+and ask for the caret after the text, as a typed letter or a suggestion
+taken does, are not refused. None of the 73 is Korean or Japanese text.
+
+What the eighth rule costs. An insertion at the caret that asks for the
+caret to stay before the text it inserts is refused and input restarts:
+a completion shown after the caret by a keyboard that asks for the caret
+to stay before it would be lost. No recorded keyboard sent one. The same
+update sent again is refused until six restarts have been made without a
+change of text, and the seventh is applied. Not recognised: the same
+insertion in a composition that has typed (one is recorded, in a run
+that ended damaged), an insertion elsewhere than at the caret that keeps
+the caret (five are recorded: the doubling at the end of the line in two
+runs that ended damaged, two typed passages whose insertion ends at the
+caret, and a text written again with the caret after it), and an
+insertion that asks for the caret after the text, which a typed letter
+and a suggestion taken ask for.
+
+A reopened word can also be written over the letter just typed. After
+the screen turns and a letter is typed at the end of a line, Gboard 10.8
+on an API 31 emulator marks the word before the caret again and writes a
+text over the stretch that ends at the caret, where the letter stands,
+asking for the caret to stay at the offset it had. Nearly always the
+text is the word with the letter (twox over the x, twotwox), which the
+first rule takes: the text is a stretch of the buffer that touches the
+caret. Twice in the recordings it was a text from elsewhere in the
+buffer. With a first line ending in haha no no banana above line two and
+an x typed at the end of line two, a space and no b, a stretch of the
+first line (56..61), were written over the x (75..76) with the caret
+asked at 76, where it was, and the line became line two no b: the letter
+was lost. The first rule reads what the text says and cannot tell a text
+that is held away from the caret; where the update puts the caret does.
+A keyboard in step asks for the caret at the end of what it writes, as a
+typed letter, a Backspace, a correction on Space, a Hangul or kana step
+and a conversion each do. On Android, while a composition is open that
+has typed and the selection is collapsed before and in the update, an
+update is refused when its range is not empty, ends at the caret and
+lies in the buffer, its text is not empty, and it asks for the caret at
+the offset it had, which is not the end of what it writes (the start of
+the range plus the length of the text). An update that writes the
+range's own text has the end of the range for the end of what it writes
+and is never refused. The rule keeps no state and reads nothing but the
+update, the buffer and the two flags that the other rules read, and its
+refusal is the same as theirs. Of the 33,690 recorded updates of 3,286
+recordings, 223 have this shape, one in each of 223 runs. 221 write a
+text that touches the caret, which the first rule refuses as well; the
+other 2 are the two above, in runs that ended damaged. 184 of the 223
+are in runs that ended intact, where the build the run was made on
+refused each one; none was applied in a run that ended intact. None is
+Korean or Japanese text.
+
+What the ninth rule costs. An update that replaces the text that ends at
+the caret and keeps the caret at the offset it had, which is not the end
+of what it writes, is refused and input restarts once. A completion
+written over the letter just typed with a longer text, by a keyboard
+that keeps the caret at the letter's offset, would be lost and the
+letter would stay; no recorded keyboard outside the 223 sent one. The
+same update sent again is refused until six restarts have been made
+without a change of text, and the seventh is applied. Not recognised: a
+range that ends before the caret (23 are recorded, all refused by the
+first rule) or after it (14 are recorded, 8 in runs that ended damaged
+and 6 in runs without a record of how they ended), an empty text, and
+the same update in a composition that has typed nothing, which the
+seventh rule takes.
+
+A write whose range ends beyond the buffer can also arrive. The input
+method keeps the offsets of the buffer it was given, so when its copy is
+longer than the buffer the editor holds, or the editor has put the start
+of the buffer elsewhere since, a range it kept from before names text
+that the buffer does not hold. On a test build that typed the letter
+itself and then rebuilt the buffer at the caret's line, after the screen
+turned and a letter was typed, Gboard 10.8 on an API 31 emulator wrote
+the word over 74..75 and asked for the caret at 9, in a buffer of nine
+units that started 67 units after the start the keyboard knew. The
+editor read the 66 units after the caret as that many units to replace,
+and the typed edit of a composition replaces them in the model across
+line breaks (patch 0024): the line break and the line below the caret
+were deleted and the word stood twice (line twoxtwox). Such an update is
+now refused in any composition state: the model keeps its text, the
+buffer goes back to it, input restarts once, and the refusal counts in
+the bound of restarts. Past the bound it is passed as every refusal is
+passed, but its range is cut at the buffer first: the end becomes the
+end of the buffer and the start is limited to it, so that the typed edit
+replaces no unit after the caret that the buffer does not hold and a
+deletion that starts beyond the buffer deletes nothing. The cut copies
+the five fields of the update one by one, because the browser's update
+event keeps them as getters on its prototype and a copy made with a
+spread would hold none of them. The text after the buffer is not
+touched. A range that ends at the end of the buffer is a write over its
+last units and is not beyond it. Of the 38,774 recorded updates of 3,733
+recordings, 40 end beyond the buffer that the editor had written last, 5
+of them start beyond it: 35 in recordings made without this patch or
+with an earlier form of it, none with the later forms, and 5 on the
+test build above, each in a run that ended with
+the line below the caret deleted: the line read line twoxtwox in 4 and
+line twoxx in 1. They lie in 24 runs: 14 ended with the text damaged, 10
+have no record of how they ended, and none ended intact. None of the
+2,660 recorded updates outside a composition ends beyond the buffer, and
+443 of them replace a range, a word replaced by a suggestion or a
+correction among them, inside it. What it costs: an input method that is
+one unit ahead of the buffer is refused where it was applied. 15 of the
+40 updates are such (13 in recordings made without this patch, 2 with
+an earlier form of it), none on the later forms.
+
+What the patch does not do. After the screen turns, the next letter
+typed can be lost, or can replace the last letter of the word at the
+caret (line twx where line twox was typed); a person sees either at once
+and types the letter again, and nothing else of the text is touched. It
+happens when the keyboard has reopened the word at the caret and then
+writes the letter alone over it. Over the whole word that is the fourth
+rule's shape: the update is refused, input restarts and the letter is
+lost. Over the last letter it is one letter written over one letter with
+the caret asked right after it, which no rule refuses, because a Hangul
+or kana step has that shape: the letter replaces the last letter of the
+word. Counted in runs on an API 31 emulator with Gboard 10.8 that turn
+the screen to landscape and back and type one letter about eight seconds
+later, on builds that did not type the letter themselves, and among the
+runs in which the keyboard had a range open at that letter: 4 of 105 on
+a line reached by a tap (3.8%, one in 26; the exact 95% interval is 1.0
+to 9.5%) and 2 of 107 on a new line made with Enter under other text
+(1.9%, one in 54; the exact 95% interval is 0.2 to 6.6%), over the whole
+reopened word in 3 and over its last letter in 3. The last batch of
+those, on this patch as it is, had 2 of the 4: two of fourteen runs on a
+line reached by a tap lost the letter, and none of fourteen on a new
+line. With Gboard 12.4 on an API 33 emulator the same steps ended right
+in 30 runs of 30, twenty on the nine rules and ten on this patch as it
+is. On the test build above, which typed the letter itself, the new-line
+runs gave 5 of 43 and the runs with a tap 0 of 42.
+
+Source checks run the real emit method over the real composition and
+typing operations, with the model, the cursor list, the undo stack and
+the EditContext replaced by adapters, on a host Node and not the Android
+runtime. The update events are objects whose fields are getters on a
+prototype, as the browser's are. 250 named cases cover the recorded
+damage, the device rows above, the Tab and the joined letter, the tail
+drops, what the rules cost, the restart, the bound, the refusal that
+stands, the cases the rules cannot tell from a stale write, which are
+kept as known limits and say what the patch does, for the seventh rule,
+the two updates that damaged runs replayed from their recordings, the
+five other recorded updates that the rules above passed, each kind of
+update that must still be applied, and each condition of the rule alone,
+for the eighth rule, the update that damaged a run replayed from its
+recording with the letter typed after it, each recorded update of its
+shape, each kind of insertion that must still be applied (a letter typed
+at the caret, a suggestion with the caret after it, an emoji, a text
+with no composition open, a composition that starts with an update that
+changes nothing) and each condition of the rule alone, and, for the
+ninth rule, the two updates that damaged runs replayed from their
+recordings, each of the 18 states in which a recorded update of its
+shape was sent, each kind of update that must still be applied (a second
+letter, a Backspace, a correction on Space, a jamo step, a kana step, a
+conversion, a suggestion taken) and each condition of the rule alone,
+and, for the guard, the stale write of the device run in the buffer it
+arrived in with a composition open, with one that has typed and with
+none open, the units it would replace after the caret reaching the end
+of the file, a range one unit beyond the buffer, and, which are not
+beyond it, a range that ends exactly at the end of the buffer and a
+write over the last line of a multi-line buffer, the bound, a deletion
+that starts beyond the buffer, with one cursor and with two, a text
+written over a range that starts beyond it, a platform that is not
+Android, and each action that rebuilds the buffer at the caret's line
+while a composition is open (a tap, an arrow key, a paste). The guard is
+checked against its statement on every buffer of up to five units, every
+range from before the buffer to three units past it, every text, every
+caret, composing or not and typed or not, with two lines after the
+buffer's: it refuses exactly the updates that end beyond the buffer, and
+past the bound it passes them clamped with the line break and the lines
+after the buffer untouched, the line of the buffer made of the text
+before the range, the text of the update and what follows the buffer,
+the caret, for an update with a text, at the offset it asks for, and the
+outcome that of the update that ends at the end of the buffer, with one
+cursor and with two (49,522 evaluations, none disagrees). 116 deliberate
+breakages of the code, one literal edit each (96 of the earlier rules
+and 20 of the guard and its clamp): a case or a check of a method
+against its statement fails on 113 of them. The 3 that survive are the
+two that remove the call of the fifth rule or of the sixth, whose
+refusals the seventh rule contains, and the one that removes the
+condition on the end of the buffer from the sixth rule, which the guard,
+first in the chain, now holds for every rule. 10,466,336 small updates
+agree with the fourth rule written separately from the code, 6,239,744
+with the fifth rule and the sixth rule, 10,126,208 with the seventh,
+15,468,864 with the eighth and 15,468,864 with the ninth. Over the
+33,690 recorded updates of 3,286 recordings the patch differs from the
+version before it on 2 updates. Over the 38,774 recorded updates of
+3,733 recordings it differs from the same patch without the guard on 59
+updates: the 40 above, and 19 that end beyond the replay's copy of the
+buffer, which is one to six units shorter than the buffer the editor had
+written, and not beyond the editor's.
+
+On devices. On an API 31 emulator with Gboard 10.8 and WebView 134, a
+word was typed, the screen turned to landscape and back, and one letter
+typed about eight seconds later. Without this patch 21 of 30 runs ended
+damaged, 20 of them with the word doubled, on the disk too. With the
+nine rules built, 100 of 101 runs were right: 39 of 40 on a new line and
+40 of 40 on a line reached by a tap, both under a load held on the host,
+and 21 of 21 on a quiet host, where the keyboard had the word open at
+the letter in 20. The ninth rule's shape came in 31 of those runs and
+was refused in each. The run that was not right ended line twx, the
+letter over the last letter, as said above.
+
+The write beyond the buffer was dispatched into the live editor through
+the page, after the turn and with the keyboard attached: twox over one
+unit that lies 65 units past the caret, as recorded, and x over a range
+that starts before the caret and ends 20 units past the buffer, each
+with a composition open that had typed nothing, with one that had typed,
+and with none open. On a build with the nine rules and without the
+refusal the lines after the caret were deleted on the disk in 12 runs of
+12. With the patch built the whole file was kept in 30 runs of 30, one
+restart for the refused update and the next two letters at the caret;
+the recorder shows a composition open at the update in 19 of the 35 runs
+of that batch and none in 16. The same update sent again and again was
+refused until six refusals stood for one version of the model, then
+passed once with its range cut: its text was typed at the end of the
+buffer, the lines after it were whole, and nothing read undefined, in 5
+runs of 5. An empty text over a range beyond the buffer, sent seven
+times with the caret inside the word, changed nothing in 6 runs of 6,
+and in the 3 of them where an Undo followed it took back the typed line,
+so the passed update had left no undo step.
+
+On an API 33 emulator with Gboard 12.4 and WebView 134, the refusal held
+in 15 runs of 15 in the three states, the composition open and untyped
+at the update in all five runs of that state. The bound held in 7 of 7:
+six refusals, the seventh update passed with its range cut at the end of
+the buffer, the eighth refused again. Past the bound an empty text
+wholly beyond the buffer changed nothing and one Undo took back the
+letter typed before it in 3 of 3, and an empty text from two units after
+the caret to five past the buffer deleted to the end of the buffer and
+nothing after it in 3 of 3.
+
+With the patch as it is here, the turn and the letter were run 28 times
+more on the API 31 emulator, with no load made on the host: 14 of 14 on
+a new line came out right, with two more letters typed after the first,
+and 12 of 14 on a line reached by a tap. In the two that were not, the
+keyboard wrote the letter alone over the whole reopened word, which is
+refused, and the letter was lost, as said above. No update of the 28
+runs ended beyond the buffer, and the patch without the refusal of such
+a range decides every one of their 485 updates the same. On the API 33
+emulator with Gboard 12.4 the turn and a letter were right in 10 runs of
+10 with it, the keyboard writing the word and the letter together each
+time.
+
+Other keyboards, on the nine rules: on the API 33 emulator with Gboard
+12.4, which composes English words, twenty runs of the turn and a letter
+were right, and fifteen runs of the rules' honest neighbours were right
+with no refusal (letters typed and deleted at a word's end, a word taken
+from the strip, a letter typed inside a word); in five more a word typed
+for correction stayed as typed, because the keyboard offered no
+correction in the editor; on an API 36 emulator with Gboard 18.5, Korean
+and Japanese lines typed, converted and turned came out as typed in 224
+updates with no refusal.
+
+diff --git a/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts b/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
+index babfbb0..d2d6592 100644
+--- a/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
++++ b/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
+@@ -87,9 +87,22 @@ export class NativeEditContext extends AbstractEditContext {
+ 	private _deletingByKey = false;
+ 	// An open EditContext composition, set at compositionstart and cleared at compositionend or blur.
+ 	private _compositionOpen = false;
++	// Whether the composition that is open has typed: an update of it that changed the text was applied by the model since its compositionstart (set after the edit, in
++	// _afterAppliedEdit). See _isInStepRewrite and _isTailDropOnReopen.
++	private _compositionTyped = false;
++	// The refusal that stands: the model's version, the range of the update that was last refused and the line of the model that the buffer it was made on starts at (the buffer starts at the first column of a line). It
++	// stands until the model is edited or a composition starts (a restart that was completed), and the third rule applies to an update over the same range of the same
++	// buffer: see _isTypedOverStaleRange.
++	private _standingRefusal: { version: number; start: number; end: number; line: number } | undefined;
+ 	// The buffer and selection the input method knew before the first rewrite of the current task,
+ 	// kept until the task's rewrites are done: see _restartInputIfUnheard.
+-	private _beforeRewrite: { text: string; selection: OffsetRange; composing: boolean } | undefined;
++	private _beforeRewrite: { text: string; selection: OffsetRange; composing: boolean; force?: boolean } | undefined;
++	// Restart bound, part 1 of 4 (this member, the guard at a refusal, the count in _restartInputIfUnheard and the reset go together): how many forced restarts
++	// have been made since an update last changed the text.
++	private _refusalRestarts = 0;
++	// Restart bound, part 1b: the version of the model that the count belongs to. Any edit of the model (typed, Enter, paste, cut, undo) is a change of text and starts the
++	// count again, whether or not the update came through _emitTypeEvent.
++	private _refusalRestartsVersion = -1;
+ 
+ 	// Overflow guard container
+ 	private readonly _parent: HTMLElement;
+@@ -258,6 +271,9 @@ export class NativeEditContext extends AbstractEditContext {
+ 		}));
+ 		this._register(editContextAddDisposableListener(this._editContext, 'compositionstart', (e) => {
+ 			this._compositionOpen = true;
++			this._compositionTyped = false;
++			// A composition that starts is the input method's picture read again, which is what a restart is for: the refusal that stood is over.
++			this._standingRefusal = undefined;
+ 			this._updateEditContext();
+ 			// Utlimately fires onDidCompositionStart() on the editor to notify for example suggest model of composition state
+ 			// Updates the composition state of the cursor controller which determines behavior of typing with interceptors
+@@ -518,19 +534,29 @@ export class NativeEditContext extends AbstractEditContext {
+ 	// without a composition, restart nothing. Two rewrites restart input once, and a composition
+ 	// already ended by the page's key or tap handler restarts nothing more. The blur stays outside
+ 	// the edit, with the focus tracker paused so that the editor is not told it lost focus.
+-	private _restartInputIfUnheard(text: string, selection: OffsetRange, wasComposing: boolean): void {
++	// A caller that has refused an update forces the restart, which then happens whatever the buffer holds, as long as the
++	// editor host still has the focus when the task's rewrites are done; several refusals in one task restart once.
++	private _restartInputIfUnheard(text: string, selection: OffsetRange, wasComposing: boolean, force = false): void {
+ 		if (this._beforeRewrite) {
++			if (force) {
++				this._beforeRewrite.force = true;
++			}
+ 			return;
+ 		}
+-		this._beforeRewrite = { text, selection, composing: wasComposing };
++		this._beforeRewrite = { text, selection, composing: wasComposing, force };
+ 		queueMicrotask(() => {
+ 			const before = this._beforeRewrite;
+ 			this._beforeRewrite = undefined;
+ 			const domNode = this.domNode.domNode;
+-			if (!before || this._editContext.text === before.text ||
+-				(!this._previousEditContextSelection.equals(before.selection) && !(before.composing && this._compositionOpen)) || getActiveElement() !== domNode) {
++			if (!before || (!before.force && (this._editContext.text === before.text ||
++				(!this._previousEditContextSelection.equals(before.selection) && !(before.composing && this._compositionOpen)))) || getActiveElement() !== domNode) {
+ 				return;
+ 			}
++			// Restart bound, part 2 of 4: a forced restart counts where its blur and focus happen. One that is asked for and not made, because the editor
++			// host has lost the focus, counts for nothing, and refusals handed over in one task make one.
++			if (before.force) {
++				this._refusalRestarts++;
++			}
+ 			this._focusTracker.pause();
+ 			domNode.blur();
+ 			domNode.focus();
+@@ -544,6 +570,51 @@ export class NativeEditContext extends AbstractEditContext {
+ 		}
+ 		const selectionEndOffset = this._previousEditContextSelection.endExclusive;
+ 		const selectionStartOffset = this._previousEditContextSelection.start;
++		const modelVersion = this._context.viewModel.model.getVersionId();
++		if (this._refusalRestartsVersion !== modelVersion) {
++			this._refusalRestartsVersion = modelVersion;
++			this._refusalRestarts = 0;
++		}
++		// Restart bound, part 3 of 4: after six forced restarts made without a change of text an update is no longer refused. A keyboard that has gone on with the same
++		// picture through six restarts is not going to be corrected by a seventh, and a refusal that repeats leaves the person with input that does nothing until something
++		// else is typed; the update is passed, as the editor without this patch passes it, and the count starts again at the next update that changes text.
++		if (this._refusalRestarts < 6 && (this._isBeyondBuffer(e) || this._isRememberedWordRewrite(e, selectionStartOffset, selectionEndOffset) || this._isTailDropOnReopen(e, selectionStartOffset, selectionEndOffset) ||
++			this._isTypedOverStaleRange(e, selectionStartOffset, selectionEndOffset) || this._isOneUnitOverWord(e, selectionStartOffset, selectionEndOffset) ||
++			this._isStaleWriteAfterCaret(e, selectionStartOffset, selectionEndOffset) || this._isGrowthAfterCaret(e, selectionStartOffset, selectionEndOffset) ||
++			this._isUntypedWriteKeepingCaret(e, selectionStartOffset, selectionEndOffset) ||
++			this._isUntypedInsertKeepingCaret(e, selectionStartOffset, selectionEndOffset) ||
++			this._isTypedWriteKeepingCaret(e, selectionStartOffset, selectionEndOffset))) {
++			// Refused: the model keeps its text and the buffer goes back to it where the update was applied to it. Input restarts
++			// whether or not the buffer changed: the input method has to read the text and the caret again, or it goes on with
++			// the range it kept and the next letter typed is written into it.
++			// A refusal stands until the model is edited or a composition starts, for the range it refused of the buffer it was made on: see _isTypedOverStaleRange.
++			this._standingRefusal = { version: modelVersion, start: e.updateRangeStart, end: e.updateRangeEnd, line: this._editContextStart.lineNumber };
++			const oldText = this._editContext.text;
++			const applyingInput = this._applyingInputMethodEdit;
++			this._applyingInputMethodEdit = true;
++			try {
++				this._updateEditContext();
++				if (this._editContext.selectionStart !== selectionStartOffset || this._editContext.selectionEnd !== selectionEndOffset) {
++					this._editContext.updateSelection(selectionStartOffset, selectionEndOffset);
++				}
++			} finally {
++				this._applyingInputMethodEdit = applyingInput;
++			}
++			this._restartInputIfUnheard(oldText, this._previousEditContextSelection, true, true);
++			return;
++		}
++		// Past the bound an update that names text beyond the buffer is applied as far as the buffer goes: its range is cut at the end of the buffer, so the typed edit below replaces no unit that the buffer does not hold. The start
++		// is cut as well: a deletion that starts beyond the buffer then deletes nothing, where its start made the edit below write the text after the caret again. The fields are copied one by one: the browser's event keeps them
++		// as getters on its prototype, which a spread does not copy.
++		if (isAndroid && e.updateRangeEnd > this._previousEditContextText.length) {
++			e = { text: e.text, updateRangeStart: Math.min(e.updateRangeStart, this._previousEditContextText.length), updateRangeEnd: this._previousEditContextText.length, selectionStart: e.selectionStart, selectionEnd: e.selectionEnd };
++		}
++		// An update that is not refused and whose text differs from the cached text of its range changes the text. Once the editor has applied it (the model's version
++		// moves), _afterAppliedEdit follows: the composition has typed and the count of the restart bound starts again.
++		// An update that names a range with its own text, a selection that moves, an empty update and one that the editor discards (a read-only editor, a cursor that
++		// loses its edit) do not do it.
++		const changesText = e.text !== this._previousEditContextText.slice(e.updateRangeStart, e.updateRangeEnd);
++		const versionBefore = this._context.viewModel.model.getVersionId();
+ 		this._previousEditContextSelection = new OffsetRange(e.selectionStart, e.selectionEnd);
+ 
+ 		// With several cursors, an update that reaches outside the primary selection is about the
+@@ -570,6 +641,7 @@ export class NativeEditContext extends AbstractEditContext {
+ 				this._expectedCaretOffset = e.selectionStart;
+ 				this._onType(viewController, input);
+ 				this._expectedCaretOffset = undefined;
++				this._afterAppliedEdit(changesText, versionBefore);
+ 				return;
+ 			}
+ 			this._dismissOtherCursors();
+@@ -633,6 +705,194 @@ export class NativeEditContext extends AbstractEditContext {
+ 		this._expectedCaretOffset = e.selectionStart === e.selectionEnd ? e.selectionStart : undefined;
+ 		this._onType(viewController, typeInput);
+ 		this._expectedCaretOffset = undefined;
++		this._afterAppliedEdit(changesText, versionBefore);
++	}
++
++	// An input method that has been told to reopen a word can hand over, as an update of the range it kept from before,
++	// the text of the word it reopened now. After a turn of the screen Gboard 10.8 wrote the word before the caret over the
++	// first word of the line, and over the last letter; after the key row's Tab inside a word Gboard 12.4 wrote the word
++	// after the caret over the start of the range it held before; a keyboard that composes joined the letter just typed to
++	// the word that follows it and wrote both over the letter. Such an update replaces text before the caret with a text that
++	// the buffer holds in a stretch that contains the caret or touches it, in a range that is not that text's own, and asks
++	// for the caret to stay. An insertion at the caret has no range to replace, and an update that asks for the caret to move
++	// with the change in length does not match: a keyboard in step moves the caret by that change. Nor does a rewrite, with a text of the same
++	// length, of the range that ends at the caret, in a composition that has already typed: a keyboard in step sends it when a Hangul syllable
++	// gains a letter, when the word being composed grows in place or is corrected (a kana or a multi-tap letter cycles, an autocorrect). A stale
++	// write comes as the first update of a composition that only reopened a word, and no recorded one is such a rewrite in a composition that typed. Nor does one unit
++	// written over one unit: a kana toggled by a 12-key keyboard is that, and no recorded stale write is (they are words, or one unit over a word).
++	private _isRememberedWordRewrite(e: ITextUpdateEvent, selectionStartOffset: number, selectionEndOffset: number): boolean {
++		return isAndroid && this._compositionOpen && selectionStartOffset === selectionEndOffset &&
++			e.selectionStart === selectionStartOffset && e.selectionEnd === selectionStartOffset &&
++			e.text.length > 0 &&
++			e.updateRangeStart >= 0 && e.updateRangeStart < e.updateRangeEnd && e.updateRangeEnd <= selectionStartOffset &&
++			this._previousEditContextText.slice(e.updateRangeStart, e.updateRangeEnd) !== e.text &&
++			!this._isInStepRewrite(e, selectionStartOffset) &&
++			!(e.text.length === 1 && e.updateRangeEnd - e.updateRangeStart === 1) &&
++			this._textTouchesCaret(e.text, selectionStartOffset);
++	}
++
++	// Whether the update rewrites, with a text of the same length, the range that ends at the caret, in a composition that has already typed: an update
++	// of it that changed the text was applied since its compositionstart. The range ends at the caret, which the rule requires of every range it
++	// refuses; it is tested here as well so that the method says what it is.
++	private _isInStepRewrite(e: ITextUpdateEvent, caret: number): boolean {
++		return this._compositionTyped && e.updateRangeEnd === caret && e.text.length === e.updateRangeEnd - e.updateRangeStart;
++	}
++
++	// An input method that reopened a word with the caret inside it writes the part of the word up to the caret over the whole range it kept and asks for the
++	// caret to stay: the text after the caret that the range covers is dropped, and the keyboard goes on with the same range, so its next update takes the
++	// characters after it as well (Gboard 12.4, a line holding twzox with the caret between the z and the o: twz over 5..10, and the line becomes twz; in alpha
++	// beta Charlie delta with the caret inside beta: bet over 6..10, then bet over the same range again, which takes the space, then betz over it, which takes the
++	// capital). Such an update is refused when the composition that is open has typed nothing, the text is the part of the range before the caret, it is not the
++	// range's own text, and the range's own text is not that text repeated: that is a keyboard taking a doubled word back (twotwo to two), and it is passed. A
++	// composition that has typed is not judged here, as in _isInStepRewrite, which reads the same flag.
++	private _isTailDropOnReopen(e: ITextUpdateEvent, selectionStartOffset: number, selectionEndOffset: number): boolean {
++		if (!isAndroid || !this._compositionOpen || this._compositionTyped || selectionStartOffset !== selectionEndOffset ||
++			e.selectionStart !== selectionStartOffset || e.selectionEnd !== selectionStartOffset ||
++			!(e.updateRangeStart >= 0 && e.updateRangeStart < selectionStartOffset && selectionStartOffset < e.updateRangeEnd && e.updateRangeEnd <= this._previousEditContextText.length)) {
++			return false;
++		}
++		const old = this._previousEditContextText.slice(e.updateRangeStart, e.updateRangeEnd);
++		return e.text === this._previousEditContextText.slice(e.updateRangeStart, selectionStartOffset) && old !== e.text &&
++			!(old.length % e.text.length === 0 && old === e.text.repeat(old.length / e.text.length));
++	}
++
++	// After a refusal the keyboard can go on with the range it kept, and the letter typed next then arrives as that range: the part of the word up to the caret and the
++	// letter in place of its text, the tail after the caret dropped, the caret asked right after the letter. Gboard 12.4 wrote it so in alpha beta Charlie delta with the
++	// caret inside beta, after two writes of bet over 6..10 that were applied: betz over 6..10 with the caret at 10, and the z landed on the character after the word.
++	// Such an update is refused while the refusal stands, that is until the model is edited, and only over the range that was refused: a suggestion at another word, which
++	// a tap can bring up before any edit, is not the keyboard going on with its range. On its own it is not refused: a suggestion taken with the caret inside a
++	// word can have the same shape, and nothing has been refused before it. A text that keeps the tail (a letter typed inside the word, the word rewritten with it) is not this shape.
++	private _isTypedOverStaleRange(e: ITextUpdateEvent, selectionStartOffset: number, selectionEndOffset: number): boolean {
++		const standing = this._standingRefusal;
++		if (!isAndroid || !this._compositionOpen || !standing || standing.version !== this._context.viewModel.model.getVersionId() ||
++			standing.start !== e.updateRangeStart || standing.end !== e.updateRangeEnd || selectionStartOffset !== selectionEndOffset ||
++			standing.line !== this._editContextStart.lineNumber ||
++			e.selectionStart !== e.selectionEnd || e.selectionStart !== e.updateRangeStart + e.text.length ||
++			!(e.updateRangeStart >= 0 && e.updateRangeStart < selectionStartOffset && selectionStartOffset < e.updateRangeEnd && e.updateRangeEnd <= this._previousEditContextText.length)) {
++			return false;
++		}
++		return e.text.length > selectionStartOffset - e.updateRangeStart && e.text.startsWith(this._previousEditContextText.slice(e.updateRangeStart, selectionStartOffset)) &&
++			!e.text.endsWith(this._previousEditContextText.slice(selectionStartOffset, e.updateRangeEnd));
++	}
++
++	// A word that an input method reopened, with nothing typed in it since, is written over by ONE unit: the keyboard asks for the caret right after the letter, over the
++	// whole range it kept, and the caret is inside that range or at its end. Gboard 12.4 wrote it so after a turn of the screen, the first letter typed over a word it had
++	// reopened without typing (two over 84..87 became x with the caret asked at 85, in a line holding line two; delta over 19..24 became z with the caret asked at 20, the
++	// caret being at 22, in a line holding alpha beta Charlie delta); the word is gone and the letter stands alone. Such an update is refused. A Backspace on a reopened
++	// word of two units writes the first unit of the range, which is not this shape (the second rule above refuses the one that drops the tail of a longer one), and a
++	// selected word has a selection that is not collapsed. The third rule above does not see it: it needs a refusal that stands and a text longer than the part of the range
++	// before the caret.
++	private _isOneUnitOverWord(e: ITextUpdateEvent, selectionStartOffset: number, selectionEndOffset: number): boolean {
++		if (!isAndroid || !this._compositionOpen || this._compositionTyped || selectionStartOffset !== selectionEndOffset ||
++			e.selectionStart !== e.selectionEnd || !this._isOneLetter(e.text) || e.selectionStart !== e.updateRangeStart + e.text.length ||
++			!(e.updateRangeStart >= 0 && e.updateRangeStart + e.text.length < e.updateRangeEnd && e.updateRangeStart < selectionStartOffset && selectionStartOffset <= e.updateRangeEnd &&
++				e.updateRangeEnd <= this._previousEditContextText.length)) {
++			return false;
++		}
++		const old = this._previousEditContextText.slice(e.updateRangeStart, e.updateRangeEnd);
++		return !(old.length === e.text.length + 1 && old.startsWith(e.text));
++	}
++
++	// Whether the text is one letter or digit of an alphabet: one code point (an emoji or another character outside the basic plane is one, though it is two units long), and
++	// not a unit of Han, kana or Hangul, which stands for a longer reading (a kanji over two kana is a conversion), nor a symbol (the strip offers one for a word). The stale
++	// writes of the fourth rule are letters.
++	private _isOneLetter(text: string): boolean {
++		return /^[\p{L}\p{N}]$/u.test(text) && !/^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]$/u.test(text);
++	}
++
++	// A word the keyboard remembered is written over text that lies AFTER the caret, and the caret is asked to stay where it was, outside the written text (Gboard 12.4 after a
++	// turn, in alpha beta Charlie delta with the caret at 2: be over 6..8 twice as the composition reopens over those two letters, then alpha over 6..8 with the caret asked at 2,
++	// and the line becomes alpha alphata Charlie delta; sent again, alphaphata). No keyboard rewrites the text after the caret and leaves the caret before it for a person: the
++	// corrections of a word lie at or before the caret, and text written after it moves the caret into or after the text. The first rule reads only ranges that end at or before
++	// the caret. Such an update is refused when the composition that is open has typed nothing, the selection is collapsed before and in the update, the caret is asked to stay,
++	// the range lies wholly after it and is not empty, the text is not empty and is not the range's own. The rule keeps no state, so the same update sent again is refused again.
++	private _isStaleWriteAfterCaret(e: ITextUpdateEvent, selectionStartOffset: number, selectionEndOffset: number): boolean {
++		return isAndroid && this._compositionOpen && !this._compositionTyped && selectionStartOffset === selectionEndOffset &&
++			e.selectionStart === selectionStartOffset && e.selectionEnd === selectionStartOffset &&
++			e.text.length > 0 && e.updateRangeStart > selectionStartOffset && e.updateRangeStart < e.updateRangeEnd &&
++			e.updateRangeEnd <= this._previousEditContextText.length &&
++			this._previousEditContextText.slice(e.updateRangeStart, e.updateRangeEnd) !== e.text;
++	}
++
++	// The range's own text is written back with units added at its end, and the caret is asked to stay where it was, at the range's end and so before the added units (Gboard 12.4
++	// on Android 13 after two turns, in a buffer whose last lines read line twox and line two, with the caret at the end of the last: twox over 44..47, which holds two, with the
++	// caret asked at 47, a hundred and thirty-five milliseconds after the same range had been reopened with its own text; the line becomes line twox, an x nobody typed, and
++	// the x typed ten seconds later arrives as twoxx over the same range and gives line twoxxx). A letter typed at the end of a word asks for the caret after it; a keyboard
++	// that writes text after the caret and leaves the caret before it is writing what it remembered. Such an update is refused when the composition that is open has typed
++	// nothing, the selection is collapsed before and in the update, the range is not empty and ends at the caret, the text is longer than the range's text and starts with it,
++	// and the caret is asked to stay. The rule keeps no state.
++	private _isGrowthAfterCaret(e: ITextUpdateEvent, selectionStartOffset: number, selectionEndOffset: number): boolean {
++		return isAndroid && this._compositionOpen && !this._compositionTyped && selectionStartOffset === selectionEndOffset &&
++			e.selectionStart === selectionStartOffset && e.selectionEnd === selectionStartOffset &&
++			e.updateRangeStart >= 0 && e.updateRangeStart < e.updateRangeEnd && e.updateRangeEnd === selectionStartOffset &&
++			e.updateRangeEnd <= this._previousEditContextText.length &&
++			e.text.length > e.updateRangeEnd - e.updateRangeStart && e.text.startsWith(this._previousEditContextText.slice(e.updateRangeStart, e.updateRangeEnd));
++	}
++
++	// An update that replaces text and asks for the caret to stay where it was, although that offset is not the end of what it writes, with nothing typed in the composition. After a
++	// turn of the screen Gboard 12.4 on Android 13 reopened the word at the end of the last line of a buffer whose last lines read line twox and line two with its own text
++	// (two over 15..18, the caret at 18) and, in that composition and with nothing typed in it, wrote line over the same range with the caret asked at 18: not after the new text,
++	// which is at 19, and not where a keyboard in step asks for it after a change of length; the line becomes line line, and the letter typed next gives line linxe. The text
++	// of such a write is the range's text at another time, so what it says does not tell it from a rewrite; where it puts the caret does. Every recorded update of this shape asks
++	// for the caret at the offset it had. Such an update is refused when the composition that is open has typed nothing, the selection is collapsed before and in the update and the
++	// update asks for the caret at that offset, the range is not empty and inside the buffer, the text is not the range's own, and the offset is not the end of what the update
++	// writes. A keyboard that corrects an earlier word asks for the caret moved by the change in length and is not refused. The rule keeps no state. Not recognised: a stale
++	// write that asks for the caret after its text, which a suggestion taken asks for as well.
++	private _isUntypedWriteKeepingCaret(e: ITextUpdateEvent, selectionStartOffset: number, selectionEndOffset: number): boolean {
++		if (!isAndroid || !this._compositionOpen || this._compositionTyped || selectionStartOffset !== selectionEndOffset ||
++			e.selectionStart !== selectionStartOffset || e.selectionEnd !== selectionStartOffset ||
++			!(e.updateRangeStart >= 0 && e.updateRangeStart < e.updateRangeEnd && e.updateRangeEnd <= this._previousEditContextText.length) ||
++			this._previousEditContextText.slice(e.updateRangeStart, e.updateRangeEnd) === e.text) {
++			return false;
++		}
++		return selectionStartOffset !== e.updateRangeStart + e.text.length;
++	}
++
++	// An update that inserts text at the caret and asks for the caret to stay where it was, so before the text it inserts, with nothing typed in the composition. After a turn of the
++	// screen Gboard 12.4 reopens the word before the caret (a composition that starts with an update that changes nothing, at the caret) and, some time later and with nothing
++	// typed in it, writes that word again as an insertion at the caret, asking for the caret at the offset it had: the line two becomes line twotwo, and the letter typed next
++	// gives line twoxtwo. The text of such an insertion is what the buffer already holds before the caret, so what it says does not tell it from a word that is new; where it puts the
++	// caret does. A keyboard that inserts a word asks for the caret after it and is not refused. Such an update is refused when the composition that is open has typed nothing, the
++	// selection is collapsed before and in the update, the range is empty and at the caret and inside the buffer, the text is not empty, and the update asks for the caret at the
++	// offset it had. The rule keeps no state. Not recognised: the same insertion in a composition that has typed, and an insertion elsewhere than at the caret.
++	private _isUntypedInsertKeepingCaret(e: ITextUpdateEvent, selectionStartOffset: number, selectionEndOffset: number): boolean {
++		return isAndroid && this._compositionOpen && !this._compositionTyped && selectionStartOffset === selectionEndOffset &&
++			e.selectionStart === selectionStartOffset && e.selectionEnd === selectionStartOffset &&
++			e.updateRangeStart === selectionStartOffset && e.updateRangeEnd === selectionStartOffset &&
++			e.text !== '' && selectionStartOffset <= this._previousEditContextText.length;
++	}
++
++	// An update that replaces the text that ends at the caret and asks for the caret to stay where it was, which is not the end of what it writes, in a composition that has typed. After a
++	// letter typed after a turn of the screen, Gboard 10.8 on Android 12 marks its word again and writes it over the letter: the word at the caret (twox over the x, which the first rule takes,
++	// as the text is a stretch of the buffer that touches the caret) and, in two recorded runs, a text from elsewhere in the buffer, no b over the x with the caret asked at 76, where it
++	// was: the line becomes line two no b, and the letter is lost. The first rule reads what the text says and cannot see a text that is held away from the caret; where the update puts the
++	// caret tells it from every update that a keyboard in step sends, because a typed letter, a Backspace, a correction on Space, a jamo or kana step and a conversion each ask for the
++	// caret at the end of what they write. Such an update is refused when the composition that is open has typed, the selection is collapsed before and in the update, the range is not
++	// empty, ends at the caret and lies in the buffer, the text is not empty, and the update asks for the caret at the offset it had, which is not the end of what it writes (an update that
++	// writes the range's own text has the end of the range for the end of what it writes, so it is never refused). The rule keeps no state. Not recognised: a range that ends before the caret
++	// or after it, an empty text, and the same update in a composition that has typed nothing, which the seventh rule takes.
++	private _isTypedWriteKeepingCaret(e: ITextUpdateEvent, selectionStartOffset: number, selectionEndOffset: number): boolean {
++		return isAndroid && this._compositionOpen && this._compositionTyped && selectionStartOffset === selectionEndOffset &&
++			e.selectionStart === selectionStartOffset && e.selectionEnd === selectionStartOffset &&
++			e.text.length > 0 && e.updateRangeStart >= 0 && e.updateRangeStart < e.updateRangeEnd && e.updateRangeEnd === selectionStartOffset &&
++			e.updateRangeEnd <= this._previousEditContextText.length &&
++			selectionStartOffset !== e.updateRangeStart + e.text.length;
++	}
++
++	// An update whose range reaches past the end of the buffer names text that the buffer does not hold. The input method holds the offsets of a buffer that is no longer the one it was given, because it kept a range
++	// through a restart that the editor had rebuilt the buffer around, and in this buffer they mean nothing: Gboard 10.8 wrote twox over 74..75 of a buffer of nine units and asked for the caret at 9, in a buffer that the
++	// editor had started at the caret's line, 67 units after the start the keyboard knew. The units past the caret are read as that many units to replace after it, and the typed edit replaces them in the model across
++	// line breaks (patch 0024), so the update deleted the line break and the line below it, text that the input method never saw. Such an update is refused in any composition state, with the restart and the bound of the
++	// rules above; past the bound it is clamped to the buffer, see _emitTypeEvent. A range that ends at the end of the buffer is a write over its last units and is not beyond it.
++	private _isBeyondBuffer(e: ITextUpdateEvent): boolean {
++		return isAndroid && e.updateRangeEnd > this._previousEditContextText.length;
++	}
++
++	// Whether the buffer holds the text in a stretch of its own length that contains the caret or touches it: one that starts
++	// at most as many units before the caret as the text is long, and at the caret at the latest. The window is as wide as
++	// those stretches reach. A text longer than the room around the caret cannot match, since the window is then too short.
++	private _textTouchesCaret(text: string, caret: number): boolean {
++		return this._previousEditContextText.slice(Math.max(0, caret - text.length), caret + text.length).includes(text);
+ 	}
+ 
+ 	// Whether the update changes no text. It replaces nothing with nothing, or its text is the cached
+@@ -755,6 +1015,15 @@ export class NativeEditContext extends AbstractEditContext {
+ 		this._applyingInputMethodEdit = false;
+ 	}
+ 
++	// After the edit, once the model has applied an update that changes the text (its version is not the one it had before the edit): the composition has typed, and
++	// the count of the restart bound, part 4 of 4, starts again. See _emitTypeEvent.
++	private _afterAppliedEdit(changesText: boolean, versionBefore: number): void {
++		if (changesText && this._context.viewModel.model.getVersionId() !== versionBefore) {
++			this._compositionTyped = true;
++			this._refusalRestarts = 0;
++		}
++	}
++
+ 	// A keyboard that pastes from its own clipboard, as Gboard's suggestion strip does, hands the
+ 	// text over as one commit, and typed it was applied a character at a time: a model edit and a
+ 	// layout of the line for every one, which held the page for seconds for a few thousand

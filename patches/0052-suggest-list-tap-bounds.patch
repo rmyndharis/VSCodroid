@@ -1,0 +1,42 @@
+Dismiss suggestions on a retargeted touch outside the list.
+
+A touch on the editor line immediately above the suggestion list can be
+delivered with a suggestion row as its target. The gesture handler then
+accepts that row even though the touch point lies outside the list.
+
+Check the gesture's page coordinates against the list's page rectangle. If
+they lie outside, run the editor's existing command to cancel suggestions
+instead of accepting the row. The touch does not move the caret; a further
+editor tap can do that. Mouse selection and touches within the list keep their
+existing handling. Gesture dispatch and other lists are unchanged.
+
+diff --git a/src/vs/editor/contrib/suggest/browser/suggestWidget.ts b/src/vs/editor/contrib/suggest/browser/suggestWidget.ts
+--- a/src/vs/editor/contrib/suggest/browser/suggestWidget.ts
++++ b/src/vs/editor/contrib/suggest/browser/suggestWidget.ts
+@@ -281,7 +281,7 @@
+ 		applyStatusBarStyle();
+ 
+ 		this._disposables.add(this._list.onMouseDown(e => this._onListMouseDownOrTap(e)));
+-		this._disposables.add(this._list.onTap(e => this._onListMouseDownOrTap(e)));
++		this._disposables.add(this._list.onTap(e => this._onListTap(e)));
+ 		this._disposables.add(this._list.onDidChangeSelection(e => this._onListSelection(e)));
+ 		this._disposables.add(this._list.onDidChangeFocus(e => this._onListFocus(e)));
+ 		this._disposables.add(this.editor.onDidChangeCursorSelection(() => this._onCursorSelectionChanged()));
+@@ -348,7 +348,17 @@
+ 	private _onCursorSelectionChanged(): void {
+ 		if (this._state !== State.Hidden) {
+ 			this._contentWidget.layout();
++		}
++	}
++
++	private _onListTap(e: IListGestureEvent<CompletionItem>): void {
++		const { left, top, width, height } = dom.getDomNodePagePosition(this._list.getHTMLElement());
++		const { pageX, pageY } = e.browserEvent;
++		if (pageX < left || pageX >= left + width || pageY < top || pageY >= top + height) {
++			this.editor.trigger('touch', 'hideSuggestWidget', null);
++			return;
+ 		}
++		this._onListMouseDownOrTap(e);
+ 	}
+ 
+ 	private _onListMouseDownOrTap(e: IListMouseEvent<CompletionItem> | IListGestureEvent<CompletionItem>): void {

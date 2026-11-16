@@ -4389,16 +4389,27 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
      * Command Palette and the Explorer's rename box never set it off.
      * `scripts/test-keyboard-guard.js` runs this part of the script.
      *
-     * What that does not cover: a caret moved by a command, such as Undo, Find
-     * or Go to Line, or by an extension, which is neither a key in the list nor
-     * an editor gesture; Enter accepting a suggestion, which is not one of those
-     * keys; and the textarea edit path, whose host has no `editContext`. Not
-     * measured: keyboards other than Gboard, Korean and Chinese input, and the
-     * other Monaco editors, such as the Source Control message box and the chat
-     * input. What it costs: the word is committed as typed, so on a Japanese
-     * keyboard a guarded key or tap commits the kana unconverted; and a chord
-     * the suggestion list also binds, such as Shift+Tab or Ctrl+Down, ends the
-     * word first, so the list acts from its first row.
+     * Commands and extensions are not keys or gestures this guard handles.
+     * Patch 0046 ends a composition still open after an edit changes the buffer.
+     * Measured on the built editor with Gboard 12.4 and WebView 134 on API 33:
+     * long-press Paste and hardware Ctrl+V each left `helloabXYZ` with one editor
+     * restart; Edit > Paste left it with none, the menu having ended composition.
+     * From the source, Undo and Redo, a snippet, an extension's edit, and Enter
+     * accepting a suggestion also reach the rule if composition remains open.
+     * That Enter route was not reached in the measured suggestion-list sequence:
+     * Gboard 12.4 typed `alp` and a newline; on Gboard 8.0.4's baseline, composition
+     * ended before Enter accepted `alpha1`. Find, Go to Line or another command
+     * that moves the buffer to a different line's text is also a source-only route.
+     * A within-line move that changes no buffer text and the textarea path remain
+     * uncovered. The input method's synchronous work is excluded; later work such
+     * as format-on-type can commit an unconverted word. Restarts coalesce per
+     * pending batch, not across an edit made by composition-end itself.
+     * Not measured: keyboards other than Gboard, Korean and Chinese input, and
+     * other Monaco editors such as the Source Control message box and chat input.
+     * What it costs: the word is committed as typed, so on a Japanese keyboard a
+     * guarded key or tap commits kana unconverted; a chord the suggestion list
+     * also binds, such as Shift+Tab or Ctrl+Down, ends the word first, so the list
+     * acts from its first row.
      */
     private fun injectKeyboardGuard() {
         webView?.evaluateJavascript(
