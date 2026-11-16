@@ -676,6 +676,7 @@ class SafDirectoryRenameTest {
     fun `an event for another folder does not let this folder's cache answer for it`() {
         deviceTree(mapOf("root" to listOf("notes.txt")))
         File(mirror, "notes.txt").writeText("x")
+        every { resolver.openInputStream(any()) } answers { ByteArrayInputStream("x".toByteArray()) }
         // Seeds the cache for the folder being watched.
         observe(FileObserver.MODIFY, "notes.txt")
 
@@ -683,7 +684,13 @@ class SafDirectoryRenameTest {
         val otherTree = mockk<Uri>(relaxed = true)
         deviceTree(mapOf("root" to emptyList()))
         engine.handleMirrorEvent(FileObserver.MODIFY, File(mirror, "notes.txt"), mirror, otherTree)
+        // Both jobs must drain even when the events share a clock tick.
+        val queued = engine.session.queue.toList()
+        assertEquals(2, queued.size)
+        engine.session.queue.clear()
+        engine.session.queue.addAll(queued.map { it.copy(timestamp = 1L) })
         drain()
+        verify(atLeast = 1) { resolver.openInputStream(any()) }
 
         verify(exactly = 1) {
             DocumentsContract.createDocument(any(), any(), any(), "notes.txt")
