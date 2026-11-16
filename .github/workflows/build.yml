@@ -430,6 +430,7 @@ jobs:
 
   test:
     name: Unit Tests
+    needs: codeoss
     runs-on: ubuntu-latest
     timeout-minutes: 40
 
@@ -489,20 +490,38 @@ jobs:
           restore-keys: |
             gradle-home-${{ runner.os }}-${{ runner.arch }}-
 
-      # Unit tests only need compiled Kotlin, not the full assets.
-      # Create minimal directory structure so Gradle does not fail.
+      # The server below is real; only the native library and base usr are stubs.
+      # Large pack payloads stay release-only; four named pack cases may skip here.
       - name: Create minimal asset stubs
         run: |
           mkdir -p android/app/src/main/jniLibs/arm64-v8a
-          mkdir -p android/app/src/main/assets/vscode-reh/out
           mkdir -p android/app/src/main/assets/usr
           mkdir -p android/app/src/main/assets/extensions
           printf '\x7fELF' > android/app/src/main/jniLibs/arm64-v8a/libnode.so
           dd if=/dev/zero bs=1 count=60 >> android/app/src/main/jniLibs/arm64-v8a/libnode.so 2>/dev/null
 
+      - name: Download the server for unit tests
+        uses: actions/download-artifact@9000827ccba6bdab643e8b6fd33ac0654aef8333 # v8.0.2
+        with:
+          name: vscode-reh-web-linux-arm64-${{ needs.codeoss.outputs.version }}
+          path: ${{ runner.temp }}/codeoss
+
+      - name: Fetch the server for unit tests
+        env:
+          VSCODE_OSS_URL: file://${{ runner.temp }}/codeoss/vscode-reh-web-linux-arm64-${{ needs.codeoss.outputs.version }}.tar.gz
+          VSCODE_OSS_SHA256: ${{ needs.codeoss.outputs.sha256 }}
+        run: bash scripts/fetch-vscode-oss.sh
+
+      - name: Copy the server for unit tests
+        run: bash scripts/package-assets.sh
+
       - name: Run unit tests
         working-directory: android
-        run: ./gradlew testDebugUnitTest
+        # The fetched bundle is not a compiled Kotlin input; run its contracts anew.
+        run: ./gradlew testDebugUnitTest --rerun
+
+      - name: Check unit test skips
+        run: python3 scripts/check-unit-test-skips.py android/app/build/test-results/testDebugUnitTest --allow-pack-skips
 
       # Compiles the instrumented tests without running them, which is the only
       # thing CI can do for them and is better than the nothing that was here.

@@ -475,9 +475,9 @@ class WorkspaceUrlRoundTripTest {
      * somewhere other than our origin, makes [emptyWindowUrl] match nothing and
      * the same-origin branch match nothing, silently and in both directions.
      *
-     * Skipped rather than failed when the tree is absent: it is a gitignored
-     * artifact and the unit-test job stubs it, and a silent skip there would read
-     * as a green check of something nothing ran.
+     * Skipped rather than failed in a local checkout without the gitignored
+     * server tree. Both CI unit jobs supply it and reject an unexpected skip;
+     * a silent return would read as a green check of something nothing ran.
      */
     @Test
     fun `the shipped workbench still names the empty window this way`() {

@@ -264,6 +264,10 @@ def _main() -> int:
         print("  FAIL   no 'build' job in build.yml; the job layout changed")
         return 1
     ci_pr = set(IN_WORKFLOW.findall(build_job))
+    if not ci_pr:
+        print("  FAIL   no scripts found in build.yml's build job; "
+              "the pattern stopped matching")
+        return 1
 
     # Its counterpart on the tag path. The two prepare the same assets and are
     # maintained by hand as two lists, which is the arrangement that drifts.

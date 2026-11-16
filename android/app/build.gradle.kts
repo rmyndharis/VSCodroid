@@ -535,6 +535,9 @@ dependencies {
 
 tasks.withType<Test> {
     useJUnitPlatform()
+    // JBR routes java.io through NIO, so static Files mocks intercept class loading.
+    // Keep test-worker class loading independent of those filesystem mocks.
+    jvmArgs("-Djbr.java.io.use.nio=false")
     // The whole suite runs in one JVM (no forkEvery), and a Gradle test worker gets a 512 MB
     // heap unless told otherwise. What earlier test classes keep reachable, MockK stubs among
     // it, still counts against that late in the run. CI died with "OutOfMemoryError: Java heap
@@ -543,8 +546,12 @@ tasks.withType<Test> {
     // what holds the stubs.
     maxHeapSize = "2g"
     // MockK needs reflective access to Files internals for publication failure tests,
-    // and to UUID's for the one that forces a temporary name to collide.
-    jvmArgs("--add-opens=java.base/java.nio.file=ALL-UNNAMED", "--add-opens=java.base/java.util=ALL-UNNAMED")
+    // to UUID's for temporary name collisions, and to ZIP internals for the extraction barrier.
+    jvmArgs(
+        "--add-opens=java.base/java.nio.file=ALL-UNNAMED",
+        "--add-opens=java.base/java.util=ALL-UNNAMED",
+        "--add-opens=java.base/java.util.zip=ALL-UNNAMED",
+    )
     // A Unix socket path holds 107 bytes and macOS's default temporary directory is long
     // enough for a fixture's socket name to pass that, which fails every editor start in
     // the service tests there, so those fixtures need a short one.

@@ -150,6 +150,13 @@ ALLOWLIST_GATE = re.compile(r"github\.event_name\s*==\s*'[a-z_]+'")
 # app, matched by name in any job. Delete one and the workflow still loads and
 # runs green. Renaming one means renaming it here too.
 REQUIRED_STEPS = {
+    "build.yml": (
+        "Download the server for unit tests",
+        "Fetch the server for unit tests",
+        "Copy the server for unit tests",
+        "Run unit tests",
+        "Check unit test skips",
+    ),
     "codeoss-build.yml": (
         "Verify the server tarball",
     ),
@@ -165,6 +172,7 @@ REQUIRED_STEPS = {
         "Fetch Code - OSS server",
         "Verify assets",
         "Run unit tests",
+        "Check unit test skips",
         "Run lint",
         "Compile the instrumented tests",
         "Decode keystore",
@@ -178,22 +186,53 @@ REQUIRED_STEPS = {
 }
 
 
-def top_level_or(expr: str) -> bool:
-    """Whether `||` appears in `expr` outside every pair of parentheses.
+def split_boolean(expr: str, operator: str):
+    """Split at an operator outside groups and strings, or reject malformed input."""
+    parts, start, groups, quoted, i = [], 0, [], False, 0
+    while i < len(expr):
+        char = expr[i]
+        if char == "'":
+            if quoted and i + 1 < len(expr) and expr[i + 1] == "'":
+                i += 2  # GitHub expressions escape a quote by doubling it.
+                continue
+            quoted = not quoted
+        elif not quoted:
+            if char in "([":
+                groups.append(char)
+            elif char in ")]":
+                if not groups or groups.pop() != {")": "(", "]": "["}[char]:
+                    return None
+            elif not groups and expr.startswith(operator, i):
+                parts.append(expr[start:i])
+                i += len(operator)
+                start = i
+                continue
+        i += 1
+    if quoted or groups:
+        return None
+    parts.append(expr[start:])
+    return parts
 
-    `||` binds loosest of all in GitHub's expression language, so one outside
-    the parentheses turns whatever allowlist stands beside it into an
-    alternative to it: `github.event_name == 'push' || true` names the event
-    and admits everything. Inside parentheses it is somebody else's disjunction
-    (`== 'push' && (startsWith(a) || startsWith(b))`) and the allowlist still
-    holds over the whole. Innermost groups are removed until none are left,
-    which is enough because the language has no other bracketing.
-    """
-    while True:
-        inner = re.sub(r"\([^()]*\)", "", expr)
-        if inner == expr:
-            return "||" in expr
-        expr = inner
+
+def required_event_gate(expr: str) -> bool:
+    """Require a positive event equality in an unavoidable conjunction."""
+    expr = expr.strip()
+    if expr.startswith("${{") and expr.endswith("}}"):
+        expr = expr[3:-2].strip()
+    alternatives = split_boolean(expr, "||")
+    if alternatives is None or len(alternatives) != 1:
+        return False
+    terms = split_boolean(expr, "&&")
+    if terms is None:
+        return False
+    if len(terms) > 1:
+        return all(term.strip() for term in terms) and any(required_event_gate(term) for term in terms)
+    if expr.startswith("(") and expr.endswith(")"):
+        # Only remove a pair that encloses the whole expression.
+        inner = expr[1:-1]
+        if split_boolean(inner, "&&") is not None:
+            return required_event_gate(inner)
+    return ALLOWLIST_GATE.fullmatch(expr) is not None
 
 
 def steps_of(doc):
@@ -330,8 +369,7 @@ def ungated_writers(path, doc):
         # is the shape of edit this rule exists for. It was a substring test
         # for `github.event_name`, which `!= 'schedule'` and `== 'push' || true`
         # both satisfy while admitting a dispatched run.
-        if (not ALLOWLIST_GATE.search(gate) or "workflow_dispatch" in gate
-                or top_level_or(gate)):
+        if "workflow_dispatch" in gate or not required_event_gate(gate):
             bad.append(
                 f"{path.name}: job {job_name} can write to this repository "
                 f"(contents: write), and the workflow can be started by hand "
@@ -376,11 +414,21 @@ def self_test() -> int:
         "github.event_name != 'schedule' && startsWith(github.ref, 'refs/tags/v')",
         "github.event_name == 'push' || true",
         "github.event_name == 'push' || github.event_name != 'schedule'",
+        "(github.event_name == 'push' || true)",
+        "((github.event_name == 'push' || true)) && success()",
+        "!(github.event_name == 'push') && success()",
+        "contains('github.event_name == ''push''', 'push')",
+        "fromJSON('[true]')[true && github.event_name == 'push' && true]",
+        "github.event_name == 'push' && success())",
     )
     admitted = (
         "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')",
         "github.event_name == 'push' && (startsWith(github.ref, 'refs/tags/v') "
         "|| startsWith(github.ref, 'refs/tags/server-'))",
+        "(github.event_name == 'push') && (success() || failure())",
+        "((github.event_name == 'push') && success())",
+        "${{ (github.event_name == 'push') && (success() || failure()) }}",
+        "github.event_name == 'push' && contains('a)b', ')')",
     )
     for gate in refused:
         bad, _ = ungated_writers(pathlib.Path("self-test.yml"), workflow(gate))

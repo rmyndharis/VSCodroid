@@ -340,11 +340,10 @@ class KeyboardGuardWiringTest {
     /**
      * The packaged workbench, or a skip when the tree is absent.
      *
-     * Skipped rather than failed, because the tree is a gitignored artifact and
-     * a fresh clone has none. Stated as an assumption rather than an `if`, so a
-     * run that cannot make the check says so: the unit-test job in build.yml
-     * stubs `assets/vscode-reh`, and a silent skip there reads as a green check
-     * of something nothing ran.
+     * Skipped rather than failed in a local checkout without the gitignored
+     * server tree. An assumption reports that the check did not run; a silent
+     * return would read as a green check of something nothing ran. Both CI unit
+     * jobs supply the server and refuse an unexpected skip.
      */
     private fun packagedWorkbench(): String {
         val workbench = File(WORKBENCH)
