@@ -52,6 +52,13 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A restart of the editor's server no longer leaves the previous editor process running when its record file could not be written.
 - Starting the app no longer removes the files of a toolchain download or install that is still in progress.
 - Reading a device folder no longer keeps the processor busy while the app that provides the folder has no data to give.
+- A notice says so when a save finds that another app changed the file in the device folder and the device's version is kept beside it as `<name>.device-<time>`.
+- A notice says so when a device folder holds a newer version of a file than an edit that never reached it, and the app's edit is kept beside it as `<name>.local-<time>`.
+- A file another app deleted from a device folder while an edit made in the app had not reached it is put back with that edit at the next open of the folder, instead of at the one after.
+- A delete in a device folder that gives up waiting for another write is reported as not deleted, not as a file another app changed.
+- A delete in a device folder that gave up waiting for another write no longer keeps its folder from being deleted later.
+- A folder renamed or moved in a device folder that does not reach the device is reported once, with each file edited in it just before, instead of twice or not at all.
+- Choosing a recent device folder whose permission was withdrawn no longer blocks removing its local copy in Manage Device Folder Storage until the app restarts.
 - The description of the C/C++ toolchain names clangd beside clang and lld.
 - The editor server's log files keep recording after one failed switch to a new file.
 - The process count in the status bar no longer shows a reading dated in the future as current.

@@ -227,6 +227,13 @@
     <!-- Shown when a save could not be written out to the device folder. Names the
          consequence rather than the error: the user's next decision is whether to
          copy the file out before uninstalling, not which exception was thrown. -->
+    <string name="saf_device_copy_preserved">Изменение с устройства рядом: %1$s.</string>
+    <plurals name="saf_device_copies_preserved">
+        <item quantity="one">Сохранено %1$d изменение с устройства. Ищите .device- и время.</item>
+        <item quantity="few">Сохранено %1$d изменения с устройства. Ищите .device- и время.</item>
+        <item quantity="many">Сохранено %1$d изменений с устройства. Ищите .device- и время.</item>
+        <item quantity="other">Сохранено %1$d изменения с устройства. Ищите .device- и время.</item>
+    </plurals>
     <string name="saf_write_back_failed">Не удалось сохранить %1$s в папку на устройстве. Единственная копия остаётся внутри VSCodroid.</string>
 
     <!-- Shown once after a folder opens when documents in it could not be copied into
@@ -269,6 +276,13 @@
          never had, which is what saf_directory_kept says. -->
     <string name="saf_directory_changed_kept">Папка %1$s оставлена в папке на устройстве: другое приложение могло изменить файл в ней с тех пор, как редактор в последний раз прочитал или сохранил этот файл. Удалите её там, если она больше не нужна.</string>
     <string name="saf_delete_refused">Не удалось удалить %1$s из папки на устройстве, поэтому этот элемент появится снова при следующем открытии папки. Удалите его в файловом менеджере устройства.</string>
+    <string name="saf_local_copy_preserved">Изменение в приложении рядом: %1$s.</string>
+    <plurals name="saf_local_copies_preserved">
+        <item quantity="one">Сохранено %1$d изменение в приложении. Ищите .local- и время.</item>
+        <item quantity="few">Сохранено %1$d изменения в приложении. Ищите .local- и время.</item>
+        <item quantity="many">Сохранено %1$d изменений в приложении. Ищите .local- и время.</item>
+        <item quantity="other">Сохранено %1$d изменения в приложении. Ищите .local- и время.</item>
+    </plurals>
 
     <!-- Removing the local copy of a device folder, from the storage screen. The
          mirror named by a hash the screen holds no longer exists: the user picked it

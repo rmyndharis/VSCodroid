@@ -28,6 +28,8 @@ import org.junit.jupiter.api.io.TempDir
 import java.io.ByteArrayInputStream
 import java.io.ByteArrayOutputStream
 import java.io.File
+import java.util.concurrent.CountDownLatch
+import java.util.concurrent.TimeUnit
 import java.util.concurrent.atomic.AtomicBoolean
 import java.util.concurrent.atomic.AtomicReference
 
@@ -182,6 +184,39 @@ class SafProviderClaimWaitTest {
         assertTrue(ms >= 250, "a zero wait marked the holder as given up on, so the next waiter did not wait ($ms ms)")
     }
 
+    /** A waiter whose time expires after a handover must not mark the new holder. */
+    @Test
+    fun `a waiter whose time runs out after a handover does not mark the new holder`() {
+        val first = hold("test")
+        val mutations = SafSyncEngine::class.java.getDeclaredField("providerMutations")
+            .apply { isAccessible = true }.get(null)!!
+        val second = AtomicReference<Any?>()
+        val handover = Thread {
+            Thread.sleep(150)
+            synchronized(mutations) {
+                release(first)
+                second.set(tryClaim(uri("test")))
+            }
+        }.apply { isDaemon = true; start() }
+
+        try {
+            assertNull(claimWithin(uri("test"), 300))
+            handover.join(2_000)
+            assertNotNull(second.get(), "handover failed to claim the provider")
+
+            val (third, ms) = timed { claimWithin(uri("test"), 300) }
+
+            assertNull(third)
+            assertTrue(
+                ms >= 250,
+                "the new holder was marked as given up on although no waiter waited a full turn on it ($ms ms)",
+            )
+        } finally {
+            handover.join(2_000)
+            second.get()?.let { runCatching { release(it) } }
+        }
+    }
+
     @Test
     fun `another authority is not held up`() {
         hold("test")
@@ -317,7 +352,95 @@ class SafProviderClaimWaitTest {
         deleteWith(engine, outcome)
 
         assertFalse(outcome.deleted.get(), "the device document was deleted without the claim")
-        assertTrue(outcome.kept.get(), "the document was not kept on the device, and the user was not told")
+        assertTrue(outcome.refused.get(), "a delete refused while the provider is busy did not report the delete-refused notice")
+        assertFalse(outcome.kept.get(), "a delete refused while the provider is busy reported that another app may have changed the document")
+    }
+
+    @Test
+    fun `a busy delete does not mark the file so a parent folder delete goes through once free`() {
+        val engine = engineOnDevice()
+        engine.providerClaimWaitMs = 200
+        fun uriWithId(id: String) = mockk<Uri>(relaxed = true).also {
+            every { it.authority } returns "test"
+            every { it.toString() } returns "doc-uri:$id"
+        }
+        every { DocumentsContract.buildChildDocumentsUriUsingTree(any(), any()) } answers {
+            uriWithId("children:${secondArg<String>()}")
+        }
+        every { DocumentsContract.buildDocumentUriUsingTree(any(), any()) } answers {
+            uriWithId(secondArg<String>())
+        }
+        every { DocumentsContract.getDocumentId(any()) } answers {
+            firstArg<Uri>().toString().removePrefix("doc-uri:")
+        }
+        every { resolver.query(any(), any(), any(), any(), any()) } answers {
+            val id = firstArg<Uri>().toString().removePrefix("doc-uri:")
+            val entries = when (id) {
+                "children:root" -> listOf(Triple("doc:sub", "sub", DocumentsContract.Document.MIME_TYPE_DIR))
+                "children:doc:sub" -> listOf(Triple("doc:sub/notes.md", "notes.md", "text/plain"))
+                "doc:sub" -> listOf(Triple("doc:sub", "sub", DocumentsContract.Document.MIME_TYPE_DIR))
+                else -> emptyList()
+            }
+            var idx = -1
+            mockk<Cursor>(relaxed = true) {
+                every { moveToFirst() } answers {
+                    idx = 0
+                    entries.isNotEmpty()
+                }
+                every { moveToNext() } answers { ++idx < entries.size }
+                every { getColumnIndexOrThrow(any()) } answers {
+                    when (firstArg<String>()) {
+                        DocumentsContract.Document.COLUMN_DOCUMENT_ID -> 0
+                        DocumentsContract.Document.COLUMN_DISPLAY_NAME -> 1
+                        DocumentsContract.Document.COLUMN_MIME_TYPE -> 2
+                        else -> 3
+                    }
+                }
+                every { getColumnIndex(any()) } answers {
+                    when (firstArg<String>()) {
+                        DocumentsContract.Document.COLUMN_MIME_TYPE -> 2
+                        DocumentsContract.Document.COLUMN_LAST_MODIFIED -> 4
+                        else -> -1
+                    }
+                }
+                every { isNull(any<Int>()) } returns false
+                every { getString(0) } answers { entries[idx].first }
+                every { getString(1) } answers { entries[idx].second }
+                every { getString(2) } answers { entries[idx].third }
+                every { getLong(3) } returns 8L
+                every { getLong(4) } returns 1_700_000_000_000L
+            }
+        }
+        val deletedIds = mutableListOf<String>()
+        every { DocumentsContract.deleteDocument(any(), any()) } answers {
+            deletedIds += secondArg<Uri>().toString().removePrefix("doc-uri:")
+            true
+        }
+        val refused = mutableListOf<String>()
+        val kept = mutableListOf<String>()
+        engine.onDeleteRefused = { refused += it.name }
+        engine.onKeptOnDevice = { f, _, _ -> kept += f.name }
+
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        val file = File(mirror, "sub/notes.md")
+        val sub = File(mirror, "sub")
+        assertTrue(file.isFile)
+
+        val claim = hold("test")
+        assertTrue(file.delete())
+        engine.handleMirrorEvent(FileObserver.DELETE, file, mirror, treeUri)
+        engine.runWriteBackLoop { false }
+        assertEquals(listOf("notes.md"), refused)
+        assertTrue(kept.isEmpty(), "busy delete recorded kept-on-device notice")
+
+        release(claim)
+        held.remove(claim)
+        assertTrue(sub.delete())
+        engine.handleMirrorEvent(FileObserver.DELETE or 0x40000000, sub, mirror, treeUri)
+        engine.runWriteBackLoop { false }
+
+        assertTrue(kept.isEmpty(), "parent folder delete was blocked by an earlier busy file delete")
+        assertEquals(listOf("doc:sub"), deletedIds)
     }
 
     @Test
@@ -380,5 +503,1304 @@ class SafProviderClaimWaitTest {
 
         assertEquals(3, waiting, "a delete, a create and a rename take the claim with a wait")
         assertEquals(3, trying, "the two open-time repairs and the save still take it without waiting")
+    }
+
+    private class RenameFixture(
+        val engine: SafSyncEngine,
+        val renamedCalls: MutableList<Pair<String, String>>,
+        val createdCalls: MutableList<Pair<String, String>>,
+        val failedNames: MutableList<String>,
+        val renamedOnDevice: AtomicBoolean,
+        val blockOtherWrite: AtomicBoolean,
+        val otherWriteStarted: CountDownLatch,
+        val allowOtherWriteFinish: CountDownLatch,
+    )
+
+    private fun setupRenameFixture(): RenameFixture {
+        val engine = engineOnDevice()
+        fun uriWithId(id: String) = mockk<Uri>(relaxed = true).also {
+            every { it.authority } returns "test"
+            every { it.toString() } returns "doc-uri:$id"
+        }
+        every { DocumentsContract.buildChildDocumentsUriUsingTree(any(), any()) } answers {
+            uriWithId("children:${secondArg<String>()}")
+        }
+        every { DocumentsContract.buildDocumentUriUsingTree(any(), any()) } answers {
+            uriWithId(secondArg<String>())
+        }
+        every { DocumentsContract.getDocumentId(any()) } answers {
+            firstArg<Uri>().toString().removePrefix("doc-uri:")
+        }
+        val renamedOnDevice = AtomicBoolean(false)
+        every { resolver.query(any(), any(), any(), any(), any()) } answers {
+            val uriStr = firstArg<Uri>().toString().removePrefix("doc-uri:")
+            if (!uriStr.startsWith("children:")) {
+                val displayName = uriStr.removePrefix("doc:")
+                var moved = false
+                return@answers mockk<Cursor>(relaxed = true) {
+                    every { moveToFirst() } returns true
+                    every { moveToNext() } answers { !moved.also { moved = true } }
+                    every { getColumnIndex(DocumentsContract.Document.COLUMN_DISPLAY_NAME) } returns 0
+                    every { getString(0) } returns displayName
+                }
+            }
+            val entries = when (uriStr.removePrefix("children:")) {
+                "root" -> listOf(
+                    Triple(
+                        if (renamedOnDevice.get()) "doc:renamed" else "doc:old",
+                        if (renamedOnDevice.get()) "renamed" else "old",
+                        DocumentsContract.Document.MIME_TYPE_DIR,
+                    ),
+                    Triple("doc:other.txt", "other.txt", "text/plain"),
+                )
+                "doc:old", "doc:renamed" -> listOf(Triple("doc:old/child.txt", "child.txt", "text/plain"))
+                else -> emptyList()
+            }
+            var idx = -1
+            mockk<Cursor>(relaxed = true) {
+                every { moveToNext() } answers { ++idx < entries.size }
+                every { getColumnIndexOrThrow(any()) } answers {
+                    when (firstArg<String>()) {
+                        DocumentsContract.Document.COLUMN_DOCUMENT_ID -> 0
+                        DocumentsContract.Document.COLUMN_DISPLAY_NAME -> 1
+                        DocumentsContract.Document.COLUMN_MIME_TYPE -> 2
+                        else -> 3
+                    }
+                }
+                every { getColumnIndex(DocumentsContract.Document.COLUMN_LAST_MODIFIED) } returns 4
+                every { isNull(any<Int>()) } returns false
+                every { getString(0) } answers { entries[idx].first }
+                every { getString(1) } answers { entries[idx].second }
+                every { getString(2) } answers { entries[idx].third }
+                every { getLong(3) } returns 8L
+                every { getLong(4) } returns 1_700_000_000_000L
+            }
+        }
+        val renamedCalls = mutableListOf<Pair<String, String>>()
+        val createdCalls = mutableListOf<Pair<String, String>>()
+        val failedNames = mutableListOf<String>()
+        every { DocumentsContract.renameDocument(any(), any(), any()) } answers {
+            val docId = secondArg<Uri>().toString().removePrefix("doc-uri:")
+            val targetName = thirdArg<String>()
+            renamedCalls += docId to targetName
+            renamedOnDevice.set(true)
+            uriWithId("doc:$targetName")
+        }
+        every { DocumentsContract.createDocument(any(), any(), any(), any()) } answers {
+            val parentId = secondArg<Uri>().toString().removePrefix("doc-uri:")
+            val displayName = arg<String>(3)
+            createdCalls += parentId to displayName
+            uriWithId("doc:$displayName")
+        }
+        val blockOtherWrite = AtomicBoolean(false)
+        val otherWriteStarted = CountDownLatch(1)
+        val allowOtherWriteFinish = CountDownLatch(1)
+        every { resolver.openOutputStream(any(), any()) } answers {
+            val docId = firstArg<Uri>().toString().removePrefix("doc-uri:")
+            if (blockOtherWrite.get() && docId == "doc:other.txt") {
+                otherWriteStarted.countDown()
+                allowOtherWriteFinish.await(5, TimeUnit.SECONDS)
+            }
+            ByteArrayOutputStream()
+        }
+        engine.onWriteBackFailed = { failedNames += it.name }
+        runBlocking { engine.initialSync(treeUri, mirror) { _, _ -> } }
+        return RenameFixture(
+            engine = engine,
+            renamedCalls = renamedCalls,
+            createdCalls = createdCalls,
+            failedNames = failedNames,
+            renamedOnDevice = renamedOnDevice,
+            blockOtherWrite = blockOtherWrite,
+            otherWriteStarted = otherWriteStarted,
+            allowOtherWriteFinish = allowOtherWriteFinish,
+        )
+    }
+
+    private fun renameDirectory(engine: SafSyncEngine, fromName: String = "old", toName: String = "renamed") {
+        val oldDir = File(mirror, fromName)
+        val newDir = File(mirror, toName)
+        assertTrue(oldDir.isDirectory, "missing source directory $fromName")
+        assertTrue(oldDir.renameTo(newDir), "mirror rename $fromName -> $toName failed")
+        engine.handleMirrorEvent(FileObserver.MOVED_FROM or 0x40000000, oldDir, mirror, treeUri)
+        Thread.sleep(2)
+        engine.handleMirrorEvent(FileObserver.MOVED_TO or 0x40000000, newDir, mirror, treeUri)
+    }
+
+    @Test
+    fun `a rename that meets another folder's write waits for it and goes through`() {
+        val fixture = setupRenameFixture()
+        fixture.engine.providerClaimWaitMs = 5_000L
+        val claim = hold("test")
+        releaseAfter(claim, 400)
+
+        val (_, ms) = timed {
+            renameDirectory(fixture.engine)
+            fixture.engine.runWriteBackLoop { false }
+        }
+
+        assertEquals(listOf("doc:old" to "renamed"), fixture.renamedCalls)
+        assertTrue(fixture.failedNames.isEmpty(), "a rename that completed within the wait raised a notice")
+        assertTrue(ms >= 300, "the rename did not wait for the claim ($ms ms)")
+        assertFalse(fixture.engine.retryHeldBack(WatchSession(mirror)), "completed rename left a held retry entry")
+    }
+
+    @Test
+    fun `a rename is dropped with one notice when the claim stays held past the wait`() {
+        val fixture = setupRenameFixture()
+        fixture.engine.providerClaimWaitMs = 250L
+        hold("test")
+
+        renameDirectory(fixture.engine)
+        fixture.engine.runWriteBackLoop { false }
+
+        assertTrue(fixture.renamedCalls.isEmpty(), "rename ran without the provider claim")
+        assertTrue(fixture.createdCalls.isEmpty(), "dropped rename fell back to creating a duplicate directory")
+        assertEquals(listOf("renamed"), fixture.failedNames)
+        assertFalse(fixture.renamedOnDevice.get(), "device folder was renamed despite held claim")
+        assertTrue(File(mirror, "renamed/child.txt").isFile, "local mirror lost its renamed folder contents")
+        assertFalse(fixture.engine.retryHeldBack(WatchSession(mirror)), "dropped busy rename left a held retry entry")
+    }
+
+    @Test
+    fun `a rename whose mirror lock times out ends after one attempt without spinning`() {
+        val fixture = setupRenameFixture()
+        fixture.engine.outboundTurnWaitMs = 50L
+        fixture.engine.providerClaimWaitMs = 5_000L
+        fixture.blockOtherWrite.set(true)
+
+        val otherFile = File(mirror, "other.txt").apply { writeText("updated bytes") }
+        val blocker = Thread {
+            fixture.engine.handleMirrorEvent(FileObserver.MODIFY, otherFile, mirror, treeUri)
+            fixture.engine.runWriteBackLoop { false }
+        }.apply { isDaemon = true; start() }
+
+        try {
+            assertTrue(
+                fixture.otherWriteStarted.await(5, TimeUnit.SECONDS),
+                "setup failed: in-flight write did not acquire the mirror lock",
+            )
+            val (_, ms) = timed {
+                renameDirectory(fixture.engine)
+                fixture.engine.runWriteBackLoop { false }
+            }
+            var extraRetries = 0
+            while (extraRetries < 5 && fixture.engine.retryHeldBack(WatchSession(mirror))) {
+                extraRetries++
+            }
+
+            assertTrue(fixture.renamedCalls.isEmpty(), "rename ran while the mirror lock was held")
+            assertTrue(fixture.engine.session.queue.isEmpty(), "timed-out rename stayed queued")
+            assertEquals(0, extraRetries, "timed-out rename kept retrying after its one attempt")
+            assertTrue(ms < 2_000, "timed-out rename blocked or spun past one turn wait ($ms ms)")
+            assertEquals(listOf("renamed"), fixture.failedNames)
+        } finally {
+            fixture.allowOtherWriteFinish.countDown()
+            blocker.join(5_000)
+        }
+    }
+
+    @Test
+    fun `a rename whose mirror lock times out records the path and notifies once`() {
+        val fixture = setupRenameFixture()
+        fixture.engine.outboundTurnWaitMs = 50L
+        fixture.engine.providerClaimWaitMs = 5_000L
+        fixture.blockOtherWrite.set(true)
+
+        val otherFile = File(mirror, "other.txt").apply { writeText("updated bytes") }
+        val blocker = Thread {
+            fixture.engine.handleMirrorEvent(FileObserver.MODIFY, otherFile, mirror, treeUri)
+            fixture.engine.runWriteBackLoop { false }
+        }.apply { isDaemon = true; start() }
+
+        try {
+            assertTrue(
+                fixture.otherWriteStarted.await(5, TimeUnit.SECONDS),
+                "setup failed: in-flight write did not acquire the mirror lock",
+            )
+            renameDirectory(fixture.engine)
+            fixture.engine.runWriteBackLoop { false }
+
+            // A subsequent write-back failure for the same target path in the open session must
+            // see it already recorded in refusalsAnnounced rather than emitting a second notice.
+            val renamedDir = File(mirror, "renamed")
+            fixture.engine.handleMirrorEvent(FileObserver.CREATE or 0x40000000, renamedDir, mirror, treeUri)
+            fixture.engine.runWriteBackLoop { false }
+
+            assertEquals(
+                listOf("renamed"),
+                fixture.failedNames,
+                "mirror-lock timeout bypassed announceLost and allowed a duplicate notice",
+            )
+        } finally {
+            fixture.allowOtherWriteFinish.countDown()
+            blocker.join(5_000)
+        }
+    }
+
+    private class VirtualNode(
+        val id: String,
+        val treeTag: String,
+        var parentId: String?,
+        var name: String,
+        val isDirectory: Boolean,
+        @Volatile var bytes: ByteArray = ByteArray(0),
+        @Volatile var lastModified: Long = 1_700_000_000_000L,
+    )
+
+    private inner class VirtualSafHarness(
+        authorities: Map<String, String> = mapOf("treeA" to "test"),
+    ) {
+        private val lock = Any()
+        private val nodes = LinkedHashMap<String, VirtualNode>()
+        private val uris = HashMap<Pair<String, String>, Uri>()
+        private var seq = 0
+
+        var clockOffsetMs: Long = 0L
+        val treeUris = HashMap<String, Uri>()
+        val treeAuthorities = authorities.toMap()
+        val renamedCalls = mutableListOf<Pair<String, String>>()
+        val createdCalls = mutableListOf<Pair<String, String>>()
+        val deletedIds = mutableListOf<String>()
+        val failedNames = mutableListOf<String>()
+        val deleteRefusedNames = mutableListOf<String>()
+        val queriedTargets = mutableListOf<String>()
+        @Volatile var beforeOpenOutput: ((String) -> Unit)? = null
+        @Volatile var shouldFailQuery: ((String) -> Boolean)? = null
+
+        init {
+            for ((treeTag, auth) in treeAuthorities) {
+                val rootId = "$treeTag::root"
+                nodes[rootId] = VirtualNode(rootId, treeTag, null, "", isDirectory = true)
+                treeUris[treeTag] = uriFor(auth, rootId)
+            }
+        }
+
+        private fun uriFor(authority: String, docId: String): Uri = synchronized(lock) {
+            uris.getOrPut(authority to docId) {
+                mockk<Uri>(relaxed = true).also {
+                    every { it.authority } returns authority
+                    every { it.toString() } returns "doc-uri:$docId"
+                }
+            }
+        }
+
+        private fun treeTagOf(docOrTreeId: String): String = docOrTreeId.substringBefore("::")
+
+        private fun cursorFor(rows: List<VirtualNode>): Cursor {
+            var idx = -1
+            return mockk<Cursor>(relaxed = true) {
+                every { moveToFirst() } answers {
+                    idx = 0
+                    rows.isNotEmpty()
+                }
+                every { moveToNext() } answers { ++idx < rows.size }
+                every { getColumnIndexOrThrow(any()) } answers {
+                    when (firstArg<String>()) {
+                        DocumentsContract.Document.COLUMN_DOCUMENT_ID -> 0
+                        DocumentsContract.Document.COLUMN_DISPLAY_NAME -> 1
+                        DocumentsContract.Document.COLUMN_MIME_TYPE -> 2
+                        DocumentsContract.Document.COLUMN_SIZE -> 3
+                        else -> 4
+                    }
+                }
+                every { getColumnIndex(any()) } answers {
+                    when (firstArg<String>()) {
+                        DocumentsContract.Document.COLUMN_DOCUMENT_ID -> 0
+                        DocumentsContract.Document.COLUMN_DISPLAY_NAME -> 1
+                        DocumentsContract.Document.COLUMN_MIME_TYPE -> 2
+                        DocumentsContract.Document.COLUMN_SIZE -> 3
+                        DocumentsContract.Document.COLUMN_LAST_MODIFIED -> 4
+                        else -> -1
+                    }
+                }
+                every { isNull(any<Int>()) } returns false
+                every { getString(0) } answers { rows[idx].id }
+                every { getString(1) } answers { rows[idx].name }
+                every { getString(2) } answers {
+                    if (rows[idx].isDirectory) DocumentsContract.Document.MIME_TYPE_DIR else "text/plain"
+                }
+                every { getLong(3) } answers { rows[idx].bytes.size.toLong() }
+                every { getLong(4) } answers { rows[idx].lastModified }
+            }
+        }
+
+        fun addDir(treeTag: String, relativePath: String): String = synchronized(lock) {
+            var parentId = "$treeTag::root"
+            for (segment in relativePath.split('/').filter { it.isNotEmpty() }) {
+                val existing = nodes.values.firstOrNull { it.parentId == parentId && it.name == segment }
+                parentId = existing?.id ?: "$treeTag::doc:${++seq}".also { id ->
+                    nodes[id] = VirtualNode(id, treeTag, parentId, segment, isDirectory = true)
+                }
+            }
+            parentId
+        }
+
+        fun addFile(treeTag: String, relativePath: String, content: String): String = synchronized(lock) {
+            val parts = relativePath.split('/').filter { it.isNotEmpty() }
+            val parentRel = parts.dropLast(1).joinToString("/")
+            val parentId = if (parentRel.isEmpty()) "$treeTag::root" else addDir(treeTag, parentRel)
+            val name = parts.last()
+            val id = "$treeTag::doc:${++seq}"
+            nodes[id] = VirtualNode(id, treeTag, parentId, name, isDirectory = false, bytes = content.toByteArray())
+            id
+        }
+
+        fun findByPath(treeTag: String, relativePath: String): VirtualNode? = synchronized(lock) {
+            var currentId = "$treeTag::root"
+            for (segment in relativePath.split('/').filter { it.isNotEmpty() }) {
+                val next = nodes.values.firstOrNull { it.parentId == currentId && it.name == segment }
+                    ?: return@synchronized null
+                currentId = next.id
+            }
+            nodes[currentId]
+        }
+
+        private fun deleteRecursive(docId: String) {
+            val children = nodes.values.filter { it.parentId == docId }.map { it.id }
+            children.forEach { deleteRecursive(it) }
+            nodes.remove(docId)
+        }
+
+        fun buildEngine(): SafSyncEngine {
+            mockkStatic(SystemClock::class)
+            every { SystemClock.elapsedRealtime() } answers { System.nanoTime() / 1_000_000 + clockOffsetMs }
+            mockkStatic(DocumentsContract::class)
+            every { DocumentsContract.getTreeDocumentId(any()) } answers {
+                firstArg<Uri>().toString().removePrefix("doc-uri:")
+            }
+            every { DocumentsContract.buildChildDocumentsUriUsingTree(any(), any()) } answers {
+                val auth = firstArg<Uri>().authority ?: "test"
+                val parentId = secondArg<String>()
+                uriFor(auth, "children|$parentId")
+            }
+            every { DocumentsContract.buildDocumentUriUsingTree(any(), any()) } answers {
+                val auth = firstArg<Uri>().authority ?: "test"
+                val docId = secondArg<String>()
+                uriFor(auth, docId)
+            }
+            every { DocumentsContract.getDocumentId(any()) } answers {
+                firstArg<Uri>().toString().removePrefix("doc-uri:")
+            }
+            every {
+                DocumentsContract.renameDocument(any(), any(), any())
+            } answers {
+                val docUri = secondArg<Uri>()
+                val targetName = thirdArg<String>()
+                val docId = docUri.toString().removePrefix("doc-uri:")
+                synchronized(lock) {
+                    renamedCalls += docId to targetName
+                    nodes[docId]?.name = targetName
+                }
+                docUri
+            }
+            every {
+                DocumentsContract.createDocument(any(), any(), any(), any())
+            } answers {
+                val parentUri = secondArg<Uri>()
+                val mime = thirdArg<String>()
+                val displayName = arg<String>(3)
+                val parentId = parentUri.toString().removePrefix("doc-uri:")
+                val created = synchronized(lock) {
+                    createdCalls += parentId to displayName
+                    val tag = treeTagOf(parentId)
+                    val id = "$tag::doc:${++seq}"
+                    nodes[id] = VirtualNode(
+                        id = id,
+                        treeTag = tag,
+                        parentId = parentId,
+                        name = displayName,
+                        isDirectory = mime == DocumentsContract.Document.MIME_TYPE_DIR,
+                    )
+                    uriFor(treeAuthorities.getValue(tag), id)
+                }
+                created
+            }
+            every { DocumentsContract.deleteDocument(any(), any()) } answers {
+                val docId = secondArg<Uri>().toString().removePrefix("doc-uri:")
+                synchronized(lock) {
+                    deletedIds += docId
+                    val existed = nodes.containsKey(docId)
+                    if (existed) deleteRecursive(docId)
+                    existed
+                }
+            }
+
+            resolver = mockk(relaxed = true)
+            every { resolver.query(any(), any(), any(), any(), any()) } answers {
+                val raw = firstArg<Uri>().toString().removePrefix("doc-uri:")
+                if (shouldFailQuery?.invoke(raw) == true) {
+                    throw IllegalStateException("simulated query failure for $raw")
+                }
+                val rows = synchronized(lock) {
+                    queriedTargets += raw
+                    if (raw.startsWith("children|")) {
+                        val parentId = raw.removePrefix("children|")
+                        nodes.values.filter { it.parentId == parentId }.toList()
+                    } else {
+                        listOfNotNull(nodes[raw])
+                    }
+                }
+                cursorFor(rows)
+            }
+            every { resolver.openInputStream(any()) } answers {
+                val docId = firstArg<Uri>().toString().removePrefix("doc-uri:")
+                val bytes = synchronized(lock) { nodes[docId]?.bytes ?: ByteArray(0) }
+                ByteArrayInputStream(bytes)
+            }
+            every { resolver.openOutputStream(any(), any()) } answers {
+                val docId = firstArg<Uri>().toString().removePrefix("doc-uri:")
+                beforeOpenOutput?.invoke(docId)
+                object : ByteArrayOutputStream() {
+                    override fun close() {
+                        super.close()
+                        synchronized(lock) {
+                            nodes[docId]?.let { node ->
+                                node.bytes = toByteArray()
+                                node.lastModified += 1_000L
+                            }
+                        }
+                    }
+                }
+            }
+
+            context = mockk<Context>(relaxed = true)
+            every { context.contentResolver } returns resolver
+            every { context.filesDir } returns filesDir
+            return SafSyncEngine(context).apply {
+                providerClaimWaitMs = 50L
+                onWriteBackFailed = { failedNames += it.name }
+                onDeleteRefused = { deleteRefusedNames += it.name }
+            }
+        }
+    }
+
+    private fun waitUntilInClaimWait(thread: Thread) {
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        while (System.nanoTime() < deadline) {
+            val state = thread.state
+            if ((state == Thread.State.WAITING || state == Thread.State.TIMED_WAITING) &&
+                thread.stackTrace.any { it.methodName.startsWith("claimProviderMutationWithin") }
+            ) {
+                return
+            }
+            Thread.sleep(5)
+        }
+        error("worker thread did not reach claimProviderMutationWithin; state=${thread.state}")
+    }
+
+    @Test
+    fun `a file save on the same mirror defers without blocking on mirror lock while a rename waits for the provider claim`() {
+        val harness = VirtualSafHarness()
+        harness.addDir("treeA", "old")
+        harness.addFile("treeA", "old/child.txt", "original")
+        val otherId = harness.addFile("treeA", "other.txt", "before")
+        val treeA = harness.treeUris.getValue("treeA")
+        val engine = harness.buildEngine()
+        engine.outboundTurnWaitMs = 5_000L
+        engine.providerClaimWaitMs = 5_000L
+
+        runBlocking { engine.initialSync(treeA, mirror) { _, _ -> } }
+        val oldDir = File(mirror, "old")
+        val renamedDir = File(mirror, "renamed")
+        val otherFile = File(mirror, "other.txt")
+
+        val claim = hold("test")
+        assertTrue(oldDir.renameTo(renamedDir))
+        engine.handleMirrorEvent(FileObserver.MOVED_FROM or 0x40000000, oldDir, mirror, treeA)
+        Thread.sleep(2)
+        engine.handleMirrorEvent(FileObserver.MOVED_TO or 0x40000000, renamedDir, mirror, treeA)
+
+        val worker = Thread { engine.runWriteBackLoop { false } }.apply { start() }
+        waitUntilInClaimWait(worker)
+
+        otherFile.writeText("concurrent save")
+        val concurrentSession = WatchSession(mirror, engine.session.generation)
+        concurrentSession.queue.offer(
+            SyncJob(
+                type = SyncType.MODIFY,
+                localPath = otherFile.absolutePath,
+                safDocUri = DocumentsContract.buildDocumentUriUsingTree(treeA, otherId),
+                safParentUri = treeA,
+                safTreeUri = treeA,
+                timestamp = System.currentTimeMillis(),
+                relativePath = "other.txt",
+                mirrorRoot = mirror,
+                generation = engine.session.generation,
+            ),
+        )
+        val (_, saveMs) = timed {
+            engine.runWriteBackLoop(concurrentSession) { false }
+        }
+        assertTrue(
+            saveMs < 1_000,
+            "same-mirror save blocked on mirror lock while rename waited for provider claim ($saveMs ms)",
+        )
+
+        release(claim)
+        held.remove(claim)
+        worker.join(5_000)
+        assertFalse(worker.isAlive)
+
+        harness.clockOffsetMs += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+        assertTrue(engine.retryHeldBack(WatchSession(mirror, engine.session.generation)))
+        assertEquals(
+            "concurrent save",
+            harness.findByPath("treeA", "other.txt")?.bytes?.toString(Charsets.UTF_8),
+        )
+        assertEquals(
+            "original",
+            harness.findByPath("treeA", "renamed/child.txt")?.bytes?.toString(Charsets.UTF_8),
+        )
+        assertEquals(listOf("other.txt"), harness.failedNames)
+    }
+
+    @Test
+    fun `a completed or normalized folder rename runs once and never re-enters the queue or retry loop`() {
+        val harness = VirtualSafHarness()
+        val oldId = harness.addDir("treeA", "old")
+        val oldNode = harness.findByPath("treeA", "old")!!
+        harness.addFile("treeA", "old/child.txt", "original")
+        val treeA = harness.treeUris.getValue("treeA")
+        val engine = harness.buildEngine()
+
+        every { DocumentsContract.renameDocument(any(), any(), any()) } answers {
+            val docUri = secondArg<Uri>()
+            val docId = docUri.toString().removePrefix("doc-uri:")
+            val normalized = "${thirdArg<String>()}_norm"
+            harness.renamedCalls += docId to normalized
+            if (docId == oldId) oldNode.name = normalized
+            docUri
+        }
+
+        runBlocking { engine.initialSync(treeA, mirror) { _, _ -> } }
+        val oldDir = File(mirror, "old")
+        val renamedDir = File(mirror, "renamed")
+        assertTrue(oldDir.renameTo(renamedDir))
+        engine.handleMirrorEvent(FileObserver.MOVED_FROM or 0x40000000, oldDir, mirror, treeA)
+        Thread.sleep(2)
+        engine.handleMirrorEvent(FileObserver.MOVED_TO or 0x40000000, renamedDir, mirror, treeA)
+
+        engine.runWriteBackLoop { false }
+        engine.runWriteBackLoop { false }
+        harness.clockOffsetMs += SafSyncEngine.HELD_BACK_RETRY_MAX_MS
+        assertFalse(engine.retryHeldBack(WatchSession(mirror, engine.session.generation)))
+
+        assertEquals(1, harness.renamedCalls.size, "folder rename executed more than once: ${harness.renamedCalls}")
+        assertTrue(harness.createdCalls.isEmpty(), "normalized rename triggered fallback creation: ${harness.createdCalls}")
+        assertTrue(File(mirror, "renamed_norm/child.txt").isFile)
+        assertTrue(harness.failedNames.isEmpty())
+    }
+
+    @Test
+    fun `current release leaves cross-directory move unmoved when target parent arrives during claim wait and announces the drop`() {
+        // Target parent is resolved before the claim wait and not re-resolved when the wait ends.
+        val harness = VirtualSafHarness()
+        val oldId = harness.addDir("treeA", "old")
+        val oldNode = harness.findByPath("treeA", "old")!!
+        harness.addFile("treeA", "old/child.txt", "original")
+        harness.addFile("treeA", "old/.git/HEAD", "ref: refs/heads/main")
+        val treeA = harness.treeUris.getValue("treeA")
+        val engine = harness.buildEngine()
+        engine.providerClaimWaitMs = 5_000L
+
+        every { DocumentsContract.moveDocument(any(), any(), any(), any()) } answers {
+            val docUri = secondArg<Uri>()
+            val targetParentUri = arg<Uri>(3)
+            val docId = docUri.toString().removePrefix("doc-uri:")
+            val targetParentId = targetParentUri.toString().removePrefix("doc-uri:")
+            if (docId == oldId) {
+                oldNode.parentId = targetParentId
+                docUri
+            } else {
+                null
+            }
+        }
+
+        runBlocking { engine.initialSync(treeA, mirror) { _, _ -> } }
+        val claim = hold("test")
+        val dstDir = File(mirror, "dst").apply { mkdirs() }
+        val oldDir = File(mirror, "old")
+        val movedDir = File(dstDir, "old")
+        assertTrue(oldDir.renameTo(movedDir))
+        engine.handleMirrorEvent(FileObserver.MOVED_FROM or 0x40000000, oldDir, mirror, treeA)
+        Thread.sleep(2)
+        engine.handleMirrorEvent(FileObserver.MOVED_TO or 0x40000000, movedDir, mirror, treeA)
+
+        val worker = Thread { engine.runWriteBackLoop { false } }.apply { start() }
+        waitUntilInClaimWait(worker)
+
+        harness.addDir("treeA", "dst")
+        release(claim)
+        held.remove(claim)
+        worker.join(5_000)
+        assertFalse(worker.isAlive)
+
+        assertNotNull(harness.findByPath("treeA", "old"))
+        assertNull(harness.findByPath("treeA", "dst/old"))
+        assertEquals(listOf("old"), harness.failedNames)
+    }
+
+    @Test
+    fun `a cross-directory move whose target parent never reaches the device announces the unmoved folder`() {
+        val harness = VirtualSafHarness()
+        harness.addDir("treeA", "old")
+        harness.addFile("treeA", "old/child.txt", "original")
+        val treeA = harness.treeUris.getValue("treeA")
+        val engine = harness.buildEngine()
+        engine.providerClaimWaitMs = 100L
+
+        runBlocking { engine.initialSync(treeA, mirror) { _, _ -> } }
+
+        val claim = hold("test")
+        val dstDir = File(mirror, "dst").apply { mkdirs() }
+        engine.handleMirrorEvent(FileObserver.CREATE or 0x40000000, dstDir, mirror, treeA)
+        engine.runWriteBackLoop { false }
+        assertEquals(listOf("dst"), harness.failedNames)
+
+        release(claim)
+        held.remove(claim)
+
+        val oldDir = File(mirror, "old")
+        val movedDir = File(dstDir, "old")
+        assertTrue(oldDir.renameTo(movedDir))
+        engine.handleMirrorEvent(FileObserver.MOVED_FROM or 0x40000000, oldDir, mirror, treeA)
+        Thread.sleep(2)
+        engine.handleMirrorEvent(FileObserver.MOVED_TO or 0x40000000, movedDir, mirror, treeA)
+        engine.runWriteBackLoop { false }
+
+        assertNull(harness.findByPath("treeA", "dst/old"))
+        assertNotNull(harness.findByPath("treeA", "old"))
+        assertEquals(
+            listOf("dst", "old"),
+            harness.failedNames,
+            "cross-directory move into missing device parent dropped without announcing the unmoved folder",
+        )
+    }
+
+    @Test
+    fun `a dropped rename still notifies when an earlier refused entry at the same path was deleted`() {
+        val harness = VirtualSafHarness()
+        harness.addDir("treeA", "old")
+        harness.addFile("treeA", "old/child.txt", "original")
+        val treeA = harness.treeUris.getValue("treeA")
+        val engine = harness.buildEngine()
+        engine.providerClaimWaitMs = 100L
+
+        runBlocking { engine.initialSync(treeA, mirror) { _, _ -> } }
+
+        val firstClaim = hold("test")
+        val tempSameName = File(mirror, "renamed").apply { mkdirs() }
+        engine.handleMirrorEvent(FileObserver.CREATE or 0x40000000, tempSameName, mirror, treeA)
+        engine.runWriteBackLoop { false }
+        assertEquals(listOf("renamed"), harness.failedNames)
+
+        release(firstClaim)
+        held.remove(firstClaim)
+
+        assertTrue(tempSameName.delete())
+        engine.handleMirrorEvent(FileObserver.DELETE or 0x40000000, tempSameName, mirror, treeA)
+        engine.runWriteBackLoop { false }
+        harness.failedNames.clear()
+
+        val secondClaim = hold("test")
+        val oldDir = File(mirror, "old")
+        val renamedDir = File(mirror, "renamed")
+        assertTrue(oldDir.renameTo(renamedDir))
+        engine.handleMirrorEvent(FileObserver.MOVED_FROM or 0x40000000, oldDir, mirror, treeA)
+        Thread.sleep(2)
+        engine.handleMirrorEvent(FileObserver.MOVED_TO or 0x40000000, renamedDir, mirror, treeA)
+        engine.runWriteBackLoop { false }
+
+        release(secondClaim)
+        held.remove(secondClaim)
+
+        assertNotNull(harness.findByPath("treeA", "old"))
+        assertNull(harness.findByPath("treeA", "renamed"))
+        assertEquals(
+            listOf("renamed"),
+            harness.failedNames,
+            "dropped rename emitted zero notice because refusalsAnnounced kept a deleted entry's path",
+        )
+    }
+
+    @Test
+    fun `deleting a refused folder clears refusal tracking for children inside its subtree`() {
+        val harness = VirtualSafHarness()
+        val treeA = harness.treeUris.getValue("treeA")
+        val engine = harness.buildEngine()
+        engine.providerClaimWaitMs = 100L
+
+        runBlocking { engine.initialSync(treeA, mirror) { _, _ -> } }
+
+        val folder = File(mirror, "folder").apply { mkdirs() }
+        val child = File(folder, "note.txt").apply { writeText("first") }
+        val firstClaim = hold("test")
+        engine.handleMirrorEvent(FileObserver.CREATE or 0x40000000, folder, mirror, treeA)
+        engine.handleMirrorEvent(FileObserver.CREATE, child, mirror, treeA)
+        engine.runWriteBackLoop { false }
+        release(firstClaim)
+        held.remove(firstClaim)
+        assertTrue("note.txt" in harness.failedNames)
+
+        assertTrue(child.delete())
+        assertTrue(folder.delete())
+        engine.handleMirrorEvent(FileObserver.DELETE or 0x40000000, folder, mirror, treeA)
+        harness.failedNames.clear()
+
+        assertTrue(folder.mkdirs())
+        child.writeText("second")
+        val secondClaim = hold("test")
+        engine.handleMirrorEvent(FileObserver.CREATE or 0x40000000, folder, mirror, treeA)
+        engine.handleMirrorEvent(FileObserver.CREATE, child, mirror, treeA)
+        engine.runWriteBackLoop { false }
+        release(secondClaim)
+        held.remove(secondClaim)
+
+        assertTrue("folder" in harness.failedNames)
+        assertTrue("note.txt" in harness.failedNames)
+    }
+
+    @Test
+    fun `writes and deletes queued after a dropped rename fail against the missing device folder even after the claim frees`() {
+        val harness = VirtualSafHarness()
+        harness.addDir("treeA", "old")
+        harness.addFile("treeA", "old/child.txt", "original")
+        harness.addFile("treeA", "old/gone.txt", "keep on device")
+        val treeA = harness.treeUris.getValue("treeA")
+        val engine = harness.buildEngine()
+        engine.providerClaimWaitMs = 100L
+
+        runBlocking { engine.initialSync(treeA, mirror) { _, _ -> } }
+
+        val claim = hold("test")
+        val oldDir = File(mirror, "old")
+        val renamedDir = File(mirror, "renamed")
+        assertTrue(oldDir.renameTo(renamedDir))
+        engine.handleMirrorEvent(FileObserver.MOVED_FROM or 0x40000000, oldDir, mirror, treeA)
+        Thread.sleep(2)
+        engine.handleMirrorEvent(FileObserver.MOVED_TO or 0x40000000, renamedDir, mirror, treeA)
+
+        val editedChild = File(renamedDir, "child.txt").apply { writeText("edited after rename") }
+        engine.handleMirrorEvent(FileObserver.MODIFY, editedChild, mirror, treeA)
+        val createdChild = File(renamedDir, "after.txt").apply { writeText("created after rename") }
+        engine.handleMirrorEvent(FileObserver.CREATE, createdChild, mirror, treeA)
+        val deletedChild = File(renamedDir, "gone.txt")
+        assertTrue(deletedChild.delete())
+        engine.handleMirrorEvent(FileObserver.DELETE, deletedChild, mirror, treeA)
+
+        val worker = Thread { engine.runWriteBackLoop { false } }.apply { start() }
+        worker.join(5_000)
+        assertFalse(worker.isAlive)
+
+        release(claim)
+        held.remove(claim)
+        harness.clockOffsetMs += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+        assertFalse(engine.retryHeldBack(WatchSession(mirror, engine.session.generation)))
+
+        assertEquals(listOf("renamed", "child.txt", "after.txt"), harness.failedNames)
+        assertTrue(harness.deleteRefusedNames.isEmpty())
+        assertEquals("original", harness.findByPath("treeA", "old/child.txt")?.bytes?.toString(Charsets.UTF_8))
+        assertEquals("keep on device", harness.findByPath("treeA", "old/gone.txt")?.bytes?.toString(Charsets.UTF_8))
+        assertNull(harness.findByPath("treeA", "renamed"))
+    }
+
+    @Test
+    fun `edits queued before a folder rename still reach the device or notify per file when the rename drops`() {
+        val harness = VirtualSafHarness()
+        harness.addDir("treeA", "old")
+        harness.addFile("treeA", "old/child.txt", "original")
+        val treeA = harness.treeUris.getValue("treeA")
+        val engine = harness.buildEngine()
+        engine.providerClaimWaitMs = 100L
+
+        runBlocking { engine.initialSync(treeA, mirror) { _, _ -> } }
+
+        val oldDir = File(mirror, "old")
+        val editedBeforeRename = File(oldDir, "child.txt").apply { writeText("edited before rename") }
+        engine.handleMirrorEvent(FileObserver.MODIFY, editedBeforeRename, mirror, treeA)
+        val createdBeforeRename = File(oldDir, "before.txt").apply { writeText("created before rename") }
+        engine.handleMirrorEvent(FileObserver.CREATE, createdBeforeRename, mirror, treeA)
+
+        val renamedDir = File(mirror, "renamed")
+        assertTrue(oldDir.renameTo(renamedDir))
+        engine.handleMirrorEvent(FileObserver.MOVED_FROM or 0x40000000, oldDir, mirror, treeA)
+        Thread.sleep(2)
+        engine.handleMirrorEvent(FileObserver.MOVED_TO or 0x40000000, renamedDir, mirror, treeA)
+
+        val claim = hold("test")
+        engine.runWriteBackLoop { false }
+        release(claim)
+        held.remove(claim)
+
+        harness.clockOffsetMs += SafSyncEngine.HELD_BACK_RETRY_FIRST_MS
+        engine.retryHeldBack(WatchSession(mirror, engine.session.generation))
+
+        assertEquals(listOf("renamed", "child.txt", "before.txt"), harness.failedNames)
+        assertEquals("original", harness.findByPath("treeA", "old/child.txt")?.bytes?.toString(Charsets.UTF_8))
+    }
+
+    @Test
+    fun `current release uploads pre-rename edits to final via fallback create while leaving intermediate folder on device`() {
+        // Without chained identity tracking, mid -> final lacks safDocUri and falls back to createInSaf.
+        val harness = VirtualSafHarness()
+        harness.addDir("treeA", "old")
+        harness.addFile("treeA", "old/child.txt", "initial")
+        val treeA = harness.treeUris.getValue("treeA")
+        val engine = harness.buildEngine()
+
+        runBlocking { engine.initialSync(treeA, mirror) { _, _ -> } }
+        val oldDir = File(mirror, "old")
+        val midDir = File(mirror, "mid")
+        val finalDir = File(mirror, "final")
+
+        val edited = File(oldDir, "child.txt").apply { writeText("edited before renames") }
+        engine.handleMirrorEvent(FileObserver.MODIFY, edited, mirror, treeA)
+        val added = File(oldDir, "added.txt").apply { writeText("created before renames") }
+        engine.handleMirrorEvent(FileObserver.CREATE, added, mirror, treeA)
+
+        assertTrue(oldDir.renameTo(midDir))
+        engine.handleMirrorEvent(FileObserver.MOVED_FROM or 0x40000000, oldDir, mirror, treeA)
+        Thread.sleep(2)
+        engine.handleMirrorEvent(FileObserver.MOVED_TO or 0x40000000, midDir, mirror, treeA)
+
+        assertTrue(midDir.renameTo(finalDir))
+        engine.handleMirrorEvent(FileObserver.MOVED_FROM or 0x40000000, midDir, mirror, treeA)
+        Thread.sleep(2)
+        engine.handleMirrorEvent(FileObserver.MOVED_TO or 0x40000000, finalDir, mirror, treeA)
+
+        engine.runWriteBackLoop { false }
+
+        assertNull(harness.findByPath("treeA", "old"))
+        assertNotNull(harness.findByPath("treeA", "mid"))
+        assertEquals(
+            "edited before renames",
+            harness.findByPath("treeA", "final/child.txt")?.bytes?.toString(Charsets.UTF_8),
+        )
+        assertEquals(
+            "created before renames",
+            harness.findByPath("treeA", "final/added.txt")?.bytes?.toString(Charsets.UTF_8),
+        )
+    }
+
+    @Test
+    fun `renaming an unsynced folder then deleting it and replacing it with a file writes the file once without delete refusal`() {
+        val harness = VirtualSafHarness()
+        val treeA = harness.treeUris.getValue("treeA")
+        val engine = harness.buildEngine()
+        val outputsById = mutableMapOf<String, Int>()
+        harness.beforeOpenOutput = { docId ->
+            outputsById[docId] = (outputsById[docId] ?: 0) + 1
+        }
+
+        runBlocking { engine.initialSync(treeA, mirror) { _, _ -> } }
+
+        val ghostDir = File(mirror, "ghost").apply { mkdirs() }
+        File(ghostDir, "note.txt").writeText("local only")
+        val target = File(mirror, "replaced")
+        assertTrue(ghostDir.renameTo(target))
+        engine.handleMirrorEvent(FileObserver.MOVED_FROM or 0x40000000, ghostDir, mirror, treeA)
+        Thread.sleep(2)
+        engine.handleMirrorEvent(FileObserver.MOVED_TO or 0x40000000, target, mirror, treeA)
+
+        val oldNote = File(target, "note.txt")
+        assertTrue(oldNote.delete())
+        engine.handleMirrorEvent(FileObserver.DELETE, oldNote, mirror, treeA)
+        assertTrue(target.delete())
+        engine.handleMirrorEvent(FileObserver.DELETE or 0x40000000, target, mirror, treeA)
+
+        target.writeText("replacement file")
+        engine.handleMirrorEvent(FileObserver.CREATE, target, mirror, treeA)
+
+        engine.runWriteBackLoop { false }
+
+        val node = harness.findByPath("treeA", "replaced")
+        assertNotNull(node)
+        assertFalse(node!!.isDirectory)
+        assertEquals("replacement file", node.bytes.toString(Charsets.UTF_8))
+        assertTrue(harness.deleteRefusedNames.isEmpty(), "unexpected delete refusal: ${harness.deleteRefusedNames}")
+        assertEquals(1, outputsById[node.id], "replacement file was written ${outputsById[node.id]} times")
+    }
+
+    @Test
+    fun `renaming an unsynced folder then deleting and recreating it as a folder uploads each child once`() {
+        val harness = VirtualSafHarness()
+        val treeA = harness.treeUris.getValue("treeA")
+        val engine = harness.buildEngine()
+        val outputsById = mutableMapOf<String, Int>()
+        harness.beforeOpenOutput = { docId ->
+            outputsById[docId] = (outputsById[docId] ?: 0) + 1
+        }
+
+        runBlocking { engine.initialSync(treeA, mirror) { _, _ -> } }
+
+        val ghostDir = File(mirror, "ghost").apply { mkdirs() }
+        File(ghostDir, "old.txt").writeText("old")
+        val recreated = File(mirror, "recreated")
+        assertTrue(ghostDir.renameTo(recreated))
+        engine.handleMirrorEvent(FileObserver.MOVED_FROM or 0x40000000, ghostDir, mirror, treeA)
+        Thread.sleep(2)
+        engine.handleMirrorEvent(FileObserver.MOVED_TO or 0x40000000, recreated, mirror, treeA)
+
+        val oldFile = File(recreated, "old.txt")
+        assertTrue(oldFile.delete())
+        engine.handleMirrorEvent(FileObserver.DELETE, oldFile, mirror, treeA)
+        assertTrue(recreated.delete())
+        engine.handleMirrorEvent(FileObserver.DELETE or 0x40000000, recreated, mirror, treeA)
+
+        assertTrue(recreated.mkdirs())
+        engine.handleMirrorEvent(FileObserver.CREATE or 0x40000000, recreated, mirror, treeA)
+        val fresh = File(recreated, "fresh.txt").apply { writeText("fresh") }
+        engine.handleMirrorEvent(FileObserver.CREATE, fresh, mirror, treeA)
+
+        engine.runWriteBackLoop { false }
+
+        val freshNode = harness.findByPath("treeA", "recreated/fresh.txt")
+        assertNotNull(freshNode)
+        assertEquals("fresh", freshNode!!.bytes.toString(Charsets.UTF_8))
+        assertTrue(harness.deleteRefusedNames.isEmpty())
+        assertEquals(1, outputsById[freshNode.id], "recreated child was uploaded ${outputsById[freshNode.id]} times")
+    }
+
+    @Test
+    fun `chaining a second rename after folder deletion and file replacement writes the replacement file`() {
+        val harness = VirtualSafHarness()
+        harness.addDir("treeA", "x")
+        harness.addFile("treeA", "x/child.txt", "original")
+        val treeA = harness.treeUris.getValue("treeA")
+        val engine = harness.buildEngine()
+
+        runBlocking { engine.initialSync(treeA, mirror) { _, _ -> } }
+        val xDir = File(mirror, "x")
+        val aDir = File(mirror, "a")
+        val bDir = File(mirror, "b")
+
+        assertTrue(xDir.renameTo(aDir))
+        engine.handleMirrorEvent(FileObserver.MOVED_FROM or 0x40000000, xDir, mirror, treeA)
+        Thread.sleep(2)
+        engine.handleMirrorEvent(FileObserver.MOVED_TO or 0x40000000, aDir, mirror, treeA)
+
+        assertTrue(aDir.renameTo(bDir))
+        engine.handleMirrorEvent(FileObserver.MOVED_FROM or 0x40000000, aDir, mirror, treeA)
+        Thread.sleep(2)
+        engine.handleMirrorEvent(FileObserver.MOVED_TO or 0x40000000, bDir, mirror, treeA)
+
+        val child = File(bDir, "child.txt")
+        assertTrue(child.delete())
+        engine.handleMirrorEvent(FileObserver.DELETE, child, mirror, treeA)
+        assertTrue(bDir.delete())
+        engine.handleMirrorEvent(FileObserver.DELETE or 0x40000000, bDir, mirror, treeA)
+
+        bDir.writeText("replacement")
+        engine.handleMirrorEvent(FileObserver.CREATE, bDir, mirror, treeA)
+
+        engine.runWriteBackLoop { false }
+
+        val fileNode = harness.findByPath("treeA", "b")
+        assertNotNull(fileNode)
+        assertFalse(fileNode!!.isDirectory)
+        assertEquals("replacement", fileNode.bytes.toString(Charsets.UTF_8))
+        assertTrue(harness.deleteRefusedNames.isEmpty())
+        assertTrue(harness.failedNames.isEmpty())
+    }
+
+    @Test
+    fun `current release leaves original device folder stranded when intermediate folder name is reused before drain`() {
+        // Superseding on localPath drops old -> tmp without carrying old's identity through tmp -> final.
+        val harness = VirtualSafHarness()
+        harness.addDir("treeA", "old")
+        harness.addFile("treeA", "old/from_old.txt", "from old")
+        harness.addFile("treeA", "old/.git/head", "ref: old")
+        harness.addDir("treeA", "other")
+        harness.addFile("treeA", "other/from_other.txt", "from other")
+        val treeA = harness.treeUris.getValue("treeA")
+        val engine = harness.buildEngine()
+
+        runBlocking { engine.initialSync(treeA, mirror) { _, _ -> } }
+        val oldDir = File(mirror, "old")
+        val tmpDir = File(mirror, "tmp")
+        val finalDir = File(mirror, "final")
+        val otherDir = File(mirror, "other")
+
+        assertTrue(oldDir.renameTo(tmpDir))
+        engine.handleMirrorEvent(FileObserver.MOVED_FROM or 0x40000000, oldDir, mirror, treeA)
+        Thread.sleep(2)
+        engine.handleMirrorEvent(FileObserver.MOVED_TO or 0x40000000, tmpDir, mirror, treeA)
+
+        assertTrue(tmpDir.renameTo(finalDir))
+        engine.handleMirrorEvent(FileObserver.MOVED_FROM or 0x40000000, tmpDir, mirror, treeA)
+        Thread.sleep(2)
+        engine.handleMirrorEvent(FileObserver.MOVED_TO or 0x40000000, finalDir, mirror, treeA)
+
+        assertTrue(otherDir.renameTo(tmpDir))
+        engine.handleMirrorEvent(FileObserver.MOVED_FROM or 0x40000000, otherDir, mirror, treeA)
+        Thread.sleep(2)
+        engine.handleMirrorEvent(FileObserver.MOVED_TO or 0x40000000, tmpDir, mirror, treeA)
+
+        engine.runWriteBackLoop { false }
+
+        assertNotNull(harness.findByPath("treeA", "old"))
+        assertNull(harness.findByPath("treeA", "final/.git/head"))
+        assertEquals("from other", harness.findByPath("treeA", "tmp/from_other.txt")?.bytes?.toString(Charsets.UTF_8))
+    }
+
+    @Test
+    fun `current release leaves original device folder behind when moved into a newly created parent that is renamed`() {
+        // Rename old -> sub/mid lacks sub on device and has absent localPath after sub -> sub2.
+        val harness = VirtualSafHarness()
+        harness.addDir("treeA", "old")
+        harness.addFile("treeA", "old/child.txt", "original")
+        harness.addFile("treeA", "old/.git/head", "ref: old")
+        val treeA = harness.treeUris.getValue("treeA")
+        val engine = harness.buildEngine()
+
+        runBlocking { engine.initialSync(treeA, mirror) { _, _ -> } }
+        val subDir = File(mirror, "sub").apply { mkdirs() }
+        engine.handleMirrorEvent(FileObserver.CREATE or 0x40000000, subDir, mirror, treeA)
+
+        val oldDir = File(mirror, "old")
+        val midDir = File(subDir, "mid")
+        assertTrue(oldDir.renameTo(midDir))
+        engine.handleMirrorEvent(FileObserver.MOVED_FROM or 0x40000000, oldDir, mirror, treeA)
+        Thread.sleep(2)
+        engine.handleMirrorEvent(FileObserver.MOVED_TO or 0x40000000, midDir, mirror, treeA)
+
+        val subRenamed = File(mirror, "sub2")
+        assertTrue(subDir.renameTo(subRenamed))
+        engine.handleMirrorEvent(FileObserver.MOVED_FROM or 0x40000000, subDir, mirror, treeA)
+        Thread.sleep(2)
+        engine.handleMirrorEvent(FileObserver.MOVED_TO or 0x40000000, subRenamed, mirror, treeA)
+
+        engine.runWriteBackLoop { false }
+
+        assertNotNull(harness.findByPath("treeA", "old"))
+        assertNull(harness.findByPath("treeA", "sub2/mid/.git/head"))
+        assertEquals("original", harness.findByPath("treeA", "sub2/mid/child.txt")?.bytes?.toString(Charsets.UTF_8))
+    }
+
+    @Test
+    fun `missing-source fallback after folder switch with known parent writes to the queued folder`() {
+        val harness = VirtualSafHarness(mapOf("treeA" to "testA", "treeB" to "testB"))
+        val treeA = harness.treeUris.getValue("treeA")
+        val treeB = harness.treeUris.getValue("treeB")
+        val engine = harness.buildEngine()
+
+        runBlocking { engine.initialSync(treeA, mirror) { _, _ -> } }
+
+        val ghostDir = File(mirror, "ghost").apply { mkdirs() }
+        File(ghostDir, "note.txt").writeText("local only")
+        val materialized = File(mirror, "materialized")
+        assertTrue(ghostDir.renameTo(materialized))
+        engine.handleMirrorEvent(FileObserver.MOVED_FROM or 0x40000000, ghostDir, mirror, treeA)
+        Thread.sleep(2)
+        engine.handleMirrorEvent(FileObserver.MOVED_TO or 0x40000000, materialized, mirror, treeA)
+
+        val mirrorB = File(filesDir, "mirrorB").apply { mkdirs() }
+        runBlocking { engine.initialSync(treeB, mirrorB) { _, _ -> } }
+
+        engine.runWriteBackLoop { false }
+
+        assertEquals(
+            "local only",
+            harness.findByPath("treeA", "materialized/note.txt")?.bytes?.toString(Charsets.UTF_8),
+        )
+    }
+
+    @Test
+    fun `stale generation reports write-back failure for an unsynced moved folder deleted before drain`() {
+        val harness = VirtualSafHarness()
+        val treeA = harness.treeUris.getValue("treeA")
+        val engine = harness.buildEngine()
+
+        runBlocking { engine.initialSync(treeA, mirror) { _, _ -> } }
+
+        val ghostDir = File(mirror, "ghost").apply { mkdirs() }
+        File(ghostDir, "note.txt").writeText("local only")
+        val vanished = File(mirror, "vanished")
+        assertTrue(ghostDir.renameTo(vanished))
+        engine.handleMirrorEvent(FileObserver.MOVED_FROM or 0x40000000, ghostDir, mirror, treeA)
+        Thread.sleep(2)
+        engine.handleMirrorEvent(FileObserver.MOVED_TO or 0x40000000, vanished, mirror, treeA)
+
+        val note = File(vanished, "note.txt")
+        assertTrue(note.delete())
+        engine.handleMirrorEvent(FileObserver.DELETE, note, mirror, treeA)
+        assertTrue(vanished.delete())
+        engine.handleMirrorEvent(FileObserver.DELETE or 0x40000000, vanished, mirror, treeA)
+
+        runBlocking { engine.initialSync(treeA, mirror) { _, _ -> } }
+        engine.runWriteBackLoop { false }
+
+        assertTrue(harness.failedNames.isEmpty(), "reported write-back failure for already deleted path: ${harness.failedNames}")
+    }
+
+    @Test
+    fun `failed same-dir rename with unresolved event parent falls back to create without overwriting external device child`() {
+        val harness = VirtualSafHarness()
+        harness.addDir("treeA", "d0")
+        val oldId = harness.addDir("treeA", "d0/old")
+        val oldNode = harness.findByPath("treeA", "d0/old")!!
+        harness.addFile("treeA", "d0/old/child.txt", "from mirror")
+        val treeA = harness.treeUris.getValue("treeA")
+        val engine = harness.buildEngine()
+        val outputsById = mutableMapOf<String, Int>()
+        harness.beforeOpenOutput = { docId ->
+            outputsById[docId] = (outputsById[docId] ?: 0) + 1
+        }
+        every { DocumentsContract.renameDocument(any(), any(), any()) } answers {
+            val docUri = secondArg<Uri>()
+            val targetName = thirdArg<String>()
+            val docId = docUri.toString().removePrefix("doc-uri:")
+            if (docId == oldId && targetName == "target") {
+                null
+            } else {
+                harness.renamedCalls += docId to targetName
+                if (docId == oldId) oldNode.name = targetName
+                docUri
+            }
+        }
+
+        runBlocking { engine.initialSync(treeA, mirror) { _, _ -> } }
+
+        engine.resetCache(treeA)
+        var rootQueries = 0
+        harness.shouldFailQuery = { raw ->
+            raw == "children|treeA::root" && ++rootQueries == 2
+        }
+
+        val dir = File(mirror, "d0")
+        val oldDir = File(dir, "old")
+        val targetDir = File(dir, "target")
+        assertTrue(oldDir.renameTo(targetDir))
+        engine.handleMirrorEvent(FileObserver.MOVED_FROM or 0x40000000, oldDir, mirror, treeA)
+        Thread.sleep(2)
+        engine.handleMirrorEvent(FileObserver.MOVED_TO or 0x40000000, targetDir, mirror, treeA)
+        harness.shouldFailQuery = null
+
+        val externalId = harness.addFile("treeA", "d0/target/child.txt", "external on device")
+
+        engine.runWriteBackLoop { false }
+
+        assertEquals(0, outputsById[externalId] ?: 0, "external device child was overwritten")
+    }
+
+    @Test
+    fun `current release leaves moved subfolder under renamed parent when parent and child rename before drain`() {
+        // Without path tracking through queued parent renames, p1_mid/old misses safDocUri at event time.
+        val harness = VirtualSafHarness()
+        val p1Id = harness.addDir("treeA", "p1")
+        val p1Node = harness.findByPath("treeA", "p1")!!
+        val oldId = harness.addDir("treeA", "p1/old")
+        val oldNode = harness.findByPath("treeA", "p1/old")!!
+        harness.addFile("treeA", "p1/old/child.txt", "deep")
+        harness.addDir("treeA", "p2")
+        val treeA = harness.treeUris.getValue("treeA")
+        val engine = harness.buildEngine()
+        every { DocumentsContract.moveDocument(any(), any(), any(), any()) } answers {
+            val docUri = secondArg<Uri>()
+            val targetParentUri = arg<Uri>(3)
+            val docId = docUri.toString().removePrefix("doc-uri:")
+            val targetParentId = targetParentUri.toString().removePrefix("doc-uri:")
+            if (docId == oldId) oldNode.parentId = targetParentId
+            docUri
+        }
+        every { DocumentsContract.renameDocument(any(), any(), any()) } answers {
+            val docUri = secondArg<Uri>()
+            val targetName = thirdArg<String>()
+            val docId = docUri.toString().removePrefix("doc-uri:")
+            harness.renamedCalls += docId to targetName
+            when (docId) {
+                p1Id -> p1Node.name = targetName
+                oldId -> oldNode.name = targetName
+            }
+            docUri
+        }
+
+        runBlocking { engine.initialSync(treeA, mirror) { _, _ -> } }
+
+        val p1Dir = File(mirror, "p1")
+        val p1Mid = File(mirror, "p1_mid")
+        assertTrue(p1Dir.renameTo(p1Mid))
+        engine.handleMirrorEvent(FileObserver.MOVED_FROM or 0x40000000, p1Dir, mirror, treeA)
+        Thread.sleep(2)
+        engine.handleMirrorEvent(FileObserver.MOVED_TO or 0x40000000, p1Mid, mirror, treeA)
+
+        val movingChild = File(p1Mid, "old")
+        val dest = File(mirror, "p2/moved")
+        assertTrue(movingChild.renameTo(dest))
+        engine.handleMirrorEvent(FileObserver.MOVED_FROM or 0x40000000, movingChild, mirror, treeA)
+        Thread.sleep(2)
+        engine.handleMirrorEvent(FileObserver.MOVED_TO or 0x40000000, dest, mirror, treeA)
+
+        engine.runWriteBackLoop { false }
+
+        assertNotNull(harness.findByPath("treeA", "p1_mid/old"))
+        assertEquals("deep", harness.findByPath("treeA", "p2/moved/child.txt")?.bytes?.toString(Charsets.UTF_8))
+    }
+
+    @Test
+    fun `reopening the same tree into a new mirror does not let an earlier unresolved rename rename an external folder`() {
+        val harness = VirtualSafHarness()
+        val treeA = harness.treeUris.getValue("treeA")
+        val engine = harness.buildEngine()
+
+        runBlocking { engine.initialSync(treeA, mirror) { _, _ -> } }
+
+        val ghostDir = File(mirror, "mid").apply { mkdirs() }
+        File(ghostDir, "child.txt").writeText("local")
+        val finalDir = File(mirror, "final")
+        assertTrue(ghostDir.renameTo(finalDir))
+        engine.handleMirrorEvent(FileObserver.MOVED_FROM or 0x40000000, ghostDir, mirror, treeA)
+        Thread.sleep(2)
+        engine.handleMirrorEvent(FileObserver.MOVED_TO or 0x40000000, finalDir, mirror, treeA)
+
+        harness.addDir("treeA", "mid")
+        harness.addFile("treeA", "mid/from_device.txt", "device copy")
+        val mirrorSecond = File(filesDir, "mirrorSecond").apply { mkdirs() }
+        runBlocking { engine.initialSync(treeA, mirrorSecond) { _, _ -> } }
+        harness.queriedTargets.clear()
+
+        engine.runWriteBackLoop { false }
+
+        assertTrue(harness.renamedCalls.isEmpty(), "unresolved earlier rename touched external device folder: ${harness.renamedCalls}")
+        assertEquals(
+            "device copy",
+            harness.findByPath("treeA", "mid/from_device.txt")?.bytes?.toString(Charsets.UTF_8),
+        )
+    }
+
+    @Test
+    fun `draining a pre-resolved rename with queued child saves after switching folders leaves the new tree untouched`() {
+        val harness = VirtualSafHarness(mapOf("treeA" to "testA", "treeB" to "testB"))
+        harness.addDir("treeA", "old")
+        harness.addFile("treeA", "old/child.txt", "from A")
+        harness.addDir("treeB", "renamed")
+        harness.addFile("treeB", "renamed/child.txt", "kept in B")
+        val treeA = harness.treeUris.getValue("treeA")
+        val treeB = harness.treeUris.getValue("treeB")
+        val engine = harness.buildEngine()
+
+        runBlocking { engine.initialSync(treeA, mirror) { _, _ -> } }
+        val oldDir = File(mirror, "old")
+        val renamedDir = File(mirror, "renamed")
+        val child = File(oldDir, "child.txt").apply { writeText("edited A") }
+        engine.handleMirrorEvent(FileObserver.MODIFY, child, mirror, treeA)
+
+        assertTrue(oldDir.renameTo(renamedDir))
+        engine.handleMirrorEvent(FileObserver.MOVED_FROM or 0x40000000, oldDir, mirror, treeA)
+        Thread.sleep(2)
+        engine.handleMirrorEvent(FileObserver.MOVED_TO or 0x40000000, renamedDir, mirror, treeA)
+
+        val mirrorB = File(filesDir, "mirrorB").apply { mkdirs() }
+        runBlocking { engine.initialSync(treeB, mirrorB) { _, _ -> } }
+        harness.queriedTargets.clear()
+        harness.renamedCalls.clear()
+
+        engine.runWriteBackLoop { false }
+
+        assertTrue(harness.queriedTargets.none { it.contains("treeB::") })
+        assertTrue(harness.renamedCalls.none { it.first.startsWith("treeB::") })
+        assertEquals("kept in B", harness.findByPath("treeB", "renamed/child.txt")?.bytes?.toString(Charsets.UTF_8))
+        assertEquals("edited A", harness.findByPath("treeA", "renamed/child.txt")?.bytes?.toString(Charsets.UTF_8))
     }
 }

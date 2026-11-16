@@ -152,6 +152,8 @@ class SafInboundIntegrityTest : SafInitialSyncTestBase() {
         assertEquals("delivered", written["doc-uri:doc:notes.txt"]?.toString())
         alterReceiptProof(local, proof)
         deviceTree(mapOf("root" to listOf(Child("keep.txt", contents = "k"))))
+        // The deleted document's bytes go with it: a document made again under its name starts empty.
+        written.remove("doc-uri:doc:notes.txt")
 
         sync()
 
@@ -161,7 +163,13 @@ class SafInboundIntegrityTest : SafInitialSyncTestBase() {
             assertTrue(local.exists(), "the device deletion removed mirror bytes without matching digest proof")
             assertEquals(if (proof == "changed") "UNSENT!!!" else "delivered", local.readText())
         }
-        assertTrue(created.isEmpty(), "the same reopen undid the device deletion")
+        if (proof == "changed") {
+            // A change the device never got wins over the deletion: the same reopen puts it back.
+            assertEquals(listOf("notes.txt"), created.map { it.second }, "the same reopen left the unsent change off the device")
+            assertEquals("UNSENT!!!", written["doc-uri:doc:notes.txt"]?.toString(), "the document came back without the unsent change")
+        } else {
+            assertTrue(created.isEmpty(), "the same reopen undid the device deletion")
+        }
     }
 
     @ParameterizedTest

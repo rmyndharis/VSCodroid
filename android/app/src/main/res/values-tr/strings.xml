@@ -227,6 +227,11 @@
     <!-- Shown when a save could not be written out to the device folder. Names the
          consequence rather than the error: the user's next decision is whether to
          copy the file out before uninstalling, not which exception was thrown. -->
+    <string name="saf_device_copy_preserved">Cihazdaki değişiklik dosyanın yanında: %1$s.</string>
+    <plurals name="saf_device_copies_preserved">
+        <item quantity="one">Cihazdaki %1$d değişiklik korundu. .device- ve zamanı arayın.</item>
+        <item quantity="other">Cihazdaki %1$d değişiklik korundu. .device- ve zamanı arayın.</item>
+    </plurals>
     <string name="saf_write_back_failed">%1$s cihaz klasörüne ulaşmadı. Tek kopyası VSCodroid içinde.</string>
 
     <!-- Shown once after a folder opens when documents in it could not be copied into
@@ -265,6 +270,11 @@
          never had, which is what saf_directory_kept says. -->
     <string name="saf_directory_changed_kept">%1$s cihaz klasöründe tutuldu: düzenleyici içindeki bir dosyayı en son okuduğundan veya kaydettiğinden beri başka bir uygulama o dosyayı değiştirmiş olabilir. Buna artık ihtiyacınız yoksa orada silin.</string>
     <string name="saf_delete_refused">%1$s cihaz klasöründen silinemedi ve klasör yeniden açıldığında tekrar görünecek. Bu öğeyi cihazınızdaki dosya yöneticisinden silin.</string>
+    <string name="saf_local_copy_preserved">Uygulamadaki değişiklik dosyanın yanında: %1$s.</string>
+    <plurals name="saf_local_copies_preserved">
+        <item quantity="one">Uygulamadaki %1$d değişiklik korundu. .local- ve zamanı arayın.</item>
+        <item quantity="other">Uygulamadaki %1$d değişiklik korundu. .local- ve zamanı arayın.</item>
+    </plurals>
 
     <!-- Removing the local copy of a device folder, from the storage screen. The
          mirror named by a hash the screen holds no longer exists: the user picked it

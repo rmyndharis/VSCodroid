@@ -227,6 +227,12 @@
     <!-- Shown when a save could not be written out to the device folder. Names the
          consequence rather than the error: the user's next decision is whether to
          copy the file out before uninstalling, not which exception was thrown. -->
+    <string name="saf_device_copy_preserved">Copia del dispositivo accanto al file: %1$s.</string>
+    <plurals name="saf_device_copies_preserved">
+        <item quantity="one">Conservata %1$d modifica. Cerca .device- e un orario.</item>
+        <item quantity="many">Conservate %1$d modifiche. Cerca .device- e un orario.</item>
+        <item quantity="other">Conservate %1$d modifiche. Cerca .device- e un orario.</item>
+    </plurals>
     <string name="saf_write_back_failed">%1$s non è arrivato nella cartella del dispositivo. L\'unica copia è dentro VSCodroid.</string>
 
     <!-- Shown once after a folder opens when documents in it could not be copied into
@@ -267,6 +273,12 @@
          never had, which is what saf_directory_kept says. -->
     <string name="saf_directory_changed_kept">%1$s è stata mantenuta nella cartella del dispositivo: un\'altra app potrebbe aver modificato un file al suo interno da quando l\'editor lo ha letto o salvato l\'ultima volta. Eliminala lì se non ti serve più.</string>
     <string name="saf_delete_refused">Non è stato possibile eliminare %1$s dalla cartella del dispositivo, quindi ricomparirà alla prossima apertura della cartella. Eliminalo nel gestore file del dispositivo.</string>
+    <string name="saf_local_copy_preserved">Copia dell\'app accanto al file: %1$s.</string>
+    <plurals name="saf_local_copies_preserved">
+        <item quantity="one">Conservata %1$d modifica dell\'app. Cerca .local- e un orario.</item>
+        <item quantity="many">Conservate %1$d modifiche dell\'app. Cerca .local- e un orario.</item>
+        <item quantity="other">Conservate %1$d modifiche dell\'app. Cerca .local- e un orario.</item>
+    </plurals>
 
     <!-- Removing the local copy of a device folder, from the storage screen. The
          mirror named by a hash the screen holds no longer exists: the user picked it

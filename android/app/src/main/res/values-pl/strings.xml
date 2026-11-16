@@ -227,6 +227,13 @@
     <!-- Shown when a save could not be written out to the device folder. Names the
          consequence rather than the error: the user's next decision is whether to
          copy the file out before uninstalling, not which exception was thrown. -->
+    <string name="saf_device_copy_preserved">Zmiana z urządzenia obok pliku: %1$s.</string>
+    <plurals name="saf_device_copies_preserved">
+        <item quantity="one">Zachowano %1$d zmianę z urządzenia. Szukaj .device- i czasu.</item>
+        <item quantity="few">Zachowano %1$d zmiany z urządzenia. Szukaj .device- i czasu.</item>
+        <item quantity="many">Zachowano %1$d zmian z urządzenia. Szukaj .device- i czasu.</item>
+        <item quantity="other">Zachowano %1$d zmiany z urządzenia. Szukaj .device- i czasu.</item>
+    </plurals>
     <string name="saf_write_back_failed">Plik %1$s nie trafił do folderu na urządzeniu. Jedyna kopia jest w VSCodroid.</string>
 
     <!-- Shown once after a folder opens when documents in it could not be copied into
@@ -269,6 +276,13 @@
          never had, which is what saf_directory_kept says. -->
     <string name="saf_directory_changed_kept">Folder %1$s został zachowany w folderze na urządzeniu: inna aplikacja mogła zmienić znajdujący się w nim plik, odkąd edytor ostatnio go odczytał lub zapisał. Usuń go tam, jeśli nie jest już potrzebny.</string>
     <string name="saf_delete_refused">Nie udało się usunąć %1$s z folderu w urządzeniu, więc pojawi się ponownie przy następnym otwarciu folderu. Usuń go w menedżerze plików w urządzeniu.</string>
+    <string name="saf_local_copy_preserved">Zmiana z aplikacji obok pliku: %1$s.</string>
+    <plurals name="saf_local_copies_preserved">
+        <item quantity="one">Zachowano %1$d zmianę z aplikacji. Szukaj .local- i czasu.</item>
+        <item quantity="few">Zachowano %1$d zmiany z aplikacji. Szukaj .local- i czasu.</item>
+        <item quantity="many">Zachowano %1$d zmian z aplikacji. Szukaj .local- i czasu.</item>
+        <item quantity="other">Zachowano %1$d zmiany z aplikacji. Szukaj .local- i czasu.</item>
+    </plurals>
 
     <!-- Removing the local copy of a device folder, from the storage screen. The
          mirror named by a hash the screen holds no longer exists: the user picked it
