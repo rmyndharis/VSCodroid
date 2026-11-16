@@ -70,6 +70,7 @@
          about to become reachable again, and a user who is not told which
          setting to look for has nothing to search on. -->
     <string name="heap_override_suspended">settings.json içindeki özel bellek sınırı, art arda gelen çökmelerden sonra kapatıldı. Başka bir değer denemek için vscodroid.server.heapCeilingMb ayarını değiştirin ve uygulamayı yeniden başlatın.</string>
+    <string name="notice_editor_away_from_home">Başka bir uygulama %1$d bağlantı noktasını kullandığı için ayarlarınız ve oturum açma bilgileriniz yüklenmedi. Bunlar güvende: o uygulamayı kapatın, VSCodroid\'i bildiriminden durdurun ve yeniden açın.</string>
     <!-- The figure is passed in rather than written here, and it is the
          SHORTFALL the refusal measured, not the size of the unpack: this asks
          the user to free it, and what they have to free is what the device is

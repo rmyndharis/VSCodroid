@@ -1,15 +1,20 @@
 package com.vscodroid
 
 import android.content.Context
+import android.net.Uri
 import android.os.SystemClock
 import android.webkit.WebView
+import android.webkit.WebViewClient
 import android.widget.Toast
 import com.vscodroid.service.mockEditorGateway
 import com.vscodroid.bridge.AuthTabWindow
 import com.vscodroid.service.NodeService
 import com.vscodroid.service.StartupNotice
+import com.vscodroid.storage.SafStorageManager
 import com.vscodroid.util.Logger
+import com.vscodroid.webview.DownloadCoordinator
 import com.vscodroid.webview.VSCodroidWebChromeClient
+import com.vscodroid.webview.VSCodroidWebViewClient
 import io.mockk.Runs
 import io.mockk.every
 import io.mockk.just
@@ -190,5 +195,91 @@ class ServerReadinessCallSiteTest {
         val start = SourceScan.withoutComments(SourceScan.body(source, "override fun onStart()"))
         assertTrue(Regex("""backgroundedAt\s*=\s*SystemClock\.elapsedRealtime\(\)""").containsMatchIn(stop))
         assertTrue(Regex("""\bhandleResumeFromBackground\s*\(\s*\)""").containsMatchIn(start))
+    }
+
+    private fun installWebViewClient(port: Int = 13337): WebViewClient {
+        mockkStatic(Uri::class)
+        every { Uri.encode(any()) } answers { firstArg() }
+        mockkObject(VSCodroidWebViewClient.Companion)
+        every {
+            VSCodroidWebViewClient.setupServiceWorkerInterception(any(), any(), any(), any(), any(), any())
+        } just Runs
+        every { Logger.d(any(), any()) } just Runs
+        every { service.getConnectionToken() } returns "token"
+        lateinit var client: WebViewClient
+        every { webView.webViewClient = any() } answers { client = firstArg() }
+        every { webView.webViewClient } answers { client }
+        every { webView.loadUrl(any()) } answers { events += "load-url" }
+        every { activity["markAppNavigation"]() } answers { callOriginal() }
+        every { activity["rememberWorkspaceFolder"](any<String>(), any<Boolean>()) } returns true
+        every { activity["folderFromUrl"](any<String>()) } returns null
+        every { activity["injectBridgeToken"]() } returns Unit
+        every { activity["initBridge"](any<Int>()) } answers { callOriginal() }
+        every { activity["navigateToFolder"](any<Int>(), any<String>(), any<String>()) } answers { callOriginal() }
+        setField("safManager", mockk<SafStorageManager>(relaxed = true))
+        setField("downloads", mockk<DownloadCoordinator>(relaxed = true))
+        setField("appNavigation", AppNavigationMark(10_000))
+        setField("serverPort", port)
+        MainActivity::class.java.getDeclaredMethod("initBridge", Int::class.javaPrimitiveType)
+            .apply { isAccessible = true }.invoke(activity, port)
+        return client
+    }
+
+    @Test
+    fun `a workbench load started while stopped counts absence from that load`() {
+        installWebViewClient()
+        setField("backgroundedAt", 1_000L)
+
+        now = 390_000L
+        MainActivity::class.java.getDeclaredMethod(
+            "navigateToFolder", Int::class.javaPrimitiveType, String::class.java, String::class.java,
+        ).apply { isAccessible = true }.invoke(activity, 13337, null, "token")
+        assertEquals(listOf("load-url"), events)
+        events.clear()
+
+        now = 400_000L
+        runReal("handleResumeFromBackground")
+        assertEquals(emptyList<String>(), events, "a 10s-old background load was reloaded from the 399s-old onStop timestamp")
+    }
+
+    @Test
+    fun `a workbench page started before onStop and finished while stopped is not reloaded on return`() {
+        val client = installWebViewClient()
+        val url = "http://127.0.0.1:13337/"
+        now = 500L
+        client.onPageStarted(webView, url, null)
+        assertEquals(0L, backgroundedAt())
+
+        setField("backgroundedAt", 1_000L)
+
+        now = 380_000L
+        client.onPageFinished(webView, url)
+
+        now = 405_000L
+        runReal("handleResumeFromBackground")
+        assertEquals(emptyList<String>(), events, "a page that finished loading 25s ago while stopped was reloaded")
+        assertEquals(0L, backgroundedAt())
+    }
+
+    @Test
+    fun `a background-loaded page still reloads once its own idle time passes the threshold, and non-workbench pages keep the clock`() {
+        val client = installWebViewClient()
+        val url = "http://127.0.0.1:13337/"
+        setField("backgroundedAt", 1_000L)
+
+        now = 390_000L
+        client.onPageStarted(webView, "about:blank", null)
+        client.onPageFinished(webView, "about:blank")
+        assertEquals(1_000L, backgroundedAt(), "a non-workbench page must not refresh the background clock")
+
+        client.onPageStarted(webView, url, null)
+        assertEquals(390_000L, backgroundedAt())
+        now = 400_000L
+        client.onPageFinished(webView, url)
+        assertEquals(400_000L, backgroundedAt())
+
+        now = 750_000L
+        runReal("handleResumeFromBackground")
+        assertEquals(listOf("reload"), events)
     }
 }

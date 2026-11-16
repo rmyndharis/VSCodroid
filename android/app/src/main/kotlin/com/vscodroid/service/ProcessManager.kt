@@ -253,6 +253,104 @@ class ProcessManager internal constructor(
     val port: Int get() = _port
 
     /**
+     * The home port this process had to start without, once, or 0.
+     *
+     * The page is then on another origin, so the settings, sign-ins and open
+     * editors the workbench stored under home are not there. They are not lost
+     * either: home is still the remembered port, and the next cold start, or a
+     * start after [releaseAwayOrigin], tries it first.
+     *
+     * Kept by the gateway, which holds the origin for the life of the application
+     * process, and not by this instance: a service the system recreates in the same
+     * process makes a new manager, which starts on the origin already bound and
+     * would otherwise have nothing to say. Set when a start binds the origin, once
+     * per application process, so it is said once and not again for a restart or a
+     * reload in the same process.
+     */
+    fun takeAwayFromHome(): Int = editorGateway.takeAwayFromHome()
+
+    /**
+     * Gives up a public origin this process bound only because home was busy.
+     *
+     * For a stop the person asked for. The gateway otherwise keeps its port for the
+     * life of the application process, and Android keeps that process cached after
+     * the service stops, so opening the editor again inherited the temporary port
+     * instead of trying home. Home itself is never released here: it stays reserved
+     * against other programs for as long as this process lives.
+     */
+    fun releaseAwayOrigin() {
+        val gateway = editorGateway
+        val bound = gateway.boundPort ?: return
+        val home = PortFinder.rememberedPort(context)
+        if (home <= 0 || bound == home) return
+        if (gateway.release(bound)) {
+            _port = 0
+            Logger.i(tag, "Released the temporary origin $bound; the next start tries $home again")
+        }
+    }
+
+    /**
+     * Gives back a temporary origin that a start refused by a stop bound itself.
+     *
+     * A start can be waiting to bind while Stop and [releaseAwayOrigin] run; it then
+     * binds after them, finds itself stopped, and would leave the listener that the
+     * stop meant to give up. That holds for a start that found a listener bound at its
+     * beginning too: Stop may release that one before the bind, which then opens a new
+     * listener on the same port. Whether the listener bound now was opened by this
+     * start is read from the gateway's count of listeners opened, taken when the start
+     * began ([listenersAtStart]); only starts open listeners, and [startLock] lets one
+     * run at a time, so a count that moved since then moved in this start. Home is
+     * kept, as everywhere: it stays reserved for the life of the process. A listener
+     * this start did not open is left.
+     */
+    private fun releaseOriginOfRefusedStart(gateway: EditorGateway, listenersAtStart: Long) {
+        if (gateway.listenersOpened == listenersAtStart) return
+        val bound = gateway.boundPort ?: return
+        if (bound == PortFinder.rememberedPort(context)) return
+        if (gateway.release(bound)) {
+            _port = 0
+            Logger.i(tag, "A stop refused this start; released the temporary origin $bound it had bound")
+        }
+    }
+
+    /**
+     * Moves a start that followed a survivor to its recorded port, and did not adopt
+     * it, back to home when home can be bound; answers false only when no origin can
+     * be bound at all.
+     *
+     * The survivor's port is taken first because adoption needs it: the survivor was
+     * started for that origin. Once it is not adopted (it fails the proof of this
+     * build or of the run its note names, or it is gone) nothing ties the new editor
+     * to that port, and serving it there would leave the session away from home with
+     * nothing holding home. If home is taken between the check and the bind, the
+     * start stays on the port it had.
+     */
+    private fun leaveUnadoptedSurvivorsPort(gateway: EditorGateway, home: Int): Boolean {
+        val away = _port
+        if (home <= 0 || away == home || !PortFinder.isPortAvailable(home) || !gateway.release(away)) return true
+        _port = 0
+        for (port in listOf(home, away)) {
+            try {
+                _port = gateway.bind(port)
+                break
+            } catch (_: IOException) {
+            }
+        }
+        if (_port == 0) {
+            try {
+                _port = gateway.bind(PortFinder.getOrAllocatePort(context))
+            } catch (e: IOException) {
+                Logger.e(tag, "Could not reserve the editor origin again", e)
+                serverLog.append("Could not reserve the editor origin: ${e.javaClass.simpleName}: ${e.message}")
+                return false
+            }
+        }
+        gateway.noteAwayFromHome(if (_port != home) home else 0)
+        Logger.i(tag, "The editor recorded on $away was not adopted; starting on $_port")
+        return true
+    }
+
+    /**
      * Whether the running server was started with a user-chosen heap ceiling that
      * is HIGHER than the one this device would have been given anyway.
      *
@@ -543,11 +641,25 @@ class ProcessManager internal constructor(
         val editorNote = recordedEditorNote()
         val recorded = editorNote?.let { runCatching { JSONObject(it) }.getOrNull() }
         val inheritedPort = gateway.boundPort
-        _port = inheritedPort ?: _port.takeIf { it > 0 } ?: PortFinder.rememberedPort(context)
+        val listenersAtStart = gateway.listenersOpened
+        val home = PortFinder.rememberedPort(context)
+        _port = inheritedPort ?: _port.takeIf { it > 0 } ?: home
+        val recordedSocket = recorded?.let { recordedBackendSocket(it) }
+        // An editor that outlived the application process is adopted on the port
+        // it was recorded on. That is not home when its process found home busy,
+        // and starting from home would neither adopt it nor end it: both compare
+        // the note's port with this one. So this start continues there, and the
+        // next one without a survivor goes home.
+        val recordedPort = recorded?.optInt("port", 0) ?: 0
+        var followedSurvivor = false
+        if (inheritedPort == null && recordedSocket != null && recordedPort > 0 && recordedPort != _port) {
+            val candidate = _port
+            _port = recordedPort
+            if (portHeldByOurEditorServer(editorNote)) followedSurvivor = true else _port = candidate
+        }
         if (_port == 0) _port = PortFinder.getOrAllocatePort(context)
 
         // A legacy child owns TCP itself. End it before reserving the same WebView origin.
-        val recordedSocket = recorded?.let { recordedBackendSocket(it) }
         if (inheritedPort == null && recorded != null && recordedSocket == null &&
             portHeldByOurEditorServer(editorNote)) {
             if (reapRecordedEditorServer("moving the editor behind its private transport", editorNote)) {
@@ -573,6 +685,14 @@ class ProcessManager internal constructor(
             }
         }
         if (!bound) return false
+        if (inheritedPort == null) {
+            // The first port an install binds is its home. A start that bound
+            // another because home was busy keeps it for this process only, and
+            // the person is told once: what the workbench stored under home is
+            // not on this origin.
+            if (home == 0) PortFinder.rememberHome(context, _port)
+            gateway.noteAwayFromHome(if (home > 0 && home != _port) home else 0)
+        }
 
         // The private backend may survive the application process, whose TCP listener did not.
         if (editorNote != null && recorded != null && recordedSocket != null &&
@@ -581,6 +701,7 @@ class ProcessManager internal constructor(
             synchronized(readinessLock) {
                 if (isShuttingDown || generation != stopGeneration || !canStart()) {
                     reapRecordedEditorServer("a stop landed before adoption", editorNote)
+                    releaseOriginOfRefusedStart(gateway, listenersAtStart)
                     return false
                 }
                 // Stop must be able to withdraw routing while the adoption proof is in flight.
@@ -592,6 +713,7 @@ class ProcessManager internal constructor(
                     if (isShuttingDown || generation != stopGeneration || !canStart()) {
                         gateway.withdrawBackend(owner)
                         reapRecordedEditorServer("a stop landed while it was being adopted", editorNote)
+                        releaseOriginOfRefusedStart(gateway, listenersAtStart)
                         return false
                     }
                     adopted = true
@@ -619,12 +741,15 @@ class ProcessManager internal constructor(
             // Only confirmed process absence permits cleanup without sending a signal.
             StorageManager.deleteFile(recordedSocket, context.filesDir.parentFile)
         }
+        // Not adopted: the adoption branch returned above when it adopted.
+        if (followedSurvivor && !leaveUnadoptedSurvivorsPort(gateway, home)) return false
         // A failed pid-note write leaves this owner only in memory. Retire it
         // before the next spawn replaces the identity Stop would need.
         if (editorNote == null) {
             val previousRunId = synchronized(readinessLock) { serverRunId }
             reapOwnedEditor(previousRunId)
         }
+        sweepOldRunSockets(backendSocket)
         unboundRefusalLogged = false
         // Below the adoption branch, which returned above: an adopted server holds
         // the token it started with in memory and must keep the file that names it.
@@ -720,6 +845,7 @@ class ProcessManager internal constructor(
             if (!accepted) {
                 Logger.i(tag, "A stop landed while the server was spawning; ending it again")
                 stopOwnedProcess(spawned, runId, rejected = true)
+                releaseOriginOfRefusedStart(gateway, listenersAtStart)
                 return false
             }
             // The source is named, not only the number. A ceiling in a bug report
@@ -1377,11 +1503,45 @@ class ProcessManager internal constructor(
                             ?.let { File(it).canonicalPath } != entry
                     ) continue
                     killRecordedProcess(pid)
+                    editorBackendSocket(context, runId)?.let { socket ->
+                        StorageManager.deleteFile(socket, context.filesDir.parentFile)
+                    }
                     Logger.i(tag, "Ended the owned editor $pid whose bootstrap left no usable note")
                 }
             }
         } catch (e: Exception) {
             Logger.w(tag, "Could not complete the owned editor check: ${e.javaClass.simpleName}")
+        }
+    }
+
+    /**
+     * Sweeps stale `e-<hash>.sock` run sockets under [Context.filesDir] while keeping
+     * [currentBackendSocket] and any socket belonging to an `editor-server.pid` note whose
+     * recorded pid has not been confirmed absent (or whose note cannot be parsed).
+     */
+    internal fun sweepOldRunSockets(currentBackendSocket: File) {
+        val noteFile = File(Environment.getServerDir(context), EDITOR_PID_FILE)
+        val keptSocketName = if (noteFile.isFile) {
+            val recorded = runCatching { JSONObject(noteFile.readText()) }.getOrNull() ?: return
+            val pid = recorded.optInt("pid", 0)
+            val confirmedAbsent = pid > 0 &&
+                Files.notExists(File(procDir, pid.toString()).toPath(), LinkOption.NOFOLLOW_LINKS)
+            if (confirmedAbsent) {
+                null
+            } else {
+                (recordedBackendSocket(recorded)
+                    ?: editorBackendSocket(context, recorded.optString("runId", "")))?.name
+            }
+        } else {
+            null
+        }
+        val parentRoot = context.filesDir.parentFile
+        val entries = context.filesDir.listFiles() ?: return
+        for (entry in entries) {
+            val name = entry.name
+            if (!RUN_SOCKET_NAME_REGEX.matches(name)) continue
+            if (name == currentBackendSocket.name || name == keptSocketName) continue
+            StorageManager.deleteFile(entry, parentRoot)
         }
     }
 
@@ -2034,6 +2194,8 @@ internal fun editorBackendSocket(context: Context, runId: String): File? {
         null
     }
 }
+
+private val RUN_SOCKET_NAME_REGEX = Regex("^e-[0-9a-f]{32}\\.sock$")
 
 
 

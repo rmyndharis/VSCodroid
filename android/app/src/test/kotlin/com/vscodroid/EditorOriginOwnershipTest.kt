@@ -151,6 +151,55 @@ class EditorOriginOwnershipTest {
 
         client.shouldInterceptRequest(view, request)?.reasonPhrase
 
-        assertNull(returned, "an unverified listener document received the persistent key")
+        assertTrue(returned == null, "an unverified listener document received the persistent key")
     }
+    @Test
+    fun admittedKeyRequestCanFinishAfterTemporaryOriginRelease() {
+        val port = gateway.bind(0)
+        address = "http://127.0.0.1:$port/"
+        every { view.url } returns address
+        set("bridgeInitialized", false)
+        MainActivity::class.java.getDeclaredMethod("initBridge", Int::class.javaPrimitiveType)
+            .apply { isAccessible = true }.invoke(activity, port)
+        val entered = java.util.concurrent.CountDownLatch(1)
+        val proceed = java.util.concurrent.CountDownLatch(1)
+        val answered = java.util.concurrent.atomic.AtomicBoolean(false)
+        val storage = mockk<SecretStorageKey>()
+        every { storage.bytes() } answers {
+            entered.countDown()
+            check(proceed.await(10, java.util.concurrent.TimeUnit.SECONDS))
+            ByteArray(32).also { java.security.SecureRandom().nextBytes(it) }
+        }
+        mockkObject(SecretStorageKey.Companion)
+        every { SecretStorageKey.forApp(any()) } returns storage
+        mockkConstructor(WebResourceResponse::class)
+        every { anyConstructed<WebResourceResponse>().reasonPhrase } returns "RESPONSE"
+        every {
+            constructedWith<WebResourceResponse>(
+                EqMatcher("application/octet-stream"), ConstantMatcher<Any>(true), EqMatcher(200),
+                EqMatcher("OK"), ConstantMatcher<Any>(true),
+                FunctionMatcher<InputStream>({ answered.set(true); true }, InputStream::class),
+            ).reasonPhrase
+        } returns "KEY"
+        val uri = mockk<Uri>(relaxed = true)
+        every { uri.host } returns "127.0.0.1"
+        every { uri.port } returns port
+        every { uri.path } returns "/_vscodroid/secret-key"
+        val request = mockk<WebResourceRequest>(relaxed = true)
+        every { request.url } returns uri
+        every { request.method } returns "POST"
+        every { request.requestHeaders } returns mapOf("Origin" to address.removeSuffix("/"), "Sec-Fetch-Site" to "same-origin")
+        val requester = thread { client.shouldInterceptRequest(view, request)?.reasonPhrase }
+        try {
+            assertTrue(entered.await(10, java.util.concurrent.TimeUnit.SECONDS))
+            assertTrue(gateway.release(port))
+            assertFalse(gateway.isBound(port))
+        } finally {
+            proceed.countDown()
+            requester.join(10_000)
+        }
+        assertFalse(requester.isAlive)
+        assertTrue(answered.get(), "ownership is checked at admission; release does not revoke an in-flight key response")
+    }
+
 }

@@ -358,6 +358,7 @@ object AuthTabWindow {
         var registeredAt: Long? = null
         var at: Long? = null
         var expired = false
+        var delivering = false
         var outstanding = 0
         var succeeded = false
     }
@@ -367,6 +368,10 @@ object AuthTabWindow {
         internal var completed = false
         fun isEmpty(): Boolean = launches.isEmpty()
     }
+
+    class Delivery internal constructor(
+        internal val requestId: String, internal val generation: Long, internal val launch: Launch,
+    )
 
     private val launches = LinkedHashMap<String, Launch>()
     private var generation = 0L
@@ -413,7 +418,7 @@ object AuthTabWindow {
         val closed = launches.entries.firstOrNull { (_, launch) ->
             val openedAt = launch.at
             val registeredAt = launch.registeredAt
-            launch.expired || (openedAt != null && launch.outstanding == 0 &&
+            launch.expired || (!launch.delivering && openedAt != null && launch.outstanding == 0 &&
                 !authCallbackIsExpected(openedAt, nowMillis, AUTH_TAB_WINDOW_MILLIS)) ||
                 (openedAt == null && launch.outstanding == 0 && registeredAt != null &&
                     nowMillis - registeredAt > AUTH_UNLAUNCHED_GRACE_MILLIS)
@@ -450,6 +455,23 @@ object AuthTabWindow {
             it.succeeded = it.succeeded || succeeded
             if (it.outstanding == 0 && !it.succeeded) it.at = null
         }
+    }
+
+    @Synchronized
+    fun claimDelivery(requestId: String, pageGeneration: Long, documentId: String, nonce: String?): Delivery? {
+        val launch = launches[requestId] ?: return null
+        if (pageGeneration != generation || launch.documentId != documentId || launch.nonce != nonce ||
+            launch.expired || launch.delivering || launch.at == null) return null
+        launch.delivering = true
+        return Delivery(requestId, generation, launch)
+    }
+
+    @Synchronized
+    fun finishDelivery(delivery: Delivery, delivered: Boolean) {
+        val launch = launches[delivery.requestId]
+        if (delivery.generation != generation || launch !== delivery.launch || !launch.delivering) return
+        launch.delivering = false
+        if (delivered) launch.expired = true
     }
 
     @Synchronized

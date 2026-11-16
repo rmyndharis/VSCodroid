@@ -885,12 +885,15 @@ if (!fs.existsSync(rehEntryPoint)) {
         // in their manifests, so without it neither activates at all, for the
         // user's own projects directory just as much as for a device folder.
         '--disable-workspace-trust',
-        // Lets ms-python.python use the proposed APIs its manifest declares. The workbench
-        // strips them from every extension the server does not name, which Microsoft's builds
-        // avoid with a list in product.json, and the extension then fails to activate at its
-        // first read of one (testObserver). Always with an id: the bare flag turns the check
-        // off for every extension.
+        // Lets ms-python.python, ms-toolsai.jupyter, and ms-toolsai.jupyter-renderers use the
+        // proposed APIs their manifests declare. The workbench strips them from every extension the
+        // server does not name, which Microsoft's builds avoid with a list in product.json, failing
+        // activation (testObserver, notebookKernelSource) and dropping notebook static preloads
+        // (contribNotebookStaticPreloads). Always with an id: the bare flag turns the check off
+        // for every extension.
         '--enable-proposed-api', 'ms-python.python',
+        '--enable-proposed-api', 'ms-toolsai.jupyter',
+        '--enable-proposed-api', 'ms-toolsai.jupyter-renderers',
         '--log', LOG_LEVEL
     ];
 

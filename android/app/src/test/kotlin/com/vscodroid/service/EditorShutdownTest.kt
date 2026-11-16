@@ -407,6 +407,50 @@ class EditorShutdownTest {
         assertTrue(current === replacement, "the previous stop discarded the new process handle")
     }
 
+    @Test
+    fun `reaping an unrecorded editor and starting again sweeps old run sockets`() {
+        val firstRun = runId
+        val firstSocket = editorBackendSocket(context, firstRun)!!.apply { writeText("") }
+        val orphanSocket = editorBackendSocket(context, "older-unrecorded-run")!!.apply { writeText("") }
+        val unrelated = File(temp, "keep.txt").apply { writeText("keep") }
+        unrecordedChild(8123, firstRun)
+
+        startFixture()
+
+        assertEquals(listOf(8123), killed)
+        assertFalse(firstSocket.exists(), "the reaped unrecorded run socket should be removed")
+        assertFalse(orphanSocket.exists(), "an older orphaned run socket should be swept")
+        assertTrue(unrelated.exists(), "files outside the run-socket pattern must survive")
+    }
+
+    @Test
+    fun `run socket sweep keeps only the socket named by a live editor note`() {
+        val liveRun = "live-recorded-run"
+        val liveRecordedSocket = editorBackendSocket(context, liveRun)!!.apply { writeText("") }
+        val deadOrphanSocket = editorBackendSocket(context, "dead-orphan-run")!!.apply { writeText("") }
+        val unrelatedSocket = File(temp, "user.sock").apply { writeText("") }
+        record(8123, port = manager.port + 1, owner = liveRun)
+        val withSocketPath = JSONObject(note.readText()).put("socketPath", liveRecordedSocket.path)
+        note.writeText(withSocketPath.toString())
+
+        startFixture()
+
+        assertTrue(liveRecordedSocket.exists(), "a live recorded pid in editor-server.pid keeps its socket")
+        assertFalse(deadOrphanSocket.exists(), "an orphaned run socket without a live note is swept")
+        assertTrue(unrelatedSocket.exists(), "non-run socket filenames must not be touched")
+
+        assertTrue(File(temp, "proc/8123").deleteRecursively())
+        startFixture()
+
+        assertFalse(liveRecordedSocket.exists(), "once the recorded pid is gone from proc, its socket is swept")
+
+        val unparseableNoteSocket = editorBackendSocket(context, "unparseable-note-run")!!.apply { writeText("") }
+        note.writeText("{not-json")
+        startFixture()
+
+        assertTrue(unparseableNoteSocket.exists(), "an unreadable editor-server.pid prevents sweeping")
+    }
+
     private fun startFixture() {
         val exited = CountDownLatch(1)
         manager.onServerCrashed = { exited.countDown() }

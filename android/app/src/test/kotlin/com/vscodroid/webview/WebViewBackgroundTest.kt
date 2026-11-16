@@ -6,6 +6,8 @@ import android.webkit.WebView
 import androidx.webkit.WebMessageCompat
 import com.vscodroid.R
 import com.vscodroid.SourceScan
+import com.vscodroid.service.EditorGateway
+import com.vscodroid.service.mockEditorGateway
 import com.vscodroid.util.Logger
 import io.mockk.every
 import io.mockk.mockk
@@ -70,9 +72,11 @@ class WebViewBackgroundTest {
     private val webView = mockk<WebView>(relaxed = true)
     private val context = mockk<Context>()
     private val prefs = mockk<SharedPreferences>()
+    private lateinit var gateway: EditorGateway
 
     @BeforeEach
     fun setUp() {
+        gateway = mockEditorGateway()
         // configure() logs through android.util.Log and, behind Logger.debugEnabled,
         // calls a static WebView method; both are android.jar stubs that throw on
         // the JVM. See WebViewSettingsTest, which needs the same.
@@ -138,22 +142,36 @@ class WebViewBackgroundTest {
 
     @Test
     fun `only the workbench page's opaque colour becomes the view's background`() {
-        fun color(data: String?, host: String? = "127.0.0.1", isMainFrame: Boolean = true) =
-            pageColorFromMessage(WebMessageCompat(data), host, isMainFrame)
+        fun color(
+            data: String?,
+            origin: String? = "http://127.0.0.1:13337",
+            port: Int = 13337,
+            isMainFrame: Boolean = true,
+        ) = pageColorFromMessage(WebMessageCompat(data), origin, port, isMainFrame)
 
         assertEquals(0xFFFFFFFF.toInt(), color("#ffffff"))
-        assertEquals(0xFF1F1F1F.toInt(), color("#1F1F1F", "localhost"))
+        assertEquals(0xFF1F1F1F.toInt(), color("#1F1F1F"))
         // Any frame can post, webviews of extensions included, and only the
-        // workbench page, the top frame on the loopback address, says what it paints.
+        // workbench page, the top frame at http://127.0.0.1:<port> while the
+        // gateway is bound, says what it paints.
         assertNull(color("#ffffff", isMainFrame = false)) { "a frame's colour was taken" }
-        assertNull(color("#ffffff", "abc.vscode-cdn.net")) { "another host's colour was taken" }
-        assertNull(color("#ffffff", null)) { "a page with no host had its colour taken" }
+        assertNull(color("#1F1F1F", "http://localhost:13337")) { "localhost colour was taken" }
+        assertNull(color("#1F1F1F", "http://[::1]:13337")) { "an IPv6 loopback colour was taken" }
+        assertNull(color("#1F1F1F", "http://127.0.0.1:5173")) { "another loopback port's colour was taken" }
+        assertNull(color("#1F1F1F", "http://127.0.0.1")) { "port 80's colour was taken" }
+        assertNull(color("#1F1F1F", "https://127.0.0.1:13337")) { "an https origin's colour was taken" }
+        assertNull(color("#ffffff", "https://abc.vscode-cdn.net")) { "another host's colour was taken" }
+        assertNull(color("#ffffff", null)) { "a page with no origin had its colour taken" }
+        assertNull(color("#ffffff", port = 0)) { "a colour was taken before a port was bound" }
+        every { gateway.isBound(13337) } returns false
+        assertNull(color("#ffffff")) { "a colour was taken while the gateway was not bound" }
+        every { gateway.isBound(13337) } returns true
         // Only what the workbench writes for an opaque colour.
         for (data in listOf("#fff", "#ffffff80", "rgb(255, 255, 255)", " #ffffff", "#ffffff ", "#gggggg", "", null)) {
             assertNull(color(data)) { "'$data' was taken as a background colour" }
         }
         // An ArrayBuffer, which any page can post too and whose data throws when read.
-        assertNull(pageColorFromMessage(WebMessageCompat(byteArrayOf(0)), "127.0.0.1", true)) {
+        assertNull(pageColorFromMessage(WebMessageCompat(byteArrayOf(0)), "http://127.0.0.1:13337", 13337, true)) {
             "an ArrayBuffer was taken as a background colour"
         }
     }
@@ -166,7 +184,7 @@ class WebViewBackgroundTest {
                 "private fun setupWebView()",
             )
         )
-        val added = setup.indexOf("addPageColorListener(wv, ::showPageColor)")
+        val added = setup.indexOf("addPageColorListener(wv, { serverPort }, ::showPageColor)")
         val loaded = setup.indexOf("wv.loadData(")
         assertTrue(loaded >= 0) { "setupWebView no longer loads its placeholder, so this case measures nothing" }
         assertTrue(added in 0 until loaded) {
@@ -182,6 +200,9 @@ class WebViewBackgroundTest {
         )
         assertTrue("WebViewCompat.addWebMessageListener(webView, PAGE_COLOR_OBJECT, setOf(\"*\"))" in add) {
             "addPageColorListener no longer listens under PAGE_COLOR_OBJECT for every origin"
+        }
+        assertTrue("pageColorFromMessage(message, origin.toString(), port(), isMainFrame)" in add) {
+            "addPageColorListener no longer passes the full serialized origin and bound port to pageColorFromMessage"
         }
     }
 

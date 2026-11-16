@@ -15,6 +15,7 @@ import androidx.webkit.WebMessageCompat
 import androidx.webkit.WebViewCompat
 import androidx.webkit.WebViewFeature
 import com.vscodroid.R
+import com.vscodroid.service.EditorGateway
 import com.vscodroid.util.Logger
 import com.vscodroid.util.isLightColor
 
@@ -203,11 +204,11 @@ internal const val PAGE_COLOR_OBJECT = "vscodroidPageColor"
  * [com.vscodroid.addUiScaleScript] gives; [pageColorFromMessage] says which
  * messages are taken.
  */
-internal fun addPageColorListener(webView: WebView, onColor: (Int) -> Unit) {
+internal fun addPageColorListener(webView: WebView, port: () -> Int, onColor: (Int) -> Unit) {
     if (WebViewFeature.isFeatureSupported(WebViewFeature.WEB_MESSAGE_LISTENER)) {
         try {
             WebViewCompat.addWebMessageListener(webView, PAGE_COLOR_OBJECT, setOf("*")) { view, message, origin, isMainFrame, _ ->
-                pageColorFromMessage(message, origin.host, isMainFrame)?.let { color ->
+                pageColorFromMessage(message, origin.toString(), port(), isMainFrame)?.let { color ->
                     view.setBackgroundColor(color)
                     onColor(color)
                 }
@@ -221,18 +222,24 @@ internal fun addPageColorListener(webView: WebView, onColor: (Int) -> Unit) {
 
 /**
  * The colour a message to [PAGE_COLOR_OBJECT] asks for, or null to leave the view
- * as it is. Only the workbench page sets it: the top frame on the loopback address,
- * which is where the page script runs, since any frame can post. Only an opaque
- * `#rrggbb`, which is how the workbench writes an opaque theme colour; a
- * translucent one would let the window behind show through.
+ * as it is. Only the workbench page sets it: the top frame at the bound gateway's
+ * `http://127.0.0.1:<port>` origin, which is where the page script runs, since any
+ * frame can post. Only an opaque `#rrggbb`, which is how the workbench writes an
+ * opaque theme colour; a translucent one would let the window behind show through.
  *
  * Only a string, tested before `data` is read. A page can post an ArrayBuffer as
  * well, which androidx.webkit hands over as one wherever the WebView supports
  * WEB_MESSAGE_ARRAY_BUFFER, and `data` throws IllegalStateException for that, in
  * the callback the WebView runs on the UI thread.
  */
-internal fun pageColorFromMessage(message: WebMessageCompat, host: String?, isMainFrame: Boolean): Int? {
-    if (!isMainFrame || (host != "127.0.0.1" && host != "localhost")) return null
+internal fun pageColorFromMessage(
+    message: WebMessageCompat,
+    origin: String?,
+    port: Int,
+    isMainFrame: Boolean,
+): Int? {
+    if (!isMainFrame || origin == null || port <= 0) return null
+    if (!EditorGateway.instance.isBound(port) || !VSCodroidWebViewClient.isWorkbenchOrigin(origin, port)) return null
     if (message.type != WebMessageCompat.TYPE_STRING) return null
     val data = message.data
     if (data == null || !Regex("#[0-9a-fA-F]{6}").matches(data)) return null

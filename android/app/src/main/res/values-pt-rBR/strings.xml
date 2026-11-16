@@ -70,6 +70,7 @@
          about to become reachable again, and a user who is not told which
          setting to look for has nothing to search on. -->
     <string name="heap_override_suspended">O limite de memória personalizado no settings.json foi desativado após falhas repetidas. Altere vscodroid.server.heapCeilingMb e reinicie o app para tentar outro valor.</string>
+    <string name="notice_editor_away_from_home">Suas configurações e logins não foram carregados porque outro app está usando a porta %1$d. Eles estão seguros: feche esse app, pare o VSCodroid pela notificação e abra-o de novo.</string>
     <!-- The figure is passed in rather than written here, and it is the
          SHORTFALL the refusal measured, not the size of the unpack: this asks
          the user to free it, and what they have to free is what the device is

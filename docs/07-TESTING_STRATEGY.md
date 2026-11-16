@@ -38,7 +38,7 @@ flowchart TD
 |-----------|-------------|---------|
 | ProcessManager / NodeService | Server lifecycle, readiness, restart budget, port adoption | `ProcessManagerTest`, `NodeServiceTest`, `ServerReadinessDecisionTest`, `ServerReadinessCallSiteTest`, `AdoptionNoteWireTest` |
 | Environment | Env variable construction, PATH and shell paths, SAF mirror paths | `EnvironmentTest`, `TerminalShellPathTest`, `EnvironmentSafTest` |
-| PortFinder | Port allocation and reuse across restarts | `PortFinderTest` |
+| PortFinder | The home port reused across restarts; a port taken while home is busy serves one process and never replaces home; the first port bound becomes home | `PortFinderTest`, `HomePortTest` |
 | ExtraKeyRow / KeyInjector | Key mapping, modifier state, trackpad gestures | `KeyMappingTest`, `ExtraKeyToggleStateTest`, `TrackpadGestureTest` |
 | AndroidBridge | Registered method surface, session tokens, log redaction | `BridgeApiSpecParityTest`, `SecurityManagerTest`, `LogRelayRedactionTest` |
 | ToolchainManager / ToolchainRegistry | Catalog, download and install state, digests, retirement sweep | `ToolchainRegistryTest`, `ToolchainInstallTest`, `ToolchainDigestTest`, `RetiredToolchainTest` |

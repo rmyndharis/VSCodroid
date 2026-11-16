@@ -70,6 +70,7 @@
          about to become reachable again, and a user who is not told which
          setting to look for has nothing to search on. -->
     <string name="heap_override_suspended">Пользовательский предел памяти в settings.json отключён после повторяющихся сбоев. Измените vscodroid.server.heapCeilingMb и перезапустите приложение, чтобы попробовать другое значение.</string>
+    <string name="notice_editor_away_from_home">Ваши настройки и входы в аккаунты не загрузились, потому что порт %1$d занят другим приложением. Они в сохранности: закройте это приложение, остановите VSCodroid через его уведомление и откройте снова.</string>
     <!-- The figure is passed in rather than written here, and it is the
          SHORTFALL the refusal measured, not the size of the unpack: this asks
          the user to free it, and what they have to free is what the device is

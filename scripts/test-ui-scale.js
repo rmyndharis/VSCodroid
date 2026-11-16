@@ -111,7 +111,8 @@ const plain = (value) => JSON.parse(JSON.stringify(value));
 function newPage(options) {
     const opts = {
         screen: [411, 891], view: 411, engine: 'webview', top: true,
-        host: '127.0.0.1', pathname: '/', meta: WORKBENCH_VIEWPORT, storage: new Map(),
+        protocol: 'http:', host: '127.0.0.1', port: '13337', pathname: '/',
+        meta: WORKBENCH_VIEWPORT, storage: new Map(),
         ...options,
     };
     const frames = [];
@@ -174,7 +175,7 @@ function newPage(options) {
     }
 
     const win = {
-        location: { hostname: opts.host, pathname: opts.pathname },
+        location: { protocol: opts.protocol, hostname: opts.host, port: opts.port, pathname: opts.pathname },
         screen: { width: opts.screen[0], height: opts.screen[1] },
         localStorage: {
             getItem: (k) => (opts.storage.has(k) ? opts.storage.get(k) : null),
@@ -224,6 +225,9 @@ const scaled = (s) => ({
 for (const [label, where] of [
     ['an iframe', { top: false }],
     ['another host', { host: 'example.com' }],
+    ['localhost rather than 127.0.0.1', { host: 'localhost' }],
+    ['https on the loopback address', { protocol: 'https:' }],
+    ['the loopback address without an explicit port', { port: '' }],
     ['a dev server preview opened at its own root', { host: '10.0.2.2' }],
     ['the web worker extension host frame', { pathname: '/stable-abc/static/out/vs/workbench/services/extensions/worker/webWorkerExtensionHostIframe.html' }],
     ['a workspace file loaded as a page', { pathname: '/vscode-remote-resource' }],

@@ -266,6 +266,14 @@ class MainActivity : AppCompatActivity() {
     private var rendererCrashLoopShown = false
 
     /**
+     * The previous-crash dialog and the away-from-home notice, held so the notice
+     * never covers a crash screen: it waits for the first, and [showErrorPage]
+     * takes it down. Main thread only.
+     */
+    private var crashDialog: AlertDialog? = null
+    private var awayFromHomeNotice: AlertDialog? = null
+
+    /**
      * Whether the "the editor restarted" explanation has already been shown.
      *
      * One per Activity, which is what the case it exists for needs and what an
@@ -2256,7 +2264,7 @@ class MainActivity : AppCompatActivity() {
             // builds comes through here as well.
             addUiScaleScript(wv)
             addPlainTextPageScript(wv)
-            addPageColorListener(wv, ::showPageColor)
+            addPageColorListener(wv, { serverPort }, ::showPageColor)
             dropCacheLeftByEarlierBuild(wv)
             applyWindowInsetsPadding(wv)
             // Here and not in initBridge, which does its work once per WebView
@@ -2995,6 +3003,11 @@ class MainActivity : AppCompatActivity() {
         // one that refuses an unasked reload, and the gave-up page, whose control
         // restarts the server, needs the readiness that follows to load.
         rendererCrashLoopShown = control == RELOAD_URL
+        // Not under the away-from-home notice: one still waiting for the
+        // previous-crash dialog is dropped, and one on screen is taken down,
+        // guarded because dismissing a dialog whose window has gone throws.
+        crashDialog?.setOnDismissListener(null)
+        if (!isFinishing && !isDestroyed) awayFromHomeNotice?.dismiss()
         val retry = getString(R.string.error_server_retry)
         // The diagnostics half of the page, and the two parts of it travel
         // together on purpose: the log tail says what happened and the button
@@ -3125,6 +3138,16 @@ class MainActivity : AppCompatActivity() {
         // up over a page that never refused it, so the refusal is over. The one
         // caller that is neither checks the flag before calling; see onServerReady.
         rendererCrashLoopShown = false
+        // A start that found the home port busy runs this process on another
+        // origin, where the workbench's stored settings, sign-ins and open editors
+        // are not. Said once per such start; the service hands the port out once,
+        // so an activity that is going away and cannot show it does not take it.
+        if (!isFinishing && !isDestroyed) {
+            nodeService?.takeAwayFromHome()?.takeIf { it > 0 }?.let { home ->
+                Logger.w(tag, "The editor opens on port $port because its home port $home is busy")
+                showAwayFromHomeNotice(home)
+            }
+        }
         initBridge(port)
         applyEditorLanguage()
         applySecretStorage()
@@ -3215,6 +3238,28 @@ class MainActivity : AppCompatActivity() {
             val target = workspaceTargetAfterLookup(currentUrl, port, folderFromUrl(currentUrl), resolved)
             navigateToFolder(port, target)
         }
+    }
+
+    /**
+     * Says that this start could not use the home port, in a dialog: Android 12
+     * and later cut a text toast to two lines, which kept both the port and the
+     * way back off the screen (measured on an API 37 image).
+     *
+     * It never covers a crash screen. A previous-crash dialog still open is
+     * answered first, and [showErrorPage] takes the notice down or drops it.
+     * Nothing here records that it was shown: the service hands the port out
+     * once per process, so an activity recreated in it has nothing to show.
+     */
+    private fun showAwayFromHomeNotice(home: Int) {
+        fun show() {
+            if (isFinishing || isDestroyed) return
+            awayFromHomeNotice = AlertDialog.Builder(this)
+                .setMessage(getString(R.string.notice_editor_away_from_home, home))
+                .setPositiveButton(android.R.string.ok, null)
+                .show()
+        }
+        val crash = crashDialog
+        if (crash != null && crash.isShowing) crash.setOnDismissListener { show() } else show()
     }
 
     /** The encoded query, excluding opaque placeholders and URL fragments. */
@@ -3404,7 +3449,17 @@ class MainActivity : AppCompatActivity() {
             workspaceMembers = { workspaceResources.roots() },
             connectionToken = { nodeService?.getConnectionToken() },
             onCrash = { recreateWebView() },
-            onNavigationStarted = appNavigation::clear,
+            onNavigationStarted = { url ->
+                appNavigation.clear()
+                // A workbench navigation that runs while the activity is stopped
+                // replaces the page whose idle time `onStop` was counting. Move the
+                // timestamp forward rather than clearing it so the new page is not
+                // reloaded on return yet still ages from its own load if the app
+                // stays stopped for another five minutes.
+                if (isWorkbenchUrl(url, port) && backgroundedAt != 0L) {
+                    backgroundedAt = SystemClock.elapsedRealtime()
+                }
+            },
             // The page covers itself the moment it is told to leave, and a
             // navigation this client hands to another app or refuses never comes
             // to replace it: the cover has to be taken down from here.
@@ -3510,6 +3565,9 @@ class MainActivity : AppCompatActivity() {
                 // flag that tells an arriving OAuth callback it has a workbench
                 // to land in. It then lands in a page that cannot consume it.
                 if (isWorkbenchUrl(url, port)) {
+                    if (backgroundedAt != 0L) {
+                        backgroundedAt = SystemClock.elapsedRealtime()
+                    }
                     injectBridgeToken()
                 }
             },
@@ -3772,6 +3830,9 @@ class MainActivity : AppCompatActivity() {
         Logger.i(tag, "Loading VS Code at ${urlLogLabel(url)}")
         markAppNavigation()
         recoveryPageEpoch++
+        if (backgroundedAt != 0L) {
+            backgroundedAt = SystemClock.elapsedRealtime()
+        }
         wv.loadUrl(url)
     }
 
@@ -7049,9 +7110,9 @@ class MainActivity : AppCompatActivity() {
      * Giving the body panel weight 1 and letting `LinearLayoutCompat` measure the
      * vertical stack reserves the full stacked `buttonPanel` height and shrinks
      * only the scrolling body panel when the dialog reaches the window's height
-     * limit.
+     * limit. Answers the dialog it showed.
      */
-    private fun showWithReachableButtons(builder: AlertDialog.Builder) {
+    private fun showWithReachableButtons(builder: AlertDialog.Builder): AlertDialog {
         val dialog = builder.show()
         val contentPanel = dialog.findViewById<View>(androidx.appcompat.R.id.contentPanel)
         val customPanel = dialog.findViewById<View>(androidx.appcompat.R.id.customPanel)
@@ -7060,6 +7121,7 @@ class MainActivity : AppCompatActivity() {
         (customPanel?.layoutParams as? LinearLayoutCompat.LayoutParams)?.weight = 1f
         buttonPanel?.id = View.NO_ID
         buttonPanel?.requestLayout()
+        return dialog
     }
 
     /**
@@ -7256,20 +7318,23 @@ class MainActivity : AppCompatActivity() {
             Logger.w(tag, "A sign-in callback carried no address this relay could read")
             return
         }
-        Logger.i(tag, "Extension callback relay received")
         val key = JSONObject.quote("vscode-web.url-callbacks[$requestId]")
         val value = JSONObject.quote(callbackUri)
         val targetView = webView ?: return
         val page = (targetView.webViewClient as? VSCodroidWebViewClient)?.authPage(targetView) ?: return
         val generation = page.generation
-        val documentId = JSONObject.quote(AuthTabWindow.documentIdFor(requestId) ?: return)
+        val documentId = AuthTabWindow.documentIdFor(requestId) ?: return
+        val quotedDocumentId = JSONObject.quote(documentId)
         val origin = JSONObject.quote(page.origin)
-        targetView.evaluateJavascript("""
+        val delivery = AuthTabWindow.claimDelivery(requestId, generation, documentId, callbackNonce(dataParam)) ?: return
+        Logger.i(tag, "Extension callback relay received")
+        try {
+            targetView.evaluateJavascript("""
             (function() {
                 try {
-                    if (window.__vscodroidCallbackDocumentId !== $documentId) return;
+                    if (window.__vscodroidCallbackDocumentId !== $quotedDocumentId) return false;
                     if (window !== window.top || location.origin !== $origin || location.pathname !== '/' ||
-                        (window.__vscodroid || {}).pageGeneration !== $generation) return;
+                        (window.__vscodroid || {}).pageGeneration !== $generation) return false;
                     var key = $key;
                     var value = $value;
                     localStorage.setItem(key, value);
@@ -7281,11 +7346,19 @@ class MainActivity : AppCompatActivity() {
                         key: key, newValue: value, oldValue: null,
                         storageArea: localStorage, url: window.location.href
                     }));
+                    return true;
                 } catch(e) {
                     console.error('[VSCodroid] Callback relay error:', e);
+                    return false;
                 }
             })();
-        """.trimIndent(), null)
+            """.trimIndent()) { result ->
+                AuthTabWindow.finishDelivery(delivery, result == "true")
+            }
+        } catch (error: RuntimeException) {
+            AuthTabWindow.finishDelivery(delivery, false)
+            throw error
+        }
     }
 
     /**
@@ -7356,7 +7429,7 @@ class MainActivity : AppCompatActivity() {
         val lastCrash = CrashReporter.getLastCrash() ?: return
         // Truncate for display
         val preview = if (lastCrash.length > 500) lastCrash.take(500) + "\n..." else lastCrash
-        showWithReachableButtons(
+        crashDialog = showWithReachableButtons(
             AlertDialog.Builder(this)
                 .setTitle(getString(R.string.crash_title))
                 .setMessage(getString(R.string.crash_message, preview))
@@ -8516,9 +8589,9 @@ internal fun uiScaleScript(): String =
     (function() {
         // Every frame of every origin starts with this, since the rule it is
         // registered under cannot name the server's port. Only the workbench
-        // page is scaled: the top frame at / on the loopback address.
+        // page is scaled: the top frame at / on http://127.0.0.1:<port>.
         if (window.top !== window || location.pathname !== '/' ||
-            (location.hostname !== '127.0.0.1' && location.hostname !== 'localhost')) return;
+            location.protocol !== 'http:' || location.hostname !== '127.0.0.1' || !location.port) return;
         var KEY = 'vscodroid.uiScale';
         var SCALES = [1, 1.1, 1.25, 1.5];
         // The narrowest the page may get at a size offered, in CSS px. At 329, a

@@ -70,6 +70,7 @@
          about to become reachable again, and a user who is not told which
          setting to look for has nothing to search on. -->
     <string name="heap_override_suspended">Vlastní limit paměti v souboru settings.json byl po opakovaných pádech vypnut. Chcete-li vyzkoušet jinou hodnotu, změňte vscodroid.server.heapCeilingMb a restartujte aplikaci.</string>
+    <string name="notice_editor_away_from_home">Vaše nastavení a přihlášení se nenačetla, protože port %1$d používá jiná aplikace. Jsou v bezpečí: zavřete tuto aplikaci, zastavte VSCodroid z jeho oznámení a znovu ho otevřete.</string>
     <!-- The figure is passed in rather than written here, and it is the
          SHORTFALL the refusal measured, not the size of the unpack: this asks
          the user to free it, and what they have to free is what the device is

@@ -1759,6 +1759,21 @@ This is usually caused by Android's memory management killing background process
 4. On devices with 4 GB RAM or less, consider keeping only one project open at a time.
 5. If it keeps happening, send a report; see [Sending a Bug Report](#sending-a-bug-report).
 
+### Settings or Sign-ins Missing After a Start
+
+The editor's page lives at a local address, `127.0.0.1` and a port, and the
+editor keeps your settings, sign-ins and open files under that address. If
+another app is using the port when VSCodroid starts, the editor opens on another
+port for that session and says so. Your settings, sign-ins and open files are
+then not shown, but they are not lost:
+
+1. Close the app that uses the port, if you know which one it is.
+2. Tap **Stop Server** in VSCodroid's notification, then open VSCodroid again.
+   Every start tries the usual port first.
+3. What you change in such a session stays with the other port, and comes back
+   only if a later start has to use that port again. Save your files before you
+   stop.
+
 ### Dev Server Not Accessible in Browser
 
 If the preview tab or the device browser opens but the page does not load:

@@ -212,7 +212,7 @@ const callbackMatch = activity.slice(activity.indexOf('private fun handleExtensi
 assert.ok(callbackMatch, 'the real native callback delivery script was not found');
 function delivery(documentId, generation, code) {
     return callbackMatch[1]
-        .replaceAll('$documentId', JSON.stringify(documentId))
+        .replaceAll('$quotedDocumentId', JSON.stringify(documentId))
         .replaceAll('$generation', String(generation))
         .replaceAll('$origin', JSON.stringify('http://127.0.0.1:13337'))
         .replaceAll('$key', JSON.stringify('vscode-web.url-callbacks[1]'))
@@ -222,6 +222,16 @@ const pageA = fixture({ ready: true });
 pageA.provider.create({ authority: 'example.test' });
 const documentA = pageA.window.__vscodroidCallbackDocumentId;
 const callbackA = delivery(documentA, 7, 'A');
+{
+    const page = fixture({ ready: true });
+    page.provider.create({ authority: 'example.test' });
+    page.context.localStorage.setItem = () => { throw new Error('storage unavailable'); };
+    const script = delivery(page.window.__vscodroidCallbackDocumentId, 7, 'retry');
+    assert.equal(vm.runInNewContext(script, page.context), false, 'a failed write must report no delivery');
+    assert.equal(page.writes.length, 0);
+    assert.equal(page.delivered.length, 0);
+    page.provider.dispose();
+}
 function replacementPage() {
     const page = fixture({ nativeGeneration: 8, accept: (_id, _nonce, _documentId, generation) => generation === 8 });
     const created = page.provider.create({ authority: 'example.test' });
@@ -232,13 +242,13 @@ function replacementPage() {
 }
 {
     const pageB = replacementPage();
-    vm.runInNewContext(callbackA, pageB.context);
+    assert.equal(vm.runInNewContext(callbackA, pageB.context), false, 'a replaced page must report no delivery');
     pageB.provider.checkCallbacks();
     assert.equal(pageB.writes.length, 0, 'an old callback must not write into the replacement document');
     assert.equal(pageB.delivered.length, 0, 'an old callback must not consume the replacement pending id');
     assert.equal(JSON.stringify(vm.runInNewContext(bootstrap.replaceAll('pageGeneration = 7', 'pageGeneration = 8').replaceAll('return [7,', 'return [8,').replaceAll('isAuthPageCurrent("session", 7)', 'isAuthPageCurrent("session", 8)'), pageB.context)), '[8,true]');
     const callbackB = delivery(pageB.window.__vscodroidCallbackDocumentId, 8, 'B');
-    vm.runInNewContext(callbackB, pageB.context);
+    assert.equal(vm.runInNewContext(callbackB, pageB.context), true, 'a written callback must report delivery');
     pageB.provider.checkCallbacks();
     assert.equal(pageB.delivered.length, 1, 'the replacement document must retain its genuine pending request');
     assert.equal(pageB.delivered[0].query, 'code=B');
@@ -347,7 +357,7 @@ for (const options of [
     const page = fixture({ ready: true });
     page.provider.create({ scheme: 'vscodroid', authority: 'example.test', path: '/auth', query: 'state=xyz', fragment: 'done' });
     const goldenDelivery = callbackMatch[1]
-        .replaceAll('$documentId', JSON.stringify(page.window.__vscodroidCallbackDocumentId))
+        .replaceAll('$quotedDocumentId', JSON.stringify(page.window.__vscodroidCallbackDocumentId))
         .replaceAll('$generation', '7')
         .replaceAll('$origin', JSON.stringify('http://127.0.0.1:13337'))
         .replaceAll('$key', JSON.stringify('vscode-web.url-callbacks[1]'))

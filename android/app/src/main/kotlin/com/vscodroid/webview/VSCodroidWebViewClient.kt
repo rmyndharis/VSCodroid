@@ -939,7 +939,7 @@ class VSCodroidWebViewClient(
      */
     private val onNavigationDeclined: () -> Unit = { },
     private val workspaceMembers: () -> List<String>? = { null },
-    private val onNavigationStarted: () -> Unit = { },
+    private val onNavigationStarted: (String?) -> Unit = { },
 ) : WebViewClient() {
     // MissingOnRenderProcessGone: overridden below, and what it does there is the
     // reason the class exists in one piece. The check misses the override on a
@@ -1325,7 +1325,7 @@ class VSCodroidWebViewClient(
     }
 
     override fun onPageStarted(view: WebView, url: String?, favicon: Bitmap?) {
-        onNavigationStarted()
+        onNavigationStarted(url)
         disposeAuthPage()
         AuthTabWindow.beginPage()
         trustedAuthOrigin(url)?.let { authPage = AuthPage(view, AuthTabWindow.pageGeneration(), it) }
