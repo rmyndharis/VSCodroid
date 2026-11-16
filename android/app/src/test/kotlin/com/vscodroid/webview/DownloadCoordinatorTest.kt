@@ -80,6 +80,12 @@ class DownloadCoordinatorTest {
     /** Set to make closing the next opened document throw. */
     private var closeFails = false
 
+    /** Display names returned by [DownloadHost.destinationName] for chosen documents. */
+    private val destinationNames = mutableMapOf<Uri, String?>()
+
+    /** Set to make [DownloadHost.destinationName] throw as a vanished provider would. */
+    private var destinationNameThrows = false
+
     private lateinit var coordinator: DownloadCoordinator
 
     /**
@@ -118,11 +124,19 @@ class DownloadCoordinatorTest {
             if (!pickerOpens) coordinator.onDestinationUnavailable(requestId)
         }
 
-        override fun openDestination(destination: Uri): OutputStream? {
+        /** Every document here is one the picker has just created for a new name: empty. */
+        override fun measureDestination(destination: Uri) = DocumentMeasure(length = 0L)
+
+        override fun destinationName(destination: Uri): String? {
+            if (destinationNameThrows) throw SecurityException("provider grant gone")
+            return destinationNames[destination]
+        }
+
+        override fun openDestination(destination: Uri, mode: String): OpenDocument? {
             if (!destinationOpens) return null
             val stream = RecordingStream()
             documents[destination] = stream
-            return stream
+            return OpenDocument(stream)
         }
 
         override fun discardDestination(destination: Uri) {
@@ -169,6 +183,8 @@ class DownloadCoordinatorTest {
         destinationOpens = true
         writesFail = false
         closeFails = false
+        destinationNames.clear()
+        destinationNameThrows = false
         // Both executors run where they are handed over, so the whole of a
         // download settles inside the call that started it and every case below
         // reads state that has stopped moving. Which thread each one really is
@@ -936,6 +952,57 @@ class DownloadCoordinatorTest {
         assertEquals(listOf(orphan), discarded)
         assertEquals("current page bytes", documents[target]!!.written.toString())
         assertEquals(listOf(DownloadOutcome.SAVED to "new.txt"), reported)
+    }
+
+    @Test
+    fun `saving under another name in the picker reports the chosen document's name`() {
+        val savedTarget = destination("renamed-save")
+        destinationNames[savedTarget] = "my-copy.bin"
+        coordinator.onDownloadNamed("blob:one", "over34.bin")
+        val firstId = startAndChoose("blob:one", savedTarget)
+        coordinator.onBytes(firstId, encode("payload"))
+        coordinator.onComplete(firstId, null)
+
+        val failedTarget = destination("renamed-fail")
+        destinationNames[failedTarget] = "second-copy.bin"
+        writesFail = true
+        coordinator.onDownloadNamed("blob:two", "over34.bin")
+        val secondId = startAndChoose("blob:two", failedTarget)
+        coordinator.onBytes(secondId, encode("payload"))
+
+        assertEquals(listOf("over34.bin", "over34.bin"), asked)
+        assertEquals(
+            listOf(
+                DownloadOutcome.SAVED to "my-copy.bin",
+                DownloadOutcome.FAILED to "second-copy.bin",
+            ),
+            reported,
+        )
+    }
+
+    @Test
+    fun `a missing, blank or throwing document name falls back to the page's name`() {
+        val blankTarget = destination("blank")
+        destinationNames[blankTarget] = "   "
+        coordinator.onDownloadNamed("blob:blank", "page-blank.txt")
+        val blankId = startAndChoose("blob:blank", blankTarget)
+        coordinator.onBytes(blankId, encode("a"))
+        coordinator.onComplete(blankId, null)
+
+        destinationNameThrows = true
+        val throwingTarget = destination("throws")
+        coordinator.onDownloadNamed("blob:throws", "page-throws.txt")
+        val throwingId = startAndChoose("blob:throws", throwingTarget)
+        coordinator.onBytes(throwingId, encode("b"))
+        coordinator.onComplete(throwingId, null)
+
+        assertEquals(
+            listOf(
+                DownloadOutcome.SAVED to "page-blank.txt",
+                DownloadOutcome.SAVED to "page-throws.txt",
+            ),
+            reported,
+        )
     }
 
 }

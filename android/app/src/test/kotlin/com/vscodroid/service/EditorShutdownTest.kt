@@ -196,6 +196,30 @@ class EditorShutdownTest {
     }
 
     @Test
+    fun `a retry ends its unrecorded editor before publishing the replacement owner`() {
+        val previous = runId
+        unrecordedChild(8123, previous)
+        unrecordedChild(8124, "another-run")
+        unrecordedChild(8125, previous, entry = "user-script.js")
+        unrecordedChild(8126, previous, uid = 12346)
+        unrecordedChild(8127, previous)
+        assertTrue(File(temp, "proc/8127/environ").delete())
+        manager.killRecordedProcess = { pid ->
+            val owner = ProcessManager::class.java.getDeclaredField("serverRunId")
+                .apply { isAccessible = true }.get(manager)
+            assertEquals(previous, owner, "the replacement was published before the old editor ended")
+            killed += pid
+        }
+
+        startFixture()
+
+        assertEquals(listOf(8123), killed)
+        assertNotEquals(previous, runId)
+        manager.stopServer()
+        assertEquals(listOf(8123), killed, "Stop must not signal an editor from another run")
+    }
+
+    @Test
     fun `a rejected spawn ends only its owned editor when no note was written`() {
         set("serverProcess", null)
         var rejectedRun = ""

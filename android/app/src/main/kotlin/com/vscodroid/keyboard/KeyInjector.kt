@@ -438,6 +438,47 @@ class KeyInjector(
      * cannot identify visual edges there; left-to-right text skips the probe and
      * is cancelled only at its logical ends.
      *
+     * The same script keeps the soft keyboard, and with it this row, up while a
+     * chord that the row started is pending. The workbench answers a chord's first
+     * key by moving focus from the editor to a read-only textarea, which takes the
+     * keyboard down for the five seconds the chord waits, so two ordinary taps on
+     * Esc, or on Ctrl and a letter, could not finish Esc Esc or Ctrl+K Ctrl+S. For
+     * a synthetic key, which is every key the row sends, that move is not made. A
+     * trusted key moves focus as before. That is a hardware key, and also a key
+     * event from a soft keyboard that sends its own, whose users still lose the
+     * keyboard at the first key of a chord. A hardware key keeps the move because,
+     * with the IME on, Gboard turns a physical letter into key code 229 and a chord
+     * such as Ctrl+K then Z would never see it.
+     *
+     * Focus and the IME stay on the editor for that chord, so a plain letter typed
+     * while it waits reaches the workbench as key code 229, which no keybinding
+     * takes, and would go into the file with the chord still waiting. So the
+     * character that comes next is the chord's second key: the editor is lent the
+     * empty EditContext, as it is for a latched Ctrl or Alt, and the character is
+     * sent as a key press with no modifier, which ends the chord. Ctrl+K then Z is
+     * three taps, and so is Ctrl+K then M. A latch still works for a second key that
+     * needs a modifier, as in Ctrl+K Ctrl+S. A letter from a hardware keyboard is
+     * code 229 here as well and is taken the same way.
+     *
+     * The wait begins where the workbench is seen to move focus for a chord, and
+     * ends at the next key that is not a modifier, apart from the keyboard's 229,
+     * when the workbench focuses its host again, at five seconds, or when focus
+     * leaves that editor, so text typed elsewhere or after the chord is over is typed as ever. A
+     * word that a prediction chip commits in one piece while the chord waits is
+     * inserted as text and leaves the chord waiting.
+     *
+     * Ctrl then c or x supplies Copy or Cut when no binding takes the synthetic
+     * key. The terminal's xterm and any workbench or extension binding keep their
+     * own keys. Ctrl with Shift or Alt is another chord and is left as it was.
+     *
+     * The editor fills a DataTransfer for a copy event. Its text goes to Android
+     * through the existing clipboard bridge, and a cut event follows only after
+     * that write succeeds. Copy with no selection still copies the line. A text
+     * box supplies its selection directly and deletes it only after a successful
+     * write, preserving its undo stack. Only plain text crosses; the HTML an
+     * editor copy can carry does not reach Android's clipboard from here. The
+     * terminal, password boxes and other targets are left alone.
+     *
      * Call once after the page finishes loading.
      */
     fun setupModifierInterceptor() {
@@ -495,6 +536,48 @@ class KeyInjector(
                     insertParagraph: ['Enter', 13],
                     insertLineBreak: ['Enter', 13]
                 };
+
+                // Only supply copy and cut when no binding took the key.
+                var CLIPBOARD_KEYS = { c: 'copy', x: 'cut' };
+
+                function editorHost(box) {
+                    return box.classList.contains('native-edit-context') || box.classList.contains('inputarea');
+                }
+
+                // Copy first; an editor cut must wait for Android to accept
+                // the text. Text boxes use their selection and undo-aware delete.
+                function clipboardDefault(box, kind) {
+                    var token = (window.__vscodroid || {}).authToken;
+                    if (!token || typeof AndroidBridge === 'undefined') return;
+                    var classes = box.classList;
+                    var editor = editorHost(box);
+                    var plain = !editor && !classes.contains('xterm-helper-textarea') &&
+                        !classes.contains('ime-text-area') && box.type !== 'password' &&
+                        (box.tagName === 'TEXTAREA' || (box.tagName === 'INPUT' && box.selectionStart !== null));
+                    if (!editor && !plain) return;
+                    // As the browser's own: a cut from a box that cannot be
+                    // written to does nothing, not even the copy.
+                    if (plain && kind === 'cut' && (box.readOnly || box.disabled)) return;
+                    var data;
+                    var copied;
+                    if (editor) {
+                        data = new DataTransfer();
+                        box.dispatchEvent(new ClipboardEvent('copy', {
+                            clipboardData: data, bubbles: true, cancelable: true, composed: true
+                        }));
+                        copied = data.getData('text/plain');
+                    } else {
+                        copied = box.value.substring(box.selectionStart, box.selectionEnd);
+                    }
+                    if (!copied || !AndroidBridge.copyToClipboard(token, copied)) return;
+                    if (kind === 'cut') {
+                        if (editor) {
+                            box.dispatchEvent(new ClipboardEvent('cut', {
+                                clipboardData: data, bubbles: true, cancelable: true, composed: true
+                            }));
+                        } else document.execCommand('delete');
+                    }
+                }
 
                 // What a keyboard is composing in a text box, and what it was
                 // before its latest update. Blink fires compositionupdate with
@@ -597,7 +680,7 @@ class KeyInjector(
                     // this listener acts on spend them by acting, and the rest
                     // spend them by reaching the end of the character they were
                     // meant for.
-                    if (!mod.ctrl && !mod.alt) {
+                    if (!mod.ctrl && !mod.alt && !chordLive()) {
                         mod.shift = false;
                         return;
                     }
@@ -726,8 +809,11 @@ class KeyInjector(
                         cancelable: true,
                         composed: true
                     };
+                    var clipboardKind = (init.ctrlKey && !init.altKey && !init.shiftKey && !init.metaKey &&
+                        CLIPBOARD_KEYS.hasOwnProperty(ch)) ? CLIPBOARD_KEYS[ch] : null;
+                    var untaken = true;
                     function chord() {
-                        target.dispatchEvent(new KeyboardEvent('keydown', init));
+                        untaken = target.dispatchEvent(new KeyboardEvent('keydown', init));
                         target.dispatchEvent(new KeyboardEvent('keyup', init));
                         releaseModifiers(target, init);
                     }
@@ -743,6 +829,9 @@ class KeyInjector(
                     mod.ctrl = false;
                     mod.alt = false;
                     mod.shift = false;
+
+                    // Spend the latch before clipboard callbacks run.
+                    if (clipboardKind && untaken) clipboardDefault(target, clipboardKind);
                 }, true);
 
                 // A composing IME on the EditContext edit path. Chromium reports
@@ -822,6 +911,50 @@ class KeyInjector(
                 // Open, leaves that to the focus change.
                 var held = { ctrl: !!window.__vscodroid.ctrl, alt: !!window.__vscodroid.alt };
                 var lent = null;
+
+                // A chord the row started waits for its second key, and that is
+                // a latch with no modifier: the next character is the key, through
+                // the same lend and the same listener. Without it a plain letter
+                // from the soft keyboard reaches the workbench as key code 229,
+                // which it cannot read as a key, and goes into the file while the
+                // chord waits. See the KDoc.
+                //
+                // It begins where the workbench is seen to switch its IME off, in
+                // the focus wrapper at the end of this script, and ends at a key
+                // that is not a modifier, apart from the keyboard's 229, or at the
+                // workbench's return to its host, or at five seconds. It holds only
+                // while focus is on the editor it began in: text elsewhere is no chord's key.
+                var chordWaiting = false;
+                var chordHost = null;
+                var chordFirst = null;
+                var chordSerial = 0;
+                function chordLive() {
+                    return chordWaiting && !!chordHost && document.activeElement === chordHost;
+                }
+                function wantsNext() {
+                    return held.ctrl || held.alt || chordLive();
+                }
+                function chordOver() {
+                    if (!chordWaiting) return;
+                    chordWaiting = false;
+                    chordSerial++;
+                    if (!wantsNext()) giveBack();
+                }
+                function chordBegins(e) {
+                    chordWaiting = true;
+                    chordHost = document.activeElement;
+                    chordFirst = e;
+                    var serial = ++chordSerial;
+                    setTimeout(function() { if (serial === chordSerial) chordOver(); }, 5000);
+                    setTimeout(takeNextCharacter, 0);
+                }
+                // The key that ends it is read after the workbench has read it, a
+                // task later. The one that began it is not that key.
+                window.addEventListener('keydown', function(e) {
+                    if (!chordWaiting || e === chordFirst || e.keyCode === 229 ||
+                        MODIFIERS.hasOwnProperty(e.key)) return;
+                    setTimeout(chordOver, 0);
+                }, true);
                 function giveBack() {
                     if (!lent) return;
                     var l = lent;
@@ -845,7 +978,7 @@ class KeyInjector(
                     // telling, still has the empty one.
                     giveBack();
                     var host = document.activeElement;
-                    if (!(held.ctrl || held.alt) || !host || !host.editContext ||
+                    if (!wantsNext() || !host || !host.editContext ||
                         typeof EditContext !== 'function') return;
                     // A word still composing goes into the editor as typed, and
                     // only then is the EditContext lent out.
@@ -905,9 +1038,9 @@ class KeyInjector(
                         enumerable: true,
                         get: function() { return held[name]; },
                         set: function(value) {
-                            var was = held.ctrl || held.alt;
+                            var was = wantsNext();
                             held[name] = !!value;
-                            if (!(held.ctrl || held.alt)) giveBack();
+                            if (!wantsNext()) giveBack();
                             else if (!was) setTimeout(takeNextCharacter, 0);
                         }
                     });
@@ -935,7 +1068,7 @@ class KeyInjector(
                 // above, a task after the focus change, and not for a host it has
                 // lent already, which a blur and focus in one task leaves lent.
                 document.addEventListener('focusin', function(e) {
-                    if (!(held.ctrl || held.alt) || !e.target || !e.target.editContext ||
+                    if (!wantsNext() || !e.target || !e.target.editContext ||
                         (lent && lent.host === e.target)) return;
                     setTimeout(takeNextCharacter, 0);
                 }, true);
@@ -1040,6 +1173,36 @@ class KeyInjector(
                     t.addEventListener('keydown', decide);
                     setTimeout(function() { t.removeEventListener('keydown', decide); }, 0);
                 }, true);
+
+                // The first key of a chord makes the workbench switch its IME
+                // off, and the editor does that by moving focus to a read-only
+                // textarea. A soft keyboard cannot stay up over a read-only box,
+                // so the keyboard and this row went away with it and the second
+                // key of Esc Esc or Ctrl+K Ctrl+S had nothing to be tapped on.
+                // A synthetic key, which is every key this row sends, leaves
+                // focus in the editor. A trusted key moves it as before: a
+                // hardware key, and also a key event from a soft keyboard that
+                // sends its own, whose users keep the old behaviour. With the
+                // IME on, Gboard hands even a physical letter over as key code
+                // 229, which no keybinding takes, so Ctrl+K then Z from a
+                // hardware keyboard would stop working. The editor keeping
+                // focus is what chordBegins answers: the next character is the
+                // chord's second key, as it would be for a latch. The call is
+                // made inside the keydown's own dispatch, which is why the
+                // event under dispatch tells the two apart.
+                if (typeof HTMLElement === 'function') {
+                    var focusNatively = HTMLElement.prototype.focus;
+                    HTMLElement.prototype.focus = function() {
+                        var e = window.event;
+                        if (e && e.type === 'keydown' && !e.isTrusted &&
+                            this.classList && this.classList.contains('ime-text-area')) {
+                            chordBegins(e);
+                            return;
+                        }
+                        if (this === chordHost && document.activeElement === this) chordOver();
+                        return focusNatively.apply(this, arguments);
+                    };
+                }
             })();
         """.trimIndent()
 

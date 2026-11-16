@@ -451,6 +451,23 @@ class MaintenanceScriptsTest(unittest.TestCase):
                     if status:
                         self.assertIn(f"no longer sets {flag} = true", result["stdout"], result)
 
+    def test_logger_recovers_after_rotation_errors_and_honors_drop(self):
+        text = (SOURCE / "scripts/build-native-addons.sh").read_text()
+
+        def emitted(target):
+            marker = f'cat > "{target}" <<\'JSEOF\'\n'
+            self.assertEqual(1, text.count(marker))
+            return text.split(marker, 1)[1].split("\nJSEOF", 1)[0] + "\n"
+
+        shim = self.root / "index.js"
+        check = self.root / "check.mjs"
+        write(shim, emitted("$SPDLOG_DIR/index.js"))
+        write(check, emitted("$WORK_DIR/spdlog-shim-check.mjs"))
+        node = shutil.which("node")
+        self.assertIsNotNone(node, "Node is required for the packaged logger self-check")
+        result = run([node, str(check), str(shim)], self.root)
+        self.assertEqual(0, result["status"], result)
+
     def test_build_step_check_refuses_an_empty_pr_script_set(self):
         fixture = self.root / "build-steps"
         shutil.copytree(SOURCE / "scripts", fixture / "scripts")
@@ -626,6 +643,71 @@ esac
                              {"HOME": str(self.root / "empty-home"), "ANDROID_HOME": str(sdk), **overrides})
                 self.assertEqual(0, result["status"], result)
                 self.assertEqual(str(expected), result["stdout"], result)
+
+    def test_java_pack_requires_the_documented_launchers(self):
+        text = (SOURCE / "scripts/download-java.sh").read_text()
+        begin = text.index("# --- Step 6: Write manifest.json ---")
+        phase = text[begin:text.index("# --- Step 7: Verify", begin)]
+        launchers = ("java", "javac", "jar", "jshell")
+        for missing in (None, *launchers, "all", "java-directory"):
+            with self.subTest(missing=missing):
+                case = self.root / (missing or "complete")
+                bin_dir = case / "jdk/bin"
+                bin_dir.mkdir(parents=True)
+                for name in launchers:
+                    if missing not in (name, "all") and not (missing == "java-directory" and name == "java"):
+                        write(bin_dir / name, "launcher\n")
+                if missing == "java-directory":
+                    (bin_dir / "java").mkdir()
+                prefix = ('set -euo pipefail\nJDK_DIR="$PWD/jdk"\nPACK_ASSETS="$PWD/pack"\n'
+                          'JDK_MAJOR=25\nJDK_DIRNAME=java-25-openjdk\nJAVA_VERSION=25.0.5\n'
+                          'mkdir -p "$PACK_ASSETS"\n')
+                result = run(["/bin/bash", "-c", prefix + phase], case)
+                manifest = case / "pack/toolchain_java.json"
+                if missing is not None:
+                    expected = "java" if missing in ("all", "java-directory") else missing
+                    self.assertNotEqual(0, result["status"], result)
+                    self.assertIn(expected, result["stderr"], result)
+                    self.assertFalse(manifest.exists(), result)
+                else:
+                    self.assertEqual(0, result["status"], result)
+                    data = json.loads(manifest.read_text())
+                    for name in launchers:
+                        path = f"usr/lib/jvm/java-25-openjdk/bin/{name}"
+                        self.assertIn(path, data["binaries"])
+                        self.assertEqual(path, data["symlinks"][name])
+
+    def test_ruby_pack_requires_the_documented_launchers(self):
+        text = (SOURCE / "scripts/download-ruby.sh").read_text()
+        begin = text.index('if [ ! -d "$RUBY_USR/bin" ]; then')
+        phase = text[begin:text.index("# Copy ruby lib directory", begin)]
+        launchers = ("ruby", "irb", "gem", "bundle", "bundler", "rake")
+        for missing in (None, *launchers, "all", "ruby-directory", "bin-directory"):
+            with self.subTest(missing=missing):
+                case = self.root / (missing or "complete")
+                case.mkdir()
+                bin_dir = case / "package/usr/bin"
+                if missing != "bin-directory":
+                    bin_dir.mkdir(parents=True)
+                    for name in launchers:
+                        if missing not in (name, "all") and not (missing == "ruby-directory" and name == "ruby"):
+                            write(bin_dir / name, f"{name} launcher\n")
+                    if missing == "ruby-directory":
+                        (bin_dir / "ruby").mkdir()
+                prefix = ('set -euo pipefail\nRUBY_USR="$PWD/package/usr"\nPACK_ASSETS="$PWD/pack"\n'
+                          'mkdir -p "$PACK_ASSETS/usr/bin"\n')
+                result = run(["/bin/bash", "-c", prefix + phase], case)
+                copied = case / "pack/usr/bin"
+                if missing is not None:
+                    expected = "ruby" if missing in ("all", "ruby-directory") else missing
+                    self.assertNotEqual(0, result["status"], result)
+                    self.assertIn("bin" if missing == "bin-directory" else expected, result["stderr"], result)
+                    self.assertEqual([], list(copied.iterdir()), result)
+                else:
+                    self.assertEqual(0, result["status"], result)
+                    self.assertEqual(set(launchers), {p.name for p in copied.iterdir()})
+                    for name in launchers:
+                        self.assertEqual((bin_dir / name).read_bytes(), (copied / name).read_bytes())
 
     def test_java_pack_gets_its_trust_store_from_ca_certificates_java(self):
         text = (SOURCE / "scripts/download-java.sh").read_text()

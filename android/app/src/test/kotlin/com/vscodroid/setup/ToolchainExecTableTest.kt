@@ -773,6 +773,100 @@ class ToolchainExecTableTest {
         )
     }
 
+    private val gitCore get() = File(filesDir, "usr/lib/git-core")
+
+    private fun gitCoreScript(name: String, body: String = "#!/system/bin/sh\nexit 0\n") =
+        File(gitCore, name).apply {
+            parentFile?.mkdirs()
+            writeText(body)
+        }
+
+    @Test
+    fun `git core commands use the trampoline while sourced libraries remain readable`() {
+        val commands = listOf(
+            "git-submodule", "git-mergetool", "git-filter-branch", "git-subtree",
+            "git-merge-octopus", "git-merge-one-file", "git-merge-resolve",
+            "git-difftool--helper", "git-quiltimport", "git-request-pull", "git-web--browse",
+        )
+        val libraries = listOf("git-sh-setup", "git-sh-i18n", "git-mergetool--lib")
+        commands.forEach { gitCoreScript(it) }
+        libraries.forEach { gitCoreScript(it, "LIB_VALUE=kept\n") }
+
+        regenerate()
+
+        for (name in commands) {
+            val link = File(gitCore, name)
+            assertTrue(Files.isSymbolicLink(link.toPath()), "$name still needs exec permission on app storage")
+            assertEquals(trampoline, Files.readSymbolicLink(link.toPath()).toString())
+            assertEquals("#!/system/bin/sh\nexit 0\n", File(gitCore, "$name.script").readText())
+            assertTrue(tableLines().any { it.startsWith("$name\t/system/bin/sh\t") },
+                "$name has no system-shell row")
+            assertFalse(Files.exists(File(filesDir, "usr/libexec/tcbin/$name").toPath(), LinkOption.NOFOLLOW_LINKS),
+                "$name should be found through GIT_EXEC_PATH, not a new PATH command")
+        }
+        for (name in libraries) {
+            assertFalse(Files.isSymbolicLink(File(gitCore, name).toPath()), "$name is sourced as text")
+            assertEquals("LIB_VALUE=kept\n", File(gitCore, name).readText())
+            assertFalse(tableLines().any { it.startsWith("$name\t") })
+        }
+    }
+
+    @Test
+    fun `a git core row preserves the command name arguments and library path`() {
+        assumeTrue(File("/bin/sh").canExecute(), "a POSIX host shell is needed")
+        gitCoreScript("git-sh-setup", "LIB_VALUE='from git core'\n")
+        gitCoreScript("git-submodule", """
+            #!/system/bin/sh
+            . "${'$'}GIT_EXEC_PATH/git-sh-setup"
+            printf '%s\n' "${'$'}{0##*/}" "${'$'}@" "${'$'}LIB_VALUE"
+        """.trimIndent() + "\n")
+        regenerate()
+        val row = tableLines().firstOrNull { it.startsWith("git-submodule\t") }
+        assertTrue(row != null, "git-submodule has no executable row")
+        val fields = row!!.split('\t')
+        val process = ProcessBuilder(listOf("/bin/sh") + fields.drop(2) + listOf("two words", "quote'and\"double"))
+            .apply { environment()["GIT_EXEC_PATH"] = gitCore.absolutePath }
+            .redirectErrorStream(true).start()
+        val output = process.inputStream.bufferedReader().readText()
+        assertEquals(0, process.waitFor(), output)
+        assertEquals("git-submodule\ntwo words\nquote'and\"double\nfrom git core\n", output,
+            "git-sh-setup uses the original command name and may invoke it again")
+    }
+
+    @Test
+    fun `a refreshed git core script replaces the kept version after extraction`() {
+        gitCoreScript("git-submodule", "#!/system/bin/sh\nprintf old\n")
+        regenerate()
+        File(gitCore, "git-submodule").delete()
+        gitCoreScript("git-submodule", "#!/system/bin/sh\nprintf new\n")
+
+        regenerate()
+
+        assertTrue(Files.isSymbolicLink(File(gitCore, "git-submodule").toPath()))
+        assertEquals("#!/system/bin/sh\nprintf new\n", File(gitCore, "git-submodule.script").readText())
+    }
+
+    @Test
+    fun `git core launch repair keeps helper links and repoints them after reinstall`() {
+        gitCoreScript("git-submodule")
+        gitCoreScript("git-sh-setup", "LIB_VALUE=kept\n")
+        File(gitCore, "gitcore-symlinks").writeText("git-add\n")
+        File(nativeLibDir, "libgit.so").writeText("elf")
+        val originalTarget = File(trampoline).apply { writeText("elf"); setExecutable(false, false) }
+        regenerate()
+
+        FirstRunSetup(context).setupGitCore()
+        regenerate()
+
+        assertTrue(Files.isSymbolicLink(File(gitCore, "git-submodule").toPath()))
+        assertEquals("#!/system/bin/sh\nexit 0\n", File(gitCore, "git-submodule.script").readText())
+        assertFalse(originalTarget.canExecute(), "the launch pass must not chmod the linked native target")
+        nativeLibDir = File(filesDir, "nativeLib-reinstalled").apply { mkdirs() }
+        regenerate()
+        assertEquals(trampoline, Files.readSymbolicLink(File(gitCore, "git-submodule").toPath()).toString())
+        assertEquals("LIB_VALUE=kept\n", File(gitCore, "git-sh-setup").readText())
+    }
+
     // The server's command-line client, first on every terminal's PATH. It is a
     // `#!/usr/bin/env sh` file under filesDir like the git helpers, so bash
     // answered "Permission denied", and its last line runs `$ROOT/node`, which the

@@ -98,6 +98,10 @@ const RECOMMENDATIONS_MARKER = 'vscodroid-extension-recommendations';
 // What says the page already starts on the last theme; see the block that adds it.
 const INITIAL_THEME_MARKER = 'vscodroid-initial-theme';
 
+// What says the page already carries the first-layout defaults; see the block that
+// adds them.
+const CONFIGURATION_DEFAULTS_MARKER = 'vscodroid-configuration-defaults';
+
 // The object the app gives the page to post the colour it paints itself with,
 // PAGE_COLOR_OBJECT in VSCodroidWebView.kt; see the block that adds the script.
 const PAGE_COLOR_OBJECT = 'vscodroidPageColor';
@@ -540,6 +544,42 @@ if (!fs.existsSync(rehEntryPoint)) {
     } catch (e) {
         log('error', `Could not add the extension recommendations: ${e.message}`);
         log('error', 'The editor still works; a formatter is just never suggested.');
+    }
+
+    // Keep the Chat side bar shut from the first layout.
+    //
+    // The workbench decides which side bars to open once, while it builds its
+    // services, from the configuration it has then. The welcome extension
+    // contributes `workbench.secondarySideBar.defaultVisibility: hidden`, but an
+    // extension's contributed defaults are registered only after the extension
+    // host is up. The browser keeps the defaults registered in one start and
+    // replays them at the next, which is why only the first load of a profile
+    // falls back to upstream's `visibleInWorkspace` and draws the bar for the
+    // seconds until the extension closes it. The construction options'
+    // `configurationDefaults` are registered when the browser's default
+    // configuration is built, before the layout reads the setting (read from the
+    // 1.139.1 bundle, `DefaultConfiguration`'s constructor and its cache of the
+    // registered defaults, against the layout state's AUXILIARYBAR_HIDDEN default).
+    //
+    // The same value the extension contributes, for every device, so where a
+    // device ends up does not change; only when the workbench learns it. A profile
+    // that has a stored layout keeps it, and a value the user or the page already
+    // gave for the key is left alone by the membership test below. The test script
+    // checks this against the extension's own package.json so the two cannot drift.
+    try {
+        const added = extendWorkbenchPage(workbenchHtmlPath, CONFIGURATION_DEFAULTS_MARKER, [
+            '\t\t\t\t\tvar defaults = settings.configurationDefaults || {};',
+            "\t\t\t\t\tif (!Object.prototype.hasOwnProperty.call(defaults, 'workbench.secondarySideBar.defaultVisibility')) {",
+            "\t\t\t\t\t\tdefaults['workbench.secondarySideBar.defaultVisibility'] = 'hidden';",
+            '\t\t\t\t\t}',
+            '\t\t\t\t\tsettings.configurationDefaults = defaults;',
+        ]);
+        if (added) {
+            log('info', 'First-layout defaults given to the workbench page');
+        }
+    } catch (e) {
+        log('error', `Could not add the first-layout defaults: ${e.message}`);
+        log('error', 'The editor still works; the Chat bar shows until the welcome extension closes it.');
     }
 
     // Start every page load on the theme it is about to show.

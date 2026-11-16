@@ -4,7 +4,12 @@ import android.net.Uri
 import android.os.Handler
 import android.os.Looper
 import com.vscodroid.util.Logger
+import com.vscodroid.util.StorageManager
+import java.io.File
+import java.io.FileNotFoundException
+import java.io.IOException
 import java.io.OutputStream
+import java.io.RandomAccessFile
 import java.util.Base64
 import java.util.concurrent.Executor
 import java.util.concurrent.LinkedBlockingQueue
@@ -81,6 +86,73 @@ internal fun providerWorkExecutor(idleMs: Long = PROVIDER_IDLE_MS): Executor =
     }.apply { allowCoreThreadTimeOut(true) }
 
 /**
+ * A document as a descriptor opened read-only shows it, before this download writes to it.
+ *
+ * Each field is null when it cannot be read: [length] for anything that is not a regular file,
+ * a pipe or a socket, which cannot be measured and is treated as the user's; [occupied] and
+ * [free] where the provider or its file system will not say.
+ */
+class DocumentMeasure(
+    /** Its length in bytes (`st_size`). */
+    val length: Long?,
+    /** The bytes its blocks occupy (`st_blocks` times 512), below [length] for a sparse file. */
+    val occupied: Long? = null,
+    /** The bytes its file system has free for this app (`f_bavail` times `f_frsize`). */
+    val free: Long? = null,
+)
+
+/**
+ * A document opened for writing from its first byte.
+ *
+ * [length] and [truncate] are there when the provider handed back a regular file, and null when
+ * it handed back a pipe: a pipe has no length to read or cut, and a provider that serves one
+ * takes what arrives through it as the whole document.
+ */
+class OpenDocument(
+    val stream: OutputStream,
+    val length: (() -> Long)? = null,
+    val truncate: ((Long) -> Unit)? = null,
+)
+
+/**
+ * The app low-storage threshold that a staged download leaves available.
+ *
+ * A save over an existing document holds the whole download there until its last byte arrives,
+ * so a large one could take the internal storage that the editor's own state and every other app
+ * write to, and the save would fail anyway once nothing was left. With the floor it fails before
+ * that, with the document untouched. Saves to a new name never stage, and are not bounded here.
+ */
+internal const val STAGE_FLOOR_BYTES = StorageManager.LOW_STORAGE_BYTES
+
+/** The size of each read when a staged download is copied into its document. */
+private const val COPY_BUFFER_BYTES = 64 * 1024
+
+/**
+ * Makes [document] hold exactly the [written] bytes by cutting whatever lies beyond them, or
+ * throws so that the download is reported as not saved.
+ *
+ * The platform's providers open mode "w" without truncating, and any provider is free to ignore
+ * the "t" of "wt", so a download shorter than the file it replaces would otherwise keep that
+ * file's tail and still be reported as saved. It never grows a document: one shorter than what
+ * was written has been cut by another writer, and growing it back would report zeros as the
+ * download. A length that does not match at the check fails the save; another writer's change
+ * of the same length, or one that lands after the last check, is not seen. A pipe has nothing to
+ * measure, and the provider behind it takes what arrived as the document.
+ */
+private fun settle(document: OpenDocument, written: Long) {
+    val length = document.length ?: return
+    val before = length()
+    if (before == written) return
+    val truncate = document.truncate
+    if (before < written || truncate == null) {
+        throw IOException("the document holds $before bytes where $written were written")
+    }
+    truncate(written)
+    val now = length()
+    if (now != written) throw IOException("the document holds $now bytes where $written were written")
+}
+
+/**
  * Everything [DownloadCoordinator] needs from the Activity it runs inside.
  *
  * An interface rather than the pile of lambdas the chrome client uses, because
@@ -101,8 +173,26 @@ interface DownloadHost {
      */
     fun askDestination(requestId: String, fileName: String)
 
-    /** Opens the document the user chose for writing, or null when it will not open. */
-    fun openDestination(destination: Uri): OutputStream?
+    /**
+     * Measures the document the user chose through a descriptor opened read-only ("r"), so that
+     * looking cannot truncate it, or answers null when it will not open for reading. Asked before
+     * the document is opened for writing: only a regular file measured as empty is written
+     * straight into, and only such a document may be removed.
+     */
+    fun measureDestination(destination: Uri): DocumentMeasure?
+
+    /**
+     * The display name of the document the user chose in the picker, or null when the provider
+     * gives none or cannot be read.
+     */
+    fun destinationName(destination: Uri): String? = null
+
+    /**
+     * Opens the document the user chose for writing from its first byte, in [mode] ("w" for a
+     * document measured empty, "wt" and then "w" for one the user already had), or answers null
+     * when it will not open. A provider that does not accept [mode] throws.
+     */
+    fun openDestination(destination: Uri, mode: String): OpenDocument?
 
     /** Removes a document this download created and did not fill. */
     fun discardDestination(destination: Uri)
@@ -153,6 +243,20 @@ interface DownloadHost {
  * so. Reporting is not optional on any path either: the defect this replaces
  * was a menu entry that did nothing and said nothing, and a fix that fails
  * quietly is the same defect wearing more code.
+ *
+ * The other half of that rule is that **a file the user already had is not
+ * written to before every byte of the download has arrived**. The picker answers
+ * "Overwrite" with the existing document itself and nothing in the answer says
+ * which kind it is, so the document is measured once through a read-only
+ * descriptor before anything opens it for writing. Only a regular file measured
+ * as empty is written straight into, and only such a document is ever removed.
+ * Anything else, including a document that cannot be measured, is the user's: it
+ * is filled from a copy of the bytes held in app storage after the last of them
+ * has arrived, and is cut to the download's length, because the platform's
+ * providers open mode "w" without truncating and a shorter download would
+ * otherwise keep the old file's tail. The copy starts only when the
+ * destination's file system reports room for it; a copy that fails after it
+ * started leaves the document partly written, and says so.
  *
  * One at a time is a rule about the picker, not a simplification. Downloading a
  * multi-select starts one download per file at once, and only one picker can be
@@ -214,6 +318,15 @@ class DownloadCoordinator(
      * needs no looper.
      */
     private val mainThread: Executor = Executor { work -> Handler(Looper.getMainLooper()).post(work) },
+    /**
+     * Where the bytes of a download saved over an existing document wait until the last of
+     * them has arrived. Asked for on the provider thread, when a download needs it, so an
+     * Activity can pass its cache directory before it has one. Null is the platform's
+     * temporary directory.
+     */
+    private val stagingDir: () -> File? = { null },
+    /** The free space on the staging volume, or null if unknown, checked before each piece. */
+    private val stagingRoom: () -> Long? = { null },
 ) {
 
     private val tag = "DownloadCoordinator"
@@ -280,14 +393,21 @@ class DownloadCoordinator(
         val id: String,
         val url: String,
         val fileName: String,
+        var chosenName: String? = null,
         var destination: Uri? = null,
-        var stream: OutputStream? = null,
+        var sink: Sink? = null,
+        /**
+         * Whether [destination] was measured empty before this download opened it for writing,
+         * which makes it the one kind a download that ends badly may remove. Settled on the
+         * provider thread before anything is written, and false until then.
+         */
+        var owned: Boolean = false,
         /**
          * Whether a thread is inside the open, a `write` or the `close` of this
          * download's document right now, outside the monitor.
          *
-         * The claim, and the whole of the exclusion. The stream comes from
-         * `contentResolver.openOutputStream`, and neither that call nor a stream
+         * The claim, and the whole of the exclusion. The document comes from
+         * `contentResolver.openFileDescriptor`, and neither that call nor a stream
          * to a cloud or MTP provider has any timeout, so none of the three can be
          * made while holding the monitor: every teardown here arrives on the UI
          * thread (`onDestroy`, `onPageFinished`, `recreateWebView`) and would
@@ -304,6 +424,157 @@ class DownloadCoordinator(
          */
         var busy: Boolean = false,
     )
+
+    /**
+     * Where a download's bytes go while they arrive, and how they become the document.
+     *
+     * [finish] makes what was written the document's whole content, or throws. [abandon] lets go
+     * without making anything final, and is all a download that ends badly does to its sink.
+     */
+    private abstract class Sink {
+        /** Bytes written so far. */
+        var written = 0L
+            protected set
+
+        abstract fun write(bytes: ByteArray)
+
+        abstract fun finish()
+
+        abstract fun abandon()
+    }
+
+    /**
+     * Writes straight into a document measured empty, which is what the picker gives a new name.
+     * A download that ends badly loses nothing by having started, and the document is removed as
+     * it always was.
+     */
+    private class DirectSink(private val document: OpenDocument) : Sink() {
+        override fun write(bytes: ByteArray) {
+            document.stream.write(bytes)
+            written += bytes.size
+        }
+
+        override fun finish() {
+            document.stream.use { stream ->
+                stream.flush()
+                settle(document, written)
+            }
+        }
+
+        override fun abandon() = document.stream.close()
+    }
+
+    /**
+     * Holds the bytes of a download saved over a document the user already had in app storage
+     * until the last of them has arrived, and only then opens the document and fills it. A
+     * download that ends before that leaves the document exactly as it was, and so does one its
+     * destination has no room for ([checkRoom]). A copy that fails once it has started leaves
+     * the document partly written and is reported as failed: a document URI offers no atomic
+     * replace, and the user confirmed "Overwrite".
+     *
+     * The stage file is unlinked as soon as it is open, so its bytes live as long as this
+     * descriptor and no longer: a download that fails, and a process that dies during one, leave
+     * nothing behind in app storage.
+     */
+    private inner class StagedSink(private val destination: Uri) : Sink() {
+        private val stage: RandomAccessFile
+
+        init {
+            val file = File.createTempFile("download", ".part", stagingDir())
+            try {
+                stage = RandomAccessFile(file, "rw")
+            } finally {
+                if (!file.delete()) Logger.w(tag, "A download stage could not be unlinked")
+            }
+        }
+
+        override fun write(bytes: ByteArray) {
+            val room = stagingRoom()
+            if (room != null && room - bytes.size < STAGE_FLOOR_BYTES) {
+                throw IOException("app storage has $room bytes free, and staging stops at $STAGE_FLOOR_BYTES")
+            }
+            stage.write(bytes)
+            written += bytes.size
+        }
+
+        override fun finish() {
+            try {
+                checkRoom(destination, written)
+                val document = openForWriting(destination)
+                    ?: throw IOException("the chosen document could not be opened")
+                document.stream.use { out ->
+                    stage.seek(0)
+                    val buffer = ByteArray(COPY_BUFFER_BYTES)
+                    var left = written
+                    while (left > 0) {
+                        val read = stage.read(buffer, 0, minOf(buffer.size.toLong(), left).toInt())
+                        if (read < 0) throw IOException("the stage ended $left bytes early")
+                        out.write(buffer, 0, read)
+                        left -= read
+                    }
+                    out.flush()
+                    settle(document, written)
+                }
+            } finally {
+                stage.close()
+            }
+        }
+
+        override fun abandon() = stage.close()
+    }
+
+    /**
+     * [DownloadHost.measureDestination], or null when the provider threw: a document
+     * nothing can be learned about is one nothing may remove.
+     */
+    private fun measure(destination: Uri): DocumentMeasure? =
+        try {
+            host.measureDestination(destination)
+        } catch (e: Exception) {
+            Logger.w(tag, "Could not measure the chosen document", e)
+            null
+        }
+
+    /**
+     * Throws, before [destination] is opened for writing, when its file system reports less room
+     * than replacing it with [needed] bytes takes. What the replace gives back is counted only
+     * as far as the document's blocks hold it ([DocumentMeasure.occupied], at most its length),
+     * so a sparse file earns what it occupies and no more, and blocks nobody reports earn
+     * nothing.
+     *
+     * An estimate taken a moment before the copy, not a reservation: another writer can still
+     * take the room. Where the room cannot be measured (a pipe, a document that will not open for
+     * reading, a file system that will not say) the replace goes ahead as it always did.
+     */
+    private fun checkRoom(destination: Uri, needed: Long) {
+        val measure = measure(destination) ?: return
+        val free = measure.free ?: return
+        val credit = minOf(measure.occupied ?: 0L, measure.length ?: 0L)
+        if (free + credit < needed) {
+            throw IOException("the destination has $free bytes free and $credit to give back where $needed are needed")
+        }
+    }
+
+    /**
+     * Opens a document the user already had to be replaced: "wt", which asks the provider to drop
+     * what it holds, and once more with "w" when that open throws IllegalArgumentException,
+     * UnsupportedOperationException or FileNotFoundException, whatever the cause. A provider that
+     * refuses the mode answers with any of the three, and FileNotFoundException is also how every
+     * other failed open arrives, so nothing tells a refused mode apart; the retry costs one more
+     * open, and the copy starts only if it succeeds. Either way [settle] cuts the result to
+     * length, so a provider that ignores the "t" still ends up holding the download alone.
+     */
+    private fun openForWriting(destination: Uri): OpenDocument? =
+        try {
+            host.openDestination(destination, "wt")
+        } catch (e: Exception) {
+            if (e !is IllegalArgumentException &&
+                e !is UnsupportedOperationException &&
+                e !is FileNotFoundException
+            ) throw e
+            Logger.d(tag, "Opening the chosen document with wt failed (${e.javaClass.simpleName}); trying once more with w")
+            host.openDestination(destination, "w")
+        }
 
     /**
      * The page is about to download [url] under [fileName], which is the
@@ -410,10 +681,13 @@ class DownloadCoordinator(
      * when the user backed out.
      *
      * The id is checked rather than assumed, and a result that does not match
-     * the download waiting for one loses its document. The picker creates the
-     * file the moment the user confirms a name, so a result nobody is waiting
-     * on has already put an empty file in their folder wearing the name of a
-     * file they will not get.
+     * the download waiting for one is never written to. When the user typed a
+     * new name, the picker created the file the moment they confirmed it, so a
+     * result nobody is waiting on has put an empty file in their folder wearing
+     * the name of a file they will not get, and that file is removed. When they
+     * chose a file they already had and confirmed "Overwrite", the result is
+     * that file, and it is left alone unless it was empty, which loses nothing.
+     * The same measurement settles both, live or not; see [takeDestination].
      *
      * Cancelling is the ordinary case and it is deliberately not silent. It is
      * also the cheapest to get right: the picker creates nothing until the user
@@ -426,7 +700,9 @@ class DownloadCoordinator(
         val request = pending?.takeIf { it.id == requestId }
         if (request == null) {
             Logger.w(tag, "Destination for $requestId belongs to no download in flight")
-            destination?.let { offThread("discard") { host.discardDestination(it) } }
+            // Settled as a live answer is, and then ended at once: nothing is
+            // written, and the document goes only if it measures empty.
+            destination?.let { takeDestination(Pending(requestId ?: "", "", ""), it, open = false) }
             startNextIfIdle()
             return
         }
@@ -437,10 +713,24 @@ class DownloadCoordinator(
             startNextIfIdle()
             return
         }
-        // Recorded before the stream is opened, so a failure to open still has
-        // somewhere to point. The picker has already created the document by
-        // the time it answers, so an unopenable one is an empty file sitting in
-        // the user's chosen folder wearing the name of the file they wanted.
+        takeDestination(request, destination, open = true)
+    }
+
+    /**
+     * Records [destination] as [request]'s and settles, on the provider thread
+     * and before anything opens it for writing, the two things everything after
+     * depends on: whether it measures empty ([measure]), which is the only kind a
+     * download that ends badly may remove, and, when [open], where the bytes go.
+     * An empty document is written directly; any other is written from a copy held
+     * in app storage once the last byte has arrived ([StagedSink]).
+     *
+     * Called holding the monitor.
+     */
+    private fun takeDestination(request: Pending, destination: Uri, open: Boolean) {
+        // Recorded before the document is opened, so a failure to open still has
+        // somewhere to point. A document the picker created is already in the
+        // user's chosen folder by now, so an unopenable one is an empty file
+        // wearing the name of the file they wanted.
         request.destination = destination
         // Claimed here rather than on the provider thread, so that no teardown
         // can slip between deciding to open the document and the claim that
@@ -448,7 +738,7 @@ class DownloadCoordinator(
         request.busy = true
         // Handed over rather than made here. This is the first trip into the
         // provider and the last one that was still made from the UI thread under
-        // the monitor: `openOutputStream` cold-starts the provider's process and
+        // the monitor: opening a document cold-starts the provider's process and
         // can go to a network, with no timeout on either, and this runs in the
         // activity-result callback, so a slow provider froze the editor from the
         // moment the picker closed and past five seconds it was an ANR. The
@@ -456,8 +746,19 @@ class DownloadCoordinator(
         // [providerWork], which is single, so an open still queues behind the
         // close of the document before it.
         providerWork.execute {
-            val stream = try {
-                host.openDestination(destination)
+        // Measured before any open for writing: a provider that truncates on
+            // that open would otherwise make every document look empty.
+            val owned = measure(destination)?.length == 0L
+            val chosenName = if (!open) null else try {
+                host.destinationName(destination)?.takeIf { it.isNotBlank() }
+            } catch (e: Exception) {
+                Logger.d(tag, "Could not read back the chosen document name (${e.javaClass.simpleName})")
+                null
+            }
+            val sink = if (!open) null else try {
+                // "w", as a new name was always opened: an empty document has nothing for
+                // a "t" to drop, and a provider that refuses "wt" must not cost it its save.
+                if (owned) host.openDestination(destination, "w")?.let { DirectSink(it) } else StagedSink(destination)
             } catch (e: Exception) {
                 // Everything the provider can throw, not only IOException.
                 // Opening the document is a binder call into another app, and
@@ -470,25 +771,28 @@ class DownloadCoordinator(
                 Logger.w(tag, "Could not open the chosen document", e)
                 null
             }
-            mainThread.execute { onDestinationOpened(request, stream) }
+            mainThread.execute { onDestinationOpened(request, sink, owned, chosenName) }
         }
     }
 
     /**
-     * The provider answered the open for [request], with null when the document
-     * would not open.
+     * The provider answered for [request]: [owned] says whether the picker
+     * created the document for it, and [sink] is where its bytes go, null when
+     * the document would not open or no bytes are coming.
      *
      * Back on the thread the picker's answer arrived on, because [mainThread]
      * says why, and back under the monitor, because the state this settles is
      * the same state every other answer settles.
      */
     @Synchronized
-    private fun onDestinationOpened(request: Pending, stream: OutputStream?) {
+    private fun onDestinationOpened(request: Pending, sink: Sink?, owned: Boolean, chosenName: String?) {
         request.busy = false
+        request.owned = owned
+        if (chosenName != null) request.chosenName = chosenName
         // Recorded before the test below, so that a download ended while its
-        // document was opening hands [closeAndDiscard] a stream to close rather
+        // document was opening hands [closeAndDiscard] a sink to let go of rather
         // than leaving one open on a document nobody will ever read back.
-        request.stream = stream
+        request.sink = sink
         if (pending !== request) {
             // Ended while the provider was still thinking, by a teardown that
             // found this claimed and left the document to the thread inside it.
@@ -497,7 +801,7 @@ class DownloadCoordinator(
             closeAndDiscard(request)
             return
         }
-        if (stream == null) {
+        if (sink == null) {
             fail(request, "the chosen document could not be opened")
             return
         }
@@ -524,7 +828,7 @@ class DownloadCoordinator(
     fun onBytes(requestId: String, base64: String): Boolean {
         val chunk = synchronized(this) { claim(requestId, base64) } ?: return false
         val failure = try {
-            chunk.stream.write(chunk.bytes)
+            chunk.sink.write(chunk.bytes)
             null
         } catch (e: Exception) {
             // Everything, because the claim taken above has to be given back
@@ -559,8 +863,8 @@ class DownloadCoordinator(
         }
     }
 
-    /** One claimed write: the download, the stream it owns, and the bytes for it. */
-    private class Chunk(val request: Pending, val stream: OutputStream, val bytes: ByteArray)
+    /** One claimed write: the download, the sink it owns, and the bytes for it. */
+    private class Chunk(val request: Pending, val sink: Sink, val bytes: ByteArray)
 
     /**
      * Claims the live download for one write, or answers null when there is
@@ -568,7 +872,7 @@ class DownloadCoordinator(
      */
     private fun claim(requestId: String, base64: String): Chunk? {
         val request = live(requestId) ?: return null
-        val stream = request.stream ?: return null
+        val sink = request.sink ?: return null
         if (request.busy) {
             // Ended rather than merely refused. Returning false stops the page
             // reading and the page does not report a refused chunk back, so a
@@ -588,21 +892,23 @@ class DownloadCoordinator(
             return null
         }
         request.busy = true
-        return Chunk(request, stream, bytes)
+        return Chunk(request, sink, bytes)
     }
 
     /**
      * The page has no more bytes. [error] is null on success and a reason
      * otherwise.
      *
-     * Closing is part of the success test rather than cleanup after it. A
+     * Finishing is part of the success test rather than cleanup after it. A
      * `content://` stream can buffer, so the write that actually reaches
      * storage may be the one `close` performs, and reporting success before it
-     * returns would report on a file that had not been written yet.
+     * returns would report on a file that had not been written yet. Finishing
+     * also cuts the document to the bytes written, and for a document the user
+     * already had it is where that document is filled from app storage.
      *
-     * Which is also why the close is outside the monitor and claimed, exactly as
-     * the write in [onBytes] is: a close that commits to a provider blocks for as
-     * long as a write to one does.
+     * Which is also why the finish is outside the monitor and claimed, exactly
+     * as the write in [onBytes] is: a close that commits to a provider blocks
+     * for as long as a write to one does.
      */
     fun onComplete(requestId: String, error: String?) {
         val request = synchronized(this) {
@@ -623,7 +929,7 @@ class DownloadCoordinator(
             request
         }
         val failure = try {
-            request.stream?.close()
+            request.sink?.finish()
             null
         } catch (e: Exception) {
             // Everything, for the reason the write above gives: the claim below
@@ -632,9 +938,10 @@ class DownloadCoordinator(
         }
         synchronized(this) {
             request.busy = false
-            // Cleared however this ends, so the stream is never closed twice and
-            // a teardown that deferred to this thread finds it already released.
-            request.stream = null
+            // Cleared however this ends, so the sink is never finished or let go
+            // of twice and a teardown that deferred to this thread finds it
+            // already released.
+            request.sink = null
             if (failure != null) {
                 Logger.w(tag, "Closing the chosen document failed", failure)
                 if (pending === request) fail(request, "the file could not be finished")
@@ -649,7 +956,7 @@ class DownloadCoordinator(
             request.destination = null
             if (pending !== request) return
             pending = null
-            host.report(DownloadOutcome.SAVED, request.fileName, null)
+            host.report(DownloadOutcome.SAVED, request.chosenName ?: request.fileName, null)
             startNextIfIdle()
         }
     }
@@ -700,7 +1007,7 @@ class DownloadCoordinator(
     private fun fail(request: Pending, detail: String) {
         pending = null
         closeAndDiscard(request)
-        host.report(DownloadOutcome.FAILED, request.fileName, detail)
+        host.report(DownloadOutcome.FAILED, request.chosenName ?: request.fileName, detail)
         // Whether or not the page ever got as far as reading this one. A hold
         // already given up is told again here and answers nothing; a download
         // that failed before anyone asked for its bytes, which is every failure
@@ -710,7 +1017,8 @@ class DownloadCoordinator(
     }
 
     /**
-     * Closes the stream and removes the document behind it, off this thread.
+     * Lets go of the sink and removes the document behind it when the picker
+     * created that document for this download, off this thread.
      *
      * The two calls are separate hand-offs and the close goes first, which is
      * the whole of the ordering they need. Its failure is swallowed on purpose:
@@ -719,7 +1027,7 @@ class DownloadCoordinator(
      * discard away with it would leave behind exactly the half-written file the
      * discard exists to prevent.
      *
-     * What stays here is the state transition. The stream and the document are
+     * What stays here is the state transition. The sink and the document are
      * taken off the request under the monitor, so the request is over the moment
      * this returns and nothing can close or delete either of them twice; the two
      * calls that reach the provider are what goes to [providerWork], because
@@ -738,12 +1046,18 @@ class DownloadCoordinator(
             Logger.d(tag, "Deferring the discard of a download still inside the provider")
             return
         }
-        val stream = request.stream
-        request.stream = null
+        val sink = request.sink
+        request.sink = null
         val destination = request.destination
         request.destination = null
-        stream?.let { offThread("close") { it.close() } }
-        destination?.let { offThread("discard") { host.discardDestination(it) } }
+        sink?.let { offThread("close") { it.abandon() } }
+        // The one place a download removes a document, whichever way it ended:
+        // a failure, a page that went away, a picker answer for a download that
+        // was already gone, a write or close that outlived its download. Only a
+        // document measured empty before the download wrote to it goes, which
+        // loses nothing. Anything else is the user's, and a download that ended
+        // before its last byte arrived has written nothing into it.
+        if (request.owned) destination?.let { offThread("discard") { host.discardDestination(it) } }
     }
 
     /**

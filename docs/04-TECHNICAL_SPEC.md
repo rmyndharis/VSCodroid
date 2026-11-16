@@ -2,7 +2,7 @@
 
 **Project**: VSCodroid
 **Version**: 1.0-draft
-**Date**: 2026-02-10
+**Date**: 2026-11-13
 
 > **The code is the only authority.** The server is built from the MIT Code - OSS source by
 > `.github/workflows/build-vscode-oss.yml`, which applies the unified diffs in `patches/` and the
@@ -204,8 +204,10 @@ rest of its dependency set, fetched by `scripts/download-termux-tools.sh`.
 **Output artifacts**:
 
 - `libgit.so` and `libgit-remote-curl.so` in `jniLibs/arm64-v8a/`
-- `usr/lib/git-core/*` helper binaries, reached through `GIT_EXEC_PATH`; the ones that must be
-  executable become symlinks to `libgit.so` at first run
+- `usr/lib/git-core/*` helpers, reached through `GIT_EXEC_PATH`; built-in commands link to
+  `libgit.so`, HTTP transports to `libgit-remote-curl.so`, and shell commands to the exec
+  trampoline, which starts `/system/bin/sh` with the saved script and its original name.
+  Sourced shell libraries remain ordinary text files.
 - `usr/share/git-core/templates`, reached through `GIT_TEMPLATE_DIR`
 
 Shebangs and built-in shell paths are rewritten to `/system/bin/sh`, because the path Termux
@@ -543,10 +545,11 @@ first so that a file that cannot parse costs musl clients their DNS rather than
 costing the app its editor server, and it is passed as one token, because
 `process-monitor.js` names a process by its first non-option argument.
 
-The bootstrap also adds three scripts to the workbench page template,
+The bootstrap also adds four scripts to the workbench page template,
 `vscode-reh/out/vs/code/browser/workbench/workbench.html`, through `extendWorkbenchPage`, because
 the page cannot take them from `product.json`: the trusted link domains, the extension
-recommendations, and the theme a page load starts on. The last one first reads the settings file of
+recommendations, the configuration defaults the first layout reads, and the theme a page load
+starts on. The last one first reads the settings file of
 the window it opens, the folder's `.vscode/settings.json` or the workspace file, with a synchronous
 GET of `/vscode-remote-resource`, because the page has to be coloured before its first paint and the
 workbench reads its configuration element once. The text goes to the workbench as
@@ -594,6 +597,19 @@ recorded; and a window after the user's theme was changed by an edit of the user
 folder with a theme of its own was open, whose record of the user's theme is then older than the
 theme. Patch 0026 keeps the folder's settings in force between the extensions registering and the
 file being read, which a folder's settings given by the page or by its cached copy both need.
+
+The configuration-defaults script sets `workbench.secondarySideBar.defaultVisibility` to `hidden` in
+the page's `configurationDefaults`, unless the page already carries a value for that key, and keeps
+every other entry. The workbench decides whether to open the Chat side bar when its layout state is
+initialised, from that setting's default. The browser's default configuration registers the
+construction options' `configurationDefaults` when it is built, before that decision, whereas the
+welcome extension's contributed default registers only after the extension host has scanned the
+extension. The browser keeps the defaults registered in one start and replays them at the next, so
+only the first load of a profile fell back to upstream's `visibleInWorkspace` and drew the Chat side
+bar until the extension closed it. The value is the one the extension contributes for every device, so no device
+ends up anywhere new, and `scripts/test-server-bootstrap.js` compares the two. A layout already
+stored for the workspace still wins. The primary side bar has no such setting, so a first run still
+shows it, with the standard Welcome page, until the extension host is up.
 
 Readiness is `GET /version`, and only a `200` counts. There is no `/healthz`:
 what used to serve one was a fallback server in `assets/server.js` that bound the

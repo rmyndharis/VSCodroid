@@ -85,6 +85,15 @@ class NonInteractiveShellEnvTest {
 
     private fun bashEnvFile() = File(Environment.getBashEnvPath(context))
 
+    @Test
+    fun `the shared environment names Git system defaults without choosing other pagers`() {
+        val env = Environment.buildProcessEnvironment(context, 1234)
+
+        assertEquals(File(filesDir, "usr/etc/gitconfig").path, env["GIT_CONFIG_SYSTEM"])
+        assertFalse("PAGER" in env, "other tools keep their own pager choice")
+        assertFalse("GIT_PAGER" in env, "Git's user configuration must retain precedence")
+    }
+
     /**
      * The drift guard, and the reason it is first: the two halves are edited
      * separately and neither fails on its own. A file written where nothing

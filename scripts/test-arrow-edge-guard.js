@@ -513,7 +513,7 @@ for (const tag of ['INPUT', 'TEXTAREA']) {
 {
     const LATCH_INTERCEPTOR = extractInterceptor('{"/":["Slash",191,0]}');
 
-    function latchPage({ startOnTerminal = false } = {}) {
+    function latchPage({ startOnTerminal = false, workbench = false } = {}) {
         const log = [];
         const timers = [];
         const listen = (node) => Object.assign(node, {
@@ -541,14 +541,20 @@ for (const tag of ['INPUT', 'TEXTAREA']) {
             });
             const phases = [[window, true], [document, true], [target, true], [target, false]];
             if (event.bubbles) phases.push([document, false], [window, false]);
-            for (const [node, capture] of phases) {
-                for (const l of node.listeners.slice()) {
-                    if (l.type !== event.type || l.capture !== capture) continue;
-                    l.fn.call(node, event);
-                    if (stopped) return !event.defaultPrevented;
+            const outer = window.event;
+            window.event = event;
+            try {
+                for (const [node, capture] of phases) {
+                    for (const l of node.listeners.slice()) {
+                        if (l.type !== event.type || l.capture !== capture) continue;
+                        l.fn.call(node, event);
+                        if (stopped) return !event.defaultPrevented;
+                    }
                 }
+                return !event.defaultPrevented;
+            } finally {
+                window.event = outer;
             }
-            return !event.defaultPrevented;
         }
         class FakeEditContext {
             constructor(name = 'empty') {
@@ -604,6 +610,7 @@ for (const tag of ['INPUT', 'TEXTAREA']) {
             },
             focus() {
                 log.push('focus host');
+                if (document.activeElement === host) return;
                 document.activeElement = host;
                 ime.active = attached;
                 dispatch(host, { type: 'focusin', bubbles: true });
@@ -612,7 +619,8 @@ for (const tag of ['INPUT', 'TEXTAREA']) {
         });
         // The workbench's keybinding service, as far as a chord goes. A chord
         // that opens Quick Open moves focus into its box.
-        const quickOpen = { tagName: 'INPUT', value: '', classList: { contains: () => false } };
+        const quickOpen = listen({ tagName: 'INPUT', value: '', classList: { contains: () => false } });
+        quickOpen.dispatchEvent = (event) => dispatch(quickOpen, event);
         host.addEventListener('keydown', (e) => {
             log.push(`chord ${e.key}${e.ctrlKey ? ' ctrl' : ''}${e.altKey ? ' alt' : ''}${e.shiftKey ? ' shift' : ''} ${e.code} ${e.keyCode}`);
             if (page.chordTakesFocus && e.ctrlKey) { host.blur(); document.activeElement = quickOpen; }
@@ -622,17 +630,74 @@ for (const tag of ['INPUT', 'TEXTAREA']) {
         document.activeElement = startOnTerminal ? terminal : host;
         window.__vscodroid = {};
         const event = function (type, init) { return { type, ...init }; };
+        // The workbench's side of a chord, as far as the editor's focus goes. The
+        // first key of a chord switches its IME off, and the editor answers by
+        // moving focus from the EditContext host to a read-only textarea; the key
+        // that ends the chord, or the five seconds it waits, switches it on and the
+        // editor focuses its host again. A key the keyboard hands over as 229 is
+        // ignored for keybindings, and so is a modifier alone.
+        class FakeElement {
+            constructor(name) { this.name = name; this.classList = { contains: (n) => n === name }; this.tagName = 'TEXTAREA'; }
+            focus() {
+                if (this === host) return focusHost.call(this);
+                log.push(`focus ${this.name}`);
+                if (document.activeElement === host) host.blur();
+                document.activeElement = this;
+                ime.active = null;
+            }
+        }
+        // Editor hosts and the IME box use the same focus prototype.
+        const focusHost = host.focus;
+        host.focus = function () { return FakeElement.prototype.focus.call(this); };
+        const readOnlyBox = listen(new FakeElement('ime-text-area'));
+        readOnlyBox.dispatchEvent = (event) => dispatch(readOnlyBox, event);
+        const chordKey = (e) => (e.ctrlKey && e.key === 'k') || (e.key === 'Escape' && page.zen);
+        if (workbench) {
+            window.addEventListener('keydown', (e) => {
+                if (e.keyCode === 229 || ['Control', 'Shift', 'Alt', 'Meta'].includes(e.key)) return;
+                if (page.chordPending) {
+                    page.chordPending = false;
+                    log.push(`workbench ends the chord at ${e.key}`);
+                    host.focus();
+                } else if (chordKey(e)) {
+                    page.chordPending = true;
+                    log.push('workbench waits for the second key');
+                    readOnlyBox.focus();
+                }
+            }, false);
+        }
         vm.runInContext(LATCH_INTERCEPTOR, vm.createContext({
             window, document, navigator: { userAgent: AT_149 },
             EditContext: FakeEditContext,
             TextUpdateEvent: event,
             InputEvent: event,
             KeyboardEvent: event,
-            setTimeout: (fn) => { timers.push(fn); },
+            ...(workbench ? { HTMLElement: FakeElement } : {}),
+            setTimeout: (fn, delay = 0) => { timers.push({ fn, delay }); },
         }));
         page = {
             log, host, own, terminal,
-            flush() { for (const fn of timers.splice(0)) fn(); },
+            // The tasks queued so far, not what they queue and not a timer of seconds.
+            flush() {
+                const due = timers.filter((x) => x.delay < 1000);
+                for (const x of due) timers.splice(timers.indexOf(x), 1);
+                for (const x of due) x.fn();
+            },
+            // The timers that fall due within `ms` more.
+            advance(ms) {
+                const due = timers.filter((x) => x.delay <= ms);
+                for (const x of due) timers.splice(timers.indexOf(x), 1);
+                for (const x of due) x.fn();
+            },
+            chordPending: false,
+            zen: false,
+            readOnlyBox,
+            // The user taps a box elsewhere, as Quick Open's, and types into it.
+            moveFocusToQuickOpen() { host.blur(); document.activeElement = quickOpen; },
+            // A character the page may take or the interceptor may cancel; true when typed.
+            input(target, text) {
+                return dispatch(target, { type: 'beforeinput', inputType: 'insertText', data: text, bubbles: true, cancelable: true });
+            },
             // What ExtraKeyRow pushes, all three flags at once.
             latch(mods = {}) {
                 const m = window.__vscodroid;
@@ -783,6 +848,118 @@ for (const tag of ['INPUT', 'TEXTAREA']) {
             return { log: p.log, editContext: p.host.editContext.name };
         },
         { log: ['editor typed al', 'blur host', 'focus host', 'blur host', 'focus host'], editContext: 'empty' });
+
+    // A chord the row started waits for its second key, and the soft keyboard
+    // types that key as a plain letter, which the workbench cannot read as a
+    // key: the keyboard reports it as key code 229 whatever has focus, and with
+    // the row's first key no longer moving focus to the read-only box the letter
+    // went into the file while the chord waited. While such a chord waits the
+    // interceptor lends the empty EditContext as it does for a latch, so the
+    // next character is the chord's second key. The wait begins where the
+    // workbench is seen to switch its IME off and ends at a key that is not a
+    // modifier, at five seconds, or when focus is not on the editor.
+    const chordCase = (name, act, want, options) => latchCase(name, act, want, { workbench: true, ...options });
+    const chordState = (p) => ({
+        chords: p.log.filter((line) => line.startsWith('chord ')),
+        typed: p.log.filter((line) => line.startsWith('editor typed ')),
+        editContext: p.host.editContext.name,
+    });
+    // The row's Ctrl, then k on the soft keyboard, typed as a keyboard that commits types it or one that composes.
+    const startFromRow = (p, how = 'commit') => { p.latch({ ctrl: true }); p[how]('k'); p.flush(); p.flush(); };
+    const hardwareKey = (key, code, keyCode, mods = {}) => ({
+        type: 'keydown', key, code, keyCode, isTrusted: true, bubbles: true, cancelable: true, ...mods,
+    });
+
+    chordCase('Ctrl+K from the row, then a plain z from a committing keyboard, is Ctrl+K Z and types nothing',
+        (p) => { startFromRow(p); p.commit('z'); p.flush(); return chordState(p); },
+        { chords: ['chord k ctrl KeyK 75', 'chord z KeyZ 90'], typed: [], editContext: 'editor' });
+    chordCase('the same with a keyboard that composes, as Gboard 12.4 does',
+        (p) => { startFromRow(p, 'compose'); p.compose('z'); p.flush(); return chordState(p); },
+        { chords: ['chord k ctrl KeyK 75', 'chord z KeyZ 90'], typed: [], editContext: 'editor' });
+    chordCase('a letter after the chord has ended at its second key is typed as ever',
+        (p) => { startFromRow(p); p.commit('z'); p.flush(); p.commit('q'); return chordState(p); },
+        { chords: ['chord k ctrl KeyK 75', 'chord z KeyZ 90'], typed: ['editor typed q'], editContext: 'editor' });
+    chordCase('a chord left unanswered keeps the EditContext lent until the workbench\'s five seconds are over, then the letter is typed',
+        (p) => {
+            startFromRow(p);
+            p.advance(4999);
+            const early = p.host.editContext.name;
+            p.advance(5000);
+            p.commit('q');
+            return { early, ...chordState(p) };
+        },
+        { early: 'empty', chords: ['chord k ctrl KeyK 75'], typed: ['editor typed q'], editContext: 'editor' });
+    // The row sends Escape as a key, with no latch and no character, so the wait has
+    // to begin where the workbench switches its IME off and not at a latch.
+    chordCase('Esc Esc in Zen Mode: the first Esc from the row lends the EditContext, the second ends the chord and gives it back',
+        (p) => {
+            p.zen = true;
+            p.key('Escape', 27);
+            p.flush();
+            const lent = p.host.editContext.name;
+            p.key('Escape', 27);
+            p.flush();
+            return { lent, ...chordState(p) };
+        },
+        { lent: 'empty', chords: ['chord Escape  27', 'chord Escape  27'], typed: [], editContext: 'editor' });
+    chordCase('Ctrl+K Ctrl+S from the row: the second Ctrl is latched with the EditContext already lent, and Ctrl+S is the chord',
+        (p) => { startFromRow(p); p.latch({ ctrl: true }); p.commit('s'); p.flush(); return chordState(p); },
+        { chords: ['chord k ctrl KeyK 75', 'chord s ctrl KeyS 83'], typed: [], editContext: 'editor' });
+    // A hardware keyboard's keys are trusted: the editor still moves focus to the
+    // read-only box, so nothing is lent and the letter comes as a key.
+    chordCase('a hardware chord is untouched: focus moves to the read-only box, nothing is lent, the letter is a key event',
+        (p) => {
+            p.host.dispatchEvent(hardwareKey('k', 'KeyK', 75, { ctrlKey: true }));
+            p.flush();
+            const lent = p.host.editContext.name;
+            p.readOnlyBox.dispatchEvent(hardwareKey('z', 'KeyZ', 90));
+            p.flush();
+            return { lent, log: p.log, editContext: p.host.editContext.name };
+        },
+        { lent: 'editor',
+            log: ['chord k ctrl KeyK 75', 'workbench waits for the second key', 'focus ime-text-area', 'blur host',
+                'workbench ends the chord at z', 'focus host'],
+            editContext: 'editor' });
+    chordCase('a chord another key ends, such as Enter from a hardware keyboard, is over: the next letter is typed, not taken',
+        (p) => { startFromRow(p); p.host.dispatchEvent(hardwareKey('Enter', 'Enter', 13)); p.flush(); p.commit('q'); return chordState(p); },
+        { chords: ['chord k ctrl KeyK 75', 'chord Enter Enter 13'], typed: ['editor typed q'], editContext: 'editor' });
+    chordCase('a word still composing when the row starts the chord is typed once, and z is still the second key',
+        (p) => { p.compose('al'); startFromRow(p); p.commit('z'); p.flush(); return chordState(p); },
+        { chords: ['chord k ctrl KeyK 75', 'chord z KeyZ 90'], typed: ['editor typed al'], editContext: 'editor' });
+    // A whole word in one commit, as a next-word prediction chip makes it, is text and
+    // not a key; the chord is still waiting for its second key afterwards.
+    chordCase('a word a prediction chip commits in one piece is inserted, and the chord still waits for its second key',
+        (p) => {
+            startFromRow(p);
+            p.commit('hello');
+            p.flush();
+            p.flush();
+            const word = p.own.text;
+            p.commit('z');
+            p.flush();
+            return { word, ...chordState(p) };
+        },
+        { word: 'hello', chords: ['chord k ctrl KeyK 75', 'chord z KeyZ 90'], typed: ['editor typed hello'], editContext: 'editor' });
+    chordCase('a chord the workbench has left no longer takes the next letter',
+        (p) => {
+            startFromRow(p);
+            // Ending chord mode restores the editor's IME and focuses its host.
+            p.chordPending = false;
+            p.host.focus();
+            p.flush();
+            p.commit('z');
+            p.flush();
+            return chordState(p);
+        },
+        { chords: ['chord k ctrl KeyK 75'], typed: ['editor typed z'], editContext: 'editor' });
+    chordCase('focus leaving the editor during the chord: what is typed in the box it went to is typed there',
+        (p) => {
+            startFromRow(p);
+            p.moveFocusToQuickOpen();
+            p.flush();
+            const s = chordState(p); return { typed: p.input(p.quickOpen, 'x'), chords: s.chords, editContext: s.editContext };
+        },
+        { typed: true, chords: ['chord k ctrl KeyK 75'], editContext: 'editor' });
 }
 
 let failed = 0;

@@ -21,6 +21,7 @@ import com.vscodroid.storage.SafStorageManager
 import com.vscodroid.util.CrashReporter
 import com.vscodroid.util.Logger
 import com.vscodroid.util.StorageManager
+import com.vscodroid.util.redactSecrets
 import com.vscodroid.webview.redactToken
 import com.vscodroid.webview.urlLogLabel
 import org.json.JSONArray
@@ -849,9 +850,10 @@ class AndroidBridge(
      * `tag` goes through it too. It is page-supplied and there is no reason it
      * could not carry a URL.
      *
-     * Ceiling, stated because it is wider here than at the other call sites: the
-     * redaction matches the `tkn=` parameter, so a page that prints a bare token,
-     * or one re-encoded as `tkn%3D` inside another parameter, passes through. See
+     * Known credential shapes also pass through [redactSecrets].
+     * The connection-token redaction matches the `tkn=` parameter, so a page
+     * that prints a bare token or one re-encoded as `tkn%3D` inside another
+     * parameter passes through. See
      * [redactToken]. Closing that would mean redacting by the token's value, which
      * this class could do and the webview call sites could not, worth knowing
      * before anyone assumes parity between them.
@@ -859,8 +861,8 @@ class AndroidBridge(
     @JavascriptInterface
     fun logToNative(authToken: String, level: String, tag: String, message: String) {
         if (!security.validateToken(authToken)) return
-        val safeTag = redactToken(tag)
-        val safeMessage = redactToken(message)
+        val safeTag = redactSecrets(redactToken(tag))
+        val safeMessage = redactSecrets(redactToken(message))
         when (level) {
             "debug" -> Logger.d(safeTag, safeMessage)
             "info" -> Logger.i(safeTag, safeMessage)

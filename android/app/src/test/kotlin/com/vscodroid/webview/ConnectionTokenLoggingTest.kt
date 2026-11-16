@@ -418,6 +418,27 @@ class ConnectionTokenLoggingTest {
         assertNothingLeaked()
     }
 
+    @Test
+    fun `console credentials are scrubbed from source and message at every level`() {
+        val sourceSecret = "dummy-script-credential"
+        val messageSecret = "dummy-console-credential"
+        val client = VSCodroidWebChromeClient(navigationIsOurs = { false }) { false }
+        listOf(
+            ConsoleMessage.MessageLevel.ERROR, ConsoleMessage.MessageLevel.WARNING,
+            ConsoleMessage.MessageLevel.LOG, ConsoleMessage.MessageLevel.DEBUG, ConsoleMessage.MessageLevel.TIP,
+        ).forEach { level ->
+            val console = mockk<ConsoleMessage>(relaxed = true)
+            every { console.messageLevel() } returns level
+            every { console.lineNumber() } returns 42
+            every { console.sourceId() } returns "https://example.invalid/a.js?api_key=$sourceSecret&module=console"
+            every { console.message() } returns "retry password=$messageSecret diagnostic"
+            client.onConsoleMessage(console)
+        }
+        assertTrue(logged.size == 5, "the console did not emit every level: $logged")
+        assertTrue(logged.all { "example.invalid" in it && "retry" in it && "diagnostic" in it }, logged.toString())
+        assertTrue(logged.none { sourceSecret in it || messageSecret in it }, logged.toString())
+    }
+
     /**
      * The callback still receives the real URL.
      *

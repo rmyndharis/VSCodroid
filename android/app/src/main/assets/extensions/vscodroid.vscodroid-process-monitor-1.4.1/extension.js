@@ -26,7 +26,7 @@ const POLL_INTERVAL_MS = 10_000;
 const STALE_AFTER_MS = 3 * POLL_INTERVAL_MS;
 
 /**
- * Whether a snapshot is too old for anything to be decided from it.
+ * Whether a snapshot is too old or dated in the future.
  *
  * Written as the negation of "fresh enough" rather than as "older than", so a
  * snapshot carrying no timestamp comes out stale. The direct form is
@@ -36,7 +36,8 @@ const STALE_AFTER_MS = 3 * POLL_INTERVAL_MS;
  * `budget.soft || 8` and `p.idle === true` do below.
  */
 function isStale(snapshot) {
-    return !(Date.now() - snapshot.timestamp <= STALE_AFTER_MS);
+    const age = Date.now() - snapshot.timestamp;
+    return !(age >= 0 && age <= STALE_AFTER_MS);
 }
 
 let statusBarItem;

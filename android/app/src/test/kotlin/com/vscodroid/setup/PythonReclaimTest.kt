@@ -202,6 +202,7 @@ class PythonReclaimTest {
     @Test
     fun `a failed stdlib copy keeps Python repair pending`() {
         every { assets.list(any()) } returns emptyArray()
+        every { assets.open(any()) } throws java.io.IOException("absent")
         every { assets.list("usr/lib") } returns arrayOf(shipped, "python3.13")
         every { assets.list("usr/lib/python3.13") } returns arrayOf("encodings")
         every { assets.list("usr/lib/python3.13/encodings") } returns arrayOf("__init__.py")
@@ -229,6 +230,7 @@ class PythonReclaimTest {
     @Test
     fun `an unavailable stdlib root keeps runtime repair pending until a complete retry`() {
         every { assets.list(any()) } returns emptyArray()
+        every { assets.open(any()) } throws java.io.IOException("absent")
         every { assets.list("usr/lib") } returns arrayOf(shipped, "python3.13")
         every { assets.open("usr/lib/python3.13") } throws java.io.IOException("stdlib root unavailable")
         every { assets.open("usr/lib/$shipped") } answers {

@@ -16,6 +16,7 @@ import androidx.core.content.pm.ShortcutManagerCompat
 import androidx.core.graphics.drawable.IconCompat
 import androidx.core.view.doOnLayout
 import androidx.core.widget.NestedScrollView
+import androidx.lifecycle.Lifecycle
 import androidx.lifecycle.lifecycleScope
 import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
@@ -37,6 +38,7 @@ import com.vscodroid.webview.hasKeptPageColor
 import com.vscodroid.webview.keepStartColor
 import com.vscodroid.webview.lastPageColor
 import com.vscodroid.webview.readSavedPageColor
+import kotlinx.coroutines.CoroutineDispatcher
 import kotlinx.coroutines.Dispatchers
 import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
@@ -88,6 +90,12 @@ class SplashActivity : AppCompatActivity() {
     /** [launchMain] was asked while [stopped]; [onStart] runs it when the user is back. */
     private var launchPending = false
 
+    /**
+     * The setup hold a first run took ahead of its launch repairs, until a setup
+     * run takes it over ([runSetupWithRetry]) or the launch gives it back.
+     */
+    private var heldThroughRepairs = false
+
     // Progress UI refs (only valid after setContentView to progress layout)
     private val progressRows = mutableMapOf<String, ProgressRow>()
 
@@ -107,160 +115,203 @@ class SplashActivity : AppCompatActivity() {
 
         val setup = FirstRunSetup(this)
 
-        // Always validate tool symlinks: Android changes nativeLibraryDir
-        // path on every reinstall, which breaks absolute symlinks in usr/bin/.
-        //
-        // These touch the filesystem on the main thread at launch. Letting one
-        // throw would crash the app before it ever draws, leaving a launch loop
-        // with no explanation. What survives a failure here is degraded rather
-        // than dead (tools missing from PATH, a stale terminal profile), and
-        // logcat is the only trace, so keep the message specific.
-        //
-        // Guarded one at a time rather than as a block, because they share
-        // nothing but the launch they run in and a single catch made the first
-        // failure cost all of them. The likeliest thrower is not last: writing
-        // .npmrc is a certainty on the first launch after any reinstall, because
-        // its contents name nativeLibraryDir and that path is new every time, and
-        // a full disk turns that write into an exception. Behind it sat the
-        // repair that repoints git and the Claude Code wrapper at the directory
-        // the app has just moved to, and the reclaim of SAF mirrors whose
-        // permission the user withdrew, the only pass here that gives disk back.
-        // A full disk therefore stopped its own remedy, and did it again on every
-        // launch.
-        repair("tool symlinks") { setup.setupToolSymlinks() }
-        repair("git core") { setup.setupGitCore() }
-        repair("the git CA bundle") { setup.setupGitCaBundle() }
-        repair("the OpenSSL configuration") { setup.setupOpensslConfig() }
-        repair("the ripgrep symlink") { setup.setupRipgrepVscodeSymlink() }
-        repair("the Copilot aliases") { setup.setupCopilotAndroidAliases() }
-        // Before the three below, all of which extend .bashrc only when it
-        // already exists. An install broken by an older release carries a
-        // truncated one, and every writer skipped it because it was there;
-        // this clears and rewrites it so the appenders have something whole
-        // to append to. It is confined to evidence that cannot be a user's
-        // own edit, see the method for where that line is drawn.
-        repair("the truncated-file repair") { setup.repairTruncatedSetupFiles() }
-        repair("the npm wrappers") { setup.createNpmWrappers() }
-        repair("the toolchain env sourcing") { setup.ensureToolchainEnvSourcing() }
-        repair("the prompt block") { setup.ensurePromptFix() }
-        repair("the startup directory guard") { setup.ensureStartupDirGuard() }
-        // The same commands for shells that never read .bashrc. Outside the
-        // three above rather than inside them: it writes its own file whole, so
-        // it neither needs a .bashrc to exist nor leaves anything behind in one.
-        repair("the non-interactive shell env") { setup.createBashEnvFile() }
-        // Beside the shell writers rather than inside them: pip.conf is its own
-        // file with its own format, and it has to be reconciled every launch so a
-        // changed wheelhouse URL reaches a device already installed.
-        repair("the pip configuration") { setup.ensurePipConfig() }
-        // Ahead of the settings refresh, which writes the preload's LD_PRELOAD
-        // line only when this file is there. That guard is what keeps the line
-        // from ever standing alone (a preload the linker cannot find kills
-        // every terminal rather than degrading one); the order is what gets
-        // the file and the line in the same launch. A same-version reinstall
-        // runs no extraction, so with the two reversed the first build carrying
-        // the library would put the file down after the refresh had looked, and
-        // the line would wait for the launch after.
-        repair("the exec preload") { setup.ensureExecPreload() }
-        repair("the native library paths in settings.json") { setup.updateSettingsNativeLibPaths() }
-        // Beside the other idempotent repairs, for the same reason they are
-        // here: it can disappear between launches. This one because it is
-        // reachable from outside the app by some routes, and wiped by Clear
-        // Data, not because the app moved it.
-        repair("the projects directory") { setup.ensureProjectsDir() }
-        // Immediately after it, because it points AT it. The link was written
-        // once, at first run, behind a guard that follows it -- so a projects
-        // directory deleted from outside the app left `~/projects` dangling,
-        // reading as present to every check, until the next app update. The
-        // terminal starts there.
-        repair("the projects symlink") { setup.createStorageSymlinks() }
-        // A toolchain keeps the manifest it was installed with, so a
-        // packaging fix never reaches an install that already exists. This
-        // gives those binaries back the execute bit they should have had.
-        // It returns immediately, the walk itself runs on the toolchain
-        // I/O thread, because the trees involved have thousands of files
-        // and this block is on the main thread.
-        //
-        // applicationContext, not this, and that is not a style choice: the
-        // walk it submits runs on the toolchain I/O thread over thousands of
-        // files, and this Activity finishes for MainActivity moments later, so
-        // handing it our own Context keeps a finished Activity, its Window and
-        // its ContextImpl reachable for the whole walk -- exactly while the
-        // editor, the WebView renderer and Node are all starting. Every
-        // ToolchainManager built in this file passes applicationContext for the
-        // same reason; ToolchainActivity and AndroidBridge already did.
-        //
-        // The Context is only half of it, and this line is the half that needs
-        // nothing else: it hands the manager no callback, so there is no closure
-        // to name this screen. Where there is one, in [startDownloads], the
-        // closure holds this screen strongly on purpose, because it is the only
-        // thing that advances the queue; [endDownloadQueue] is what bounds that
-        // retention.
-        repair("the toolchain repair pass") { ToolchainManager(applicationContext).repairInstalledToolchains() }
-        // Finish earlier committed removals and orphan metadata cleanup. Ordinary
-        // copies survive revoked permissions because terminals may still write to them.
-        repair("the SAF mirror reclaim") { SafStorageManager(this).reclaimRevokedMirrors() }
+        // The file repairs, one block that a first run runs off the main thread.
+        fun repairFiles() {
+            // Always validate tool symlinks: Android changes nativeLibraryDir
+            // path on every reinstall, which breaks absolute symlinks in usr/bin/.
+            //
+            // These touch the filesystem at launch: on the main thread, or on an
+            // I/O thread on a first run (below). Letting one throw would crash the
+            // app, leaving a launch loop with no explanation. What survives a
+            // failure here is degraded rather than dead (tools missing from PATH, a
+            // stale terminal profile), and logcat is the only trace, so keep the
+            // message specific.
+            //
+            // Guarded one at a time rather than as a block, because they share
+            // nothing but the launch they run in and a single catch made the first
+            // failure cost all of them. The likeliest thrower is not last: writing
+            // .npmrc is a certainty on the first launch after any reinstall, because
+            // its contents name nativeLibraryDir and that path is new every time, and
+            // a full disk turns that write into an exception. Behind it sat the
+            // repair that repoints git and the Claude Code wrapper at the directory
+            // the app has just moved to, and the reclaim of SAF mirrors whose
+            // permission the user withdrew, the only pass here that gives disk back.
+            // A full disk therefore stopped its own remedy, and did it again on every
+            // launch.
+            repair("tool symlinks") { setup.setupToolSymlinks() }
+            repair("git core") { setup.setupGitCore() }
+            repair("the git CA bundle") { setup.setupGitCaBundle() }
+            repair("the OpenSSL configuration") { setup.setupOpensslConfig() }
+            repair("the ripgrep symlink") { setup.setupRipgrepVscodeSymlink() }
+            repair("the Copilot aliases") { setup.setupCopilotAndroidAliases() }
+            // Before the three below, all of which extend .bashrc only when it
+            // already exists. An install broken by an older release carries a
+            // truncated one, and every writer skipped it because it was there;
+            // this clears and rewrites it so the appenders have something whole
+            // to append to. It is confined to evidence that cannot be a user's
+            // own edit, see the method for where that line is drawn.
+            repair("the truncated-file repair") { setup.repairTruncatedSetupFiles() }
+            repair("the npm wrappers") { setup.createNpmWrappers() }
+            repair("the toolchain env sourcing") { setup.ensureToolchainEnvSourcing() }
+            repair("the prompt block") { setup.ensurePromptFix() }
+            repair("the startup directory guard") { setup.ensureStartupDirGuard() }
+            // The same commands for shells that never read .bashrc. Outside the
+            // three above rather than inside them: it writes its own file whole, so
+            // it neither needs a .bashrc to exist nor leaves anything behind in one.
+            repair("the non-interactive shell env") { setup.createBashEnvFile() }
+            // Beside the shell writers rather than inside them: pip.conf is its own
+            // file with its own format, and it has to be reconciled every launch so a
+            // changed wheelhouse URL reaches a device already installed.
+            repair("the pip configuration") { setup.ensurePipConfig() }
+            // Ahead of the settings refresh, which writes the preload's LD_PRELOAD
+            // line only when this file is there. That guard is what keeps the line
+            // from ever standing alone (a preload the linker cannot find kills
+            // every terminal rather than degrading one); the order is what gets
+            // the file and the line in the same launch. A same-version reinstall
+            // runs no extraction, so with the two reversed the first build carrying
+            // the library would put the file down after the refresh had looked, and
+            // the line would wait for the launch after.
+            repair("the exec preload") { setup.ensureExecPreload() }
+            repair("the native library paths in settings.json") { setup.updateSettingsNativeLibPaths() }
+            // Beside the other idempotent repairs, for the same reason they are
+            // here: it can disappear between launches. This one because it is
+            // reachable from outside the app by some routes, and wiped by Clear
+            // Data, not because the app moved it.
+            repair("the projects directory") { setup.ensureProjectsDir() }
+            // Immediately after it, because it points AT it. The link was written
+            // once, at first run, behind a guard that follows it -- so a projects
+            // directory deleted from outside the app left `~/projects` dangling,
+            // reading as present to every check, until the next app update. The
+            // terminal starts there.
+            repair("the projects symlink") { setup.createStorageSymlinks() }
+        }
 
-        if (!setup.isFirstRun()) {
-            // The interpreter ships in the APK and every install replaces it,
-            // while its runtime and stdlib are extracted only when [isFirstRun]
-            // sees a changed versionName, versionCode, or lastUpdateTime. If the
-            // runtime in filesDir ever falls out of step with the packaged
-            // interpreter, "not first run" still has work to do.
-            // The check is two directory listings; the work it gates is 23 MB, so
-            // it runs off the main thread and holds this activity open while it
-            // does: lifecycleScope is cancelled the moment we finish for
-            // MainActivity.
-            if (setup.pythonRuntimeNeedsWork()) {
-                Logger.i(tag, "Bundled Python changed since the last extraction; reconciling")
-                showSplashLayout()
-                findViewById<TextView>(R.id.statusText).text = getString(R.string.status_updating_python)
-                lifecycleScope.launch {
-                    withContext(Dispatchers.IO) { setup.reconcilePythonRuntime() }
-                    continueAfterSetup()
+        // The rest, as another block; its returns end the launch, as they did.
+        fun continueAfterRepairs() {
+            // A toolchain keeps the manifest it was installed with, so a
+            // packaging fix never reaches an install that already exists. This
+            // gives those binaries back the execute bit they should have had.
+            // It returns immediately, the walk itself runs on the toolchain
+            // I/O thread, because the trees involved have thousands of files
+            // and this block is on the main thread.
+            //
+            // applicationContext, not this, and that is not a style choice: the
+            // walk it submits runs on the toolchain I/O thread over thousands of
+            // files, and this Activity finishes for MainActivity moments later, so
+            // handing it our own Context keeps a finished Activity, its Window and
+            // its ContextImpl reachable for the whole walk -- exactly while the
+            // editor, the WebView renderer and Node are all starting. Every
+            // ToolchainManager built in this file passes applicationContext for the
+            // same reason; ToolchainActivity and AndroidBridge already did.
+            //
+            // The Context is only half of it, and this line is the half that needs
+            // nothing else: it hands the manager no callback, so there is no closure
+            // to name this screen. Where there is one, in [startDownloads], the
+            // closure holds this screen strongly on purpose, because it is the only
+            // thing that advances the queue; [endDownloadQueue] is what bounds that
+            // retention.
+            repair("the toolchain repair pass") { ToolchainManager(applicationContext).repairInstalledToolchains() }
+            // Finish earlier committed removals and orphan metadata cleanup. Ordinary
+            // copies survive revoked permissions because terminals may still write to them.
+            repair("the SAF mirror reclaim") { SafStorageManager(this).reclaimRevokedMirrors() }
+
+            if (!setup.isFirstRun()) {
+                // The interpreter ships in the APK and every install replaces it,
+                // while its runtime and stdlib are extracted only when [isFirstRun]
+                // sees a changed versionName, versionCode, or lastUpdateTime. If the
+                // runtime in filesDir ever falls out of step with the packaged
+                // interpreter, "not first run" still has work to do.
+                // The check is two directory listings; the work it gates is 23 MB, so
+                // it runs off the main thread and holds this activity open while it
+                // does: lifecycleScope is cancelled the moment we finish for
+                // MainActivity.
+                if (setup.pythonRuntimeNeedsWork()) {
+                    Logger.i(tag, "Bundled Python changed since the last extraction; reconciling")
+                    showSplashLayout()
+                    findViewById<TextView>(R.id.statusText).text = getString(R.string.status_updating_python)
+                    lifecycleScope.launch {
+                        withContext(Dispatchers.IO) { setup.reconcilePythonRuntime() }
+                        continueAfterSetup()
+                    }
+                    return
                 }
+                Logger.i(tag, "Not first run, setup is already behind this launch")
+                continueAfterSetup()
                 return
             }
-            Logger.i(tag, "Not first run, setup is already behind this launch")
-            continueAfterSetup()
+
+            showSplashLayout()
+            val statusText = findViewById<TextView>(R.id.statusText)
+            val progressBar = findViewById<ProgressBar>(R.id.progressBar)
+            progressBar.isIndeterminate = true
+
+            if (setup.getPreviousVersionCode() > 0) {
+                statusText.text = getString(R.string.status_updating_app)
+            }
+
+            // A colour is kept once the workbench first shows one, so none is kept on
+            // the first start after an update from a build that kept none, and setup
+            // then runs for a minute on the dark window whatever the editor's theme.
+            // Only with a port remembered: a fresh install, or one after Clear storage,
+            // has no workbench storage to read either.
+            if (!hasKeptPageColor(this)) {
+                val port = PortFinder.rememberedPort(this)
+                if (port > 0) {
+                    colorProbe = readSavedPageColor(this, port) { color ->
+                        colorProbe?.destroy()
+                        colorProbe = null
+                        if (color != null) showSavedPageColor(color)
+                    }
+                }
+            }
+
+            // Named rather than assigned inline, so [onDestroy] can hand back exactly
+            // this closure and nobody else's.
+            val sink: (String, Int) -> Unit = { message, percent ->
+                statusText.post {
+                    applySetupProgress(statusText, progressBar, message, percent)
+                }
+            }
+            progressSink = sink
+            // After onResume on a first run, which had no sink to attach then.
+            if (lifecycle.currentState.isAtLeast(Lifecycle.State.RESUMED)) {
+                FirstRunSetup.attachProgress(sink)
+            }
+
+            runSetupWithRetry(setup, statusText, progressBar)
+        }
+
+        // A launch that will run setup puts the splash up and repairs off the
+        // main thread; any other launch repairs here, as it always has.
+        if (setup.isFirstRun()) {
+            showFirstRunSplash(setup)
+            startFirstRunRepairs(::repairFiles, ::continueAfterRepairs)
             return
         }
+        oneLaunchRepairAtATime(::repairFiles)
+        continueAfterRepairs()
+    }
 
-        showSplashLayout()
-        val statusText = findViewById<TextView>(R.id.statusText)
-        val progressBar = findViewById<ProgressBar>(R.id.progressBar)
-
-        if (setup.getPreviousVersionCode() > 0) {
-            statusText.text = getString(R.string.status_updating_app)
-        }
-
-        // A colour is kept once the workbench first shows one, so none is kept on
-        // the first start after an update from a build that kept none, and setup
-        // then runs for a minute on the dark window whatever the editor's theme.
-        // Only with a port remembered: a fresh install, or one after Clear storage,
-        // has no workbench storage to read either.
-        if (!hasKeptPageColor(this)) {
-            val port = PortFinder.rememberedPort(this)
-            if (port > 0) {
-                colorProbe = readSavedPageColor(this, port) { color ->
-                    colorProbe?.destroy()
-                    colorProbe = null
-                    if (color != null) showSavedPageColor(color)
+    /**
+     * The launch repairs of a first run: [files] on an I/O thread, then [after]
+     * on this one ([repairFilesOffMain]). The setup hold is taken here, while the
+     * activity is starting, because the platform refuses a foreground service
+     * start from an app the user left more than a few seconds before, and the
+     * repairs take longer than that on a slow phone; [runSetupWithRetry] takes it
+     * over, and a launch that ends without a setup run gives it back here.
+     */
+    private fun startFirstRunRepairs(files: () -> Unit, after: () -> Unit) {
+        heldThroughRepairs = holdProcessForSetup()
+        lifecycleScope.launch {
+            try {
+                repairFilesOffMain(Dispatchers.IO, files, after) { !isFinishing && !isDestroyed }
+            } finally {
+                if (heldThroughRepairs) {
+                    heldThroughRepairs = false
+                    releaseSetupHold()
                 }
             }
         }
-
-        // Named rather than assigned inline, so [onDestroy] can hand back exactly
-        // this closure and nobody else's.
-        val sink: (String, Int) -> Unit = { message, percent ->
-            runOnUiThread {
-                statusText.text = message
-                progressBar.progress = percent
-            }
-        }
-        progressSink = sink
-        setup.onProgress = sink
-
-        runSetupWithRetry(setup, statusText, progressBar)
     }
 
     /**
@@ -272,10 +323,10 @@ class SplashActivity : AppCompatActivity() {
      * which, and the next line of the log was whatever the app did after
      * skipping the rest.
      *
-     * Swallowing is still deliberate. Every one of these runs on the main thread
-     * before the first frame, and a throw that escapes here crashes the app
-     * before it draws, which is a launch loop with no explanation. Degraded is
-     * the acceptable outcome; dead is not.
+     * Swallowing is still deliberate. A throw that escapes here, on the main
+     * thread before the first frame or on the I/O thread of a first run, crashes
+     * the app, which is a launch loop with no explanation. Degraded is the
+     * acceptable outcome; dead is not.
      */
     private fun repair(what: String, action: () -> Unit) {
         try {
@@ -299,9 +350,26 @@ class SplashActivity : AppCompatActivity() {
      * unpadded.
      */
     private fun showSplashLayout() {
+        // Already the screen when a first run put it up ahead of the launch
+        // repairs: laid out again, the bar would start over.
+        if (findViewById<View>(R.id.splashRoot) != null) return
         setContentView(R.layout.activity_splash)
         findViewById<View>(R.id.splashRoot).padForSystemBars()
         tintSplashText()
+    }
+
+    /**
+     * The splash as the first-run branch of [onCreate] sets it up, the text and
+     * the bar included, for the launch repairs to run under. Only existing
+     * strings: the update line on an upgrade, the layout's own text on a fresh
+     * install.
+     */
+    private fun showFirstRunSplash(setup: FirstRunSetup) {
+        showSplashLayout()
+        findViewById<ProgressBar>(R.id.progressBar).isIndeterminate = true
+        if (setup.getPreviousVersionCode() > 0) {
+            findViewById<TextView>(R.id.statusText).text = getString(R.string.status_updating_app)
+        }
     }
 
     /**
@@ -343,14 +411,20 @@ class SplashActivity : AppCompatActivity() {
         startForegroundService(
             Intent(this, NodeService::class.java).apply { action = NodeService.ACTION_HOLD }
         )
+        SetupHolds.taken()
         true
     } catch (e: Exception) {
         Logger.w(tag, "Could not hold the process for setup: ${e.message}")
         false
     }
 
-    /** Gives that hold back. Plain [startService]: the service is already up. */
+    /**
+     * Gives that hold back, to the service only when no other holder in this
+     * process still needs it ([SetupHolds]). Plain [startService]: the service
+     * is already up.
+     */
     private fun releaseSetupHold() {
+        if (!SetupHolds.givenBack()) return
         try {
             startService(
                 Intent(this, NodeService::class.java).apply {
@@ -367,6 +441,8 @@ class SplashActivity : AppCompatActivity() {
         statusText: TextView,
         progressBar: ProgressBar
     ) {
+        // The hold a first run took ahead of its repairs, kept until this run ends.
+        val heldEarlier = heldThroughRepairs.also { heldThroughRepairs = false }
         lifecycleScope.launch {
             // Held across the unpack, and only across it. Until this existed the
             // process wrote 810 MiB with no started component behind it, so a
@@ -401,6 +477,7 @@ class SplashActivity : AppCompatActivity() {
                 setup.runSetup { held = holdProcessForSetup() }
             } finally {
                 if (held) releaseSetupHold()
+                if (heldEarlier) releaseSetupHold()
             }
             when (result) {
                 FirstRunSetup.SetupResult.SUCCESS -> {
@@ -463,6 +540,7 @@ class SplashActivity : AppCompatActivity() {
                 // Reset UI and retry
                 statusText.text = getString(R.string.extracting_message)
                 progressBar.visibility = View.VISIBLE
+                progressBar.isIndeterminate = true
                 progressBar.progress = 0
                 // Extraction is about to run again, so the reason the flag
                 // exists is back.
@@ -517,8 +595,15 @@ class SplashActivity : AppCompatActivity() {
         }
     }
 
+    // A paused screen can return without another onStart.
+    override fun onResume() {
+        super.onResume()
+        progressSink?.let { FirstRunSetup.attachProgress(it) }
+    }
+
     override fun onStop() {
         stopped = true
+        FirstRunSetup.detachProgress(progressSink)
         super.onStop()
     }
 
@@ -1277,4 +1362,63 @@ internal fun setupFailureMessage(context: Context, failure: FirstRunSetup.Failur
     failure == null -> context.getString(R.string.error_setup_failed)
     failure.step.isBlank() -> context.getString(R.string.error_setup_failed) + "\n" + failure.detail
     else -> context.getString(R.string.error_setup_failed_at, failure.step, failure.detail)
+}
+
+internal fun applySetupProgress(
+    statusText: TextView,
+    progressBar: ProgressBar,
+    message: String,
+    percent: Int,
+) {
+    statusText.text = message
+    progressBar.isIndeterminate = percent <= 0
+    progressBar.progress = percent
+}
+
+/**
+ * The launch repairs of a first run: [files] on [io], so that the main thread
+ * stays free to draw the splash and answer a touch however long they take, then
+ * [after] back on the caller's thread if [alive] still says so. [files] is plain
+ * file work and does not stop for a cancellation; one that comes meanwhile is
+ * seen when it returns, and nothing after it runs. The next launch, again a
+ * first run, repairs and sets up from the start.
+ */
+internal suspend fun repairFilesOffMain(
+    io: CoroutineDispatcher,
+    files: () -> Unit,
+    after: () -> Unit,
+    alive: () -> Boolean,
+) {
+    withContext(io) { oneLaunchRepairAtATime(files) }
+    if (alive()) after()
+}
+
+private val launchRepairs = Any()
+
+/**
+ * Runs [repairs] while no other launch in this process runs its own. On the
+ * main thread two launches' repairs could never overlap; a first run takes them
+ * off it, and a second Splash meanwhile (a re-creation, or MainActivity handing
+ * a launch back) would run the same `.bashrc` appenders at once, where one's
+ * read and the other's later write drop a block.
+ */
+internal fun oneLaunchRepairAtATime(repairs: () -> Unit) = synchronized(launchRepairs) { repairs() }
+
+/**
+ * The holds this process's Splash instances have on NodeService for setup.
+ * The service keeps a single hold that any release ends, so a release is passed
+ * on only by the last holder. Main thread only, as every caller is.
+ */
+internal object SetupHolds {
+    private var holders = 0
+
+    fun taken() {
+        holders++
+    }
+
+    /** Whether that was the last hold, so that the service's should go. */
+    fun givenBack(): Boolean {
+        holders = (holders - 1).coerceAtLeast(0)
+        return holders == 0
+    }
 }

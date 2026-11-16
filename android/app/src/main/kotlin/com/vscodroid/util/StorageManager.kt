@@ -237,9 +237,9 @@ object StorageManager {
      * The other order has a window: a download starting in between would have its
      * directory in the listing and its name in neither set.
      *
-     * `ToolchainManager` also sweeps these on every launch, but only once they are a
-     * day old, deliberately: nothing there can tell a stalled download from a
-     * finished one. This is the user asking, so it takes everything it safely can.
+     * `ToolchainManager` also keeps active packs when it sweeps on launch, but
+     * waits until an unused directory is a day old. This is the user asking, so
+     * it takes everything it safely can.
      */
     private fun clearAbandonedToolchainDownloads(context: Context): Long {
         val root = File(context.cacheDir, "toolchain-download")
@@ -324,7 +324,10 @@ object StorageManager {
         val parents = mutableListOf<DirectoryStream<Path>>()
         return try {
             val opened = Files.newDirectoryStream(canonicalRoot).also { parents.add(it) }
-            val anchored = opened as? SecureDirectoryStream<Path> ?: return false
+            val anchored = opened as? SecureDirectoryStream<Path> ?: run {
+                Logger.w(TAG, "Cleanup skipped: secure directory operations are unavailable")
+                return false
+            }
             var parent = anchored
             for (i in 0 until relative.nameCount - 1) {
                 parent = parent.newDirectoryStream(relative.getName(i), NOFOLLOW_LINKS)
@@ -420,7 +423,10 @@ object StorageManager {
         return try {
             val opened = Files.newDirectoryStream(canonicalRoot).also { parents.add(it) }
             // A pathname fallback would follow a directory replaced during cleanup.
-            val anchored = opened as? SecureDirectoryStream<Path> ?: return 0
+            val anchored = opened as? SecureDirectoryStream<Path> ?: run {
+                Logger.w(TAG, "Cleanup skipped: secure directory operations are unavailable")
+                return 0
+            }
             var parent = anchored
             for (i in 0 until relative.nameCount - 1) {
                 parent = parent.newDirectoryStream(relative.getName(i), NOFOLLOW_LINKS)

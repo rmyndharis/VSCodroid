@@ -354,7 +354,7 @@ private fun redactNamedSecrets(line: String): String = buildString {
  */
 private val NAMED_SECRET_PREFIX = Regex(
     """(?i)(?<![A-Za-z0-9])(?:vscodroid_server_run_id|api[_-]?key|apikey|access[_-]?token|refresh[_-]?token""" +
-        """|auth[_-]?token|client[_-]?secret|private[_-]?key|pgpassword|password""" +
+        """|run[_-]?id|auth[_-]?token|client[_-]?secret|private[_-]?key|pgpassword|password""" +
         """|passwd|secret|token)(?:[_-][A-Za-z0-9_-]*)?\s*(?:\\?["'])?\s*[:=]\s*"""
 )
 private val UNQUOTED_SECRET_VALUE = Regex("""["']?[^\s"',}&]+""")
@@ -365,6 +365,7 @@ private val SECRET_PATTERNS: List<Pair<Regex, String>> = listOf(
             """(?:\\?["'])?[^"',}]+"""
     ) to "\$1<redacted>",
     Regex("""(?i)(\b(?:bearer|basic)\s+)[A-Za-z0-9._~+/=-]{8,}""") to "\$1<redacted>",
+    Regex("""(?i)(\bhttps?://[^\s/@:]+:)[^\s/@]+(@)""") to "\$1<redacted>\$2",
     // A private key serialised onto one line, which is the shape `JSON.stringify`
     // gives it: the body is base64 and `\n` escapes, hundreds of characters of it
     // for any real key, so the floor of 40 leaves a diagnostic that merely names
