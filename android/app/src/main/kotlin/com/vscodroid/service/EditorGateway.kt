@@ -111,9 +111,10 @@ internal class EditorGateway : Closeable {
      * is stopped so that the next start can bind the usual one; see
      * `ProcessManager.releaseAwayOrigin`. Open connections, the selected backend and an
      * unsaid notice that it was away go with it. It returns once the accept thread has
-     * left its channel, which is when the port can be bound again. A client it accepted
-     * that has not been given a backend yet is closed rather than given the backend of a
-     * listener bound later; see [accept].
+     * left its channel, or after [ACCEPT_END_WAIT_MS] if that thread has not ended by
+     * then; the port cannot be bound again before the thread has left. A client it
+     * accepted that has not been given a backend yet is closed rather than given the
+     * backend of a listener bound later; see [accept].
      */
     fun release(port: Int): Boolean {
         val (channel, retired, acceptor) = synchronized(lock) {
@@ -130,7 +131,7 @@ internal class EditorGateway : Closeable {
         // The port stays bound until the thread waiting in accept has left the channel, and
         // close returns before that: a bind of the same port in that moment is refused. A
         // caller that releases in order to bind again, here or in another program, is told
-        // only once the port is free.
+        // only once that thread has ended, or the wait has run out.
         if (acceptor !== Thread.currentThread()) acceptor?.join(ACCEPT_END_WAIT_MS)
         return true
     }
