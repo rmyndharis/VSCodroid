@@ -44,6 +44,7 @@ import kotlinx.coroutines.launch
 import kotlinx.coroutines.withContext
 import android.widget.Toast
 import com.vscodroid.service.NodeService
+import com.vscodroid.util.AppNotices
 import androidx.core.content.edit
 
 @SuppressLint("CustomSplashScreen")
@@ -593,6 +594,7 @@ class SplashActivity : AppCompatActivity() {
             launchPending = false
             launchMain()
         }
+        AppNotices.flush(this)
     }
 
     // A paused screen can return without another onStart.
@@ -628,6 +630,7 @@ class SplashActivity : AppCompatActivity() {
         progressSink = null
         colorProbe?.destroy()
         colorProbe = null
+        AppNotices.drop(this, carry = true)
         super.onDestroy()
     }
 
@@ -838,7 +841,7 @@ class SplashActivity : AppCompatActivity() {
                 val reason =
                     if (isFinishing || isDestroyed) null else reasonToAnnounce(why, alreadySaid)
                 if (reason != null) {
-                    Toast.makeText(this, getString(reason.message), Toast.LENGTH_LONG).show()
+                    AppNotices.showNotice(this, getString(reason.message), Toast.LENGTH_LONG)
                 }
             }
         }

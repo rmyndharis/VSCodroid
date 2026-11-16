@@ -19,6 +19,7 @@ import com.vscodroid.setup.ToolchainPickerAdapter
 import com.vscodroid.setup.ToolchainRegistry
 import com.vscodroid.util.Logger
 import android.widget.Toast
+import com.vscodroid.util.AppNotices
 import java.lang.ref.WeakReference
 import java.util.concurrent.ConcurrentHashMap
 import java.util.concurrent.atomic.AtomicBoolean
@@ -316,7 +317,7 @@ class ToolchainActivity : AppCompatActivity() {
         // status, not an explanation, and the explanation is the part
         // that tells the user whether to free space or move to wifi.
         if (why != null) {
-            Toast.makeText(this, getString(why.message), Toast.LENGTH_LONG).show()
+            AppNotices.showNotice(this, getString(why.message), Toast.LENGTH_LONG)
         }
         // A decline reports UNKNOWN, and without this the screen answers a
         // tap with nothing at all. The card cannot say it either: the pack
@@ -328,9 +329,9 @@ class ToolchainActivity : AppCompatActivity() {
         // [shouldSayAlreadyInstalling] carries how a decline reaches a screen
         // that asked for nothing, and what is left wrong when it does.
         if (shouldSayAlreadyInstalling(status, why, asked)) {
-            Toast.makeText(
+            AppNotices.showNotice(
                 this, getString(R.string.toolchain_already_installing), Toast.LENGTH_SHORT
-            ).show()
+            )
         }
         if (status == AssetPackStatus.REQUIRES_USER_CONFIRMATION) {
             askForCellularConfirmation()
@@ -435,6 +436,7 @@ class ToolchainActivity : AppCompatActivity() {
             confirmationDeferred = false
             askForCellularConfirmation()
         }
+        AppNotices.flush(this)
     }
 
     override fun onStop() {
@@ -470,6 +472,7 @@ class ToolchainActivity : AppCompatActivity() {
         // only when the user taps Remove again.
         removeDialog?.dismiss()
         retryDialog?.dismiss()
+        AppNotices.drop(this, carry = true)
         super.onDestroy()
     }
 

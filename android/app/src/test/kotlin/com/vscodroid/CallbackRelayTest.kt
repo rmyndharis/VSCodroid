@@ -204,7 +204,7 @@ class CallbackRelayInjectionTest {
         // was killed, is a single arrival into a fresh instance.
         val gate = code(body("private fun receiveCallbackIntent("))
         val guard = gate.indexOf("restartNoticeShown")
-        val toast = gate.indexOf("Toast.makeText(")
+        val toast = gate.indexOf("AppNotices.showNotice(")
 
         assertTrue(guard >= 0) {
             "nothing bounds the restart explanation any more"

@@ -38,6 +38,8 @@ import android.webkit.WebViewClient
 import android.widget.ScrollView
 import android.widget.TextView
 import android.widget.Toast
+import com.vscodroid.util.AppNotices
+import com.vscodroid.util.BlockingNoticeHost
 import java.io.File
 import java.security.MessageDigest
 import java.lang.ref.WeakReference
@@ -130,7 +132,7 @@ import androidx.core.content.edit
 import androidx.core.net.toUri
 import android.annotation.SuppressLint
 
-class MainActivity : AppCompatActivity() {
+class MainActivity : AppCompatActivity(), BlockingNoticeHost {
     private val tag = "MainActivity"
 
     private var webView: WebView? = null
@@ -272,6 +274,8 @@ class MainActivity : AppCompatActivity() {
      */
     private var crashDialog: AlertDialog? = null
     private var awayFromHomeNotice: AlertDialog? = null
+    private var awayFromHomePendingShow: (() -> Unit)? = null
+    private var pendingNoticeAfterCrash: (() -> Unit)? = null
 
     /**
      * Whether the "the editor restarted" explanation has already been shown.
@@ -711,7 +715,7 @@ class MainActivity : AppCompatActivity() {
             // Hopped because the bytes arrive on the WebView's bridge thread, so
             // the end of a download is reported from a thread that cannot touch
             // a Toast.
-            runOnUiThread { Toast.makeText(this@MainActivity, message, Toast.LENGTH_SHORT).show() }
+            runOnUiThread { AppNotices.showNotice(this@MainActivity, message, Toast.LENGTH_SHORT) }
         }
     },
         // A lambda because this initializer runs before the Activity has a context to ask;
@@ -787,6 +791,7 @@ class MainActivity : AppCompatActivity() {
         // exactly the part that outlives the screen.
         val appContext = applicationContext
         val toMainThread = Handler(Looper.getMainLooper())
+        val screen = WeakReference(this)
         // The manager as a local for the same reason: reading the field inside one of
         // these lambdas is a read of `this`, and captures the Activity exactly as
         // naming it would. ActivityRetentionTest refuses the field spelling there.
@@ -796,11 +801,12 @@ class MainActivity : AppCompatActivity() {
         // the manager, because a provider that starts refusing refuses everything.
         safManager.onWriteBackFailed { file ->
             toMainThread.post {
-                Toast.makeText(
+                AppNotices.showNotice(
                     appContext,
                     appContext.getString(R.string.saf_write_back_failed, file.name),
                     Toast.LENGTH_LONG,
-                ).show()
+                    screen.get(),
+                )
             }
         }
 
@@ -813,7 +819,7 @@ class MainActivity : AppCompatActivity() {
                 )
             }
             toMainThread.post {
-                Toast.makeText(appContext, message, Toast.LENGTH_LONG).show()
+                AppNotices.showNotice(appContext, message, Toast.LENGTH_LONG, screen.get())
             }
         }
 
@@ -837,7 +843,7 @@ class MainActivity : AppCompatActivity() {
                 )
             }
             toMainThread.post {
-                Toast.makeText(appContext, message, Toast.LENGTH_LONG).show()
+                AppNotices.showNotice(appContext, message, Toast.LENGTH_LONG, screen.get())
             }
         }
 
@@ -846,7 +852,7 @@ class MainActivity : AppCompatActivity() {
         // true for these, and would send the user looking for a file that is safe.
         safManager.onDocumentsNotCopied { count, outOfRoom ->
             toMainThread.post {
-                Toast.makeText(
+                AppNotices.showNotice(
                     appContext,
                     appContext.resources.getQuantityString(
                         if (outOfRoom) R.plurals.saf_documents_not_copied_no_room
@@ -855,7 +861,8 @@ class MainActivity : AppCompatActivity() {
                         count,
                     ),
                     Toast.LENGTH_LONG,
-                ).show()
+                    screen.get(),
+                )
             }
         }
 
@@ -879,7 +886,7 @@ class MainActivity : AppCompatActivity() {
                 kept.name,
             )
             toMainThread.post {
-                Toast.makeText(appContext, message, Toast.LENGTH_LONG).show()
+                AppNotices.showNotice(appContext, message, Toast.LENGTH_LONG, screen.get())
             }
         }
 
@@ -890,7 +897,7 @@ class MainActivity : AppCompatActivity() {
         safManager.onDeleteRefused { refused ->
             val message = appContext.getString(R.string.saf_delete_refused, refused.name)
             toMainThread.post {
-                Toast.makeText(appContext, message, Toast.LENGTH_LONG).show()
+                AppNotices.showNotice(appContext, message, Toast.LENGTH_LONG, screen.get())
             }
         }
 
@@ -909,7 +916,7 @@ class MainActivity : AppCompatActivity() {
                 )
             }
             toMainThread.post {
-                Toast.makeText(appContext, message, Toast.LENGTH_LONG).show()
+                AppNotices.showNotice(appContext, message, Toast.LENGTH_LONG, screen.get())
             }
         }
 
@@ -1128,11 +1135,11 @@ class MainActivity : AppCompatActivity() {
             // after the process was killed is one arrival into a fresh instance.
             if (!restartNoticeShown) {
                 restartNoticeShown = true
-                Toast.makeText(
+                AppNotices.showNotice(
                     this,
                     getString(R.string.sign_in_editor_restarted),
                     Toast.LENGTH_LONG
-                ).show()
+                )
             }
             return
         }
@@ -1176,11 +1183,11 @@ class MainActivity : AppCompatActivity() {
             // quoted any of it would be a way to put chosen words on the screen
             // of an app the user trusts.
             Logger.w(tag, "A sign-in callback arrived after its window had closed")
-            Toast.makeText(
+            AppNotices.showNotice(
                 this,
                 getString(R.string.sign_in_timed_out),
                 Toast.LENGTH_LONG
-            ).show()
+            )
             return
         }
         // The id the gate just accepted, handed on rather than read again. See
@@ -1279,6 +1286,10 @@ class MainActivity : AppCompatActivity() {
         // destroyed WebView, which answers by logging and never calling back.
         extraKeyRow?.keyInjector = null
         (webView?.webViewClient as? VSCodroidWebViewClient)?.disposeAuthPage()
+        crashDialog?.setOnDismissListener(null)
+        awayFromHomePendingShow = null
+        awayFromHomeNotice?.setOnDismissListener(null)
+        AppNotices.drop(this, carry = true)
         webView?.destroy()
         webView = null
         super.onDestroy()
@@ -1295,6 +1306,7 @@ class MainActivity : AppCompatActivity() {
         super.onStart()
         handleResumeFromBackground()
         refreshToolchainCommands()
+        AppNotices.flush(this)
     }
 
     /**
@@ -1443,7 +1455,7 @@ class MainActivity : AppCompatActivity() {
                         tag,
                         "The workbench opened device folder copy $mirror, which has no grant; nothing syncs it",
                     )
-                    Toast.makeText(this@MainActivity, R.string.saf_permission_expired, Toast.LENGTH_LONG).show()
+                    AppNotices.showNotice(this@MainActivity, R.string.saf_permission_expired, Toast.LENGTH_LONG)
                 }
                 ungrantedMirrorNoticed = mirror
                 return@launch
@@ -1478,7 +1490,7 @@ class MainActivity : AppCompatActivity() {
      */
     private fun openSafFolder(uri: Uri, navigate: Boolean, adoptedPath: String? = null) {
         if (!safManager.claimMirrorOpen(safManager.getMirrorDir(uri))) {
-            Toast.makeText(this, R.string.saf_folder_unavailable, Toast.LENGTH_LONG).show()
+            AppNotices.showNotice(this, R.string.saf_folder_unavailable, Toast.LENGTH_LONG)
             return
         }
         // The mirror's name and never the tree URI. A SAF tree URI spells the
@@ -1963,13 +1975,13 @@ class MainActivity : AppCompatActivity() {
                     }
                 }
                 runOnUiThread {
-                    Toast.makeText(
+                    AppNotices.showNotice(
                         this,
                         getString(
                             R.string.saf_mirror_removed, StorageManager.formatSize(freed)
                         ),
                         Toast.LENGTH_LONG,
-                    ).show()
+                    )
                 }
                 ""
             }
@@ -2059,7 +2071,7 @@ class MainActivity : AppCompatActivity() {
         } else {
             getString(R.string.saf_sync_failed_no_write_back, reason)
         }
-        Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+        AppNotices.showNotice(this, message, Toast.LENGTH_LONG)
     }
 
     /**
@@ -2083,11 +2095,11 @@ class MainActivity : AppCompatActivity() {
      */
     fun openRecentSafFolder(uri: Uri) {
         if (!safManager.hasPersistedPermission(uri)) {
-            Toast.makeText(
+            AppNotices.showNotice(
                 this,
                 getString(R.string.saf_permission_expired),
                 Toast.LENGTH_LONG
-            ).show()
+            )
             return
         }
         handleSafFolderSelected(uri)
@@ -2770,7 +2782,7 @@ class MainActivity : AppCompatActivity() {
         nodeService?.onServerError = { message ->
             runOnUiThread {
                 Logger.e(tag, "Server error: $message")
-                Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+                AppNotices.showNotice(this, message, Toast.LENGTH_LONG)
             }
         }
         // A toast lasts three and a half seconds; this state lasts until the app
@@ -2842,7 +2854,7 @@ class MainActivity : AppCompatActivity() {
         ) {
             is BindDecision.ShowNotice -> {
                 Logger.w(tag, "Server start notice predating this binding: ${decision.message}")
-                Toast.makeText(this, decision.message, Toast.LENGTH_LONG).show()
+                AppNotices.showNotice(this, decision.message, Toast.LENGTH_LONG)
             }
             is BindDecision.ShowGaveUp -> {
                 // The page, not only the toast. The toast is gone in three and a
@@ -2850,7 +2862,7 @@ class MainActivity : AppCompatActivity() {
                 // still saying the server is starting. The page below says what
                 // happened and carries the only control that can change it.
                 Logger.w(tag, "Server had already given up when this binding arrived")
-                Toast.makeText(this, decision.message, Toast.LENGTH_LONG).show()
+                AppNotices.showNotice(this, decision.message, Toast.LENGTH_LONG)
                 showServerGaveUpWithLog()
             }
             is BindDecision.Load -> {
@@ -3007,7 +3019,10 @@ class MainActivity : AppCompatActivity() {
         // previous-crash dialog is dropped, and one on screen is taken down,
         // guarded because dismissing a dialog whose window has gone throws.
         crashDialog?.setOnDismissListener(null)
+        awayFromHomePendingShow = null
+        awayFromHomeNotice?.setOnDismissListener(null)
         if (!isFinishing && !isDestroyed) awayFromHomeNotice?.dismiss()
+        AppNotices.drop(this)
         val retry = getString(R.string.error_server_retry)
         // The diagnostics half of the page, and the two parts of it travel
         // together on purpose: the log tail says what happened and the button
@@ -3253,13 +3268,55 @@ class MainActivity : AppCompatActivity() {
     private fun showAwayFromHomeNotice(home: Int) {
         fun show() {
             if (isFinishing || isDestroyed) return
+            awayFromHomePendingShow = null
             awayFromHomeNotice = AlertDialog.Builder(this)
                 .setMessage(getString(R.string.notice_editor_away_from_home, home))
                 .setPositiveButton(android.R.string.ok, null)
+                .setOnDismissListener { flushPendingNoticeAfterCrash() }
                 .show()
         }
         val crash = crashDialog
-        if (crash != null && crash.isShowing) crash.setOnDismissListener { show() } else show()
+        if (crash != null && crash.isShowing) {
+            awayFromHomePendingShow = { show() }
+            crash.setOnDismissListener { show() }
+        } else {
+            show()
+        }
+    }
+
+    override fun isBlockingNoticeShowing(): Boolean =
+        crashDialog?.isShowing == true || awayFromHomeNotice?.isShowing == true
+
+    override fun waitForBlockingNoticeDismiss(onDismissed: () -> Unit) {
+        pendingNoticeAfterCrash = onDismissed
+        val crash = crashDialog
+        if (crash != null && crash.isShowing) {
+            crash.setOnDismissListener {
+                val away = awayFromHomePendingShow
+                awayFromHomePendingShow = null
+                away?.invoke()
+                if (awayFromHomeNotice?.isShowing != true) {
+                    flushPendingNoticeAfterCrash()
+                }
+            }
+            return
+        }
+        val away = awayFromHomeNotice
+        if (away != null && away.isShowing) {
+            away.setOnDismissListener { flushPendingNoticeAfterCrash() }
+            return
+        }
+        flushPendingNoticeAfterCrash()
+    }
+
+    override fun clearBlockingNoticeWaiter() {
+        pendingNoticeAfterCrash = null
+    }
+
+    private fun flushPendingNoticeAfterCrash() {
+        val waiter = pendingNoticeAfterCrash ?: return
+        pendingNoticeAfterCrash = null
+        waiter.invoke()
     }
 
     /** The encoded query, excluding opaque placeholders and URL fragments. */
@@ -3382,11 +3439,13 @@ class MainActivity : AppCompatActivity() {
                     runOnUiThread {
                         if (isFinishing || isDestroyed) return@runOnUiThread
                         if (shouldAnnounceMultipleDeviceFolders(mirrorCount, generation, announcedMultiMirrorGenerations)) {
-                            Toast.makeText(
+                            AppNotices.showNotice(
                                 applicationContext,
                                 R.string.saf_workspace_multiple_folders,
                                 Toast.LENGTH_LONG,
-                            ).show()
+                                this@MainActivity,
+                                processOnceKey = AppNotices.ONCE_KEY_MULTI_DEVICE_FOLDERS,
+                            )
                         }
                     }
                 }
@@ -3490,7 +3549,7 @@ class MainActivity : AppCompatActivity() {
                             )
                             else -> getString(R.string.url_handoff_failed, it.scheme, it.failureType)
                         }
-                        Toast.makeText(this@MainActivity, message, Toast.LENGTH_LONG).show()
+                        AppNotices.showNotice(this@MainActivity, message, Toast.LENGTH_LONG)
                     }
                 }
             },
@@ -3625,7 +3684,7 @@ class MainActivity : AppCompatActivity() {
             TlsFailureReason.INVALID -> getString(R.string.tls_blocked_invalid, host)
             TlsFailureReason.HANDSHAKE -> getString(R.string.tls_blocked_handshake, host)
         }
-        Toast.makeText(this, message, Toast.LENGTH_LONG).show()
+        AppNotices.showNotice(this, message, Toast.LENGTH_LONG)
     }
 
     /**
@@ -3662,7 +3721,7 @@ class MainActivity : AppCompatActivity() {
      */
     private fun rememberWorkspaceFolder(folderPath: String?, persist: Boolean = true): Boolean {
         if (folderPath != null && !safManager.claimWorkspacePaths(listOf(folderPath))) {
-            Toast.makeText(this, R.string.saf_folder_unavailable, Toast.LENGTH_LONG).show()
+            AppNotices.showNotice(this, R.string.saf_folder_unavailable, Toast.LENGTH_LONG)
             return false
         }
         openWorkspaceFolder = folderPath
@@ -7133,7 +7192,7 @@ class MainActivity : AppCompatActivity() {
         try {
             startActivity(Intent(Intent.ACTION_VIEW, url.toUri()))
         } catch (_: ActivityNotFoundException) {
-            Toast.makeText(this, R.string.open_url_no_handler, Toast.LENGTH_LONG).show()
+            AppNotices.showNotice(this, R.string.open_url_no_handler, Toast.LENGTH_LONG)
         }
     }
 
@@ -7406,7 +7465,7 @@ class MainActivity : AppCompatActivity() {
             }
         }
         clipboard.setPrimaryClip(clip)
-        Toast.makeText(this@MainActivity, getString(R.string.crash_report_copied), Toast.LENGTH_SHORT).show()
+        AppNotices.showNotice(this@MainActivity, getString(R.string.crash_report_copied), Toast.LENGTH_SHORT)
     }
 
     /**
@@ -7473,11 +7532,12 @@ class MainActivity : AppCompatActivity() {
     private fun checkStorageHealth() {
         if (!StorageManager.isStorageLow(this)) return
         val available = StorageManager.formatSize(StorageManager.getAvailableStorage(this))
-        Toast.makeText(
+        AppNotices.showNotice(
             this,
             getString(R.string.storage_low_warning, available),
-            Toast.LENGTH_LONG
-        ).show()
+            Toast.LENGTH_LONG,
+            processOnceKey = AppNotices.ONCE_KEY_STORAGE_LOW,
+        )
         Logger.w(tag, "Storage low: $available available")
     }
 
