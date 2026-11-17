@@ -1190,7 +1190,8 @@ class SplashActivity : AppCompatActivity() {
      *    filesDir/usr not yet extracted, and install a toolchain over a base
      *    that is not there. Publishing from launchMain() -- the one funnel every
      *    completed startup passes through -- means the shortcut cannot exist
-     *    before the setup it needs.
+     *    before the first setup. It does outlive an update, whose setup runs
+     *    again, which is why ToolchainActivity hands such a launch back here.
      *
      * Re-pushed on every launch on purpose: it is how an install that predates
      * this change gains the shortcut, and how the label follows a locale change.

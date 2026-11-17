@@ -1,5 +1,6 @@
 package com.vscodroid
 
+import android.content.Intent
 import android.os.Bundle
 import androidx.appcompat.app.AlertDialog
 import androidx.appcompat.app.AppCompatActivity
@@ -8,6 +9,7 @@ import androidx.recyclerview.widget.GridLayoutManager
 import androidx.recyclerview.widget.RecyclerView
 import com.google.android.material.appbar.MaterialToolbar
 import com.google.android.play.core.assetpacks.model.AssetPackStatus
+import com.vscodroid.setup.FirstRunSetup
 import com.vscodroid.setup.ToolchainManager
 import com.vscodroid.setup.ToolchainDownloadProgress
 import com.vscodroid.util.drawBehindSystemBars
@@ -156,6 +158,7 @@ class ToolchainActivity : AppCompatActivity() {
         // Before super.onCreate(), as the call it replaces required.
         drawBehindSystemBars()
         super.onCreate(savedInstanceState)
+        if (handOffToSetup()) return
         setContentView(R.layout.activity_toolchain)
         findViewById<android.view.View>(R.id.toolchainRoot).padForSystemBars()
 
@@ -354,6 +357,24 @@ class ToolchainActivity : AppCompatActivity() {
         }
     }
 
+    /**
+     * Sends a launch that arrives before this build's setup has run to the splash screen.
+     *
+     * The launcher shortcut an earlier version published survives an update, and an update runs
+     * setup again, which unpacks `usr/`. Installing a toolchain from here in that minute writes into
+     * `usr/` under the unpacking, and each of the two counts on storage the other is about to take.
+     * The editor does the same for its own launch (`MainActivity.handOffToSetup`); the shortcut works
+     * again once setup is over. Nothing of this screen exists yet when it returns true, and a screen
+     * finished in onCreate is destroyed without being started.
+     */
+    private fun handOffToSetup(): Boolean {
+        if (!FirstRunSetup(this).isFirstRun()) return false
+        Logger.w(tag, "Opened before setup had run; handing the launch to the splash screen")
+        startActivity(Intent(this, SplashActivity::class.java))
+        finish()
+        return true
+    }
+
     override fun onStart() {
         super.onStart()
         toolchainManager.registerListener()
@@ -463,6 +484,11 @@ class ToolchainActivity : AppCompatActivity() {
         // interleaving where the screen found the set non-empty and the report
         // found a screen that was not gone yet, with nobody left to hand it back.
         destroyed.set(true)
+        // A screen that handed its launch to setup made nothing to give back: see [handOffToSetup].
+        if (!::toolchainManager.isInitialized) {
+            super.onDestroy()
+            return
+        }
         if (outstanding.isEmpty()) toolchainManager.unregisterListener()
         // The window this dialog is attached to goes with the Activity, and a
         // rotation destroys this one: nothing here declares configChanges. Left
