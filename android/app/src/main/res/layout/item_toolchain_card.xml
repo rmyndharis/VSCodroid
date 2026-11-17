@@ -128,15 +128,19 @@
             style="@style/Widget.Material3.Button.TextButton"
             android:textColor="@color/colorPrimaryText"
             android:layout_width="wrap_content"
-            android:layout_height="48dp"
+            android:layout_height="wrap_content"
             android:layout_marginTop="4dp"
             android:minWidth="48dp"
+            android:minHeight="48dp"
             android:paddingStart="12dp"
             android:paddingEnd="12dp"
             android:textAllCaps="false"
             android:textSize="12sp"
             android:visibility="gone"
+            app:layout_constrainedWidth="true"
             app:layout_constraintEnd_toEndOf="parent"
+            app:layout_constraintHorizontal_bias="1"
+            app:layout_constraintStart_toStartOf="parent"
             app:layout_constraintTop_toBottomOf="@+id/downloadProgress" />
 
     </androidx.constraintlayout.widget.ConstraintLayout>

@@ -13,6 +13,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - In the terminal, Ctrl or Alt latched on the extra key row and then a letter typed on a keyboard that underlines words sends the control character alone again, without the letter before it.
 - In the terminal, Ctrl or Alt latched on the extra key row and then a letter typed on a keyboard that underlines words sends the control character alone again, without the letter before it.
 - On Android 12 and later the low storage warning is shown; it was dropped before the screen could show it.
+- The action button of a toolchain card shows its whole label at the largest font and display sizes.
+- The action button of a toolchain card shows its whole label at the largest font and display sizes.
 
 ## [1.9.0] - 2026-11-16
 
