@@ -34,7 +34,9 @@ A practical guide to using VSCodroid, the full VS Code IDE running natively on y
 | Item | Path |
 |------|------|
 | Projects folder | `~/projects/` |
-| Settings and data | `~/.vscodroid/` |
+| Extensions and editor data | `~/.vscodroid/` |
+| Settings on the **Remote** tab of Settings | `~/.vscodroid/data/Machine/settings.json` |
+| Settings and keybindings on the **User** tab | Inside the WebView's storage, not a file |
 | SSH keys | `~/.ssh/` |
 
 All files are stored in the app's private sandbox. No root access is required.
@@ -185,7 +187,11 @@ Common commands:
 ### Settings
 
 Open the Command Palette (**Ctrl+Shift+P**) and run `Preferences: Open Settings (UI)`.
-VSCodroid stores settings in `~/.vscodroid/`. Key defaults:
+Settings you change on the **User** tab, the one Settings opens on, are kept by
+the editor inside the WebView's storage, not in a file. The tab labelled **Remote
+[127.0.0.1:13337]** (the port can differ on your device) edits
+`~/.vscodroid/data/Machine/settings.json`, the file VSCodroid writes its own
+settings into. Key defaults:
 
 - Word wrap is on, in the editor and in the diff editor.
 - Enter accepts an editor suggestion only when it changes the text (`editor.acceptSuggestionOnEnter` is `smart`), so pressing Enter after a word already in the file starts a new line.
@@ -427,7 +433,11 @@ A file open in the editor runs from the play button in the editor's title bar.
 Python files get it from the Python extension. JavaScript, TypeScript, Ruby,
 Java, C, C++ and `.sh` or `.bash` files get **VSCodroid: Run File**, which saves
 the file and runs it in a terminal named *VSCodroid Run*; the next run replaces
-that terminal. Header files and the other shells' scripts do not get it. Ruby, Java and C/C++ need their toolchain from the toolchains screen
+that terminal. Header files and the other shells' scripts do not get it. A
+TypeScript file runs as `node file.ts`, which only removes type annotations, so
+one with an `enum` or an import that leaves out the `.ts` extension stops with
+an error (see the TypeScript note under
+[What You Get For Each Language](#what-you-get-for-each-language)). Ruby, Java and C/C++ need their toolchain from the toolchains screen
 first, and the button offers it when it is missing. A C or C++ file is built
 into a temporary file and run, so a program of several files or one that needs
 build options still belongs in the terminal.
@@ -1008,7 +1018,8 @@ extension from Open VSX talks to it: see [C and C++](#c-and-c). There is no debu
 program with no Android build, so `npx tsc` stops with
 `Unable to resolve ... Either your platform is unsupported`. Install `typescript@6` instead, which compiles in JavaScript and works
 here. The editor's own TypeScript checking is separate and is not affected. Node itself runs
-`.ts` files directly (`node file.ts`) as long as they use only syntax that can be stripped.
+`.ts` files directly (`node file.ts`) as long as they use only syntax that can be stripped and
+name the `.ts` file in every relative import.
 
 ### Installing During First Run
 
