@@ -988,15 +988,6 @@ if (!fs.existsSync(rehEntryPoint)) {
         pid: server.pid, port: PORT, runId: process.env.VSCODROID_SERVER_RUN_ID,
         ...(SOCKET_PATH ? { socketPath: SOCKET_PATH } : {}),
     });
-    try {
-        const tmp = pidFile + '.tmp';
-        fs.writeFileSync(tmp, pidNote);
-        fs.renameSync(tmp, pidFile);
-    } catch (e) {
-        // Not fatal: adoption is an optimisation, and its absence costs a
-        // restart rather than a session.
-        log('warn', 'Could not record the editor server pid: ' + e.message);
-    }
 
     const clearPidFile = () => {
         try {
@@ -1010,19 +1001,12 @@ if (!fs.existsSync(rehEntryPoint)) {
         }
     };
 
-    // Start process monitor (non-fatal if it fails)
-    try {
-        const monitor = require(path.join(SERVER_DIR, 'process-monitor.js'));
-        monitor.start();
-    } catch (e) {
-        log('warn', 'Process monitor failed to start: ' + e.message);
-    }
-
-    server.on('error', (err) => {
-        log('error', `Failed to start VS Code Server: ${err.message}`);
-        process.exit(1);
-    });
-
+    // Both handlers go on before the note is written and before the monitor
+    // loads. Until process.on('SIGTERM') has run, a SIGTERM ends this process
+    // by the default action, which forwards nothing: a Stop landing in that
+    // span left the child just forked running, with its note naming it as
+    // though the bootstrap had stopped it. Node runs these from the event
+    // loop, so neither can run before this script has written the note.
     server.on('exit', (code, signal) => {
         // A killed child reports code === null and the signal separately, and
         // `code || 0` collapsed that to a clean zero -- so a server killed for
@@ -1068,5 +1052,28 @@ if (!fs.existsSync(rehEntryPoint)) {
             server.kill('SIGKILL');
         }, CHILD_KILL_AFTER_SIGTERM_MS);
         if (escalate.unref) escalate.unref();
+    });
+
+    try {
+        const tmp = pidFile + '.tmp';
+        fs.writeFileSync(tmp, pidNote);
+        fs.renameSync(tmp, pidFile);
+    } catch (e) {
+        // Not fatal: adoption is an optimisation, and its absence costs a
+        // restart rather than a session.
+        log('warn', 'Could not record the editor server pid: ' + e.message);
+    }
+
+    // Start process monitor (non-fatal if it fails)
+    try {
+        const monitor = require(path.join(SERVER_DIR, 'process-monitor.js'));
+        monitor.start();
+    } catch (e) {
+        log('warn', 'Process monitor failed to start: ' + e.message);
+    }
+
+    server.on('error', (err) => {
+        log('error', `Failed to start VS Code Server: ${err.message}`);
+        process.exit(1);
     });
 }

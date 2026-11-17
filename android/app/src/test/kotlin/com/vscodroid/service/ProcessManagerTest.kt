@@ -546,6 +546,7 @@ class ProcessManagerTest {
             .writeText("/lib/libnode.so\u0000/data/server/vscode-reh/out/server-main.js\u0000")
         File(tempDir, "proc/$pid/environ").writeText("VSCODROID_SERVER_RUN_ID=stop-fixture\u0000")
         manager.procDirField = File(tempDir, "proc")
+        manager.editorsDieOfTheirSigterm(File(tempDir, "proc"))
     }
 
     @Test
@@ -583,18 +584,19 @@ class ProcessManagerTest {
 
     @Test
     fun `a stop the bootstrap answers leaves the recorded pid alone`() {
-        // The guard on the reap above, and not a no-op assertion. A bootstrap that
-        // exited did so from its child's exit handler, so that child is already
-        // gone and the note it left was deleted in the same handler. A note still
-        // sitting there after a clean stop therefore belongs to something started
-        // since, and signalling it would end a server this stop has nothing to do
-        // with.
+        // A bootstrap that answers the SIGTERM exits from its child's exit handler,
+        // which deletes the note first: the stop then finds neither the note nor the
+        // child, and signals nothing.
         val killed = mutableListOf<Int>()
         manager.killRecordedProcess = { killed += it }
         recordEditorServer(pid = 8123, port = 13400)
         val process = mockk<Process>(relaxed = true) {
             every { isAlive } returns true
-            every { waitFor(any(), any()) } returns true
+            every { waitFor(any(), any()) } answers {
+                File(tempDir, "server/editor-server.pid").delete()
+                File(tempDir, "proc/8123").deleteRecursively()
+                true
+            }
         }
         manager.serverProcessField = process
 
@@ -2867,6 +2869,7 @@ class AdoptionTest {
             .writeText("/lib/libnode.so\u0000/data/server/vscode-reh/out/$entry\u0000")
         File(tempDir, "proc/$pid/environ").writeText("VSCODROID_SERVER_RUN_ID=$runId\u0000")
         manager.procDirField = File(tempDir, "proc")
+        manager.editorsDieOfTheirSigterm(File(tempDir, "proc"))
         stub?.proofKey = runId
     }
 
@@ -2998,12 +3001,20 @@ class AdoptionTest {
         val holder = serving(200)
         recordEditorServer(4242, holder.port)
         holder.proofKey = "another-private-run"
+        val events = mutableListOf<String>()
+        val gateway = EditorGateway.instance
+        every { gateway.withdrawBackend(any()) } answers { events += "withdraw ${firstArg<String>()}" }
+        manager.killRecordedProcess = { events += "kill $it" }
 
         assertTrue(manager.startServer())
 
         assertFalse(manager.isAdopted())
         assertFalse(manager.probeReadiness())
         assertNull(manager.connectionToken)
+        assertEquals(
+            listOf("withdraw run-4242", "kill 4242"), events,
+            "the survivor that failed the proof must stop receiving the page's bytes before it is ended",
+        )
     }
 
     @Test
@@ -3358,6 +3369,7 @@ class AdoptionTest {
             "the stop asked for the server to be gone, and the orphan it could not see " +
                 "is the only thing left holding the port",
         )
+        assertNull(EditorGateway.instance.boundPort, "the origin this refused start bound was kept")
     }
 
     @Test
@@ -3385,6 +3397,10 @@ class AdoptionTest {
             "and stay on the origin the workbench's IndexedDB is keyed to",
         )
         assertNull(manager.serverProcessField, "adoption spawns nothing")
+        val gateway = EditorGateway.instance
+        val recordedSocket = editorBackendSocket(contextMock, "run-4242")!!
+        verify(exactly = 1) { gateway.selectBackend(any(), any()) }
+        verify(exactly = 1) { gateway.selectBackend(recordedSocket, "run-4242") }
     }
 
     @Test
@@ -3816,6 +3832,8 @@ class AdoptionTest {
         assertFalse(manager.isAdopted())
         assertFalse(manager.isReady())
         assertNull(manager.connectionToken, "a departed editor must stop publishing its token")
+        val gateway = EditorGateway.instance
+        verify(exactly = 1) { gateway.withdrawBackend("run-4242") }
     }
 
     @Test
@@ -5182,6 +5200,40 @@ class HomePortTest {
         manager.releaseAwayOrigin()
 
         assertEquals(home, gateway.boundPort, "home stays reserved against other programs while the process lives")
+    }
+
+    @Test
+    fun `a stop landing as a start follows its survivor gives up the temporary origin`() {
+        // The survivor of an earlier process ran on a temporary port, and a start follows
+        // it there to adopt it. A stop that lands once that port is bound ends the survivor
+        // and must not leave the start's listener on a port that is not home.
+        val home = freePort()
+        stored = home
+        hold(home)
+        val away = freePort()
+        val runId = "run-4242"
+        val socket = editorBackendSocket(contextMock, runId)!!
+        File(tempDir, "server").mkdirs()
+        File(tempDir, "server/editor-server.pid").writeText(
+            org.json.JSONObject().put("pid", 4242).put("port", away).put("runId", runId)
+                .put("socketPath", socket.path).toString(),
+        )
+        File(tempDir, "proc/4242").mkdirs()
+        File(tempDir, "proc/4242/cmdline").writeText("/lib/libnode.so\u0000/data/server/vscode-reh/out/server-main.js\u0000")
+        File(tempDir, "proc/4242/environ").writeText("VSCODROID_SERVER_RUN_ID=$runId\u0000")
+        val gateway = spyk(EditorGateway()).also { gateways += it }
+        val manager = manager(gateway)
+        manager.procDirField = File(tempDir, "proc")
+        val killed = mutableListOf<Int>()
+        manager.killRecordedProcess = { killed += it }
+        manager.editorsDieOfTheirSigterm(File(tempDir, "proc"))
+        every { gateway.bind(any()) } answers { callOriginal().also { manager.stopServer() } }
+
+        assertFalse(manager.startServer(), "a start a stop refused reported success")
+
+        assertEquals(listOf(4242), killed, "the survivor the stop landed on was left running")
+        assertNull(gateway.boundPort, "the temporary origin $away outlived the stop that refused its start")
+        assertEquals(home, stored)
     }
     @Test
     fun stoppedStartMustNotBindAfterTemporaryRelease() {

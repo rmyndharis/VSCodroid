@@ -37,6 +37,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The notice that a sign-in was cut off by an editor restart no longer comes back after a font size or language change or an update.
 - Leaving the editor just as the folder picker or a download's save dialog was about to open no longer crashes the app.
 - The message for a device folder that failed to open names the error instead of ending in "null".
+- A Stop Server pressed while the server was still starting no longer leaves the editor server running in the background.
 
 ## [1.9.0] - 2026-11-16
 
