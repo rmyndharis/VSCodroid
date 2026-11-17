@@ -51,7 +51,7 @@
  * event hooks, with upstream's refilter replaced by a counter.
  *
  * NEGATIVE CONTROL, measured on the 1.139.1 tree with Node 22.23.2. Against upstream's
- * files, with no patch applied, 72 of the 79 cases fail. Each of these single edits to a
+ * files, with no patch applied, 75 of the 82 cases fail. Each of these single edits to a
  * copy of a patched file fails at least one case:
  *
  *   0046  the body of the blur listener removed; the composing clause dropped from the
@@ -60,18 +60,20 @@
  *   0048  in `_isSelectionOnly`: the equal-text alternative removed, the collapsed
  *         selection no longer required, a moved selection accepted with several cursors.
  *   0049  `_cursorsHoldSameText` answering true, and answering false;
- *         `_inputAtEveryCursor` answering nothing; the surrogate test of its deletion
- *         removed; a longer deletion taken for a Backspace; `_dismissingCursors` not set.
+ *         `_inputAtEveryCursor` answering nothing; its test for a paste removed; the
+ *         surrogate test of its deletion removed; a longer deletion taken for a Backspace;
+ *         `_dismissingCursors` not set.
  *   0050  the call removed from the chain for `_isBeyondBuffer`,
  *         `_isRememberedWordRewrite`, `_isTailDropOnReopen`, `_isOneUnitOverWord`,
  *         `_isUntypedWriteKeepingCaret`, `_isUntypedInsertKeepingCaret` and
  *         `_isTypedWriteKeepingCaret`; `_isInStepRewrite` answering false; each of the
  *         three exemptions removed (one unit over one unit, a doubled word, a Backspace on
- *         two letters); a letter counted in units; Han, kana and Hangul counted as
- *         letters; the bound raised from six to seven; a forced restart not counted; the
- *         count not started again at a new version of the model; the clamp past the bound
- *         removed; the typed flag never set, and not cleared at compositionstart; the
- *         restart after a refusal not forced; the buffer not written back at a refusal.
+ *         two letters); a letter counted in units; any one code point counted as a letter;
+ *         Han, kana and Hangul counted as letters; the bound raised from six to seven; a
+ *         forced restart not counted; the count not started again at a new version of the
+ *         model; the clamp past the bound removed, or only the cut of its start; the typed
+ *         flag never set, and not cleared at compositionstart; the restart after a
+ *         refusal not forced; the buffer not written back at a refusal.
  *   0051  `_caretUnmoved` answering false; its single-caret test removed; the count of
  *         carets not taken when the others are dropped.
  *   0052  the bounds test of `_onListTap` removed.
@@ -747,6 +749,13 @@ check('0049: a suggestion at cursors that hold different words goes to the prima
     return [{ ...p.state(), written: p.buffer.writes - writes }, { ...applied('alphabet\nbravox', [8]), written: 0 }];
 });
 
+check('0049: a commit long enough to be a paste goes to the primary cursor alone', async () => {
+    const clip = 'x'.repeat(70);
+    const p = page('alpha\nbravo', [5, 11]);
+    await p.update(`alpha${clip}`, 0, 5);
+    return [p.state(), applied(`alpha${clip}\nbravo`, [75])];
+});
+
 check('0049: a word deleted whole is not a Backspace and goes to the primary cursor alone', async () => {
     const p = page('alphax\nbravox', [6, 13]);
     await p.compose();
@@ -906,6 +915,13 @@ check('0050 fourth rule: a letter outside the basic plane is one letter', async 
     await p.compose();
     await p.update('\u{1D431}', 5, 8);
     return [p.state(), refused('line two', 8)];
+});
+
+check('0050 fourth rule: an emoji the strip offers for the reopened word is not a letter and is applied', async () => {
+    const p = page('line two', [8]);
+    await p.compose();
+    await p.update('\u{1F600}', 5, 8);
+    return [p.state(), applied('line \u{1F600}', 7)];
 });
 
 check('0050 fourth rule: a Backspace on a reopened word of two letters is applied', async () => {
@@ -1111,6 +1127,12 @@ check('0050 bound: six refusals for one version of the model, and the seventh up
         { sixth: ['above\nline twox\nbelow', 6], text: 'above\nline twoxtwox\nbelow', carets: [15], restarts: 6 }];
 });
 
+check('0050 bound: past the bound a deletion that starts beyond the buffer edits nothing, and the text after the caret is not written again', async () => {
+    const p = page('above\nline twox\nbelow', [11]);
+    await p.repeat(7, '', 74, 75, 5);
+    return [p.state(), { text: 'above\nline twox\nbelow', carets: [11], version: 1, restarts: 6 }];
+});
+
 check('0050 bound: the applied update moved the version, so the next one is refused again', async () => {
     const p = page('above\nline twox\nbelow', [15]);
     await p.repeat(8, ...beyond);
@@ -1239,19 +1261,37 @@ check('0053: with no composition an open list is refiltered as upstream does it'
     return [model.refilters(), 1];
 });
 
+// A case that never settles leaves the event loop nothing to wait for, and Node then exits 0
+// without the summary: the timer keeps the run alive and fails the case, and the exit check
+// fails a run that ended before every case had been run.
+const SETTLE_MS = 10000;
+
 (async () => {
     let failed = 0;
+    let ran = 0;
+    process.on('exit', () => {
+        if (ran !== cases.length) {
+            console.error(`check-editcontext-ime.js: ${ran} of ${cases.length} cases ran`);
+            process.exitCode = 1;
+        }
+    });
     for (const [name, play] of cases) {
         let got;
         let want;
+        let timer;
         try {
-            [got, want] = await play();
+            [got, want] = await Promise.race([play(), new Promise((resolve, reject) => {
+                timer = setTimeout(() => reject(new Error(`the case did not settle within ${SETTLE_MS} ms`)), SETTLE_MS);
+            })]);
             if (want !== null && typeof want === 'object' && !Array.isArray(want)) {
                 got = Object.fromEntries(Object.keys(want).map(key => [key, got[key]]));
             }
         } catch (error) {
             got = `threw ${error.stack}`;
+        } finally {
+            clearTimeout(timer);
         }
+        ran += 1;
         if (util.isDeepStrictEqual(got, want)) {
             console.log(`ok   ${name}`);
         } else {

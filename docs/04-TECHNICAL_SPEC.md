@@ -1236,7 +1236,7 @@ first, so that nothing after the buffer is replaced. Nothing of a refusal is kep
 count: the restart ends the composition, and the update that follows is judged on its own.
 What is refused is a set of shapes; the set and its cases are in the patch's description,
 with what the rules cost: a correction of an earlier word that keeps the caret where it was
-is not applied either, and the typo stays. The
+is not applied either, and the typo stays. One
 known limit is a letter typed after a turn while the keyboard still holds the range it
 reopened. The keyboard can send that letter alone over the word, which is refused, so the
 letter is lost; or over a single reopened letter, which is what a Hangul or kana step looks
@@ -1261,8 +1261,13 @@ The builds called the nine rules and the patch as it is above carried one rule m
 patch has now, the third of the nine: it remembered the last refusal and was to refuse the
 next letter sent over the same range. It could not act, because the restart that follows a
 refusal ends the composition the rule needed, and it has been removed; no device run has been
-made without it. The rules are run on the patched source by
-`scripts/check-editcontext-ime.js`, in the server build.
+made without it. Two more results are known limits that the rules pass: the word written again
+at the caret in a composition that has typed (`line twoxtwo`, one recorded update, in a run
+that ended damaged), and, after a refusal, a keyboard that goes on with the range it kept: its
+next letter over that range, or the refused write sent again, replaces or deletes the rest of
+the word after the caret (`alpha betz Charlie delta`, `alpha bet Charlie delta`). What a
+keyboard sends after a restart of input is not recorded. The rules are run on the patched
+source by `scripts/check-editcontext-ime.js`, in the server build.
 
 Patch 0051 keeps the EditContext buffer where it is while the caret has not moved. After an
 Enter typed on the keyboard at the end of a line, the buffer keeps its start on the line above
