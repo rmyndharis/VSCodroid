@@ -1037,6 +1037,44 @@ const keys = (page, at = 'text-box') => sequence(page).filter((line, i) => page.
         JSON.stringify(term.sent()), JSON.stringify(['ab', '\x03'])]);
 }
 
+// A second update reaches the field before the chord's task: the field is then not put back, xterm
+// empties it on the blur, and the send xterm arms for the word would read it empty. So the blur is
+// left to the page's own hook, which sends the word while the field still holds it: the word reaches
+// the shell, with the letters the keyboard put into it, which is the trade a keyboard that commits
+// would not make but a lost word is worse.
+{
+    const page = newPage();
+    intercept(page);
+    const term = terminal(page);
+    term.compose('a');
+    term.compose('ab');
+    page.window.__vscodroid.ctrl = true;
+    term.compose('abc');
+    term.compose('abcd');
+    page.runTimers();
+    cases.push(['a second update before a composed Ctrl+C in the terminal still sends the word, then ^C',
+        JSON.stringify(term.sent()), JSON.stringify(['abcd', '\x03'])]);
+}
+{
+    const page = newPage();
+    intercept(page);
+    const term = terminal(page, (e) => e.ctrlKey && e.key === 'p' && page.document.activeElement !== quickOpen);
+    const quickOpen = page.newNode('quick-input-box', page.document.body);
+    page.window.addEventListener('keydown', (e) => {
+        if (!e.ctrlKey || e.key !== 'p') return;
+        term.blur();
+        page.document.activeElement = quickOpen;
+    });
+    term.compose('a');
+    term.compose('ab');
+    page.window.__vscodroid.ctrl = true;
+    term.compose('abp');
+    term.compose('abpx');
+    page.runTimers();
+    cases.push(['a second update before a composed Ctrl+P in the terminal still sends the word to the shell',
+        JSON.stringify(term.sent()), JSON.stringify(['abpx'])]);
+}
+
 // A chord the workbench takes from the terminal never reaches xterm's
 // composition handling, so only the compositionend sends the word, read back
 // from the textarea in a zero timeout. Ctrl+P is one, and it takes the focus

@@ -640,8 +640,10 @@ class KeyInjector(
                         if (document.activeElement === box && box.classList.contains('xterm-helper-textarea')) {
                             // Marked, so the terminal script's blur hook leaves the send of the
                             // composition this blur ends to xterm's own timer, which runs after the
-                            // field's text is put back below.
-                            window.__vscodroidChordBlur = box;
+                            // field's text is put back below. Only when it will be put back: where
+                            // something changed the field in between it is not, xterm empties it on
+                            // the blur, and that timer would then send nothing of the word.
+                            if (untouched) window.__vscodroidChordBlur = box;
                             try { box.blur(); } finally { window.__vscodroidChordBlur = null; }
                             box.focus();
                         }

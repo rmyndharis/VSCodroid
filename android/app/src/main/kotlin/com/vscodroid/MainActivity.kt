@@ -1426,9 +1426,10 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                     if (!targetView.isFocused || !targetView.hasWindowFocus()) return@evaluateJavascript
                     targetView.clearFocus()
                     targetView.requestFocus()
-                } else if (editable == "false") {
-                    // No refocus follows the page's no, so the turn stops waiting for one: a keyboard
-                    // put away over Quick Open or the find box is then the person's after the floor.
+                } else if (editable == "\"none\"") {
+                    // The focus is in a plain text box, for which no refocus is made, so the turn stops
+                    // waiting for one: a keyboard put away over Quick Open or the find box is then the
+                    // person's after the floor. Every other no leaves the turn waiting, as it did.
                     keyboardDismissal.noRefocus()
                 }
             }
@@ -5231,6 +5232,15 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                         (element.editContext || isTerminalTextarea(element)) &&
                         element.getAttribute('inputmode') !== 'none');
                 }
+                // A text box of the workbench that is neither the editor (its EditContext host, or the
+                // `inputarea` textarea of the other edit path) nor the terminal: the Quick Open input,
+                // the find box, a rename box. Nothing here is held down, and the keyboard returns by
+                // itself for the box, so a turn has nothing to refocus for it.
+                function plainTextBox(element) {
+                    if (!element || !element.classList || element.classList.contains('inputarea')) return false;
+                    return element.tagName === 'TEXTAREA' || element.isContentEditable === true ||
+                        (element.tagName === 'INPUT' && element.selectionStart !== null);
+                }
                 function finishCompositionTurn() {
                     if (!turnUnchanged()) { cancelCompositionTurn(); return; }
                     var turn = compositionTurn;
@@ -5272,7 +5282,9 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                         if (!element) return false;
                         var context = element.editContext;
                         if (!context) {
-                            if (!isTerminalTextarea(element)) return false;
+                            // 'none' and not false: the app is told that no refocus will come, and the
+                            // turn stops waiting for one. The other answers of false leave it waiting.
+                            if (!isTerminalTextarea(element)) return plainTextBox(element) ? 'none' : false;
                             // The refocus blurs the field, xterm empties it,
                             // and the word still under composition is lost.
                             if (composing.has(element)) return false;

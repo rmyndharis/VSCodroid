@@ -1490,9 +1490,13 @@ function that did nothing it stayed up. `KeyboardDismissal` therefore calls the 
 second after the report, and not if the keyboard is visible by then or a change of
 configuration explains the report: any report within two seconds of it, and where a turn
 found the keyboard up and the app refocuses the editor for it, one until `AFTER_REFOCUS_MS`
-after that refocus (`TURN_CAP_MS` after the turn at most). With the focus in a text box other
-than the editor (Quick Open, the find box) the app makes no refocus and the two seconds are
-the whole window. A scroll inside that half second can raise a keyboard put away
+after that refocus (`TURN_CAP_MS` after the turn at most). With the focus in a plain text box
+(Quick Open, the find box: the page answers `none` and the app calls `noRefocus`) the app
+makes no refocus and the two seconds are the whole window; a system hide first reported
+later than that, as a keyboard rebuilding under load can, is then taken for the person's,
+and the next file opened is held until a tap. For the editor, the terminal and a focus in
+neither the page answers `false` and the claim runs to `TURN_CAP_MS` as before. A scroll
+inside that half second can raise a keyboard put away
 with Back, as it did before the hold existed. A tap is the script's own test,
 12 CSS px and 500 ms, or a tap by the workbench's touch gesture, which the activity bar, the
 status bar and the tabs act on and which is looser, under 700 ms within 30 px on each axis:
