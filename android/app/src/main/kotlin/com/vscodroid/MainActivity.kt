@@ -1426,6 +1426,10 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                     if (!targetView.isFocused || !targetView.hasWindowFocus()) return@evaluateJavascript
                     targetView.clearFocus()
                     targetView.requestFocus()
+                } else if (editable == "false") {
+                    // No refocus follows the page's no, so the turn stops waiting for one: a keyboard
+                    // put away over Quick Open or the find box is then the person's after the floor.
+                    keyboardDismissal.noRefocus()
                 }
             }
         }
@@ -4511,7 +4515,11 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
      * the host, for as long as it was watched; with the hook replaced by a
      * function that does nothing it stayed up. [KeyboardDismissal] therefore
      * calls the hook half a second after the report, and not if the keyboard is
-     * back by then or the configuration changed within two seconds. The cost is
+     * back by then or a change of configuration explains the report: any report
+     * within two seconds of it, and where a turn found the keyboard up and the
+     * app refocuses the editor for it, one until
+     * [KeyboardDismissal.AFTER_REFOCUS_MS] after that refocus
+     * ([KeyboardDismissal.TURN_CAP_MS] after the turn at most). The cost is
      * that a scroll in that half second can raise a keyboard put away with Back,
      * as it did before the hold existed. Not measured: switching keyboards with
      * the globe key and leaving the app with the keyboard up, either of which

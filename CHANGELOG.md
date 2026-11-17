@@ -21,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The notice that the server crashed repeatedly no longer appears for a moment under the page that says so.
 - The notice that another app is using the editor's port comes back after a font size or language change until it is answered, and offers Stop Server itself for a phone with notifications turned off.
 - The Toolchains shortcut opened while the setup that follows an update is running goes to the setup screen instead of installing over files still being unpacked.
+- A keyboard put away after the screen is turned stays down when a text box other than the editor has the focus, such as Quick Open or the find box; the next touch used to bring it back.
 
 ## [1.9.0] - 2026-11-16
 

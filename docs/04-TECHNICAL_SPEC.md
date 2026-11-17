@@ -1478,8 +1478,12 @@ and visible again 150 to 650 ms later, and on an API 36 emulator with `hw.keyboa
 reports no keyboard as a phone does, the hold the hook writes at the first report took the
 keyboard down at the turn to landscape and kept it down, where with the hook replaced by a
 function that did nothing it stayed up. `KeyboardDismissal` therefore calls the hook half a
-second after the report, and not if the keyboard is visible by then or the configuration
-changed within two seconds. A scroll inside that half second can raise a keyboard put away
+second after the report, and not if the keyboard is visible by then or a change of
+configuration explains the report: any report within two seconds of it, and where a turn
+found the keyboard up and the app refocuses the editor for it, one until `AFTER_REFOCUS_MS`
+after that refocus (`TURN_CAP_MS` after the turn at most). With the focus in a text box other
+than the editor (Quick Open, the find box) the app makes no refocus and the two seconds are
+the whole window. A scroll inside that half second can raise a keyboard put away
 with Back, as it did before the hold existed. A tap is the script's own test,
 12 CSS px and 500 ms, or a tap by the workbench's touch gesture, which the activity bar, the
 status bar and the tabs act on and which is looser, under 700 ms within 30 px on each axis:
