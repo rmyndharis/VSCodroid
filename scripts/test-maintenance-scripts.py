@@ -442,6 +442,15 @@ class MaintenanceScriptsTest(unittest.TestCase):
             "android/app/src/main/kotlin/X.kt": 'val s = "a ' + escape(0x2013) + ' b"\n',
             "android/app/src/main/assets/x.js": "const s = 'a " + escape(0x2015, True) + " b';\n",
             "patches/0001-added.patch": patch("same", "new " + bar + " line"),
+            # The editor's build compiles what a patch adds, so its escapes are decoded as well.
+            "patches/0003-escaped.patch": patch("same", "const s = 'a " + escape(0x2014) + " b';"),
+            # An added line whose own text starts with `++ ` is not the file header it looks like.
+            "patches/0004-plus.patch": patch("same", "++ counter " + em),
+            # Copied into the server tree, where product.json names the app to its users.
+            "branding/product.json": '{"nameLong": "a ' + escape(0x2013) + ' b"}\n',
+            "branding/workbench/x.svg": "<svg><text>a &#%d; b</text></svg>\n" % 0x2014,
+            # Three backslashes: an escaped backslash, then the escape itself.
+            "android/app/src/main/kotlin/Odd.kt": 'val s = "\\\\' + escape(0x2014) + '"\n',
         }
         allowed = {
             "patches/0002-upstream.patch": patch("ctx " + em + " kept", "new line").replace(
@@ -450,6 +459,11 @@ class MaintenanceScriptsTest(unittest.TestCase):
             "scripts/test-x.js": "const s = '" + escape(0x2013, True) + "';\n",
             "scripts/x.py": "s = '&mdash;'\n",
             "docs/site/plain.html": "<p>a - b &amp; c &MDASH; d &mdash e &#82120;</p>\n",
+            # Ours, and judged for the character, but a description is not compiled.
+            "patches/0005-described.patch": patch("same", "new line").replace(
+                "plain words", "keep the " + escape(0x2014) + " escape out"),
+            # Two backslashes: an escaped backslash and a plain `u`, which shows no dash.
+            "android/app/src/main/kotlin/Even.kt": 'val s = "\\' + escape(0x2014) + '"\n',
         }
         # Not judged at all, so it is not even a path the gate accepts: only the whole-tree count shows it.
         verbatim = {"licenses/x.txt": "a " + em + " b\n"}

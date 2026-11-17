@@ -36,15 +36,20 @@ Two more places decode a spelling into the character before anyone reads it.
 A page does: HTML and Markdown (which the docs site and GitHub render as
 HTML) turn a named or numeric character reference into the character, and a
 browser takes a number without its semicolon and remaps the windows-1252
-numbers onto both dashes. Each reference is put through the standard
+numbers onto both dashes. SVG is read the same way, since a browser draws it
+and decodes its references. Each reference is put through the standard
 library's HTML decoder rather than matched against a list, so those count the
 same as the obvious name. A Markdown code span is not told apart: that needs a
 Markdown parser, and a miss costs the character on a published page. And a
 string literal does: shipped Kotlin, Java, JavaScript and JSON (the strings of
 the bundled extensions among them) decode a backslash-u escape, in JavaScript
-the braced form too, into text a person is shown. Only code under a `src/main`
-directory is read for that form; tests and scripts spell it on purpose, as a
-fixture, and show it to nobody.
+the braced form too, into text a person is shown. Code under a `src/main`
+directory, the JSON under `branding/` that the server build copies into the
+tree it ships, and every line a patch adds to the editor's source are read for
+that form; tests and scripts spell it on purpose, as a fixture, and show it to
+nobody. A backslash that is itself escaped, as in `\\\\u` followed by the
+digits, leaves a backslash and plain text, so only an odd run of backslashes
+before the `u` counts.
 
 Why a gate rather than a habit
 ------------------------------
@@ -101,9 +106,14 @@ ESCAPED = {
 
 # The escape a shipped string literal decodes: the four-digit form Kotlin,
 # Java, JavaScript and JSON share, and the braced form JavaScript adds.
+#
+# ODD_BACKSLASH starts a match only where the backslash before the `u` is not
+# itself escaped: an even run of backslashes ahead of it decodes to backslashes
+# and leaves the `u` and its digits as plain text.
+ODD_BACKSLASH = r"(?<!\\)(?:\\\\)*\\u"
 CODE_ESCAPED = {
     char: re.compile(
-        rf"\\u{ord(char):04x}|\\u\{{0*{ord(char):x}\}}",
+        rf"{ODD_BACKSLASH}(?:{ord(char):04x}|\{{0*{ord(char):x}\}})",
         re.IGNORECASE,
     )
     for char in BANNED
@@ -129,17 +139,22 @@ def tracked(paths):
 
 
 def checkable_lines(path, text):
-    """The (number, line) pairs this gate is allowed to judge."""
+    """The (number, line, added) triples this gate is allowed to judge, where
+    `added` marks a line a patch adds to the editor's source."""
     lines = enumerate(text.split("\n"), start=1)
     if not path.endswith(".patch"):
-        return lines
-    judged, in_diff = [], False
+        return [(number, line, False) for number, line in lines]
+    judged, in_diff, previous = [], False, ""
     for number, line in lines:
         if line.startswith("diff --git ") or line.startswith("--- a/"):
             in_diff = True
-        # Below the diff line only an added line is ours; `+++ ` names a file.
-        if not in_diff or (line.startswith("+") and not line.startswith("+++ ")):
-            judged.append((number, line))
+        # Below the diff line only an added line is ours. `+++ ` names a file only
+        # right after the `--- ` line; anywhere else it adds a line that starts `++ `.
+        if not in_diff:
+            judged.append((number, line, False))
+        elif line.startswith("+") and not (line.startswith("+++ ") and previous.startswith("--- ")):
+            judged.append((number, line, True))
+        previous = line
     return judged
 
 
@@ -162,20 +177,24 @@ def compiled_by_aapt2(path):
 
 def rendered_as_html(path):
     """Whether a reader sees this file as a page that decodes references."""
-    return path.endswith((".html", ".htm", ".md"))
+    return path.endswith((".html", ".htm", ".md", ".svg"))
 
 
 def decodes_code_escapes(path):
     """Whether this is shipped code or JSON whose string literals decode a
-    backslash-u escape: under a `src/main` directory, in any module."""
+    backslash-u escape: under a `src/main` directory, in any module, or under
+    `branding/`, which the server build copies into the tree it ships."""
     if not path.endswith((".kt", ".java", ".js", ".mjs", ".cjs", ".ts", ".json")):
         return False
     parts = pathlib.PurePosixPath(path).parts
+    if parts[:1] == ("branding",):
+        return True
     return any(parts[i:i + 2] == ("src", "main") for i in range(len(parts) - 1))
 
 
-def line_offences(path, number, line):
-    """The offences on one line this gate is allowed to judge."""
+def line_offences(path, number, line, added=False):
+    """The offences on one line this gate is allowed to judge. `added` marks a
+    line a patch adds, which the editor's build compiles like shipped code."""
     found = []
     for column, char in enumerate(line, start=1):
         if char in BANNED:
@@ -186,7 +205,7 @@ def line_offences(path, number, line):
     escaped = []
     if compiled_by_aapt2(path):
         escaped.append((ESCAPED, "escaped; the resource compiler expands it"))
-    if decodes_code_escapes(path):
+    if added or decodes_code_escapes(path):
         escaped.append((CODE_ESCAPED, "escaped; the string literal decodes it"))
     for table, why in escaped:
         for char, pattern in table.items():
@@ -214,8 +233,8 @@ def offences(path):
         # problem that a different gate should report.
         return []
     found = []
-    for number, line in checkable_lines(path, text):
-        found.extend(line_offences(path, number, line))
+    for number, line, added in checkable_lines(path, text):
+        found.extend(line_offences(path, number, line, added))
     # The passes walk the same line, so a file holding one of each would
     # otherwise report the second line before the first column of the first.
     found.sort(key=lambda offence: offence[:2])
