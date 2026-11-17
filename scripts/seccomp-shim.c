@@ -44,6 +44,10 @@
 #define __NR_epoll_pwait2 441
 #endif
 
+#ifndef SYS_SECCOMP
+#define SYS_SECCOMP 1
+#endif
+
 extern int *__errno_location(void);
 
 static inline long sys6(long nr, long a, long b, long c, long d, long e, long f) {
@@ -95,6 +99,14 @@ static void on_sigsys(int sig, siginfo_t *info, void *ctx) {
     ucontext_t *uc = (ucontext_t *)ctx;
     unsigned long *regs = (unsigned long *)uc->uc_mcontext.regs;
 
+    if (info->si_code != SYS_SECCOMP) {
+        // Sent with kill, tgkill or sigqueue, not raised by a refusal. No call was
+        // skipped, si_syscall is not set for it, and x0 is whatever the
+        // interrupted code holds there, such as kill's own result. Nothing to
+        // answer, so nothing is touched.
+        return;
+    }
+
     if (info->si_syscall != __NR_epoll_pwait2) {
         // Not ours, and the call did not run. Answer it rather than leaving the
         // caller with whatever the rollback left in x0, and leave the handler in
@@ -135,8 +147,9 @@ static void on_sigsys(int sig, siginfo_t *info, void *ctx) {
  * Installs the handler before anything else in the process runs.
  *
  * SA_NODEFER so a refusal raised from inside the handler is not held back, and
- * SA_SIGINFO because si_syscall is the only thing that says which call was
- * refused. No restorer: arm64 returns from a signal through the vDSO.
+ * SA_SIGINFO because only si_code says the signal is a refusal and only
+ * si_syscall says which call was refused. No restorer: arm64 returns from a
+ * signal through the vDSO.
  */
 /**
  * musl's own `struct sigaction`, which is not the kernel's: the mask comes
