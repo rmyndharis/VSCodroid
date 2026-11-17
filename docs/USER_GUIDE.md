@@ -638,8 +638,16 @@ The Android build of that add-on is pointed at by `ZEROMQ_PREBUILD`, which every
 
 The Google Antigravity extension (`Google.google-antigravity` on Open VSX) installs from the Extensions view
 like any other. When it first starts it downloads its engine, about 60 MB, which unpacks to about 200 MB
-under `~/.gemini`. VSCodroid starts that engine for the extension and lets the extension's panel show the
-page the engine serves, so the panel opens on the Antigravity welcome screen with **Continue with Google**.
+under `~/.gemini`. Once you have turned its engine on (below), VSCodroid starts that engine for the
+extension and lets the extension's panel show the page the engine serves, so the panel opens on the
+Antigravity welcome screen with **Continue with Google**.
+
+**The engine is off until you turn it on.** With the extension installed, VSCodroid shows a notice that
+says so and offers **Turn On and Reload**. The same switch is in Settings: search for `antigravity` and
+tick **Vscodroid > Antigravity: Run Engine** (it is listed on the **Remote** tab), then run **Developer:
+Reload Window**. Until then the extension's panel reads `Couldn't load this view` with a
+`spawn ... EACCES` error, which is the engine not being started. Untick the setting and reload to turn the
+engine off again. The reason for the switch is the third point below.
 
 What to know before using it:
 
@@ -654,7 +662,8 @@ What to know before using it:
   use the network can open that port. The page the engine serves there includes the key its calls require, so
   such an app can read the signed-in account's name, email address and plan, and should be assumed able to make
   the engine's other calls too. VSCodroid has found no way to make the engine listen on a private socket, as the
-  editor does. Sign in only on a phone whose installed apps you trust.
+  editor does, which is why the engine stays off until you turn it on. Turn it on, and sign in, only on a
+  phone whose installed apps you trust.
 - **Processes and memory.** The engine is one more process counted against Android's phantom process limit (see
   [Android Phantom Process Limit](#android-phantom-process-limit)) while it runs, and on an emulator it held
   between about 140 and 200 MB of memory, on top of the editor's own.

@@ -1,0 +1,7 @@
+{
+  "displayName": "VSCodroid İşlem İzleyici",
+  "description": "Android'deki hayalet işlem sayısını izler",
+  "command.showProcesses": "VSCodroid: İşlem ağacını göster",
+  "config.server.heapCeilingMb": "Düzenleyici sunucusu için V8 yığın üst sınırı, MB cinsinden. Boş bırakılırsa cihaz belleğinden türetilir (RAM'in sekizde biri, 256 ile 768 arasında). Uygulamanın bir sonraki açılışında geçerli olur. Bu cihazın kaldıramayacağı kadar büyük bir değer kendiliğinden düşürülür, tekrarlanan çökmelerden sonra da kapatılır.\n\nSınır, sunucudaki her V8 yalıtımı için ayrı ayrı geçerlidir, hepsi için birden değil; bu yüzden onu yükseltmek sayının söylediğinin birkaç katına mal olur.",
+  "config.antigravity.runEngine": "Google Antigravity uzantısının motorunu başlatmasına izin verir. Motor çalışırken, bu telefondaki ağ erişimi olan herhangi bir uygulamanın ulaşabileceği yerel bir bağlantı noktasını dinler ve böyle bir uygulama motorda oturum açmış hesabı kullanabilir. Siz açana kadar kapalıdır. Değiştirdikten sonra pencereyi yeniden yükleyin."
+}

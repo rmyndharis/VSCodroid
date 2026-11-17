@@ -1,0 +1,7 @@
+{
+  "displayName": "VSCodroid Monitor de procesos",
+  "description": "Vigila el número de procesos fantasma en Android",
+  "command.showProcesses": "VSCodroid: Mostrar el árbol de procesos",
+  "config.server.heapCeilingMb": "Límite del montículo de V8 para el servidor del editor, en MB. Si lo dejas sin valor, se deduce de la memoria del dispositivo (un octavo de la RAM, entre 256 y 768). Se aplica la próxima vez que se inicie la aplicación. Un valor mayor de lo que este dispositivo admite se reduce automáticamente, y se desactiva tras fallos repetidos.\n\nEl límite se aplica por separado a cada aislado de V8 del servidor, no a todos juntos, así que subirlo cuesta varias veces lo que dice la cifra.",
+  "config.antigravity.runEngine": "Permite que la extensión Google Antigravity inicie su motor. Mientras el motor está en marcha, escucha en un puerto local al que puede acceder cualquier aplicación de este teléfono con acceso a la red, y esa aplicación puede usar la cuenta con la que se inició sesión en el motor. Desactivado hasta que lo actives. Recarga la ventana después de cambiarlo."
+}

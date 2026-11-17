@@ -40,6 +40,32 @@ function isStale(snapshot) {
     return !(age >= 0 && age <= STALE_AFTER_MS);
 }
 
+// The Google Antigravity extension starts an engine whose port any app on the phone can reach, so
+// the app starts that engine only once `vscodroid.antigravity.runEngine` is on (platform-fix.js reads
+// the setting where the engine would be started). With the setting off the extension's panel fails
+// with a spawn error that says nothing about a setting, so this says it, once per window, and offers
+// to turn the setting on. A machine setting, written to the same file the app reads.
+const ANTIGRAVITY = 'Google.google-antigravity';
+const TURN_ON = 'Turn On and Reload';
+let engineOffered = false;
+
+function offerAntigravityEngine() {
+    if (engineOffered || !vscode.extensions.getExtension(ANTIGRAVITY)) return;
+    const config = vscode.workspace.getConfiguration('vscodroid.antigravity');
+    if (config.get('runEngine') === true) return;
+    engineOffered = true;
+    vscode.window.showWarningMessage(
+        'Google Antigravity is installed, but VSCodroid keeps its engine off. While the engine runs, ' +
+            'other apps on this phone can reach it and use the account signed in to it. Turn it on only ' +
+            'on a phone whose apps you trust.',
+        TURN_ON
+    ).then((choice) => {
+        if (choice !== TURN_ON) return undefined;
+        return config.update('runEngine', true, vscode.ConfigurationTarget.Global)
+            .then(() => vscode.commands.executeCommand('workbench.action.reloadWindow'));
+    });
+}
+
 let statusBarItem;
 let outputChannel;
 let pollTimer;
@@ -70,6 +96,10 @@ function activate(context) {
     const showCmd = vscode.commands.registerCommand('vscodroid.showProcesses', () => {
         showProcessTree();
     });
+
+    // Now, and again when the set of extensions changes: the person may install Antigravity later.
+    offerAntigravityEngine();
+    context.subscriptions.push(vscode.extensions.onDidChange(offerAntigravityEngine));
 
     // No command that signals a process. 'Kill Idle Servers' lived here and
     // SIGTERMed the idle rows, and measured on device it freed nothing: the

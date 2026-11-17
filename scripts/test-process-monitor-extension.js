@@ -46,11 +46,26 @@ const printed = [];
 // extension host in one table, and one made without an id is numbered per host,
 // so the first such item of a web extension took this item's slot.
 const statusItemArgs = [];
+// What the Antigravity offer reads and writes: which extensions are installed, the machine setting, the
+// configuration writes it made and the commands it ran. A case sets these before it activates.
+const world = { installed: new Set(), runEngine: undefined, updates: [], executed: [], onExtensionsChange: null, answer: undefined };
 const vscodeStub = {
+    ConfigurationTarget: { Global: 1, Workspace: 2 },
+    extensions: {
+        getExtension: (id) => (world.installed.has(id.toLowerCase()) ? { id } : undefined),
+        onDidChange: (listener) => { world.onExtensionsChange = listener; return { dispose() {} }; },
+    },
+    workspace: {
+        getConfiguration: (section) => ({
+            get: (key) => (section === 'vscodroid.antigravity' && key === 'runEngine' ? world.runEngine : undefined),
+            update: (key, value, target) => { world.updates.push([section, key, value, target]); return Promise.resolve(); },
+        }),
+    },
     StatusBarAlignment: { Left: 1, Right: 2 },
     ThemeColor: class { constructor(id) { this.id = id; } },
     commands: {
         registerCommand: (id, fn) => { commands.set(id, fn); return { dispose() {} }; },
+        executeCommand: (id) => { world.executed.push(id); return Promise.resolve(); },
     },
     window: {
         createStatusBarItem: (...args) => { statusItemArgs.push(args); return { show() {}, hide() {}, dispose() {} }; },
@@ -67,7 +82,7 @@ const vscodeStub = {
         // stood beside 'Show Details' on both tiers, and a stub that dropped the
         // items could not tell a notification offering a signal from one that
         // does not.
-        showWarningMessage: (message, ...items) => { shown.push({ level: 'warning', message, items }); return Promise.resolve(undefined); },
+        showWarningMessage: (message, ...items) => { shown.push({ level: 'warning', message, items }); return Promise.resolve(items.includes(world.answer) ? world.answer : undefined); },
         showErrorMessage: (message, ...items) => { shown.push({ level: 'error', message, items }); return Promise.resolve(undefined); },
         showInformationMessage: (message) => { shown.push({ level: 'info', message }); return Promise.resolve(undefined); },
     },
@@ -692,6 +707,67 @@ assert.ok(
     'the status bar item is made without an id, so it shares a slot with another extension ' +
     'host\'s item: ' + JSON.stringify(statusItemArgs[0]),
 );
+
+// The Antigravity engine is off until the person turns on a machine setting, and the extension's own
+// failure with the setting off is a spawn error that names no setting. So the offer is made when the
+// extension is installed and the setting is off, once per window, also when the extension is installed
+// later; turning it on writes the machine setting and reloads the window, and nothing else does.
+async function antigravityOffer({ installed, runEngine, answer, installLater = false }) {
+    world.installed = new Set(installed && !installLater ? ['google.google-antigravity'] : []);
+    world.runEngine = runEngine;
+    world.answer = answer;
+    world.updates = [];
+    world.executed = [];
+    world.onExtensionsChange = null;
+    const tmp = fs.mkdtempSync(path.join(BASE_TMP, 'vscodroid-ext-'));
+    process.env.TMPDIR = tmp;
+    shown.length = 0;
+    delete require.cache[require.resolve(EXTENSION)];
+    const extension = require(EXTENSION);
+    const context = { subscriptions: [] };
+    extension.activate(context);
+    if (installLater) {
+        assert.strictEqual(shown.filter((m) => /Antigravity/.test(m.message)).length, 0, 'the offer was made with the extension not installed');
+        world.installed.add('google.google-antigravity');
+        world.onExtensionsChange();
+    }
+    // A second change of the extensions must not ask again in the same window.
+    if (world.onExtensionsChange) world.onExtensionsChange();
+    await new Promise((resolve) => setImmediate(resolve));
+    await new Promise((resolve) => setImmediate(resolve));
+    extension.deactivate();
+    fs.rmSync(tmp, { recursive: true, force: true });
+    return { offers: shown.filter((m) => /Antigravity/.test(m.message)), updates: world.updates.slice(), executed: world.executed.slice() };
+}
+
+(async () => {
+    const quiet = await antigravityOffer({ installed: false, runEngine: undefined });
+    assert.strictEqual(quiet.offers.length, 0, 'the offer was made with the Antigravity extension not installed');
+
+    const on = await antigravityOffer({ installed: true, runEngine: true });
+    assert.strictEqual(on.offers.length, 0, 'the offer was made with the setting already on');
+
+    const dismissed = await antigravityOffer({ installed: true, runEngine: false, answer: undefined });
+    assert.strictEqual(dismissed.offers.length, 1, 'the offer was not made once: ' + dismissed.offers.length);
+    assert.deepStrictEqual(dismissed.offers[0].items, ['Turn On and Reload']);
+    assert.ok(/other apps on this phone/.test(dismissed.offers[0].message), 'the offer does not say what turning the engine on exposes');
+    assert.deepStrictEqual([dismissed.updates, dismissed.executed], [[], []], 'a dismissed offer changed a setting or reloaded the window');
+
+    const accepted = await antigravityOffer({ installed: true, runEngine: undefined, answer: 'Turn On and Reload' });
+    assert.deepStrictEqual(accepted.updates, [['vscodroid.antigravity', 'runEngine', true, 1]], 'accepting did not write the machine setting through the user target');
+    assert.deepStrictEqual(accepted.executed, ['workbench.action.reloadWindow'], 'accepting did not reload the window, so the engine is not started');
+
+    const later = await antigravityOffer({ installed: true, runEngine: false, installLater: true });
+    assert.strictEqual(later.offers.length, 1, 'installing the extension after the window loaded was not followed by one offer: ' + later.offers.length);
+
+    const manifest = JSON.parse(fs.readFileSync(path.join(path.dirname(EXTENSION), 'package.json'), 'utf8'));
+    const setting = manifest.contributes.configuration.properties['vscodroid.antigravity.runEngine'];
+    assert.deepStrictEqual(
+        [setting && setting.type, setting && setting.default, setting && setting.scope], ['boolean', false, 'machine'],
+        'the engine setting is not a machine setting that is off by default, which is where platform-fix.js reads it',
+    );
+    console.log('ok -- the Antigravity engine is offered once per window when its extension is installed and the setting is off, and turning it on writes the machine setting and reloads');
+})().catch((e) => { console.error(e); process.exit(1); });
 
 console.log(
     'ok -- both notification tiers say the same thing whatever the counts, stay quiet below ' +

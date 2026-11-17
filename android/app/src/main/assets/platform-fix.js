@@ -201,6 +201,33 @@ if (process.platform === 'android') {
   // which gains this app's webview origin; a policy that does not ask for VS
   // Code webviews is left as it is.
   var ANTIGRAVITY_ENGINE = /[\\/]\.gemini[\\/]bin[\\/]agy$/;
+
+  // The engine's own port answers every app on the phone that can use the network, and the page it
+  // serves there hands out the key its calls need, so an app that finds the port can use the account
+  // signed in to the engine. The engine has no option that closes this. So the app does not start the
+  // engine's hub until the person has turned on `vscodroid.antigravity.runEngine`, a machine setting
+  // the process monitor extension declares and offers when it sees the Antigravity extension. With the
+  // setting off the extension's spawn is left as it was written and fails with EACCES, as it always
+  // did here.
+  //
+  // Read from the machine settings file at each hub start, the way the app reads its heap setting:
+  // comments are removed, strings are kept, and the key counts only at the start of a line, so one
+  // that is commented out or quoted inside another value does not turn it on.
+  var ENGINE_SETTING = /^\s*"vscodroid\.antigravity\.runEngine"\s*:\s*true\b/m;
+  var STRING_OR_COMMENT = /"(?:\\.|[^"\\])*"|\/\/[^\n]*|\/\*[\s\S]*?\*\//g;
+
+  function engineTurnedOn() {
+    if (!process.env.HOME) return false;
+    try {
+      var settings = fs.readFileSync(path.join(process.env.HOME, '.vscodroid', 'data', 'Machine', 'settings.json'), 'utf8');
+      return ENGINE_SETTING.test(settings.replace(STRING_OR_COMMENT, function (found) {
+        return found.charAt(0) === '"' ? found : '';
+      }));
+    } catch (e) {
+      return false;
+    }
+  }
+
   var WEBVIEW_ORIGIN = 'https://*.vscode-cdn.net';
   var HOP_BY_HOP = /^(connection|keep-alive|proxy-authenticate|proxy-authorization|te|trailer|transfer-encoding|upgrade)$/i;
 
@@ -386,11 +413,14 @@ if (process.platform === 'android') {
       }
     }
     var hub = null;
+    var turnedOff = false;
     var call = throughLinker(file, Array.prototype.slice.call(arguments, 1), function (args) {
-      hub = antigravityHub(file, args);
+      // Every hub start, with a port to relay or without: see ENGINE_SETTING.
+      turnedOff = ANTIGRAVITY_ENGINE.test(file) && args.indexOf('--hub') >= 0 && !engineTurnedOn();
+      hub = turnedOff ? null : antigravityHub(file, args);
       return hub ? hub.args : args;
     });
-    if (call) {
+    if (call && !turnedOff) {
       if (hub) endEarlierHub();
       var started = realSpawn.apply(this, call);
       if (hub && started && started.pid !== undefined) {

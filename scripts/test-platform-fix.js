@@ -263,13 +263,18 @@ fs.symlinkSync(ENGINE, LINK_INTO_DATA);
 const FIFO = path.join(REAL_DATA, 'files/home/fifo');
 execFileSync('mkfifo', [FIFO]);
 
+// The home these runs get has no settings file, so the Antigravity engine's hub is turned off in
+// them unless a case names a home that turns it on.
+const NO_SETTINGS_HOME = path.join(tmp, 'no-settings-home');
+fs.mkdirSync(NO_SETTINGS_HOME, { recursive: true });
+
 // LD_PRELOAD is set from inside the process, not in its environment, so the
 // dynamic loader does not complain about a library that is not there.
 const SET_PRELOAD = path.join(tmp, 'set-preload.js');
 fs.writeFileSync(SET_PRELOAD, "if (process.env.FAKE_LD_PRELOAD) process.env.LD_PRELOAD = process.env.FAKE_LD_PRELOAD;\n");
 
-function spawnedUnder(call, { preload = null, dataDir = DATA_LINK, record = RECORD_SPAWN, main = SPAWN_MAIN, cwd = undefined } = {}) {
-    const env = { ...process.env };
+function spawnedUnder(call, { preload = null, dataDir = DATA_LINK, record = RECORD_SPAWN, main = SPAWN_MAIN, cwd = undefined, home = NO_SETTINGS_HOME } = {}) {
+    const env = { ...process.env, HOME: home };
     delete env.LD_PRELOAD;
     if (preload !== null) env.FAKE_LD_PRELOAD = preload;
     if (dataDir === null) delete env.TERMUX_APP__DATA_DIR; else env.TERMUX_APP__DATA_DIR = dataDir;
@@ -402,13 +407,13 @@ const bionicWorker = path.join(tmp, 'bionic-worker.js');
 fs.writeFileSync(bionicWorker, `
 const { Worker } = require('worker_threads');
 const env = { ...process.env, TERMUX_APP__DATA_DIR: ${JSON.stringify(DATA_LINK)} }; delete env.NODE_OPTIONS; delete env.LD_PRELOAD;
-const w = new Worker(${JSON.stringify(`require('child_process').spawn(${JSON.stringify(ENGINE)}, ['--hub']);`)},
+const w = new Worker(${JSON.stringify(`require('child_process').spawn(${JSON.stringify(ENGINE)}, ['--version']);`)},
     { eval: true, env, execArgv: ['--require', ${JSON.stringify(FAKE_ANDROID)}, '--require', ${JSON.stringify(RECORD_SPAWN)}, '--require', ${JSON.stringify(FIX)}] });
 w.on('error', (e) => { console.error(e); process.exit(1); });
 `);
 const fromBionicWorker = execFileSync(process.execPath, [bionicWorker], { encoding: 'utf8', env: { ...process.env, NODE_OPTIONS: '' } });
 assert.deepStrictEqual(
-    JSON.parse(fromBionicWorker.trim().split('\n').pop()), [BIONIC_LINKER, [ENGINE, '--hub']],
+    JSON.parse(fromBionicWorker.trim().split('\n').pop()), [BIONIC_LINKER, [ENGINE, '--version']],
     'a worker with the preload in execArgv did not start the executable through the linker',
 );
 checked++;
@@ -573,6 +578,45 @@ setTimeout(() => { console.error('the driver gave up waiting'); process.exit(1);
 const HUB_HOME = path.join(tmp, 'hub-home');
 fs.mkdirSync(path.join(HUB_HOME, '.vscodroid'), { recursive: true });
 const HUB_NOTE = path.join(HUB_HOME, '.vscodroid/antigravity-hub.json');
+
+// The engine's own port answers any app on the phone, so its hub is started only once the person has
+// turned on the machine setting `vscodroid.antigravity.runEngine`. The file is read the way the app
+// reads its heap setting: comments out, strings kept, the key only at the start of a line. With the
+// setting off the extension's spawn is left exactly as written, and fails as it did before.
+const machineSettings = (home) => path.join(home, '.vscodroid/data/Machine/settings.json');
+const homeWith = (name, text) => {
+    const home = path.join(tmp, name);
+    if (text !== null) put(machineSettings(home), text);
+    else fs.mkdirSync(home, { recursive: true });
+    return home;
+};
+put(machineSettings(HUB_HOME), '{\n    // what the app wrote\n    "git.path": "/x/libgit.so",\n    "vscodroid.antigravity.runEngine": true,\n    "update.mode": "none"\n}\n');
+const HUB_CALL = [ENGINE, ['--hub', '--hub-port=41000', '--app_data_dir=antigravity'], SPAWN_OPTIONS];
+for (const [label, text] of [
+    ['no settings file', null],
+    ['the setting absent', '{\n    "update.mode": "none"\n}\n'],
+    ['the setting false', '{\n    "vscodroid.antigravity.runEngine": false\n}\n'],
+    ['the setting in a line comment', '{\n    // "vscodroid.antigravity.runEngine": true,\n    "update.mode": "none"\n}\n'],
+    ['the setting in a block comment', '{\n    /*\n    "vscodroid.antigravity.runEngine": true,\n    */\n    "update.mode": "none"\n}\n'],
+    ['the setting quoted inside another value', '{\n    "note": "\\"vscodroid.antigravity.runEngine\\": true"\n}\n'],
+    ['a file that is not text the reader understands', '\u0000\u0001'],
+]) {
+    const home = homeWith('off-' + checked, text);
+    assert.deepStrictEqual(spawnedUnder(HUB_CALL, { home }), HUB_CALL, `${label}: the engine's hub was started with the setting off`);
+    assert.strictEqual(fs.existsSync(path.join(home, '.vscodroid/antigravity-hub.json')), false, `${label}: a note was kept for an engine that was not started`);
+    checked++;
+}
+{
+    const withoutPort = [ENGINE, ['--hub', '--app_data_dir=antigravity'], SPAWN_OPTIONS];
+    assert.deepStrictEqual(spawnedUnder(withoutPort), withoutPort, 'a hub start that names no port was started with the setting off');
+    const version = [ENGINE, ['--version'], SPAWN_OPTIONS];
+    assert.deepStrictEqual(spawnedUnder(version), [BIONIC_LINKER, [ENGINE, '--version'], SPAWN_OPTIONS], 'the setting is for the hub: another run of the engine is not held back');
+    const on = spawnedUnder(HUB_CALL, { home: HUB_HOME });
+    assert.strictEqual(on[0], BIONIC_LINKER, 'with the setting on the hub was not started through the linker');
+    assert.strictEqual(on[1][0], ENGINE);
+    assert.ok(/^--hub-port=\d+$/.test(on[1][2]) && on[1][2] !== '--hub-port=41000', 'with the setting on the engine kept the port the extension chose: ' + on[1][2]);
+    checked += 3;
+}
 const hubRun = JSON.parse(execFileSync(
     process.execPath,
     ['--require', FAKE_ANDROID, '--require', RECORD_HUB, '--require', FIX, HUB_DRIVER, ENGINE],
@@ -771,7 +815,7 @@ const KEEP = [
 for (const [label, file, args] of KEEP) {
     if (!fs.existsSync(file)) put(file, elf64(BIONIC_LINKER));
     const inside = file.startsWith(REAL_DATA);
-    const got = spawnedUnder([file, args, SPAWN_OPTIONS]);
+    const got = spawnedUnder([file, args, SPAWN_OPTIONS], { home: HUB_HOME });
     assert.deepStrictEqual(got[1], inside ? [file, ...args] : args, `${label}: the arguments changed`);
     checked++;
 }
