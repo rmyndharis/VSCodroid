@@ -1196,7 +1196,8 @@ class SplashActivity : AppCompatActivity() {
      *    that is not there. Publishing from launchMain() -- the one funnel every
      *    completed startup passes through -- means the shortcut cannot exist
      *    before the first setup. It does outlive an update, whose setup runs
-     *    again, which is why ToolchainActivity hands such a launch back here.
+     *    again, which is why ToolchainActivity hands an install asked for
+     *    before that setup has finished back here.
      *
      * Re-pushed on every launch on purpose: it is how an install that predates
      * this change gains the shortcut, and how the label follows a locale change.

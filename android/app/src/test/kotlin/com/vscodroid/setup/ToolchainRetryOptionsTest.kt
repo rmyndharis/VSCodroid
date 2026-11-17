@@ -62,6 +62,8 @@ class ToolchainRetryOptionsTest {
         val dialog = mockk<AlertDialog>(relaxed = true)
         every { anyConstructed<AlertDialog.Builder>().show() } returns dialog
         every { screen invoke "showRemoveConfirmation" withArguments listOf("toolchain_java") } returns Unit
+        // Setup has finished; the case where it has not is at the end.
+        every { screen["handOffToSetup"]() } returns false
 
         val action = ToolchainActivity::class.java.declaredMethods.single {
             Modifier.isStatic(it.modifiers) && it.parameterTypes.toList() ==
@@ -91,6 +93,15 @@ class ToolchainRetryOptionsTest {
         action.invoke(null, screen, "toolchain_java", ToolchainAction.RETRY)
         assertTrue(choices.isEmpty(), "a settled installation should not offer a repair choice")
         verify(exactly = 3) { manager.install("toolchain_java") }
+
+        // Before the setup that follows an update has finished, Install and Retry hand over to the
+        // splash screen and start nothing: the install would unpack into usr/ under the setup.
+        every { screen["handOffToSetup"]() } returns true
+        (outstanding as MutableSet<String>).clear()
+        action.invoke(null, screen, "toolchain_java", ToolchainAction.INSTALL)
+        action.invoke(null, screen, "toolchain_java", ToolchainAction.RETRY)
+        verify(exactly = 3) { manager.install("toolchain_java") }
+        assertTrue(outstanding.isEmpty(), "a request handed to setup is recorded as one this screen waits on")
 
         val destroy = ToolchainActivity::class.java.getDeclaredMethod("onDestroy").apply { isAccessible = true }
         try {
