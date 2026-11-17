@@ -217,10 +217,21 @@ def split_boolean(expr: str, operator: str):
 
 
 def required_event_gate(expr: str) -> bool:
-    """Require a positive event equality in an unavoidable conjunction."""
-    expr = expr.strip()
-    if expr.startswith("${{") and expr.endswith("}}"):
-        expr = expr[3:-2].strip()
+    """Require a positive event equality in an unavoidable conjunction.
+
+    `${{ }}` may wrap the whole value and nothing else. With any text around it, a trailing
+    newline of a block scalar included, GitHub reads the value as a string, which is always true,
+    so such a value gates nothing and is refused here whatever it says inside.
+    """
+    if "${{" in expr or "}}" in expr:
+        if not (expr.startswith("${{") and expr.endswith("}}") and expr.count("${{") == 1 and expr.count("}}") == 1):
+            return False
+        expr = expr[3:-2]
+    return event_gate_expression(expr.strip())
+
+
+def event_gate_expression(expr: str) -> bool:
+    """[required_event_gate] for an expression with no `${{ }}` around it."""
     alternatives = split_boolean(expr, "||")
     if alternatives is None or len(alternatives) != 1:
         return False
@@ -228,12 +239,12 @@ def required_event_gate(expr: str) -> bool:
     if terms is None:
         return False
     if len(terms) > 1:
-        return all(term.strip() for term in terms) and any(required_event_gate(term) for term in terms)
+        return all(term.strip() for term in terms) and any(event_gate_expression(term.strip()) for term in terms)
     if expr.startswith("(") and expr.endswith(")"):
         # Only remove a pair that encloses the whole expression.
         inner = expr[1:-1]
         if split_boolean(inner, "&&") is not None:
-            return required_event_gate(inner)
+            return event_gate_expression(inner.strip())
     return ALLOWLIST_GATE.fullmatch(expr) is not None
 
 
@@ -422,6 +433,10 @@ def self_test() -> int:
         "contains('github.event_name == ''push''', 'push')",
         "fromJSON('[true]')[true && github.event_name == 'push' && true]",
         "github.event_name == 'push' && success())",
+        "${{ github.event_name == 'push' }} && startsWith(github.ref, 'refs/tags/v')",
+        "startsWith(github.ref, 'refs/tags/v') && ${{ github.event_name == 'push' }}",
+        "${{ github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v') }}\n",
+        "${{ github.event_name == 'push' }} ${{ success() }}",
     )
     admitted = (
         "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')",
