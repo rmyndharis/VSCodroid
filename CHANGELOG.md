@@ -10,6 +10,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 ### Fixed
 
 - Saving a download over a file you already have no longer freezes the editor while a large file is copied into it.
+- In the terminal, Ctrl or Alt latched on the extra key row and then a letter typed on a keyboard that underlines words sends the control character alone again, without the letter before it.
+- In the terminal, Ctrl or Alt latched on the extra key row and then a letter typed on a keyboard that underlines words sends the control character alone again, without the letter before it.
 
 ## [1.9.0] - 2026-11-16
 

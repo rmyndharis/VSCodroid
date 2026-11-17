@@ -6170,6 +6170,9 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                 window.addEventListener('blur', function(e) {
                     // xterm empties its field in the field's own blur handler, and the compositionend of a word the
                     // blur commits comes just before it, in the same task: send what is pending while the field holds it.
+                    // Not for the blur the key row's chord makes over a composing letter: that one puts the field's
+                    // own text back right after, and xterm's send has to read it then, as it always did.
+                    if (e.target === window.__vscodroidChordBlur) return;
                     finishEnded(e.target);
                 }, true);
                 window.addEventListener('compositionend', function(e) {
