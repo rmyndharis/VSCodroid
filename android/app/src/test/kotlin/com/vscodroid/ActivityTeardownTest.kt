@@ -1,7 +1,21 @@
 package com.vscodroid
 
+import androidx.activity.result.ActivityResultLauncher
+import com.vscodroid.util.Logger
+import com.vscodroid.webview.DownloadCoordinator
+import com.vscodroid.webview.DownloadHost
+import io.mockk.Runs
+import io.mockk.every
+import io.mockk.just
+import io.mockk.mockk
+import io.mockk.mockkObject
+import io.mockk.unmockkAll
+import io.mockk.verify
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
+import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import java.io.File
 
@@ -213,5 +227,98 @@ class ActivityTeardownTest {
             "a folder switch shut the engine down instead of stopping it, so the folder " +
                 "opened next is never watched and its saves never reach the device",
         )
+    }
+}
+
+/**
+ * A picker asked for just before the screen went away.
+ *
+ * Both requests reach the main thread through a post, the folder picker from the bridge and
+ * the download destination from whatever thread ended the download before it, so either can
+ * run after `onDestroy`. By then the activity result registry has let go of its launchers and
+ * `launch` throws `IllegalStateException`, which on the main thread ends the process and the
+ * server in it.
+ *
+ * Driven on a mocked Activity, whose launcher fields are set by hand: the methods read nothing
+ * else. The download host is the anonymous object `downloads` is built around, so it is
+ * reached by its compiled name.
+ */
+class PickerAfterTeardownTest {
+
+    private lateinit var activity: MainActivity
+    private val launcher = mockk<ActivityResultLauncher<Any?>>()
+    private val downloads = mockk<DownloadCoordinator>(relaxed = true)
+    private var launched = 0
+
+    private fun setField(name: String, value: Any?) {
+        MainActivity::class.java.getDeclaredField(name).apply {
+            isAccessible = true
+            set(activity, value)
+        }
+    }
+
+    private fun field(name: String): Any? =
+        MainActivity::class.java.getDeclaredField(name).apply { isAccessible = true }.get(activity)
+
+    private fun downloadHost(): DownloadHost =
+        Class.forName("com.vscodroid.MainActivity\$downloads\$1")
+            .getDeclaredConstructor(MainActivity::class.java)
+            .apply { isAccessible = true }
+            .newInstance(activity) as DownloadHost
+
+    @BeforeEach
+    fun setUp() {
+        mockkObject(Logger)
+        every { Logger.w(any(), any()) } just Runs
+        every { Logger.w(any(), any(), any()) } just Runs
+        activity = mockk(relaxed = true)
+        every { activity.runOnUiThread(any()) } answers { firstArg<Runnable>().run() }
+        every { activity.openFolderPicker() } answers { callOriginal() }
+        every { launcher.launch(any()) } answers {
+            launched++
+            throw IllegalStateException("Attempting to launch an unregistered ActivityResultLauncher")
+        }
+        setField("folderPickerLauncher", launcher)
+        setField("downloadDestinationLauncher", launcher)
+        setField("downloads", downloads)
+    }
+
+    @AfterEach
+    fun tearDown() = unmockkAll()
+
+    @Test
+    fun `a folder picker asked for after destroy opens nothing`() {
+        every { activity.isDestroyed } returns true
+
+        activity.openFolderPicker()
+
+        assertEquals(0, launched, "a picker was launched for a screen that is gone")
+    }
+
+    @Test
+    fun `a folder picker the registry no longer knows does not take the process down`() {
+        activity.openFolderPicker()
+
+        assertEquals(1, launched)
+    }
+
+    @Test
+    fun `a download destination asked for after destroy ends that download`() {
+        every { activity.isDestroyed } returns true
+
+        downloadHost().askDestination("dl-1", "App.kt")
+
+        assertEquals(0, launched, "a picker was launched for a screen that is gone")
+        verify(exactly = 1) { downloads.onDestinationUnavailable("dl-1") }
+        assertNull(field("pickerRequestId"))
+    }
+
+    @Test
+    fun `a download destination the registry no longer knows ends that download`() {
+        downloadHost().askDestination("dl-1", "App.kt")
+
+        assertEquals(1, launched)
+        verify(exactly = 1) { downloads.onDestinationUnavailable("dl-1") }
+        assertNull(field("pickerRequestId"), "the request is still marked as owning a picker")
     }
 }

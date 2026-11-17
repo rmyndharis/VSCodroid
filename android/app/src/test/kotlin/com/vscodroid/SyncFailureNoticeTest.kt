@@ -169,4 +169,21 @@ class SyncFailureNoticeTest {
                 "English in every locale",
         )
     }
+
+    /**
+     * The catch-all's sentence takes the exception's message, and a message is null for
+     * many exceptions, so the user read "Failed to open folder: null."
+     */
+    @Test
+    fun `the sentence for a folder that failed to open is never handed a null`() {
+        val calls = callArguments("getString").filter { it.trimStart().startsWith("R.string.saf_sync_failed,") }
+
+        assertEquals(1, calls.size) {
+            "expected the one live use of saf_sync_failed, found ${calls.size}; this measures nothing"
+        }
+        val detail = calls.single().substringAfter(',').trim()
+        assertTrue("?:" in detail) {
+            "`$detail` can be null, and the sentence then ends in \"null\""
+        }
+    }
 }

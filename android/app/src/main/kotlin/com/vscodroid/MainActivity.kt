@@ -584,11 +584,23 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
          */
         override fun askDestination(requestId: String, fileName: String) {
             runOnUiThread {
+                // Posted, so it can run after this screen is gone, when launch
+                // throws. The download is ended rather than left holding the queue,
+                // and no picker is opened for a screen that cannot take its answer:
+                // it would create the document and leave it empty.
+                if (isFinishing || isDestroyed) {
+                    downloads.onDestinationUnavailable(requestId)
+                    return@runOnUiThread
+                }
                 pickerRequestId = requestId
                 try {
                     downloadDestinationLauncher.launch(fileName)
                 } catch (e: ActivityNotFoundException) {
                     Logger.w(tag, "No document creator on this device", e)
+                    pickerRequestId = null
+                    downloads.onDestinationUnavailable(requestId)
+                } catch (e: IllegalStateException) {
+                    Logger.w(tag, "The document creator is no longer registered", e)
                     pickerRequestId = null
                     downloads.onDestinationUnavailable(requestId)
                 }
@@ -766,6 +778,20 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         // Before super.onCreate(), as the call it replaces required.
         drawBehindSystemBars()
         super.onCreate(savedInstanceState)
+        // A screen made again (a font size or language change, or a restore after
+        // the process was killed) is handed the intent it last had, and Recents
+        // restarts a task whose screens are gone with its first intent, marked as
+        // launched from history. A callback in either was answered when it
+        // arrived, so its data goes before the two readers below see it: read
+        // again, it raised the restart notice on every recreation and rode the
+        // hand-off through setup after an update.
+        intent?.let {
+            if (savedInstanceState != null ||
+                (it.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0
+            ) {
+                it.data = null
+            }
+        }
         // First, because everything below it assumes an extracted tree. See
         // handOffToSetup for what reaching this activity without one costs.
         if (handOffToSetup()) return
@@ -953,8 +979,10 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         // show before it has started: with its once key it is held, unspent, and shown at onStart.
         checkStorageHealth()
         checkWebViewVersion()
-        // Reading it here, and not only in onNewIntent, is what makes a sign-in
-        // survive the app being killed while the browser had the screen. See
+        // Reading it here, and not only in onNewIntent, serves a callback that
+        // starts this screen with nothing of it left to restore. A screen restored
+        // after the app was killed while the browser had it gets the callback in
+        // onNewIntent, which the platform delivers before onResume. See
         // receiveCallbackIntent.
         receiveCallbackIntent(intent)
 
@@ -968,6 +996,9 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        // Kept as this screen's intent, so a recreation is handed this one rather
+        // than the launch's, and onCreate drops its data: it is answered here.
+        setIntent(intent)
         receiveCallbackIntent(intent)
     }
 
@@ -1122,7 +1153,14 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
      * explanation per launch, and every further arrival for that id lands in the
      * silent branch above.
      *
-     * Both messages are fixed text; nothing from the callback reaches the screen.
+     * The restart message has a second way in, keyed the same way: a page can be
+     * replaced inside one Activity (a server restart's reload, a folder switch)
+     * with `workbenchLoaded` true throughout, and the launches it was waiting on
+     * go with it ([AuthTabWindow.beginPage]). A return for one of those, carrying
+     * its secret and inside its window, gets the restart message once
+     * ([AuthTabWindow.takeReplaced]); anything else stays in the silent branch.
+     *
+     * Every message is fixed text; nothing from the callback reaches the screen.
      */
     private fun receiveCallbackIntent(intent: Intent?) {
         val uri = intent?.data ?: return
@@ -1181,6 +1219,28 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         // no sign-in here to report on.
         val requestId = callbackRequestId(uri.getQueryParameter("data"))
         val armedAt = requestId?.let { AuthTabWindow.armedAt(it) }
+        // The workbench registers this immutable nonce when it creates the
+        // callback URI. Outgoing URL text can activate that identity but cannot
+        // create or replace it. Check before expiry so an invalid return neither
+        // retires the pending request nor raises its timeout notice.
+        val offered = callbackNonce(uri.getQueryParameter("data"))
+        val secretMatches = requestId != null && callbackSecretMatches(offered, AuthTabWindow.nonceFor(requestId))
+        // A return the page on screen cannot take, for a launch an earlier page
+        // was still waiting on when it was replaced while the browser had the
+        // sign-in (a server restart's reload, a folder switch), with
+        // workbenchLoaded true throughout. Said once per such launch, and only
+        // for the secret it was registered with.
+        if (requestId != null && (armedAt == null || !secretMatches) &&
+            AuthTabWindow.takeReplaced(requestId, offered, SystemClock.elapsedRealtime())
+        ) {
+            Logger.w(tag, "A sign-in callback arrived after the page that started it was replaced")
+            AppNotices.showNotice(
+                this,
+                getString(R.string.sign_in_editor_restarted),
+                Toast.LENGTH_LONG
+            )
+            return
+        }
         if (requestId == null || armedAt == null) {
             // Logged without the URI. It is the payload of a sign-in this app
             // did not start, and the log is readable by anything holding
@@ -1189,12 +1249,7 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
             Logger.w(tag, "Ignoring a sign-in callback that no sign-in was waiting for")
             return
         }
-        // The workbench registers this immutable nonce when it creates the
-        // callback URI. Outgoing URL text can activate that identity but cannot
-        // create or replace it. Check before expiry so an invalid return neither
-        // retires the pending request nor raises its timeout notice.
-        val offered = callbackNonce(uri.getQueryParameter("data"))
-        if (!callbackSecretMatches(offered, AuthTabWindow.nonceFor(requestId))) {
+        if (!secretMatches) {
             Logger.w(tag, "Ignoring a sign-in callback that did not carry this request's secret")
             return
         }
@@ -1467,6 +1522,10 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
      * Called from [AndroidBridge.openFolderPicker] via JS bridge.
      */
     fun openFolderPicker() {
+        // The bridge posts this, so it can run after this screen is gone: the
+        // registry lets go of the launcher at destroy and launch then throws, and
+        // nothing would be left to take the answer.
+        if (isFinishing || isDestroyed) return
         // Guarded like the file chooser: a device with DocumentsUI disabled throws
         // here on the main thread, and an uncaught throw ends the process with the
         // server in it.
@@ -1474,6 +1533,8 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
             folderPickerLauncher.launch(null)
         } catch (e: ActivityNotFoundException) {
             Logger.w(tag, "No document tree picker on this device", e)
+        } catch (e: IllegalStateException) {
+            Logger.w(tag, "The folder picker is no longer registered", e)
         }
     }
 
@@ -1727,7 +1788,7 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                 // link are off the main thread for the reason every other disk
                 // read here is: `MainThreadWatch` installs a policy that logs one,
                 // and `folderOpenTarget` stats each candidate.
-                if (navigate && serverPort > 0) {
+                if (navigate) {
                     val target = withContext(Dispatchers.IO) {
                         val opened = folderOpenTarget(
                             mirrorDir.absolutePath,
@@ -1769,12 +1830,20 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                     // and the server is asked back: retryServerStart puts up the
                     // loading page, whose URL names no folder, so onServerReady's
                     // loadVSCode falls through the chain to this one.
-                    if (nodeService?.isServerReady() == true) {
+                    //
+                    // A port of 0 is a screen that has not yet seen this process's
+                    // server answer, which is where a folder picked across a
+                    // process restart lands: the picker's result comes in before
+                    // the binding does. No editor has been loaded on it yet, and the
+                    // first load reads the remembered folder, so remembering is all
+                    // it needs; gating the whole branch on the port let the editor
+                    // open the folder remembered before this one.
+                    if (serverPort > 0 && nodeService?.isServerReady() == true) {
                         navigateToFolder(serverPort, target)
                     } else {
                         Logger.i(tag, "The server is not serving; opening the folder once it is")
                         if (!rememberWorkspaceFolder(target)) return@launch
-                        retryServerStart()
+                        if (serverPort > 0) retryServerStart()
                     }
                 }
             } catch (e: CancellationException) {
@@ -1849,8 +1918,10 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                 // Guarded for the reason the handler above it is.
                 if (!isFinishing && !isDestroyed) dialog.dismiss()
                 Logger.e(tag, "SAF sync failed", e)
+                // Never null: many exceptions carry no message, and the sentence then
+                // ended in the word null.
                 reportSyncFailure(
-                    getString(R.string.saf_sync_failed, e.message),
+                    getString(R.string.saf_sync_failed, e.message ?: e.javaClass.simpleName),
                     restoreWatcherAfterFailure(previouslyWatched, uri)
                 )
             } finally {
