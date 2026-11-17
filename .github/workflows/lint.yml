@@ -226,9 +226,9 @@ jobs:
       # punctuation. 857 of them had accumulated across 118 files before anyone
       # counted, because each arrives one edit at a time from an editor that
       # substitutes them, which is the shape a convention cannot hold on its own.
-      # Verbatim licence text and the body of a patch are exempt: both are
-      # reproduced rather than written, and a patch context line has to match the
-      # file it applies to byte for byte.
+      # Verbatim licence text and a patch's context and removed lines are exempt:
+      # both are reproduced rather than written, and a patch context line has to
+      # match the file it applies to byte for byte. A patch's added lines are ours.
       - name: Check the tree writes plain punctuation
         run: python3 scripts/check-plain-punctuation.py
 

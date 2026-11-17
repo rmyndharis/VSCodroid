@@ -32,6 +32,20 @@ among them on purpose: XML predefines five and `&mdash;` is not one, so a
 resource carrying it fails the build out loud rather than reaching a screen,
 which is the opposite of the failure this section exists for.
 
+Two more places decode a spelling into the character before anyone reads it.
+A page does: HTML and Markdown (which the docs site and GitHub render as
+HTML) turn a named or numeric character reference into the character, and a
+browser takes a number without its semicolon and remaps the windows-1252
+numbers onto both dashes. Each reference is put through the standard
+library's HTML decoder rather than matched against a list, so those count the
+same as the obvious name. A Markdown code span is not told apart: that needs a
+Markdown parser, and a miss costs the character on a published page. And a
+string literal does: shipped Kotlin, Java, JavaScript and JSON (the strings of
+the bundled extensions among them) decode a backslash-u escape, in JavaScript
+the braced form too, into text a person is shown. Only code under a `src/main`
+directory is read for that form; tests and scripts spell it on purpose, as a
+fixture, and show it to nobody.
+
 Why a gate rather than a habit
 ------------------------------
 857 of them accumulated across 118 files before anyone counted, in prose, in
@@ -44,10 +58,11 @@ What is deliberately NOT checked, and why
 -----------------------------------------
 * `licenses/` holds verbatim third-party licence text. It is reproduced
   rather than written, and editing it would misrepresent the licence.
-* Inside a `.patch`, everything from the first `diff --git` or `--- a/` line
-  onward. Those lines are upstream source plus our edits to it, and a
+* Inside a `.patch`, the context and removed lines from the first
+  `diff --git` or `--- a/` line onward. Those are upstream source, and a
   context line has to match the file it is applied to byte for byte. The
-  description above that point is ours, and is checked.
+  description above that point is ours, and so is every added `+` line below
+  it: both are checked.
 * Anything git does not track, which is what keeps build output and
   downloaded toolchains out of the result.
 
@@ -56,6 +71,7 @@ The number of files examined is printed on success. A gate that says only
 repository has shipped that mistake before.
 """
 
+import html
 import pathlib
 import re
 import subprocess
@@ -83,6 +99,20 @@ ESCAPED = {
     for char in BANNED
 }
 
+# The escape a shipped string literal decodes: the four-digit form Kotlin,
+# Java, JavaScript and JSON share, and the braced form JavaScript adds.
+CODE_ESCAPED = {
+    char: re.compile(
+        rf"\\u{ord(char):04x}|\\u\{{0*{ord(char):x}\}}",
+        re.IGNORECASE,
+    )
+    for char in BANNED
+}
+
+# A candidate character reference, the same shape the standard library's HTML
+# decoder looks for. What it decodes to is the decoder's answer, not ours.
+REFERENCE = re.compile(r"&(?:#[0-9]+;?|#[xX][0-9a-fA-F]+;?|[^\t\n\f <&#;]{1,32};?)")
+
 SKIP_PREFIXES = ("licenses/",)
 
 # How many offences to print before summarising. A first sweep of a stale
@@ -100,13 +130,17 @@ def tracked(paths):
 
 def checkable_lines(path, text):
     """The (number, line) pairs this gate is allowed to judge."""
-    lines = text.split("\n")
-    if path.endswith(".patch"):
-        for i, line in enumerate(lines):
-            if line.startswith("diff --git ") or line.startswith("--- a/"):
-                lines = lines[:i]
-                break
-    return enumerate(lines, start=1)
+    lines = enumerate(text.split("\n"), start=1)
+    if not path.endswith(".patch"):
+        return lines
+    judged, in_diff = [], False
+    for number, line in lines:
+        if line.startswith("diff --git ") or line.startswith("--- a/"):
+            in_diff = True
+        # Below the diff line only an added line is ours; `+++ ` names a file.
+        if not in_diff or (line.startswith("+") and not line.startswith("+++ ")):
+            judged.append((number, line))
+    return judged
 
 
 def compiled_by_aapt2(path):
@@ -126,6 +160,51 @@ def compiled_by_aapt2(path):
     return "res" in pathlib.PurePosixPath(path).parts[:-1] or path.endswith("AndroidManifest.xml")
 
 
+def rendered_as_html(path):
+    """Whether a reader sees this file as a page that decodes references."""
+    return path.endswith((".html", ".htm", ".md"))
+
+
+def decodes_code_escapes(path):
+    """Whether this is shipped code or JSON whose string literals decode a
+    backslash-u escape: under a `src/main` directory, in any module."""
+    if not path.endswith((".kt", ".java", ".js", ".mjs", ".cjs", ".ts", ".json")):
+        return False
+    parts = pathlib.PurePosixPath(path).parts
+    return any(parts[i:i + 2] == ("src", "main") for i in range(len(parts) - 1))
+
+
+def line_offences(path, number, line):
+    """The offences on one line this gate is allowed to judge."""
+    found = []
+    for column, char in enumerate(line, start=1):
+        if char in BANNED:
+            found.append((number, column, BANNED[char], line.strip()))
+    # Only where something expands them. Elsewhere an escape is six characters
+    # a reader sees as six characters, and this gate is about what reaches a
+    # user rather than about how a file spells things.
+    escaped = []
+    if compiled_by_aapt2(path):
+        escaped.append((ESCAPED, "escaped; the resource compiler expands it"))
+    if decodes_code_escapes(path):
+        escaped.append((CODE_ESCAPED, "escaped; the string literal decodes it"))
+    for table, why in escaped:
+        for char, pattern in table.items():
+            for hit in pattern.finditer(line):
+                found.append((number, hit.start() + 1, f"{BANNED[char]}, {why}", line.strip()))
+    if rendered_as_html(path):
+        for hit in REFERENCE.finditer(line):
+            decoded = html.unescape(hit.group(0))
+            for char in BANNED:
+                if char in decoded:
+                    found.append((
+                        number, hit.start() + 1,
+                        f"{BANNED[char]}, as a character reference; the page decodes it",
+                        line.strip(),
+                    ))
+    return found
+
+
 def offences(path):
     try:
         text = pathlib.Path(path).read_text(encoding="utf-8")
@@ -135,22 +214,9 @@ def offences(path):
         # problem that a different gate should report.
         return []
     found = []
-    # Only where a compiler expands them. Elsewhere `\\u2014` is six characters
-    # a reader sees as six characters, and this gate is about what reaches a
-    # user rather than about how a file spells things.
-    escaped = ESCAPED if compiled_by_aapt2(path) else {}
     for number, line in checkable_lines(path, text):
-        for column, char in enumerate(line, start=1):
-            if char in BANNED:
-                found.append((number, column, BANNED[char], line.strip()))
-        for char, pattern in escaped.items():
-            for hit in pattern.finditer(line):
-                found.append((
-                    number, hit.start() + 1,
-                    f"{BANNED[char]}, escaped; the resource compiler expands it",
-                    line.strip(),
-                ))
-    # Both passes walk the same line, so a file holding one of each would
+        found.extend(line_offences(path, number, line))
+    # The passes walk the same line, so a file holding one of each would
     # otherwise report the second line before the first column of the first.
     found.sort(key=lambda offence: offence[:2])
     return found
@@ -177,6 +243,22 @@ def main(argv) -> int:
         if seen != len(forms):
             print(f"  FAIL   the escape table cannot see U+{code:04X} written as an escape")
             return 2
+
+    # And for the forms read since: a string literal's two escapes, and a
+    # page's references by name, by number, by number without its semicolon
+    # and by the windows-1252 number a browser remaps. Each must be seen once.
+    names = {0x2014: "mdash", 0x2013: "ndash", 0x2015: "horbar"}
+    remapped = {0x2014: 151, 0x2013: 150}
+    for code in (0x2014, 0x2013, 0x2015):
+        for path, forms in (
+            ("src/main/x.js", (rf"\u{code:04X}", rf"\u{{0{code:x}}}")),
+            ("x.html", (f"&{names[code]};", f"&#{code};", f"&#X{code:x};", f"&#{code} ")
+             + ((f"&#{remapped[code]};",) if code in remapped else ())),
+        ):
+            for form in forms:
+                if len(line_offences(path, 1, form)) != 1:
+                    print(f"  FAIL   {path} cannot see U+{code:04X} written as {form.strip()}")
+                    return 2
 
     paths = argv[1:] or ["."]
     files = [f for f in tracked(paths) if not f.startswith(SKIP_PREFIXES)]
