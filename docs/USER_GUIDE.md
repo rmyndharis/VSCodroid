@@ -643,11 +643,12 @@ extension and lets the extension's panel show the page the engine serves, so the
 Antigravity welcome screen with **Continue with Google**.
 
 **The engine is off until you turn it on.** With the extension installed, VSCodroid shows a notice that
-says so and offers **Turn On and Reload**. The same switch is in Settings: search for `antigravity` and
+says so and offers **Turn On and Reload**. The same switch is in Settings: search for `run engine` and
 tick **Vscodroid > Antigravity: Run Engine** (it is listed on the **Remote** tab), then run **Developer:
 Reload Window**. Until then the extension's panel reads `Couldn't load this view` with a
-`spawn ... EACCES` error, which is the engine not being started. Untick the setting and reload to turn the
-engine off again. The reason for the switch is the third point below.
+`spawn ... EACCES` error, which is the engine not being started. Untick the setting and reload the window
+to turn the engine off again: an engine that is running is stopped then. The reason for the switch is the
+third point below.
 
 What to know before using it:
 

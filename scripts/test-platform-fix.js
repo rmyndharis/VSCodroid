@@ -714,6 +714,18 @@ if (dummy) {
         assert.strictEqual(got.result, want, `an earlier engine (${mode}): ${got.result}, wanted ${want}`);
         checked++;
     }
+    // With the setting turned off the hub is not started, and an engine an earlier extension host started is
+    // ended all the same: turning the setting off and reloading the window must leave none running.
+    {
+        const home = homeWith('off-with-an-engine', '{\n    "update.mode": "none"\n}\n');
+        const got = JSON.parse(execFileSync(
+            process.execPath,
+            ['--require', FAKE_ANDROID, '--require', FIX, REAP_DRIVER, ENGINE, 'match', path.join(home, '.vscodroid/antigravity-hub.json')],
+            { env: { ...process.env, ...standInEnv, HOME: home, TERMUX_APP__DATA_DIR: DATA_LINK, LD_PRELOAD: '' }, encoding: 'utf8', timeout: 30000 },
+        ).trim().split('\n').pop());
+        assert.strictEqual(got.result, 'ended by SIGTERM', `an engine left running when the setting is turned off: ${got.result}`);
+        checked++;
+    }
 
     // The editor server's own start does the same, because the extension host
     // may not start for a long time after the app restarted the server. Only its

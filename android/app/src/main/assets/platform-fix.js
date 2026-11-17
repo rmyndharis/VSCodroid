@@ -436,6 +436,9 @@ if (process.platform === 'android') {
       }
       return started;
     }
+    // Turned off: an engine an earlier extension host started is ended as well, so that turning the
+    // setting off and reloading the window leaves none running.
+    if (turnedOff) endEarlierHub();
     return realSpawn.apply(this, arguments);
   };
 
