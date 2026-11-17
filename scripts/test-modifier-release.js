@@ -769,7 +769,7 @@ function textBox(page, { value = '', className = 'input', tagName = 'TEXTAREA', 
  * gives the textarea the focus for any key but a modifier. A key the
  * workbench takes (`workbench`, as VS Code's custom key handler does for a
  * command it keeps from the shell, which it is asked again for the keyup)
- * goes no further. Ctrl+C is sent as ^C. `sent` is what reaches the shell.
+ * goes no further. Ctrl and a letter is sent as its control code and Alt and a key as Esc then the key. `sent` is what reaches the shell.
  */
 function terminal(page, workbench = () => false) {
     const box = textBox(page, { className: 'xterm-helper-textarea' });
@@ -831,7 +831,9 @@ function terminal(page, workbench = () => false) {
             finalize(false);
         }
         if (e.keyCode === 229) return readChanges();
-        if (e.ctrlKey && e.key === 'c') sent.push('\x03');
+        // xterm: Ctrl and a letter is the control code, Alt and a key is Esc then the key.
+        if (e.ctrlKey && /^[a-z]$/i.test(e.key)) sent.push(String.fromCharCode(e.key.toUpperCase().charCodeAt(0) - 64));
+        else if (e.altKey && e.key.length === 1) sent.push('\x1b' + e.key);
     }, true);
     box.addEventListener('keyup', (e) => {
         if (workbench(e) || [16, 17, 18, 91, 92, 93, 224].includes(e.keyCode) || e.key === 'Meta') return;
@@ -1020,6 +1022,23 @@ const keys = (page, at = 'text-box') => sequence(page).filter((line, i) => page.
     term.compose('c');
     page.runTimers();
     cases.push(['a composed Ctrl+C in the terminal sends ^C alone', JSON.stringify(term.sent()), JSON.stringify(['\x03'])]);
+}
+
+// The other chords a shell takes: end of input, suspend, and a word back in readline. Each reaches
+// the shell as its own code and nothing else, with the letter never typed first.
+for (const [name, latch, letter, code] of [
+    ['Ctrl+D', 'ctrl', 'd', '\x04'],
+    ['Ctrl+Z', 'ctrl', 'z', '\x1a'],
+    ['Alt+B', 'alt', 'b', '\x1bb'],
+]) {
+    const page = newPage();
+    intercept(page);
+    const term = terminal(page);
+    page.window.__vscodroid[latch] = true;
+    term.compose(letter);
+    page.runTimers();
+    cases.push([`a composed ${name} in the terminal sends its code alone`,
+        JSON.stringify(term.sent()), JSON.stringify([code])]);
 }
 
 // Over a word the terminal is still composing: the word reaches the shell,
