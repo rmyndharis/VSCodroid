@@ -171,4 +171,25 @@ class NoticeWiringTest {
             "AppNotices process-once tracking must live on the process singleton rather than an Activity field",
         )
     }
+
+    /**
+     * From Android 12 the storage warning does not fit a toast, so it is a dialog, and an activity
+     * that has not started cannot show one: with a process-once key the notice is then neither shown
+     * nor remembered. `onCreate` runs before the start, so a call made there loses the warning for
+     * good. It is posted to the window instead, which runs once the activity has started.
+     */
+    @Test
+    fun `the storage warning is not asked for from onCreate before the activity has started`() {
+        val main = SourceScan.withoutComments(SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt"))
+        val create = SourceScan.body(main, "override fun onCreate(")
+
+        assertTrue(
+            create.contains("window.decorView.post { checkStorageHealth() }"),
+            "onCreate must post checkStorageHealth to the window so that a dialog can be shown",
+        )
+        assertFalse(
+            Regex("""(?<!\{ )\bcheckStorageHealth\(\)(?! \})""").containsMatchIn(create),
+            "onCreate calls checkStorageHealth directly, before the activity can show a dialog",
+        )
+    }
 }

@@ -941,7 +941,10 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         requestNotificationPermission()
         startAndBindService()
         checkPreviousCrash()
-        checkStorageHealth()
+        // Once the window is attached, which is after the activity has started: from Android 12 the
+        // warning is too long for a toast and is a dialog, and a screen that has not started cannot show
+        // one, so a call made here was neither shown nor remembered and the warning never appeared.
+        window.decorView.post { checkStorageHealth() }
         checkWebViewVersion()
         // Reading it here, and not only in onNewIntent, is what makes a sign-in
         // survive the app being killed while the browser had the screen. See

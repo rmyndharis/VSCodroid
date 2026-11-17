@@ -12,6 +12,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Saving a download over a file you already have no longer freezes the editor while a large file is copied into it.
 - In the terminal, Ctrl or Alt latched on the extra key row and then a letter typed on a keyboard that underlines words sends the control character alone again, without the letter before it.
 - In the terminal, Ctrl or Alt latched on the extra key row and then a letter typed on a keyboard that underlines words sends the control character alone again, without the letter before it.
+- On Android 12 and later the low storage warning is shown; it was dropped before the screen could show it.
 
 ## [1.9.0] - 2026-11-16
 
@@ -27,6 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Format Document uses the bundled Prettier for JavaScript, TypeScript, JSON, CSS, HTML and the other languages it covers without asking which formatter to use; a formatter chosen in Settings still wins.
 - The Java toolchain checks HTTPS connections against Mozilla's list of trusted certificate authorities instead of OpenJDK's own.
 - A Java toolchain installed earlier keeps OpenJDK's certificate list until it is removed and installed again.
+- The low storage warning and the notice about a workspace that spans several device folders are shown once while the app runs, instead of at every start of its screen.
 
 ### Fixed
 
