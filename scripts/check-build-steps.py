@@ -32,7 +32,7 @@ built without them, or shipped without them having run:
     in build.yml rather than lint.yml because they read an assets tree lint does
     not build, and the rest are invoked with arguments from a script or from
     Gradle. The answerable question for this family is whether anything runs
-    them at all.
+    them at all. A scripts/check-*.js is asked the same question.
 
 The first three are about `.sh` and say so. The JavaScript rule is deliberately
 not folded into them: those three pair four sources, build.yml, release.yml,
@@ -405,9 +405,12 @@ def _main() -> int:
     else:
         print(f"  ok     {' and '.join(NDK_WORKFLOWS)} both set up NDK {versions.pop()}")
 
-    checkers = {p.name for p in (ROOT / "scripts").glob("check-*.py")}
+    # The JavaScript checkers as well: check-editcontext-ime.js reads a patched
+    # source tree, which lint.yml does not have, so it cannot be a test-*.js
+    # self-check and only its place in build-vscode-oss.sh runs it.
+    checkers = {p.name for kind in ("py", "js") for p in (ROOT / "scripts").glob(f"check-*.{kind}")}
     if not checkers:
-        print("  FAIL   no scripts/check-*.py matched; the glob stopped matching")
+        print("  FAIL   no scripts/check-*.py or check-*.js matched; the glob stopped matching")
         return 1
 
     runners = [p for pattern in RUNNERS_OF_CHECKERS
@@ -426,10 +429,13 @@ def _main() -> int:
         # Requiring `python3` on the same line covers all three real forms --
         # `python3 scripts/x.py` in a workflow, `python3 "$SCRIPT_DIR/x.py"` in a
         # shell script, and `"python3", "scripts/x.py"` in the Gradle build -- and
-        # excludes a bare filename in a key, a comment or a doc string.
+        # excludes a bare filename in a key, a comment or a doc string. A
+        # JavaScript checker is run by `node` in the same way; the word has to
+        # stand alone, because a cache key names download-node.sh.
         wired |= {name for name in checkers
                   for line in text.splitlines()
-                  if name in line and "python3" in line}
+                  if name in line and ("python3" in line if name.endswith(".py")
+                                       else re.search(r"(?<![\w-])node\s", line))}
 
     # Every script the server build runs over its output has to be in the cache
     # key that decides whether the cached asset tree is taken again.
@@ -471,7 +477,7 @@ def _main() -> int:
                " its presence in the tree reads as coverage.")
         failed = True
     else:
-        print(f"  ok     all {len(checkers)} scripts/check-*.py are invoked, "
+        print(f"  ok     all {len(checkers)} scripts/check-*.py and check-*.js are invoked, "
               f"across {len(runners)} files that could run one")
 
     return 1 if failed else 0

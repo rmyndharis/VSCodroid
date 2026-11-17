@@ -499,6 +499,30 @@ class MaintenanceScriptsTest(unittest.TestCase):
         self.assertNotEqual(0, changed.returncode, changed.stdout + changed.stderr)
         self.assertIn("no scripts found in build.yml's build job", changed.stdout)
 
+    def test_build_step_check_refuses_a_javascript_checker_nothing_runs(self):
+        fixture = self.root / "build-steps-js"
+        shutil.copytree(SOURCE / "scripts", fixture / "scripts")
+        shutil.copytree(SOURCE / ".github/workflows", fixture / ".github/workflows")
+        (fixture / "android/app").mkdir(parents=True)
+        shutil.copy2(SOURCE / "android/app/build.gradle.kts", fixture / "android/app")
+        shutil.copy2(SOURCE / "CONTRIBUTING.md", fixture)
+
+        def check():
+            return subprocess.run([sys.executable, str(fixture / "scripts/check-build-steps.py")],
+                                  cwd=fixture, capture_output=True, text=True, timeout=30)
+
+        healthy = check()
+        self.assertEqual(0, healthy.returncode, healthy.stdout + healthy.stderr)
+        build = fixture / "scripts/build-vscode-oss.sh"
+        text = build.read_text()
+        command = 'node "$SCRIPT_DIR/check-editcontext-ime.js" "$SRC"'
+        self.assertEqual(1, text.count(command))
+        # Still named in the line, and in the server cache key: neither is an invocation.
+        build.write_text(text.replace(command, '# ' + command, 1))
+        unrun = check()
+        self.assertNotEqual(0, unrun.returncode, unrun.stdout + unrun.stderr)
+        self.assertIn("check-editcontext-ime.js", unrun.stdout)
+
     def test_wheelhouse_checks_versioned_shared_objects(self):
         verifier = types.ModuleType("fixture_elf_verifier")
         verifier.__file__ = str(SOURCE / "scripts/verify-android-elf.py")
