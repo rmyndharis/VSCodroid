@@ -634,6 +634,31 @@ If the extension offers to install `jupyter` and `notebook`, decline: that is a 
 
 The Android build of that add-on is pointed at by `ZEROMQ_PREBUILD`, which every process VSCodroid starts inherits. A Node project of your own pinned to `zeromq` 5.x or 6.0.x picks it up too, which is what lets it load at all here. To run such a project against its own copy instead, clear the variable for that command: `ZEROMQ_PREBUILD= node app.js`.
 
+### Google Antigravity
+
+The Google Antigravity extension (`Google.google-antigravity` on Open VSX) installs from the Extensions view
+like any other. When it first starts it downloads its engine, about 60 MB, which unpacks to about 200 MB
+under `~/.gemini`. VSCodroid starts that engine for the extension and lets the extension's panel show the
+page the engine serves, so the panel opens on the Antigravity welcome screen with **Continue with Google**.
+
+What to know before using it:
+
+- **Signing in.** The panel asks you to sign in in the browser and paste the authorization code shown on the
+  callback page.
+- **How far it has been tried.** On an emulator the engine started, sign-in completed, and the agent answered a
+  message, created a file and ran commands. `python3`, `git` and `node` ran from those commands. A program stored
+  directly under the app's files directory, such as the engine itself, answered `Permission denied`: the engine
+  starts the agent's commands itself, and VSCodroid cannot route those through the system loader. Installed
+  toolchains were not tried.
+- **Other apps on the phone.** While it runs, the engine listens on a port of `127.0.0.1`, and any app that can
+  use the network can open that port. The page the engine serves there includes the key its calls require, so
+  such an app can read the signed-in account's name, email address and plan, and should be assumed able to make
+  the engine's other calls too. VSCodroid has found no way to make the engine listen on a private socket, as the
+  editor does. Sign in only on a phone whose installed apps you trust.
+- **Processes and memory.** The engine is one more process counted against Android's phantom process limit (see
+  [Android Phantom Process Limit](#android-phantom-process-limit)) while it runs, and on an emulator it held
+  between about 140 and 200 MB of memory, on top of the editor's own.
+
 ### What Is Not Available
 
 Some extensions are exclusive to the Microsoft Marketplace and not published on Open VSX. Notable examples include Microsoft's C/C++ extension. For most cases, open-source alternatives exist on Open VSX. GitHub Copilot Chat is the exception that needs no marketplace: it ships bundled.
@@ -1577,7 +1602,10 @@ itself, outside any terminal, and that start is not covered.
 VSCodroid asks the marketplace for the musl build wherever an extension
 publishes one, which is what makes that route possible at all, but the extension
 itself then has to offer a setting that lets its command be prefixed. Almost
-none do. The Codex extension is handled by the app instead: see [Codex](#codex).
+none do. The Codex extension is handled by the app instead: see [Codex](#codex). So is a
+program built for Android itself that an extension downloads into its storage and then starts with `spawn` or
+`execFile`: the app hands it to the system loader, which is how the engine of Google Antigravity runs (see [Google
+Antigravity](#google-antigravity)).
 
 **How to recognise it.** The extension is installed and enabled, its commands are
 missing from the Command Palette or do nothing when run, and the Problems panel
@@ -1591,16 +1619,6 @@ Playwright, a library the extension carries, and the engine program it ships
 needs `libstdc++`, which VSCodroid does not provide. Neither is something to
 change on your side. For an AI assistant that runs here, see [Codex](#codex);
 GitHub Copilot Chat is built in.
-
-**Another is Google Antigravity, and this one is loud.** Version 1.12.0 installs
-and adds its icon to the Activity Bar, and its panel then reads `Couldn't load
-this view` with `spawn .../.gemini/bin/agy EACCES`. That is the second wall: the
-extension downloads its engine into the app's storage and starts it itself. The
-engine is a build for Android and does start from a terminal, as
-`~/.gemini/bin/agy`, where it asks for a Google sign-in. The panel is another
-matter: it shows a page that the engine serves, and that page names the places
-that may display it. An extension panel of this editor is not among them, so the
-panel would not load here even with the engine running.
 
 **One variant is loud rather than silent.** An extension that publishes a
 separate build per platform, with no musl build and no platform-independent one,

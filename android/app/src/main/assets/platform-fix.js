@@ -106,8 +106,228 @@ if (process.platform === 'android') {
   // Only spawn is wrapped, which is the call the extension makes: execFile and
   // fork reach the same function through a reference of their own.
   var fs = require('fs');
+  var path = require('path');
   var childProcess = require('child_process');
   var CODEX_BUNDLED = /[\\/]openai\.chatgpt-[^\\/]+[\\/]bin[\\/][^\\/]+[\\/]codex$/;
+
+  // An extension that downloads a program built for Android into app storage
+  // (Google Antigravity's engine, ~/.gemini/bin/agy) starts it with
+  // child_process.spawn, and the kernel refuses: SELinux does not let anything
+  // under the app's data directory be executed. The terminal gets past that
+  // with an exec interceptor, which the extension host does not load, so the
+  // call fails with EACCES. The system linker can run the same file, and that
+  // is all the interceptor does underneath: `linker64 <file> <args>`.
+  //
+  // Only a 64-bit ELF that asks for that linker (its PT_INTERP) and whose real
+  // path is inside the data directory. The links under usr/bin end in the
+  // native library directory, where a direct exec is allowed and keeps
+  // /proc/self/exe honest; a musl binary needs its own loader; a script has no
+  // interpreter entry at all. Left alone in a process that already has the
+  // terminal's interceptor, which does this itself.
+  var LINKER = '/system/bin/linker64';
+  var APP_DATA = null;
+  try { APP_DATA = fs.realpathSync(process.env.TERMUX_APP__DATA_DIR || ''); } catch (e) { /* unset: stays off */ }
+  var INTERCEPTED = /libtermux-exec/.test(process.env.LD_PRELOAD || '');
+
+  /** The PT_INTERP string of an open ELF64 little-endian file, or null. */
+  function elfInterpreter(fd) {
+    var header = Buffer.alloc(64);
+    if (fs.readSync(fd, header, 0, 64, 0) < 64) return null;
+    if (header.readUInt32BE(0) !== 0x7f454c46 || header[4] !== 2 || header[5] !== 1) return null;
+    var phoff = Number(header.readBigUInt64LE(32));
+    var phentsize = header.readUInt16LE(54);
+    var phnum = header.readUInt16LE(56);
+    if (phentsize < 56) return null;
+    var entry = Buffer.alloc(phentsize);
+    for (var i = 0; i < phnum; i++) {
+      if (fs.readSync(fd, entry, 0, phentsize, phoff + i * phentsize) < phentsize) return null;
+      if (entry.readUInt32LE(0) !== 3) continue;
+      var size = Number(entry.readBigUInt64LE(32));
+      if (size < 1 || size > 4096) return null;
+      var text = Buffer.alloc(size);
+      if (fs.readSync(fd, text, 0, size, Number(entry.readBigUInt64LE(8))) < size) return null;
+      return text.toString('latin1').replace(/\0[\s\S]*$/, '');
+    }
+    return null;
+  }
+
+  function bionicInAppData(file) {
+    if (!APP_DATA || INTERCEPTED || !path.isAbsolute(file)) return false;
+    try {
+      var real = fs.realpathSync(file);
+      if (real.indexOf(APP_DATA + '/') !== 0) return false;
+      // O_NONBLOCK: a plain open of a FIFO waits for a writer.
+      var fd = fs.openSync(real, fs.constants.O_RDONLY | fs.constants.O_NONBLOCK);
+      try { return elfInterpreter(fd) === LINKER; } finally { fs.closeSync(fd); }
+    } catch (e) {
+      return false;
+    }
+  }
+
+  /**
+   * What follows `file` in a child_process call (an argument list, options and a
+   * callback, whichever are given) as a call to `linker64 <file> <args>`, or null
+   * when the call is left alone. `change` may replace the argument list.
+   */
+  function throughLinker(file, rest, change) {
+    if (typeof file !== 'string') return null;
+    var listed = Array.isArray(rest[0]);
+    var options = listed ? rest[1] : rest[0];
+    if ((options && options.shell) || !bionicInAppData(file)) return null;
+    var args = listed ? rest[0] : [];
+    return [LINKER, [file].concat(change ? change(args) : args)].concat(rest.slice(listed ? 1 : 0));
+  }
+
+  // The Antigravity engine's page refuses to be framed by anything but a short
+  // list of ancestors: itself, localhost and 127.0.0.1 on any port, and
+  // `vscode-webview:`, which is how desktop VS Code names the origin of its
+  // webviews. Here a webview is served from https://<id>.vscode-cdn.net,
+  // because the workbench is a web page, and that origin is not on the list,
+  // so the browser refuses the frame and the panel stays empty. Every
+  // *.vscode-cdn.net address is answered inside the app and never reaches the
+  // network, so the only thing that origin can be is one of this app's own
+  // webviews.
+  //
+  // The extension picks a free port, starts `agy --hub --hub-port=<port>`, polls
+  // http://127.0.0.1:<port>/healthz and puts that address in an iframe. So the
+  // engine is started on a port of its own and this process answers on the one
+  // the extension chose. Everything passes through unchanged except the
+  // `frame-ancestors` directive of a policy that already lists `vscode-webview:`,
+  // which gains this app's webview origin; a policy that does not ask for VS
+  // Code webviews is left as it is.
+  var ANTIGRAVITY_ENGINE = /[\\/]\.gemini[\\/]bin[\\/]agy$/;
+  var WEBVIEW_ORIGIN = 'https://*.vscode-cdn.net';
+  var HOP_BY_HOP = /^(connection|keep-alive|proxy-authenticate|proxy-authorization|te|trailer|transfer-encoding|upgrade)$/i;
+
+  function widenFrameAncestors(policy) {
+    return policy.split(';').map(function (directive) {
+      var parts = directive.trim().split(/\s+/);
+      if (parts[0].toLowerCase() !== 'frame-ancestors' || parts.indexOf('vscode-webview:') < 0) return directive;
+      if (parts.indexOf(WEBVIEW_ORIGIN) < 0) parts.push(WEBVIEW_ORIGIN);
+      return directive.match(/^\s*/)[0] + parts.join(' ');
+    }).join(';');
+  }
+
+  /**
+   * For `agy --hub --hub-port=<n>`: the port the extension chose, the one the
+   * engine is given instead and the argument list that says so. A random port
+   * in the dynamic range, as the extension's own is. A clash makes the engine
+   * print `port <n> is already in use`, which the extension's own port
+   * collision handling matches; that path was read, not run.
+   */
+  function antigravityHub(file, args) {
+    if (!ANTIGRAVITY_ENGINE.test(file) || args.indexOf('--hub') < 0) return null;
+    for (var i = 0; i < args.length; i++) {
+      var match = /^--hub-port=(\d{1,5})$/.exec(args[i]);
+      if (!match || Number(match[1]) === 0) continue;
+      var front = Number(match[1]);
+      var back = front;
+      while (back === front) back = 20000 + Math.floor(Math.random() * 40000);
+      var changed = args.slice();
+      changed[i] = '--hub-port=' + back;
+      return { front: front, back: back, args: changed };
+    }
+    return null;
+  }
+
+  /** Answers on `front` and relays to the engine on `back`, 502 while it is not accepting; closes when `child` ends. */
+  function relayHub(front, back, child) {
+    var http = require('http');
+    var net = require('net');
+    var sockets = new Set();
+    var server = http.createServer(function (req, res) {
+      var headers = {};
+      Object.keys(req.headers).forEach(function (name) {
+        if (!HOP_BY_HOP.test(name)) headers[name] = req.headers[name];
+      });
+      headers.host = '127.0.0.1:' + back;
+      var up = http.request({ host: '127.0.0.1', port: back, method: req.method, path: req.url, headers: headers, agent: false }, function (answer) {
+        var sent = [];
+        for (var i = 0; i < answer.rawHeaders.length; i += 2) {
+          var name = answer.rawHeaders[i];
+          var value = answer.rawHeaders[i + 1];
+          if (HOP_BY_HOP.test(name)) continue;
+          sent.push(name, /^content-security-policy$/i.test(name) ? widenFrameAncestors(value) : value);
+        }
+        res.writeHead(answer.statusCode, answer.statusMessage, sent);
+        answer.pipe(res);
+      });
+      up.on('error', function () {
+        if (!res.headersSent) res.writeHead(502);
+        res.end();
+      });
+      res.on('close', function () { up.destroy(); });
+      req.pipe(up);
+    });
+    // The page the engine serves opens a WebSocket back to it.
+    server.on('upgrade', function (req, socket, head) {
+      var up = net.connect(back, '127.0.0.1', function () {
+        var lines = [req.method + ' ' + req.url + ' HTTP/1.1'];
+        for (var i = 0; i < req.rawHeaders.length; i += 2) {
+          lines.push(req.rawHeaders[i] + ': ' + (/^host$/i.test(req.rawHeaders[i]) ? '127.0.0.1:' + back : req.rawHeaders[i + 1]));
+        }
+        up.write(lines.join('\r\n') + '\r\n\r\n');
+        if (head && head.length) up.write(head);
+        up.pipe(socket);
+        socket.pipe(up);
+      });
+      up.on('error', function () { socket.destroy(); });
+      socket.on('error', function () { up.destroy(); });
+    });
+    server.on('connection', function (socket) {
+      sockets.add(socket);
+      socket.on('close', function () { sockets.delete(socket); });
+    });
+    server.on('error', function (error) { console.error('[vscodroid] hub relay on ' + front + ': ' + error.message); });
+    server.listen(front, '127.0.0.1');
+    child.once('exit', function () {
+      server.close();
+      sockets.forEach(function (socket) { socket.destroy(); });
+    });
+  }
+
+  // When the system kills the editor server the app starts another, and the
+  // engine of the first outlives it: a killed process forwards nothing to its
+  // children. The orphan keeps its port, a page that carries the session token
+  // and about 200 MB. So each start ends the one before it. The pid and port of
+  // the engine started last are kept in a note, and the note is believed only
+  // while that pid still runs the engine on that port.
+  var HUB_NOTE = process.env.HOME ? path.join(process.env.HOME, '.vscodroid', 'antigravity-hub.json') : null;
+
+  function endEarlierHub() {
+    if (!HUB_NOTE) return;
+    try {
+      var note = JSON.parse(fs.readFileSync(HUB_NOTE, 'utf8'));
+      var pid = Number(note.pid);
+      if (!(pid > 1)) return;
+      var words = fs.readFileSync('/proc/' + pid + '/cmdline', 'latin1').split('\0');
+      if (words.indexOf('--hub-port=' + note.port) >= 0 && words.some(function (word) { return ANTIGRAVITY_ENGINE.test(word); })) {
+        process.kill(pid, 'SIGTERM');
+      }
+    } catch (e) { /* no note, or that pid is gone */ }
+  }
+
+  function keepHubNote(child, port) {
+    if (!HUB_NOTE) return;
+    try {
+      fs.writeFileSync(HUB_NOTE, JSON.stringify({ pid: child.pid, port: port }));
+    } catch (e) { return; }
+    child.once('exit', function () {
+      try {
+        if (JSON.parse(fs.readFileSync(HUB_NOTE, 'utf8')).pid === child.pid) fs.unlinkSync(HUB_NOTE);
+      } catch (e) { /* already replaced or removed */ }
+    });
+  }
+
+  // The extension host starts only when the page connects, which can be long
+  // after the app restarted the server, so the server's own start ends an engine
+  // the last one left behind as well. Only on the main thread of the editor
+  // server: the extension host and the terminal host load this file too, and the
+  // terminal host starts when the first terminal opens, with an engine already
+  // running. A worker has no argv[1] while preloads run on Node 22, so the name
+  // test alone already skips it; the thread test keeps that from depending on it.
+  if (require('worker_threads').isMainThread && /(^|[\\/])server-main\.js$/.test(process.argv[1] || '')) endEarlierHub();
+
   var realSpawn = childProcess.spawn;
   childProcess.spawn = function (file) {
     if (typeof file === 'string' && CODEX_BUNDLED.test(file)) {
@@ -118,6 +338,37 @@ if (process.platform === 'android') {
         return realSpawn.apply(this, args);
       }
     }
+    var hub = null;
+    var call = throughLinker(file, Array.prototype.slice.call(arguments, 1), function (args) {
+      hub = antigravityHub(file, args);
+      return hub ? hub.args : args;
+    });
+    if (call) {
+      if (hub) endEarlierHub();
+      var started = realSpawn.apply(this, call);
+      if (hub && started && started.pid !== undefined) {
+        relayHub(hub.front, hub.back, started);
+        keepHubNote(started, hub.back);
+      }
+      return started;
+    }
     return realSpawn.apply(this, arguments);
   };
+
+  // execFile reaches the internal spawn, not the exported one replaced above, and
+  // the Antigravity extension runs its engine once with it (`agy --version`) to
+  // check what it downloaded; when that fails with EACCES it downloads the engine
+  // again. spawnSync and execFileSync are not wrapped: the extension calls neither.
+  var promisify = require('util').promisify;
+  var realExecFile = childProcess.execFile;
+  var realExecFilePromised = realExecFile[promisify.custom];
+  childProcess.execFile = function (file) {
+    return realExecFile.apply(this, throughLinker(file, Array.prototype.slice.call(arguments, 1)) || arguments);
+  };
+  // util.promisify(execFile) resolves { stdout, stderr } through this property of the original.
+  if (realExecFilePromised) {
+    childProcess.execFile[promisify.custom] = function (file) {
+      return realExecFilePromised.apply(this, throughLinker(file, Array.prototype.slice.call(arguments, 1)) || arguments);
+    };
+  }
 }

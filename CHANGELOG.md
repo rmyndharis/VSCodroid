@@ -7,6 +7,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- Start a program built for Android that an extension downloads into the app's storage through the system loader when it calls `spawn` or `execFile`, because the extension host has no exec interceptor and the call failed with `EACCES`.
+- Let the Google Antigravity extension's panel frame its engine's page, because the engine names only `vscode-webview:` as an ancestor and this editor serves webviews from `*.vscode-cdn.net`.
+
 ### Fixed
 
 - Saving a download over a file you already have no longer freezes the editor while a large file is copied into it.
