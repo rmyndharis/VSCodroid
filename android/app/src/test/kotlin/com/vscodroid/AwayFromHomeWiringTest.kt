@@ -72,8 +72,8 @@ class AwayFromHomeWiringTest {
         assertTrue(
             notice.contains(".setNeutralButton(R.string.action_stop)") &&
                 notice.contains("setAction(NodeService.ACTION_STOP)"),
-            "the notice sends the person to Stop Server in the notification, and a phone with " +
-                "notifications turned off shows none: the dialog has to offer the same action",
+            "the notice sends the person to Stop Server, and a phone with notifications turned " +
+                "off shows no notification: the dialog has to offer the same action",
         )
     }
 

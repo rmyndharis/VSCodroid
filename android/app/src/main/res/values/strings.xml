@@ -70,7 +70,7 @@
          about to become reachable again, and a user who is not told which
          setting to look for has nothing to search on. -->
     <string name="heap_override_suspended">The custom memory limit in settings.json was turned off after repeated crashes. Change vscodroid.server.heapCeilingMb and restart the app to try a different value.</string>
-    <string name="notice_editor_away_from_home">Your settings and sign-ins did not load because another app is using port %1$d. They are safe: close that app, stop VSCodroid from its notification and open it again.</string>
+    <string name="notice_editor_away_from_home">Your settings and sign-ins did not load because another app is using port %1$d. They are safe: close that app, tap Stop Server (or stop VSCodroid from its notification) and open it again.</string>
     <!-- The figure is passed in rather than written here, and it is the
          SHORTFALL the refusal measured, not the size of the unpack: this asks
          the user to free it, and what they have to free is what the device is
@@ -226,11 +226,6 @@
     <string name="shortcut_toolchains_short">Toolchains</string>
     <string name="shortcut_toolchains_long">Manage toolchains</string>
     <string name="toolchain_size_download_and_installed">%1$s download, %2$s installed</string>
-    <string name="saf_device_copy_preserved">Device edit kept beside file: %1$s.</string>
-    <plurals name="saf_device_copies_preserved">
-        <item quantity="one">%1$d device edit kept. Look for .device- and a time.</item>
-        <item quantity="other">%1$d device edits kept. Look for .device- and a time.</item>
-    </plurals>
     <!-- Shown when a save could not be written out to the device folder. Names the
          consequence rather than the error: the user's next decision is whether to
          copy the file out before uninstalling, not which exception was thrown. -->
@@ -273,6 +268,12 @@
          never had, which is what saf_directory_kept says. -->
     <string name="saf_directory_changed_kept">%1$s was kept in the device folder: another app may have changed a file in it since the editor last read or saved that file. Delete it there if you no longer need it.</string>
     <string name="saf_delete_refused">%1$s could not be deleted from the device folder, so it comes back the next time the folder is opened. Delete it in the file manager on your device.</string>
+    <!-- Device and app edits kept beside their file instead of being overwritten -->
+    <string name="saf_device_copy_preserved">Device edit kept beside file: %1$s.</string>
+    <plurals name="saf_device_copies_preserved">
+        <item quantity="one">%1$d device edit kept. Look for .device- and a time.</item>
+        <item quantity="other">%1$d device edits kept. Look for .device- and a time.</item>
+    </plurals>
     <string name="saf_local_copy_preserved">App edit kept beside file: %1$s.</string>
     <plurals name="saf_local_copies_preserved">
         <item quantity="one">%1$d app edit kept. Look for .local- and a time.</item>

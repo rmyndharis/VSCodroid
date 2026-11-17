@@ -70,7 +70,7 @@
          about to become reachable again, and a user who is not told which
          setting to look for has nothing to search on. -->
     <string name="heap_override_suspended">settings.json 中的自訂記憶體上限已在多次當機後關閉。請修改 vscodroid.server.heapCeilingMb 並重新啟動應用程式，以試用其他數值。</string>
-    <string name="notice_editor_away_from_home">另一個應用程式正在使用連接埠 %1$d，因此你的設定和登入資訊未能載入。這些資料並未遺失：請關閉該應用程式，從通知停止 VSCodroid，然後重新開啟。</string>
+    <string name="notice_editor_away_from_home">另一個應用程式正在使用連接埠 %1$d，因此你的設定和登入資訊未能載入。這些資料並未遺失：請關閉該應用程式，點選「停止伺服器」（或從通知停止 VSCodroid），然後重新開啟 VSCodroid。</string>
     <!-- The figure is passed in rather than written here, and it is the
          SHORTFALL the refusal measured, not the size of the unpack: this asks
          the user to free it, and what they have to free is what the device is
@@ -225,10 +225,6 @@
     <string name="shortcut_toolchains_short">工具鏈</string>
     <string name="shortcut_toolchains_long">管理工具鏈</string>
     <string name="toolchain_size_download_and_installed">下載 %1$s，安裝後 %2$s</string>
-    <string name="saf_device_copy_preserved">裝置修改已保留在旁邊：%1$s。</string>
-    <plurals name="saf_device_copies_preserved">
-        <item quantity="other">已保留 %1$d 處裝置修改。請尋找 .device- 和時間。</item>
-    </plurals>
     <!-- Shown when a save could not be written out to the device folder. Names the
          consequence rather than the error: the user's next decision is whether to
          copy the file out before uninstalling, not which exception was thrown. -->
@@ -268,6 +264,11 @@
          never had, which is what saf_directory_kept says. -->
     <string name="saf_directory_changed_kept">%1$s 已保留在裝置資料夾中：自編輯器上次讀取或儲存其中的某個檔案以來，其他應用程式可能已變更該檔案。若不再需要，請在該處刪除。</string>
     <string name="saf_delete_refused">無法從裝置資料夾中刪除 %1$s，下次開啟該資料夾時它會再次出現。請在裝置的檔案管理員中刪除。</string>
+    <!-- Device and app edits kept beside their file instead of being overwritten -->
+    <string name="saf_device_copy_preserved">裝置修改已保留在旁邊：%1$s。</string>
+    <plurals name="saf_device_copies_preserved">
+        <item quantity="other">已保留 %1$d 處裝置修改。請尋找 .device- 和時間。</item>
+    </plurals>
     <string name="saf_local_copy_preserved">應用程式內修改已保留在旁邊：%1$s。</string>
     <plurals name="saf_local_copies_preserved">
         <item quantity="other">已保留 %1$d 處應用程式內修改。請尋找 .local- 和時間。</item>

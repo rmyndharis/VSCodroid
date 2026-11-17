@@ -3485,9 +3485,9 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
      * taken down before that (a font size or language change makes it again, and
      * so does a reclaimed screen) gives it back, so the notice is not lost with it.
      *
-     * The notice sends the person to Stop Server in the notification, and a phone
-     * with notifications turned off for the app shows none, so the dialog carries
-     * the same action under the notification's own label.
+     * Stop Server is in the notification, and a phone with notifications turned
+     * off for the app shows none, so the dialog carries the same action under the
+     * notification's own label, and the notice names both.
      */
     private fun showAwayFromHomeNotice(home: Int) {
         awayFromHomeUnanswered = home
