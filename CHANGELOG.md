@@ -22,6 +22,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The notice that another app is using the editor's port comes back after a font size or language change until it is answered, and offers Stop Server itself for a phone with notifications turned off.
 - The Toolchains shortcut opened while the setup that follows an update is running goes to the setup screen instead of installing over files still being unpacked.
 - A keyboard put away after the screen is turned stays down when a text box other than the editor has the focus, such as Quick Open or the find box; the next touch used to bring it back.
+- A file another app deleted from a device folder is no longer put back there when the app's copy of it could not be read as the folder opened.
+- An edit that lands just as the app removes its copy of a file another app deleted from a device folder is kept as `<name>.local-<time>` and a notice says so.
 
 ## [1.9.0] - 2026-11-16
 
