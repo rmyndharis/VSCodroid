@@ -576,6 +576,29 @@ class MaintenanceScriptsTest(unittest.TestCase):
         self.assertNotEqual(0, unrun.returncode, unrun.stdout + unrun.stderr)
         self.assertIn("check-editcontext-ime.js", unrun.stdout)
 
+    def test_build_step_check_refuses_a_javascript_checker_missing_from_the_assets_key(self):
+        fixture = self.root / "build-steps-key"
+        shutil.copytree(SOURCE / "scripts", fixture / "scripts")
+        shutil.copytree(SOURCE / ".github/workflows", fixture / ".github/workflows")
+        (fixture / "android/app").mkdir(parents=True)
+        shutil.copy2(SOURCE / "android/app/build.gradle.kts", fixture / "android/app")
+        shutil.copy2(SOURCE / "CONTRIBUTING.md", fixture)
+
+        def check():
+            return subprocess.run([sys.executable, str(fixture / "scripts/check-build-steps.py")],
+                                  cwd=fixture, capture_output=True, text=True, timeout=30)
+
+        healthy = check()
+        self.assertEqual(0, healthy.returncode, healthy.stdout + healthy.stderr)
+        build = fixture / ".github/workflows/build.yml"
+        text = build.read_text()
+        entry = "'scripts/check-editcontext-ime.js', "
+        self.assertEqual(1, text.count(entry))
+        build.write_text(text.replace(entry, "", 1))
+        unkeyed = check()
+        self.assertNotEqual(0, unkeyed.returncode, unkeyed.stdout + unkeyed.stderr)
+        self.assertIn("check-editcontext-ime.js", unkeyed.stdout)
+
     def test_wheelhouse_checks_versioned_shared_objects(self):
         verifier = types.ModuleType("fixture_elf_verifier")
         verifier.__file__ = str(SOURCE / "scripts/verify-android-elf.py")
