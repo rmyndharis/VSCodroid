@@ -1,0 +1,6 @@
+{
+  "Google Antigravity is installed, but VSCodroid keeps its engine off. While the engine runs, other apps on this phone can reach it and use the account signed in to it. Turn it on only on a phone whose apps you trust.": "Google Antigravity はインストールされていますが、VSCodroid はそのエンジンをオフにしています。エンジンの実行中は、このスマートフォン上の他のアプリがエンジンに接続し、エンジンにサインインしているアカウントを使用できます。入っているアプリを信頼できるスマートフォンでのみオンにしてください。",
+  "Turn On and Reload": "オンにして再読み込み",
+  "Don't Show Again": "今後は表示しない",
+  "The Antigravity engine could not be turned on: {0}": "Antigravity エンジンをオンにできませんでした: {0}"
+}

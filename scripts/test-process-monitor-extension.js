@@ -47,9 +47,19 @@ const printed = [];
 // so the first such item of a web extension took this item's slot.
 const statusItemArgs = [];
 // What the Antigravity offer reads and writes: which extensions are installed, the machine setting, the
-// configuration writes it made and the commands it ran. A case sets these before it activates.
-const world = { installed: new Set(), runEngine: undefined, updates: [], executed: [], onExtensionsChange: null, answer: undefined };
+// configuration writes it made and the commands it ran, whether the workbench refuses the write, and the
+// language the window is in. A case sets these before it activates.
+const world = { installed: new Set(), runEngine: undefined, updates: [], executed: [], onExtensionsChange: null, answer: undefined, refuseWrite: null, locale: 'en' };
+// vscode.l10n.t as the extension host answers it: the extension's bundle for the window's language when
+// there is one, the English text otherwise, with {0} filled in.
+const l10nDir = path.join(path.dirname(EXTENSION), 'l10n');
+function translate(message, ...args) {
+    const bundle = path.join(l10nDir, `bundle.l10n.${world.locale}.json`);
+    const text = (world.locale !== 'en' && fs.existsSync(bundle) && JSON.parse(fs.readFileSync(bundle, 'utf8'))[message]) || message;
+    return text.replace(/\{(\d+)\}/g, (all, n) => (args[n] === undefined ? all : String(args[n])));
+}
 const vscodeStub = {
+    l10n: { t: translate },
     ConfigurationTarget: { Global: 1, Workspace: 2 },
     extensions: {
         getExtension: (id) => (world.installed.has(id.toLowerCase()) ? { id } : undefined),
@@ -58,7 +68,10 @@ const vscodeStub = {
     workspace: {
         getConfiguration: (section) => ({
             get: (key) => (section === 'vscodroid.antigravity' && key === 'runEngine' ? world.runEngine : undefined),
-            update: (key, value, target) => { world.updates.push([section, key, value, target]); return Promise.resolve(); },
+            update: (key, value, target) => {
+                world.updates.push([section, key, value, target]);
+                return world.refuseWrite ? Promise.reject(new Error(world.refuseWrite)) : Promise.resolve();
+            },
         }),
     },
     StatusBarAlignment: { Left: 1, Right: 2 },
@@ -711,11 +724,23 @@ assert.ok(
 // The Antigravity engine is off until the person turns on a machine setting, and the extension's own
 // failure with the setting off is a spawn error that names no setting. So the offer is made when the
 // extension is installed and the setting is off, once per window, also when the extension is installed
-// later; turning it on writes the machine setting and reloads the window, and nothing else does.
-async function antigravityOffer({ installed, runEngine, answer, installLater = false }) {
+// later; turning it on writes the machine setting and reloads the window, and nothing else does. A write
+// the workbench refuses is said, not dropped; "Don't Show Again" holds across windows until the setting
+// is turned on; and the offer is in the window's language.
+const TURN_ON = 'Turn On and Reload';
+const NEVER = "Don't Show Again";
+const DECLINED = 'antigravity.engineOfferDeclined';
+// Recorded only while these cases run, and refused in every one of them: an offer whose promise rejects
+// unhandled is a button that silently does nothing.
+const unhandled = [];
+const recordUnhandled = (e) => { unhandled.push(String(e && e.message)); };
+process.on('unhandledRejection', recordUnhandled);
+async function antigravityOffer({ installed, runEngine, answer, installLater = false, state = new Map(), refuseWrite = null, locale = 'en' }) {
     world.installed = new Set(installed && !installLater ? ['google.google-antigravity'] : []);
     world.runEngine = runEngine;
     world.answer = answer;
+    world.refuseWrite = refuseWrite;
+    world.locale = locale;
     world.updates = [];
     world.executed = [];
     world.onExtensionsChange = null;
@@ -724,7 +749,11 @@ async function antigravityOffer({ installed, runEngine, answer, installLater = f
     shown.length = 0;
     delete require.cache[require.resolve(EXTENSION)];
     const extension = require(EXTENSION);
-    const context = { subscriptions: [] };
+    const globalState = {
+        get: (key) => state.get(key),
+        update: (key, value) => { if (value === undefined) state.delete(key); else state.set(key, value); return Promise.resolve(); },
+    };
+    const context = { subscriptions: [], globalState };
     extension.activate(context);
     if (installLater) {
         assert.strictEqual(shown.filter((m) => /Antigravity/.test(m.message)).length, 0, 'the offer was made with the extension not installed');
@@ -737,7 +766,14 @@ async function antigravityOffer({ installed, runEngine, answer, installLater = f
     await new Promise((resolve) => setImmediate(resolve));
     extension.deactivate();
     fs.rmSync(tmp, { recursive: true, force: true });
-    return { offers: shown.filter((m) => /Antigravity/.test(m.message)), updates: world.updates.slice(), executed: world.executed.slice() };
+    assert.deepStrictEqual(unhandled, [], `an offer's promise was rejected and nothing handled it (answer ${JSON.stringify(answer)})`);
+    return {
+        offers: shown.filter((m) => m.level === 'warning' && /Antigravity/.test(m.message)),
+        errors: shown.filter((m) => m.level === 'error'),
+        updates: world.updates.slice(),
+        executed: world.executed.slice(),
+        state,
+    };
 }
 
 (async () => {
@@ -749,16 +785,56 @@ async function antigravityOffer({ installed, runEngine, answer, installLater = f
 
     const dismissed = await antigravityOffer({ installed: true, runEngine: false, answer: undefined });
     assert.strictEqual(dismissed.offers.length, 1, 'the offer was not made once: ' + dismissed.offers.length);
-    assert.deepStrictEqual(dismissed.offers[0].items, ['Turn On and Reload']);
+    assert.deepStrictEqual(dismissed.offers[0].items, [TURN_ON, NEVER]);
     assert.ok(/other apps on this phone/.test(dismissed.offers[0].message), 'the offer does not say what turning the engine on exposes');
-    assert.deepStrictEqual([dismissed.updates, dismissed.executed], [[], []], 'a dismissed offer changed a setting or reloaded the window');
+    assert.deepStrictEqual([dismissed.updates, dismissed.executed, [...dismissed.state]], [[], [], []], 'a dismissed offer changed a setting, reloaded the window or was kept from coming back');
 
-    const accepted = await antigravityOffer({ installed: true, runEngine: undefined, answer: 'Turn On and Reload' });
+    const accepted = await antigravityOffer({ installed: true, runEngine: undefined, answer: TURN_ON });
     assert.deepStrictEqual(accepted.updates, [['vscodroid.antigravity', 'runEngine', true, 1]], 'accepting did not write the machine setting through the user target');
     assert.deepStrictEqual(accepted.executed, ['workbench.action.reloadWindow'], 'accepting did not reload the window, so the engine is not started');
 
     const later = await antigravityOffer({ installed: true, runEngine: false, installLater: true });
     assert.strictEqual(later.offers.length, 1, 'installing the extension after the window loaded was not followed by one offer: ' + later.offers.length);
+
+    // The workbench refuses an extension's write to a settings file it cannot parse, and reports nothing.
+    const reason = 'Unable to write into remote user settings. Please open the remote user settings file to correct errors/warnings in it and try again.';
+    const refused = await antigravityOffer({ installed: true, runEngine: false, answer: TURN_ON, refuseWrite: reason });
+    assert.strictEqual(refused.errors.length, 1, 'a refused write was not shown: ' + JSON.stringify(refused.errors));
+    assert.ok(refused.errors[0].message.includes(reason), 'the error does not say why: ' + refused.errors[0].message);
+    assert.deepStrictEqual(refused.executed, [], 'the window was reloaded although the setting was not written');
+
+    // "Don't Show Again" lasts across windows, and only while the setting stays off.
+    const state = new Map();
+    const never = await antigravityOffer({ installed: true, runEngine: false, answer: NEVER, state });
+    assert.deepStrictEqual([never.offers.length, never.updates, [...state]], [1, [], [[DECLINED, true]]], 'declining for good was not remembered, or changed the setting');
+    const next = await antigravityOffer({ installed: true, runEngine: false, state });
+    assert.strictEqual(next.offers.length, 0, 'the offer came back in the next window after "Don\'t Show Again"');
+    await antigravityOffer({ installed: true, runEngine: true, state });
+    assert.deepStrictEqual([...state], [], 'turning the setting on did not forget "Don\'t Show Again"');
+    const offAgain = await antigravityOffer({ installed: true, runEngine: false, state });
+    assert.strictEqual(offAgain.offers.length, 1, 'a person who turned the setting on and off again was not told again');
+
+    // In the window's language, the buttons included, and a translated answer still does what it says.
+    const german = JSON.parse(fs.readFileSync(path.join(path.dirname(EXTENSION), 'l10n/bundle.l10n.de.json'), 'utf8'));
+    const de = await antigravityOffer({ installed: true, runEngine: false, answer: german[TURN_ON], locale: 'de' });
+    assert.strictEqual(de.offers.length, 1);
+    assert.strictEqual(de.offers[0].message, german[dismissed.offers[0].message], 'the offer was not shown in German');
+    assert.deepStrictEqual(de.offers[0].items, [german[TURN_ON], german[NEVER]], 'the buttons were not shown in German');
+    assert.deepStrictEqual(de.executed, ['workbench.action.reloadWindow'], 'the German button did not turn the engine on');
+
+    // Every language the app ships has every string, with its placeholder, and no string the code does not use.
+    const used = [dismissed.offers[0].message, TURN_ON, NEVER, 'The Antigravity engine could not be turned on: {0}'];
+    assert.ok(refused.errors[0].message.startsWith(used[3].replace('{0}', '')), 'the error text is not the one the bundles translate');
+    const bundles = fs.readdirSync(path.join(path.dirname(EXTENSION), 'l10n')).sort();
+    const nls = fs.readdirSync(path.dirname(EXTENSION)).filter((f) => /^package\.nls\.[a-z-]+\.json$/.test(f)).map((f) => f.slice(12, -5)).sort();
+    assert.deepStrictEqual(bundles, nls.map((l) => `bundle.l10n.${l}.json`), 'the l10n bundles are not the languages package.nls is translated into');
+    for (const file of bundles) {
+        const bundle = JSON.parse(fs.readFileSync(path.join(path.dirname(EXTENSION), 'l10n', file), 'utf8'));
+        assert.deepStrictEqual(Object.keys(bundle).sort(), used.slice().sort(), `${file} does not hold exactly the strings the offer uses`);
+        for (const key of used) assert.strictEqual(bundle[key].includes('{0}'), key.includes('{0}'), `${file}: the placeholder of "${key}" was lost or added`);
+    }
+    const manifestL10n = JSON.parse(fs.readFileSync(path.join(path.dirname(EXTENSION), 'package.json'), 'utf8')).l10n;
+    assert.strictEqual(manifestL10n, './l10n', 'package.json does not point the extension host at the bundles');
 
     const manifest = JSON.parse(fs.readFileSync(path.join(path.dirname(EXTENSION), 'package.json'), 'utf8'));
     const setting = manifest.contributes.configuration.properties['vscodroid.antigravity.runEngine'];
@@ -766,7 +842,9 @@ async function antigravityOffer({ installed, runEngine, answer, installLater = f
         [setting && setting.type, setting && setting.default, setting && setting.scope], ['boolean', false, 'machine'],
         'the engine setting is not a machine setting that is off by default, which is where platform-fix.js reads it',
     );
-    console.log('ok -- the Antigravity engine is offered once per window when its extension is installed and the setting is off, and turning it on writes the machine setting and reloads');
+    process.removeListener('unhandledRejection', recordUnhandled);
+    assert.deepStrictEqual(unhandled, [], 'a promise was rejected and nothing handled it');
+    console.log('ok -- the Antigravity engine is offered once per window when its extension is installed and the setting is off, in the window\'s language, a refused write is shown, "Don\'t Show Again" holds until the setting is turned on, and turning it on writes the machine setting and reloads');
 })().catch((e) => { console.error(e); process.exit(1); });
 
 console.log(

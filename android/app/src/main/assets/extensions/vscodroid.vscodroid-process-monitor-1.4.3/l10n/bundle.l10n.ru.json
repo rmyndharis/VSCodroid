@@ -1,0 +1,6 @@
+{
+  "Google Antigravity is installed, but VSCodroid keeps its engine off. While the engine runs, other apps on this phone can reach it and use the account signed in to it. Turn it on only on a phone whose apps you trust.": "Расширение Google Antigravity установлено, но VSCodroid держит его движок выключенным. Пока движок работает, другие приложения на этом телефоне могут подключиться к нему и использовать учётную запись, с которой выполнен вход в движок. Включайте его только на телефоне, приложениям на котором вы доверяете.",
+  "Turn On and Reload": "Включить и перезагрузить",
+  "Don't Show Again": "Больше не показывать",
+  "The Antigravity engine could not be turned on: {0}": "Не удалось включить движок Antigravity: {0}"
+}

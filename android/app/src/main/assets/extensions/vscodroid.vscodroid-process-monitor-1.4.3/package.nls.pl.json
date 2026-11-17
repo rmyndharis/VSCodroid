@@ -3,5 +3,5 @@
   "description": "Śledzi liczbę procesów widmo w Androidzie",
   "command.showProcesses": "VSCodroid: Pokaż drzewo procesów",
   "config.server.heapCeilingMb": "Górny limit sterty V8 dla serwera edytora, w MB. Pozostawiony bez wartości jest wyliczany z pamięci urządzenia (jedna ósma RAM, między 256 a 768). Zadziała przy następnym uruchomieniu aplikacji. Wartość większa, niż to urządzenie udźwignie, zostaje automatycznie obniżona, a po powtarzających się awariach wyłączona.\n\nLimit dotyczy każdego izolatu V8 na serwerze z osobna, a nie wszystkich razem, więc jego podniesienie kosztuje kilka razy tyle, ile mówi liczba.",
-  "config.antigravity.runEngine": "Pozwala rozszerzeniu Google Antigravity uruchomić jego silnik. Gdy silnik działa, nasłuchuje na lokalnym porcie, do którego może się połączyć każda aplikacja na tym telefonie mająca dostęp do sieci, a taka aplikacja może korzystać z konta zalogowanego w silniku. Wyłączone, dopóki tego nie włączysz. Po zmianie załaduj okno ponownie."
+  "config.antigravity.runEngine": "Pozwala rozszerzeniu Google Antigravity uruchomić swój silnik. Gdy silnik działa, nasłuchuje na lokalnym porcie, do którego może się połączyć każda aplikacja na tym telefonie mająca dostęp do sieci, a taka aplikacja może korzystać z konta zalogowanego w silniku. Wyłączone, dopóki tego nie włączysz. Po zmianie załaduj okno ponownie."
 }

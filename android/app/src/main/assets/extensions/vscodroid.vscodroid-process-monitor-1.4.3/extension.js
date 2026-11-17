@@ -45,24 +45,42 @@ function isStale(snapshot) {
 // the setting where the engine would be started). With the setting off the extension's panel fails
 // with a spawn error that says nothing about a setting, so this says it, once per window, and offers
 // to turn the setting on. A machine setting, written to the same file the app reads.
+//
+// Translated, unlike this extension's other notices, because it is the one place the person is told
+// what turning the engine on exposes. "Don't Show Again" lasts while the setting stays off: turning it
+// on clears it, so a person who turns it off again later is told again.
 const ANTIGRAVITY = 'Google.google-antigravity';
-const TURN_ON = 'Turn On and Reload';
+const ENGINE_DECLINED = 'antigravity.engineOfferDeclined';
 let engineOffered = false;
+let globalState;
 
 function offerAntigravityEngine() {
     if (engineOffered || !vscode.extensions.getExtension(ANTIGRAVITY)) return;
     const config = vscode.workspace.getConfiguration('vscodroid.antigravity');
-    if (config.get('runEngine') === true) return;
+    if (config.get('runEngine') === true) {
+        if (globalState.get(ENGINE_DECLINED)) globalState.update(ENGINE_DECLINED, undefined);
+        return;
+    }
+    if (globalState.get(ENGINE_DECLINED)) return;
     engineOffered = true;
+    const turnOn = vscode.l10n.t('Turn On and Reload');
+    const never = vscode.l10n.t("Don't Show Again");
     vscode.window.showWarningMessage(
-        'Google Antigravity is installed, but VSCodroid keeps its engine off. While the engine runs, ' +
+        vscode.l10n.t('Google Antigravity is installed, but VSCodroid keeps its engine off. While the engine runs, ' +
             'other apps on this phone can reach it and use the account signed in to it. Turn it on only ' +
-            'on a phone whose apps you trust.',
-        TURN_ON
+            'on a phone whose apps you trust.'),
+        turnOn,
+        never
     ).then((choice) => {
-        if (choice !== TURN_ON) return undefined;
-        return config.update('runEngine', true, vscode.ConfigurationTarget.Global)
-            .then(() => vscode.commands.executeCommand('workbench.action.reloadWindow'));
+        if (choice === never) return globalState.update(ENGINE_DECLINED, true);
+        if (choice !== turnOn) return undefined;
+        // An extension's write is not reported by the workbench, and it refuses one to a settings file it
+        // cannot parse, which would leave the button doing nothing.
+        return config.update('runEngine', true, vscode.ConfigurationTarget.Global).then(
+            () => vscode.commands.executeCommand('workbench.action.reloadWindow'),
+            (error) => vscode.window.showErrorMessage(
+                vscode.l10n.t('The Antigravity engine could not be turned on: {0}', (error && error.message) || String(error)))
+        );
     });
 }
 
@@ -98,6 +116,7 @@ function activate(context) {
     });
 
     // Now, and again when the set of extensions changes: the person may install Antigravity later.
+    globalState = context.globalState;
     offerAntigravityEngine();
     context.subscriptions.push(vscode.extensions.onDidChange(offerAntigravityEngine));
 
