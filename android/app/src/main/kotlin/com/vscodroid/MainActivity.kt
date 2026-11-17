@@ -81,6 +81,7 @@ import com.vscodroid.keyboard.ExtraKeyRow
 import com.vscodroid.keyboard.HardwareTyping
 import com.vscodroid.keyboard.KeyInjector
 import com.vscodroid.keyboard.KeyboardDismissal
+import com.vscodroid.service.EditorGateway
 import com.vscodroid.service.NodeService
 import com.vscodroid.service.StartupNotice
 import com.vscodroid.setup.FirstRunSetup
@@ -289,6 +290,10 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
     private var crashDialog: AlertDialog? = null
     private var awayFromHomeNotice: AlertDialog? = null
     private var awayFromHomePendingShow: (() -> Unit)? = null
+
+    // The home port of an away-from-home notice the person has not answered yet, or 0. An activity
+    // taken down before the answer gives it back to the gateway, so the one made in its place says it.
+    private var awayFromHomeUnanswered = 0
     private var pendingNoticeAfterCrash: (() -> Unit)? = null
 
     /**
@@ -1314,6 +1319,10 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         crashDialog?.setOnDismissListener(null)
         awayFromHomePendingShow = null
         awayFromHomeNotice?.setOnDismissListener(null)
+        // Taken down with its screen, which the platform otherwise reports as a leaked window, and
+        // handed back unless the app is closing: see [awayFromHomeUnanswered].
+        awayFromHomeNotice?.takeIf { it.isShowing }?.dismiss()
+        if (!isFinishing) returnUnansweredAwayFromHome()
         AppNotices.drop(this, carry = true)
         webView?.destroy()
         webView = null
@@ -3224,6 +3233,8 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         awayFromHomePendingShow = null
         awayFromHomeNotice?.setOnDismissListener(null)
         if (!isFinishing && !isDestroyed) awayFromHomeNotice?.dismiss()
+        // Not answered, so the editor load that follows this page says it again.
+        returnUnansweredAwayFromHome()
         AppNotices.drop(this)
         val retry = getString(R.string.error_server_retry)
         // The diagnostics half of the page, and the two parts of it travel
@@ -3464,17 +3475,27 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
      *
      * It never covers a crash screen. A previous-crash dialog still open is
      * answered first, and [showErrorPage] takes the notice down or drops it.
-     * Nothing here records that it was shown: the service hands the port out
-     * once per process, so an activity recreated in it has nothing to show.
+     * The service hands the port out once per process. Until the person answers
+     * the dialog the port is kept in [awayFromHomeUnanswered], and an activity
+     * taken down before that (a font size or language change makes it again, and
+     * so does a reclaimed screen) gives it back, so the notice is not lost with it.
+     *
+     * The notice sends the person to Stop Server in the notification, and a phone
+     * with notifications turned off for the app shows none, so the dialog carries
+     * the same action under the notification's own label.
      */
     private fun showAwayFromHomeNotice(home: Int) {
+        awayFromHomeUnanswered = home
         fun show() {
             if (isFinishing || isDestroyed) return
             awayFromHomePendingShow = null
             awayFromHomeNotice = AlertDialog.Builder(this)
                 .setMessage(getString(R.string.notice_editor_away_from_home, home))
                 .setPositiveButton(android.R.string.ok, null)
-                .setOnDismissListener { flushPendingNoticeAfterCrash() }
+                .setNeutralButton(R.string.action_stop) { _, _ ->
+                    startService(Intent(this, NodeService::class.java).setAction(NodeService.ACTION_STOP))
+                }
+                .setOnDismissListener { awayFromHomeAnswered() }
                 .show()
         }
         val crash = crashDialog
@@ -3505,7 +3526,7 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         }
         val away = awayFromHomeNotice
         if (away != null && away.isShowing) {
-            away.setOnDismissListener { flushPendingNoticeAfterCrash() }
+            away.setOnDismissListener { awayFromHomeAnswered() }
             return
         }
         flushPendingNoticeAfterCrash()
@@ -3513,6 +3534,18 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
 
     override fun clearBlockingNoticeWaiter() {
         pendingNoticeAfterCrash = null
+    }
+
+    private fun awayFromHomeAnswered() {
+        awayFromHomeUnanswered = 0
+        flushPendingNoticeAfterCrash()
+    }
+
+    private fun returnUnansweredAwayFromHome() {
+        val home = awayFromHomeUnanswered
+        if (home <= 0) return
+        awayFromHomeUnanswered = 0
+        EditorGateway.instance.noteAwayFromHome(home)
     }
 
     private fun flushPendingNoticeAfterCrash() {

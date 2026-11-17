@@ -48,7 +48,7 @@ class AwayFromHomeWiringTest {
     }
 
     @Test
-    fun `the notice is a dialog with the whole sentence, the platform's OK and no title`() {
+    fun `the notice is a dialog with the whole sentence, the platform's OK, Stop Server and no title`() {
         val notice = SourceScan.body(main, "private fun showAwayFromHomeNotice(")
         assertTrue(
             notice.contains("AlertDialog.Builder(this)"),
@@ -62,13 +62,67 @@ class AwayFromHomeWiringTest {
             notice.contains(".setPositiveButton(android.R.string.ok, null)"),
             "the dialog's one button is no longer the platform's OK",
         )
-        for (call in listOf("setTitle", "setNegativeButton", "setNeutralButton", "Toast")) {
+        for (call in listOf("setTitle", "setNegativeButton", "Toast")) {
             assertFalse(
                 notice.contains(call),
-                "the notice gained $call; it is one message and the platform's OK, so that no " +
-                    "new string needs translating",
+                "the notice gained $call; it is one message, the platform's OK and the " +
+                    "notification's own Stop Server, so that no new string needs translating",
             )
         }
+        assertTrue(
+            notice.contains(".setNeutralButton(R.string.action_stop)") &&
+                notice.contains("setAction(NodeService.ACTION_STOP)"),
+            "the notice sends the person to Stop Server in the notification, and a phone with " +
+                "notifications turned off shows none: the dialog has to offer the same action",
+        )
+    }
+
+    /**
+     * The service hands the home port out once. A dialog nobody answered, taken down with its
+     * activity (a font size or language change makes the activity again) or by a crash page, was
+     * the only explanation of where the settings went, so the port goes back to the gateway and
+     * the next editor load says it again.
+     */
+    @Test
+    fun `a notice nobody answered is handed back when its screen is taken down`() {
+        val notice = SourceScan.body(main, "private fun showAwayFromHomeNotice(")
+        assertTrue(
+            notice.indexOf("awayFromHomeUnanswered = home") in 0 until notice.indexOf("fun show()"),
+            "the port is not kept from the moment the notice is asked for, so one still waiting " +
+                "behind the previous-crash dialog is lost with its activity",
+        )
+        assertTrue(
+            notice.contains(".setOnDismissListener { awayFromHomeAnswered() }"),
+            "answering the dialog no longer ends the keeping of its port",
+        )
+        assertTrue(
+            SourceScan.body(main, "private fun awayFromHomeAnswered(").contains("awayFromHomeUnanswered = 0"),
+            "an answered notice would be said again by the next activity",
+        )
+        val back = SourceScan.body(main, "private fun returnUnansweredAwayFromHome(")
+        assertTrue(
+            back.contains("EditorGateway.instance.noteAwayFromHome(home)") && back.contains("awayFromHomeUnanswered = 0"),
+            "the unanswered port no longer goes back to the gateway, or goes back twice",
+        )
+        val destroy = SourceScan.body(main, "override fun onDestroy(")
+        assertTrue(
+            destroy.contains("if (!isFinishing) returnUnansweredAwayFromHome()"),
+            "an activity the system takes down no longer hands the notice to the one made in its " +
+                "place, or an app that is closing hands it to nobody",
+        )
+        assertTrue(
+            destroy.contains("awayFromHomeNotice?.takeIf { it.isShowing }?.dismiss()"),
+            "a dialog left up when its activity is destroyed is a leaked window",
+        )
+        assertTrue(
+            SourceScan.body(main, "private fun showErrorPage(").contains("returnUnansweredAwayFromHome()"),
+            "a crash page takes the notice down for good, and the load after it says nothing",
+        )
+        assertTrue(
+            SourceScan.body(main, "override fun waitForBlockingNoticeDismiss(")
+                .contains("away.setOnDismissListener { awayFromHomeAnswered() }"),
+            "a notice waiting behind this dialog replaces its dismiss listener, and the answer is lost",
+        )
     }
 
     @Test
