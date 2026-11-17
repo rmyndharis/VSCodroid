@@ -165,9 +165,11 @@ class SafDataPreservationInstrumentedTest {
 
         assertTrue("Reopening removed the only undelivered edit", local.isFile)
         assertArrayEquals("The only undelivered bytes changed", undelivered, local.readBytes())
+        // The digest tells this copy from the recorded one, so it goes back at this open and not the next.
         val stats = control("stats")
-        assertFalse("The same reopen recreated the provider document", stats.getBoolean("exists"))
-        assertEquals("The same reopen uploaded the unproved mirror copy", createsBeforeDeletion, stats.getInt("createCalls"))
+        assertTrue("The reopen did not put the undelivered edit back on the device", stats.getBoolean("exists"))
+        assertEquals("The reopen made more than the one document", createsBeforeDeletion + 1, stats.getInt("createCalls"))
+        assertArrayEquals("The device did not get the undelivered bytes", undelivered, providerBytes())
     }
 
     @Test
