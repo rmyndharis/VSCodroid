@@ -15,6 +15,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - On Android 12 and later the low storage warning is shown; it was dropped before the screen could show it.
 - The action button of a toolchain card shows its whole label at the largest font and display sizes.
 - The action button of a toolchain card shows its whole label at the largest font and display sizes.
+- An install made on Android 10 keeps its projects folder in the app's storage after the phone is updated, even when another app has made a folder of that name on shared storage.
 
 ## [1.9.0] - 2026-11-16
 
