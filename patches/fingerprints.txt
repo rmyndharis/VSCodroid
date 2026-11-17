@@ -367,12 +367,18 @@
 0043 regular-file check in serveFile|out/server-main.js|Not a regular file:
 0044 gesture target inside a shadow root|out/vs/code/browser/workbench/workbench.js|composedPath()[0]
 0045 color picker opened by a swatch tap|out/vs/code/browser/workbench/workbench.js|closest(".colorpicker-color-decoration")
+# 0046's own text in the bundle is the saved mark and the clause that reads it at the restart. The bare member this._compositionOpen cannot stand for the patch: the
+# rules of 0050 read it as well, so a count of it is met with 0046's own uses gone. Nor can the four places that set and clear it: they assign booleans, which the minifier
+# writes as !0 and !1, and no text found in the patch matches those. Those listeners are run on the patched source by scripts/check-editcontext-ime.js.
 0046 editcontext composition snapshot|out/vs/code/browser/workbench/workbench.js|composing:
-0046 editcontext composition tracking|out/vs/code/browser/workbench/workbench.js x6|this._compositionOpen
+0046 open composition read at the restart (set and cleared by listeners that check-editcontext-ime.js runs)|out/vs/code/browser/workbench/workbench.js|.composing&&this._compositionOpen)
 0047 editcontext initial cursor|out/vs/code/browser/workbench/workbench.js|getPrimaryCursorState().modelState.selection
 0047 editcontext initial window|out/vs/code/browser/workbench/workbench.js|this._primarySelection.startLineNumber
-0048 unchanged input text|out/vs/code/browser/workbench/workbench.js|this._previousEditContextText.slice(
-0048 unchanged input bounds|out/vs/code/browser/workbench/workbench.js|this._previousEditContextText.length
+# 0049 moved 0048's test into _isSelectionOnly, so every line of it in the bundle is one 0049 wrote again, and the cache reads it is made of,
+# this._previousEditContextText.slice( and this._previousEditContextText.length, are written a dozen times each by 0049 and 0050: a row on either is met with 0048's
+# test gone. The one piece of the test that no other patch writes is its single-cursor alternative. What the test decides is run on the patched source by
+# scripts/check-editcontext-ime.js.
+0048 unchanged input, a moved selection with one cursor only (the test sits in _isSelectionOnly since 0049; check-editcontext-ime.js runs it)|out/vs/code/browser/workbench/workbench.js|getCursorStates().length===1
 0049 same text at every cursor|out/vs/code/browser/workbench/workbench.js|this._cursorsHoldSameText(
 0049 several cursors|out/vs/code/browser/workbench/workbench.js|getCursorStates().length>1
 0049 buffer held while cursors go|out/vs/code/browser/workbench/workbench.js|this._dismissingCursors
@@ -394,10 +400,6 @@
 0050 bound on forced restarts|out/vs/code/browser/workbench/workbench.js|this._refusalRestarts<6
 # The call that follows an edit the editor applied: it marks the composition as typed and starts the restart count again.
 0050 flag and count after an applied edit|out/vs/code/browser/workbench/workbench.js|this._afterAppliedEdit(
-# The test for the next letter arriving over the stale range of a refusal that stands.
-0050 typed over a stale range|out/vs/code/browser/workbench/workbench.js|this._isTypedOverStaleRange(
-# The record of a refusal that stands, for the range and the buffer it was made on, until the model is edited or a composition starts.
-0050 refusal stands for its range until the model is edited|out/vs/code/browser/workbench/workbench.js|this._standingRefusal=
 # The test for one letter written over a reopened word of more than one unit.
 0050 one unit written over a reopened word|out/vs/code/browser/workbench/workbench.js|this._isOneUnitOverWord(
 # The restart count is kept for one version of the model and starts again when the model changes.

@@ -301,8 +301,12 @@ async function main() {
         // Docker Compose, GraphQL and Vue. Contributing language-scoped
         // configurationDefaults entries puts Prettier in the DEFAULT scope
         // (defaultOverrides) for those sixteen shipped languages without setting
-        // a global editor.defaultFormatter that would claim Python or Ignore,
-        // and without outranking a user or workspace setting.
+        // a global editor.defaultFormatter that would claim Python or Ignore.
+        // A formatter the user or a workspace names for one of these languages
+        // still wins, because it lands in the same language override and is
+        // merged over this default. A root editor.defaultFormatter does not:
+        // VS Code applies every language override after the merge, so this
+        // default outranks it for these sixteen languages.
         const PRETTIER_ID = 'esbenp.prettier-vscode';
         const EXPECTED_FORMATTER_LANGUAGES = [
             'css',

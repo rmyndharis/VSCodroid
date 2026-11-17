@@ -920,7 +920,11 @@ class NodeService : Service() {
 
     private fun reportStartupNotice(message: String, terminal: Boolean = false) {
         startupNotice = StartupNotice(message, terminal)
-        onServerError?.invoke(message)
+        // A terminal notice is followed at once by [onServerGaveUp], whose page says it to a client
+        // already bound, and is recorded above for one that binds later. Raised here as well it was a
+        // notice that page took down the moment it came up: a dialog that flashed wherever the text is
+        // too long for a toast.
+        if (!terminal) onServerError?.invoke(message)
     }
 
     /**

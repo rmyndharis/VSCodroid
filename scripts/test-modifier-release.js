@@ -274,6 +274,27 @@ function newPage({ emitter = true } = {}) {
         navigator: { userAgent: 'Chrome/153.0.0.0' },
         setTimeout: (fn) => { page.timers.push(fn); },
     });
+    // The terminal script shipped beside this one, taken from the source as it is. It only
+    // acts on xterm's own textarea, and it wraps setTimeout and listens to blur, which is
+    // what a composed chord there meets: each case below runs with both installed, as in the page.
+    {
+        const activity = fs.readFileSync(path.join(
+            __dirname, '..', 'android/app/src/main/kotlin/com/vscodroid/MainActivity.kt',
+        ), 'utf8');
+        const terminalScript = activity.split('private fun injectTerminalTypedCharacters()')[1].split('"""')[1];
+        assert.ok(terminalScript.includes('__vscodroidTerminalTypedCharacters'), 'the terminal script was not found in MainActivity.kt');
+        let nextTimerId = 0;
+        const cancelled = new Set();
+        window.setTimeout = (fn, delay, ...args) => {
+            const id = ++nextTimerId;
+            page.timers.push(() => { if (!cancelled.has(id)) fn(...args); });
+            return id;
+        };
+        window.clearTimeout = (id) => { cancelled.add(id); };
+        vm.runInContext('var window = this.window;' + terminalScript, page.context);
+        // The model's own timers go through the page's setTimeout, as xterm's do.
+        page.context.setTimeout = (...args) => window.setTimeout(...args);
+    }
     return page;
 }
 
@@ -765,6 +786,7 @@ function terminal(page, workbench = () => false) {
         const suffix = h.suffix;
         h.sending = true;
         page.context.setTimeout(() => {
+            // xterm's send of an ended composition: this._isSendingComposition
             if (!h.sending) return;
             h.sending = false;
             let r;
@@ -785,7 +807,7 @@ function terminal(page, workbench = () => false) {
         h.suffix = box.value.substring(h.end);
     });
     box.addEventListener('compositionupdate', () => {
-        page.context.setTimeout(() => { h.end = Math.max(h.start, box.selectionEnd); });
+        page.context.setTimeout(() => { /* xterm: this._compositionPosition.end */ h.end = Math.max(h.start, box.selectionEnd); });
     });
     box.addEventListener('compositionend', () => finalize(true));
     let reading = false;

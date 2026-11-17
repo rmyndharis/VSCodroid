@@ -3,6 +3,7 @@ package com.vscodroid
 import android.webkit.ValueCallback
 import android.webkit.WebView
 import com.vscodroid.bridge.AuthTabWindow
+import com.vscodroid.keyboard.KeyboardDismissal
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.slot
@@ -15,6 +16,7 @@ import org.junit.jupiter.api.Test
 class KeyboardRotationCallSiteTest {
     private lateinit var activity: MainActivity
     private lateinit var view: WebView
+    private lateinit var dismissal: KeyboardDismissal
     private val events = mutableListOf<String>()
     private val reply = slot<ValueCallback<String>>()
 
@@ -36,6 +38,10 @@ class KeyboardRotationCallSiteTest {
         activity = mockk(relaxed = true)
         view = mockk(relaxed = true)
         setView(view)
+        // The activity is a mock, so the field its constructor would have filled is put in by hand.
+        dismissal = mockk(relaxed = true)
+        MainActivity::class.java.getDeclaredField("keyboardDismissal").apply { isAccessible = true }.set(activity, dismissal)
+        every { dismissal.noRefocus() } answers { events += "no refocus" }
         every { activity.isFinishing } returns false
         every { activity.isDestroyed } returns false
         every { view.isFocused } returns true
@@ -60,10 +66,25 @@ class KeyboardRotationCallSiteTest {
     }
 
     @Test
-    fun `a page without an eligible editing host keeps native focus`() {
+    fun `a page without an eligible editing host keeps native focus, and its no ends the wait for a refocus`() {
         turn()
-        for (value in listOf("false", "null", "\"true\"", "{}")) reply.captured.onReceiveValue(value)
-        assertEquals(listOf("evaluate"), events)
+        for (value in listOf("null", "\"true\"", "{}")) reply.captured.onReceiveValue(value)
+        assertEquals(listOf("evaluate"), events, "an answer that is not the page's no was taken for one")
+        reply.captured.onReceiveValue("false")
+        assertEquals(
+            listOf("evaluate", "no refocus"), events,
+            "the page's no did not reach the dismissal, so a keyboard put away after the turn is left to the turn until its cap",
+        )
+    }
+
+    @Test
+    fun `the answer to an earlier turn says nothing about the one after it`() {
+        turn()
+        val first = reply.captured
+        turn()
+        first.onReceiveValue("false")
+        first.onReceiveValue("true")
+        assertEquals(listOf("evaluate", "evaluate"), events)
     }
 
     @Test
@@ -71,6 +92,7 @@ class KeyboardRotationCallSiteTest {
         turn()
         AuthTabWindow.beginPage()
         reply.captured.onReceiveValue("true")
+        reply.captured.onReceiveValue("false")
         assertEquals(listOf("evaluate"), events)
     }
 

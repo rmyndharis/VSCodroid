@@ -638,7 +638,11 @@ class KeyInjector(
                         // editors and the terminal tab rename box do, would
                         // commit the letter and close. See the KDoc.
                         if (document.activeElement === box && box.classList.contains('xterm-helper-textarea')) {
-                            box.blur();
+                            // Marked, so the terminal script's blur hook leaves the send of the
+                            // composition this blur ends to xterm's own timer, which runs after the
+                            // field's text is put back below.
+                            window.__vscodroidChordBlur = box;
+                            try { box.blur(); } finally { window.__vscodroidChordBlur = null; }
                             box.focus();
                         }
                         if (untouched) {

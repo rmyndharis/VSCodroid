@@ -177,6 +177,49 @@ class EnvironmentTest {
 
             assertEquals(legacy.absolutePath, Environment.projectsDirFor(context, 30))
         }
+
+        /**
+         * An install made on Android 10 works in the internal folder, and something else can make
+         * the folder on shared storage while the phone is still on 10. The update to 11 then removes
+         * the guard above, and the install must not be moved onto what that something put there:
+         * the default workspace would change under it and `.bashrc` would go on exporting the old
+         * path. The install's own `~/projects` link is the record of which folder it uses.
+         */
+        @Test
+        fun `an Android 10 install keeps its internal folder when a shared-storage one appears before the update`() {
+            val internal = File(projectsFilesDir, "projects")
+            val link = File(projectsFilesDir, "home/projects")
+            assertTrue(internal.mkdirs(), "could not stage the internal folder")
+            assertTrue(link.parentFile!!.mkdirs(), "could not stage the home directory")
+            Files.createSymbolicLink(link.toPath(), internal.toPath())
+            assertTrue(legacy.mkdirs(), "could not stage the directory another app made")
+
+            assertEquals(internal.absolutePath, Environment.projectsDirFor(context, 30))
+            assertEquals(internal.absolutePath, Environment.projectsDirFor(context, 34))
+        }
+
+        /** The control: an older install whose link names shared storage stays there when both exist. */
+        @Test
+        fun `an install whose link names shared storage keeps it when the internal folder exists too`() {
+            val internal = File(projectsFilesDir, "projects")
+            val link = File(projectsFilesDir, "home/projects")
+            assertTrue(internal.mkdirs(), "could not stage the internal folder")
+            assertTrue(link.parentFile!!.mkdirs(), "could not stage the home directory")
+            assertTrue(legacy.mkdirs(), "could not stage the directory an older release made")
+            Files.createSymbolicLink(link.toPath(), legacy.toPath())
+
+            assertEquals(legacy.absolutePath, Environment.projectsDirFor(context, 30))
+        }
+
+        /** With no record, as before: the folder on shared storage is the older install's. */
+        @Test
+        fun `with no link and both folders present the shared-storage one is kept`() {
+            val internal = File(projectsFilesDir, "projects")
+            assertTrue(internal.mkdirs(), "could not stage the internal folder")
+            assertTrue(legacy.mkdirs(), "could not stage the directory an older release made")
+
+            assertEquals(legacy.absolutePath, Environment.projectsDirFor(context, 30))
+        }
     }
 
     @Nested

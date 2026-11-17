@@ -45,6 +45,8 @@ class KeyboardDismissal(
 ) {
     private var turnedAt: Long? = null
     private var refocusedAt: Long? = null
+    // False once the page has answered that this turn makes no refocus: see noRefocus.
+    private var refocusComing = true
     private var backAt: Long? = null
     private var edgeAt: Long? = null
     // The times of the Back key's and the pair's own events, set with backAt and edgeAt: the age the page is given runs from them.
@@ -98,6 +100,7 @@ class KeyboardDismissal(
      * Always within [TURN_FLOOR_MS] of the turn. Beyond it only for a turn that found the keyboard up, which is the one the system takes the keyboard
      * from after the transition, and then until [AFTER_REFOCUS_MS] after the refocus the turn makes, or while that refocus is still to come, and never
      * past [TURN_CAP_MS]. A keyboard that was down at the turn gets the floor and no more: the report that follows is a keyboard shown and put away after it.
+     * So does a turn the page answered with no refocus ([noRefocus]): there is none to wait for.
      */
     private fun turnOwns(at: Long): Boolean {
         if (claimEnded) return false
@@ -105,7 +108,7 @@ class KeyboardDismissal(
         val age = at - turn
         if (age < TURN_FLOOR_MS) return true
         if (!upAtTurn || age >= TURN_CAP_MS) return false
-        val refocus = refocusedAt ?: return true
+        val refocus = refocusedAt ?: return refocusComing
         return at - refocus < AFTER_REFOCUS_MS
     }
 
@@ -180,6 +183,7 @@ class KeyboardDismissal(
         val putAwayAge = backAge ?: pairAge
         upAtTurn = putAwayAge == null && (visibleNow || hidePending || (turnOwns(at) && upAtTurn))
         refocusedAt = null
+        refocusComing = true
         if (backAge != null) backAt = null
         edgeAt = null
         edgeCompletedDownAt = null
@@ -203,6 +207,18 @@ class KeyboardDismissal(
         val turn = turnedAt ?: return
         if (!upAtTurn || now() - turn >= TURN_CAP_MS) return
         if (refocusedAt == null) refocusedAt = now()
+    }
+
+    /**
+     * The page answered that this turn makes no refocus: the focus is not in an editing host (it is in Quick Open, the find box, the Search view's
+     * input, a rename box), or it is in one the page does not refocus (not aimed at text, a terminal word still being composed, text that changed
+     * while the turn waited). With none to wait for, the turn's claim ends at [TURN_FLOOR_MS], and a keyboard reported hidden after it is the
+     * person's, as it was for every turn before the refocus existed. Left to [TURN_CAP_MS], a keyboard put away with a Back the activity does not
+     * see was never told to the page, and the next touch raised it again. A focus the WebView takes all the same still starts [AFTER_REFOCUS_MS]
+     * ([refocused]), and the next turn waits for its own answer.
+     */
+    fun noRefocus() {
+        refocusComing = false
     }
 
     /**
@@ -249,7 +265,7 @@ class KeyboardDismissal(
     fun describe(): String {
         val at = now()
         fun age(t: Long?) = t?.let { "${at - it}ms" } ?: "none"
-        return "turnAge=${age(turnedAt)} refocusAge=${age(refocusedAt)} backAge=${age(backAt)} edgeAge=${age(edgeAt)} upAtTurn=$upAtTurn claimEnded=$claimEnded"
+        return "turnAge=${age(turnedAt)} refocusAge=${age(refocusedAt)} backAge=${age(backAt)} edgeAge=${age(edgeAt)} upAtTurn=$upAtTurn claimEnded=$claimEnded refocusComing=$refocusComing"
     }
 
     /** The activity is going away. */
@@ -278,7 +294,9 @@ class KeyboardDismissal(
         /**
          * The latest a report is the turn's, however long the refocus takes. The first hidden reports after a turn came 0.44, 1.75, 3.29 and 5.89 s after it on
          * runs where the system took the keyboard away, 6.77 s after the turn's finish in another turn-transition hide, and 12.08 s on Android 16 while the
-         * keyboard rebuilt under host load 200 to 284. A refocus that has not been made by then is not coming (the app makes it only for a page aimed at text).
+         * keyboard rebuilt under host load 200 to 284. A refocus that has not been made by then is not coming. The cap is for a refocus that is late, not
+         * for one that is never made: the app makes it only for an editing host aimed at text, and where the page says there is none ([noRefocus]) the
+         * claim ends at [TURN_FLOOR_MS].
          */
         const val TURN_CAP_MS = 13_000L
 

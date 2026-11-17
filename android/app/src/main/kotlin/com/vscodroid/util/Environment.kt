@@ -389,7 +389,16 @@ object Environment {
         if (sdkInt == Build.VERSION_CODES.Q) return internal
         val externalDir = context.getExternalFilesDir(null) ?: return internal
         val legacy = File(externalDir, "projects")
-        if (legacy.isDirectory) return legacy.absolutePath
+        if (legacy.isDirectory) {
+            // Something else can make this folder while the phone is still on Android 10 (see above),
+            // and it is there when an update takes the phone to 11 or later. An install that has been
+            // working in the internal folder says so in its `~/projects` link and is not moved by it.
+            // Read only when both folders exist, so an install with no folder of its own on shared
+            // storage still costs one stat.
+            val keptInternal = File(internal).isDirectory &&
+                runCatching { Os.readlink("$filesDir/home/projects") }.getOrNull() == internal
+            return if (keptInternal) internal else legacy.absolutePath
+        }
         // Answered before the link is read, so the ordinary case costs one stat
         // and no syscall: once either directory is there, that is the answer.
         if (File(internal).isDirectory) return internal

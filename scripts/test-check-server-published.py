@@ -166,7 +166,7 @@ class ServerPublishedTest(unittest.TestCase):
 
     def test_every_script_the_build_runs_is_an_input(self):
         build = (ROOT / "scripts/build-vscode-oss.sh").read_text()
-        ran = {f"scripts/{name}" for name in re.findall(r"\$SCRIPT_DIR/([\w.-]+\.py)", build)}
+        ran = {f"scripts/{name}" for name in re.findall(r"\$SCRIPT_DIR/([\w.-]+\.(?:py|js))", build)}
         self.assertTrue(ran, "build-vscode-oss.sh runs no script by that pattern; update this test")
         self.assertEqual(ran - set(INPUTS), set(), "run by the build, absent from its cache key")
 

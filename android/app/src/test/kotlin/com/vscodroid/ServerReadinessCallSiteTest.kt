@@ -52,7 +52,7 @@ class ServerReadinessCallSiteTest {
         events.clear()
         now = 400_000L
         AuthTabWindow.beginPage()
-        mockEditorGateway()
+        mockEditorGateway().bind(13337)
         mockkObject(Logger)
         every { Logger.i(any(), any()) } just Runs
         every { Logger.w(any(), any()) } just Runs

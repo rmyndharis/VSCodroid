@@ -142,6 +142,14 @@ void __assert_fail(const char *assertion, const char *file, unsigned line,
  * so that EOF (-1) indexes validly. The table is built once with the C locale,
  * which is what these addons run under anyway.
  *
+ * Each is built at load, not by whichever call comes first. A table published
+ * by a plain flag can be read by a second thread that sees the flag ahead of
+ * the entries, since arm64 does not order two plain stores. The release and
+ * acquire that publish each looked-up pointer further down are not enough for
+ * a table: two first callers would both fill it while a third reads it. A
+ * constructor is one writer, and it has returned before the loader lets
+ * anything that needs this library run.
+ *
  * The bit values are glibc's _ISbit(): bits 0-7 are shifted up a byte, bits
  * 8-11 down a byte, so the "obvious" hex guesses are wrong in both directions.
  * The first version of this table guessed, and got 5 of the 12 classes wrong -
@@ -162,35 +170,30 @@ void __assert_fail(const char *assertion, const char *file, unsigned line,
 #define SHIM_ISpunct  0x0004
 #define SHIM_ISalnum  0x0008
 
-static const unsigned short *ctype_b_table(void) {
-    static unsigned short table[384];
-    static const unsigned short *ptr;
-    if (!ptr) {
-        for (int c = 0; c < 256; c++) {
-            unsigned short f = 0;
-            if (c >= 'A' && c <= 'Z') f |= SHIM_ISupper | SHIM_ISalpha;
-            if (c >= 'a' && c <= 'z') f |= SHIM_ISlower | SHIM_ISalpha;
-            if (c >= '0' && c <= '9') f |= SHIM_ISdigit;
-            if ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))
-                f |= SHIM_ISxdigit;
-            if (f & (SHIM_ISalpha | SHIM_ISdigit)) f |= SHIM_ISalnum;
-            if (c == ' ' || (c >= '\t' && c <= '\r')) f |= SHIM_ISspace;
-            if (c == ' ' || c == '\t') f |= SHIM_ISblank;
-            if (c < 32 || c == 127) f |= SHIM_IScntrl;
-            if (c >= 33 && c <= 126) {
-                f |= SHIM_ISgraph;
-                if (!(f & SHIM_ISalnum)) f |= SHIM_ISpunct;
-            }
-            if (c >= 32 && c <= 126) f |= SHIM_ISprint;
-            table[c + 128] = f;
+static unsigned short ctype_b_table[384];
+
+__attribute__((constructor(101))) static void build_ctype_b_table(void) {
+    for (int c = 0; c < 256; c++) {
+        unsigned short f = 0;
+        if (c >= 'A' && c <= 'Z') f |= SHIM_ISupper | SHIM_ISalpha;
+        if (c >= 'a' && c <= 'z') f |= SHIM_ISlower | SHIM_ISalpha;
+        if (c >= '0' && c <= '9') f |= SHIM_ISdigit;
+        if ((c >= '0' && c <= '9') || (c >= 'a' && c <= 'f') || (c >= 'A' && c <= 'F'))
+            f |= SHIM_ISxdigit;
+        if (f & (SHIM_ISalpha | SHIM_ISdigit)) f |= SHIM_ISalnum;
+        if (c == ' ' || (c >= '\t' && c <= '\r')) f |= SHIM_ISspace;
+        if (c == ' ' || c == '\t') f |= SHIM_ISblank;
+        if (c < 32 || c == 127) f |= SHIM_IScntrl;
+        if (c >= 33 && c <= 126) {
+            f |= SHIM_ISgraph;
+            if (!(f & SHIM_ISalnum)) f |= SHIM_ISpunct;
         }
-        ptr = table + 128;
+        if (c >= 32 && c <= 126) f |= SHIM_ISprint;
+        ctype_b_table[c + 128] = f;
     }
-    return ptr;
 }
 const unsigned short **__ctype_b_loc(void) {
-    static const unsigned short *p;
-    p = ctype_b_table();
+    static const unsigned short *p = ctype_b_table + 128;
     return &p;
 }
 
@@ -207,29 +210,23 @@ const unsigned short **__ctype_b_loc(void) {
  * tables was compared against that dump and the rule below reproduces all of
  * them. None of 128..255 is a letter, so the case tests never fire there.
  */
-static const int *ctype_case_table(int want_upper) {
-    static int lower[384], upper[384];
-    static int built;
-    if (!built) {
-        for (int i = -128; i < 256; i++) {
-            int v = (i < -1) ? i + 256 : i;
-            lower[i + 128] = (v >= 'A' && v <= 'Z') ? v + 32 : v;
-            upper[i + 128] = (v >= 'a' && v <= 'z') ? v - 32 : v;
-        }
-        built = 1;
+static int ctype_lower_table[384], ctype_upper_table[384];
+
+__attribute__((constructor(101))) static void build_ctype_case_tables(void) {
+    for (int i = -128; i < 256; i++) {
+        int v = (i < -1) ? i + 256 : i;
+        ctype_lower_table[i + 128] = (v >= 'A' && v <= 'Z') ? v + 32 : v;
+        ctype_upper_table[i + 128] = (v >= 'a' && v <= 'z') ? v - 32 : v;
     }
-    return (want_upper ? upper : lower) + 128;
 }
 
 const int **__ctype_tolower_loc(void) {
-    static const int *p;
-    p = ctype_case_table(0);
+    static const int *p = ctype_lower_table + 128;
     return &p;
 }
 
 const int **__ctype_toupper_loc(void) {
-    static const int *p;
-    p = ctype_case_table(1);
+    static const int *p = ctype_upper_table + 128;
     return &p;
 }
 

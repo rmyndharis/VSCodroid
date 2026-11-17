@@ -237,7 +237,7 @@ class ExternalUrlHandoffTest {
         announced.clear()
         logged.clear()
         declined = 0
-        mockEditorGateway()
+        mockEditorGateway().bind(ALLOWED_PORT)
         mockkObject(Logger)
         every { Logger.i(any(), any()) } answers { logged += secondArg<String>() }
         every { Logger.e(any(), any(), any()) } answers { logged += secondArg<String>() }

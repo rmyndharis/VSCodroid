@@ -7,6 +7,22 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Saving a download over a file you already have no longer freezes the editor while a large file is copied into it.
+- In the terminal, Ctrl or Alt latched on the extra key row and then a letter typed on a keyboard that underlines words sends the control character alone again, without the letter before it.
+- On Android 12 and later the low storage warning is shown; it was dropped before the screen could show it.
+- The action button of a toolchain card shows its whole label at the largest font and display sizes.
+- An install made on Android 10 keeps its projects folder in the app's storage after the phone is updated, even when another app has made a folder of that name on shared storage.
+- A notice shown only once while the app runs, such as the one about a workspace that spans several device folders, waits for the app's return when it arrives in the background instead of being dropped.
+- On Android 12 and later, the notice that the server is taking longer than usual to start closes when the server starts instead of staying over the editor.
+- The notice that the server crashed repeatedly no longer appears for a moment under the page that says so.
+- The notice that another app is using the editor's port comes back after a font size or language change until it is answered, and offers Stop Server itself for a phone with notifications turned off.
+- The Toolchains shortcut opened while the setup that follows an update is running goes to the setup screen instead of installing over files still being unpacked.
+- A keyboard put away after the screen is turned stays down when a text box other than the editor has the focus, such as Quick Open or the find box; the next touch used to bring it back.
+- A file another app deleted from a device folder is no longer put back there when the app's copy of it could not be read as the folder opened.
+- An edit that lands just as the app removes its copy of a file another app deleted from a device folder is kept as `<name>.local-<time>` and a notice says so.
+
 ## [1.9.0] - 2026-11-16
 
 ### Added
@@ -18,9 +34,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The minimum Android version is now 10, down from 11.
 - Enter accepts an editor suggestion by default only when it changes the text, so pressing Enter after a word already in the file starts a new line.
-- Format Document uses the bundled Prettier for JavaScript, TypeScript, JSON, CSS, HTML and the other languages it covers without asking which formatter to use; a formatter chosen in Settings still wins.
+- Format Document uses the bundled Prettier for JavaScript, TypeScript, JSON, CSS, HTML and the other languages it covers without asking which formatter to use; a formatter chosen for one of those languages in Settings still wins, and one chosen for every language does not.
 - The Java toolchain checks HTTPS connections against Mozilla's list of trusted certificate authorities instead of OpenJDK's own.
 - A Java toolchain installed earlier keeps OpenJDK's certificate list until it is removed and installed again.
+- The low storage warning and the notice about a workspace that spans several device folders are shown once while the app runs, instead of at every start of its screen.
 
 ### Fixed
 
@@ -29,7 +46,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - In the terminal, a word still underlined is kept when Enter follows at once or the terminal loses focus.
 - The keyboard no longer goes away after a file is opened for the first time from Quick Open.
 - The keyboard no longer goes away a moment after the screen is turned, as it did on some phones.
-- A keyboard put away with Back stays down when the screen is turned right after, or while a word is still underlined.
+- A keyboard put away with Back stays down when the screen is turned right after, or while a word is still underlined, on a phone where Android gives the app the Back key.
 - After the screen is turned with the keyboard put away, a scroll no longer brings the keyboard back.
 - Turning the screen while the keyboard underlines a word no longer doubles the word, writes it over another word of the line or deletes text after the caret.
 - After a turn of the screen with a word underlined, the next letter typed can still, rarely, be lost or replace the word's last letter.
@@ -58,7 +75,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A long notice that arrives while the app is in the background is shown whole in a dialog at the next return to the app, unless the app's process ended in between.
 - The Chat side bar no longer opens for a moment on the first launch.
 - A download saved over an existing file replaces it whole instead of leaving the end of the old file behind.
-- A download that fails or is cancelled before it has fully arrived leaves the file it was to replace as it was; a failure while that file is being replaced can still leave it partly written.
+- A download that fails or is cancelled before it has fully arrived leaves the file it was to replace as it was, unless that file was empty, in which case it is removed; a failure while that file is being replaced can still leave it partly written.
 - The notice after a download names the file as it was saved when its name was changed in the save dialog.
 - `git log`, `git diff` and other paged git commands print in the terminal instead of stopping with a pager error.
 - Clone Repository in Source Control completes, with and without submodules.

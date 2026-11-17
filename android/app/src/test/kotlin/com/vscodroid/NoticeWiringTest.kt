@@ -93,7 +93,7 @@ class NoticeWiringTest {
             "a screen made again takes what its predecessor held before it looks for notices of its own",
         )
         assertTrue(
-            flush.contains("coordinators.getOrPut(activity) { NoticeDialogCoordinator() }.take(it)"),
+            flush.contains("coordinators.getOrPut(activity) { NoticeDialogCoordinator(onceKeys = shownOnceKeys) }.take(it)"),
             "what a screen made again takes goes into that screen's own coordinator",
         )
         for (member in listOf("override val isShowing: Boolean", "override fun dismiss()")) {
@@ -169,6 +169,49 @@ class NoticeWiringTest {
         assertTrue(
             helper.contains("ConcurrentHashMap.newKeySet<String>()"),
             "AppNotices process-once tracking must live on the process singleton rather than an Activity field",
+        )
+    }
+
+    /**
+     * "The server is taking longer than usual to start" is a dialog from Android 12, and nothing took
+     * it down when the server did start: it stayed over the working editor until it was tapped.
+     */
+    @Test
+    fun `the slow start notice is taken back when the server is ready`() {
+        val main = SourceScan.withoutComments(SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt"))
+        val callbacks = SourceScan.body(main, "private fun setupServiceCallbacks(")
+        val ready = callbacks.substringAfter("nodeService?.onServerReady = ").substringBefore("nodeService?.onServerError = ")
+
+        assertTrue(
+            ready.contains("AppNotices.retract(this, getString(R.string.status_server_slow_start))"),
+            "onServerReady no longer takes the slow start notice back",
+        )
+        val service = SourceScan.withoutComments(SourceScan.read("src/main/kotlin/com/vscodroid/service/NodeService.kt"))
+        assertTrue(
+            SourceScan.body(service, "private fun reportStartupNotice(").contains("if (!terminal) onServerError?.invoke(message)"),
+            "a terminal notice is raised as well as recorded again, and flashes as a dialog under the page " +
+                "that onServerGaveUp puts up at once",
+        )
+    }
+
+    /**
+     * From Android 12 the storage warning does not fit a toast, so it is a dialog, and an activity
+     * that has not started cannot show one: with a process-once key the notice is then neither shown
+     * nor remembered. `onCreate` runs before the start, so a call made there loses the warning for
+     * good. It is posted to the window instead, which runs once the activity has started.
+     */
+    @Test
+    fun `the storage warning is not asked for from onCreate before the activity has started`() {
+        val main = SourceScan.withoutComments(SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt"))
+        val create = SourceScan.body(main, "override fun onCreate(")
+
+        assertTrue(
+            create.contains("window.decorView.post { checkStorageHealth() }"),
+            "onCreate must post checkStorageHealth to the window so that a dialog can be shown",
+        )
+        assertFalse(
+            Regex("""(?<!\{ )\bcheckStorageHealth\(\)(?! \})""").containsMatchIn(create),
+            "onCreate calls checkStorageHealth directly, before the activity can show a dialog",
         )
     }
 }

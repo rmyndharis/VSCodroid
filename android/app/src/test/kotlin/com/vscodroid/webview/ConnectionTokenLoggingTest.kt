@@ -77,7 +77,7 @@ class ConnectionTokenLoggingTest {
     fun setUp() {
         logged.clear()
 
-        mockEditorGateway()
+        mockEditorGateway().bind(41234)
         mockkObject(Logger)
         every { Logger.d(any(), any()) } answers { logged += secondArg<String>() }
         every { Logger.i(any(), any()) } answers { logged += secondArg<String>() }

@@ -81,6 +81,7 @@ import com.vscodroid.keyboard.ExtraKeyRow
 import com.vscodroid.keyboard.HardwareTyping
 import com.vscodroid.keyboard.KeyInjector
 import com.vscodroid.keyboard.KeyboardDismissal
+import com.vscodroid.service.EditorGateway
 import com.vscodroid.service.NodeService
 import com.vscodroid.service.StartupNotice
 import com.vscodroid.setup.FirstRunSetup
@@ -289,6 +290,10 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
     private var crashDialog: AlertDialog? = null
     private var awayFromHomeNotice: AlertDialog? = null
     private var awayFromHomePendingShow: (() -> Unit)? = null
+
+    // The home port of an away-from-home notice the person has not answered yet, or 0. An activity
+    // taken down before the answer gives it back to the gateway, so the one made in its place says it.
+    private var awayFromHomeUnanswered = 0
     private var pendingNoticeAfterCrash: (() -> Unit)? = null
 
     /**
@@ -643,7 +648,8 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         }
 
         /**
-         * Deletes a document a failed download created.
+         * Deletes a document a failed download created, or an empty one the user chose to overwrite:
+         * the two cannot be told apart, and the coordinator asks only for a document it measured empty.
          *
          * The picker creates the file when the user confirms the name, so by
          * the time anything can go wrong there is already a file in their
@@ -940,7 +946,10 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         requestNotificationPermission()
         startAndBindService()
         checkPreviousCrash()
-        checkStorageHealth()
+        // Once the window is attached, which is after the activity has started: from Android 12 the
+        // warning is too long for a toast and is a dialog, and a screen that has not started cannot show
+        // one, so a call made here was neither shown nor remembered and the warning never appeared.
+        window.decorView.post { checkStorageHealth() }
         checkWebViewVersion()
         // Reading it here, and not only in onNewIntent, is what makes a sign-in
         // survive the app being killed while the browser had the screen. See
@@ -1310,6 +1319,10 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         crashDialog?.setOnDismissListener(null)
         awayFromHomePendingShow = null
         awayFromHomeNotice?.setOnDismissListener(null)
+        // Taken down with its screen, which the platform otherwise reports as a leaked window, and
+        // handed back unless the app is closing: see [awayFromHomeUnanswered].
+        awayFromHomeNotice?.takeIf { it.isShowing }?.dismiss()
+        if (!isFinishing) returnUnansweredAwayFromHome()
         AppNotices.drop(this, carry = true)
         webView?.destroy()
         webView = null
@@ -1413,6 +1426,10 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                     if (!targetView.isFocused || !targetView.hasWindowFocus()) return@evaluateJavascript
                     targetView.clearFocus()
                     targetView.requestFocus()
+                } else if (editable == "false") {
+                    // No refocus follows the page's no, so the turn stops waiting for one: a keyboard
+                    // put away over Quick Open or the find box is then the person's after the floor.
+                    keyboardDismissal.noRefocus()
                 }
             }
         }
@@ -2954,6 +2971,9 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
             // offers has a port to load when the user does ask.
             serverPort = port
             runOnUiThread {
+                // "Taking longer than usual to start" is over. From Android 12 it is a dialog, which
+                // stayed over the working editor until it was tapped.
+                AppNotices.retract(this, getString(R.string.status_server_slow_start))
                 // A server that came back on its own is not the user asking, and
                 // the crash page has told them the editor stays down until they
                 // do. Loading here anyway ran the loop that page exists to stop
@@ -3217,6 +3237,8 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         awayFromHomePendingShow = null
         awayFromHomeNotice?.setOnDismissListener(null)
         if (!isFinishing && !isDestroyed) awayFromHomeNotice?.dismiss()
+        // Not answered, so the editor load that follows this page says it again.
+        returnUnansweredAwayFromHome()
         AppNotices.drop(this)
         val retry = getString(R.string.error_server_retry)
         // The diagnostics half of the page, and the two parts of it travel
@@ -3457,17 +3479,27 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
      *
      * It never covers a crash screen. A previous-crash dialog still open is
      * answered first, and [showErrorPage] takes the notice down or drops it.
-     * Nothing here records that it was shown: the service hands the port out
-     * once per process, so an activity recreated in it has nothing to show.
+     * The service hands the port out once per process. Until the person answers
+     * the dialog the port is kept in [awayFromHomeUnanswered], and an activity
+     * taken down before that (a font size or language change makes it again, and
+     * so does a reclaimed screen) gives it back, so the notice is not lost with it.
+     *
+     * The notice sends the person to Stop Server in the notification, and a phone
+     * with notifications turned off for the app shows none, so the dialog carries
+     * the same action under the notification's own label.
      */
     private fun showAwayFromHomeNotice(home: Int) {
+        awayFromHomeUnanswered = home
         fun show() {
             if (isFinishing || isDestroyed) return
             awayFromHomePendingShow = null
             awayFromHomeNotice = AlertDialog.Builder(this)
                 .setMessage(getString(R.string.notice_editor_away_from_home, home))
                 .setPositiveButton(android.R.string.ok, null)
-                .setOnDismissListener { flushPendingNoticeAfterCrash() }
+                .setNeutralButton(R.string.action_stop) { _, _ ->
+                    startService(Intent(this, NodeService::class.java).setAction(NodeService.ACTION_STOP))
+                }
+                .setOnDismissListener { awayFromHomeAnswered() }
                 .show()
         }
         val crash = crashDialog
@@ -3498,7 +3530,7 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         }
         val away = awayFromHomeNotice
         if (away != null && away.isShowing) {
-            away.setOnDismissListener { flushPendingNoticeAfterCrash() }
+            away.setOnDismissListener { awayFromHomeAnswered() }
             return
         }
         flushPendingNoticeAfterCrash()
@@ -3506,6 +3538,18 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
 
     override fun clearBlockingNoticeWaiter() {
         pendingNoticeAfterCrash = null
+    }
+
+    private fun awayFromHomeAnswered() {
+        awayFromHomeUnanswered = 0
+        flushPendingNoticeAfterCrash()
+    }
+
+    private fun returnUnansweredAwayFromHome() {
+        val home = awayFromHomeUnanswered
+        if (home <= 0) return
+        awayFromHomeUnanswered = 0
+        EditorGateway.instance.noteAwayFromHome(home)
     }
 
     private fun flushPendingNoticeAfterCrash() {
@@ -4471,7 +4515,11 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
      * the host, for as long as it was watched; with the hook replaced by a
      * function that does nothing it stayed up. [KeyboardDismissal] therefore
      * calls the hook half a second after the report, and not if the keyboard is
-     * back by then or the configuration changed within two seconds. The cost is
+     * back by then or a change of configuration explains the report: any report
+     * within two seconds of it, and where a turn found the keyboard up and the
+     * app refocuses the editor for it, one until
+     * [KeyboardDismissal.AFTER_REFOCUS_MS] after that refocus
+     * ([KeyboardDismissal.TURN_CAP_MS] after the turn at most). The cost is
      * that a scroll in that half second can raise a keyboard put away with Back,
      * as it did before the hold existed. Not measured: switching keyboards with
      * the globe key and leaving the app with the keyboard up, either of which
@@ -4551,8 +4599,9 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
      * with it.
      *
      * The same script ends a word the keyboard is still composing when a key or
-     * a tap moves the editor's caret, or when [onConfigurationChanged] calls
-     * `window.__vscodroidFinishComposition` on a turn of the screen. Chromium
+     * a tap moves the editor's caret, or when [onConfigurationChanged] asks for it on a turn of
+     * the screen (`window.__vscodroidFinishCompositionOnTurn`, through
+     * [finishKeyboardCompositionOnTurn]). Chromium
      * keeps an EditContext composition's range where it was when the page moves
      * the selection (crbug 379170477), so with a keyboard that composes, moving
      * the caret while a word was underlined made the keyboard's next edit land
@@ -6169,6 +6218,9 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                 window.addEventListener('blur', function(e) {
                     // xterm empties its field in the field's own blur handler, and the compositionend of a word the
                     // blur commits comes just before it, in the same task: send what is pending while the field holds it.
+                    // Not for the blur the key row's chord makes over a composing letter: that one puts the field's
+                    // own text back right after, and xterm's send has to read it then, as it always did.
+                    if (e.target === window.__vscodroidChordBlur) return;
                     finishEnded(e.target);
                 }, true);
                 window.addEventListener('compositionend', function(e) {

@@ -225,13 +225,13 @@
     <string name="shortcut_toolchains_short">툴체인</string>
     <string name="shortcut_toolchains_long">툴체인 관리</string>
     <string name="toolchain_size_download_and_installed">다운로드 %1$s, 설치 후 %2$s</string>
-    <!-- Shown when a save could not be written out to the device folder. Names the
-         consequence rather than the error: the user's next decision is whether to
-         copy the file out before uninstalling, not which exception was thrown. -->
     <string name="saf_device_copy_preserved">기기 변경 사항을 옆에 보관: %1$s.</string>
     <plurals name="saf_device_copies_preserved">
         <item quantity="other">기기의 변경 사항 %1$d개를 보관했습니다. .device-와 시간을 찾으세요.</item>
     </plurals>
+    <!-- Shown when a save could not be written out to the device folder. Names the
+         consequence rather than the error: the user's next decision is whether to
+         copy the file out before uninstalling, not which exception was thrown. -->
     <string name="saf_write_back_failed">%1$s이(가) 기기 폴더에 저장되지 않았습니다. 사본은 VSCodroid 안에만 있습니다.</string>
 
     <!-- Shown once after a folder opens when documents in it could not be copied into

@@ -113,6 +113,7 @@ temporary directory where it needs files, and is executed directly by `node`.
 | Page script syntax | That every JavaScript raw string in the Android shell (`MainActivity.kt`, `VSCodroidWebView.kt`, `KeyInjector.kt`) compiles cleanly as a classic script under `vm.Script` after Kotlin template substitution | `scripts/test-page-scripts.js` |
 | Static file serving | That `patches/0043-serve-only-regular-files.patch` applied to `webClientServer.ts` validates the opened file, preserves ETag and 304 cache behavior, and refuses special files even when a path is replaced during opening | `scripts/test-server-serve-file.js` |
 | SAF mirror workspace claims | That `patches/0035-claim-device-folder-copies-before-use.patch`, `patches/0038-publish-workspace-resource-roots.patch`, and `patches/0042-tolerate-non-list-workspace-folders.patch` claim and publish SAF mirror workspace roots, keep opening a saved workspace when a device-folder copy is missing, and tolerate non-array `folders` values in `.code-workspace` files | `scripts/test-saf-mirror-usage.js` |
+| Composing keyboard patches | That `nativeEditContext.ts` as patches 0046 to 0053 leave it applies, refuses and fans out a keyboard's updates as the patches say: the buffer filled when the editor is built, a word written over itself making no edit, an edit across an open composition restarting input, typed text and one Backspace at every cursor and anything else at the primary one, each refusal of 0050 with the update that looks like it and must still be applied, the bound of six forced restarts for one version of the model, shared by every rule, the letter that follows a refusal replayed with a composition that starts again and with none, and the buffer kept while a single caret stays; also 0052's touch outside the suggestion list and 0053's refilter while composing. It runs the patched file and upstream's composition command against fakes of the EditContext, the editing host and the model, and models no keyboard: what a keyboard sends after a restart of input is a device question | `scripts/check-editcontext-ime.js <patched source root>`, run by `build-vscode-oss.sh` on the tree it has just patched and nowhere else, since no other job has that tree |
 
 **Run**: one `node` invocation per script listed in the `Check the bundled
 JavaScript runtime` step of `lint.yml`, and again in `release.yml`, on Node 24,
@@ -121,7 +122,11 @@ also runs the `--self-test` entry points of `check-workflow-steps.py`,
 `verify-android-elf.py`, `verify-server-tree.py`, `check-patch-fingerprints.py`,
 `check-editcontext-sync.py`, `check-asset-table.py`, `patch-venv-home.py` and
 `gen-glibc-forwarders.py`, which hand each gate the input it exists to refuse,
-since no file in the tree can.
+since no file in the tree can. `check-editcontext-ime.js` is not in that step: it
+reads Code - OSS source with every patch applied, so the server build runs it,
+beside `check-editcontext-sync.py`, and a pull request that changes a patch meets
+it there. It needs the transform mode of Node's `module.stripTypeScriptTypes`,
+which Node 22.23 and 24.18 have and Node 26.11 does not.
 
 **What is enforced**: the suites themselves. A single failing test fails the job.
 No workflow reads a coverage figure, no threshold exists, and none is planned.

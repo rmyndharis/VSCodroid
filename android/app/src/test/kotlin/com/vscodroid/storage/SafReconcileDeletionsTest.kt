@@ -785,15 +785,23 @@ class SafReconcileDeletionsTest {
     }
 
     @ParameterizedTest
-    @ValueSource(strings = ["redirect", "edit", "replacement"])
+    @ValueSource(strings = [
+        "redirect", "edit", "replacement",
+        "unseen edit", "unseen edit beside an earlier copy", "unseen edit of a long name",
+    ])
     fun `reconciliation retains a file changed during deletion verification`(shape: String) {
         val directory = mirrored("nested").apply { assertTrue(mkdirs()) }
-        val local = File(directory, "notes.txt").apply { writeText("previously copied") }
+        // The long name leaves no room for the suffix of a kept copy.
+        val name = if (shape == "unseen edit of a long name") "n".repeat(240) + ".txt" else "notes.txt"
+        val local = File(directory, name).apply { writeText("previously copied") }
         val modified = local.lastModified()
+        val stamp = Files.getLastModifiedTime(local.toPath())
         val original = local.readBytes()
         val edited = ByteArray(original.size) { 'z'.code.toByte() }
+        val earlier = File(directory, "$name${SafSyncEngine.LOCAL_COPY_SUFFIX}$modified")
+        if (shape == "unseen edit beside an earlier copy") earlier.writeText("EARLIER COPY")
         writeRecord(SafSyncEngine.recordLine(
-            "nested/notes.txt\t$modified\t${original.size}",
+            "nested/$name\t$modified\t${original.size}",
             MessageDigest.getInstance("SHA-256").digest(original),
         ))
         val moved = File(filesDir, "outside-mirror")
@@ -820,7 +828,10 @@ class SafReconcileDeletionsTest {
                             }
                             else -> {
                                 local.writeBytes(edited)
-                                assertTrue(local.setLastModified(modified))
+                                // With the stamp whole, nothing before the move can tell the edit
+                                // from the copy, as for a write that lands just ahead of the move.
+                                if (shape.startsWith("unseen")) Files.setLastModifiedTime(local.toPath(), stamp)
+                                else assertTrue(local.setLastModified(modified))
                             }
                         }
                     }
@@ -833,7 +844,10 @@ class SafReconcileDeletionsTest {
             Boolean::class.javaPrimitiveType, List::class.java,
         ).apply { isAccessible = true }
 
-        reconcile.invoke(SafSyncEngine(context), mirror,
+        val engine = SafSyncEngine(context)
+        val announced = mutableListOf<File>()
+        engine.onLocalCopiesPreserved = { announced += it }
+        reconcile.invoke(engine, mirror,
             listOf(DocumentInfo(uriFor("keep"), "keep", "keep.txt", false, 1, DEVICE_TIME)), true, emptyList<String>())
 
         assertTrue(changed.get(), "the deletion never verified the recorded copy")
@@ -844,6 +858,24 @@ class SafReconcileDeletionsTest {
             assertTrue(mirror.walkTopDown().filter { it.isFile }.any { edited.contentEquals(it.readBytes()) },
                 "deletion removed bytes changed while it verified the original copy")
             if (shape == "replacement") assertTrue(edited.contentEquals(local.readBytes()))
+        }
+        // An edit the checks before the move could not see leaves the name with the copy. It is
+        // the person's work under a name they did not give it, so it is named as every kept edit
+        // is and said.
+        if (shape.startsWith("unseen")) {
+            val kept = announced.singleOrNull()
+            assertTrue(
+                kept != null && kept.parentFile == directory && edited.contentEquals(kept.readBytes()),
+                "nothing said where the edit was kept: $announced among ${directory.list()?.toList()}",
+            )
+            when (shape) {
+                "unseen edit" -> assertEquals(earlier.name, kept!!.name, "the kept edit does not carry the name of its file")
+                "unseen edit beside an earlier copy" -> {
+                    assertEquals("$name${SafSyncEngine.LOCAL_COPY_SUFFIX}${modified + 1}", kept!!.name)
+                    assertEquals("EARLIER COPY", earlier.readText(), "an earlier kept copy was replaced")
+                }
+            }
+            assertEquals(emptyList<String>(), recordedPaths(), "a row for the edit or its old name lets a later open remove it")
         }
     }
 

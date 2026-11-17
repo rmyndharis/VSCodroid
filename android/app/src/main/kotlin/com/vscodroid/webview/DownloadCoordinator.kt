@@ -239,8 +239,9 @@ interface DownloadHost {
  * The rule the whole class exists to keep is that **a download that did not
  * happen never looks like one that did**. A partial file left behind with the
  * name the user chose is indistinguishable from a complete one until they open
- * it, so every path that ends badly removes the document it created and says
- * so. Reporting is not optional on any path either: the defect this replaces
+ * it, so every path that ends badly removes the document it created, when that
+ * document can be told from one the user had (see below), and says so. Reporting
+ * is not optional on any path either: the defect this replaces
  * was a menu entry that did nothing and said nothing, and a fix that fails
  * quietly is the same defect wearing more code.
  *
@@ -250,6 +251,10 @@ interface DownloadHost {
  * which kind it is, so the document is measured once through a read-only
  * descriptor before anything opens it for writing. Only a regular file measured
  * as empty is written straight into, and only such a document is ever removed.
+ * That cannot tell a document the picker has just created from an empty file the
+ * user chose to overwrite, so an empty file that was theirs is removed too when its
+ * download fails; and a document the provider will not measure, a new one among
+ * them, is left in the folder, empty, when its download fails.
  * Anything else, including a document that cannot be measured, is the user's: it
  * is filled from a copy of the bytes held in app storage after the last of them
  * has arrived, and is cut to the download's length, because the platform's
@@ -928,6 +933,18 @@ class DownloadCoordinator(
             request.busy = true
             request
         }
+        // A save over a document the user already had is copied into it from app storage here, whole,
+        // and a provider takes as long as it takes. Every call the page makes blocks the page's own
+        // thread until it returns (which is why the page yields between the pieces of a download), so
+        // that copy is handed to [providerWork] and this returns at once: the page ignores the answer,
+        // the outcome is reported from the provider thread, and the claim above keeps every other path
+        // off the request until [finishClaimed] gives it back. A direct sink's finish is only a close,
+        // and is made here as it always was.
+        if (request.sink is StagedSink) providerWork.execute { finishClaimed(request) } else finishClaimed(request)
+    }
+
+    /** What [onComplete] does once the download is claimed, on the thread that holds the claim. */
+    private fun finishClaimed(request: Pending) {
         val failure = try {
             request.sink?.finish()
             null

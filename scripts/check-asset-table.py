@@ -41,6 +41,12 @@ def check(path_or_file, quiet=False):
         for name in both:
             print(f"asset path is both a file and a directory: {name}")
         print(f"{count} asset files, {len(both)} paths that are both a file and a directory")
+    # An archive with no asset at all has nothing to conflict, so it would pass having read nothing:
+    # the shape a build gets when the assets move to another module or another path.
+    if not count:
+        if not quiet:
+            print("no asset files were found, so nothing was checked")
+        return 1
     return 1 if both else 0
 
 
@@ -57,6 +63,10 @@ def self_test():
     assert check(archive("assets/a", "assets/a/b"), quiet=True) == 1
     assert check(archive("assets/a", "assets/a/"), quiet=True) == 1
     assert check(archive("base/assets/a", "base/assets/a/b/c"), quiet=True) == 1
+    assert check(archive("classes.dex"), quiet=True) == 1, "an archive with no assets passed unread"
+    assert check(archive("base/dex/classes.dex", "toolchain_java/assets/a"), quiet=True) == 1, \
+        "an AAB whose assets are in another module passed unread"
+    assert check(archive("assets/"), quiet=True) == 1, "a directory entry alone counts as an asset file"
     print("self-test passed")
     return 0
 

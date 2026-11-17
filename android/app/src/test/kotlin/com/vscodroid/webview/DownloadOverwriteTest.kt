@@ -282,6 +282,82 @@ class DownloadOverwriteTest {
             "a save reported as done has to hold the download and nothing of the old file")
     }
 
+    /**
+     * A coordinator whose provider thread runs only when the test says so, so that "the caller did
+     * not wait" and "the work never happened" can be told apart. The queue is what the provider
+     * thread has been handed and has not run.
+     */
+    private fun deferredCoordinator(queued: ArrayDeque<Runnable>) = DownloadCoordinator(
+        host,
+        providerWork = Executor { queued.add(it) },
+        mainThread = Executor { it.run() },
+        stagingDir = { stagingDir },
+        stagingRoom = { stagingRoom },
+    )
+
+    /** Starts a download of notes.md, answers its picker with [target] and runs the open that follows. */
+    private fun startAndChooseOn(deferred: DownloadCoordinator, queued: ArrayDeque<Runnable>, target: Uri): String {
+        deferred.onDownloadNamed("blob:notes", "notes.md")
+        deferred.onDownloadStart("blob:notes", null)
+        deferred.onDestinationChosen(pickerIds.last(), target)
+        queued.removeFirst().run()
+        return readRequests.last()
+    }
+
+    @Test
+    fun `finishing a save over an existing document hands the copy to the provider thread`() {
+        val queued = ArrayDeque<Runnable>()
+        val deferred = deferredCoordinator(queued)
+        val target = existingDocument("OLD LINE ONE\nOLD LINE TWO\n")
+        val id = startAndChooseOn(deferred, queued, target)
+        deferred.onBytes(id, encode("NEW\n"))
+
+        // The page's own thread is blocked until this returns, and the copy is the whole file.
+        deferred.onComplete(id, null)
+
+        assertEquals(1, queued.size, "the copy into the provider was not handed to its thread")
+        assertEquals(emptyList<Pair<DownloadOutcome, String>>(), reported, "the save was reported before the copy ran")
+        assertEquals("OLD LINE ONE\nOLD LINE TWO\n", contentOf(target), "the caller made the copy itself")
+
+        queued.removeFirst().run()
+
+        assertEquals(listOf(DownloadOutcome.SAVED to "notes.md"), reported)
+        assertEquals("NEW\n", contentOf(target))
+    }
+
+    @Test
+    fun `a copy that fails on the provider thread is reported as failed and leaves the document alone`() {
+        val queued = ArrayDeque<Runnable>()
+        val deferred = deferredCoordinator(queued)
+        val target = existingDocument("KEEP ORIGINAL\n")
+        val id = startAndChooseOn(deferred, queued, target)
+        deferred.onBytes(id, encode("NEW\n"))
+        openThrows = IOException("the provider went away")
+
+        deferred.onComplete(id, null)
+        queued.removeFirst().run()
+
+        assertEquals(listOf(DownloadOutcome.FAILED to "notes.md"), reported)
+        assertEquals("KEEP ORIGINAL\n", contentOf(target), "a copy that never started changed the document")
+        assertTrue(queued.isEmpty(), "the failure left work for the provider thread: the stage is closed by the copy and the user's document is not discarded")
+    }
+
+    @Test
+    fun `a page that goes away during the copy still gets its finished save kept`() {
+        val queued = ArrayDeque<Runnable>()
+        val deferred = deferredCoordinator(queued)
+        val target = existingDocument("OLD\n")
+        val id = startAndChooseOn(deferred, queued, target)
+        deferred.onBytes(id, encode("NEW\n"))
+        deferred.onComplete(id, null)
+
+        // The renderer goes while the provider thread has the copy.
+        deferred.onPageGone()
+        while (queued.isNotEmpty()) queued.removeFirst().run()
+
+        assertEquals("NEW\n", contentOf(target), "a save that finished was removed because the page went after it")
+    }
+
     @Test
     fun `a download that fails before it is complete leaves an existing document as it was`() {
         val target = existingDocument("KEEP ORIGINAL\n")

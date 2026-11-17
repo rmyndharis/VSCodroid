@@ -587,6 +587,87 @@ class KeyboardDismissalTest {
         assertEquals(1, h.dismissed, "a later focus change moved the end of the window after the refocus")
     }
 
+    // ---- a turn the page answers with no refocus has the floor and no more
+    //
+    // The app refocuses the WebView only for an editing host aimed at text. With the focus in Quick Open, the find box, the Search view's input or a rename
+    // box the page answers no, nothing is refocused, and no report is waited for past the floor: the window of 2 s that every turn had before the refocus.
+
+    @Test
+    fun `a keyboard put away 3 s or 12 s after a turn that makes no refocus is the person's, and one inside the floor is the turn's`() {
+        for (report in listOf(3_000L, 12_000L)) {
+            val h = Harness()
+            h.visible = true
+            h.dismissal.turned()
+            replay(h, listOf(40L to { h.dismissal.noRefocus() }, report to { h.visible = false; h.dismissal.hidden() }))
+            assertEquals(
+                1, h.dismissed,
+                "a keyboard put away $report ms after a turn whose page makes no refocus was left to the turn, and the next touch raised it again",
+            )
+        }
+
+        val inside = Harness()
+        inside.visible = true
+        inside.dismissal.turned()
+        replay(
+            inside,
+            listOf(
+                40L to { inside.dismissal.noRefocus() },
+                KeyboardDismissal.TURN_FLOOR_MS - 1 to { inside.visible = false; inside.dismissal.hidden() },
+            ),
+        )
+        assertEquals(0, inside.dismissed, "a report inside the floor of a turn that makes no refocus was taken for the person's")
+    }
+
+    @Test
+    fun `the page's no counts when it comes before the check, and a new turn waits for its own answer`() {
+        // A loaded page can answer after the report: the check, half a second after it, reads what is known by then.
+        val late = Harness()
+        late.visible = true
+        late.dismissal.turned()
+        replay(late, listOf(3_000L to { late.visible = false; late.dismissal.hidden() }, 3_200L to { late.dismissal.noRefocus() }))
+        assertEquals(1, late.dismissed, "the page's no, known at the check, was not read")
+
+        val again = Harness()
+        again.visible = true
+        again.dismissal.turned()
+        replay(again, listOf(40L to { again.dismissal.noRefocus() }, 1_000L to { again.dismissal.turned() }, 4_000L to { again.visible = false; again.dismissal.hidden() }))
+        assertEquals(0, again.dismissed, "the answer to the turn before ended the claim of a turn whose own answer had not come")
+    }
+
+    @Test
+    fun `the editor's turn keeps its allowance, and a focus the WebView takes after the page's no still starts one`() {
+        val editor = Harness()
+        editor.visible = true
+        editor.dismissal.turned()
+        replay(editor, listOf(300L to { editor.dismissal.refocused() }, 3_000L to { editor.visible = false; editor.dismissal.hidden() }))
+        assertEquals(0, editor.dismissed, "a report 2.7 s after the refocus of an editor's turn was taken for the person's")
+
+        val past = Harness()
+        past.visible = true
+        past.dismissal.turned()
+        replay(
+            past,
+            listOf(
+                300L to { past.dismissal.refocused() },
+                300L + KeyboardDismissal.AFTER_REFOCUS_MS to { past.visible = false; past.dismissal.hidden() },
+            ),
+        )
+        assertEquals(1, past.dismissed, "a report as late after the refocus as the allowance was taken for the turn's")
+
+        val anyway = Harness()
+        anyway.visible = true
+        anyway.dismissal.turned()
+        replay(
+            anyway,
+            listOf(
+                40L to { anyway.dismissal.noRefocus() },
+                2_500L to { anyway.dismissal.refocused() },
+                5_000L to { anyway.visible = false; anyway.dismissal.hidden() },
+            ),
+        )
+        assertEquals(0, anyway.dismissed, "a focus the WebView took after the page's no did not start the allowance the system's hide is given")
+    }
+
     // ---- a Back the activity sees is the person's, whenever it comes
 
     @Test
@@ -1146,7 +1227,7 @@ class KeyboardDismissalTest {
     fun `the debug line carries ages and flags and nothing else`() {
         val h = Harness()
         assertEquals(
-            "turnAge=none refocusAge=none backAge=none edgeAge=none upAtTurn=false claimEnded=false",
+            "turnAge=none refocusAge=none backAge=none edgeAge=none upAtTurn=false claimEnded=false refocusComing=true",
             h.dismissal.describe(),
         )
 
@@ -1160,9 +1241,12 @@ class KeyboardDismissalTest {
         h.dismissal.edgeGesture()
         h.advance(150)
         assertEquals(
-            "turnAge=1250ms refocusAge=950ms backAge=250ms edgeAge=150ms upAtTurn=true claimEnded=false",
+            "turnAge=1250ms refocusAge=950ms backAge=250ms edgeAge=150ms upAtTurn=true claimEnded=false refocusComing=true",
             h.dismissal.describe(),
         )
+
+        h.dismissal.noRefocus()
+        assertTrue(h.dismissal.describe().endsWith(" claimEnded=false refocusComing=false"), "the page's no is not in the line a run on a device is read from")
     }
 
     // ---- Multi-API replay and boundary checks

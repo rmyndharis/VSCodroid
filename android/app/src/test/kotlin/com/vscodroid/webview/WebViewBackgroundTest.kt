@@ -148,6 +148,7 @@ class WebViewBackgroundTest {
             port: Int = 13337,
             isMainFrame: Boolean = true,
         ) = pageColorFromMessage(WebMessageCompat(data), origin, port, isMainFrame)
+        gateway.bind(13337)
 
         assertEquals(0xFFFFFFFF.toInt(), color("#ffffff"))
         assertEquals(0xFF1F1F1F.toInt(), color("#1F1F1F"))
@@ -163,9 +164,9 @@ class WebViewBackgroundTest {
         assertNull(color("#ffffff", "https://abc.vscode-cdn.net")) { "another host's colour was taken" }
         assertNull(color("#ffffff", null)) { "a page with no origin had its colour taken" }
         assertNull(color("#ffffff", port = 0)) { "a colour was taken before a port was bound" }
-        every { gateway.isBound(13337) } returns false
+        gateway.release(13337)
         assertNull(color("#ffffff")) { "a colour was taken while the gateway was not bound" }
-        every { gateway.isBound(13337) } returns true
+        gateway.bind(13337)
         // Only what the workbench writes for an opaque colour.
         for (data in listOf("#fff", "#ffffff80", "rgb(255, 255, 255)", " #ffffff", "#ffffff ", "#gggggg", "", null)) {
             assertNull(color(data)) { "'$data' was taken as a background colour" }

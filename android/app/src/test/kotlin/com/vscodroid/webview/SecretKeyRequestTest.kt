@@ -147,7 +147,7 @@ class SecretKeyInterceptorResponseTest {
     fun setUp() {
         keyReads = 0
         logged.clear()
-        mockEditorGateway()
+        mockEditorGateway().bind(port)
         mockkObject(Logger)
         every { Logger.d(any(), any()) } answers { logged += secondArg<String>() }
         every { Logger.i(any(), any()) } answers { logged += secondArg<String>() }

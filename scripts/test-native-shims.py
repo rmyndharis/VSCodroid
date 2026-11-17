@@ -324,6 +324,148 @@ int main(int argc, char **argv) {
 """.replace("RENAMES", renames).replace("BODY", body)
 
 
+def clockwait_fixture():
+    """cond-clockwait.c whole, with its lookup and both of Bionic's waits recorded.
+
+    The lookup made at load finds nothing, which is Android 10. The same lookup made
+    again with a function to find stands for every later release.
+    """
+    return r"""
+#define _GNU_SOURCE
+#include <assert.h>
+#include <dlfcn.h>
+#include <errno.h>
+#include <pthread.h>
+#include <string.h>
+#include <time.h>
+
+static pthread_cond_t cond;
+static pthread_mutex_t mutex;
+static const struct timespec deadline = {5, 6};
+static void *found;
+static int lookups, calls, reached, clock_reached, answer;
+static void *lookup(void *handle, const char *name) {
+    assert(handle == RTLD_DEFAULT && !strcmp(name, "pthread_cond_clockwait"));
+    lookups++;
+    return found;
+}
+static int reach(int which, pthread_cond_t *c, pthread_mutex_t *m, const struct timespec *d) {
+    assert(c == &cond && m == &mutex && d == &deadline);
+    calls++; reached = which;
+    return answer;
+}
+static int pthread_cond_timedwait_monotonic_np(pthread_cond_t *c, pthread_mutex_t *m,
+                                               const struct timespec *d) {
+    return reach('m', c, m, d);
+}
+static int wall_clock_wait(pthread_cond_t *c, pthread_mutex_t *m, const struct timespec *d) {
+    return reach('w', c, m, d);
+}
+static int real_wait(pthread_cond_t *c, pthread_mutex_t *m, clockid_t clock,
+                     const struct timespec *d) {
+    clock_reached = (int)clock;
+    return reach('r', c, m, d);
+}
+#define dlsym lookup
+#define pthread_cond_timedwait wall_clock_wait
+BODY
+static int wait_on(clockid_t clock) {
+    return __wrap_pthread_cond_clockwait(&cond, &mutex, clock, &deadline);
+}
+""".replace("BODY", (ROOT / "scripts/cond-clockwait.c").read_text())
+
+
+def ctype_fixture():
+    """The ctype tables and their three entry points, beside the host's own ctype.
+
+    The shim's entry points are renamed, so glibc's tables stay reachable where the host
+    has them and are then the reference for every entry. Any C library answers for the
+    ASCII half.
+    """
+    body = function("scripts/glibc-shim.c", "#define SHIM_ISupper ", "\n/* Version strings")
+    names = ["__ctype_b_loc", "__ctype_tolower_loc", "__ctype_toupper_loc"]
+    for name in names:
+        assert name + "(void) {" in body, name + " is no longer defined by the shim"
+    renames = "\n".join("#define %s shim%s" % (n, n) for n in names)
+    originals = "\n".join("#undef " + n for n in names)
+    return r"""
+#include <assert.h>
+#include <ctype.h>
+#include <pthread.h>
+#include <stdint.h>
+#include <stdio.h>
+#include <sys/wait.h>
+#include <unistd.h>
+
+RENAMES
+BODY
+ORIGINALS
+
+static int wrong(const unsigned short *b, const int *lower, const int *upper) {
+    int count = 0;
+    for (int i = -128; i < 256; i++) {
+#ifdef __GLIBC__
+        count += b[i] != (*__ctype_b_loc())[i];
+        count += lower[i] != (*__ctype_tolower_loc())[i];
+        count += upper[i] != (*__ctype_toupper_loc())[i];
+#endif
+        if (i != EOF && (i < 0 || i > 127)) continue;
+#define CLASS(bit, test) count += !(b[i] & bit) != !test(i);
+        CLASS(SHIM_ISupper, isupper) CLASS(SHIM_ISlower, islower) CLASS(SHIM_ISalpha, isalpha)
+        CLASS(SHIM_ISdigit, isdigit) CLASS(SHIM_ISxdigit, isxdigit) CLASS(SHIM_ISspace, isspace)
+        CLASS(SHIM_ISprint, isprint) CLASS(SHIM_ISgraph, isgraph) CLASS(SHIM_ISblank, isblank)
+        CLASS(SHIM_IScntrl, iscntrl) CLASS(SHIM_ISpunct, ispunct) CLASS(SHIM_ISalnum, isalnum)
+        count += lower[i] != tolower(i);
+        count += upper[i] != toupper(i);
+    }
+    return count;
+}
+
+/* The tables as a process holds them before its first call. A child makes the calls and
+ * says where the tables are; this process has made none, and reads its own copy there. */
+static int wrong_before_the_first_call(void) {
+    int ends[2], status;
+    const void *tables[3];
+    assert(pipe(ends) == 0);
+    pid_t child = fork();
+    assert(child >= 0);
+    if (child == 0) {
+        tables[0] = *shim__ctype_b_loc();
+        tables[1] = *shim__ctype_tolower_loc();
+        tables[2] = *shim__ctype_toupper_loc();
+        _exit(write(ends[1], tables, sizeof(tables)) != (ssize_t)sizeof(tables));
+    }
+    close(ends[1]);
+    assert(read(ends[0], tables, sizeof(tables)) == (ssize_t)sizeof(tables));
+    assert(waitpid(child, &status, 0) == child && status == 0);
+    return wrong(tables[0], tables[1], tables[2]);
+}
+
+static int released;
+static void *first_call(void *unused) {
+    (void)unused;
+    while (!__atomic_load_n(&released, __ATOMIC_ACQUIRE)) {}
+    return (void *)(intptr_t)wrong(*shim__ctype_b_loc(), *shim__ctype_tolower_loc(),
+                                   *shim__ctype_toupper_loc());
+}
+
+int main(void) {
+    int before = wrong_before_the_first_call();
+    pthread_t threads[8];
+    for (int i = 0; i < 8; i++) pthread_create(&threads[i], 0, first_call, 0);
+    __atomic_store_n(&released, 1, __ATOMIC_RELEASE);
+    int racing = 0;
+    for (int i = 0; i < 8; i++) {
+        void *result;
+        pthread_join(threads[i], &result);
+        racing += (int)(intptr_t)result;
+    }
+    printf("%d wrong entries before the first call, %d read by 8 threads making it\n", before, racing);
+    return !(before == 0 && racing == 0);
+}
+""".replace("RENAMES", renames).replace("BODY", body).replace("ORIGINALS", originals)
+
+
 class NativeShimTest(unittest.TestCase):
     def test_reserved_and_out_of_range_signals_leave_the_action_unchanged(self):
         compile_and_run(sigaction_fixture() + r'''
@@ -585,6 +727,46 @@ int main(void) {
     return 0;
 }
 '''.replace("BODY", body))
+
+    def test_ctype_tables_are_whole_before_the_first_call_and_for_threads_racing_to_make_it(self):
+        compile_and_run(ctype_fixture(), flags=["-pthread"])
+
+    def test_clockwait_takes_each_clock_to_its_own_wait_and_forwards_where_the_call_exists(self):
+        compile_and_run(clockwait_fixture() + r'''
+int main(void) {
+    const clockid_t others[] = {CLOCK_MONOTONIC_RAW, CLOCK_PROCESS_CPUTIME_ID, CLOCK_THREAD_CPUTIME_ID};
+    const clockid_t every[] = {CLOCK_MONOTONIC, CLOCK_REALTIME, CLOCK_MONOTONIC_RAW,
+                               CLOCK_PROCESS_CPUTIME_ID};
+    const int answers[] = {0, ETIMEDOUT};
+    /* Android 10: looked up once, at load, and not there. */
+    assert(lookups == 1);
+    for (int n = 0; n < 2; n++) {
+        answer = answers[n]; calls = 0;
+        /* A wait answers with an error number and leaves errno alone. */
+        errno = E2BIG;
+        assert(wait_on(CLOCK_MONOTONIC) == answer && calls == 1 && reached == 'm');
+        assert(wait_on(CLOCK_REALTIME) == answer && calls == 2 && reached == 'w');
+        for (unsigned i = 0; i < sizeof(others) / sizeof(others[0]); i++) {
+            assert(wait_on(others[i]) == EINVAL);
+        }
+        assert(calls == 2 && errno == E2BIG);
+    }
+    /* A release that has the function: every call goes to it, with the clock it was given. */
+    found = (void *)real_wait;
+    find_real_clockwait();
+    for (int n = 0; n < 2; n++) {
+        answer = answers[n];
+        for (unsigned i = 0; i < sizeof(every) / sizeof(every[0]); i++) {
+            calls = 0; clock_reached = -1;
+            assert(wait_on(every[i]) == answer);
+            assert(calls == 1 && reached == 'r' && clock_reached == (int)every[i]);
+        }
+    }
+    /* No wait looks anything up: the caller holds its mutex by then. */
+    assert(lookups == 2);
+    return 0;
+}
+''')
 
 
     @unittest.skipUnless(sys.platform.startswith("linux"), "needs the kernel's own statx to compare with")

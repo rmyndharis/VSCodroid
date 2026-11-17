@@ -55,7 +55,7 @@ class NavigationLifetimeTest {
     fun setUp() {
         loads.clear()
         AuthTabWindow.beginPage()
-        mockEditorGateway()
+        mockEditorGateway().bind(13337)
         mockkObject(Logger)
         every { Logger.i(any(), any()) } just Runs
         every { Logger.d(any(), any()) } just Runs
