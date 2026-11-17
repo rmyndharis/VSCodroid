@@ -606,6 +606,21 @@ for (const [label, text] of [
     assert.strictEqual(fs.existsSync(path.join(home, '.vscodroid/antigravity-hub.json')), false, `${label}: a note was kept for an engine that was not started`);
     checked++;
 }
+// The same through execFile, plain and promisified: the hub is as much a way round the setting there as
+// through spawn, whichever of them an extension calls. With the setting off the call is left as written;
+// with it on, and for any run of the engine that is not the hub, it still goes through the linker.
+for (const how of ['plain', 'promisified']) {
+    const hub = [ENGINE, ['--hub', '--hub-port=41000'], { timeout: 5000 }];
+    const expected = [how, ...hub];
+    assert.deepStrictEqual(spawnedUnder([how, hub], { record: RECORD_EXEC, main: EXEC_MAIN }), expected, `execFile (${how}) started the hub with the setting off`);
+    assert.deepStrictEqual(spawnedUnder([how, [ENGINE, ['--hub', '--hub-port=41000'], '@callback']], { record: RECORD_EXEC, main: EXEC_MAIN }).slice(0, 2),
+        [how, ENGINE], `execFile (${how}) with a callback was started with the setting off`);
+    assert.deepStrictEqual(spawnedUnder([how, hub], { record: RECORD_EXEC, main: EXEC_MAIN, home: HUB_HOME }), [how, BIONIC_LINKER, [ENGINE, '--hub', '--hub-port=41000'], { timeout: 5000 }],
+        `execFile (${how}) with the setting on did not go through the linker`);
+    assert.deepStrictEqual(spawnedUnder([how, [ENGINE, ['--version'], { timeout: 5000 }]], { record: RECORD_EXEC, main: EXEC_MAIN }),
+        [how, BIONIC_LINKER, [ENGINE, '--version'], { timeout: 5000 }], `execFile (${how}) of the engine for its version is held back with the setting off`);
+    checked += 4;
+}
 {
     const withoutPort = [ENGINE, ['--hub', '--app_data_dir=antigravity'], SPAWN_OPTIONS];
     assert.deepStrictEqual(spawnedUnder(withoutPort), withoutPort, 'a hub start that names no port was started with the setting off');

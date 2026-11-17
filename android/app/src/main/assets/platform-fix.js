@@ -228,6 +228,12 @@ if (process.platform === 'android') {
     }
   }
 
+  // A start of the engine's hub with the setting off, by whichever child_process function the
+  // extension calls: spawn and execFile both reach here, so that neither is a way round the setting.
+  function hubWhileOff(file, args) {
+    return ANTIGRAVITY_ENGINE.test(file) && args.indexOf('--hub') >= 0 && !engineTurnedOn();
+  }
+
   var WEBVIEW_ORIGIN = 'https://*.vscode-cdn.net';
   var HOP_BY_HOP = /^(connection|keep-alive|proxy-authenticate|proxy-authorization|te|trailer|transfer-encoding|upgrade)$/i;
 
@@ -418,7 +424,7 @@ if (process.platform === 'android') {
     var turnedOff = false;
     var call = throughLinker(file, Array.prototype.slice.call(arguments, 1), function (args) {
       // Every hub start, with a port to relay or without: see ENGINE_SETTING.
-      turnedOff = ANTIGRAVITY_ENGINE.test(file) && args.indexOf('--hub') >= 0 && !engineTurnedOn();
+      turnedOff = hubWhileOff(file, args);
       hub = turnedOff ? null : antigravityHub(file, args);
       return hub ? hub.args : args;
     });
@@ -449,13 +455,24 @@ if (process.platform === 'android') {
   var promisify = require('util').promisify;
   var realExecFile = childProcess.execFile;
   var realExecFilePromised = realExecFile[promisify.custom];
+
+  // The call execFile is to make: through the linker, unless it starts the engine's hub with the setting
+  // off, which is left as written and fails with EACCES, as the same call does through spawn.
+  function execFileCall(file, all) {
+    var held = false;
+    var call = throughLinker(file, Array.prototype.slice.call(all, 1), function (args) {
+      held = hubWhileOff(file, args);
+      return args;
+    });
+    return call && !held ? call : all;
+  }
   childProcess.execFile = function (file) {
-    return realExecFile.apply(this, throughLinker(file, Array.prototype.slice.call(arguments, 1)) || arguments);
+    return realExecFile.apply(this, execFileCall(file, arguments));
   };
   // util.promisify(execFile) resolves { stdout, stderr } through this property of the original.
   if (realExecFilePromised) {
     childProcess.execFile[promisify.custom] = function (file) {
-      return realExecFilePromised.apply(this, throughLinker(file, Array.prototype.slice.call(arguments, 1)) || arguments);
+      return realExecFilePromised.apply(this, execFileCall(file, arguments));
     };
   }
 }
