@@ -1731,6 +1731,28 @@ If `node`, `python3`, `git`, or other tools show "command not found":
 2. Verify the tool exists: `ls -la $(which node)` (should point to the bundled binary).
 3. If the issue persists, close the app completely and reopen.
 
+### Permission Denied on a File in Downloads
+
+`cp`, `cat` and other terminal commands answer `Permission denied` for a file
+the browser or another app saved in Downloads, Documents or elsewhere in shared
+storage. `cp` names the destination in that message, which makes the project
+folder look like the problem; it is the file being read. VSCodroid holds no
+storage permission, so in the terminal `ls /sdcard/Download` lists only the
+files VSCodroid saved there itself.
+
+Bring the file inside instead:
+
+- In the Explorer, long-press a folder or the empty area below the files and
+  choose **Upload...**, then pick the file. This reaches a file that sits
+  directly in Downloads.
+- Or run **VSCodroid: Open Folder from Device** and allow the folder that holds
+  the files, as [Opening Files and Folders](#opening-files-and-folders)
+  describes. A terminal opened there copies in both directions:
+  `cp name.txt ~/projects/` and `cp ~/projects/name.txt .`.
+
+Android has no `/tmp` either, so a command that writes there answers the same
+way; use `$TMPDIR`.
+
 ### Extensions Not Installing
 
 1. Check your internet connection: extension search and download require connectivity.
