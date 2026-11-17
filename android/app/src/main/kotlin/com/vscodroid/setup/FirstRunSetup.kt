@@ -686,6 +686,9 @@ class FirstRunSetup(
 
             reportProgress(context.getString(R.string.setup_step_environment), 97)
             createDefaultSettings()
+            // A restore onto another phone looks exactly like this: no build has
+            // completed setup here, because the preferences are not restored.
+            if (nothingCompletedHere) withdrawRestoredEngineConsent()
 
             reportProgress(context.getString(R.string.setup_step_done), 100)
 
@@ -3426,6 +3429,32 @@ claude() {
             // should never look for them.
             markMovedDefaultsPruned()
         }
+    }
+
+    /**
+     * Turns `vscodroid.antigravity.runEngine` off in a machine settings file
+     * that came with a backup or a move from another phone.
+     *
+     * `data/Machine` travels in both (data_extraction_rules.xml), and the
+     * setting is the person's consent to an engine whose port every app on the
+     * phone can reach, given for the apps on that phone: platform-fix.js starts
+     * the engine whenever this file says so, and the process monitor's notice
+     * that asks for it is shown only while it is off. So the answer stays
+     * behind and the new phone asks again. Everything else in the file is
+     * kept. Called only where no build has completed setup, so an install
+     * keeps its own answer through every upgrade.
+     *
+     * Thrown for the reason [createDefaultSettings] throws: a failure here
+     * would start the engine on the new phone with no notice at all.
+     */
+    private fun withdrawRestoredEngineConsent() {
+        val settingsFile = File(Environment.getMachineSettingsPath(context))
+        if (!settingsFile.exists()) return
+        val updated = withEngineConsentWithdrawn(settingsFile.readText()) ?: return
+        if (!writeAtomically(settingsFile) { it.write(updated.toByteArray()) }) {
+            throw IOException("could not write $settingsFile")
+        }
+        Logger.i(tag, "Turned the Antigravity engine off in settings restored from another phone")
     }
 
     /**
@@ -6774,6 +6803,48 @@ private fun commentsBlanked(content: String): String =
             }
         }
     }
+
+/**
+ * [content] with every `true` of a root-level `vscodroid.antigravity.runEngine`
+ * made `false`, or null when there is none to change.
+ *
+ * Found the way platform-fix.js finds it, which is how VS Code reads the file:
+ * a key of the root object only, whatever escapes spell it, never one inside a
+ * comment, another object or a language block. Every copy of the key, because
+ * the last one is the one in force. Only the value is replaced, so the rest of
+ * the person's file stays as it was. A document this cannot read is left
+ * alone: platform-fix.js cannot read it either, and reads it as off.
+ */
+internal fun withEngineConsentWithdrawn(content: String): String? {
+    val bom = if (content.startsWith('﻿')) 1 else 0
+    val brace = rootBraceIndex(content.substring(bom)).takeIf { it >= 0 }?.plus(bom) ?: return null
+    val masked = commentsBlanked(content)
+    val values = mutableListOf<Int>()
+    var depth = 0
+    var cursor = brace
+    while (cursor < masked.length) {
+        when (masked[cursor]) {
+            '"' -> {
+                val literal = JSON_STRING.matchAt(masked, cursor) ?: return null
+                val key = runCatching { org.json.JSONTokener(literal.value).nextValue() }.getOrNull()
+                if (depth == 1 && key == ENGINE_CONSENT_KEY) {
+                    ENGINE_CONSENT_ON.matchAt(masked, literal.range.last + 1)?.let { values.add(it.range.last - 3) }
+                }
+                cursor = literal.range.last
+            }
+            '{', '[' -> depth++
+            '}', ']' -> if (--depth == 0) break
+        }
+        cursor++
+    }
+    if (values.isEmpty()) return null
+    val updated = StringBuilder(content)
+    for (at in values.asReversed()) updated.replace(at, at + 4, "false")
+    return updated.toString()
+}
+
+private const val ENGINE_CONSENT_KEY = "vscodroid.antigravity.runEngine"
+private val ENGINE_CONSENT_ON = Regex("""\s*:\s*true\b""")
 
 /** A JSON string, a `//` comment, or a block comment, whichever starts first. */
 private val STRING_OR_COMMENT = Regex("""\"(?:\\.|[^\"\\])*\"|//[^\n]*|/\*[\s\S]*?\*/""")
