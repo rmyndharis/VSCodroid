@@ -9,8 +9,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ### Added
 
-- Start a program built for Android that an extension downloads into the app's storage through the system loader when it calls `spawn` or `execFile`, because the extension host has no exec interceptor and the call failed with `EACCES`.
-- Let the Google Antigravity extension's panel frame its engine's page, because the engine names only `vscode-webview:` as an ancestor and this editor serves webviews from `*.vscode-cdn.net`.
+- The Google Antigravity extension starts its engine and shows its panel.
+- A program built for Android that an extension downloaded into the app's storage starts through the system loader when the extension calls `spawn` or `execFile`, instead of failing with `EACCES`.
 
 ### Fixed
 
