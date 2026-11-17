@@ -959,7 +959,42 @@ if (!fs.existsSync(rehEntryPoint)) {
     // app before this line runs.
     execArgv.push(`--require=${path.join(SERVER_DIR, 'platform-fix.js')}`);
 
-    const server = fork(serverArgs[0], serverArgs.slice(1), {
+    // Shutting down means the editor server too, and this is the only side that
+    // holds a handle on it.
+    //
+    // ProcessManager sends this SIGTERM, waits GRACEFUL_STOP_TIMEOUT_MS and then
+    // force-kills THIS process; Java's destroyForcibly signals one pid, and
+    // fork() sets no PDEATHSIG, so a child still unwinding when that second
+    // elapsed was left running with no service, no notification and no way for
+    // the user to end it, after a Stop that reported success. Escalating from
+    // here closes it: the timer has to fire inside that window or never, which is
+    // why it is well under the second ProcessManager allows, and
+    // scripts/test-server-bootstrap.js reads that constant and refuses a delay
+    // that is not.
+    //
+    // Registered before fork(), so no Stop can fall between the two. A SIGTERM
+    // before this line ends this process by the default action, with no child
+    // yet; one after it waits in the event loop until this script's synchronous
+    // part has forked the child and written its note. Registered after fork(), a
+    // Stop in between met the default action, which forwards nothing, and left
+    // the child just forked running with no note.
+    //
+    // Unref'd so it cannot hold this process open on its own; the child's exit
+    // handler below calls process.exit long before it matters.
+    let server = null;
+    process.on('SIGTERM', () => {
+        log('info', 'Received SIGTERM, shutting down...');
+        // No child yet: leave with the status the default action gives.
+        if (!server) process.exit(128 + os.constants.signals.SIGTERM);
+        server.kill('SIGTERM');
+        const escalate = setTimeout(() => {
+            log('warn', 'VS Code Server did not exit; sending SIGKILL');
+            server.kill('SIGKILL');
+        }, CHILD_KILL_AFTER_SIGTERM_MS);
+        if (escalate.unref) escalate.unref();
+    });
+
+    server = fork(serverArgs[0], serverArgs.slice(1), {
         env: childEnv,
         execArgv,
         stdio: 'inherit'
@@ -1001,12 +1036,9 @@ if (!fs.existsSync(rehEntryPoint)) {
         }
     };
 
-    // Both handlers go on before the note is written and before the monitor
-    // loads. Until process.on('SIGTERM') has run, a SIGTERM ends this process
-    // by the default action, which forwards nothing: a Stop landing in that
-    // span left the child just forked running, with its note naming it as
-    // though the bootstrap had stopped it. Node runs these from the event
-    // loop, so neither can run before this script has written the note.
+    // Goes on before the note is written and before the monitor loads. Node runs
+    // it from the event loop, so it cannot run before this script has written
+    // the note it clears.
     server.on('exit', (code, signal) => {
         // A killed child reports code === null and the signal separately, and
         // `code || 0` collapsed that to a clean zero -- so a server killed for
@@ -1027,31 +1059,6 @@ if (!fs.existsSync(rehEntryPoint)) {
         }
         log('info', `VS Code Server exited with code ${code}`);
         process.exit(code ?? 0);
-    });
-
-    // Shutting down means the editor server too, and this is the only side that
-    // holds a handle on it.
-    //
-    // ProcessManager sends this SIGTERM, waits GRACEFUL_STOP_TIMEOUT_MS and then
-    // force-kills THIS process; Java's destroyForcibly signals one pid, and
-    // fork() sets no PDEATHSIG, so a child still unwinding when that second
-    // elapsed was left running with no service, no notification and no way for
-    // the user to end it, after a Stop that reported success. Escalating from
-    // here closes it: the timer has to fire inside that window or never, which is
-    // why it is well under the second ProcessManager allows, and
-    // scripts/test-server-bootstrap.js reads that constant and refuses a delay
-    // that is not.
-    //
-    // Unref'd so it cannot hold this process open on its own; the child's exit
-    // handler above calls process.exit long before it matters.
-    process.on('SIGTERM', () => {
-        log('info', 'Received SIGTERM, shutting down...');
-        server.kill('SIGTERM');
-        const escalate = setTimeout(() => {
-            log('warn', 'VS Code Server did not exit; sending SIGKILL');
-            server.kill('SIGKILL');
-        }, CHILD_KILL_AFTER_SIGTERM_MS);
-        if (escalate.unref) escalate.unref();
     });
 
     try {

@@ -653,6 +653,51 @@ async function aStopWhileTheBootstrapStartsEndsTheEditorServer() {
     }
 }
 
+// The same Stop one step earlier: fork() has returned and the bootstrap has not
+// reached its next line. The preload here holds fork's caller in that span until
+// the signal has been sent, so the case does not depend on timing: a bootstrap
+// that registered its SIGTERM handler after the fork died of the default action
+// there, before writing the note, and left the child it had just forked running.
+async function aStopRightAfterTheForkEndsTheEditorServer() {
+    const dir = fixture(UPSTREAM, { serverMain: 'setInterval(() => {}, 1000);\n' });
+    const pidFile = path.join(dir, 'editor-server.pid');
+    const forked = path.join(dir, 'forked');
+    const release = path.join(dir, 'fork-release');
+    const hook = path.join(dir, 'fork-hook.js');
+    fs.writeFileSync(hook, [
+        "const fs = require('fs');",
+        "const childProcess = require('child_process');",
+        'const fork = childProcess.fork;',
+        'childProcess.fork = function (...rest) {',
+        '    const child = fork.apply(this, rest);',
+        '    fs.writeFileSync(' + JSON.stringify(forked) + ', String(child.pid));',
+        '    const pause = new Int32Array(new SharedArrayBuffer(4));',
+        '    while (!fs.existsSync(' + JSON.stringify(release) + ')) Atomics.wait(pause, 0, 0, 10);',
+        '    return child;',
+        '};',
+        '',
+    ].join('\n'));
+    const bootstrap = spawn(process.execPath, ['--require', hook, path.join(dir, 'server.js'), '--host=127.0.0.1'], {
+        stdio: 'ignore',
+        env: { ...process.env, VSCODROID_SERVER_RUN_ID: 'forking-run' },
+    });
+    let childPid = 0;
+    try {
+        await until(() => fs.existsSync(forked), 'the bootstrap to fork the editor server');
+        childPid = Number(fs.readFileSync(forked, 'utf8'));
+        bootstrap.kill('SIGTERM');
+        await sleep(200);
+        fs.writeFileSync(release, '1');
+        await until(() => !alive(childPid), 'the editor server forked just before a stop to be ended', 5_000);
+        await until(() => !alive(bootstrap.pid), 'the bootstrap to exit once its child had gone');
+        assert.ok(!fs.existsSync(pidFile), 'the note of an editor server that was stopped was left behind');
+    } finally {
+        if (childPid) { try { process.kill(childPid, 'SIGKILL'); } catch { /* already gone */ } }
+        bootstrap.kill('SIGKILL');
+        fs.rmSync(dir, { recursive: true, force: true });
+    }
+}
+
 async function exitingBootstrapPreservesReplacementNote() {
     const dir = fixture(UPSTREAM, { serverMain: 'setInterval(() => {}, 1000);\n' });
     const pidFile = path.join(dir, 'editor-server.pid');
@@ -1862,6 +1907,7 @@ preloadRidesAsOneToken()
     .then(exitingBootstrapPreservesReplacementNote)
     .then(stoppingTakesTheEditorServerWithIt)
     .then(aStopWhileTheBootstrapStartsEndsTheEditorServer)
+    .then(aStopRightAfterTheForkEndsTheEditorServer)
     .then(() => {
         console.log(
             'ok -- product.json survives a truncated file and an unwritable directory, a missing ' +
