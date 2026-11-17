@@ -87,28 +87,29 @@ text repeated is passed: that is a keyboard taking a doubled word back
 as by the exemption above. Its refusal is the same as the other one:
 nothing changes in the model, the buffer is written back, input restarts.
 
-A refusal stands until the model is edited or a composition starts, and
-for the range it refused of the buffer it was made on. While it stands,
-a third kind of update over that same range is refused as well: the part
-of the range before the caret and at least one more unit written over
-the whole range, with the caret asked right after the text, the range
-starting before the caret and ending after it inside the buffer, and the
-text after the caret that the range covers not at the end of the text.
-That is the letter typed next arriving as the stale range of a keyboard
-that has just been refused (in alpha beta Charlie delta, after the
-refused bet over 6..10, betz over 6..10 with the caret asked at 10,
-which would put the z on the character after the word). On its own the
-shape is passed: a suggestion taken with the caret inside a word can
-have it (alpha with the caret after al, all written over 0..5 with the
-caret at 3), and nothing has been refused before it. A text that keeps
-the tail (betza) is not this shape. The state is the model's version,
-the range and the model position of the start of the buffer at the last
-refusal, compared with those of the update when it arrives. A refusal
-over another range does not make the shape refused, nor does one made on
-another buffer: a suggestion at another word, brought up by a tap onto
-another line with the model not edited, is passed. A composition that
-starts is the keyboard's picture read again, which is what the restart
-is for, and ends the refusal.
+There is no third rule, and what was refused is counted, for the bound
+below, and not remembered. An earlier form of this patch kept the last
+refusal, with the model's version, the range it refused and the line its
+buffer started at, and while that refusal stood it was to refuse the
+letter typed next when it arrived over the same range (in alpha beta
+Charlie delta, after the refused bet over 6..10, betz over 6..10 with the
+caret asked at 10, which puts the z in place of the a). That rule could
+not act. A refusal forces a restart in the microtask after the update,
+the restart blurs the host, and the blur listener of 0046 clears the
+mark of an open composition. Only compositionstart sets the mark again,
+and compositionstart was also where the refusal ended. So with a new
+composition the refusal was gone before the next update, and with none
+the rule, which needs an open composition as the others do, did not
+judge. It refused an update only when no restart had been made since the
+refusal, which is two updates in one task: a script on the page can send
+that, and a keyboard cannot, because the microtask runs when the
+listener of the first update returns. The rule and its state are
+removed, and the letter is applied in both cases, as it was. The rules
+after it keep their numbers, fourth to ninth, so that the counts and the
+device runs below read as they were written: the builds they call the
+nine rules, and the ones they call this patch as it is, carried the
+third as well. The removal has not been run on a device; by the order of
+events above it changes the outcome of no update that a keyboard sends.
 
 What is refused is narrow by shape. A keyboard in step keeps the caret
 on the same characters, so after an edit of the text before the caret it
@@ -129,19 +130,22 @@ and a repeated syllable cannot be told from them. A rewrite of an
 earlier stretch with a text of the same length keeps the caret by
 construction, and it is refused only when its text is such a stretch and
 differs from the range's own; when its range ends at the caret it is
-passed as well in a composition that has typed. The first three rules
+passed as well in a composition that has typed. The first two rules
 never refuse the same update: the first needs the range to end at or
-before the caret, the other two need it to end after it, and the text of
-the second is as long as the part before the caret while the text of the
-third is longer.
+before the caret, the second needs it to end after it.
 
 Restarts are bounded by a count of the forced restarts that are made,
-kept for one version of the model. After six of them without a change of
-text an update is no longer refused: it is applied as the editor without
-this patch applies it, so that a keyboard that answers every restart
-with the same update, or a pick the rules cannot tell from a stale
-write, is not refused for ever and the person is not left with input
-that does nothing until something else is typed. The count starts again
+kept for one version of the model. It is one count for every rule and
+every update: six restarts forced by different updates, under different
+rules, spend it as six forced by the same update do. After six of them
+without a change of text an update is no longer refused: it is applied
+as the editor without this patch applies it, so that a keyboard that
+answers every restart with the same update, or a pick the rules cannot
+tell from a stale write, is not refused for ever and the person is not
+left with input that does nothing until something else is typed. The
+bound does not ask whether the keyboard went on with the same update:
+after six forced restarts on one version of the model nothing more is
+refused, whatever those six refused. The count starts again
 after an update that changes the text has been applied by the editor,
 that is when the text of the update differs from the cached text of its
 range and the model's version is not the one it had before the edit, and
@@ -157,9 +161,10 @@ empty update, a new composition or a change of focus; the restarts the
 editor makes after a rewrite of the buffer are not counted. A keyboard
 that is refused twice, once for the range of the word and once for the
 range of its last letter, as it was in three of 40 runs on a device (283
-to 324 ms apart), is well inside it. What it costs: the seventh update
-of the shape is applied, and the letter or the word it carries may do
-what the stale write does; the count starts again when text changes. The
+to 324 ms apart), is well inside it. What it costs: the update that
+follows six forced restarts on one version of the model is applied,
+whatever its shape, and the letter or the word it carries may do what
+the stale write does; the count starts again when text changes. The
 member, the version it belongs to, the guard at the refusal, the count
 in the restart and the reset are marked in the source as the parts of
 the bound and go together.
@@ -196,15 +201,18 @@ twox, caret asked at 4), a range that reaches past the caret with a text
 that is not the part before it (the shape of a brace typed inside a
 word, which another change handles), the letter typed arriving as the
 replacement of the whole word (line x), and a word sent again as an
-insertion at the caret (HeliBoard at a turn). The letter typed over a
-stale range is refused only while a refusal stands: with nothing refused
-before it, it is applied, the letter lands and the tail is lost (alpha
-betz Charlie delta). A refusal stands for the range it refused of the
-buffer it was made on only: over another word, or on another line, the
-same shape is applied, and over the same word of the same composition it
-is refused until the model is edited; a composition that starts ends it.
-The restart is the keyboard's blur and focus, so it ends the open
-composition each time.
+insertion at the caret (HeliBoard at a turn). Nor is the letter typed
+over a stale range: the part of the word up to the caret and the letter,
+written over the whole range with the caret asked right after the letter
+(betz over 6..10), is applied whether or not a refusal came before it,
+so the letter lands and the tail is lost (alpha betz Charlie delta). A
+suggestion taken with the caret inside a word has the same shape (alpha
+with the caret after al, all written over 0..5 with the caret at 3), so
+the shape alone cannot be refused. The restart is the keyboard's blur
+and focus, so it ends the open composition each time, and until a
+composition starts again only the refusal of a range that ends beyond
+the buffer judges an update: a stale write that the keyboard sends again
+with no composition open is applied.
 
 A reopened word can also be written over by one letter. After the screen
 turns, Gboard 12.4 reopens the word at the caret (the word before it, or
@@ -214,9 +222,8 @@ caret right after it: in a line holding line two with the caret at its
 end, x over 5..8 with the caret asked at 6, and the line becomes line x;
 in a line holding alpha beta Charlie delta with the caret between the l
 and the t of delta, z over 19..24 with the caret asked at 20, and the
-line becomes alpha beta Charlie z. The third rule does not see it: it
-needs a refusal that stands and a text longer than the part of the range
-before the caret. Of the 33,690 recorded updates of 3,286 recordings, 32
+line becomes alpha beta Charlie z. Of the 33,690 recorded updates of
+3,286 recordings, 32
 have this shape, one in each of 32 runs; 10 of them are the tail drop of
 the second rule as well, which refuses it too (the letter is the first
 unit of the range and the caret is right after it). Of the other 22, 17
@@ -493,6 +500,22 @@ in 30 runs of 30, twenty on the nine rules and ten on this patch as it
 is. On the test build above, which typed the letter itself, the new-line
 runs gave 5 of 43 and the runs with a tap 0 of 42.
 
+Nor does the patch remember what it refused. The restart ends the
+composition, and the update that comes next is judged on its own: if the
+keyboard goes on with the range it kept and sends the next letter over
+it (betz over 6..10 above), the letter is applied, with a new
+composition open or with none. Whether a restarted keyboard still sends
+that update, and whether a compositionstart comes before it, is not
+recorded here.
+
+The source checks described below were made on forms of this patch that
+carried the third rule, with a harness that is not in the repository.
+What the repository runs is scripts/check-editcontext-ime.js, which
+build-vscode-oss.sh runs on the patched tree: named cases over this file
+as the series leaves it, among them each rule here, the bound, the
+refusal of a range beyond the buffer, and the letter after a refusal
+replayed with a composition that starts again and with none.
+
 Source checks run the real emit method over the real composition and
 typing operations, with the model, the cursor list, the undo stack and
 the EditContext replaced by adapters, on a host Node and not the Android
@@ -616,26 +639,22 @@ and Japanese lines typed, converted and turned came out as typed in 224
 updates with no refusal.
 
 diff --git a/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts b/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
-index babfbb0..d2d6592 100644
+index babfbb0..ee7a971 100644
 --- a/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
 +++ b/src/vs/editor/browser/controller/editContext/native/nativeEditContext.ts
-@@ -87,9 +87,22 @@ export class NativeEditContext extends AbstractEditContext {
+@@ -87,9 +87,18 @@ export class NativeEditContext extends AbstractEditContext {
  	private _deletingByKey = false;
  	// An open EditContext composition, set at compositionstart and cleared at compositionend or blur.
  	private _compositionOpen = false;
 +	// Whether the composition that is open has typed: an update of it that changed the text was applied by the model since its compositionstart (set after the edit, in
 +	// _afterAppliedEdit). See _isInStepRewrite and _isTailDropOnReopen.
 +	private _compositionTyped = false;
-+	// The refusal that stands: the model's version, the range of the update that was last refused and the line of the model that the buffer it was made on starts at (the buffer starts at the first column of a line). It
-+	// stands until the model is edited or a composition starts (a restart that was completed), and the third rule applies to an update over the same range of the same
-+	// buffer: see _isTypedOverStaleRange.
-+	private _standingRefusal: { version: number; start: number; end: number; line: number } | undefined;
  	// The buffer and selection the input method knew before the first rewrite of the current task,
  	// kept until the task's rewrites are done: see _restartInputIfUnheard.
 -	private _beforeRewrite: { text: string; selection: OffsetRange; composing: boolean } | undefined;
 +	private _beforeRewrite: { text: string; selection: OffsetRange; composing: boolean; force?: boolean } | undefined;
 +	// Restart bound, part 1 of 4 (this member, the guard at a refusal, the count in _restartInputIfUnheard and the reset go together): how many forced restarts
-+	// have been made since an update last changed the text.
++	// have been made since the model's text last changed, counted together for every rule.
 +	private _refusalRestarts = 0;
 +	// Restart bound, part 1b: the version of the model that the count belongs to. Any edit of the model (typed, Enter, paste, cut, undo) is a change of text and starts the
 +	// count again, whether or not the update came through _emitTypeEvent.
@@ -643,17 +662,15 @@ index babfbb0..d2d6592 100644
  
  	// Overflow guard container
  	private readonly _parent: HTMLElement;
-@@ -258,6 +271,9 @@ export class NativeEditContext extends AbstractEditContext {
+@@ -258,6 +267,7 @@ export class NativeEditContext extends AbstractEditContext {
  		}));
  		this._register(editContextAddDisposableListener(this._editContext, 'compositionstart', (e) => {
  			this._compositionOpen = true;
 +			this._compositionTyped = false;
-+			// A composition that starts is the input method's picture read again, which is what a restart is for: the refusal that stood is over.
-+			this._standingRefusal = undefined;
  			this._updateEditContext();
  			// Utlimately fires onDidCompositionStart() on the editor to notify for example suggest model of composition state
  			// Updates the composition state of the cursor controller which determines behavior of typing with interceptors
-@@ -518,19 +534,29 @@ export class NativeEditContext extends AbstractEditContext {
+@@ -518,19 +528,29 @@ export class NativeEditContext extends AbstractEditContext {
  	// without a composition, restart nothing. Two rewrites restart input once, and a composition
  	// already ended by the page's key or tap handler restarts nothing more. The blur stays outside
  	// the edit, with the focus tracker paused so that the editor is not told it lost focus.
@@ -687,7 +704,7 @@ index babfbb0..d2d6592 100644
  			this._focusTracker.pause();
  			domNode.blur();
  			domNode.focus();
-@@ -544,6 +570,51 @@ export class NativeEditContext extends AbstractEditContext {
+@@ -544,6 +564,51 @@ export class NativeEditContext extends AbstractEditContext {
  		}
  		const selectionEndOffset = this._previousEditContextSelection.endExclusive;
  		const selectionStartOffset = this._previousEditContextSelection.start;
@@ -696,11 +713,11 @@ index babfbb0..d2d6592 100644
 +			this._refusalRestartsVersion = modelVersion;
 +			this._refusalRestarts = 0;
 +		}
-+		// Restart bound, part 3 of 4: after six forced restarts made without a change of text an update is no longer refused. A keyboard that has gone on with the same
-+		// picture through six restarts is not going to be corrected by a seventh, and a refusal that repeats leaves the person with input that does nothing until something
-+		// else is typed; the update is passed, as the editor without this patch passes it, and the count starts again at the next update that changes text.
++		// Restart bound, part 3 of 4: after six forced restarts made on one version of the model an update is no longer refused. The count is one for every rule and every
++		// update: six restarts forced by different updates, under different rules, spend it as six forced by the same update do. Refusals that go on leave the person with input
++		// that does nothing until something else is typed, so the update is passed, as the editor without this patch passes it, and the count starts again when the model's version moves.
 +		if (this._refusalRestarts < 6 && (this._isBeyondBuffer(e) || this._isRememberedWordRewrite(e, selectionStartOffset, selectionEndOffset) || this._isTailDropOnReopen(e, selectionStartOffset, selectionEndOffset) ||
-+			this._isTypedOverStaleRange(e, selectionStartOffset, selectionEndOffset) || this._isOneUnitOverWord(e, selectionStartOffset, selectionEndOffset) ||
++			this._isOneUnitOverWord(e, selectionStartOffset, selectionEndOffset) ||
 +			this._isStaleWriteAfterCaret(e, selectionStartOffset, selectionEndOffset) || this._isGrowthAfterCaret(e, selectionStartOffset, selectionEndOffset) ||
 +			this._isUntypedWriteKeepingCaret(e, selectionStartOffset, selectionEndOffset) ||
 +			this._isUntypedInsertKeepingCaret(e, selectionStartOffset, selectionEndOffset) ||
@@ -708,8 +725,8 @@ index babfbb0..d2d6592 100644
 +			// Refused: the model keeps its text and the buffer goes back to it where the update was applied to it. Input restarts
 +			// whether or not the buffer changed: the input method has to read the text and the caret again, or it goes on with
 +			// the range it kept and the next letter typed is written into it.
-+			// A refusal stands until the model is edited or a composition starts, for the range it refused of the buffer it was made on: see _isTypedOverStaleRange.
-+			this._standingRefusal = { version: modelVersion, start: e.updateRangeStart, end: e.updateRangeEnd, line: this._editContextStart.lineNumber };
++			// What was refused is counted (the bound above) and not remembered. The restart blurs the host, which ends the composition, so until a composition starts
++			// again no rule but _isBeyondBuffer judges an update, and the update that follows is judged on its own.
 +			const oldText = this._editContext.text;
 +			const applyingInput = this._applyingInputMethodEdit;
 +			this._applyingInputMethodEdit = true;
@@ -739,7 +756,7 @@ index babfbb0..d2d6592 100644
  		this._previousEditContextSelection = new OffsetRange(e.selectionStart, e.selectionEnd);
  
  		// With several cursors, an update that reaches outside the primary selection is about the
-@@ -570,6 +641,7 @@ export class NativeEditContext extends AbstractEditContext {
+@@ -570,6 +635,7 @@ export class NativeEditContext extends AbstractEditContext {
  				this._expectedCaretOffset = e.selectionStart;
  				this._onType(viewController, input);
  				this._expectedCaretOffset = undefined;
@@ -747,7 +764,7 @@ index babfbb0..d2d6592 100644
  				return;
  			}
  			this._dismissOtherCursors();
-@@ -633,6 +705,194 @@ export class NativeEditContext extends AbstractEditContext {
+@@ -633,6 +699,174 @@ export class NativeEditContext extends AbstractEditContext {
  		this._expectedCaretOffset = e.selectionStart === e.selectionEnd ? e.selectionStart : undefined;
  		this._onType(viewController, typeInput);
  		this._expectedCaretOffset = undefined;
@@ -802,32 +819,12 @@ index babfbb0..d2d6592 100644
 +			!(old.length % e.text.length === 0 && old === e.text.repeat(old.length / e.text.length));
 +	}
 +
-+	// After a refusal the keyboard can go on with the range it kept, and the letter typed next then arrives as that range: the part of the word up to the caret and the
-+	// letter in place of its text, the tail after the caret dropped, the caret asked right after the letter. Gboard 12.4 wrote it so in alpha beta Charlie delta with the
-+	// caret inside beta, after two writes of bet over 6..10 that were applied: betz over 6..10 with the caret at 10, and the z landed on the character after the word.
-+	// Such an update is refused while the refusal stands, that is until the model is edited, and only over the range that was refused: a suggestion at another word, which
-+	// a tap can bring up before any edit, is not the keyboard going on with its range. On its own it is not refused: a suggestion taken with the caret inside a
-+	// word can have the same shape, and nothing has been refused before it. A text that keeps the tail (a letter typed inside the word, the word rewritten with it) is not this shape.
-+	private _isTypedOverStaleRange(e: ITextUpdateEvent, selectionStartOffset: number, selectionEndOffset: number): boolean {
-+		const standing = this._standingRefusal;
-+		if (!isAndroid || !this._compositionOpen || !standing || standing.version !== this._context.viewModel.model.getVersionId() ||
-+			standing.start !== e.updateRangeStart || standing.end !== e.updateRangeEnd || selectionStartOffset !== selectionEndOffset ||
-+			standing.line !== this._editContextStart.lineNumber ||
-+			e.selectionStart !== e.selectionEnd || e.selectionStart !== e.updateRangeStart + e.text.length ||
-+			!(e.updateRangeStart >= 0 && e.updateRangeStart < selectionStartOffset && selectionStartOffset < e.updateRangeEnd && e.updateRangeEnd <= this._previousEditContextText.length)) {
-+			return false;
-+		}
-+		return e.text.length > selectionStartOffset - e.updateRangeStart && e.text.startsWith(this._previousEditContextText.slice(e.updateRangeStart, selectionStartOffset)) &&
-+			!e.text.endsWith(this._previousEditContextText.slice(selectionStartOffset, e.updateRangeEnd));
-+	}
-+
 +	// A word that an input method reopened, with nothing typed in it since, is written over by ONE unit: the keyboard asks for the caret right after the letter, over the
 +	// whole range it kept, and the caret is inside that range or at its end. Gboard 12.4 wrote it so after a turn of the screen, the first letter typed over a word it had
 +	// reopened without typing (two over 84..87 became x with the caret asked at 85, in a line holding line two; delta over 19..24 became z with the caret asked at 20, the
 +	// caret being at 22, in a line holding alpha beta Charlie delta); the word is gone and the letter stands alone. Such an update is refused. A Backspace on a reopened
 +	// word of two units writes the first unit of the range, which is not this shape (the second rule above refuses the one that drops the tail of a longer one), and a
-+	// selected word has a selection that is not collapsed. The third rule above does not see it: it needs a refusal that stands and a text longer than the part of the range
-+	// before the caret.
++	// selected word has a selection that is not collapsed.
 +	private _isOneUnitOverWord(e: ITextUpdateEvent, selectionStartOffset: number, selectionEndOffset: number): boolean {
 +		if (!isAndroid || !this._compositionOpen || this._compositionTyped || selectionStartOffset !== selectionEndOffset ||
 +			e.selectionStart !== e.selectionEnd || !this._isOneLetter(e.text) || e.selectionStart !== e.updateRangeStart + e.text.length ||
@@ -841,7 +838,7 @@ index babfbb0..d2d6592 100644
 +
 +	// Whether the text is one letter or digit of an alphabet: one code point (an emoji or another character outside the basic plane is one, though it is two units long), and
 +	// not a unit of Han, kana or Hangul, which stands for a longer reading (a kanji over two kana is a conversion), nor a symbol (the strip offers one for a word). The stale
-+	// writes of the fourth rule are letters.
++	// writes that _isOneUnitOverWord refuses are letters.
 +	private _isOneLetter(text: string): boolean {
 +		return /^[\p{L}\p{N}]$/u.test(text) && !/^[\p{Script=Han}\p{Script=Hiragana}\p{Script=Katakana}\p{Script=Hangul}]$/u.test(text);
 +	}
@@ -916,7 +913,7 @@ index babfbb0..d2d6592 100644
 +	// caret at the end of what they write. Such an update is refused when the composition that is open has typed, the selection is collapsed before and in the update, the range is not
 +	// empty, ends at the caret and lies in the buffer, the text is not empty, and the update asks for the caret at the offset it had, which is not the end of what it writes (an update that
 +	// writes the range's own text has the end of the range for the end of what it writes, so it is never refused). The rule keeps no state. Not recognised: a range that ends before the caret
-+	// or after it, an empty text, and the same update in a composition that has typed nothing, which the seventh rule takes.
++	// or after it, an empty text, and the same update in a composition that has typed nothing, which _isUntypedWriteKeepingCaret takes.
 +	private _isTypedWriteKeepingCaret(e: ITextUpdateEvent, selectionStartOffset: number, selectionEndOffset: number): boolean {
 +		return isAndroid && this._compositionOpen && this._compositionTyped && selectionStartOffset === selectionEndOffset &&
 +			e.selectionStart === selectionStartOffset && e.selectionEnd === selectionStartOffset &&
@@ -942,7 +939,7 @@ index babfbb0..d2d6592 100644
  	}
  
  	// Whether the update changes no text. It replaces nothing with nothing, or its text is the cached
-@@ -755,6 +1015,15 @@ export class NativeEditContext extends AbstractEditContext {
+@@ -755,6 +989,15 @@ export class NativeEditContext extends AbstractEditContext {
  		this._applyingInputMethodEdit = false;
  	}
  

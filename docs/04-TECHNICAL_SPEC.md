@@ -1228,12 +1228,15 @@ typed. An update whose range ends beyond the buffer is refused in every state, w
 composition open or not: the keyboard keeps the offsets of a buffer it was given earlier, the
 editor read the units past its own buffer as units to replace after the caret, and the typed
 edit replaced them across line breaks, so that the lines below the caret were deleted. The
-forced restarts are counted for one version of the model, and after six with no change of text
-the next such update is applied as the editor without the patch applies it, so that input
+forced restarts are counted for one version of the model, in one count for every rule and every
+update, and after six with no change of text the next update a rule would refuse is applied as
+the editor without the patch applies it, whatever the six before it refused, so that input
 never stops answering; a range that reaches beyond the buffer is cut at the buffer's end
-first, so that nothing after the buffer is replaced. What is refused is a set of shapes; the
-set and its cases are in the patch's description, with what the rules cost: a correction of an
-earlier word that keeps the caret where it was is not applied either, and the typo stays. The
+first, so that nothing after the buffer is replaced. Nothing of a refusal is kept beyond that
+count: the restart ends the composition, and the update that follows is judged on its own.
+What is refused is a set of shapes; the set and its cases are in the patch's description,
+with what the rules cost: a correction of an earlier word that keeps the caret where it was
+is not applied either, and the typo stays. The
 known limit is a letter typed after a turn while the keyboard still holds the range it
 reopened. The keyboard can send that letter alone over the word, which is refused, so the
 letter is lost; or over a single reopened letter, which is what a Hangul or kana step looks
@@ -1254,6 +1257,12 @@ deleted the lines below the caret in 12 of 12 runs on a build without the refusa
 of 30 with it; on an Android 13 emulator with Gboard 12.4 the refusal held in 15 of 15. Sent
 again and again, the update was passed once after six refusals with its text typed at the end
 of the buffer and the lines after it whole, in 5 of 5 and 7 of 7 runs on the two emulators.
+The builds called the nine rules and the patch as it is above carried one rule more than the
+patch has now, the third of the nine: it remembered the last refusal and was to refuse the
+next letter sent over the same range. It could not act, because the restart that follows a
+refusal ends the composition the rule needed, and it has been removed; no device run has been
+made without it. The rules are run on the patched source by
+`scripts/check-editcontext-ime.js`, in the server build.
 
 Patch 0051 keeps the EditContext buffer where it is while the caret has not moved. After an
 Enter typed on the keyboard at the end of a line, the buffer keeps its start on the line above
