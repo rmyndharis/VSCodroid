@@ -101,6 +101,9 @@ class DownloadOverwriteTest {
     /** Every outcome reported, in order. */
     private val reported = mutableListOf<Pair<DownloadOutcome, String>>()
 
+    /** The names the provider gives the documents the picker returned; one it does not know has none. */
+    private val names = mutableMapOf<Uri, String>()
+
     /** The request ids the page was asked to read. */
     private val readRequests = mutableListOf<String>()
 
@@ -199,6 +202,8 @@ class DownloadOverwriteTest {
         override fun discardDestination(destination: Uri) {
             store.remove(destination)
         }
+
+        override fun destinationName(destination: Uri): String? = names[destination]
 
         override fun requestBytes(requestId: String, url: String) {
             readRequests += requestId
@@ -356,6 +361,106 @@ class DownloadOverwriteTest {
         while (queued.isNotEmpty()) queued.removeFirst().run()
 
         assertEquals("NEW\n", contentOf(target), "a save that finished was removed because the page went after it")
+    }
+
+    /**
+     * The copy runs on the provider thread after the page's call has returned, so the page can be
+     * replaced while it runs (a folder opened, a window reloaded, the screen made again). The person
+     * confirmed the overwrite and the document is theirs: however the copy ends it is said.
+     */
+    @Test
+    fun `a copy that fails after the page went away is still reported as failed`() {
+        val queued = ArrayDeque<Runnable>()
+        val deferred = deferredCoordinator(queued)
+        // A provider that ignores the "t" of "wt" and cannot cut: the copy writes over the start of the file and fails at the cut.
+        truncation = Truncation.IGNORED
+        cutFails = true
+        val target = existingDocument("OLD LINE ONE\nOLD LINE TWO\n")
+        val id = startAndChooseOn(deferred, queued, target)
+        deferred.onBytes(id, encode("NEW\n"))
+        deferred.onComplete(id, null)
+
+        deferred.onPageGone()
+        while (queued.isNotEmpty()) queued.removeFirst().run()
+
+        assertEquals(listOf(DownloadOutcome.FAILED to "notes.md"), reported, "the person was left with a damaged file and no word of it")
+    }
+
+    @Test
+    fun `a copy refused for room after the page went away is still reported as failed`() {
+        val queued = ArrayDeque<Runnable>()
+        val deferred = deferredCoordinator(queued)
+        val target = existingDocument("OLD\n")
+        free = 10L
+        val id = startAndChooseOn(deferred, queued, target)
+        deferred.onBytes(id, encode("X".repeat(100)))
+        deferred.onComplete(id, null)
+
+        deferred.onPageGone()
+        while (queued.isNotEmpty()) queued.removeFirst().run()
+
+        assertEquals(listOf(DownloadOutcome.FAILED to "notes.md"), reported)
+        assertEquals("OLD\n", contentOf(target), "a copy that was refused changed the document")
+    }
+
+    @Test
+    fun `a copy that succeeds after the page went away is reported as saved`() {
+        val queued = ArrayDeque<Runnable>()
+        val deferred = deferredCoordinator(queued)
+        val target = existingDocument("OLD\n")
+        val id = startAndChooseOn(deferred, queued, target)
+        deferred.onBytes(id, encode("NEW\n"))
+        deferred.onComplete(id, null)
+
+        deferred.onPageGone()
+        while (queued.isNotEmpty()) queued.removeFirst().run()
+
+        assertEquals(listOf(DownloadOutcome.SAVED to "notes.md"), reported)
+        assertEquals("NEW\n", contentOf(target))
+    }
+
+    /**
+     * The screen can be made again while the picker is up (a language change, process death), and
+     * the answer then reaches a coordinator that has no download for it. The person chose a name and
+     * confirmed it; nothing else tells them there is no file.
+     */
+    @Test
+    fun `a picker answer for a download that is gone is reported by the name the person chose`() {
+        val created = newDocument()
+        names[created] = "report.md"
+
+        coordinator.onDestinationChosen("gone", created)
+
+        assertEquals(listOf(DownloadOutcome.FAILED to "report.md"), reported)
+        assertEquals(null, contentOf(created), "the empty document the picker made stayed in the folder")
+    }
+
+    @Test
+    fun `a picker answer for a download that is gone leaves a document the person had and says so`() {
+        val existing = existingDocument("KEEP\n")
+        names[existing] = "notes.md"
+
+        coordinator.onDestinationChosen("gone", existing)
+
+        assertEquals(listOf(DownloadOutcome.FAILED to "notes.md"), reported)
+        assertEquals("KEEP\n", contentOf(existing))
+    }
+
+    @Test
+    fun `a picker answer for a download that is gone, for a document the provider will not name, is not reported`() {
+        val created = newDocument()
+
+        coordinator.onDestinationChosen("gone", created)
+
+        assertEquals(emptyList<Pair<DownloadOutcome, String>>(), reported)
+        assertEquals(null, contentOf(created))
+    }
+
+    @Test
+    fun `a cancelled picker for a download that is gone says nothing`() {
+        coordinator.onDestinationChosen("gone", null)
+
+        assertEquals(emptyList<Pair<DownloadOutcome, String>>(), reported)
     }
 
     @Test
