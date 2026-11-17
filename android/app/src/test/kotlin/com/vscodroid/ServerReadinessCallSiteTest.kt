@@ -98,11 +98,15 @@ class ServerReadinessCallSiteTest {
         assertEquals(listOf("toast:Starting slowly", "show"), events)
     }
 
+    /**
+     * The page says it, and a notice raised before it is taken down by it at once: a dialog that
+     * flashes wherever the text is too long for a toast.
+     */
     @Test
-    fun `binding shows the terminal notice and the gave up page`() {
+    fun `binding a server that gave up shows the gave up page and no notice under it`() {
         every { service.lastStartupNotice() } returns StartupNotice("Server stopped", terminal = true)
         runReal("setupServiceCallbacks")
-        assertEquals(listOf("toast:Server stopped", "show", "gave-up"), events)
+        assertEquals(listOf("gave-up"), events)
     }
 
     @Test

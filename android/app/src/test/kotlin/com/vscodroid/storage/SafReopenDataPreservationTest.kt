@@ -28,6 +28,42 @@ class SafReopenDataPreservationTest : SafInitialSyncTestBase() {
         assertEquals("EDITOR", written["doc-uri:doc:notes.txt"]?.toString(Charsets.UTF_8))
     }
 
+    /**
+     * A name too long to take `.device-<time>` within the 255 bytes of a name keeps the device's
+     * edit under the name cut to fit, and the newer mirror edit goes across. With the whole name
+     * the copy could not be made, so the edit was refused and said to be only inside the app at
+     * every open.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = ["a short name", "a long name", "a long name in another script"])
+    fun `a newer mirror edit of a long name keeps the device's edit under its name cut to fit`(shape: String) {
+        val name = when (shape) {
+            "a long name" -> "n".repeat(240) + ".txt"
+            "a long name in another script" -> "日本語".repeat(27) + ".txt"
+            else -> "notes.txt"
+        }
+        deviceTree(mapOf("root" to listOf(Child(name, contents = "v1"))))
+        sync()
+        mirrorFile(name).apply {
+            writeText("EDITOR")
+            assertTrue(setLastModified(DEVICE_TIME + 120_000))
+        }
+        deviceTree(mapOf("root" to listOf(Child(name, contents = "another app's edit", modified = DEVICE_TIME + 60_000))))
+
+        sync()
+
+        assertEquals(emptyList<String>(), lost, "the edit was said to be only inside the app")
+        assertEquals("EDITOR", written["doc-uri:doc:$name"]?.toString(Charsets.UTF_8), "the edit never reached the device")
+        val aside = mirror.listFiles()!!.single { it.name != name }
+        assertEquals("another app's edit", aside.readText())
+        val stem = aside.name.substringBefore(SafSyncEngine.DEVICE_COPY_SUFFIX)
+        assertTrue(
+            aside.name == stem + SafSyncEngine.DEVICE_COPY_SUFFIX + (DEVICE_TIME + 60_000) &&
+                name.startsWith(stem) && aside.name.toByteArray(Charsets.UTF_8).size <= 255,
+            "the device's edit was not kept under its name cut to fit, then the suffix: ${aside.name}",
+        )
+    }
+
     @ParameterizedTest
     @ValueSource(strings = ["absent", "unsupported"])
     fun `a newer device document retains an existing copy without usable history`(history: String) {

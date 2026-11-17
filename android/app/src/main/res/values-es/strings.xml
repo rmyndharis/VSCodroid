@@ -70,7 +70,7 @@
          about to become reachable again, and a user who is not told which
          setting to look for has nothing to search on. -->
     <string name="heap_override_suspended">El límite de memoria personalizado de settings.json se desactivó después de varios fallos seguidos. Cambia vscodroid.server.heapCeilingMb y reinicia la aplicación para probar otro valor.</string>
-    <string name="notice_editor_away_from_home">Tu configuración y tus inicios de sesión no se cargaron porque otra aplicación está usando el puerto %1$d. Están a salvo: cierra esa aplicación, detén VSCodroid desde su notificación y vuelve a abrirlo.</string>
+    <string name="notice_editor_away_from_home">Tu configuración y tus inicios de sesión no se cargaron porque otra aplicación está usando el puerto %1$d. Están a salvo: cierra esa aplicación, toca Detener servidor (o detén VSCodroid desde su notificación) y vuelve a abrirlo.</string>
     <!-- The figure is passed in rather than written here, and it is the
          SHORTFALL the refusal measured, not the size of the unpack: this asks
          the user to free it, and what they have to free is what the device is
@@ -225,12 +225,6 @@
     <string name="shortcut_toolchains_short">Herramientas</string>
     <string name="shortcut_toolchains_long">Administrar cadenas de herramientas</string>
     <string name="toolchain_size_download_and_installed">%1$s de descarga, %2$s instalados</string>
-    <string name="saf_device_copy_preserved">Copia del dispositivo junto al archivo: %1$s.</string>
-    <plurals name="saf_device_copies_preserved">
-        <item quantity="one">Se conservó %1$d edición. Busca .device- y una hora.</item>
-        <item quantity="many">Se conservaron %1$d ediciones. Busca .device- y una hora.</item>
-        <item quantity="other">Se conservaron %1$d ediciones. Busca .device- y una hora.</item>
-    </plurals>
     <!-- Shown when a save could not be written out to the device folder. Names the
          consequence rather than the error: the user's next decision is whether to
          copy the file out before uninstalling, not which exception was thrown. -->
@@ -274,6 +268,13 @@
          never had, which is what saf_directory_kept says. -->
     <string name="saf_directory_changed_kept">%1$s se conservó en la carpeta del dispositivo: es posible que otra aplicación haya cambiado un archivo que contiene desde la última vez que el editor lo leyó o guardó. Elimínala ahí si ya no la necesitas.</string>
     <string name="saf_delete_refused">No se pudo eliminar %1$s de la carpeta del dispositivo, así que volverá a aparecer la próxima vez que se abra la carpeta. Elimínalo en el gestor de archivos del dispositivo.</string>
+    <!-- Device and app edits kept beside their file instead of being overwritten -->
+    <string name="saf_device_copy_preserved">Copia del dispositivo junto al archivo: %1$s.</string>
+    <plurals name="saf_device_copies_preserved">
+        <item quantity="one">Se conservó %1$d edición. Busca .device- y una hora.</item>
+        <item quantity="many">Se conservaron %1$d ediciones. Busca .device- y una hora.</item>
+        <item quantity="other">Se conservaron %1$d ediciones. Busca .device- y una hora.</item>
+    </plurals>
     <string name="saf_local_copy_preserved">Copia de la aplicación junto al archivo: %1$s.</string>
     <plurals name="saf_local_copies_preserved">
         <item quantity="one">Se conservó %1$d edición de la aplicación. Busca .local- y una hora.</item>
@@ -288,7 +289,7 @@
     <string name="saf_mirror_unknown">No hay ninguna copia local de esa carpeta que quitar.</string>
     <!-- Native confirmation and unconfirmed-removal refusal. A snapshot cannot
          exclude files added directly after the check. -->
-    <string name="saf_mirror_not_a_copy">Esta copia local puede contener archivos que nunca llegaron a la carpeta del dispositivo. Guarde los archivos necesarios en otro lugar y deje de trabajar con la copia antes de continuar. La eliminación no se puede deshacer.</string>
+    <string name="saf_mirror_not_a_copy">Esta copia local puede contener archivos que nunca llegaron a la carpeta del dispositivo. Guarda los archivos necesarios en otro lugar y deja de trabajar con la copia antes de continuar. La eliminación no se puede deshacer.</string>
     <!-- The rename that commits a removal was refused by the filesystem. Separate from
          saf_mirror_unknown, which says there was nothing to remove: here the copy is
          still there, whole, and trying again is worth something. -->

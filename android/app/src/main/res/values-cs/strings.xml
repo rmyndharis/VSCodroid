@@ -70,7 +70,7 @@
          about to become reachable again, and a user who is not told which
          setting to look for has nothing to search on. -->
     <string name="heap_override_suspended">Vlastní limit paměti v souboru settings.json byl po opakovaných pádech vypnut. Chcete-li vyzkoušet jinou hodnotu, změňte vscodroid.server.heapCeilingMb a restartujte aplikaci.</string>
-    <string name="notice_editor_away_from_home">Vaše nastavení a přihlášení se nenačetla, protože port %1$d používá jiná aplikace. Jsou v bezpečí: zavřete tuto aplikaci, zastavte VSCodroid z jeho oznámení a znovu ho otevřete.</string>
+    <string name="notice_editor_away_from_home">Vaše nastavení a přihlášení se nenačetla, protože port %1$d používá jiná aplikace. Jsou v bezpečí: zavřete tuto aplikaci, klepněte na Zastavit server (nebo zastavte VSCodroid z jeho oznámení) a VSCodroid znovu otevřete.</string>
     <!-- The figure is passed in rather than written here, and it is the
          SHORTFALL the refusal measured, not the size of the unpack: this asks
          the user to free it, and what they have to free is what the device is
@@ -225,13 +225,6 @@
     <string name="shortcut_toolchains_short">Sady nástrojů</string>
     <string name="shortcut_toolchains_long">Spravovat sady nástrojů</string>
     <string name="toolchain_size_download_and_installed">%1$s ke stažení, %2$s po instalaci</string>
-    <string name="saf_device_copy_preserved">Změna ze zařízení vedle souboru: %1$s.</string>
-    <plurals name="saf_device_copies_preserved">
-        <item quantity="one">Zachována %1$d změna ze zařízení. Hledejte .device- a čas.</item>
-        <item quantity="few">Zachovány %1$d změny ze zařízení. Hledejte .device- a čas.</item>
-        <item quantity="many">Zachováno %1$d změny ze zařízení. Hledejte .device- a čas.</item>
-        <item quantity="other">Zachováno %1$d změn ze zařízení. Hledejte .device- a čas.</item>
-    </plurals>
     <!-- Shown when a save could not be written out to the device folder. Names the
          consequence rather than the error: the user's next decision is whether to
          copy the file out before uninstalling, not which exception was thrown. -->
@@ -277,6 +270,14 @@
          never had, which is what saf_directory_kept says. -->
     <string name="saf_directory_changed_kept">Adresář %1$s zůstal ve složce v zařízení: jiná aplikace mohla změnit soubor v něm od chvíle, kdy ho editor naposledy načetl nebo uložil. Pokud ho už nepotřebujete, odstraňte ho tam.</string>
     <string name="saf_delete_refused">%1$s se nepodařilo smazat ze složky v zařízení, takže se při příštím otevření složky objeví znovu. Smažte tuto položku ve správci souborů v zařízení.</string>
+    <!-- Device and app edits kept beside their file instead of being overwritten -->
+    <string name="saf_device_copy_preserved">Změna ze zařízení vedle souboru: %1$s.</string>
+    <plurals name="saf_device_copies_preserved">
+        <item quantity="one">Zachována %1$d změna ze zařízení. Hledejte .device- a čas.</item>
+        <item quantity="few">Zachovány %1$d změny ze zařízení. Hledejte .device- a čas.</item>
+        <item quantity="many">Zachováno %1$d změny ze zařízení. Hledejte .device- a čas.</item>
+        <item quantity="other">Zachováno %1$d změn ze zařízení. Hledejte .device- a čas.</item>
+    </plurals>
     <string name="saf_local_copy_preserved">Změna z aplikace vedle souboru: %1$s.</string>
     <plurals name="saf_local_copies_preserved">
         <item quantity="one">Zachována %1$d změna z aplikace. Hledejte .local- a čas.</item>

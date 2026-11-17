@@ -2,6 +2,7 @@ package com.vscodroid.service
 
 import android.app.ActivityManager
 import android.content.Context
+import android.system.OsConstants
 import com.vscodroid.util.Environment
 import com.vscodroid.util.Logger
 import com.vscodroid.util.PortFinder
@@ -493,14 +494,20 @@ class ProcessManager internal constructor(
     private var procDir = File("/proc")
 
     /**
-     * How [reapRecordedEditorServer] and [killBootstrap] signal a process. A `var` for the
+     * How [killBootstrap] and [endEditorProcess] send SIGKILL. A `var` for the
      * same reason [procDir] is one: the suite runs on a JVM where `android.os.Process` is a
      * stub, so a test calling through to it could only ever assert that nothing happened.
      */
     internal var killRecordedProcess: (Int) -> Unit = { android.os.Process.killProcess(it) }
 
+    /** How [endEditorProcess] sends the SIGTERM that comes first; a `var` for the same reason. */
+    internal var terminateRecordedProcess: (Int) -> Unit = {
+        android.os.Process.sendSignal(it, OsConstants.SIGTERM)
+    }
+
     /**
-     * The clock [waitForReady] measures its budget on, in nanoseconds.
+     * The clock [waitForReady] measures its budget on, in nanoseconds, and
+     * [endEditorProcess] its wait for a terminated editor.
      *
      * Monotonic, which is the whole requirement: the wall clock is corrected out
      * from under a running app and the poll's bound must not move with it. See
@@ -666,12 +673,15 @@ class ProcessManager internal constructor(
                 portFreedByReap()
             }
         }
-        var bound = false
+        // The origin this start bound, kept apart from _port: the release that follows the
+        // notification's Stop clears that field under a running start, and the survivor's
+        // note names this port and no other.
+        var origin = 0
         repeat(5) {
-            if (bound) return@repeat
+            if (origin > 0) return@repeat
             try {
-                _port = gateway.bind(_port)
-                bound = true
+                origin = gateway.bind(_port)
+                _port = origin
             } catch (e: IOException) {
                 if (inheritedPort != null || it == 4) {
                     Logger.e(tag, "Could not reserve the editor origin", e)
@@ -684,58 +694,70 @@ class ProcessManager internal constructor(
                 _port = PortFinder.getOrAllocatePort(context)
             }
         }
-        if (!bound) return false
+        if (origin == 0) return false
         if (inheritedPort == null) {
             // The first port an install binds is its home. A start that bound
             // another because home was busy keeps it for this process only, and
             // the person is told once: what the workbench stored under home is
             // not on this origin.
-            if (home == 0) PortFinder.rememberHome(context, _port)
-            gateway.noteAwayFromHome(if (home > 0 && home != _port) home else 0)
+            if (home == 0) PortFinder.rememberHome(context, origin)
+            gateway.noteAwayFromHome(if (home > 0 && home != origin) home else 0)
         }
 
         // The private backend may survive the application process, whose TCP listener did not.
         if (editorNote != null && recorded != null && recordedSocket != null &&
-            portHeldByOurEditorServer(editorNote)) {
+            portHeldByOurEditorServer(editorNote, origin)) {
             val owner = recorded.optString("runId", "")
-            synchronized(readinessLock) {
-                if (isShuttingDown || generation != stopGeneration || !canStart()) {
-                    reapRecordedEditorServer("a stop landed before adoption", editorNote)
-                    releaseOriginOfRefusedStart(gateway, listenersAtStart)
-                    return false
+            // The reaps below run outside the lock, which Stop takes on the main thread: each
+            // gives the editor up to REAP_TERM_GRACE_MS to leave on its SIGTERM before it escalates.
+            val stoppedBeforeAdoption = synchronized(readinessLock) {
+                val stopped = isShuttingDown || generation != stopGeneration || !canStart()
+                if (!stopped) {
+                    // Stop must be able to withdraw routing while the adoption proof is in flight.
+                    serverRunId = owner
+                    gateway.selectBackend(recordedSocket, owner)
                 }
-                // Stop must be able to withdraw routing while the adoption proof is in flight.
-                serverRunId = owner
-                gateway.selectBackend(recordedSocket, owner)
+                stopped
+            }
+            if (stoppedBeforeAdoption) {
+                reapRecordedEditorServer("a stop landed before adoption", editorNote, origin)
+                releaseOriginOfRefusedStart(gateway, listenersAtStart)
+                return false
             }
             if (recordedServerIsServing(editorNote)) {
                 synchronized(readinessLock) {
                     if (isShuttingDown || generation != stopGeneration || !canStart()) {
                         gateway.withdrawBackend(owner)
-                        reapRecordedEditorServer("a stop landed while it was being adopted", editorNote)
-                        releaseOriginOfRefusedStart(gateway, listenersAtStart)
-                        return false
+                    } else {
+                        adopted = true
+                        adoptedAnnouncedServer = recordedEditorNote().let {
+                            it == editorNote && it == announcedEditorNote
+                        }
+                        clearReadiness()
+                        serverProcess = null
+                        serverRunId = owner
+                        serverEditorNote = editorNote
+                        listenUnreported = false
+                        heapOverrideActive = false
+                        heapOverrideSuspendedNow = false
+                        startAdoptionWatch(editorNote)
+                        return true
                     }
-                    adopted = true
-                    adoptedAnnouncedServer = recordedEditorNote().let {
-                        it == editorNote && it == announcedEditorNote
-                    }
-                    clearReadiness()
-                    serverProcess = null
-                    serverRunId = owner
-                    serverEditorNote = editorNote
-                    listenUnreported = false
-                    heapOverrideActive = false
-                    heapOverrideSuspendedNow = false
-                    startAdoptionWatch(editorNote)
-                    return true
                 }
+                reapRecordedEditorServer("a stop landed while it was being adopted", editorNote, origin)
+                releaseOriginOfRefusedStart(gateway, listenersAtStart)
+                return false
             }
             gateway.withdrawBackend(owner)
             synchronized(readinessLock) {
                 if (serverRunId == owner) serverRunId = null
             }
-            reapRecordedEditorServer("the private backend could not be adopted", editorNote)
+            reapRecordedEditorServer("the private backend could not be adopted", editorNote, origin)
+            // A stop inside the adoption round trips also fails them; nothing is bound or spawned after it.
+            if (synchronized(readinessLock) { isShuttingDown || generation != stopGeneration || !canStart() }) {
+                releaseOriginOfRefusedStart(gateway, listenersAtStart)
+                return false
+            }
         } else if (recorded != null && recordedSocket != null && recorded.optInt("pid", 0) > 0 &&
             Files.notExists(File(procDir, recorded.optInt("pid").toString()).toPath(), LinkOption.NOFOLLOW_LINKS)) {
             // Only confirmed process absence permits cleanup without sending a signal.
@@ -812,7 +834,7 @@ class ProcessManager internal constructor(
             try {
                 spawned.outputStream.close()
             } catch (failure: IOException) {
-                stopOwnedProcess(spawned, runId, rejected = true)
+                stopOwnedProcess(spawned, runId)
                 throw failure
             }
             // A stop that landed while this was spawning has to take the process
@@ -844,7 +866,7 @@ class ProcessManager internal constructor(
             }
             if (!accepted) {
                 Logger.i(tag, "A stop landed while the server was spawning; ending it again")
-                stopOwnedProcess(spawned, runId, rejected = true)
+                stopOwnedProcess(spawned, runId)
                 releaseOriginOfRefusedStart(gateway, listenersAtStart)
                 return false
             }
@@ -986,7 +1008,7 @@ class ProcessManager internal constructor(
      * it reports the server lost, the restart adopts the same note again, and the
      * budget is spent on a loop. Neither question is sufficient alone.
      */
-    fun portHeldByOurEditorServer(capturedNote: String? = null): Boolean {
+    fun portHeldByOurEditorServer(capturedNote: String? = null, origin: Int = _port): Boolean {
         val note = File(Environment.getServerDir(context), EDITOR_PID_FILE)
         val recorded = try {
             if (!note.isFile) return false
@@ -1000,8 +1022,8 @@ class ProcessManager internal constructor(
 
         val pid = recorded.optInt("pid", 0)
         val port = recorded.optInt("port", 0)
-        if (pid <= 0 || port != _port) {
-            Logger.i(tag, "Editor server note does not describe port $_port; not adopting")
+        if (pid <= 0 || port != origin) {
+            Logger.i(tag, "Editor server note does not describe port $origin; not adopting")
             return false
         }
 
@@ -1015,7 +1037,7 @@ class ProcessManager internal constructor(
             null
         }
         if (cmdline == null) {
-            Logger.i(tag, "Editor server $pid is gone; not adopting port $_port")
+            Logger.i(tag, "Editor server $pid is gone; not adopting port $origin")
             return false
         }
 
@@ -1023,7 +1045,7 @@ class ProcessManager internal constructor(
         // bytes is enough and avoids caring how many arguments there are.
         val isOurServer = cmdline.contains(EDITOR_ENTRY_POINT)
         if (!isOurServer) {
-            Logger.w(tag, "Pid $pid is no longer an editor server; not adopting port $_port")
+            Logger.w(tag, "Pid $pid is no longer an editor server; not adopting port $origin")
         }
         return isOurServer
     }
@@ -1050,7 +1072,9 @@ class ProcessManager internal constructor(
      *    one of our terminals or a language server does not match [EDITOR_ENTRY_POINT] and
      *    is left alone. The window between that read and the signal is what cannot be
      *    closed from userspace; it is microseconds wide and needs a recycle landing inside
-     *    it onto another editor server of ours.
+     *    it onto another editor server of ours. The signal is a SIGTERM, and the SIGKILL
+     *    that may follow it is preceded by the same read and a read of the run's id in its
+     *    environment: see [endEditorProcess].
      *  - **The note is consumed either way**, so a pid this declines to kill is not
      *    reconsidered on the next call.
      *
@@ -1060,7 +1084,7 @@ class ProcessManager internal constructor(
      * @return whether a process was signalled. False covers no note, a note for another
      *   port, a pid already gone, and a pid that is no longer an editor server.
      */
-    internal fun reapRecordedEditorServer(reason: String, capturedNote: String? = null): Boolean {
+    internal fun reapRecordedEditorServer(reason: String, capturedNote: String? = null, origin: Int = _port): Boolean {
         val note = File(Environment.getServerDir(context), EDITOR_PID_FILE)
         val recorded = try {
             if (!note.isFile) return false
@@ -1073,7 +1097,7 @@ class ProcessManager internal constructor(
         }
         val pid = recorded.optInt("pid", 0)
         val port = recorded.optInt("port", 0)
-        if (pid <= 0 || port != _port) return false
+        if (pid <= 0 || port != origin) return false
         if (capturedNote != null) {
             val owner = recorded.optString("runId", "")
             val environment = try {
@@ -1107,11 +1131,11 @@ class ProcessManager internal constructor(
             return false
         }
         return try {
-            killRecordedProcess(pid)
+            endEditorProcess(pid, recorded.optString("runId", ""))
             recordedBackendSocket(recorded)?.let { socket ->
                 StorageManager.deleteFile(socket, context.filesDir.parentFile)
             }
-            Logger.i(tag, "Ended the editor backend $pid for port $_port ($reason)")
+            Logger.i(tag, "Ended the editor backend $pid for port $origin ($reason)")
             true
         } catch (e: Exception) {
             Logger.w(tag, "Could not end the editor server $pid: ${e.message}")
@@ -1423,7 +1447,7 @@ class ProcessManager internal constructor(
             }
         }
         Logger.i(tag, "Stopping server...")
-        stoppingProcess?.let { stopOwnedProcess(it, stoppingRunId, rejected = false) }
+        stoppingProcess?.let { stopOwnedProcess(it, stoppingRunId) }
         synchronized(readinessLock) {
             if (serverProcess === stoppingProcess && serverRunId == stoppingRunId) {
                 serverProcess = null
@@ -1434,14 +1458,11 @@ class ProcessManager internal constructor(
         stoppingWatchdog?.interrupt()
     }
 
-    private fun stopOwnedProcess(process: Process, runId: String?, rejected: Boolean) {
-        val wasAlive = process.isAlive
-        var bootstrapExited = false
+    private fun stopOwnedProcess(process: Process, runId: String?) {
         try {
             process.destroy()
             val exited = process.waitFor(GRACEFUL_STOP_TIMEOUT_MS, TimeUnit.MILLISECONDS)
             if (exited) {
-                bootstrapExited = true
                 Logger.i(tag, "Server stopped with exit code ${process.exitValue()}")
             } else {
                 Logger.w(tag, "Graceful shutdown timed out, force killing")
@@ -1451,11 +1472,11 @@ class ProcessManager internal constructor(
             Logger.w(tag, "Shutdown failed, force killing", e)
             killBootstrap(process)
         }
-        // A signal can arrive after the fork but before the note or shutdown handler exists.
-        val noteMatchesRun = recordedEditorNote()?.let {
-            runCatching { JSONObject(it).optString("runId", "") == runId }.getOrDefault(false)
-        } == true
-        if (rejected || !wasAlive || !bootstrapExited || !noteMatchesRun) reapOwnedEditor(runId)
+        // Whatever the bootstrap did. One that answered the signal removed its note when
+        // its child exited, and the reap finds nothing. One that left before its handler
+        // ran (dead before Stop, or killed by the signal it had no handler for yet) left
+        // the note and the child, and the reap ends that child by its run identity.
+        reapOwnedEditor(runId)
     }
 
     private fun reapOwnedEditor(runId: String?) {
@@ -1479,6 +1500,7 @@ class ProcessManager internal constructor(
 
     private fun reapUnrecordedEditor(runId: String) {
         try {
+            val owned = mutableListOf<Int>()
             val uid = context.applicationInfo.uid
             if (uid <= 0) return
             val node = File(Environment.getNodePath(context)).canonicalPath
@@ -1502,16 +1524,64 @@ class ProcessManager internal constructor(
                         arguments.drop(1).firstOrNull { !it.startsWith('-') }
                             ?.let { File(it).canonicalPath } != entry
                     ) continue
-                    killRecordedProcess(pid)
-                    editorBackendSocket(context, runId)?.let { socket ->
-                        StorageManager.deleteFile(socket, context.filesDir.parentFile)
-                    }
-                    Logger.i(tag, "Ended the owned editor $pid whose bootstrap left no usable note")
+                    owned += pid
                 }
+            }
+            // Ended after the scan, so the wait each one gets is not taken from the scan's limit,
+            // and each asked again whether it is this run's editor, since the scan.
+            for (pid in owned) {
+                if (!editorStillRuns(pid, runId)) continue
+                endEditorProcess(pid, runId)
+                editorBackendSocket(context, runId)?.let { socket ->
+                    StorageManager.deleteFile(socket, context.filesDir.parentFile)
+                }
+                Logger.i(tag, "Ended the owned editor $pid whose bootstrap left no usable note")
             }
         } catch (e: Exception) {
             Logger.w(tag, "Could not complete the owned editor check: ${e.javaClass.simpleName}")
         }
+    }
+
+    /**
+     * Ends the editor server [pid] of [runId] with SIGTERM, and with SIGKILL only when it is
+     * still that editor [REAP_TERM_GRACE_MS] later.
+     *
+     * The SIGTERM is for any handler in the editor server that has to run to end what the
+     * server started; a SIGKILL runs none. An editor with no such handler dies of the SIGTERM
+     * at once, and the wait costs one poll.
+     *
+     * The identity is read again before the SIGKILL, since the pid may have been freed while
+     * this waited: a process that is gone, a zombie (which has no command line) and a pid
+     * given to anything other than an editor stop naming [EDITOR_ENTRY_POINT], and a pid given
+     * to an editor of another run stops carrying [runId] in its environment. An interrupt is
+     * kept for the caller rather than cutting the wait short, which is bounded anyway.
+     */
+    private fun endEditorProcess(pid: Int, runId: String) {
+        terminateRecordedProcess(pid)
+        val started = nanoClock()
+        var interrupted = false
+        try {
+            while (editorStillRuns(pid, runId)) {
+                if (nanoClock() - started >= TimeUnit.MILLISECONDS.toNanos(REAP_TERM_GRACE_MS)) {
+                    killRecordedProcess(pid)
+                    return
+                }
+                try {
+                    Thread.sleep(REAP_TERM_POLL_MS)
+                } catch (_: InterruptedException) {
+                    interrupted = true
+                }
+            }
+        } finally {
+            if (interrupted) Thread.currentThread().interrupt()
+        }
+    }
+
+    private fun editorStillRuns(pid: Int, runId: String): Boolean {
+        val process = File(procDir, pid.toString())
+        return readProcFile(File(process, "cmdline"), 16384)?.contains(EDITOR_ENTRY_POINT) == true &&
+            readProcFile(File(process, "environ"), 131072)?.split('\u0000')
+                ?.contains("VSCODROID_SERVER_RUN_ID=$runId") == true
     }
 
     /**
@@ -2116,6 +2186,17 @@ internal const val REAP_SCAN_BUDGET_MS = 500L
 
 /** How often the port is asked inside that grace. */
 internal const val REAP_PORT_POLL_MS = 100L
+
+/**
+ * How long a reap waits for an editor server to leave on its SIGTERM before the SIGKILL.
+ *
+ * A handler in the editor server that ends what the server started takes a few milliseconds;
+ * this bounds what an editor whose event loop is stuck costs a stop.
+ */
+internal const val REAP_TERM_GRACE_MS = 300L
+
+/** How often the editor is looked for inside that grace. */
+internal const val REAP_TERM_POLL_MS = 20L
 
 /**
  * How long [ProcessManager.waitForReady] polls before giving up.

@@ -14,14 +14,35 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - On Android 12 and later the low storage warning is shown; it was dropped before the screen could show it.
 - The action button of a toolchain card shows its whole label at the largest font and display sizes.
 - An install made on Android 10 keeps its projects folder in the app's storage after the phone is updated, even when another app has made a folder of that name on shared storage.
-- A notice shown only once while the app runs, such as the one about a workspace that spans several device folders, waits for the app's return when it arrives in the background instead of being dropped.
-- On Android 12 and later, the notice that the server is taking longer than usual to start closes when the server starts instead of staying over the editor.
-- The notice that the server crashed repeatedly no longer appears for a moment under the page that says so.
-- The notice that another app is using the editor's port comes back after a font size or language change until it is answered, and offers Stop Server itself for a phone with notifications turned off.
-- The Toolchains shortcut opened while the setup that follows an update is running goes to the setup screen instead of installing over files still being unpacked.
+- On Android 12 and later, a notice shown only once while the app runs, such as the one about a workspace that spans several device folders, waits for the app's return when it arrives in the background instead of being dropped.
+- On Android 12 and later, the notice that the server is taking longer than usual to start closes when the server starts instead of staying over the editor, also after a font size or language change, which no longer shows it twice.
+- The notice that the server crashed repeatedly or could not start no longer appears for a moment under the page that says so.
+- The page that says the server stopped is no longer skipped when the editor starts to reload at that moment, which left a blank screen.
+- The notice that another app is using the editor's port comes back until it is answered, after a font size or language change or after closing the app from the recent apps, and no longer comes back wrongly after Stop Server.
+- The notice that another app is using the editor's port offers Stop Server itself and names it in its text, for a phone with notifications turned off.
+- An install tapped on the Toolchains screen before the setup that follows an update has finished opens the setup screen instead of unpacking over it.
 - A keyboard put away after the screen is turned stays down when a text box other than the editor has the focus, such as Quick Open or the find box; the next touch used to bring it back.
 - A file another app deleted from a device folder is no longer put back there when the app's copy of it could not be read as the folder opened.
 - An edit that lands just as the app removes its copy of a file another app deleted from a device folder is kept as `<name>.local-<time>` and a notice says so.
+- Clear Caches no longer unlinks the sockets in the editor's temporary directory, so git sign-in prompts and the `vscodroid` command keep working until the next restart.
+- The first-run toolchain picker is marked answered when the downloads it started have ended, so a start that ends in the middle of them shows it again instead of dropping the packs not yet fetched, and a screen made again while they run does not ask a second time.
+- The Get Started walkthrough no longer says that every TypeScript file runs from the play button; the user guide lists the cases that fail.
+- The user guide says where settings are kept: the User tab's in the editor's storage, the Remote tab's in `~/.vscodroid/data/Machine/settings.json`.
+- The privacy policy names both installer package names that mark an install as coming from the Play Store.
+- A file deleted from a device folder is no longer put back at a later open when the app's record of that folder was missing or written by an older version.
+- A file in a device folder that grew past 50 MB is no longer put back with its old content after it is deleted on the device.
+- For a file in a device folder whose name is too long to take `.local-<time>` whole, the app's copy is kept beside it under a shortened `.local-` name, so the device's newer copy comes in again.
+- For a file in a device folder whose name is too long to take `.device-<time>` whole, another app's edit is kept beside it under a shortened `.device-` name, so the app's newer copy reaches the device.
+- A device folder picked while the app was being restarted opens once the editor is up, instead of the folder open before it.
+- A sign-in that comes back after the editor reloaded says the editor restarted and to sign in again; it used to end in silence.
+- The notice that a sign-in was cut off by an editor restart no longer comes back after a font size or language change or an update.
+- Leaving the editor just as the folder picker or a download's save dialog was about to open no longer crashes the app.
+- The message for a device folder that failed to open names the error instead of ending in "null".
+- After an update, the git sign-in prompt and the `vscodroid` command no longer keep running the previous version's script when a toolchain is removed or repaired while setup unpacks.
+- A Stop Server pressed while the server was still starting, or while the app was reconnecting to an editor on a temporary port, no longer leaves the editor server running in the background.
+- Opening VSCodroid again just after Stop Server no longer leaves "Starting server..." on the screen with the server already running behind it.
+- Connecting or removing a game controller, a remote or a keyboard with a D-pad no longer reloads the editor.
+- A connection to the editor's port that sends nothing is closed after 10 seconds instead of two minutes, so silent connections from another app no longer hold all 32 slots for that long.
 
 ## [1.9.0] - 2026-11-16
 
@@ -37,7 +58,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Format Document uses the bundled Prettier for JavaScript, TypeScript, JSON, CSS, HTML and the other languages it covers without asking which formatter to use; a formatter chosen for one of those languages in Settings still wins, and one chosen for every language does not.
 - The Java toolchain checks HTTPS connections against Mozilla's list of trusted certificate authorities instead of OpenJDK's own.
 - A Java toolchain installed earlier keeps OpenJDK's certificate list until it is removed and installed again.
-- The low storage warning and the notice about a workspace that spans several device folders are shown once while the app runs, instead of at every start of its screen.
+- On Android 11 and earlier the low storage warning, and on every version the notice about a workspace that spans several device folders, are shown once while the app runs, instead of at every start of its screen.
 
 ### Fixed
 

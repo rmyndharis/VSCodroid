@@ -3985,13 +3985,18 @@ class ToolchainManager(private val context: Context) {
         for (name in names) {
             val link = File(dist, name)
             val kept = File(dist, name + GIT_HELPER_SUFFIX)
-            val current = try { Os.readlink(link.absolutePath) } catch (e: Exception) { null }
-            if (current == null && link.isFile && !link.renameTo(kept)) {
-                Logger.w(tag, "Could not set $name aside; it cannot run")
-                continue
+            // Under the lock setup writes the name with, because this pass also runs beside setup:
+            // a new script renamed in between the set-aside and the link was overwritten by the link,
+            // and the earlier build's copy ran behind it until the next update.
+            val linked = holdingWriteLock(link) {
+                val current = try { Os.readlink(link.absolutePath) } catch (e: Exception) { null }
+                if (current == null && link.isFile && !link.renameTo(kept)) {
+                    Logger.w(tag, "Could not set $name aside; it cannot run")
+                    return@holdingWriteLock false
+                }
+                kept.isFile && (current == target || relink(link, target))
             }
-            if (!kept.isFile) continue
-            if (current != target && !relink(link, target)) continue
+            if (!linked) continue
             // git-sh-setup uses $0 for usage and can invoke it again; keep the
             // runnable name while sourcing the saved text with the caller's arguments.
             val arguments = if (dir == GIT_CORE_DIR) {

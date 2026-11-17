@@ -769,7 +769,7 @@ function textBox(page, { value = '', className = 'input', tagName = 'TEXTAREA', 
  * gives the textarea the focus for any key but a modifier. A key the
  * workbench takes (`workbench`, as VS Code's custom key handler does for a
  * command it keeps from the shell, which it is asked again for the keyup)
- * goes no further. Ctrl+C is sent as ^C. `sent` is what reaches the shell.
+ * goes no further. Ctrl and a letter is sent as its control code and Alt and a key as Esc then the key. `sent` is what reaches the shell.
  */
 function terminal(page, workbench = () => false) {
     const box = textBox(page, { className: 'xterm-helper-textarea' });
@@ -831,7 +831,9 @@ function terminal(page, workbench = () => false) {
             finalize(false);
         }
         if (e.keyCode === 229) return readChanges();
-        if (e.ctrlKey && e.key === 'c') sent.push('\x03');
+        // xterm: Ctrl and a letter is the control code, Alt and a key is Esc then the key.
+        if (e.ctrlKey && /^[a-z]$/i.test(e.key)) sent.push(String.fromCharCode(e.key.toUpperCase().charCodeAt(0) - 64));
+        else if (e.altKey && e.key.length === 1) sent.push('\x1b' + e.key);
     }, true);
     box.addEventListener('keyup', (e) => {
         if (workbench(e) || [16, 17, 18, 91, 92, 93, 224].includes(e.keyCode) || e.key === 'Meta') return;
@@ -1022,6 +1024,23 @@ const keys = (page, at = 'text-box') => sequence(page).filter((line, i) => page.
     cases.push(['a composed Ctrl+C in the terminal sends ^C alone', JSON.stringify(term.sent()), JSON.stringify(['\x03'])]);
 }
 
+// The other chords a shell takes: end of input, suspend, and a word back in readline. Each reaches
+// the shell as its own code and nothing else, with the letter never typed first.
+for (const [name, latch, letter, code] of [
+    ['Ctrl+D', 'ctrl', 'd', '\x04'],
+    ['Ctrl+Z', 'ctrl', 'z', '\x1a'],
+    ['Alt+B', 'alt', 'b', '\x1bb'],
+]) {
+    const page = newPage();
+    intercept(page);
+    const term = terminal(page);
+    page.window.__vscodroid[latch] = true;
+    term.compose(letter);
+    page.runTimers();
+    cases.push([`a composed ${name} in the terminal sends its code alone`,
+        JSON.stringify(term.sent()), JSON.stringify([code])]);
+}
+
 // Over a word the terminal is still composing: the word reaches the shell,
 // then ^C, as `ab` then Ctrl+C would from a keyboard that commits.
 {
@@ -1035,6 +1054,44 @@ const keys = (page, at = 'text-box') => sequence(page).filter((line, i) => page.
     page.runTimers();
     cases.push(['a composed Ctrl+C over `ab` in the terminal sends ab, then ^C',
         JSON.stringify(term.sent()), JSON.stringify(['ab', '\x03'])]);
+}
+
+// A second update reaches the field before the chord's task: the field is then not put back, xterm
+// empties it on the blur, and the send xterm arms for the word would read it empty. So the blur is
+// left to the page's own hook, which sends the word while the field still holds it: the word reaches
+// the shell, with the letters the keyboard put into it, which is the trade a keyboard that commits
+// would not make but a lost word is worse.
+{
+    const page = newPage();
+    intercept(page);
+    const term = terminal(page);
+    term.compose('a');
+    term.compose('ab');
+    page.window.__vscodroid.ctrl = true;
+    term.compose('abc');
+    term.compose('abcd');
+    page.runTimers();
+    cases.push(['a second update before a composed Ctrl+C in the terminal still sends the word, then ^C',
+        JSON.stringify(term.sent()), JSON.stringify(['abcd', '\x03'])]);
+}
+{
+    const page = newPage();
+    intercept(page);
+    const term = terminal(page, (e) => e.ctrlKey && e.key === 'p' && page.document.activeElement !== quickOpen);
+    const quickOpen = page.newNode('quick-input-box', page.document.body);
+    page.window.addEventListener('keydown', (e) => {
+        if (!e.ctrlKey || e.key !== 'p') return;
+        term.blur();
+        page.document.activeElement = quickOpen;
+    });
+    term.compose('a');
+    term.compose('ab');
+    page.window.__vscodroid.ctrl = true;
+    term.compose('abp');
+    term.compose('abpx');
+    page.runTimers();
+    cases.push(['a second update before a composed Ctrl+P in the terminal still sends the word to the shell',
+        JSON.stringify(term.sent()), JSON.stringify(['abpx'])]);
 }
 
 // A chord the workbench takes from the terminal never reaches xterm's

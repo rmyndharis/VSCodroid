@@ -69,6 +69,7 @@ class EditorShutdownTest {
         manager = ProcessManager(context)
         set("procDir", File(temp, "proc"))
         manager.killRecordedProcess = { killed += it }
+        manager.editorsDieOfTheirSigterm(File(temp, "proc"))
         startFixture()
     }
 
@@ -122,10 +123,155 @@ class EditorShutdownTest {
 
     @Test
     fun `a cooperative bootstrap leaves the recorded editor alone`() {
+        // What server.js leaves when it answers the signal: its child has exited and the
+        // child's exit handler deleted the note before the bootstrap left.
+        record(8123)
+        bootstrap(alive = true, exits = true) {
+            assertTrue(note.delete())
+            assertTrue(File(temp, "proc/8123").deleteRecursively())
+        }
+        manager.stopServer()
+        assertTrue(killed.isEmpty())
+    }
+
+    @Test
+    fun `a bootstrap that leaves its note behind has its editor reaped`() {
+        // A bootstrap killed by the stop's signal before it had a handler forwarded
+        // nothing: it exits within the wait, and its note and child are both still there.
+        val owner = runId
+        val events = mutableListOf<String>()
+        every { EditorGateway.instance.withdrawBackend(any()) } answers { events += "withdraw ${firstArg<String>()}" }
+        manager.killRecordedProcess = { events += "kill $it" }
         record(8123)
         bootstrap(alive = true, exits = true)
         manager.stopServer()
-        assertTrue(killed.isEmpty())
+        assertEquals(listOf("withdraw $owner", "kill 8123"), events, "the run's routing must go before its editor")
+        assertFalse(note.exists())
+    }
+
+    @Test
+    fun `a reap asks the editor to leave with SIGTERM and does not kill one that left`() {
+        val signals = mutableListOf<String>()
+        record(8123)
+        manager.terminateRecordedProcess = {
+            signals += "TERM $it"
+            File(temp, "proc/$it").deleteRecursively()
+        }
+        manager.killRecordedProcess = { signals += "KILL $it" }
+
+        manager.stopServer()
+
+        assertEquals(listOf("TERM 8123"), signals)
+    }
+
+    @Test
+    fun `an editor that outlives its SIGTERM is killed once the bounded wait has run`() {
+        val signals = mutableListOf<String>()
+        record(8123)
+        manager.terminateRecordedProcess = { signals += "TERM $it" }
+        manager.killRecordedProcess = { signals += "KILL $it" }
+
+        val started = System.nanoTime()
+        manager.stopServer()
+        val waited = TimeUnit.NANOSECONDS.toMillis(System.nanoTime() - started)
+
+        assertEquals(listOf("TERM 8123", "KILL 8123"), signals)
+        assertTrue(waited >= REAP_TERM_GRACE_MS, "killed after $waited ms, before the editor's handler had its time")
+        assertTrue(waited < REAP_TERM_GRACE_MS + 2_000, "the wait for a terminated editor took $waited ms")
+    }
+
+    @Test
+    fun `a pid that stops being the editor during the wait is not killed`() {
+        val signals = mutableListOf<String>()
+        record(8123)
+        manager.terminateRecordedProcess = {
+            signals += "TERM $it"
+            File(temp, "proc/$it/cmdline").writeText("/bin/sh\u0000")
+        }
+        manager.killRecordedProcess = { signals += "KILL $it" }
+
+        manager.stopServer()
+
+        assertEquals(listOf("TERM 8123"), signals)
+    }
+
+    @Test
+    fun `a pid given to an editor of another run during the wait is not killed`() {
+        val signals = mutableListOf<String>()
+        record(8123)
+        manager.terminateRecordedProcess = {
+            signals += "TERM $it"
+            File(temp, "proc/$it/environ").writeText("VSCODROID_SERVER_RUN_ID=another-run\u0000")
+        }
+        manager.killRecordedProcess = { signals += "KILL $it" }
+
+        manager.stopServer()
+
+        assertEquals(listOf("TERM 8123"), signals)
+    }
+
+    @Test
+    fun `an unrecorded editor given to another run after the scan gets no signal`() {
+        // The signals go out once the whole scan is done, so a pid it found can have been
+        // freed and given to an editor of another run by the time its turn comes.
+        val signals = mutableListOf<String>()
+        val owner = runId
+        manager.terminateRecordedProcess = {
+            signals += "TERM $it"
+            File(temp, "proc/${if (it == 8123) 8124 else 8123}").takeIf { dir -> dir.isDirectory }
+                ?.let { dir -> File(dir, "environ").writeText("VSCODROID_SERVER_RUN_ID=another-run\u0000") }
+            File(temp, "proc/$it").deleteRecursively()
+        }
+        manager.killRecordedProcess = { signals += "KILL $it" }
+        bootstrap(alive = true, exits = true) {
+            unrecordedChild(8123, owner)
+            unrecordedChild(8124, owner)
+        }
+
+        manager.stopServer()
+
+        assertEquals(1, signals.size, "signalled: $signals")
+        assertTrue(signals.single().startsWith("TERM "), "signalled: $signals")
+    }
+
+    @Test
+    fun `an unrecorded editor is asked with SIGTERM first and every one is ended`() {
+        val signals = mutableListOf<String>()
+        val owner = runId
+        manager.terminateRecordedProcess = { signals += "TERM $it" }
+        manager.killRecordedProcess = { signals += "KILL $it" }
+        // Three that ignore the SIGTERM: their waits together pass the scan's own time limit.
+        bootstrap(alive = true, exits = true) {
+            unrecordedChild(8123, owner)
+            unrecordedChild(8124, owner)
+            unrecordedChild(8125, owner)
+        }
+
+        manager.stopServer()
+
+        val pids = listOf(8123, 8124, 8125)
+        assertEquals(pids.flatMap { listOf("TERM $it", "KILL $it") }.toSet(), signals.toSet())
+        assertEquals(6, signals.size)
+        for (pid in pids) {
+            assertTrue(signals.indexOf("TERM $pid") < signals.indexOf("KILL $pid"), "$pid was killed first: $signals")
+        }
+    }
+
+    @Test
+    fun `an editor that fails the identity checks gets no signal at all`() {
+        val signals = mutableListOf<String>()
+        manager.terminateRecordedProcess = { signals += "TERM $it" }
+        manager.killRecordedProcess = { signals += "KILL $it" }
+        record(8123)
+        File(temp, "proc/8123/environ").writeText("VSCODROID_SERVER_RUN_ID=replacement\u0000")
+        bootstrap(alive = true, exits = true) {
+            unrecordedChild(8124, "another-run")
+            unrecordedChild(8125, runId, entry = "user-script.js")
+        }
+
+        manager.stopServer()
+
+        assertTrue(signals.isEmpty(), "signalled: $signals")
     }
 
     @Test

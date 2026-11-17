@@ -139,6 +139,13 @@ class ServerGaveUpPageTest {
                 "STAND_DOWN shows a stale log or a real crash loop shows none"
         }
     }
+    /**
+     * A page the editor starts by itself while the log is read (VS Code's Reload Window, a main-frame
+     * load error) moves the page generation and not the request. With the server given up that load
+     * gets the gateway's empty 503, and the page that says what happened has to go up over it: since
+     * a terminal notice is no longer raised beside the page, skipping it left a blank screen and
+     * nothing said. Only a server that came up meanwhile lets the editor's own load stand.
+     */
     @Test
     fun `a delayed log page checks its request document and view after the read`() {
         val source = SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt")
@@ -148,7 +155,12 @@ class ServerGaveUpPageTest {
         assertTrue(body.indexOf("val generation = AuthTabWindow.pageGeneration()") in 0 until read)
         val guard = body.substringAfter("val detail =").substringAfter(".let { collapseRuns")
         assertTrue(guard.contains("request != recoveryPageEpoch") && guard.contains("webView !== targetView"))
-        assertTrue(guard.contains("generation != AuthTabWindow.pageGeneration()") && guard.contains("return@launch"))
+        assertTrue(
+            Regex("""\(generation != AuthTabWindow\.pageGeneration\(\) &&\s*nodeService\?\.isServerReady\(\) == true\)""")
+                .containsMatchIn(guard) && guard.contains("return@launch"),
+            "a page the editor started itself during the read cancels the gave-up page even with the server " +
+                "still given up, which leaves the gateway's empty 503 on screen and nothing said",
+        )
         assertTrue(guard.indexOf("return@launch") < guard.indexOf("showErrorPage("))
     }
 

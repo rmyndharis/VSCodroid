@@ -10,11 +10,12 @@ import java.io.File
  *
  * The character itself is caught tree-wide by `check-plain-punctuation.py`,
  * which compares raw code points. A string resource has a second form that
- * check cannot see: `\uXXXX`, six ASCII characters on disk that AAPT2 expands
- * into the real character in the compiled resource. One had been sitting in the
+ * check could not see until it learned to read resources for it: `\uXXXX`, six
+ * ASCII characters on disk that AAPT2 expands into the real character in the
+ * compiled resource. One had been sitting in the
  * first-run picker's subtitle, drawn to every user who installs the app, while
- * both halves of the enforcement reported a clean tree. This is the half of the
- * question the tree-wide gate cannot answer, kept next to the file it is about.
+ * both halves of the enforcement reported a clean tree. This asks the same
+ * question next to the file it is about.
  *
  * The three code points are named by their numbers rather than written out, for
  * the same reason that gate names them that way: a check that spells its own

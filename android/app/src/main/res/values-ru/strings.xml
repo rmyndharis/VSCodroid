@@ -70,7 +70,7 @@
          about to become reachable again, and a user who is not told which
          setting to look for has nothing to search on. -->
     <string name="heap_override_suspended">Пользовательский предел памяти в settings.json отключён после повторяющихся сбоев. Измените vscodroid.server.heapCeilingMb и перезапустите приложение, чтобы попробовать другое значение.</string>
-    <string name="notice_editor_away_from_home">Ваши настройки и входы в аккаунты не загрузились, потому что порт %1$d занят другим приложением. Они в сохранности: закройте это приложение, остановите VSCodroid через его уведомление и откройте снова.</string>
+    <string name="notice_editor_away_from_home">Ваши настройки и входы в аккаунты не загрузились, потому что порт %1$d занят другим приложением. Они в сохранности: закройте это приложение, нажмите «Остановить сервер» (или остановите VSCodroid через его уведомление) и снова откройте VSCodroid.</string>
     <!-- The figure is passed in rather than written here, and it is the
          SHORTFALL the refusal measured, not the size of the unpack: this asks
          the user to free it, and what they have to free is what the device is
@@ -225,13 +225,6 @@
     <string name="shortcut_toolchains_short">Наборы</string>
     <string name="shortcut_toolchains_long">Наборы инструментов</string>
     <string name="toolchain_size_download_and_installed">%1$s при загрузке, %2$s после установки</string>
-    <string name="saf_device_copy_preserved">Изменение с устройства рядом: %1$s.</string>
-    <plurals name="saf_device_copies_preserved">
-        <item quantity="one">Сохранено %1$d изменение с устройства. Ищите .device- и время.</item>
-        <item quantity="few">Сохранено %1$d изменения с устройства. Ищите .device- и время.</item>
-        <item quantity="many">Сохранено %1$d изменений с устройства. Ищите .device- и время.</item>
-        <item quantity="other">Сохранено %1$d изменения с устройства. Ищите .device- и время.</item>
-    </plurals>
     <!-- Shown when a save could not be written out to the device folder. Names the
          consequence rather than the error: the user's next decision is whether to
          copy the file out before uninstalling, not which exception was thrown. -->
@@ -277,6 +270,14 @@
          never had, which is what saf_directory_kept says. -->
     <string name="saf_directory_changed_kept">Папка %1$s оставлена в папке на устройстве: другое приложение могло изменить файл в ней с тех пор, как редактор в последний раз прочитал или сохранил этот файл. Удалите её там, если она больше не нужна.</string>
     <string name="saf_delete_refused">Не удалось удалить %1$s из папки на устройстве, поэтому этот элемент появится снова при следующем открытии папки. Удалите его в файловом менеджере устройства.</string>
+    <!-- Device and app edits kept beside their file instead of being overwritten -->
+    <string name="saf_device_copy_preserved">Изменение с устройства рядом: %1$s.</string>
+    <plurals name="saf_device_copies_preserved">
+        <item quantity="one">Сохранено %1$d изменение с устройства. Ищите .device- и время.</item>
+        <item quantity="few">Сохранено %1$d изменения с устройства. Ищите .device- и время.</item>
+        <item quantity="many">Сохранено %1$d изменений с устройства. Ищите .device- и время.</item>
+        <item quantity="other">Сохранено %1$d изменения с устройства. Ищите .device- и время.</item>
+    </plurals>
     <string name="saf_local_copy_preserved">Изменение в приложении рядом: %1$s.</string>
     <plurals name="saf_local_copies_preserved">
         <item quantity="one">Сохранено %1$d изменение в приложении. Ищите .local- и время.</item>

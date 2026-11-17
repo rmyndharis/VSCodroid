@@ -88,6 +88,17 @@ class SafLoadingListingTest : SafInitialSyncTestBase() {
         assertEquals(emptyList<Pair<String, String>>(), created, "a document was created for the repeated name")
         assertTrue(written.isEmpty(), "something was uploaded over one of the two documents: $written")
         assertTrue(record.readLines().any { it.startsWith("y.txt\t") }, "the distinct fetched file lost its identity")
-        assertFalse(record.readText().contains("x.txt"), "a repeated name was vouched for")
+        // With no record before this open, the copy at the repeated name may be named, but only
+        // without a digest, which proves nothing: it is neither removed nor sent on such a row.
+        assertTrue(
+            record.readLines().filter { it.contains("x.txt") }.all { SafSyncEngine.splitRecordLine(it).second == null },
+            "a repeated name was vouched for",
+        )
+
+        sync()
+
+        assertEquals("my edit", mirrorFile("x.txt").readText(), "the next open replaced the file under the repeated name")
+        assertEquals(emptyList<Pair<String, String>>(), created, "the next open created a document for the repeated name")
+        assertTrue(written.isEmpty(), "the next open uploaded over one of the two documents: $written")
     }
 }

@@ -27,6 +27,11 @@ import java.util.concurrent.atomic.AtomicLong
 
 private const val IO_POLL_MS = 1000
 private val IDLE_NANOS = TimeUnit.MINUTES.toNanos(2)
+// A client that has sent nothing this long after it was admitted is closed. Any app may open such
+// connections, and 32 of them held to the idle limit refused every request of the page. A browser
+// writes its request or its WebSocket upgrade as soon as it connects; only a preconnect waits, and
+// Chromium checks that an unused socket is still open before it sends on it.
+private val FIRST_BYTE_NANOS = TimeUnit.SECONDS.toNanos(10)
 private const val MAX_CONNECTIONS = 32
 private const val BUFFER_BYTES = 32 * 1024
 
@@ -210,7 +215,8 @@ internal class EditorGateway : Closeable {
         private val ended = AtomicBoolean()
         private val pumps = AtomicInteger(1)
         @Volatile private var local: EditorBackend? = null
-        private val lastProgress = AtomicLong(System.nanoTime())
+        private val admitted = System.nanoTime()
+        private val lastProgress = AtomicLong(admitted)
 
         private fun progress(): Long {
             val now = System.nanoTime()
@@ -261,6 +267,7 @@ internal class EditorGateway : Closeable {
         private fun toBackend(destination: EditorBackend) {
             val bytes = ByteArray(BUFFER_BYTES)
             val buffer = ByteBuffer.wrap(bytes)
+            var heard = false
             Selector.open().use { selector ->
                 client.register(selector, SelectionKey.OP_READ)
                 while (true) {
@@ -269,10 +276,14 @@ internal class EditorGateway : Closeable {
                     val count = client.read(buffer)
                     if (count < 0) { destination.shutdownOutput(); return }
                     if (count == 0) {
+                        if (!heard && System.nanoTime() - admitted >= FIRST_BYTE_NANOS) {
+                            throw SocketTimeoutException("Editor client sent nothing")
+                        }
                         selector.select(IO_POLL_MS.toLong())
                         selector.selectedKeys().clear()
                         continue
                     }
+                    heard = true
                     var offset = 0
                     var writeProgress = progress()
                     while (offset < count) {

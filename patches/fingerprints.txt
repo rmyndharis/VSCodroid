@@ -141,7 +141,9 @@
 0018 debug terminal env|out/vs/workbench/api/node/extensionHostProcess.js|unset ${
 0019 callback nonce|out/vs/code/browser/workbench/workbench.js|vscodroid-nonce=
 0019 callback issuance|out/vs/code/browser/workbench/workbench.js|registerAuthCallback
-0019 callback readiness|out/vs/code/browser/workbench/workbench.js|vscodroid-bridge-ready
+# 0019's readiness row is its own listener for the bridge's ready event. 0035 listens for the same event,
+# twice, so the event's name alone stayed matched with 0019's listener gone; the handler 0019 writes inline is its own.
+0019 callback readiness|out/vs/code/browser/workbench/workbench.js|'vscodroid-bridge-ready', () =>
 0019 callback document|out/vs/code/browser/workbench/workbench.js|__vscodroidCallbackDocumentId
 # 0020 gates on the log line it adds, the only text in its hunk a minifier keeps:
 # the cut itself compiles to `&&!` against a renamed binding. workbench.js is
@@ -195,6 +197,9 @@
 # but restart by focus, which upstream's one pause matches there.
 #
 #  - window start: the buffer's start is re-decided on every cursor change.
+#    0051 moved the line into its test of an unmoved caret, so the text is
+#    0024's as 0051 writes it, and the row fails only when the final source
+#    loses the call.
 #  - start kept at a line end: an edit of the keyboard's that leaves the caret
 #    at the end of its line keeps the start, which only the 20 line limit
 #    moves. Moved there too, the start left the keyboard's copy of the text
@@ -217,15 +222,19 @@
 #    ends, the composition underline and the character bounds all map a buffer
 #    offset through the window's own start. Without the selection's two, a
 #    selection on an earlier line of the window was refused at column 1.
-#  - selection without an edit: the test that sends a textupdate changing no
+#  - selection without an edit: the branch that takes a textupdate changing no
 #    text, a selection the keyboard set, to a caret move of its own instead of
-#    typing the text before the caret again.
+#    typing the text before the caret again. The test that leads there is
+#    0049's _isSelectionOnly, which 0048 and 0049 rewrote from 0024's, and
+#    `.updateRangeStart===` is written by 0049 and 0050 three times more, so
+#    the row names the branch's own text: the lines after the selection
+#    widened as the selection moves up, so the window keeps its end.
 #  - selection as a cursor key: that move is made from source 'keyboard' with
 #    reason Explicit, as a cursor key makes one, so an open suggest list is
 #    refiltered at the new caret. Made as compositionType makes it, with the
 #    reason typing has, it left the list open for Enter to accept at the new
-#    caret. No other call in this bundle reaches setCursorStates through a
-#    `viewModel.` property.
+#    caret. 0049's _dismissOtherCursors makes the same call, which reads the
+#    same once minified, so the row counts the two.
 #  - selection keeps the start, x6: the flag that keeps the window as it is
 #    while that caret move is applied, initialised, set and cleared around the
 #    move, and read where the start is decided, where the lines after the
@@ -244,12 +253,14 @@
 #    The test compiles into one conditional expression with the rest, so a
 #    read placed after it no longer opens a block. It reads the Backspace key's
 #    flag beside it.
-#  - input restarted: the call that asks for an input restart after a rewrite
+#  - input restarted, x2: the call that asks for an input restart after a rewrite
 #    of the window, which restarts input at the end of the task if the text
 #    then differs from what the keyboard knew and the selection does not, as
 #    Android passes the keyboard a selection that changed and nothing else.
 #    Without it Gboard went on offering the words of the text it had, and a
-#    pick wrote over the new text.
+#    pick wrote over the new text. 0046 rewrote the call (it passes whether a
+#    composition was open) and 0050 makes a second one for a refusal, so the
+#    row counts the two; none of the call's text is 0024's own any more.
 #  - what the keyboard knew, x4: the text and selection kept from the first
 #    rewrite of a task, read and set there, and read and cleared at its end,
 #    so that the rewrites of one task restart input once.
@@ -277,12 +288,12 @@
 0024 composition across lines|out/vs/code/browser/workbench/workbench.js x3|.positionBefore(
 0024 composition forward across lines|out/vs/code/browser/workbench/workbench.js x2|.positionAfter(
 0024 editcontext offsets as positions|out/vs/code/browser/workbench/workbench.js x5|this._modelPositionAt(
-0024 editcontext selection without an edit|out/vs/code/browser/workbench/workbench.js|.updateRangeStart===
-0024 editcontext selection as a cursor key|out/vs/code/browser/workbench/workbench.js|viewModel.setCursorStates("keyboard",
+0024 editcontext selection without an edit|out/vs/code/browser/workbench/workbench.js|Math.max(0, this._editContextLinesAfter + this._editContextPrimarySelection.endLineNumber -
+0024 editcontext selection as a cursor key|out/vs/code/browser/workbench/workbench.js x2|viewModel.setCursorStates("keyboard",
 0024 editcontext selection keeps the start|out/vs/code/browser/workbench/workbench.js x6|this._keepEditContextStart
 0024 editcontext lines after the selection|out/vs/code/browser/workbench/workbench.js x7|this._editContextLinesAfter
 0024 editcontext selection start read first|out/vs/code/browser/workbench/workbench.js|{if(this._keepEditContextStart||this._deletingByKey)
-0024 editcontext input restarted|out/vs/code/browser/workbench/workbench.js|this._restartInputIfUnheard(
+0024 editcontext input restarted|out/vs/code/browser/workbench/workbench.js x2|this._restartInputIfUnheard(
 0024 editcontext what the keyboard knew|out/vs/code/browser/workbench/workbench.js x4|this._beforeRewrite
 0024 editcontext restart only for an unmoved selection|out/vs/code/browser/workbench/workbench.js x2|this._previousEditContextSelection.equals(
 0024 editcontext restart by focus|out/vs/code/browser/workbench/workbench.js x2|this._focusTracker.pause()
@@ -320,7 +331,9 @@
 # Code Action list; without the compare it closed at every layout change again.
 0028 code action list at a height change|out/vs/code/browser/workbench/workbench.js x3|this._editorLayoutWidth
 # 0029's row: the private method that decides a commit is a paste, defined once
-# and called once from _onType, so `_isPastedByInputMethod` twice. Methods keep
+# and called once from _onType, so `_isPastedByInputMethod` twice. 0049 calls it
+# once more, which makes three in the bundle, and the row is met only with one
+# of 0029's own two in place. Methods keep
 # their names in this bundle as _onType and _getNewEditContextState do, and the
 # name is 0 times in the shipped 1.139.1 workbench.js. Without it a keyboard's
 # paste is typed a character at a time again: indented at every line break and,
@@ -342,9 +355,11 @@
 # (0029 relies on the same), and the literal is 0 times in the shipped 1.139.1 workbench.js.
 0032 settings list and modal shrink to a phone|out/vs/code/browser/workbench/workbench.js x3|LIST_MIN_WIDTH
 
-# 0033's pattern is the name of the flag it adds. Member names survive the bundler (0029 and
-# 0032 rely on the same), and the literal is 0 times in the shipped 1.139.1 workbench.js.
-0033 short window hides title and status bar|out/vs/code/browser/workbench/workbench.js x3|shortWindow
+# 0033's pattern is the flag it adds, read where the title bar and the status bar decide whether
+# they show. Member names survive the bundler (0029 and 0032 rely on the same), and the literal is
+# 0 times in the shipped 1.139.1 workbench.js. Not the bare name: 0034 reads the flag four times,
+# which met a count of it with every one of 0033's own gone.
+0033 short window hides title and status bar|out/vs/code/browser/workbench/workbench.js x2|!this.shortWindow) &&
 
 # 0034's pattern is the name of the flag it adds. Member names survive the bundler (0029, 0032 and
 # 0033 rely on the same), and the literal is 0 times in the shipped 1.139.1 workbench.js.
@@ -352,6 +367,8 @@
 
 # The same patch's second flag, the height a panel that stayed in a short window had before it.
 0034 short window panel height is remembered|out/vs/code/browser/workbench/workbench.js x10|panelHeightBeforeShort
+# 0038 rewrote the three lines of 0035 that name claimWorkspacePaths, so the first row is met by
+# 0038's text and fails only when the final source stops claiming. The other two are 0035's own.
 0035 mirror usage acknowledgement|out/vs/code/browser/workbench/workbench.js|claimWorkspacePaths
 0035 initial claim caught|out/vs/code/browser/workbench/workbench.js|Could not claim initial workspace paths
 0035 update claim caught|out/vs/code/browser/workbench/workbench.js|.uri)).catch(
@@ -367,17 +384,19 @@
 0043 regular-file check in serveFile|out/server-main.js|Not a regular file:
 0044 gesture target inside a shadow root|out/vs/code/browser/workbench/workbench.js|composedPath()[0]
 0045 color picker opened by a swatch tap|out/vs/code/browser/workbench/workbench.js|closest(".colorpicker-color-decoration")
-# 0046's own text in the bundle is the saved mark and the clause that reads it at the restart. The bare member this._compositionOpen cannot stand for the patch: the
-# rules of 0050 read it as well, so a count of it is met with 0046's own uses gone. Nor can the four places that set and clear it: they assign booleans, which the minifier
-# writes as !0 and !1, and no text found in the patch matches those. Those listeners are run on the patched source by scripts/check-editcontext-ime.js.
-0046 editcontext composition snapshot|out/vs/code/browser/workbench/workbench.js|composing:
+# 0046's own text in the bundle is the blur listener that clears the open mark: its registration survives the minifier, its body does not, since the minifier writes
+# the boolean it assigns as !1 and the patch writes false. The other three places that set and clear the mark are booleans as well. The saved mark and the clause that
+# reads it at the restart are lines 0050 rewrote when it added the forced restart, so the second row is met by 0050's text and fails only when the final source stops
+# reading the mark. The bare member this._compositionOpen cannot stand for the patch: the rules of 0050 read it as well, so a count of it is met with 0046's own uses
+# gone. The listeners are run on the patched source by scripts/check-editcontext-ime.js.
+0046 open composition cleared on blur|out/vs/code/browser/workbench/workbench.js|this.domNode.domNode, 'blur', () =>
 0046 open composition read at the restart (set and cleared by listeners that check-editcontext-ime.js runs)|out/vs/code/browser/workbench/workbench.js|.composing&&this._compositionOpen)
 0047 editcontext initial cursor|out/vs/code/browser/workbench/workbench.js|getPrimaryCursorState().modelState.selection
 0047 editcontext initial window|out/vs/code/browser/workbench/workbench.js|this._primarySelection.startLineNumber
-# 0049 moved 0048's test into _isSelectionOnly, so every line of it in the bundle is one 0049 wrote again, and the cache reads it is made of,
-# this._previousEditContextText.slice( and this._previousEditContextText.length, are written a dozen times each by 0049 and 0050: a row on either is met with 0048's
-# test gone. The one piece of the test that no other patch writes is its single-cursor alternative. What the test decides is run on the patched source by
-# scripts/check-editcontext-ime.js.
+# 0049 moved 0048's test into _isSelectionOnly, so every line of it in the bundle is one 0049 wrote again and no text of 0048's own is left: no row can be met by
+# 0048 alone. The row below names the test's single-cursor alternative, which 0049 writes once again where 0048 wrote it and no other patch writes, so it fails
+# only when the final source drops that clause. The cache the test reads, this._previousEditContextText.slice( and this._previousEditContextText.length, is written a dozen times each by 0049
+# and 0050, so a row on either is met with the test gone. What the test decides is run on the patched source by scripts/check-editcontext-ime.js.
 0048 unchanged input, a moved selection with one cursor only (the test sits in _isSelectionOnly since 0049; check-editcontext-ime.js runs it)|out/vs/code/browser/workbench/workbench.js|getCursorStates().length===1
 0049 same text at every cursor|out/vs/code/browser/workbench/workbench.js|this._cursorsHoldSameText(
 0049 several cursors|out/vs/code/browser/workbench/workbench.js|getCursorStates().length>1

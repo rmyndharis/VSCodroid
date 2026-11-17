@@ -360,7 +360,7 @@ flowchart TD
 
 ```mermaid
 flowchart TD
-  A["Application.onCreate()<br/>WebView.setDataDirectorySuffix('vscodroid')<br/>Initialize logging"] --> B["SplashActivity (LAUNCHER, runs on every start)<br/>Per-launch repairs: symlinks, git core, npm wrappers, SAF reclaim<br/>Extraction only when versionName or versionCode changed<br/>Start MainActivity"]
+  A["Application.onCreate()<br/>WebView.setDataDirectorySuffix('vscodroid')<br/>Initialize logging"] --> B["SplashActivity (LAUNCHER, runs on every start)<br/>Per-launch repairs: symlinks, git core, npm wrappers, SAF reclaim<br/>Extraction only when versionName, versionCode or the package's update time changed<br/>Start MainActivity"]
   B --> C["MainActivity.onCreate()<br/>setContentView (WebView + ExtraKeyRow)<br/>Configure WebView<br/>Start/bind NodeService<br/>Wait server ready -> loadVSCode(): register AndroidBridge,<br/>load http://127.0.0.1:PORT/?folder=... with the connection token"]
   C --> D["NodeService.onCreate()<br/>Start Foreground Service (specialUse)<br/>Build environment variables<br/>Launch Node.js with ProcessBuilder<br/>Poll GET /version, accept only 200<br/>Notify MainActivity: server ready"]
   D --> E["MainActivity (running)<br/>Give ExtraKeyRow its root view and the user's hide choice (the row decides when it shows, 5.3)<br/>Render VS Code in WebView<br/>Monitor Node.js health<br/>Handle rotation/back button/onTrimMemory"]
@@ -1236,7 +1236,7 @@ first, so that nothing after the buffer is replaced. Nothing of a refusal is kep
 count: the restart ends the composition, and the update that follows is judged on its own.
 What is refused is a set of shapes; the set and its cases are in the patch's description,
 with what the rules cost: a correction of an earlier word that keeps the caret where it was
-is not applied either, and the typo stays. The
+is not applied either, and the typo stays. One
 known limit is a letter typed after a turn while the keyboard still holds the range it
 reopened. The keyboard can send that letter alone over the word, which is refused, so the
 letter is lost; or over a single reopened letter, which is what a Hangul or kana step looks
@@ -1261,8 +1261,13 @@ The builds called the nine rules and the patch as it is above carried one rule m
 patch has now, the third of the nine: it remembered the last refusal and was to refuse the
 next letter sent over the same range. It could not act, because the restart that follows a
 refusal ends the composition the rule needed, and it has been removed; no device run has been
-made without it. The rules are run on the patched source by
-`scripts/check-editcontext-ime.js`, in the server build.
+made without it. Two more results are known limits that the rules pass: the word written again
+at the caret in a composition that has typed (`line twoxtwo`, one recorded update, in a run
+that ended damaged), and, after a refusal, a keyboard that goes on with the range it kept: its
+next letter over that range, or the refused write sent again, replaces or deletes the rest of
+the word after the caret (`alpha betz Charlie delta`, `alpha bet Charlie delta`). What a
+keyboard sends after a restart of input is not recorded. The rules are run on the patched
+source by `scripts/check-editcontext-ime.js`, in the server build.
 
 Patch 0051 keeps the EditContext buffer where it is while the caret has not moved. After an
 Enter typed on the keyboard at the end of a line, the buffer keeps its start on the line above
@@ -1490,9 +1495,13 @@ function that did nothing it stayed up. `KeyboardDismissal` therefore calls the 
 second after the report, and not if the keyboard is visible by then or a change of
 configuration explains the report: any report within two seconds of it, and where a turn
 found the keyboard up and the app refocuses the editor for it, one until `AFTER_REFOCUS_MS`
-after that refocus (`TURN_CAP_MS` after the turn at most). With the focus in a text box other
-than the editor (Quick Open, the find box) the app makes no refocus and the two seconds are
-the whole window. A scroll inside that half second can raise a keyboard put away
+after that refocus (`TURN_CAP_MS` after the turn at most). With the focus in a plain text box
+(Quick Open, the find box: the page answers `none` and the app calls `noRefocus`) the app
+makes no refocus and the two seconds are the whole window; a system hide first reported
+later than that, as a keyboard rebuilding under load can, is then taken for the person's,
+and the next file opened is held until a tap. For the editor, the terminal and a focus in
+neither the page answers `false` and the claim runs to `TURN_CAP_MS` as before. A scroll
+inside that half second can raise a keyboard put away
 with Back, as it did before the hold existed. A tap is the script's own test,
 12 CSS px and 500 ms, or a tap by the workbench's touch gesture, which the activity bar, the
 status bar and the tabs act on and which is looser, under 700 ms within 30 px on each axis:
@@ -1833,8 +1842,11 @@ every non-Play user.
 ### 7.4 Language Picker Integration
 
 The picker is offered on every launch until it is answered, gated by `toolchain_picker_shown`,
-which only its Continue and Skip buttons write; a kill or an interrupted first run leaves it to be
-offered again on the next launch. It offers the entries of `ToolchainRegistry.available` that are
+which Skip and a Continue with nothing new to fetch write at once, and a Continue that starts
+downloads writes where its queue ends (`endDownloadQueue`, after the last pack or Cancel). While
+that queue runs, a process-wide flag keeps any other launch in the same process from offering it
+again; a kill, an interrupted first run, or a process that ends mid-queue leaves it to be offered
+again on the next launch. It offers the entries of `ToolchainRegistry.available` that are
 `offeredInPicker`:
 
 ```kotlin

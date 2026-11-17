@@ -338,7 +338,62 @@ class AuthTabWindowTest {
         AuthTabWindow.launched(attempt)
         assertTrue(issueAt("33", 100L + AUTH_TAB_WINDOW_MILLIS + 1))
     }
+
+    // The replaced launches outlive beginPage, which every class here uses as its reset, so
+    // these cases use secrets no other case does.
+
+    private fun launch(id: String, nonce: String, at: Long = 100L) {
+        assertTrue(issue(id, nonce))
+        AuthTabWindow.launched(AuthTabWindow.arm(listOf(id), nonce, at))
+    }
+
+    @Test
+    fun `a launch whose page was replaced is explained once, and only for its own secret`() {
+        val secret = uniqueNonce()
+        launch("7", secret)
+        AuthTabWindow.beginPage()
+
+        assertFalse(AuthTabWindow.takeReplaced("7", uniqueNonce(), 200L), "a return without the launch's secret was explained")
+        assertFalse(AuthTabWindow.takeReplaced("7", null, 200L), "a return with no secret was explained")
+        assertFalse(AuthTabWindow.takeReplaced("8", secret, 200L), "the secret was accepted under another id")
+        assertTrue(AuthTabWindow.takeReplaced("7", secret, 200L))
+        assertFalse(AuthTabWindow.takeReplaced("7", secret, 200L), "a replaced launch was explained twice")
+    }
+
+    @Test
+    fun `a replaced launch past its window, answered or never opened is not explained`() {
+        val late = uniqueNonce()
+        val answered = uniqueNonce()
+        val unopened = uniqueNonce()
+        launch("7", late)
+        launch("8", answered)
+        AuthTabWindow.expire("8")
+        assertTrue(issue("9", unopened))
+        AuthTabWindow.beginPage()
+
+        assertFalse(AuthTabWindow.takeReplaced("7", late, 100L + AUTH_TAB_WINDOW_MILLIS + 1))
+        assertFalse(AuthTabWindow.takeReplaced("8", answered, 200L))
+        assertFalse(AuthTabWindow.takeReplaced("9", unopened, 200L))
+    }
+
+    @Test
+    fun `the replaced launches kept are bounded, the oldest going first`() {
+        val first = (1..32).map { uniqueNonce() }
+        first.forEachIndexed { index, nonce -> launch((index + 1).toString(), nonce) }
+        AuthTabWindow.beginPage()
+        val next = uniqueNonce()
+        launch("1", next)
+        AuthTabWindow.beginPage()
+
+        assertFalse(AuthTabWindow.takeReplaced("1", first[0], 200L), "more than 32 replaced launches are kept")
+        assertTrue(AuthTabWindow.takeReplaced("2", first[1], 200L))
+        assertTrue(AuthTabWindow.takeReplaced("32", first[31], 200L))
+        assertTrue(AuthTabWindow.takeReplaced("1", next, 200L))
+    }
 }
+
+/** A secret no other case uses: a replaced launch is matched on its secret and outlives beginPage. */
+private fun uniqueNonce(): String = java.util.UUID.randomUUID().toString().replace("-", "")
 
 /**
  * Which browser launches arm anything at all.
@@ -1001,14 +1056,15 @@ class AuthCallbackCallSiteTest {
 
         val toasts = body.filter { it.contains("AppNotices.showNotice(") }
         assertEquals(
-            2, toasts.size,
-            "expected the restart message and the expiry message, found ${toasts.size}: $toasts",
+            3, toasts.size,
+            "expected the restart message (for no page, and for a replaced page) and the " +
+                "expiry message, found ${toasts.size}: $toasts",
         )
 
         val messages = toastMessages(skeleton(body.joinToString("\n")))
         assertEquals(
-            2, messages.size,
-            "expected to read two message arguments, found ${messages.size}: $messages",
+            3, messages.size,
+            "expected to read three message arguments, found ${messages.size}: $messages",
         )
         messages.forEach { message ->
             // A resource lookup counts as fixed text, and only the argumentless
@@ -2184,6 +2240,74 @@ class CallbackRelayDecisionTest {
         assertEquals(emptyList<String>(), relayedIds)
         assertEquals(emptyList<String>(), toastMessages)
         assertEquals(1_000L, AuthTabWindow.armedAt(requestId))
+    }
+
+    /**
+     * The page that started the sign-in is replaced inside this Activity, as the reload a
+     * restarted server's announcement starts does in onPageStarted, and workbenchLoaded stays
+     * true through it. Secrets of their own, because a replaced launch outlives beginPage.
+     */
+    private fun launchThenReplacePage(id: String, nonce: String) {
+        assertTrue(AuthTabWindow.register(id, nonce, docId, AuthTabWindow.pageGeneration(), 1_000L))
+        AuthTabWindow.launched(AuthTabWindow.arm(listOf(id), nonce, 1_000L))
+        AuthTabWindow.beginPage()
+    }
+
+    @Test
+    fun `a return for a launch whose page was replaced gives the restart message once`() {
+        val replacedSecret = uniqueNonce()
+        launchThenReplacePage("7", replacedSecret)
+
+        deliver(payload(id = "7", nonce = replacedSecret))
+        deliver(payload(id = "7", nonce = replacedSecret))
+
+        assertEquals(emptyList<String>(), relayedIds)
+        assertEquals(listOf("restarted"), toastMessages)
+    }
+
+    @Test
+    fun `a return naming a replaced launch without its secret raises no message and spends nothing`() {
+        val replacedSecret = uniqueNonce()
+        launchThenReplacePage("7", replacedSecret)
+
+        deliver(payload(id = "7", nonce = uniqueNonce()))
+        deliver(payload(id = "7", nonce = null))
+        assertEquals(emptyList<String>(), toastMessages)
+
+        deliver(payload(id = "7", nonce = replacedSecret))
+        assertEquals(listOf("restarted"), toastMessages)
+        assertEquals(emptyList<String>(), relayedIds)
+    }
+
+    @Test
+    fun `a return for a replaced launch past its window raises no message`() {
+        val replacedSecret = uniqueNonce()
+        launchThenReplacePage("7", replacedSecret)
+        now = 1_000L + AUTH_TAB_WINDOW_MILLIS + 1
+
+        deliver(payload(id = "7", nonce = replacedSecret))
+
+        assertEquals(emptyList<String>(), relayedIds)
+        assertEquals(emptyList<String>(), toastMessages)
+    }
+
+    @Test
+    fun `the new page's own launch under the same id is left to it`() {
+        // The workbench counts its request ids from one on every page, so the first sign-in
+        // after a reload reuses the id of the one the reload cut off.
+        val replacedSecret = uniqueNonce()
+        val currentSecret = uniqueNonce()
+        launchThenReplacePage("7", replacedSecret)
+        assertTrue(AuthTabWindow.register("7", currentSecret, docId, AuthTabWindow.pageGeneration(), 1_200L))
+        AuthTabWindow.launched(AuthTabWindow.arm(listOf("7"), currentSecret, 1_200L))
+
+        deliver(payload(id = "7", nonce = replacedSecret))
+        assertEquals(listOf("restarted"), toastMessages)
+        assertEquals(1_200L, AuthTabWindow.armedAt("7"), "the old return spent the new page's launch")
+
+        deliver(payload(id = "7", nonce = currentSecret))
+        assertEquals(listOf("7"), relayedIds)
+        assertEquals(listOf("restarted"), toastMessages)
     }
 }
 

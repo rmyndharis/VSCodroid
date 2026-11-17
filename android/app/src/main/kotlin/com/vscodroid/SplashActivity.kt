@@ -56,6 +56,21 @@ class SplashActivity : AppCompatActivity() {
     private var currentDownloadIndex = -1
     private var cancelled = false
 
+    private companion object {
+        /**
+         * A first-run download queue is running in this process, from [startDownloads] to
+         * [endDownloadQueue].
+         *
+         * The picker counts as answered only where the queue ends, and the queue outlives its
+         * screen. A splash made again meanwhile (a font size, language or display size change, or a
+         * launch after Back) found the picker unanswered and offered it over downloads still in
+         * flight, where a second Continue started a second queue. Process-wide and in memory only,
+         * so a process that ends mid-queue still offers the picker at its next start.
+         */
+        @Volatile
+        var downloadQueueRunning = false
+    }
+
     /**
      * The picker's cards while the picker is the screen on show, and null in
      * every other phase of this activity.
@@ -656,7 +671,10 @@ class SplashActivity : AppCompatActivity() {
      *
      * Asking on every launch rather than only after setup costs nothing on an
      * install that answered the picker, because answering it is what writes the
-     * preference: both the Continue and the Skip buttons call [markPickerShown].
+     * preference: Skip and a Continue with nothing new to fetch call
+     * [markPickerShown] at once, and a Continue that starts downloads leaves it to
+     * [endDownloadQueue], with [downloadQueueRunning] keeping the picker down in
+     * this process until then.
      * An upgrade is unaffected either way, since a new versionName or versionCode
      * makes `isFirstRun()` true and that route already passed through here.
      *
@@ -698,6 +716,7 @@ class SplashActivity : AppCompatActivity() {
     }
 
     private fun shouldShowPicker(): Boolean {
+        if (downloadQueueRunning) return false
         val prefs = getSharedPreferences("vscodroid", MODE_PRIVATE)
         return !prefs.getBoolean("toolchain_picker_shown", false)
     }
@@ -756,10 +775,15 @@ class SplashActivity : AppCompatActivity() {
                 adapter.getSelectedPackNames(),
                 ToolchainManager(applicationContext).getInstalledToolchains(),
             )
-            markPickerShown()
             if (selected.isEmpty()) {
+                markPickerShown()
                 launchMain()
             } else {
+                // Not answered yet: the downloads that follow live in this process, which can end
+                // before they do, and the packs behind the one in flight would then be lost with
+                // nothing offering them again. The picker is marked answered where the queue ends
+                // ([endDownloadQueue]), so a process that dies in between shows it at the next start,
+                // while a splash made again in this process meanwhile does not ([downloadQueueRunning]).
                 startDownloads(selected)
             }
         }
@@ -786,6 +810,9 @@ class SplashActivity : AppCompatActivity() {
         downloadQueue = packNames.toMutableList()
         currentDownloadIndex = -1
         cancelled = false
+        // Before the first pack is asked for: a refusal reports on this thread and can end the
+        // queue before [downloadNext] returns.
+        downloadQueueRunning = true
         progressRows.clear()
 
         // Build progress rows for each toolchain
@@ -953,6 +980,8 @@ class SplashActivity : AppCompatActivity() {
      * one uninstalled.
      */
     private fun endDownloadQueue() {
+        markPickerShown()
+        downloadQueueRunning = false
         toolchainManager?.unregisterListener()
         toolchainManager?.onStateChange = null
     }
@@ -1191,7 +1220,8 @@ class SplashActivity : AppCompatActivity() {
      *    that is not there. Publishing from launchMain() -- the one funnel every
      *    completed startup passes through -- means the shortcut cannot exist
      *    before the first setup. It does outlive an update, whose setup runs
-     *    again, which is why ToolchainActivity hands such a launch back here.
+     *    again, which is why ToolchainActivity hands an install asked for
+     *    before that setup has finished back here.
      *
      * Re-pushed on every launch on purpose: it is how an install that predates
      * this change gains the shortcut, and how the label follows a locale change.

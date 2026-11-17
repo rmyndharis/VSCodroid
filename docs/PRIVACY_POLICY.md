@@ -1,7 +1,7 @@
 # VSCodroid Privacy Policy
 
 **Effective Date: February 13, 2026**
-**Last Updated: November 9, 2026**
+**Last Updated: November 17, 2026**
 
 ## Summary
 
@@ -100,7 +100,7 @@ When you push, pull, clone or fetch, the bundled Git client reaches the remote y
 
 Additional toolchains (the Ruby, Java 25 and C/C++ languages, and the Codex engine) can be downloaded on-demand. There are two delivery paths, and the app chooses between them at runtime by asking Android which package installed it:
 
-- **Installed from the Google Play Store** (the installing package is `com.android.vending`): the toolchain arrives as a Google Play Asset Delivery pack, handled by the Google Play Store infrastructure. Google's privacy policy applies to Play Store interactions: https://policies.google.com/privacy.
+- **Installed from the Google Play Store** (the installing package is `com.android.vending`, or `com.google.android.feedback`, the name older versions of the Play Store install under): the toolchain arrives as a Google Play Asset Delivery pack, handled by the Google Play Store infrastructure. Google's privacy policy applies to Play Store interactions: https://policies.google.com/privacy.
 - **Installed any other way** -- a sideloaded APK, a debug build, `adb install` -- or when the installing package cannot be read at all: the app downloads a ZIP over HTTPS from this project's GitHub Releases (https://github.com/rmyndharis/VSCodroid/releases), following GitHub's redirect to its release-asset host. GitHub's privacy policy applies to that download.
 
 VSCodroid does not collect any data during either process.

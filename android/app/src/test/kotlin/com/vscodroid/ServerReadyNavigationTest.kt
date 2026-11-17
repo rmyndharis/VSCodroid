@@ -1,5 +1,6 @@
 package com.vscodroid
 
+import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
 
@@ -70,17 +71,37 @@ class ServerReadyNavigationTest {
     @Test
     fun `a folder picked while the server is down is not thrown away`() {
         val body = SourceScan.body(mainActivity(), "private fun openSafFolder(")
+        val remembered = body.indexOf("rememberWorkspaceFolder(target)")
 
         assertTrue(
-            body.contains("rememberWorkspaceFolder(target)"),
+            remembered >= 0,
             "openSafFolder does not remember the folder it declined to open, so the " +
                 "grant and the copy are spent and nothing will reopen it",
         )
+        // Where the remembering sits, and not only that it is written somewhere. A
+        // picked folder is handled inside the branch the `navigate` test opens, so a
+        // port in that test skips everything for the screen that has not seen the
+        // server answer yet: a folder picked across a process restart, whose result
+        // arrives before the binding. It was synced and then neither opened nor
+        // remembered, and the first load opened the folder remembered before it.
+        val branch = Regex("""if \((navigate\b[^{]*)\) \{""").findAll(body)
+            .lastOrNull { it.range.first < remembered }
+        assertTrue(branch != null, "the branch that opens a picked folder is gone; this test reads nothing")
+        assertEquals(
+            "navigate", branch!!.groupValues[1].trim(),
+            "a picked folder is handled only when a port is known, so one picked before " +
+                "the server answered this screen is dropped: `if (${branch.groupValues[1]})`",
+        )
         assertTrue(
-            body.contains("retryServerStart()"),
+            body.contains("if (serverPort > 0 && nodeService?.isServerReady() == true) {"),
+            "a picked folder is navigated to without a port and a ready server behind it",
+        )
+        assertTrue(
+            body.substring(remembered).contains("if (serverPort > 0) retryServerStart()"),
             "openSafFolder declines to navigate and does not ask the server back, so " +
                 "the remembered folder waits for a readiness callback that is never " +
-                "coming once the service has given up",
+                "coming once the service has given up; with no port yet, that start is " +
+                "already on its way and must not be restarted",
         )
     }
 }

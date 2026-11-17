@@ -3,6 +3,7 @@ package com.vscodroid.service
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.mockkObject
+import java.io.File
 import java.io.IOException
 import java.net.ProtocolFamily
 import java.net.ServerSocket
@@ -50,4 +51,16 @@ internal fun mockEditorGateway(): EditorGateway {
     every { gateway.noteAwayFromHome(any()) } answers { away = firstArg() }
     every { gateway.takeAwayFromHome() } answers { away.also { away = 0 } }
     return gateway
+}
+
+/**
+ * Makes a fixture editor under [proc] die of the SIGTERM a reap sends first, as an editor does
+ * once any handler it has for the signal has run, after passing its pid to the SIGKILL hook. A
+ * case that collects or refuses signals there then sees every editor a reap ends, by either signal.
+ */
+internal fun ProcessManager.editorsDieOfTheirSigterm(proc: File) {
+    terminateRecordedProcess = { pid ->
+        killRecordedProcess(pid)
+        File(proc, pid.toString()).deleteRecursively()
+    }
 }

@@ -31,9 +31,11 @@ Six assertions:
     non-Play toolchain installs verify against;
   * a workflow that can be started by hand AND by something else must not hand
     the hand-started run a write-scoped token. See below;
-  * the steps in REQUIRED_STEPS are still there. They only check something, so
-    a workflow that has lost one parses, loads and runs green, and none of the
-    rules above can see an absence;
+  * the steps in REQUIRED_STEPS are still there, and neither they, the jobs
+    that run them, nor any job those jobs need carry an `if:` or
+    `continue-on-error` that ALLOWED_CONDITIONS does not list. They only check
+    something, so a workflow that has lost one, or skips it, parses, loads and
+    runs green, and none of the rules above can see an absence;
   * a publish never reads the tarball cache: build-vscode-oss.yml hands the
     shared build `fresh: true`, and that build skips its cache when given it.
 
@@ -145,6 +147,10 @@ PINNED = re.compile(r"@[0-9a-f]{40}$")
 LOCAL_WORKFLOW = re.compile(r"^\./\.github/workflows/[^/]+\.ya?ml$")
 # The one shape of gate the fourth rule accepts: the event named, by equality.
 ALLOWLIST_GATE = re.compile(r"github\.event_name\s*==\s*'[a-z_]+'")
+# The one `if:` the tarball cache may carry. A test that only found `inputs.fresh`
+# in it also passed `${{ inputs.fresh }}`, which skips the cache when it should be
+# read and reads it on a publish, and `${{ !inputs.fresh || true }}`.
+FRESH_SKIP = re.compile(r"\$\{\{\s*!\s*inputs\.fresh\s*\}\}")
 
 # Steps that only check something, on the path that publishes the server and the
 # app, matched by name in any job. Delete one and the workflow still loads and
@@ -185,6 +191,21 @@ REQUIRED_STEPS = {
         "Require every artifact, and report its size",
         "Generate checksums",
     ),
+}
+
+# The `if:` a required step, a job that runs one, or a job such a job needs may
+# carry, by workflow and then by step name or job id, exactly as the workflow
+# writes it. Present is not the same as run: `if: ${{ false }}`, an event the
+# workflow never sees, or `continue-on-error: true` on the step or on its job
+# keeps every name above in place while the check never runs, or runs without
+# failing anything. A skipped job skips every job that needs it, and a skipped
+# job passes a required status check. `continue-on-error` is never allowed.
+ALLOWED_CONDITIONS = {
+    "release.yml": {
+        "Check the tag matches the app version": "github.event_name == 'push'",
+        # The publishing job, whose gate the fourth rule asks about as well.
+        "github-release": "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')",
+    },
 }
 
 
@@ -261,6 +282,46 @@ def missing_steps(doc, names):
     return [name for name in names if name not in present]
 
 
+def conditioned_steps(name, doc, wanted):
+    """Complaints for the steps in `wanted`, and the jobs running them, that may not run.
+
+    `name` is the workflow's file name, the key into ALLOWED_CONDITIONS. A job that calls a
+    local workflow holding required steps runs them too: skipped, it skips them and every
+    job that needs it. So does a job that any of these needs, directly or through another
+    job: skipped, it skips them.
+    """
+    allowed = ALLOWED_CONDITIONS.get(name, {})
+    jobs = doc.get("jobs") or {}
+    holders, queue, seen = [], [], set()
+    for job_name, job in jobs.items():
+        steps = [s for s in job.get("steps") or [] if s.get("name") in wanted]
+        uses = str(job.get("uses", ""))
+        if steps or (uses.startswith("./") and uses.rsplit("/", 1)[-1] in REQUIRED_STEPS):
+            queue.append((job_name, f"job {job_name}"))
+        holders += [(s["name"], f"step {s['name']!r}", s) for s in steps]
+    # Every job that runs a required check is queued before any job it needs, so a job
+    # that is both is named for the check it runs.
+    while queue:
+        job_name, label = queue.pop(0)
+        if job_name in seen or job_name not in jobs:
+            continue
+        seen.add(job_name)
+        holders.append((job_name, label, jobs[job_name]))
+        needs = jobs[job_name].get("needs") or []
+        queue += [(need, f"job {need}, which job {job_name} needs,")
+                  for need in ([needs] if isinstance(needs, str) else needs)]
+    bad = []
+    for key, label, holder in holders:
+        if "if" in holder and str(holder["if"]) != allowed.get(key):
+            bad.append(f"{name}: {label} carries `if: {holder['if']!r}`, which ALLOWED_CONDITIONS "
+                       f"does not list, so a required check may never run. If the condition is "
+                       f"meant, list it there exactly as written")
+        if holder.get("continue-on-error", False) is not False:
+            bad.append(f"{name}: {label} sets continue-on-error, so a required check could fail "
+                       f"or be skipped without failing the run")
+    return bad
+
+
 def without_step(doc, name):
     """A copy of `doc` with every step called `name` deleted, as an edit that drops a gate would."""
     cut = copy.deepcopy(doc)
@@ -280,9 +341,9 @@ def publish_builds_fresh(docs):
     bad = []
     steps = steps_of(docs.get("codeoss-build.yml") or {})
     cache = next((step for _, _, step in steps if step.get("id") == "cache"), {})
-    if "inputs.fresh" not in str(cache.get("if", "")):
-        bad.append("codeoss-build.yml: the step with id `cache` is not skipped when "
-                   "`inputs.fresh` is set, so a fresh build could still restore a cached tarball")
+    if not FRESH_SKIP.fullmatch(str(cache.get("if", ""))):
+        bad.append("codeoss-build.yml: the step with id `cache` does not carry exactly "
+                   "`if: ${{ !inputs.fresh }}`, so a fresh build could still restore a cached tarball")
     jobs = (docs.get("build-vscode-oss.yml") or {}).get("jobs") or {}
     if ((jobs.get("build") or {}).get("with") or {}).get("fresh") is not True:
         bad.append("build-vscode-oss.yml: job build does not pass `fresh: true`, so a publish "
@@ -477,27 +538,94 @@ def self_test() -> int:
             cut += 1
     print(f"  ok     self-test: deleting any of {cut} required steps is refused")
 
-    def drop_cache_condition(doc):
-        for _, _, step in steps_of(doc):
-            if step.get("id") == "cache":
-                step.pop("if", None)
+    # Still there, and kept from running or from failing the run.
+    def step_named(doc, wanted):
+        return next(step for _, _, step in steps_of(doc) if step.get("name") == wanted)
+
+    for name, wanted in REQUIRED_STEPS.items():
+        if conditioned_steps(name, docs[name], wanted):
+            print(f"  FAIL   self-test: the conditions in {name} were refused as they stand")
+            return 1
+
+    def with_gate(holder, needs, gates):
+        """`holder` comes to need `needs`; `gates` maps each added job id to its own keys."""
+        def edit(doc):
+            doc["jobs"].update({job: {"runs-on": "ubuntu-latest", "steps": [{"run": "true"}], **keys}
+                                for job, keys in gates.items()})
+            doc["jobs"][holder]["needs"] = needs
+        return edit
+
+    tag_check = "Check the tag matches the app version"
+    skipped = (
+        ("a step under `if: ${{ false }}`", "build.yml",
+         lambda doc: step_named(doc, "Run unit tests").update({"if": "${{ false }}"})),
+        ("a step under an event the workflow never sees", "build.yml",
+         lambda doc: step_named(doc, "Run unit tests").update({"if": "github.event_name == 'schedule'"})),
+        ("a step that may fail", "codeoss-build.yml",
+         lambda doc: step_named(doc, "Verify the server tarball").update({"continue-on-error": True})),
+        ("a job under `if: ${{ false }}`", "build.yml",
+         lambda doc: doc["jobs"]["test"].update({"if": "${{ false }}"})),
+        ("a call of a workflow holding one under `if: ${{ false }}`", "build.yml",
+         lambda doc: doc["jobs"]["codeoss"].update({"if": "${{ false }}"})),
+        ("a job that may fail", "release.yml",
+         lambda doc: doc["jobs"]["build-release"].update({"continue-on-error": True})),
+        ("a listed condition loosened", "release.yml",
+         lambda doc: step_named(doc, tag_check).update({"if": "github.event_name == 'push' || true"})),
+        ("a listed condition on another step", "release.yml",
+         lambda doc: step_named(doc, "Verify assets").update({"if": "github.event_name == 'push'"})),
+        ("a job a required job needs, under `if: ${{ false }}`", "build.yml",
+         with_gate("test", ["codeoss", "gate"], {"gate": {"if": "${{ false }}"}})),
+        ("a job needed through another, under an event the workflow never sees", "release.yml",
+         with_gate("build-release", "gate",
+                   {"gate": {"needs": "gate2"}, "gate2": {"if": "github.event_name == 'schedule'"}})),
+        ("a needed job that may fail", "build-vscode-oss.yml",
+         with_gate("publish", ["build", "gate"], {"gate": {"continue-on-error": True}})),
+    )
+    for label, name, edit in skipped:
+        edited = copy.deepcopy(docs[name])
+        edit(edited)
+        if not conditioned_steps(name, edited, REQUIRED_STEPS[name]):
+            print(f"  FAIL   self-test: {label} was admitted for a required check")
+            return 1
+    print(f"  ok     self-test: {len(skipped)} ways to keep a required step from running or "
+          f"failing are refused, the listed conditions admitted")
+
+    def cache_condition(value):
+        def edit(doc):
+            for _, _, step in steps_of(doc):
+                if step.get("id") == "cache":
+                    step.pop("if", None)
+                    if value is not None:
+                        step["if"] = value
+        return edit
 
     if publish_builds_fresh(docs):
         print("  FAIL   self-test: the publish workflows were refused as they stand")
         return 1
-    for label, name, edit in (
+    fresh_cases = (
         ("a call without fresh", "build-vscode-oss.yml",
          lambda doc: doc["jobs"]["build"]["with"].pop("fresh")),
         ("fresh: false", "build-vscode-oss.yml",
          lambda doc: doc["jobs"]["build"]["with"].update(fresh=False)),
-        ("a cache step that ignores it", "codeoss-build.yml", drop_cache_condition),
-    ):
+        ("a cache step that ignores it", "codeoss-build.yml", cache_condition(None)),
+        ("a cache step read only when fresh", "codeoss-build.yml", cache_condition("${{ inputs.fresh }}")),
+        ("a cache step always read", "codeoss-build.yml", cache_condition("${{ !inputs.fresh || true }}")),
+        ("a cache condition with text after it", "codeoss-build.yml",
+         cache_condition("${{ !inputs.fresh }} && true")),
+    )
+    for label, name, edit in fresh_cases:
         edited = copy.deepcopy(docs)
         edit(edited[name])
         if not publish_builds_fresh(edited):
             print(f"  FAIL   self-test: {label} was admitted as a publish that builds fresh")
             return 1
-    print("  ok     self-test: a publish that could read the cache is refused three ways")
+    for spelling in ("${{!inputs.fresh}}", "${{  ! inputs.fresh  }}"):
+        edited = copy.deepcopy(docs)
+        cache_condition(spelling)(edited["codeoss-build.yml"])
+        if publish_builds_fresh(edited):
+            print(f"  FAIL   self-test: the cache condition {spelling!r} was refused")
+            return 1
+    print(f"  ok     self-test: a publish that could read the cache is refused {len(fresh_cases)} ways")
     return 0
 
 
@@ -522,6 +650,7 @@ def main() -> int:
                 f"nothing else fails without it. If it was renamed, rename it in "
                 f"REQUIRED_STEPS in this script; if it was removed on purpose, remove it there"
             )
+        failures.extend(conditioned_steps(path.name, doc, REQUIRED_STEPS.get(path.name, ())))
         for job_name, job in (doc.get("jobs") or {}).items():
             if "uses" not in job:
                 continue
@@ -585,7 +714,7 @@ def main() -> int:
     print(f"  ok     {gated_writers} write-scoped job(s) in a workflow that can "
           f"also be started by hand, each gated on github.event_name")
     print(f"  ok     all {sum(map(len, REQUIRED_STEPS.values()))} required steps are in "
-          f"{', '.join(REQUIRED_STEPS)}")
+          f"{', '.join(REQUIRED_STEPS)}, under no condition ALLOWED_CONDITIONS does not list")
     print("  ok     build-vscode-oss.yml asks for a fresh build and codeoss-build.yml skips its cache for it")
     return 0
 

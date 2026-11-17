@@ -169,6 +169,47 @@ class EditorEntryTest {
     }
 
     /**
+     * A callback is answered when it arrives, once. A screen made again (a font size or language
+     * change, a restore after the process was killed) is handed the intent it last had, and Recents
+     * restarts a task whose screens are gone with its first intent; read again, the old callback
+     * raised the restart notice on every recreation and rode the hand-off through setup after an
+     * update. So its data is dropped before either reader, and a callback arriving at a live screen
+     * becomes the screen's intent, so a recreation hands back that one to be dropped.
+     */
+    @Test
+    fun `a callback the screen was made with is read only by the launch made for it`() {
+        val lines = code()
+        val created = lines.indexOfFirst { it.contains("override fun onCreate(") }
+        val dropped = lines.indexOfFirst { it.contains("it.data = null") }
+        val handoff = lines.indexOfFirst { it.contains("handOffToSetup()") }
+        val relayed = lines.indexOfFirst { it.contains("receiveCallbackIntent(intent)") }
+
+        assertTrue(dropped > created) {
+            "onCreate reads the intent's callback however the screen came to be made, so an " +
+                "answered sign-in is answered again on every recreation"
+        }
+        assertTrue(dropped < handoff && dropped < relayed) {
+            "the callback is dropped after one of its readers has seen it: drop $dropped, " +
+                "hand-off $handoff, relay $relayed"
+        }
+        val condition = lines.subList(created, dropped).joinToString(" ")
+        assertTrue(condition.contains("savedInstanceState != null")) {
+            "a screen restored with its state is not told apart from one launched for the callback"
+        }
+        assertTrue(condition.contains("FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY")) {
+            "a task restarted from Recents reads the callback it was first started with"
+        }
+
+        val renewed = lines.dropWhile { !it.contains("override fun onNewIntent(") }.take(8)
+        val kept = renewed.indexOfFirst { it.contains("setIntent(intent)") }
+        val read = renewed.indexOfFirst { it.contains("receiveCallbackIntent(intent)") }
+        assertTrue(kept >= 0 && read > kept) {
+            "a callback arriving at a live screen does not become its intent, so a recreation " +
+                "is handed the launch's instead: ${renewed.joinToString("\n")}"
+        }
+    }
+
+    /**
      * Both activities are exported, so the intent they receive is whatever another app builds.
      * Copying its extras into the next intent unparcels them here, and a class this app does not
      * have makes that throw: any app could crash the launch path. Nothing reads an extra; the

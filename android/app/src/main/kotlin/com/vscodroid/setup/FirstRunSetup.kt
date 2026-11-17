@@ -4419,7 +4419,7 @@ claude() {
     private fun getCurrentVersionCode(): Int {
         return try {
             // longVersionCode unconditionally: it arrived in API 28 and minSdk
-            // here is 30, so the deprecated field the old branch fell back to was
+            // here is 29, so the deprecated field the old branch fell back to was
             // unreachable.
             context.packageManager.getPackageInfo(context.packageName, 0)
                 .longVersionCode.toInt()
@@ -6099,6 +6099,20 @@ private fun claimWriteLock(path: String): DestinationLock = synchronized(WRITE_L
 
 private fun releaseWriteLock(path: String, lock: DestinationLock) = synchronized(WRITE_LOCKS) {
     if (--lock.holders == 0) WRITE_LOCKS.remove(path)
+}
+
+/**
+ * Runs [block] holding the lock [writeAtomically] holds for [dest], for a change of [dest] made in
+ * more than one step that a write of it must not land inside.
+ */
+internal fun <T> holdingWriteLock(dest: File, block: () -> T): T {
+    val path = dest.absolutePath
+    val lock = claimWriteLock(path)
+    try {
+        return synchronized(lock) { block() }
+    } finally {
+        releaseWriteLock(path, lock)
+    }
 }
 
 /** The temporary files [writeAtomically] is writing right now, so a sweep never takes one for a stray. */

@@ -380,7 +380,8 @@ def ctype_fixture():
 
     The shim's entry points are renamed, so glibc's tables stay reachable where the host
     has them and are then the reference for every entry. Any C library answers for the
-    ASCII half.
+    ASCII half. The tables are read in a process that has made no call, which is where
+    tables built by their first caller were empty.
     """
     body = function("scripts/glibc-shim.c", "#define SHIM_ISupper ", "\n/* Version strings")
     names = ["__ctype_b_loc", "__ctype_tolower_loc", "__ctype_toupper_loc"]
@@ -391,8 +392,6 @@ def ctype_fixture():
     return r"""
 #include <assert.h>
 #include <ctype.h>
-#include <pthread.h>
-#include <stdint.h>
 #include <stdio.h>
 #include <sys/wait.h>
 #include <unistd.h>
@@ -441,27 +440,10 @@ static int wrong_before_the_first_call(void) {
     return wrong(tables[0], tables[1], tables[2]);
 }
 
-static int released;
-static void *first_call(void *unused) {
-    (void)unused;
-    while (!__atomic_load_n(&released, __ATOMIC_ACQUIRE)) {}
-    return (void *)(intptr_t)wrong(*shim__ctype_b_loc(), *shim__ctype_tolower_loc(),
-                                   *shim__ctype_toupper_loc());
-}
-
 int main(void) {
     int before = wrong_before_the_first_call();
-    pthread_t threads[8];
-    for (int i = 0; i < 8; i++) pthread_create(&threads[i], 0, first_call, 0);
-    __atomic_store_n(&released, 1, __ATOMIC_RELEASE);
-    int racing = 0;
-    for (int i = 0; i < 8; i++) {
-        void *result;
-        pthread_join(threads[i], &result);
-        racing += (int)(intptr_t)result;
-    }
-    printf("%d wrong entries before the first call, %d read by 8 threads making it\n", before, racing);
-    return !(before == 0 && racing == 0);
+    printf("%d wrong entries before the first call\n", before);
+    return before != 0;
 }
 """.replace("RENAMES", renames).replace("BODY", body).replace("ORIGINALS", originals)
 
@@ -683,7 +665,8 @@ int main(void) {
 #include <time.h>
 #define __NR_epoll_pwait2 441
 #define SYS_epoll_pwait 22
-typedef struct { int si_syscall; } siginfo_t;
+#define SYS_SECCOMP 1
+typedef struct { int si_code; int si_syscall; } siginfo_t;
 typedef struct { struct { unsigned long regs[31]; } uc_mcontext; } ucontext_t;
 static long timeout_seen;
 static int calls;
@@ -695,7 +678,7 @@ static long sys6(long nr, long fd, long events, long maxevents, long ms, long ma
 }
 BODY
 static void check(const struct timespec *ts, long expected) {
-    siginfo_t info = {__NR_epoll_pwait2};
+    siginfo_t info = {SYS_SECCOMP, __NR_epoll_pwait2};
     ucontext_t context = {0};
     context.uc_mcontext.regs[0] = 7;
     context.uc_mcontext.regs[1] = 8;
@@ -712,7 +695,25 @@ static void check(const struct timespec *ts, long expected) {
         assert(context.uc_mcontext.regs[0] == 3);
     }
 }
+/* A SIGSYS sent with kill, tgkill or sigqueue: nothing was refused, so x0 is the caller's own. */
+static void sent(int code, int syscall_field) {
+    const unsigned long regs[6] = {7, 8, 9, 0, 10, 8};
+    siginfo_t info = {code, syscall_field};
+    ucontext_t context = {0};
+    for (int i = 0; i < 6; i++) context.uc_mcontext.regs[i] = regs[i];
+    int before = calls;
+    on_sigsys(0, &info, &context);
+    assert(calls == before);
+    for (int i = 0; i < 6; i++) assert(context.uc_mcontext.regs[i] == regs[i]);
+}
 int main(void) {
+    /* SI_USER (kill), SI_TKILL (tgkill), SI_QUEUE (sigqueue), and codes that are not SYS_SECCOMP. */
+    const int codes[] = {0, -6, -1, 2, 7};
+    for (unsigned i = 0; i < sizeof(codes) / sizeof(codes[0]); i++) {
+        sent(codes[i], __NR_epoll_pwait2);
+        sent(codes[i], 0);
+        sent(codes[i], 129);
+    }
     check(NULL, -1);
     check(&(struct timespec){0, 0}, 0);
     check(&(struct timespec){0, 1}, 1);
@@ -728,8 +729,8 @@ int main(void) {
 }
 '''.replace("BODY", body))
 
-    def test_ctype_tables_are_whole_before_the_first_call_and_for_threads_racing_to_make_it(self):
-        compile_and_run(ctype_fixture(), flags=["-pthread"])
+    def test_ctype_tables_are_whole_before_the_first_call(self):
+        compile_and_run(ctype_fixture())
 
     def test_clockwait_takes_each_clock_to_its_own_wait_and_forwards_where_the_call_exists(self):
         compile_and_run(clockwait_fixture() + r'''

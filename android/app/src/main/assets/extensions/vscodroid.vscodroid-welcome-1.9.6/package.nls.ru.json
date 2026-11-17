@@ -11,7 +11,7 @@
   "walkthrough.folder.title": "Откройте свой проект",
   "walkthrough.folder.description": "Откройте папку из памяти телефона, например в Documents или Download. Файлы, которые туда сохранили другие приложения, тоже появятся.\n\n[Открыть папку с устройства](command:vscodroid.openFolderFromDevice)",
   "walkthrough.run.title": "Запустите свой код",
-  "walkthrough.run.description": "Откройте файл и нажмите кнопку запуска в заголовке редактора. Файлы JavaScript, TypeScript, Python, Ruby, Java, C, C++ и shell запускаются в терминале.\n\nRuby, Java и C/C++ устанавливаются по требованию, и кнопка предлагает их, если их нет.\n\n[Наборы инструментов](command:vscodroid.manageToolchains)",
+  "walkthrough.run.description": "Откройте файл и нажмите кнопку запуска в заголовке редактора. Файлы JavaScript, Python, Ruby, Java, C, C++ и shell запускаются в терминале.\n\nRuby, Java и C/C++ устанавливаются по требованию, и кнопка предлагает их, если их нет.\n\n[Наборы инструментов](command:vscodroid.manageToolchains)",
   "walkthrough.tools.title": "Ваши инструменты разработки",
   "walkthrough.tools.description": "В VSCodroid есть всё, что нужно, чтобы начать писать код:\n\n$(check) **Node.js** + npm: готово\n\n$(check) **Python** + pip: готово\n\n$(check) **Git**: готово\n\n$(check) **make**: готово\n\n**Java 25**, **Ruby** и **C/C++** устанавливаются по требованию. Нажмите и удерживайте значок VSCodroid на главном экране и выберите **Наборы инструментов**.\n\n[Понятно](command:vscodroid.welcome.toolsDismissed)",
   "walkthrough.terminal.title": "Настоящий терминал",

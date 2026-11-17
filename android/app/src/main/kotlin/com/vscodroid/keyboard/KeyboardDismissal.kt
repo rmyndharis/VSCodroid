@@ -100,7 +100,7 @@ class KeyboardDismissal(
      * Always within [TURN_FLOOR_MS] of the turn. Beyond it only for a turn that found the keyboard up, which is the one the system takes the keyboard
      * from after the transition, and then until [AFTER_REFOCUS_MS] after the refocus the turn makes, or while that refocus is still to come, and never
      * past [TURN_CAP_MS]. A keyboard that was down at the turn gets the floor and no more: the report that follows is a keyboard shown and put away after it.
-     * So does a turn the page answered with no refocus ([noRefocus]): there is none to wait for.
+     * So does a turn the page answered with a plain text box in focus ([noRefocus]): there is no refocus to wait for.
      */
     private fun turnOwns(at: Long): Boolean {
         if (claimEnded) return false
@@ -210,12 +210,12 @@ class KeyboardDismissal(
     }
 
     /**
-     * The page answered that this turn makes no refocus: the focus is not in an editing host (it is in Quick Open, the find box, the Search view's
-     * input, a rename box), or it is in one the page does not refocus (not aimed at text, a terminal word still being composed, text that changed
-     * while the turn waited). With none to wait for, the turn's claim ends at [TURN_FLOOR_MS], and a keyboard reported hidden after it is the
-     * person's, as it was for every turn before the refocus existed. Left to [TURN_CAP_MS], a keyboard put away with a Back the activity does not
-     * see was never told to the page, and the next touch raised it again. A focus the WebView takes all the same still starts [AFTER_REFOCUS_MS]
-     * ([refocused]), and the next turn waits for its own answer.
+     * The page answered that the focus is in a plain text box (Quick Open, the find box, the Search view's input, a rename box), where this turn
+     * makes no refocus and the system brings the keyboard back by itself. With none to wait for, the turn's claim ends at [TURN_FLOOR_MS], and a
+     * keyboard reported hidden after it is the person's. Left to [TURN_CAP_MS], a keyboard put away with a Back the activity does not see was
+     * never told to the page, and the next touch raised it again. Not called for the editor, the terminal or a focus in none of them, where a
+     * refocus is made or waited for, or the keyboard is the editor's to bring back: those keep the claim to the cap. A focus the WebView takes all
+     * the same still starts [AFTER_REFOCUS_MS] ([refocused]), and the next turn waits for its own answer.
      */
     fun noRefocus() {
         refocusComing = false
@@ -295,8 +295,8 @@ class KeyboardDismissal(
          * The latest a report is the turn's, however long the refocus takes. The first hidden reports after a turn came 0.44, 1.75, 3.29 and 5.89 s after it on
          * runs where the system took the keyboard away, 6.77 s after the turn's finish in another turn-transition hide, and 12.08 s on Android 16 while the
          * keyboard rebuilt under host load 200 to 284. A refocus that has not been made by then is not coming. The cap is for a refocus that is late, not
-         * for one that is never made: the app makes it only for an editing host aimed at text, and where the page says there is none ([noRefocus]) the
-         * claim ends at [TURN_FLOOR_MS].
+         * for one that is never made: the app makes it only for an editing host aimed at text, and where the page says the focus is in a plain text box
+         * ([noRefocus]) the claim ends at [TURN_FLOOR_MS].
          */
         const val TURN_CAP_MS = 13_000L
 

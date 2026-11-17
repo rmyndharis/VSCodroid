@@ -66,14 +66,14 @@ class KeyboardRotationCallSiteTest {
     }
 
     @Test
-    fun `a page without an eligible editing host keeps native focus, and its no ends the wait for a refocus`() {
+    fun `a page without an eligible editing host keeps native focus, and a plain text box ends the wait for a refocus`() {
         turn()
-        for (value in listOf("null", "\"true\"", "{}")) reply.captured.onReceiveValue(value)
-        assertEquals(listOf("evaluate"), events, "an answer that is not the page's no was taken for one")
-        reply.captured.onReceiveValue("false")
+        for (value in listOf("null", "\"true\"", "{}", "false", "\"false\"")) reply.captured.onReceiveValue(value)
+        assertEquals(listOf("evaluate"), events, "an answer that is not the page's none was taken for it: a false from the editor or the terminal keeps the turn waiting")
+        reply.captured.onReceiveValue("\"none\"")
         assertEquals(
             listOf("evaluate", "no refocus"), events,
-            "the page's no did not reach the dismissal, so a keyboard put away after the turn is left to the turn until its cap",
+            "the page's none did not reach the dismissal, so a keyboard put away after the turn is left to the turn until its cap",
         )
     }
 
@@ -82,7 +82,7 @@ class KeyboardRotationCallSiteTest {
         turn()
         val first = reply.captured
         turn()
-        first.onReceiveValue("false")
+        first.onReceiveValue("\"none\"")
         first.onReceiveValue("true")
         assertEquals(listOf("evaluate", "evaluate"), events)
     }
@@ -92,7 +92,7 @@ class KeyboardRotationCallSiteTest {
         turn()
         AuthTabWindow.beginPage()
         reply.captured.onReceiveValue("true")
-        reply.captured.onReceiveValue("false")
+        reply.captured.onReceiveValue("\"none\"")
         assertEquals(listOf("evaluate"), events)
     }
 

@@ -14,6 +14,7 @@ import androidx.browser.customtabs.CustomTabsIntent
 import com.google.android.play.core.assetpacks.model.AssetPackStatus
 import com.vscodroid.R
 import com.vscodroid.authCallbackIsExpected
+import com.vscodroid.callbackSecretMatches
 import com.vscodroid.isExtensionCallback
 import com.vscodroid.setup.ToolchainManager
 import com.vscodroid.setup.ToolchainRegistry
@@ -351,6 +352,8 @@ private const val MAX_QUEUED_DISK_COMMANDS = 4
  * restarts on reload. An address opened later in that document cannot replace
  * either the original secret or its time window. Expired identities stay
  * reserved until the document changes; failed browser launches can roll back.
+ * A launch still waiting when its document is replaced is kept only to explain
+ * a return that arrives too late for any page ([takeReplaced]).
  */
 object AuthTabWindow {
     internal class Launch(val nonce: String, val documentId: String) {
@@ -373,8 +376,18 @@ object AuthTabWindow {
         internal val requestId: String, internal val generation: Long, internal val launch: Launch,
     )
 
+    /** A launch that was still waiting for its return when its page was replaced. */
+    private class Replaced(val requestId: String, val nonce: String, val at: Long)
+
     private val launches = LinkedHashMap<String, Launch>()
     private var generation = 0L
+
+    /**
+     * Launches whose page was replaced before their return arrived, oldest first and at most
+     * [MAX_TRACKED_SIGN_INS]. The workbench that was waiting for them is gone with the page, so
+     * a return for one of them can only be explained, never relayed: see [takeReplaced].
+     */
+    private val replaced = ArrayDeque<Replaced>()
 
     @Synchronized
     fun pageGeneration(): Long = generation
@@ -382,7 +395,28 @@ object AuthTabWindow {
     @Synchronized
     fun beginPage() {
         generation++
+        launches.forEach { (requestId, launch) ->
+            val at = launch.at
+            if (at != null && !launch.expired) replaced.addLast(Replaced(requestId, launch.nonce, at))
+        }
+        while (replaced.size > MAX_TRACKED_SIGN_INS) replaced.removeFirst()
         launches.clear()
+    }
+
+    /**
+     * Whether [requestId] and [nonce] name a launch whose page was replaced while it waited, and
+     * whose window is still open at [nowMillis]. Forgotten as it answers, so each such launch is
+     * explained once. A return without the secret its launch was registered with matches nothing,
+     * so nothing outside the app can make it answer true.
+     */
+    @Synchronized
+    fun takeReplaced(requestId: String, nonce: String?, nowMillis: Long): Boolean {
+        replaced.removeAll { !authCallbackIsExpected(it.at, nowMillis, AUTH_TAB_WINDOW_MILLIS) }
+        val match = replaced.firstOrNull {
+            it.requestId == requestId && callbackSecretMatches(nonce, it.nonce)
+        } ?: return false
+        replaced.remove(match)
+        return true
     }
 
     /**

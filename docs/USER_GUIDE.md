@@ -26,7 +26,7 @@ A practical guide to using VSCodroid, the full VS Code IDE running natively on y
 
 1. **Install**. Download from the [Play Store](https://play.google.com/store/apps/details?id=com.vscodroid) or [GitHub Releases](https://github.com/rmyndharis/VSCodroid/releases). The core download is roughly 270 MB, and you need about 800 MB free for the extraction that follows.
 2. **Binary extraction**. On first launch, VSCodroid extracts bundled tools (Node.js, Python, Git, Bash, and others) to internal storage. About 603 MB lands on disk, unpacked one file at a time behind a progress bar, so allow minutes rather than seconds on a slower device. The ~800 MB above is that payload plus the working room setup insists on before it will start. It happens on the first launch and again after every app update or reinstall, because extraction follows the installed package's version and update timestamp rather than only what is already unpacked. An update needs far less free space than a fresh install (the app credits what it already holds, so roughly 230 MB for a complete tree rather than 800 MB), but it does re-copy the files and it does take minutes. A first run that is interrupted and retried with the same installed package is the one case that does not start over: files already the right size are left alone.
-3. **Language Picker**. A prompt asks "What do you code in?" with options for Ruby, Java and C/C++. It comes back at each launch until you answer it with Continue or Skip, and your answer is not final: touch and hold the app icon and pick **Manage toolchains** to add or remove them later. Whatever you select downloads there on the setup screen, one at a time; a download that fails is skipped and the rest continue. Skip goes straight to the editor.
+3. **Language Picker**. A prompt asks "What do you code in?" with options for Ruby, Java and C/C++. It comes back at each launch until you answer it with Continue or Skip (a Continue that chose something counts once its downloads have ended, so if the app ends before they finish, the picker comes back at the next launch), and your answer is not final: touch and hold the app icon and pick **Manage toolchains** to add or remove them later. Whatever you select downloads there on the setup screen, one at a time; a download that fails is skipped and the rest continue. Skip goes straight to the editor.
 4. **Ready**. The VS Code editor loads with terminal, file explorer, and all bundled tools available immediately.
 
 ### Default File Locations
@@ -34,7 +34,9 @@ A practical guide to using VSCodroid, the full VS Code IDE running natively on y
 | Item | Path |
 |------|------|
 | Projects folder | `~/projects/` |
-| Settings and data | `~/.vscodroid/` |
+| Extensions and editor data | `~/.vscodroid/` |
+| Settings on the **Remote** tab of Settings | `~/.vscodroid/data/Machine/settings.json` |
+| Settings and keybindings on the **User** tab | Inside the WebView's storage, not a file |
 | SSH keys | `~/.ssh/` |
 
 All files are stored in the app's private sandbox. No root access is required.
@@ -83,7 +85,8 @@ VSCodroid is VS Code. If you have used VS Code on desktop, everything works the 
   folder is open do not reach the editor until you open the folder again. If you
   save a file that another app changed since you opened the folder or last saved
   that file, the other app's version is normally kept beside yours as
-  `<name>.device-<time>`, in the editor and in the device folder. The check goes
+  `<name>.device-<time>`, in the editor and in the device folder (the name is
+  cut first when it is too long to take the suffix). The check goes
   beyond the time and size the device folder reports: before replacing an
   existing device file, VSCodroid reads its bytes and compares them with the
   version it last read or delivered. This also protects edits that keep the
@@ -114,8 +117,9 @@ VSCodroid is VS Code. If you have used VS Code on desktop, everything works the 
   When a file and a folder share a name, one on the device and one in the editor,
   for example after you delete a folder in the Explorer, which leaves it on the
   device, and make a file of the same name, the device's keeps the name and
-  yours is kept beside it as `<name>.local-<time>`, in the editor and in the
-  device folder, the next time you open the folder. Until then a notice says the
+  yours is kept beside it as `<name>.local-<time>` (the name is cut first when it
+  is too long to take the suffix), in the editor and in the device folder, the
+  next time you open the folder. Until then a notice says the
   file exists only inside VSCodroid. A file in the editor that you have not changed
   since VSCodroid copied it, where the device now holds a folder, is not kept: the
   folder replaces it. If you open a folder again while a large
@@ -185,7 +189,11 @@ Common commands:
 ### Settings
 
 Open the Command Palette (**Ctrl+Shift+P**) and run `Preferences: Open Settings (UI)`.
-VSCodroid stores settings in `~/.vscodroid/`. Key defaults:
+Settings you change on the **User** tab, the one Settings opens on, are kept by
+the editor inside the WebView's storage, not in a file. The tab labelled **Remote
+[127.0.0.1:13337]** (the port can differ on your device) edits
+`~/.vscodroid/data/Machine/settings.json`, the file VSCodroid writes its own
+settings into. Key defaults:
 
 - Word wrap is on, in the editor and in the diff editor.
 - Enter accepts an editor suggestion only when it changes the text (`editor.acceptSuggestionOnEnter` is `smart`), so pressing Enter after a word already in the file starts a new line.
@@ -427,7 +435,11 @@ A file open in the editor runs from the play button in the editor's title bar.
 Python files get it from the Python extension. JavaScript, TypeScript, Ruby,
 Java, C, C++ and `.sh` or `.bash` files get **VSCodroid: Run File**, which saves
 the file and runs it in a terminal named *VSCodroid Run*; the next run replaces
-that terminal. Header files and the other shells' scripts do not get it. Ruby, Java and C/C++ need their toolchain from the toolchains screen
+that terminal. Header files and the other shells' scripts do not get it. A
+TypeScript file runs as `node file.ts`, which only removes type annotations, so
+one with an `enum` or an import that leaves out the `.ts` extension stops with
+an error (see the TypeScript note under
+[What You Get For Each Language](#what-you-get-for-each-language)). Ruby, Java and C/C++ need their toolchain from the toolchains screen
 first, and the button offers it when it is missing. A C or C++ file is built
 into a temporary file and run, so a program of several files or one that needs
 build options still belongs in the terminal.
@@ -1008,7 +1020,8 @@ extension from Open VSX talks to it: see [C and C++](#c-and-c). There is no debu
 program with no Android build, so `npx tsc` stops with
 `Unable to resolve ... Either your platform is unsupported`. Install `typescript@6` instead, which compiles in JavaScript and works
 here. The editor's own TypeScript checking is separate and is not affected. Node itself runs
-`.ts` files directly (`node file.ts`) as long as they use only syntax that can be stripped.
+`.ts` files directly (`node file.ts`) as long as they use only syntax that can be stripped and
+name the `.ts` file in every relative import.
 
 ### Installing During First Run
 
@@ -1024,9 +1037,10 @@ Either way they land in the app's own storage and survive app updates.
 
 ### Installing After Setup
 
-The Language Picker stops appearing once you answer it with Continue or Skip, but the
-screen it offers stays reachable, by two routes. From the editor, run
-**VSCodroid: Manage Toolchains** from the Command Palette (**Ctrl+Shift+P**). From
+The Language Picker stops appearing once you answer it with Skip, or with Continue once the
+downloads it started have ended, but the screen it offers stays reachable, by two routes.
+From the editor, run **VSCodroid: Manage Toolchains** from the Command Palette
+(**Ctrl+Shift+P**). From
 outside it, **touch and hold the VSCodroid icon** (on the home screen or in the app
 drawer) and choose **Manage toolchains**. Both open the same screen, and installing
 and removing work exactly as they do during setup, so a language you skipped is not

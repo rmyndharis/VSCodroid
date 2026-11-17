@@ -187,6 +187,10 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
     @Volatile
     private var nodeService: NodeService? = null
     private var serviceBindingInitiated = false
+
+    // The four callbacks this screen put on the service (ready, error, gave up, stopped), kept so that
+    // [onDestroy] takes off the ones that are still its own and nothing else.
+    private var serviceCallbacks: Array<Any?>? = null
     private var serverPort = 0
     private var backgroundedAt = 0L
     private var bridgeInitialized = false
@@ -292,8 +296,15 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
     private var awayFromHomePendingShow: (() -> Unit)? = null
 
     // The home port of an away-from-home notice the person has not answered yet, or 0. An activity
-    // taken down before the answer gives it back to the gateway, so the one made in its place says it.
+    // taken down before the answer gives it back to the gateway, so the next editor load says it:
+    // the one made in its place, or the next one opened after closing the app from the recent apps,
+    // which leaves the service and the temporary origin running. After Stop Server the gateway has
+    // already released that origin, and the next start's bind writes the note again.
     private var awayFromHomeUnanswered = 0
+
+    // The gateway's count of listeners opened when that notice was said, so it goes back only to the
+    // listener it is about: see [returnUnansweredAwayFromHome].
+    private var awayFromHomeListener = 0L
     private var pendingNoticeAfterCrash: (() -> Unit)? = null
 
     /**
@@ -581,11 +592,23 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
          */
         override fun askDestination(requestId: String, fileName: String) {
             runOnUiThread {
+                // Posted, so it can run after this screen is gone, when launch
+                // throws. The download is ended rather than left holding the queue,
+                // and no picker is opened for a screen that cannot take its answer:
+                // it would create the document and leave it empty.
+                if (isFinishing || isDestroyed) {
+                    downloads.onDestinationUnavailable(requestId)
+                    return@runOnUiThread
+                }
                 pickerRequestId = requestId
                 try {
                     downloadDestinationLauncher.launch(fileName)
                 } catch (e: ActivityNotFoundException) {
                     Logger.w(tag, "No document creator on this device", e)
+                    pickerRequestId = null
+                    downloads.onDestinationUnavailable(requestId)
+                } catch (e: IllegalStateException) {
+                    Logger.w(tag, "The document creator is no longer registered", e)
                     pickerRequestId = null
                     downloads.onDestinationUnavailable(requestId)
                 }
@@ -763,6 +786,20 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         // Before super.onCreate(), as the call it replaces required.
         drawBehindSystemBars()
         super.onCreate(savedInstanceState)
+        // A screen made again (a font size or language change, or a restore after
+        // the process was killed) is handed the intent it last had, and Recents
+        // restarts a task whose screens are gone with its first intent, marked as
+        // launched from history. A callback in either was answered when it
+        // arrived, so its data goes before the two readers below see it: read
+        // again, it raised the restart notice on every recreation and rode the
+        // hand-off through setup after an update.
+        intent?.let {
+            if (savedInstanceState != null ||
+                (it.flags and Intent.FLAG_ACTIVITY_LAUNCHED_FROM_HISTORY) != 0
+            ) {
+                it.data = null
+            }
+        }
         // First, because everything below it assumes an extracted tree. See
         // handOffToSetup for what reaching this activity without one costs.
         if (handOffToSetup()) return
@@ -946,13 +983,14 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         requestNotificationPermission()
         startAndBindService()
         checkPreviousCrash()
-        // Once the window is attached, which is after the activity has started: from Android 12 the
-        // warning is too long for a toast and is a dialog, and a screen that has not started cannot show
-        // one, so a call made here was neither shown nor remembered and the warning never appeared.
-        window.decorView.post { checkStorageHealth() }
+        // From Android 12 the warning is too long for a toast and is a dialog, which this screen cannot
+        // show before it has started: with its once key it is held, unspent, and shown at onStart.
+        checkStorageHealth()
         checkWebViewVersion()
-        // Reading it here, and not only in onNewIntent, is what makes a sign-in
-        // survive the app being killed while the browser had the screen. See
+        // Reading it here, and not only in onNewIntent, serves a callback that
+        // starts this screen with nothing of it left to restore. A screen restored
+        // after the app was killed while the browser had it gets the callback in
+        // onNewIntent, which the platform delivers before onResume. See
         // receiveCallbackIntent.
         receiveCallbackIntent(intent)
 
@@ -966,6 +1004,9 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
 
     override fun onNewIntent(intent: Intent) {
         super.onNewIntent(intent)
+        // Kept as this screen's intent, so a recreation is handed this one rather
+        // than the launch's, and onCreate drops its data: it is answered here.
+        setIntent(intent)
         receiveCallbackIntent(intent)
     }
 
@@ -1120,7 +1161,14 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
      * explanation per launch, and every further arrival for that id lands in the
      * silent branch above.
      *
-     * Both messages are fixed text; nothing from the callback reaches the screen.
+     * The restart message has a second way in, keyed the same way: a page can be
+     * replaced inside one Activity (a server restart's reload, a folder switch)
+     * with `workbenchLoaded` true throughout, and the launches it was waiting on
+     * go with it ([AuthTabWindow.beginPage]). A return for one of those, carrying
+     * its secret and inside its window, gets the restart message once
+     * ([AuthTabWindow.takeReplaced]); anything else stays in the silent branch.
+     *
+     * Every message is fixed text; nothing from the callback reaches the screen.
      */
     private fun receiveCallbackIntent(intent: Intent?) {
         val uri = intent?.data ?: return
@@ -1179,6 +1227,28 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         // no sign-in here to report on.
         val requestId = callbackRequestId(uri.getQueryParameter("data"))
         val armedAt = requestId?.let { AuthTabWindow.armedAt(it) }
+        // The workbench registers this immutable nonce when it creates the
+        // callback URI. Outgoing URL text can activate that identity but cannot
+        // create or replace it. Check before expiry so an invalid return neither
+        // retires the pending request nor raises its timeout notice.
+        val offered = callbackNonce(uri.getQueryParameter("data"))
+        val secretMatches = requestId != null && callbackSecretMatches(offered, AuthTabWindow.nonceFor(requestId))
+        // A return the page on screen cannot take, for a launch an earlier page
+        // was still waiting on when it was replaced while the browser had the
+        // sign-in (a server restart's reload, a folder switch), with
+        // workbenchLoaded true throughout. Said once per such launch, and only
+        // for the secret it was registered with.
+        if (requestId != null && (armedAt == null || !secretMatches) &&
+            AuthTabWindow.takeReplaced(requestId, offered, SystemClock.elapsedRealtime())
+        ) {
+            Logger.w(tag, "A sign-in callback arrived after the page that started it was replaced")
+            AppNotices.showNotice(
+                this,
+                getString(R.string.sign_in_editor_restarted),
+                Toast.LENGTH_LONG
+            )
+            return
+        }
         if (requestId == null || armedAt == null) {
             // Logged without the URI. It is the payload of a sign-in this app
             // did not start, and the log is readable by anything holding
@@ -1187,12 +1257,7 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
             Logger.w(tag, "Ignoring a sign-in callback that no sign-in was waiting for")
             return
         }
-        // The workbench registers this immutable nonce when it creates the
-        // callback URI. Outgoing URL text can activate that identity but cannot
-        // create or replace it. Check before expiry so an invalid return neither
-        // retires the pending request nor raises its timeout notice.
-        val offered = callbackNonce(uri.getQueryParameter("data"))
-        if (!callbackSecretMatches(offered, AuthTabWindow.nonceFor(requestId))) {
+        if (!secretMatches) {
             Logger.w(tag, "Ignoring a sign-in callback that did not carry this request's secret")
             return
         }
@@ -1295,12 +1360,22 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         // Activity, its WebView and its view tree. Unbinding does not clear
         // them: nothing overwrites them until some future activity binds and
         // installs its own, which may be never.
-        nodeService?.let {
-            it.onServerReady = null
-            it.onServerError = null
-            it.onServerGaveUp = null
-            it.onServerStopped = null
+        //
+        // Only the callbacks this screen installed, and only while they are still the ones on the
+        // service. The service outlives the screen, and the app opened again just after Stop Server,
+        // which finishes this screen and removes its task, makes a screen that binds to the same
+        // service and installs its own while this one is still waiting to be destroyed. Clearing
+        // whatever was there took the new screen's callbacks away: the server came up behind a
+        // loading page that nothing ever replaced.
+        nodeService?.let { service ->
+            serviceCallbacks?.let { ours ->
+                if (service.onServerReady === ours[0]) service.onServerReady = null
+                if (service.onServerError === ours[1]) service.onServerError = null
+                if (service.onServerGaveUp === ours[2]) service.onServerGaveUp = null
+                if (service.onServerStopped === ours[3]) service.onServerStopped = null
+            }
         }
+        serviceCallbacks = null
         if (serviceBindingInitiated) {
             try {
                 unbindService(serviceConnection)
@@ -1317,12 +1392,14 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         extraKeyRow?.keyInjector = null
         (webView?.webViewClient as? VSCodroidWebViewClient)?.disposeAuthPage()
         crashDialog?.setOnDismissListener(null)
+        // Taken down with its screen, which the platform otherwise reports as a leaked window. Its
+        // crash logs stay, so a screen made again for a font size or language change asks again.
+        crashDialog?.takeIf { it.isShowing }?.dismiss()
         awayFromHomePendingShow = null
         awayFromHomeNotice?.setOnDismissListener(null)
-        // Taken down with its screen, which the platform otherwise reports as a leaked window, and
-        // handed back unless the app is closing: see [awayFromHomeUnanswered].
+        // Taken down with its screen for the same reason, and handed back: see [awayFromHomeUnanswered].
         awayFromHomeNotice?.takeIf { it.isShowing }?.dismiss()
-        if (!isFinishing) returnUnansweredAwayFromHome()
+        returnUnansweredAwayFromHome()
         AppNotices.drop(this, carry = true)
         webView?.destroy()
         webView = null
@@ -1426,9 +1503,10 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                     if (!targetView.isFocused || !targetView.hasWindowFocus()) return@evaluateJavascript
                     targetView.clearFocus()
                     targetView.requestFocus()
-                } else if (editable == "false") {
-                    // No refocus follows the page's no, so the turn stops waiting for one: a keyboard
-                    // put away over Quick Open or the find box is then the person's after the floor.
+                } else if (editable == "\"none\"") {
+                    // The focus is in a plain text box, for which no refocus is made, so the turn stops
+                    // waiting for one: a keyboard put away over Quick Open or the find box is then the
+                    // person's after the floor. Every other no leaves the turn waiting, as it did.
                     keyboardDismissal.noRefocus()
                 }
             }
@@ -1462,6 +1540,10 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
      * Called from [AndroidBridge.openFolderPicker] via JS bridge.
      */
     fun openFolderPicker() {
+        // The bridge posts this, so it can run after this screen is gone: the
+        // registry lets go of the launcher at destroy and launch then throws, and
+        // nothing would be left to take the answer.
+        if (isFinishing || isDestroyed) return
         // Guarded like the file chooser: a device with DocumentsUI disabled throws
         // here on the main thread, and an uncaught throw ends the process with the
         // server in it.
@@ -1469,6 +1551,8 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
             folderPickerLauncher.launch(null)
         } catch (e: ActivityNotFoundException) {
             Logger.w(tag, "No document tree picker on this device", e)
+        } catch (e: IllegalStateException) {
+            Logger.w(tag, "The folder picker is no longer registered", e)
         }
     }
 
@@ -1722,7 +1806,7 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                 // link are off the main thread for the reason every other disk
                 // read here is: `MainThreadWatch` installs a policy that logs one,
                 // and `folderOpenTarget` stats each candidate.
-                if (navigate && serverPort > 0) {
+                if (navigate) {
                     val target = withContext(Dispatchers.IO) {
                         val opened = folderOpenTarget(
                             mirrorDir.absolutePath,
@@ -1764,12 +1848,20 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                     // and the server is asked back: retryServerStart puts up the
                     // loading page, whose URL names no folder, so onServerReady's
                     // loadVSCode falls through the chain to this one.
-                    if (nodeService?.isServerReady() == true) {
+                    //
+                    // A port of 0 is a screen that has not yet seen this process's
+                    // server answer, which is where a folder picked across a
+                    // process restart lands: the picker's result comes in before
+                    // the binding does. No editor has been loaded on it yet, and the
+                    // first load reads the remembered folder, so remembering is all
+                    // it needs; gating the whole branch on the port let the editor
+                    // open the folder remembered before this one.
+                    if (serverPort > 0 && nodeService?.isServerReady() == true) {
                         navigateToFolder(serverPort, target)
                     } else {
                         Logger.i(tag, "The server is not serving; opening the folder once it is")
                         if (!rememberWorkspaceFolder(target)) return@launch
-                        retryServerStart()
+                        if (serverPort > 0) retryServerStart()
                     }
                 }
             } catch (e: CancellationException) {
@@ -1844,8 +1936,10 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                 // Guarded for the reason the handler above it is.
                 if (!isFinishing && !isDestroyed) dialog.dismiss()
                 Logger.e(tag, "SAF sync failed", e)
+                // Never null: many exceptions carry no message, and the sentence then
+                // ended in the word null.
                 reportSyncFailure(
-                    getString(R.string.saf_sync_failed, e.message),
+                    getString(R.string.saf_sync_failed, e.message ?: e.javaClass.simpleName),
                     restoreWatcherAfterFailure(previouslyWatched, uri)
                 )
             } finally {
@@ -2972,8 +3066,9 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
             serverPort = port
             runOnUiThread {
                 // "Taking longer than usual to start" is over. From Android 12 it is a dialog, which
-                // stayed over the working editor until it was tapped.
-                AppNotices.retract(this, getString(R.string.status_server_slow_start))
+                // stayed over the working editor until it was tapped. By its topic: a screen made again
+                // for a change of language carries the text in the language it had.
+                AppNotices.retractTopic(this, NodeService.TOPIC_SLOW_START)
                 // A server that came back on its own is not the user asking, and
                 // the crash page has told them the editor stays down until they
                 // do. Loading here anyway ran the loop that page exists to stop
@@ -2996,7 +3091,10 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         nodeService?.onServerError = { message ->
             runOnUiThread {
                 Logger.e(tag, "Server error: $message")
-                AppNotices.showNotice(this, message, Toast.LENGTH_LONG)
+                // The service records a notice before it raises it, and the record names the topic
+                // readiness takes it back by.
+                val topic = nodeService?.lastStartupNotice()?.takeIf { it.message == message }?.topic
+                AppNotices.showNotice(this, message, Toast.LENGTH_LONG, topic = topic)
             }
         }
         // A toast lasts three and a half seconds; this state lasts until the app
@@ -3020,6 +3118,8 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                 finishAndRemoveTask()
             }
         }
+
+        serviceCallbacks = nodeService?.let { arrayOf(it.onServerReady, it.onServerError, it.onServerGaveUp, it.onServerStopped) }
 
         // The permission answer can beat the binding; if it did, this is the
         // first moment the request has anywhere to go.
@@ -3059,28 +3159,33 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         // Reading the source for the *name* isServerReady cannot tell a call whose
         // answer is obeyed from one whose answer is discarded, and the second is
         // the mutation that survived the suite.
+        val notice = service.lastStartupNotice()
         when (
             val decision = bindDecision(
-                notice = service.lastStartupNotice(),
+                notice = notice,
                 port = service.getPort(),
                 ready = service.isServerReady(),
             )
         ) {
             is BindDecision.ShowNotice -> {
                 Logger.w(tag, "Server start notice predating this binding: ${decision.message}")
-                AppNotices.showNotice(this, decision.message, Toast.LENGTH_LONG)
+                AppNotices.showNotice(this, decision.message, Toast.LENGTH_LONG, topic = notice?.topic)
             }
             is BindDecision.ShowGaveUp -> {
-                // The page, not only the toast. The toast is gone in three and a
-                // half seconds and what it leaves behind is the loading page,
-                // still saying the server is starting. The page below says what
-                // happened and carries the only control that can change it.
+                // The page alone. A toast is gone in three and a half seconds and
+                // leaves the loading page behind, still saying the server is
+                // starting; the page says what happened and carries the only
+                // control that can change it. No notice beside it: the page takes
+                // a notice down as it comes up, which flashed a dialog wherever
+                // the text is too long for a toast.
                 Logger.w(tag, "Server had already given up when this binding arrived")
-                AppNotices.showNotice(this, decision.message, Toast.LENGTH_LONG)
                 showServerGaveUpWithLog()
             }
             is BindDecision.Load -> {
                 Logger.i(tag, "Server already serving on port ${decision.port}, loading immediately")
+                // A server that came up while no screen was bound told nobody, and a slow start
+                // notice the screen before carried over is over.
+                AppNotices.retractTopic(this, NodeService.TOPIC_SLOW_START)
                 serverPort = decision.port
                 loadVSCode(decision.port)
             }
@@ -3122,7 +3227,7 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
      *
      * One caller is left on this variant that the flag cannot reach:
      * [BindDecision.ShowGaveUp], which an activity binding after the fact reads
-     * out of `lastStartupNotice()`, and a notice carries only `terminal`. Both
+     * out of `lastStartupNotice()`, whose `terminal` is not that flag. Both
      * states set it. The asymmetry is deliberate rather than overlooked: the
      * terminal state keeps the service alive on purpose, so a later bind is the
      * case it exists for, while STAND_DOWN calls `stopSelf()` in the next line
@@ -3166,8 +3271,11 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                     .map { redactSecrets(redactToken(it)) }
                     .let { collapseRuns(it, SERVER_LOG_LINES) }
             }
+            // A page this app loaded since owns the screen. A page the editor started by itself (its
+            // Reload Window, a main-frame load error) does not while the server stays given up: the
+            // gateway answers it with an empty 503, and this page is then the only thing said.
             if (request != recoveryPageEpoch || webView !== targetView ||
-                generation != AuthTabWindow.pageGeneration()) return@launch
+                (generation != AuthTabWindow.pageGeneration() && nodeService?.isServerReady() == true)) return@launch
             showErrorPage(getString(R.string.error_server_gave_up), RETRY_URL, detail.joinToString("\n"))
         }
     }
@@ -3482,14 +3590,16 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
      * The service hands the port out once per process. Until the person answers
      * the dialog the port is kept in [awayFromHomeUnanswered], and an activity
      * taken down before that (a font size or language change makes it again, and
-     * so does a reclaimed screen) gives it back, so the notice is not lost with it.
+     * so does a reclaimed screen; closing the app from the recent apps ends it
+     * while the server goes on) gives it back, so the notice is not lost with it.
      *
-     * The notice sends the person to Stop Server in the notification, and a phone
-     * with notifications turned off for the app shows none, so the dialog carries
-     * the same action under the notification's own label.
+     * Stop Server is in the notification, and a phone with notifications turned
+     * off for the app shows none, so the dialog carries the same action under the
+     * notification's own label, and the notice names both.
      */
     private fun showAwayFromHomeNotice(home: Int) {
         awayFromHomeUnanswered = home
+        awayFromHomeListener = EditorGateway.instance.listenersOpened
         fun show() {
             if (isFinishing || isDestroyed) return
             awayFromHomePendingShow = null
@@ -3549,7 +3659,14 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         val home = awayFromHomeUnanswered
         if (home <= 0) return
         awayFromHomeUnanswered = 0
-        EditorGateway.instance.noteAwayFromHome(home)
+        // Only while the listener it was said on is still the one bound. Stop Server releases that
+        // listener, and a start opened again before this screen is destroyed binds its own and writes
+        // its own note: at home, the port handed back here made the next load say another app holds
+        // home; away again, it made the next load say it a second time.
+        val gateway = EditorGateway.instance
+        if (gateway.boundPort != null && gateway.listenersOpened == awayFromHomeListener) {
+            gateway.noteAwayFromHome(home)
+        }
     }
 
     private fun flushPendingNoticeAfterCrash() {
@@ -5231,6 +5348,15 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                         (element.editContext || isTerminalTextarea(element)) &&
                         element.getAttribute('inputmode') !== 'none');
                 }
+                // A text box of the workbench that is neither the editor (its EditContext host, or the
+                // `inputarea` textarea of the other edit path) nor the terminal: the Quick Open input,
+                // the find box, a rename box. Nothing here is held down, and the keyboard returns by
+                // itself for the box, so a turn has nothing to refocus for it.
+                function plainTextBox(element) {
+                    if (!element || !element.classList || element.classList.contains('inputarea')) return false;
+                    return element.tagName === 'TEXTAREA' || element.isContentEditable === true ||
+                        (element.tagName === 'INPUT' && element.selectionStart !== null);
+                }
                 function finishCompositionTurn() {
                     if (!turnUnchanged()) { cancelCompositionTurn(); return; }
                     var turn = compositionTurn;
@@ -5272,7 +5398,9 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                         if (!element) return false;
                         var context = element.editContext;
                         if (!context) {
-                            if (!isTerminalTextarea(element)) return false;
+                            // 'none' and not false: the app is told that no refocus will come, and the
+                            // turn stops waiting for one. The other answers of false leave it waiting.
+                            if (!isTerminalTextarea(element)) return plainTextBox(element) ? 'none' : false;
                             // The refocus blurs the field, xterm empties it,
                             // and the word still under composition is lost.
                             if (composing.has(element)) return false;

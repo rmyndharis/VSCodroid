@@ -11,7 +11,7 @@
   "walkthrough.folder.title": "Otevřete svůj projekt",
   "walkthrough.folder.description": "Otevřete složku z úložiště telefonu, například v Documents nebo Download. Zobrazí se i soubory, které do ní uložily jiné aplikace.\n\n[Otevřít složku ze zařízení](command:vscodroid.openFolderFromDevice)",
   "walkthrough.run.title": "Spusťte svůj kód",
-  "walkthrough.run.description": "Otevřete soubor a klepněte na tlačítko přehrání v záhlaví editoru. Soubory JavaScript, TypeScript, Python, Ruby, Java, C, C++ i skripty shellu se spustí v terminálu.\n\nRuby, Java a C/C++ se instalují na vyžádání a tlačítko je nabídne, když chybí.\n\n[Spravovat sady nástrojů](command:vscodroid.manageToolchains)",
+  "walkthrough.run.description": "Otevřete soubor a klepněte na tlačítko přehrání v záhlaví editoru. Soubory JavaScript, Python, Ruby, Java, C, C++ i skripty shellu se spustí v terminálu.\n\nRuby, Java a C/C++ se instalují na vyžádání a tlačítko je nabídne, když chybí.\n\n[Spravovat sady nástrojů](command:vscodroid.manageToolchains)",
   "walkthrough.tools.title": "Vaše vývojářské nástroje",
   "walkthrough.tools.description": "VSCodroid má v sobě všechno, co potřebujete k psaní kódu:\n\n$(check) **Node.js** + npm: připraveno\n\n$(check) **Python** + pip: připraveno\n\n$(check) **Git**: připraveno\n\n$(check) **make**: připraveno\n\n**Java 25**, **Ruby** a **C/C++** se instalují na vyžádání. Podržte prst na ikoně VSCodroidu na ploše a zvolte **Spravovat sady nástrojů**.\n\n[Rozumím](command:vscodroid.welcome.toolsDismissed)",
   "walkthrough.terminal.title": "Opravdový terminál",

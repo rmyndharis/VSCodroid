@@ -158,7 +158,6 @@ class ToolchainActivity : AppCompatActivity() {
         // Before super.onCreate(), as the call it replaces required.
         drawBehindSystemBars()
         super.onCreate(savedInstanceState)
-        if (handOffToSetup()) return
         setContentView(R.layout.activity_toolchain)
         findViewById<android.view.View>(R.id.toolchainRoot).padForSystemBars()
 
@@ -358,20 +357,19 @@ class ToolchainActivity : AppCompatActivity() {
     }
 
     /**
-     * Sends a launch that arrives before this build's setup has run to the splash screen.
+     * Sends an install asked for before this build's setup has finished to the splash screen.
      *
      * The launcher shortcut an earlier version published survives an update, and an update runs
      * setup again, which unpacks `usr/`. Installing a toolchain from here in that minute writes into
      * `usr/` under the unpacking, and each of the two counts on storage the other is about to take.
-     * The editor does the same for its own launch (`MainActivity.handOffToSetup`); the shortcut works
-     * again once setup is over. Nothing of this screen exists yet when it returns true, and a screen
-     * finished in onCreate is destroyed without being started.
+     * The screen itself still opens, and Remove still works: a setup refused for lack of space waits
+     * on its error screen with setup not done, and removing a toolchain here is how the space is
+     * freed. This screen stays under the splash screen, so Back from that refusal returns to it.
      */
     private fun handOffToSetup(): Boolean {
         if (!FirstRunSetup(this).isFirstRun()) return false
-        Logger.w(tag, "Opened before setup had run; handing the launch to the splash screen")
+        Logger.w(tag, "Install asked for before setup had run; handing it to the splash screen")
         startActivity(Intent(this, SplashActivity::class.java))
-        finish()
         return true
     }
 
@@ -484,11 +482,6 @@ class ToolchainActivity : AppCompatActivity() {
         // interleaving where the screen found the set non-empty and the report
         // found a screen that was not gone yet, with nobody left to hand it back.
         destroyed.set(true)
-        // A screen that handed its launch to setup made nothing to give back: see [handOffToSetup].
-        if (!::toolchainManager.isInitialized) {
-            super.onDestroy()
-            return
-        }
         if (outstanding.isEmpty()) toolchainManager.unregisterListener()
         // The window this dialog is attached to goes with the Activity, and a
         // rotation destroys this one: nothing here declares configChanges. Left
@@ -524,6 +517,7 @@ class ToolchainActivity : AppCompatActivity() {
     }
 
     private fun requestInstall(packName: String) {
+        if (handOffToSetup()) return
         // A synchronous failure must be able to settle this request immediately.
         outstanding.add(packName)
         toolchainManager.install(packName)

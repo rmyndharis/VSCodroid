@@ -428,6 +428,11 @@ class DownloadCoordinator(
          * provider holding a document created after it.
          */
         var busy: Boolean = false,
+        /**
+         * Whether this stands for a picker answer that belongs to no download in flight, so that
+         * what is known of it is the document the picker made or returned and nothing else.
+         */
+        val stray: Boolean = false,
     )
 
     /**
@@ -707,7 +712,7 @@ class DownloadCoordinator(
             Logger.w(tag, "Destination for $requestId belongs to no download in flight")
             // Settled as a live answer is, and then ended at once: nothing is
             // written, and the document goes only if it measures empty.
-            destination?.let { takeDestination(Pending(requestId ?: "", "", ""), it, open = false) }
+            destination?.let { takeDestination(Pending(requestId ?: "", "", "", stray = true), it, open = false) }
             startNextIfIdle()
             return
         }
@@ -754,7 +759,7 @@ class DownloadCoordinator(
         // Measured before any open for writing: a provider that truncates on
             // that open would otherwise make every document look empty.
             val owned = measure(destination)?.length == 0L
-            val chosenName = if (!open) null else try {
+            val chosenName = if (!open && !request.stray) null else try {
                 host.destinationName(destination)?.takeIf { it.isNotBlank() }
             } catch (e: Exception) {
                 Logger.d(tag, "Could not read back the chosen document name (${e.javaClass.simpleName})")
@@ -804,6 +809,13 @@ class DownloadCoordinator(
             // This is that thread's way out; `pending` no longer names the
             // request, exactly as it does not for a write that outlived one.
             closeAndDiscard(request)
+            // A picker answer for a download that was already gone, as when the screen was made
+            // again while the picker was up: the person chose a name and confirmed it, and gets
+            // no file. A teardown that ended its own download says nothing, as always, because
+            // the person is watching the page that went; here nothing else tells them.
+            if (request.stray && !chosenName.isNullOrBlank()) {
+                host.report(DownloadOutcome.FAILED, chosenName, "the download this answered was gone")
+            }
             return
         }
         if (sink == null) {
@@ -945,6 +957,11 @@ class DownloadCoordinator(
 
     /** What [onComplete] does once the download is claimed, on the thread that holds the claim. */
     private fun finishClaimed(request: Pending) {
+        // A copy into a document the person already had. It runs after the call that asked for it has
+        // returned, so the page can be gone by the time it ends, and it is answered then all the same:
+        // the person confirmed the overwrite, and what the copy did to their file is not a thing to
+        // leave unsaid. A save into a document the picker made says nothing once its page is gone.
+        val replacing = request.sink is StagedSink
         val failure = try {
             request.sink?.finish()
             null
@@ -962,7 +979,10 @@ class DownloadCoordinator(
             if (failure != null) {
                 Logger.w(tag, "Closing the chosen document failed", failure)
                 if (pending === request) fail(request, "the file could not be finished")
-                else closeAndDiscard(request)
+                else {
+                    closeAndDiscard(request)
+                    if (replacing) host.report(DownloadOutcome.FAILED, request.chosenName ?: request.fileName, "the file could not be finished")
+                }
                 return
             }
             // The bytes are committed, so the file is whole. A teardown that ran
@@ -971,7 +991,10 @@ class DownloadCoordinator(
             // the page went away after it finished. Dropping the destination is
             // what makes that deferred discard a no-op.
             request.destination = null
-            if (pending !== request) return
+            if (pending !== request) {
+                if (replacing) host.report(DownloadOutcome.SAVED, request.chosenName ?: request.fileName, null)
+                return
+            }
             pending = null
             host.report(DownloadOutcome.SAVED, request.chosenName ?: request.fileName, null)
             startNextIfIdle()

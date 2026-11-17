@@ -29,11 +29,12 @@ import java.io.File
  *  * no bundle carries one of the three dash characters this project does not
  *    use.
  *
- * The last rule is the one nothing else can see. `check-plain-punctuation.py`
- * compares raw codepoints over tracked files, and an em dash written as a JSON
+ * The last rule is the one that gate long missed. `check-plain-punctuation.py`
+ * compared raw codepoints over tracked files, and an em dash written as a JSON
  * `\uXXXX` escape is six ASCII bytes there and one character after `JSON.parse`,
  * exactly the way an AAPT2 escape once put one on the first-run picker while
- * that gate reported a clean tree. Both forms are refused here. The codepoints
+ * that gate reported a clean tree. The gate now reads shipped JSON for the
+ * escape too; both forms are still refused here, next to the files. The codepoints
  * are named by number for the same reason: writing them out would put them in
  * this file.
  */

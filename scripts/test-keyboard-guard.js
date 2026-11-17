@@ -725,6 +725,28 @@ check('rotation leaves a held keyboard down after finishing composition',
         advance(p, 1000);
         assert.strictEqual(rotationVerdict(p, false), false);
     }, ['blur host', 'focus host']);
+// What the app is told on a turn decides how long a keyboard put away afterwards stays the turn's. Only a
+// plain text box is answered 'none', for which no refocus is ever made; every other no, the editor's
+// textarea, a focus on a list row, a box that raises no keyboard, stays a plain false.
+function plainBox(p, tag, classes, props = {}) {
+    const box = new El(p, 'box', tag, classes, p.explorer);
+    Object.assign(box, props);
+    box.focus();
+    log = [];
+    return box;
+}
+check('rotation with the focus in the Quick Open input answers none',
+    typing({ composing: false }), (p) => { plainBox(p, 'input', ['input']); assert.strictEqual(rotationVerdict(p), 'none'); }, []);
+check('rotation with the focus in the find box, a textarea, answers none',
+    typing({ composing: false }), (p) => { plainBox(p, 'textarea', ['input', 'mirror']); assert.strictEqual(rotationVerdict(p), 'none'); }, []);
+check('rotation with the focus in a content editable answers none',
+    typing({ composing: false }), (p) => { plainBox(p, 'div', ['rename'], { isContentEditable: true }); assert.strictEqual(rotationVerdict(p), 'none'); }, []);
+check('rotation with the focus on an input that takes no text, a checkbox, answers false',
+    typing({ composing: false }), (p) => { plainBox(p, 'input', ['checkbox'], { selectionStart: null }); assert.strictEqual(rotationVerdict(p), false); }, []);
+check('rotation with the focus on a row of a list answers false',
+    typing({ composing: false }), (p) => { plainBox(p, 'div', ['monaco-list-row']); assert.strictEqual(rotationVerdict(p), false); }, []);
+check('rotation with the focus in the editor textarea answers false, not none',
+    typing({ textarea: true, composing: false }), (p) => { assert.strictEqual(rotationVerdict(p), false); }, []);
 check('rotation with focus on a suggest row leaves native input alone',
     openList(typing()), (p) => {
         p.rows[0].focus();

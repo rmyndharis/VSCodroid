@@ -437,8 +437,8 @@ def _main() -> int:
                   if name in line and ("python3" in line if name.endswith(".py")
                                        else re.search(r"(?<![\w-])node\s", line))}
 
-    # Every script the server build runs over its output has to be in the cache
-    # key that decides whether the cached asset tree is taken again.
+    # Every script the server build runs, Python or JavaScript, has to be in the
+    # cache key that decides whether the cached asset tree is taken again.
     #
     # The `assets-` key deliberately hashes files no step in the job reads: on an
     # exact hit the server is neither downloaded nor fetched, so the key is the
@@ -451,12 +451,12 @@ def _main() -> int:
     build_sh = ROOT / "scripts" / "build-vscode-oss.sh"
     workflow = ROOT / ".github" / "workflows" / "build.yml"
     if build_sh.is_file() and workflow.is_file():
-        shapers = set(re.findall(r'\$SCRIPT_DIR/([\w.-]+\.py)', build_sh.read_text()))
+        shapers = set(re.findall(r'\$SCRIPT_DIR/([\w.-]+\.(?:py|js))', build_sh.read_text()))
         key_line = next(
             (l for l in workflow.read_text().splitlines() if "assets-" in l and "hashFiles" in l),
             "",
         )
-        keyed = set(re.findall(r"scripts/([\w.-]+\.py)", key_line))
+        keyed = set(re.findall(r"scripts/([\w.-]+\.(?:py|js))", key_line))
         missing_from_key = shapers - keyed
         if missing_from_key:
             report("scripts that shape the server tarball but are not in the assets cache key",

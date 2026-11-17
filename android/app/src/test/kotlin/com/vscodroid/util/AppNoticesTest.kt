@@ -1,5 +1,7 @@
 package com.vscodroid.util
 
+import android.app.Activity
+import io.mockk.mockk
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
@@ -320,16 +322,16 @@ class AppNoticesTest {
     fun `a notice taken back leaves an open dialog, which closes when nothing else is on it`() {
         val host = FakeNoticeHost()
         val coordinator = NoticeDialogCoordinator()
-        coordinator.enqueueAndShow("The server is slow to start", host)
-        coordinator.enqueueAndShow("A copy was kept beside notes.md", host)
+        coordinator.enqueueAndShow("The server is slow to start", host, topic = "slow")
+        coordinator.enqueueAndShow("A copy was kept beside notes.md", host, topic = "copy")
         val window = host.createdWindows.single()
 
-        coordinator.retract("The server is slow to start")
+        coordinator.retractTopic("slow")
 
-        assertEquals("A copy was kept beside notes.md", window.text, "the other notice stays, alone")
+        assertEquals("A copy was kept beside notes.md", window.text, "the notice on another topic stays, alone")
         assertTrue(window.isShowing)
 
-        coordinator.retract("A copy was kept beside notes.md")
+        coordinator.retractTopic("copy")
 
         assertFalse(window.isShowing, "a dialog with nothing left to say stayed up")
         assertEquals(0, coordinator.entryCount)
@@ -343,14 +345,168 @@ class AppNoticesTest {
     fun `a notice taken back while its screen is stopped is not shown at the next start`() {
         val host = FakeNoticeHost(canShow = false, canHold = true)
         val coordinator = NoticeDialogCoordinator()
-        coordinator.hold("The server is slow to start")
+        coordinator.hold("The server is slow to start", topic = "slow")
 
-        coordinator.retract("The server is slow to start")
-        coordinator.retract("never raised")
+        coordinator.retractTopic("slow")
+        coordinator.retractTopic("never raised")
         host.canShow = true
         coordinator.flush(host)
 
         assertEquals(0, host.createdWindows.size)
+    }
+
+    /**
+     * A dialog stays open while its screen is stopped, and a notice held then is put on its text. The
+     * start of the screen is when a person sees it, so that is when its once key is spent: left
+     * unspent, the next call with the key put the same notice on the dialog a second time.
+     */
+    @Test
+    fun `a once notice held under a dialog that stayed open spends its key when the screen starts`() {
+        val host = FakeNoticeHost()
+        val processFlags = mutableSetOf<String>()
+        val coordinator = NoticeDialogCoordinator(onceKeys = processFlags)
+        val once = "Long ".repeat(20)
+        val raise = {
+            showNoticeWithPolicy(
+                message = once,
+                fontScale = 1.0f,
+                sdkInt = 34,
+                showToast = { fail("a notice with a once key is never a toast cut after two lines") },
+                coordinator = coordinator,
+                host = host,
+                processOnceKey = AppNotices.ONCE_KEY_MULTI_DEVICE_FOLDERS,
+                shownOnceKeys = processFlags,
+            )
+        }
+        coordinator.enqueueAndShow("A copy was kept beside notes.md", host)
+        val window = host.createdWindows.single()
+
+        host.canShow = false
+        host.canHold = true
+        raise()
+        assertTrue(processFlags.isEmpty(), "nobody has seen it yet")
+
+        host.canShow = true
+        coordinator.flush(host)
+
+        assertEquals(setOf(AppNotices.ONCE_KEY_MULTI_DEVICE_FOLDERS), processFlags, "seen on the open dialog, so spent")
+        val shown = window.text
+        assertTrue(shown.endsWith(once), "the dialog does not carry the notice: $shown")
+
+        raise()
+        assertEquals(shown, window.text, "the notice went onto the dialog a second time")
+        assertEquals(1, host.createdWindows.size)
+    }
+
+    @Test
+    fun `a once notice held under an open dialog comes off it when another screen spent the key`() {
+        val host = FakeNoticeHost()
+        val processFlags = mutableSetOf<String>()
+        val coordinator = NoticeDialogCoordinator(onceKeys = processFlags)
+        coordinator.enqueueAndShow("A copy was kept beside notes.md", host)
+        val window = host.createdWindows.single()
+        host.canShow = false
+        host.canHold = true
+        coordinator.holdOnce("Long ".repeat(20), AppNotices.ONCE_KEY_STORAGE_LOW)
+        processFlags += AppNotices.ONCE_KEY_STORAGE_LOW
+
+        host.canShow = true
+        coordinator.flush(host)
+
+        assertEquals("A copy was kept beside notes.md", window.text)
+        assertTrue(window.isShowing)
+        assertEquals(1, coordinator.entryCount)
+    }
+
+    /**
+     * A screen made again for a change of language carries the dialog in the language it had, and the
+     * service's record, read when the new screen binds, is in that language too. The new language's
+     * string matches neither, so a notice taken back by its text stayed over the working editor.
+     */
+    @Test
+    fun `a notice is taken back by its topic after a language change, from a dialog carried over`() {
+        val old = FakeNoticeHost()
+        val before = NoticeDialogCoordinator()
+        before.enqueueAndShow("The server is taking longer than usual to start.", old, topic = "slow")
+        before.enqueueAndShow("A copy was kept beside notes.md", old)
+
+        val held = before.drop(old)
+        assertEquals(listOf<String?>("slow", null), held?.topics, "the topic does not survive the screen being made again")
+
+        val next = FakeNoticeHost()
+        val after = NoticeDialogCoordinator()
+        after.take(held!!)
+        after.flush(next)
+        val window = next.createdWindows.single()
+
+        after.retractTopic("slow")
+
+        assertTrue(window.isShowing, "the notice on no topic went with it")
+        assertEquals("A copy was kept beside notes.md", window.text)
+    }
+
+    /**
+     * The screen made again shows the slow start dialog it was handed, and the service tells it the
+     * same thing when it binds. Added again, the dialog said it twice for as long as the server took.
+     */
+    @Test
+    fun `a notice on a topic already shown is not added twice`() {
+        val host = FakeNoticeHost()
+        val coordinator = NoticeDialogCoordinator()
+        coordinator.take(HeldNotices(listOf("Slow to start"), 0, topics = listOf("slow")))
+        coordinator.flush(host)
+
+        coordinator.enqueueAndShow("Slow to start", host, topic = "slow")
+        coordinator.hold("Slow to start", topic = "slow")
+        coordinator.enqueueAndShow("Something else", host)
+
+        assertEquals("Slow to start\n\nSomething else", host.createdWindows.single().text)
+    }
+
+    /**
+     * A server that comes up between one screen going and the next binding is told to nobody, and the
+     * slow start dialog the first screen carried waits for the next in the process-wide hand-over.
+     * Taken back from there, it is never shown over the editor.
+     */
+    @Test
+    fun `notices handed to the next screen lose those on a topic taken back, and keep the rest`() {
+        val held = HeldNotices(
+            texts = listOf("Slow to start", "A copy was kept", "Slow to start, again"),
+            pushedOut = 2,
+            onceKeys = listOf(null, AppNotices.ONCE_KEY_STORAGE_LOW, null),
+            topics = listOf("slow", "copy", "slow"),
+        )
+
+        val left = held.withoutTopic("slow")
+
+        assertEquals(listOf("A copy was kept"), left?.texts)
+        assertEquals(listOf<String?>(AppNotices.ONCE_KEY_STORAGE_LOW), left?.onceKeys, "a once key moved to another notice")
+        assertEquals(listOf<String?>("copy"), left?.topics)
+        assertEquals(2, left?.pushedOut)
+        assertNull(left?.withoutTopic("copy"), "a count with no notice left would only prefix the next, unrelated dialog")
+        assertEquals(listOf("Plain"), HeldNotices(listOf("Plain"), 0).withoutTopic("slow")?.texts, "notices held with no topics")
+    }
+
+    @Test
+    fun `a topic taken back for a screen reaches what the screen before it left for it`() {
+        @Suppress("UNCHECKED_CAST")
+        val handOver = AppNotices::class.java.getDeclaredField("heldForNextScreen")
+            .apply { isAccessible = true }.get(null) as HashMap<Class<out Activity>, HeldNotices>
+        val screen = mockk<Activity>(relaxed = true)
+        try {
+            handOver[screen.javaClass] = HeldNotices(listOf("Slow", "Kept"), 0, topics = listOf("slow", null))
+            AppNotices.retractTopic(screen, "slow")
+            assertEquals(
+                listOf("Kept"), handOver[screen.javaClass]?.texts,
+                "the next screen is handed the notice taken back, or loses the one on another topic",
+            )
+
+            handOver[screen.javaClass] = HeldNotices(listOf("Slow"), 3, topics = listOf("slow"))
+            AppNotices.retractTopic(screen, "slow")
+            assertFalse(screen.javaClass in handOver, "the next screen takes a hand-over with nothing left to show")
+        } finally {
+            handOver.remove(screen.javaClass)
+        }
     }
 
     @Test
@@ -470,6 +626,58 @@ class AppNoticesTest {
         after.take(held!!)
         after.flush(next)
         assertEquals(listOf("Open ".repeat(20)), next.createdWindows.map { it.text })
+    }
+
+    /**
+     * A notice with a once key raised while its screen is being made waits for the start, which shows
+     * it and spends the key. Still open when a font size or language change makes the screen again, it
+     * comes back like any other open dialog: the new screen's own call finds the key spent and adds
+     * nothing, so what the old screen hands over is the only copy, and it must not be dropped as one
+     * whose key some other screen spent.
+     */
+    @Test
+    fun `a once notice shown at the start comes back when its screen is made again, and only once`() {
+        for (key in listOf(AppNotices.ONCE_KEY_STORAGE_LOW, AppNotices.ONCE_KEY_MULTI_DEVICE_FOLDERS)) {
+            val processFlags = mutableSetOf<String>()
+            val once = "Long ".repeat(20)
+            fun raise(coordinator: NoticeDialogCoordinator, host: FakeNoticeHost) = showNoticeWithPolicy(
+                message = once,
+                fontScale = 1.0f,
+                sdkInt = 34,
+                showToast = { fail("a notice with a once key is never a toast cut after two lines") },
+                coordinator = coordinator,
+                host = host,
+                processOnceKey = key,
+                shownOnceKeys = processFlags,
+            )
+            val first = NoticeDialogCoordinator(onceKeys = processFlags)
+            val firstHost = FakeNoticeHost(canShow = false, canHold = true)
+            raise(first, firstHost)
+            firstHost.canShow = true
+            first.flush(firstHost)
+            assertEquals(listOf(once), firstHost.createdWindows.map { it.text }, key)
+
+            val held = first.drop(firstHost)
+            val second = NoticeDialogCoordinator(onceKeys = processFlags)
+            val secondHost = FakeNoticeHost(canShow = false, canHold = true)
+            raise(second, secondHost)
+            second.take(held!!)
+            secondHost.canShow = true
+            second.flush(secondHost)
+            assertEquals(
+                listOf(once), secondHost.createdWindows.map { it.text },
+                "$key: the dialog on screen went with its screen and the new one never showed it",
+            )
+
+            secondHost.createdWindows.single().simulateUserDismiss()
+            assertNull(second.drop(secondHost), "$key: a dialog a person closed is handed on")
+            val third = NoticeDialogCoordinator(onceKeys = processFlags)
+            val thirdHost = FakeNoticeHost(canShow = false, canHold = true)
+            raise(third, thirdHost)
+            thirdHost.canShow = true
+            third.flush(thirdHost)
+            assertEquals(0, thirdHost.createdWindows.size, "$key: shown again after it was closed")
+        }
     }
 
     @Test

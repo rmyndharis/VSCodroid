@@ -21,6 +21,8 @@ import org.junit.jupiter.api.Assumptions.assumeFalse
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
+import org.junit.jupiter.params.ParameterizedTest
+import org.junit.jupiter.params.provider.ValueSource
 import java.io.File
 import java.nio.file.Files
 import java.nio.file.LinkOption
@@ -235,6 +237,58 @@ class ProjectsSymlinkTest {
         assertEquals("current workspace bytes", File(link, "current.txt").readText())
         assertEquals("previous workspace bytes", File(previous, "notes.txt").readText())
         verify(exactly = 1) { Os.symlink(target.absolutePath, link.absolutePath) }
+    }
+
+    /** One launch's two repairs, in the order SplashActivity runs them. */
+    private fun launch(sharedStorage: Boolean) {
+        every { context.getExternalFilesDir(null) } returns if (sharedStorage) File(filesDir, "external") else null
+        val setup = FirstRunSetup(context)
+        setup.ensureProjectsDir()
+        setup.createStorageSymlinks()
+    }
+
+    /**
+     * A launch that cannot see shared storage knows nothing new about where the install works.
+     * It used to answer with the internal folder, which made that folder and pointed `~/projects`
+     * at it, and with both folders there and the link naming the internal one, every later launch
+     * read the install as one that had always worked there: the person's folder on shared storage
+     * was left behind for good while `.bashrc` went on exporting it.
+     */
+    @Test
+    fun `a launch that cannot see shared storage leaves an older install on its shared-storage folder`() {
+        val shared = File(filesDir, "external/projects").apply { assertTrue(mkdirs()) }
+        File(shared, "work.txt").writeText("the person's project")
+        Files.createSymbolicLink(link.toPath(), shared.toPath())
+
+        launch(sharedStorage = false)
+        launch(sharedStorage = true)
+
+        assertEquals(shared.absolutePath, Environment.projectsDirFor(context, 34))
+        assertEquals(shared.absolutePath, linkTarget())
+        assertFalse(File(filesDir, "projects").exists(), "a folder the install does not use was made")
+    }
+
+    /**
+     * The other direction: an install that works in the internal folder, with a folder of that
+     * name on shared storage that another app made, stays where it is when its own folder has
+     * been deleted (a terminal can), whether the link spells the folder as written or relative to
+     * `~`, and across a launch that cannot see shared storage.
+     */
+    @ParameterizedTest
+    @ValueSource(strings = ["as written", "relative", "as written, after a launch without shared storage"])
+    fun `an install on its internal folder is not moved onto another app's shared-storage folder`(spelling: String) {
+        val internal = File(filesDir, "projects")
+        val target = if (spelling == "relative") Path.of("../projects") else internal.toPath()
+        Files.createSymbolicLink(link.toPath(), target)
+        assertTrue(File(filesDir, "external/projects").mkdirs(), "could not stage another app's folder")
+
+        if (spelling.endsWith("shared storage")) launch(sharedStorage = false)
+        launch(sharedStorage = true)
+        launch(sharedStorage = true)
+
+        assertEquals(internal.absolutePath, Environment.projectsDirFor(context, 34))
+        assertEquals(internal.absolutePath, linkTarget())
+        assertTrue(internal.isDirectory, "the install's own folder was not made again")
     }
 
     @Test

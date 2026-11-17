@@ -416,6 +416,73 @@ class MaintenanceScriptsTest(unittest.TestCase):
                 self.assertEqual(1, run([sys.executable, "-I", str(checker), str(directory)],
                                         self.root)["status"])
 
+    def test_plain_punctuation_sees_every_spelling_a_reader_is_shown(self):
+        checker = SOURCE / "scripts/check-plain-punctuation.py"
+        em, en, bar = chr(0x2014), chr(0x2013), chr(0x2015)
+
+        def escape(code, braced=False):
+            return "\\u" + ("{%x}" % code if braced else "%04x" % code)
+
+        def patch(context, added):
+            return ("Subject: plain words\n\ndiff --git a/f.ts b/f.ts\n--- a/f.ts\n+++ b/f.ts\n"
+                    "@@ -1,2 +1,2 @@\n " + context + "\n-old line\n+" + added + "\n")
+
+        refused = {
+            "README.md": "a " + em + " b\n",
+            "android/app/src/main/res/values/strings.xml": "<s>a &#x2014; b</s>\n",
+            "docs/site/named.html": "<p>a &mdash; b, c &ndash; d</p>\n",
+            "docs/site/horbar.html": "<p>a &horbar; b</p>\n",
+            "docs/site/decimal.html": "<p>a &#8212; b</p>\n",
+            "docs/site/hex.html": "<p>a &#x2015; b</p>\n",
+            "docs/site/bare.html": "<p>a &#8211 b</p>\n",
+            "docs/site/remapped.html": "<p>a &#151; b</p>\n",
+            "docs/GUIDE.md": "a &ndash; b\n",
+            "android/app/src/main/assets/extensions/x/package.nls.json":
+                '{"k": "a ' + escape(0x2014) + ' b"}\n',
+            "android/app/src/main/kotlin/X.kt": 'val s = "a ' + escape(0x2013) + ' b"\n',
+            "android/app/src/main/assets/x.js": "const s = 'a " + escape(0x2015, True) + " b';\n",
+            "patches/0001-added.patch": patch("same", "new " + bar + " line"),
+            # The editor's build compiles what a patch adds, so its escapes are decoded as well.
+            "patches/0003-escaped.patch": patch("same", "const s = 'a " + escape(0x2014) + " b';"),
+            # An added line whose own text starts with `++ ` is not the file header it looks like.
+            "patches/0004-plus.patch": patch("same", "++ counter " + em),
+            # Copied into the server tree, where product.json names the app to its users.
+            "branding/product.json": '{"nameLong": "a ' + escape(0x2013) + ' b"}\n',
+            "branding/workbench/x.svg": "<svg><text>a &#%d; b</text></svg>\n" % 0x2014,
+            # Three backslashes: an escaped backslash, then the escape itself.
+            "android/app/src/main/kotlin/Odd.kt": 'val s = "\\\\' + escape(0x2014) + '"\n',
+        }
+        allowed = {
+            "patches/0002-upstream.patch": patch("ctx " + em + " kept", "new line").replace(
+                "-old line", "-old " + en + " line"),
+            "android/app/src/test/kotlin/XTest.kt": 'val s = "' + escape(0x2014) + '"\n',
+            "scripts/test-x.js": "const s = '" + escape(0x2013, True) + "';\n",
+            "scripts/x.py": "s = '&mdash;'\n",
+            "docs/site/plain.html": "<p>a - b &amp; c &MDASH; d &mdash e &#82120;</p>\n",
+            # Ours, and judged for the character, but a description is not compiled.
+            "patches/0005-described.patch": patch("same", "new line").replace(
+                "plain words", "keep the " + escape(0x2014) + " escape out"),
+            # Two backslashes: an escaped backslash and a plain `u`, which shows no dash.
+            "android/app/src/main/kotlin/Even.kt": 'val s = "\\' + escape(0x2014) + '"\n',
+        }
+        # Not judged at all, so it is not even a path the gate accepts: only the whole-tree count shows it.
+        verbatim = {"licenses/x.txt": "a " + em + " b\n"}
+        repo = self.root / "punctuation"
+        for name, text in {**refused, **allowed, **verbatim}.items():
+            write(repo / name, text)
+        env = {"HOME": str(self.root), "GIT_CONFIG_NOSYSTEM": "1"}
+        self.assertEqual(0, run(["git", "init", "-q"], repo, env)["status"])
+        self.assertEqual(0, run(["git", "add", "--", *refused, *allowed, *verbatim], repo, env)["status"])
+        for name, expected in [(n, 1) for n in refused] + [(n, 0) for n in allowed]:
+            with self.subTest(name=name):
+                result = run([sys.executable, "-I", str(checker), name], repo, env)
+                self.assertEqual(expected, result["status"], result)
+                if expected:
+                    self.assertIn(name + ":", result["stdout"])
+        whole = run([sys.executable, "-I", str(checker)], repo, env)
+        self.assertEqual(1, whole["status"], whole)
+        self.assertIn(f"{len(refused) + 1} banned dash characters", whole["stdout"])
+
     def test_lint_policy_flags_must_be_live_code(self):
         fixture = self.root / "lint-policy"
         (fixture / "scripts").mkdir(parents=True)
@@ -522,6 +589,29 @@ class MaintenanceScriptsTest(unittest.TestCase):
         unrun = check()
         self.assertNotEqual(0, unrun.returncode, unrun.stdout + unrun.stderr)
         self.assertIn("check-editcontext-ime.js", unrun.stdout)
+
+    def test_build_step_check_refuses_a_javascript_checker_missing_from_the_assets_key(self):
+        fixture = self.root / "build-steps-key"
+        shutil.copytree(SOURCE / "scripts", fixture / "scripts")
+        shutil.copytree(SOURCE / ".github/workflows", fixture / ".github/workflows")
+        (fixture / "android/app").mkdir(parents=True)
+        shutil.copy2(SOURCE / "android/app/build.gradle.kts", fixture / "android/app")
+        shutil.copy2(SOURCE / "CONTRIBUTING.md", fixture)
+
+        def check():
+            return subprocess.run([sys.executable, str(fixture / "scripts/check-build-steps.py")],
+                                  cwd=fixture, capture_output=True, text=True, timeout=30)
+
+        healthy = check()
+        self.assertEqual(0, healthy.returncode, healthy.stdout + healthy.stderr)
+        build = fixture / ".github/workflows/build.yml"
+        text = build.read_text()
+        entry = "'scripts/check-editcontext-ime.js', "
+        self.assertEqual(1, text.count(entry))
+        build.write_text(text.replace(entry, "", 1))
+        unkeyed = check()
+        self.assertNotEqual(0, unkeyed.returncode, unkeyed.stdout + unkeyed.stderr)
+        self.assertIn("check-editcontext-ime.js", unkeyed.stdout)
 
     def test_wheelhouse_checks_versioned_shared_objects(self):
         verifier = types.ModuleType("fixture_elf_verifier")

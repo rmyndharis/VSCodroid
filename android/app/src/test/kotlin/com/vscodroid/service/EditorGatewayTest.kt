@@ -479,6 +479,7 @@ class EditorGatewayTest {
         gateway.selectBackend(path, "download-run")
         worker {
             server.accept().use { connection ->
+                assertEquals('G'.code, connection.socketInput().read())
                 val output = connection.socketOutput()
                 val end = System.nanoTime() + TimeUnit.SECONDS.toNanos(123)
                 while (System.nanoTime() < end) {
@@ -489,6 +490,7 @@ class EditorGatewayTest {
             }
         }
         client().use {
+            it.getOutputStream().write('G'.code)
             it.soTimeout = 130000
             val bytes = it.getInputStream().readBytes()
             assertTrue(bytes.size > 240)
@@ -504,12 +506,14 @@ class EditorGatewayTest {
         gateway.selectBackend(path, "idle-run")
         worker {
             server.accept().use {
+                assertEquals('G'.code, it.socketInput().read())
                 it.socketOutput().write(42)
                 assertEquals(-1, it.socketInput().read())
                 backendClosed.countDown()
             }
         }
         client().use {
+            it.getOutputStream().write('G'.code)
             assertEquals(42, it.getInputStream().read())
             it.soTimeout = 130000
             val started = System.nanoTime()
@@ -570,6 +574,73 @@ class EditorGatewayTest {
             val elapsed = TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - started)
             assertTrue(elapsed in 118..130, "the blocked write ended after " + elapsed + " seconds")
             assertTrue(received.get() > 200, "the reverse direction did not remain active")
+        }
+    }
+
+    /**
+     * Answers [reply] on every connection that sends [request] whole, and keeps each
+     * connection until its client side is closed, so silent clients hold their slots.
+     */
+    private fun answering(server: ServerSocketChannel, request: ByteArray, reply: ByteArray) {
+        worker {
+            while (!closing.get()) {
+                val connection = try { server.accept() } catch (_: IOException) { return@worker }
+                resources.add(connection)
+                Thread {
+                    runCatching {
+                        connection.use {
+                            if (it.socketInput().readNBytes(request.size).size == request.size) {
+                                it.socketOutput().write(reply)
+                            }
+                        }
+                    }
+                }.apply { isDaemon = true }.start()
+            }
+        }
+    }
+
+    @Test
+    fun silentClientsGiveUpTheirSlotsLongBeforeTheInactivityLimit() {
+        // Any app can connect to the origin. Thirty-two connections that never send a byte
+        // held every relay slot for the two-minute inactivity limit, and the page was refused.
+        val request = "GET / HTTP/1.1\r\nHost: x\r\n\r\n".toByteArray()
+        val reply = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok".toByteArray()
+        val (path, server) = backend("silent")
+        answering(server, request, reply)
+        gateway.bind(0)
+        gateway.selectBackend(path, "silent-run")
+        val started = System.nanoTime()
+        val silent = List(32) { client().apply { soTimeout = 30000 } }
+        client().use {
+            assertEquals("HTTP/1.1 503 Service Unavailable", it.getInputStream().bufferedReader().readLine())
+        }
+
+        assertEquals(-1, silent[0].getInputStream().read(), "a silent client was answered")
+        val elapsed = TimeUnit.NANOSECONDS.toSeconds(System.nanoTime() - started)
+        assertTrue(elapsed in 9..14, "a silent client kept its slot for $elapsed seconds")
+        silent.forEach { assertEquals(-1, it.getInputStream().read()) }
+        Thread.sleep(1500) // the relays let their slots go once both pumps have left
+        client().use {
+            it.getOutputStream().write(request)
+            assertArrayEquals(reply, it.getInputStream().readNBytes(reply.size))
+        }
+    }
+
+    @Test
+    fun aClientThatHasSpokenIsNotCutByTheFirstByteBound() {
+        val request = "GET / HTTP/1.1\r\nHost: x\r\n\r\n".toByteArray()
+        val reply = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok".toByteArray()
+        val (path, server) = backend("slow-request")
+        answering(server, request, reply)
+        gateway.bind(0)
+        gateway.selectBackend(path, "slow-request-run")
+        client().use {
+            it.soTimeout = 30000
+            Thread.sleep(2000)
+            it.getOutputStream().write(request, 0, 1)
+            Thread.sleep(10000) // past the bound counted from the connect
+            it.getOutputStream().write(request, 1, request.size - 1)
+            assertArrayEquals(reply, it.getInputStream().readNBytes(reply.size))
         }
     }
 
