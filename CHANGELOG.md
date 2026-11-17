@@ -22,6 +22,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A keyboard put away after the screen is turned stays down when a text box other than the editor has the focus, such as Quick Open or the find box; the next touch used to bring it back.
 - A file another app deleted from a device folder is no longer put back there when the app's copy of it could not be read as the folder opened.
 - An edit that lands just as the app removes its copy of a file another app deleted from a device folder is kept as `<name>.local-<time>` and a notice says so.
+- Clear Caches no longer unlinks the sockets in the editor's temporary directory, so git sign-in prompts and the `vscodroid` command keep working until the next restart.
 
 ## [1.9.0] - 2026-11-16
 

@@ -150,9 +150,12 @@ object StorageManager {
         // fsync), which raises out of the import rather than recompiling.
         freed += deleteRecursive(File(context.cacheDir, "pycache"), context.filesDir.parentFile)
 
-        // tmp dir
+        // tmp dir. It is the running server's TMPDIR, where the editor and the terminals keep the
+        // sockets the git extension's credential prompts and the `vscodroid` command connect to, and
+        // tmux its own: a socket's path unlinked is a socket nothing can reach again until the process
+        // that made it restarts, so sockets stay. They hold no bytes, and the files around them go.
         val tmpDir = File(context.cacheDir, "tmp")
-        freed += deleteRecursive(tmpDir, context.filesDir.parentFile)
+        freed += deleteRecursive(tmpDir, context.filesDir.parentFile, keepSockets = true)
         tmpDir.mkdirs() // recreate (needed at runtime)
 
         // Crash logs
@@ -361,7 +364,7 @@ object StorageManager {
      * link-aware rule below is what stands between a forced removal and a directory
      * somewhere else on the device.
      */
-    internal fun deleteRecursive(dir: File, appRoot: File?): Long {
+    internal fun deleteRecursive(dir: File, appRoot: File?, keepSockets: Boolean = false): Long {
         // Context supplies the app data root; Android owns its parent and prevents its replacement.
         val root = appRoot?.toPath()?.toAbsolutePath()?.normalize() ?: return 0
         val canonicalRoot = try { appRoot.canonicalFile.toPath() } catch (_: IOException) { return 0 }
@@ -403,7 +406,9 @@ object StorageManager {
                             item.entries = directory.iterator()
                             continue
                         }
-                        if (attrs != null) {
+                        // A socket (or any entry that is neither a file, a directory nor a link) is left when
+                        // asked, and the directory around it then stays, as one with anything left in it does.
+                        if (attrs != null && !(keepSockets && attrs.isOther)) {
                             item.parent.deleteFile(item.name)
                             if (attrs.isRegularFile) freed += attrs.size()
                         }
