@@ -28,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The first-run toolchain picker is marked answered when the downloads it started have ended, so a start that ends in the middle of them shows it again instead of dropping the packs not yet fetched.
 - The Get Started walkthrough no longer says that every TypeScript file runs from the play button; the user guide lists the cases that fail.
 - The user guide says where settings are kept: the User tab's in the editor's storage, the Remote tab's in `~/.vscodroid/data/Machine/settings.json`.
-- The privacy policy names both package names the Play Store installs the app under.
+- The privacy policy names both installer package names that mark an install as coming from the Play Store.
 - A file deleted from a device folder is no longer put back at a later open when the app's record of that folder was missing or written by an older version.
 - A file in a device folder that grew past 50 MB is no longer put back with its old content after it is deleted on the device.
 - For a file in a device folder whose name is too long to take `.local-<time>` whole, the app's copy is kept beside it under a shortened `.local-` name, so the device's newer copy comes in again.
