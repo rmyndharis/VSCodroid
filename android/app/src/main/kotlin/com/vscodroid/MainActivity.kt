@@ -4555,8 +4555,9 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
      * with it.
      *
      * The same script ends a word the keyboard is still composing when a key or
-     * a tap moves the editor's caret, or when [onConfigurationChanged] calls
-     * `window.__vscodroidFinishComposition` on a turn of the screen. Chromium
+     * a tap moves the editor's caret, or when [onConfigurationChanged] asks for it on a turn of
+     * the screen (`window.__vscodroidFinishCompositionOnTurn`, through
+     * [finishKeyboardCompositionOnTurn]). Chromium
      * keeps an EditContext composition's range where it was when the page moves
      * the selection (crbug 379170477), so with a keyboard that composes, moving
      * the caret while a word was underlined made the keyboard's next edit land

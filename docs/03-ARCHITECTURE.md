@@ -146,8 +146,8 @@ flowchart TD
     end
 
     EXTHOST --> THREAD["Extension Host Thread<br/>Extension A (active)<br/>Extension B (active)<br/>Extension C (idle)"]
-    TERM --> BASH["bash, one per terminal on a real PTY [phantom #2+]"]
-    EXTHOST -. lazy start .-> LS["Language Servers (lazy) [phantom #3+]<br/>tsserver, pylsp (marked idle after 5 min, never killed)"]
+    TERM --> BASH["bash, one per terminal on a real PTY [phantom #4+]"]
+    EXTHOST -. lazy start .-> LS["Language Servers (lazy) [phantom #4+]<br/>tsserver, pylsp (marked idle after 5 min, never killed)"]
   end
 ```
 

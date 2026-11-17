@@ -293,7 +293,7 @@ internal fun Activity.keepStartColor(color: Int) {
     // #1E1E1E otherwise.
     //
     // The SplashScreen API is Android 12's. Before it the window is drawn from
-    // the manifest's theme and nothing can name another, so on 11 a light editor
+    // the manifest's theme and nothing can name another, so on 10 and 11 a light editor
     // starts on the dark window; every screen this app draws itself still takes
     // the colour kept above.
     if (Build.VERSION.SDK_INT < Build.VERSION_CODES.S) return

@@ -176,8 +176,8 @@ jobs:
             *) echo "::error::Tag $TAG pointed at $TAG_WAS and now points at $TAG_NOW." \
                     "Re-aiming a tag republishes the assets of a release users already" \
                     "have, under a versionName and versionCode that did not change, so" \
-                    "their next install skips setup. Cut a new version; if nothing was" \
-                    "published, delete the tag and push it again."
+                    "they are not offered it and two builds carry one version. Cut a new" \
+                    "version; if nothing was published, delete the tag and push it again."
                exit 1 ;;
           esac
 
@@ -1252,6 +1252,18 @@ jobs:
           ls -la
           test -f build-manifest.txt
 
+      - name: Check whether release notes already exist
+        id: release-notes
+        env:
+          GH_TOKEN: ${{ github.token }}
+          TAG: ${{ github.ref_name }}
+        run: |
+          if body="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq '.body // ""' 2>/dev/null)" && [ -n "$(printf '%s' "$body" | tr -d '[:space:]')" ]; then
+            echo "generate=false" >> "$GITHUB_OUTPUT"
+          else
+            echo "generate=true" >> "$GITHUB_OUTPUT"
+          fi
+
       # mapping.txt is attached to the release rather than left as a workflow
       # artifact, and the reason is lifetime: an artifact expires, 90 days by
       # default, and retention-days tops out there, while a crash report against
@@ -1268,18 +1280,6 @@ jobs:
       # Only mapping.txt. R8 writes seeds/usage/configuration/resources beside it
       # and those describe its decisions, not a stack trace; r8.yml keeps the
       # whole directory for exactly that purpose.
-      - name: Check whether release notes already exist
-        id: release-notes
-        env:
-          GH_TOKEN: ${{ github.token }}
-          TAG: ${{ github.ref_name }}
-        run: |
-          if body="$(gh release view "$TAG" --repo "$GITHUB_REPOSITORY" --json body --jq '.body // ""' 2>/dev/null)" && [ -n "$(printf '%s' "$body" | tr -d '[:space:]')" ]; then
-            echo "generate=false" >> "$GITHUB_OUTPUT"
-          else
-            echo "generate=true" >> "$GITHUB_OUTPUT"
-          fi
-
       - name: Create GitHub Release
         uses: softprops/action-gh-release@8a0cd651e5b2365bd640854a3fa5dfc70e4875f3 # v3.0.4
         with:

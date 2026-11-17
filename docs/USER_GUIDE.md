@@ -1768,8 +1768,10 @@ port for that session and says so. Your settings, sign-ins and open files are
 then not shown, but they are not lost:
 
 1. Close the app that uses the port, if you know which one it is.
-2. Tap **Stop Server** in VSCodroid's notification, then open VSCodroid again.
-   Every start tries the usual port first.
+2. Tap **Stop Server** in VSCodroid's notification, then open VSCodroid again. If you
+   turned notifications off for VSCodroid there is no notification to tap: use **Force
+   stop** for VSCodroid in the system's app settings instead. Every start tries the
+   usual port first.
 3. What you change in such a session stays with the other port, and comes back
    only if a later start has to use that port again. Save your files before you
    stop.

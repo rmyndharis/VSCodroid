@@ -430,7 +430,7 @@ with no section naming the version a user installed.
    open a fresh empty `## [Unreleased]` above it, and move the link definitions
    at the foot of the file with it: `[Unreleased]` now compares vX.Y.Z...HEAD,
    and a new `[X.Y.Z]` line compares the previous tag with vX.Y.Z
-2. Bump versionName and versionCode together in android/app/build.gradle.kts.
+2. Bump versionName and versionCode together in android/app/build.gradle.kts. The same version is written by hand in docs/04-TECHNICAL_SPEC.md (the `versionCode` and `versionName` block), in the `versionCode` and `versionName` block under this plan's release steps, and as the placeholder of `VSCodroid Version` in .github/ISSUE_TEMPLATE/bug_report.yml; no script checks them, so change all four.
    release.yml refuses a tag that disagrees with versionName, and refuses a
    versionCode that is not greater than the previous v* tag's
 3. Land both on main. The tag is taken from main, so there is one line of

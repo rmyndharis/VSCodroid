@@ -86,7 +86,7 @@ PKG="com.vscodroid.debug"
 
 derive_node_expected() {
     # The version the native addons are compiled against. The runtime must
-    # match its major, as the build's check_pair requires.
+    # match its major, as the Node major check in the build's build-native-addons.sh requires.
     sed -n 's/^NODE_VERSION="${NODE_VERSION:-\([0-9.]*\)}".*/\1/p' \
         "$ROOT_DIR/scripts/build-native-addons.sh" | head -1
 }

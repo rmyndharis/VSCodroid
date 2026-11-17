@@ -899,8 +899,8 @@ class SafSyncEngine(private val context: Context) {
                             //
                             // The decisive argument is consistency, not data loss. Capping
                             // costs nothing permanent -- an uncapped file simply stays in
-                            // the mirror, where [holdsOnlyVouchedCopies] keeps it because
-                            // the record cannot vouch for it -- but none of the other three
+                            // the mirror, where nothing removes it and [holdsOnlyVouchedCopies]
+                            // says the record cannot vouch for it -- but none of the other three
                             // `writeLocalToSaf` sites cap, so a cap here alone would upload
                             // a file when the watcher saves it and refuse the same file on
                             // reopen. One engine, two answers to one question, is worse
@@ -2071,8 +2071,9 @@ class SafSyncEngine(private val context: Context) {
      * write-back job died with the process before the drain ran it, a file made in a
      * directory past [MAX_WATCHED_DIRECTORIES] where no observer exists, or one made
      * while [initialSync] itself is running and the watcher is deliberately stopped.
-     * The mirror keeps it ([holdsOnlyVouchedCopies] refuses to reclaim a mirror holding
-     * anything the record cannot vouch for), so it is not destroyed, but it lives only
+     * The mirror keeps it (launch reclamation never removes a mirror that holds files, and
+     * [holdsOnlyVouchedCopies] says the record cannot vouch for such a file), so it is not
+     * destroyed, but it lives only
      * in this app's private storage: no other app can see it and it dies with an
      * uninstall. Reopening the folder is what the design calls the way back, and this is
      * what makes that true in the outbound direction.
@@ -2081,9 +2082,11 @@ class SafSyncEngine(private val context: Context) {
      * device is absent from the enumeration and still present in the mirror, which is
      * indistinguishable from the case above by anything except the record: phase 3 is
      * about to remove exactly those, and it proves them by the line the last sync wrote.
-     * So a path the previous record names is never a candidate here, whatever phase 3
-     * then decides to do with it. The two passes therefore cannot disagree: this one
-     * only ever touches paths the record has never carried.
+     * So a path the previous record names is a candidate here only when the mirror's copy
+     * no longer matches its row: that is the person's own newer edit, which phase 3 keeps and
+     * lets go from the record, so it goes across now rather than at the open after this one. A
+     * copy that still matches its row is a deletion made on the device, and phase 3 finishes
+     * it. The two passes therefore cannot disagree about one file.
      *
      * **A record that did not parse is not a record that names nothing**, and telling
      * those apart is what keeps the rule above from inverting. An absent record, one
@@ -2449,7 +2452,7 @@ class SafSyncEngine(private val context: Context) {
      * the file next to it: a truncate-and-write loses the whole record to a process
      * death in the middle, and the process being killed while a large folder finishes
      * opening is an ordinary event here rather than a rare one. Every consumer of a
-     * damaged record does fail safe ([holdsOnlyVouchedCopies] keeps the mirror,
+     * damaged record does fail safe ([holdsOnlyVouchedCopies] answers no,
      * [reconcileDeletions] removes nothing, [shouldOverwriteMirror]'s unknown-time
      * branch keeps the mirror copy), so what this costs is a mirror that cannot be
      * reclaimed and, on a provider that omits COLUMN_LAST_MODIFIED, a folder that stops
@@ -2573,7 +2576,8 @@ class SafSyncEngine(private val context: Context) {
      *
      * Compares the files with the synced record and fails closed if the record is
      * missing, malformed or a directory cannot be read. This predicate does not
-     * delete a mirror; launch reclamation leaves mirrors in place.
+     * delete a mirror; launch reclamation leaves mirrors in place. Nothing in the app calls it
+     * any more: it states what a record can vouch for, and the tests pin that.
      *
      * Symlinks are not followed: `walkTopDown` reports the link itself, and [isLink]
      * sends it down the not-a-plain-file branch, so a link out of the mirror can neither

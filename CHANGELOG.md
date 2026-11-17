@@ -28,7 +28,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - The minimum Android version is now 10, down from 11.
 - Enter accepts an editor suggestion by default only when it changes the text, so pressing Enter after a word already in the file starts a new line.
-- Format Document uses the bundled Prettier for JavaScript, TypeScript, JSON, CSS, HTML and the other languages it covers without asking which formatter to use; a formatter chosen in Settings still wins.
+- Format Document uses the bundled Prettier for JavaScript, TypeScript, JSON, CSS, HTML and the other languages it covers without asking which formatter to use; a formatter chosen for one of those languages in Settings still wins, and one chosen for every language does not.
 - The Java toolchain checks HTTPS connections against Mozilla's list of trusted certificate authorities instead of OpenJDK's own.
 - A Java toolchain installed earlier keeps OpenJDK's certificate list until it is removed and installed again.
 - The low storage warning and the notice about a workspace that spans several device folders are shown once while the app runs, instead of at every start of its screen.
@@ -40,7 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - In the terminal, a word still underlined is kept when Enter follows at once or the terminal loses focus.
 - The keyboard no longer goes away after a file is opened for the first time from Quick Open.
 - The keyboard no longer goes away a moment after the screen is turned, as it did on some phones.
-- A keyboard put away with Back stays down when the screen is turned right after, or while a word is still underlined.
+- A keyboard put away with Back stays down when the screen is turned right after, or while a word is still underlined, on a phone where Android gives the app the Back key.
 - After the screen is turned with the keyboard put away, a scroll no longer brings the keyboard back.
 - Turning the screen while the keyboard underlines a word no longer doubles the word, writes it over another word of the line or deletes text after the caret.
 - After a turn of the screen with a word underlined, the next letter typed can still, rarely, be lost or replace the word's last letter.
