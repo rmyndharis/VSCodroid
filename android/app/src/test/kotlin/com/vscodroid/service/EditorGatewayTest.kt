@@ -177,6 +177,40 @@ class EditorGatewayTest {
     }
 
     @Test
+    fun theStandInOtherSuitesUseHoldsItsOriginAsTheGatewayDoes() {
+        // The suites built on mockEditorGateway() see the origin only through it. One that
+        // called any port bound, or let a second port replace the first, would pass a check
+        // made against the wrong port and a start that moves a bound origin. Both are taken
+        // through the same steps here, so the stand-in cannot drift from this class unseen.
+        for ((name, subject) in listOf("the gateway" to gateway, "the stand-in" to mockEditorGateway())) {
+            assertFalse(subject.isBound(13337), "$name: no port is bound before a bind")
+
+            val port = subject.bind(0)
+            val other = port - 1
+            assertTrue(port > 0, "$name: bind(0) answers the port it took")
+            assertEquals(port, subject.boundPort, name)
+            assertTrue(subject.isBound(port), name)
+            assertFalse(subject.isBound(other), "$name: only the bound port is the origin")
+            assertFalse(subject.isBound(0), name)
+
+            assertEquals(port, subject.bind(0), "$name: bind(0) keeps the listener that is there")
+            assertEquals(port, subject.bind(port), name)
+            assertThrows(IOException::class.java, { subject.bind(other) }, "$name: a bound origin does not move")
+            assertEquals(port, subject.boundPort, "$name: a refused bind leaves the origin")
+            assertEquals(1L, subject.listenersOpened, name)
+
+            assertFalse(subject.release(other), name)
+            assertTrue(subject.release(port), name)
+            assertNull(subject.boundPort, name)
+            assertFalse(subject.isBound(port), "$name: a released port is not the origin")
+
+            val next = subject.bind(0)
+            assertTrue(subject.isBound(next), "$name: a release leaves it able to bind again")
+            assertEquals(2L, subject.listenersOpened, name)
+        }
+    }
+
+    @Test
     fun preservesHttpHostAndBinaryResponse() {
         val (path, server) = backend("http")
         val port = gateway.bind(0)

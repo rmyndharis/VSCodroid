@@ -3,7 +3,9 @@ package com.vscodroid.service
 import io.mockk.every
 import io.mockk.mockk
 import io.mockk.mockkObject
+import java.io.IOException
 import java.net.ProtocolFamily
+import java.net.ServerSocket
 import java.net.StandardProtocolFamily
 import java.nio.channels.ServerSocketChannel
 import java.nio.channels.SocketChannel
@@ -24,11 +26,20 @@ internal fun mockEditorGateway(): EditorGateway {
     var bound: Int? = null
     every { EditorGateway.instance } returns gateway
     every { gateway.boundPort } answers { bound }
-    // A bind with nothing bound opens a listener, as the real gateway counts them in listenersOpened.
+    // The origin as the real gateway holds it: a bind with nothing bound opens a listener, counted in
+    // listenersOpened, on the port asked for or, for 0, on one the system picks; a bind while one is
+    // bound answers that port and refuses any other, and isBound is true for that port alone. So a
+    // suite binds the port it then asks about. EditorGatewayTest takes this and the real class through
+    // the same steps.
     var opened = 0L
-    every { gateway.bind(any()) } answers { firstArg<Int>().also { if (bound == null) opened++; bound = it } }
+    every { gateway.bind(any()) } answers {
+        val port = firstArg<Int>()
+        val held = bound
+        if (held != null && port != 0 && port != held) throw IOException("Editor origin is already bound")
+        held ?: (if (port == 0) ServerSocket(0).use { it.localPort } else port).also { opened++; bound = it }
+    }
     every { gateway.listenersOpened } answers { opened }
-    every { gateway.isBound(any()) } answers { firstArg<Int>() > 0 }
+    every { gateway.isBound(any()) } answers { firstArg<Int>().let { it > 0 && it == bound } }
     // Release and the away notice as the real gateway has them: release answers true and unbinds only
     // for the port that is bound, and takes an unsaid notice with it; the notice is said once.
     var away = 0
