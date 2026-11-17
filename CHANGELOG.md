@@ -11,9 +11,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 - Saving a download over a file you already have no longer freezes the editor while a large file is copied into it.
 - In the terminal, Ctrl or Alt latched on the extra key row and then a letter typed on a keyboard that underlines words sends the control character alone again, without the letter before it.
-- In the terminal, Ctrl or Alt latched on the extra key row and then a letter typed on a keyboard that underlines words sends the control character alone again, without the letter before it.
 - On Android 12 and later the low storage warning is shown; it was dropped before the screen could show it.
-- The action button of a toolchain card shows its whole label at the largest font and display sizes.
 - The action button of a toolchain card shows its whole label at the largest font and display sizes.
 - An install made on Android 10 keeps its projects folder in the app's storage after the phone is updated, even when another app has made a folder of that name on shared storage.
 - A notice shown only once while the app runs, such as the one about a workspace that spans several device folders, waits for the app's return when it arrives in the background instead of being dropped.
