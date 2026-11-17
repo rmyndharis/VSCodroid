@@ -187,6 +187,10 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
     @Volatile
     private var nodeService: NodeService? = null
     private var serviceBindingInitiated = false
+
+    // The four callbacks this screen put on the service (ready, error, gave up, stopped), kept so that
+    // [onDestroy] takes off the ones that are still its own and nothing else.
+    private var serviceCallbacks: Array<Any?>? = null
     private var serverPort = 0
     private var backgroundedAt = 0L
     private var bridgeInitialized = false
@@ -1356,12 +1360,22 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         // Activity, its WebView and its view tree. Unbinding does not clear
         // them: nothing overwrites them until some future activity binds and
         // installs its own, which may be never.
-        nodeService?.let {
-            it.onServerReady = null
-            it.onServerError = null
-            it.onServerGaveUp = null
-            it.onServerStopped = null
+        //
+        // Only the callbacks this screen installed, and only while they are still the ones on the
+        // service. The service outlives the screen, and the app opened again just after Stop Server,
+        // which finishes this screen and removes its task, makes a screen that binds to the same
+        // service and installs its own while this one is still waiting to be destroyed. Clearing
+        // whatever was there took the new screen's callbacks away: the server came up behind a
+        // loading page that nothing ever replaced.
+        nodeService?.let { service ->
+            serviceCallbacks?.let { ours ->
+                if (service.onServerReady === ours[0]) service.onServerReady = null
+                if (service.onServerError === ours[1]) service.onServerError = null
+                if (service.onServerGaveUp === ours[2]) service.onServerGaveUp = null
+                if (service.onServerStopped === ours[3]) service.onServerStopped = null
+            }
         }
+        serviceCallbacks = null
         if (serviceBindingInitiated) {
             try {
                 unbindService(serviceConnection)
@@ -3104,6 +3118,8 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                 finishAndRemoveTask()
             }
         }
+
+        serviceCallbacks = nodeService?.let { arrayOf(it.onServerReady, it.onServerError, it.onServerGaveUp, it.onServerStopped) }
 
         // The permission answer can beat the binding; if it did, this is the
         // first moment the request has anywhere to go.

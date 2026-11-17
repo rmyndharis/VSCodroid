@@ -40,6 +40,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The message for a device folder that failed to open names the error instead of ending in "null".
 - After an update, the git sign-in prompt and the `vscodroid` command no longer keep running the previous version's script when a toolchain is removed or repaired while setup unpacks.
 - A Stop Server pressed while the server was still starting, or while the app was reconnecting to an editor on a temporary port, no longer leaves the editor server running in the background.
+- Opening VSCodroid again just after Stop Server no longer leaves "Starting server..." on the screen with the server already running behind it.
 - A connection to the editor's port that sends nothing is closed after 10 seconds instead of two minutes, so silent connections from another app no longer hold all 32 slots for that long.
 
 ## [1.9.0] - 2026-11-16
