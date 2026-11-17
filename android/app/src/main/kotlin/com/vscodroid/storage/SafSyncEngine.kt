@@ -511,7 +511,9 @@ class SafSyncEngine(private val context: Context) {
          * What the mirror holds, for the files this sync can vouch for. Filled only where
          * the mirror copy is known to correspond to the device document (it was just
          * written, or it was found identical), and where a fetch that did not happen left
-         * the copy an earlier sync vouched for exactly as it was, whose line is carried.
+         * the copy an earlier sync vouched for exactly as it was, whose line is carried, or,
+         * where no record could be read, left a copy nothing vouches for, whose own line goes
+         * out without a digest.
          *
          * An allowlist, and that is the whole point. The previous version recorded every
          * enumerated path and then subtracted the ways that could be wrong, which meant a
@@ -799,12 +801,14 @@ class SafSyncEngine(private val context: Context) {
                 // record said of that copy is carried while the copy is still exactly the
                 // one it names, as for a failed copy below: dropped, the copy read as a
                 // save the device never got, and a deletion of the document on the device
-                // afterwards put it back there with its old bytes.
+                // afterwards put it back there with its old bytes. Where no record could be read
+                // there is no line to carry, and the copy's own line is written without a digest
+                // ([unprovenRows] says what such a row does), for the same reason.
                 if (doc.size > MAX_FILE_SIZE) {
                     skippedLarge++
                     unfetched.add(localPath.absolutePath)
                     val line = identityLine(doc.relativePath, localPath)
-                    if (localPath.isFile && line in previouslyRecorded.orEmpty()) recorded += line
+                    if (localPath.isFile && previouslyRecorded?.contains(line) != false) recorded += line
                     // At Logger.i, not d, for the reason the no-clock line below gives:
                     // Logger.d is gated on a debuggable build, so on a release build
                     // the only trace of this document was the count in the summary. The
@@ -1103,9 +1107,10 @@ class SafSyncEngine(private val context: Context) {
                     // of that folder; the cost of not arming it is the document.
                     unfetched.add(localPath.absolutePath)
                     // The previous record's line is carried while the copy is still the
-                    // one it names, for the reason the size limit above carries it.
+                    // one it names, or written for it with no record to read, for the
+                    // reason the size limit above does.
                     val line = identityLine(doc.relativePath, localPath)
-                    if (localPath.isFile && line in previouslyRecorded.orEmpty()) recorded += line
+                    if (localPath.isFile && previouslyRecorded?.contains(line) != false) recorded += line
                     Logger.w(
                         tag,
                         "Another sync of this folder is already copying " +
@@ -1194,9 +1199,10 @@ class SafSyncEngine(private val context: Context) {
                     // device folder lacks. Carried rather than made, so not through
                     // [recordIdentity], whose precondition is that the device holds these
                     // bytes now; the line goes on saying only what it said when it was
-                    // written.
+                    // written. With no record to read it is written without a digest, as
+                    // at the size limit above.
                     val line = identityLine(doc.relativePath, localPath)
-                    if (unchangedAfterFailure && localPath.isFile && line in previouslyRecorded.orEmpty()) {
+                    if (unchangedAfterFailure && localPath.isFile && previouslyRecorded?.contains(line) != false) {
                         recorded += line
                     }
                 }
@@ -1736,12 +1742,12 @@ class SafSyncEngine(private val context: Context) {
         val preserved = try {
             openOutboundPath(localPath, mirrorRoot).use { destination ->
                 var time = doc.lastModified
-                var name = destination.sibling("${localPath.name}$DEVICE_COPY_SUFFIX$time")
+                var name = destination.sibling(deviceCopyName(localPath.name, time))
                 while (inboundAttributes(destination, name) != null ||
                     docIdCache.containsKey(File(localPath.parentFile, name.toString()).toRelativeString(mirrorRoot))
                 ) {
                     time++
-                    name = destination.sibling("${localPath.name}$DEVICE_COPY_SUFFIX$time")
+                    name = destination.sibling(deviceCopyName(localPath.name, time))
                 }
                 File(localPath.parentFile, name.toString())
             }
@@ -2425,13 +2431,17 @@ class SafSyncEngine(private val context: Context) {
      * changes. Chosen by [uploadPlan]'s walk, the one phase 2b takes, so what that pass never sends
      * (links, skipped directories, machine-temporary names) gets no row either. A copy this open set
      * aside is work it has just kept rather than a copy it cannot place, and goes across at the next
-     * open as before.
+     * open as before. So is a file the upload journal names, which says the device never got it: a
+     * file made in the editor whose create the device refused is one, and the journal is read only
+     * for documents the device lists, so with a row it stayed inside the app for good.
      */
     private fun unprovenRows(mirrorDir: File, present: Set<String>): List<String> {
         val keptThisOpen = (localPreservedDuringSync.get().orEmpty() + preservedDuringSync.get().orEmpty())
             .mapTo(HashSet()) { it.toRelativeString(mirrorDir) }
+        val unsent = uploadsInFlight()
         return uploadPlan(mirrorDir, Int.MAX_VALUE) {
-            it.isFile && it.toRelativeString(mirrorDir).let { path -> path !in present && path !in keptThisOpen }
+            it.isFile && it.absolutePath !in unsent &&
+                it.toRelativeString(mirrorDir).let { path -> path !in present && path !in keptThisOpen }
         }.entries.map { identityLine(it.toRelativeString(mirrorDir), it) }
     }
 
@@ -6337,10 +6347,19 @@ class SafSyncEngine(private val context: Context) {
          * at that name in between is lost. Nothing reachable here closes that: SecureDirectoryStream
          * moves with renameat, android.system.Os offers rename and link by path only, and renameat2
          * with RENAME_NOREPLACE is in Bionic from Android 11 and reachable only from native code.
-         * Each caller probes straight before its move.
+         * Each caller probes straight before its move. [removeRecordedCopy] has the same window
+         * where it puts a copy it took for deletion back under the copy's own name.
          */
-        internal fun localCopyName(name: String, time: Long): String {
-            val suffix = "$LOCAL_COPY_SUFFIX$time"
+        internal fun localCopyName(name: String, time: Long): String = cutToFit(name, "$LOCAL_COPY_SUFFIX$time")
+
+        /**
+         * `<name>.device-<time>`, cut to fit as [localCopyName] is: with the whole name a long
+         * file's device copy could not be made, so its newer mirror copy was refused at every
+         * open and every save.
+         */
+        internal fun deviceCopyName(name: String, time: Long): String = cutToFit(name, "$DEVICE_COPY_SUFFIX$time")
+
+        private fun cutToFit(name: String, suffix: String): String {
             var stem = name
             while (stem.isNotEmpty() &&
                 (stem + suffix).toByteArray(Charsets.UTF_8).size > SafStorageManager.MAX_NAME_BYTES

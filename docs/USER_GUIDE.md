@@ -85,7 +85,8 @@ VSCodroid is VS Code. If you have used VS Code on desktop, everything works the 
   folder is open do not reach the editor until you open the folder again. If you
   save a file that another app changed since you opened the folder or last saved
   that file, the other app's version is normally kept beside yours as
-  `<name>.device-<time>`, in the editor and in the device folder. The check goes
+  `<name>.device-<time>`, in the editor and in the device folder (the name is
+  cut first when it is too long to take the suffix). The check goes
   beyond the time and size the device folder reports: before replacing an
   existing device file, VSCodroid reads its bytes and compares them with the
   version it last read or delivered. This also protects edits that keep the
@@ -116,8 +117,9 @@ VSCodroid is VS Code. If you have used VS Code on desktop, everything works the 
   When a file and a folder share a name, one on the device and one in the editor,
   for example after you delete a folder in the Explorer, which leaves it on the
   device, and make a file of the same name, the device's keeps the name and
-  yours is kept beside it as `<name>.local-<time>`, in the editor and in the
-  device folder, the next time you open the folder. Until then a notice says the
+  yours is kept beside it as `<name>.local-<time>` (the name is cut first when it
+  is too long to take the suffix), in the editor and in the device folder, the
+  next time you open the folder. Until then a notice says the
   file exists only inside VSCodroid. A file in the editor that you have not changed
   since VSCodroid copied it, where the device now holds a folder, is not kept: the
   folder replaces it. If you open a folder again while a large

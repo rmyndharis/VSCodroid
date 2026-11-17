@@ -32,6 +32,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A file deleted from a device folder is no longer put back at a later open when the app's record of that folder was missing or written by an older version.
 - A file in a device folder that grew past 50 MB is no longer put back with its old content after it is deleted on the device.
 - For a file in a device folder whose name is too long to take `.local-<time>` whole, the app's copy is kept beside it under a shortened `.local-` name, so the device's newer copy comes in again.
+- For a file in a device folder whose name is too long to take `.device-<time>` whole, another app's edit is kept beside it under a shortened `.device-` name, so the app's newer copy reaches the device.
 - A device folder picked while the app was being restarted opens once the editor is up, instead of the folder open before it.
 - A sign-in that comes back after the editor reloaded says the editor restarted and to sign in again; it used to end in silence.
 - The notice that a sign-in was cut off by an editor restart no longer comes back after a font size or language change or an update.
