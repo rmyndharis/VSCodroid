@@ -137,7 +137,7 @@ const BUNDLED = `${EXTENSIONS}/openai.chatgpt-26.1021.22027-alpine-arm64/bin/lin
 const SPAWN_MAIN = path.join(tmp, 'spawn-main.js');
 fs.writeFileSync(
     SPAWN_MAIN,
-    "const result = require('child_process').spawn(...JSON.parse(process.argv[2]));\n" +
+    "const result = require('child_process').spawn(...JSON.parse(process.argv[2]).map((x) => (x === '@undefined' ? undefined : x)));\n" +
         "if (result !== 'child') throw new Error('the return value was lost: ' + result);\n",
 );
 function spawnedWith(call, { command = true, prefix = CODEX_PREFIX } = {}) {
@@ -248,6 +248,9 @@ fs.symlinkSync(REAL_DATA, DATA_LINK);
 const put = (file, content) => { fs.mkdirSync(path.dirname(file), { recursive: true }); fs.writeFileSync(file, content); return file; };
 const ENGINE = put(path.join(REAL_DATA, 'files/home/.gemini/bin/agy'), elf64(BIONIC_LINKER));
 const MUSL = put(path.join(REAL_DATA, 'files/home/musl-tool'), elf64('/lib/ld-musl-aarch64.so.1'));
+// An interpreter entry of 5000 bytes that begins with the linker's name: read whole it would pass for the
+// linker, which is why the parser refuses an entry past 4096 bytes instead of reading it.
+const OVERSIZED = put(path.join(REAL_DATA, 'files/home/oversized-tool'), elf64(BIONIC_LINKER + '\0'.repeat(5000 - BIONIC_LINKER.length)));
 const STATIC = put(path.join(REAL_DATA, 'files/home/static-tool'), elf64(null));
 const SCRIPT = put(path.join(REAL_DATA, 'files/home/script.sh'), '#!/bin/sh\nexit 0\n');
 const NATIVE = put(path.join(tmp, 'native/libtool.so'), elf64(BIONIC_LINKER));
@@ -265,7 +268,7 @@ execFileSync('mkfifo', [FIFO]);
 const SET_PRELOAD = path.join(tmp, 'set-preload.js');
 fs.writeFileSync(SET_PRELOAD, "if (process.env.FAKE_LD_PRELOAD) process.env.LD_PRELOAD = process.env.FAKE_LD_PRELOAD;\n");
 
-function spawnedUnder(call, { preload = null, dataDir = DATA_LINK, record = RECORD_SPAWN, main = SPAWN_MAIN } = {}) {
+function spawnedUnder(call, { preload = null, dataDir = DATA_LINK, record = RECORD_SPAWN, main = SPAWN_MAIN, cwd = undefined } = {}) {
     const env = { ...process.env };
     delete env.LD_PRELOAD;
     if (preload !== null) env.FAKE_LD_PRELOAD = preload;
@@ -273,7 +276,7 @@ function spawnedUnder(call, { preload = null, dataDir = DATA_LINK, record = RECO
     const out = execFileSync(
         process.execPath,
         ['--require', FAKE_ANDROID, '--require', SET_PRELOAD, '--require', record, '--require', FIX, main, JSON.stringify(call)],
-        { env, encoding: 'utf8', timeout: 10000 },
+        { env, encoding: 'utf8', timeout: 10000, cwd },
     );
     return JSON.parse(out.trim().split('\n').pop());
 }
@@ -296,6 +299,18 @@ assert.deepStrictEqual(
     'a link that resolves into the data directory was left alone',
 );
 checked += 5;
+// Node takes null or undefined for the argument list and reads the options after it. A call written that way
+// has to keep its options (cwd, env, stdio), which a rewrite that took the empty slot for them dropped or threw on.
+assert.deepStrictEqual(
+    spawnedUnder([ENGINE, '@undefined', SPAWN_OPTIONS]), [BIONIC_LINKER, [ENGINE], SPAWN_OPTIONS],
+    'an undefined argument list lost the options that follow it',
+);
+assert.deepStrictEqual(
+    spawnedUnder([ENGINE, null, SPAWN_OPTIONS]), [BIONIC_LINKER, [ENGINE], SPAWN_OPTIONS],
+    'a null argument list lost the options that follow it',
+);
+assert.deepStrictEqual(spawnedUnder([ENGINE, null]), [BIONIC_LINKER, [ENGINE]], 'a null argument list alone was not started through the linker');
+checked += 3;
 for (const [label, call, conditions] of [
     ['a musl executable, which needs its own loader', [MUSL, TOOL_ARGS, SPAWN_OPTIONS]],
     ['a static or shared object with no interpreter entry', [STATIC, TOOL_ARGS, SPAWN_OPTIONS]],
@@ -307,8 +322,10 @@ for (const [label, call, conditions] of [
     ['a missing file', [path.join(REAL_DATA, 'files/home/nothing'), TOOL_ARGS, SPAWN_OPTIONS]],
     ['a directory', [path.join(REAL_DATA, 'files/home'), TOOL_ARGS, SPAWN_OPTIONS]],
     ['a FIFO, which a plain open waits on', [FIFO, TOOL_ARGS, SPAWN_OPTIONS]],
+    ['an interpreter entry past 4096 bytes', [OVERSIZED, TOOL_ARGS, SPAWN_OPTIONS]],
     ['a process that has the terminal interceptor', [ENGINE, TOOL_ARGS, SPAWN_OPTIONS], { preload: '/data/user/0/com.vscodroid/files/usr/lib/libtermux-exec.so' }],
-    ['no data directory in the environment', [ENGINE, TOOL_ARGS, SPAWN_OPTIONS], { dataDir: null }],
+    ['no data directory in the environment, from a directory that holds the engine', [ENGINE, TOOL_ARGS, SPAWN_OPTIONS], { dataDir: null, cwd: REAL_DATA }],
+    ['an empty data directory in the environment, from a directory that holds the engine', [ENGINE, TOOL_ARGS, SPAWN_OPTIONS], { dataDir: '', cwd: REAL_DATA }],
 ]) {
     assert.deepStrictEqual(spawnedUnder(call, conditions), call, `${label}: the spawn was changed`);
     checked++;
@@ -334,7 +351,7 @@ fs.writeFileSync(
     "const cp = require('child_process');\n" +
         "const util = require('util');\n" +
         "const [how, call] = JSON.parse(process.argv[2]);\n" +
-        "const args = call.map((x) => (x === '@callback' ? function () {} : x));\n" +
+        "const args = call.map((x) => (x === '@callback' ? function () {} : x === '@undefined' ? undefined : x));\n" +
         "const result = how === 'promisified' ? util.promisify(cp.execFile)(...args) : cp.execFile(...args);\n" +
         "if (result !== 'child' && result !== 'promise') throw new Error('the return value was lost: ' + result);\n",
 );
@@ -349,6 +366,9 @@ for (const [label, how, call, expected] of [
     ['an empty argument list with options', 'plain', [ENGINE, [], VERSION_OPTIONS, CALLBACK], [BIONIC_LINKER, [ENGINE], VERSION_OPTIONS, null]],
     ['no arguments at all', 'plain', [ENGINE], [BIONIC_LINKER, [ENGINE]]],
     ['the promisified form, which the extension uses', 'promisified', [ENGINE, ['--version'], VERSION_OPTIONS], [BIONIC_LINKER, [ENGINE, '--version'], VERSION_OPTIONS]],
+    ['a null argument list before options and a callback', 'plain', [ENGINE, null, VERSION_OPTIONS, CALLBACK], [BIONIC_LINKER, [ENGINE], VERSION_OPTIONS, null]],
+    ['an undefined argument list before a callback', 'plain', [ENGINE, '@undefined', CALLBACK], [BIONIC_LINKER, [ENGINE], null]],
+    ['an undefined argument list before options, promisified', 'promisified', [ENGINE, '@undefined', VERSION_OPTIONS], [BIONIC_LINKER, [ENGINE], VERSION_OPTIONS]],
 ]) {
     assert.deepStrictEqual(execUnder(how, call), [how, ...expected], `execFile, ${label}: not started through the linker, or its arguments changed`);
     checked++;
@@ -404,7 +424,7 @@ const RECORD_HUB = path.join(tmp, 'record-hub.js');
 fs.writeFileSync(
     RECORD_HUB,
     "const cp = require('child_process');\nconst EventEmitter = require('events');\n" +
-        "cp.spawn = function () { globalThis.__spawned = Array.prototype.slice.call(arguments); const c = new EventEmitter(); c.pid = 4242; return c; };\n",
+        "cp.spawn = function () { globalThis.__spawned = Array.prototype.slice.call(arguments); const c = new EventEmitter(); c.pid = 4242; c.kill = function (signal) { c.killedWith = signal || 'SIGTERM'; }; globalThis.__child = c; return c; };\n",
 );
 const HUB_DRIVER = path.join(tmp, 'hub-driver.js');
 fs.writeFileSync(HUB_DRIVER, `
@@ -419,6 +439,16 @@ const get = (port, path) => new Promise((resolve, reject) => {
     req.on('timeout', () => req.destroy(new Error('no answer from ' + path)));
     req.on('error', reject);
 });
+const getAs = (port, path, host) => new Promise((resolve) => {
+    const req = http.get({ host: '127.0.0.1', port, path, agent: false, timeout: 3000, headers: { Host: host } }, (res) => {
+        let body = ''; res.on('data', (c) => { body += c; });
+        res.on('end', () => resolve({ status: res.statusCode, body }));
+        res.on('error', (e) => resolve({ error: e.code || e.message }));
+        res.on('aborted', () => resolve({ error: 'aborted' }));
+    });
+    req.on('timeout', () => { req.destroy(); resolve({ error: 'no answer' }); });
+    req.on('error', (e) => resolve({ error: e.code || e.message }));
+});
 setTimeout(() => { console.error('the driver gave up waiting'); process.exit(1); }, 20000).unref();
 (async () => {
     const front = await free();
@@ -429,9 +459,31 @@ setTimeout(() => { console.error('the driver gave up waiting'); process.exit(1);
     const out = { front, back, spawned, noteAfterSpawn: JSON.parse(require('fs').readFileSync(noteFile, 'utf8')) };
     await new Promise((r) => setTimeout(r, 150));
     out.beforeEngine = (await get(front, '/healthz')).status;
-    const seen = {};
+    const seen = { requests: 0 };
     const engine = http.createServer((req, res) => {
         seen.host = req.headers.host;
+        seen.requests++;
+        if (req.url === '/hang') {
+            res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+            res.write('first');
+            return;
+        }
+        if (req.url === '/wait') {
+            res.on('close', () => { seen.waitClosed = true; });
+            return;
+        }
+        if (req.url === '/slow') {
+            res.writeHead(200, { 'Content-Type': 'text/event-stream' });
+            res.write('first');
+            res.on('close', () => { seen.slowClosed = true; });
+            return;
+        }
+        if (req.url === '/abort') {
+            res.writeHead(200, { 'Content-Length': '100' });
+            res.write('partial');
+            setTimeout(() => res.socket.destroy(), 50);
+            return;
+        }
         res.setHeader('Content-Security-Policy', req.url === '/plain'
             ? "frame-ancestors 'self'; report-uri https://example.test/r"
             : "frame-ancestors 'self' http://127.0.0.1:* vscode-webview: vscode-file:; report-uri https://example.test/r");
@@ -439,6 +491,7 @@ setTimeout(() => { console.error('the driver gave up waiting'); process.exit(1);
         res.end('hello ' + req.url);
     });
     engine.on('upgrade', (req, socket) => {
+        seen.upgradeHost = req.headers.host;
         socket.write('HTTP/1.1 101 Switching Protocols\\r\\nUpgrade: websocket\\r\\nConnection: Upgrade\\r\\n\\r\\n');
         socket.on('data', (d) => socket.write(d));
     });
@@ -447,6 +500,36 @@ setTimeout(() => { console.error('the driver gave up waiting'); process.exit(1);
     out.page = { status: page.status, csp: page.headers['content-security-policy'], cookies: page.headers['set-cookie'], body: page.body };
     out.engineSawHost = seen.host;
     out.plainCsp = (await get(front, '/plain')).headers['content-security-policy'];
+    // A request that names another host, as a page whose name was pointed at 127.0.0.1 does.
+    const before = seen.requests;
+    out.foreignHost = await getAs(front, '/page', 'evil.example:' + front);
+    out.foreignHostPort = await getAs(front, '/page', '127.0.0.1:' + (front + 1));
+    out.noHostReached = seen.requests - before;
+    out.localhostHost = await getAs(front, '/page', 'localhost:' + front);
+    out.foreignUpgrade = await new Promise((resolve) => {
+        const socket = net.connect(front, '127.0.0.1', () => socket.write('GET /ws HTTP/1.1\\r\\nHost: evil.example:' + front + '\\r\\nConnection: Upgrade\\r\\nUpgrade: websocket\\r\\n\\r\\n'));
+        let data = '';
+        socket.on('data', (d) => { data += d; });
+        socket.on('close', () => resolve(data.split('\\r\\n')[0]));
+        socket.setTimeout(3000, () => { socket.destroy(); });
+    });
+    // An engine that resets in the middle of a body: the client must be let go, not left waiting.
+    out.abortedBody = await getAs(front, '/abort', '127.0.0.1:' + front);
+    // A client that walks away from a response the engine is still writing: the engine has to see it go.
+    await new Promise((resolve) => {
+        const walker = http.get({ host: '127.0.0.1', port: front, path: '/slow', agent: false }, (res) => { res.once('data', () => { walker.destroy(); resolve(); }); });
+        walker.on('error', () => {});
+    });
+    await new Promise((r) => setTimeout(r, 300));
+    out.engineSawClientLeave = seen.slowClosed === true;
+    // And one that leaves while the engine has not answered at all, a long poll for instance.
+    await new Promise((resolve) => {
+        const waiter = http.get({ host: '127.0.0.1', port: front, path: '/wait', agent: false }, () => {});
+        waiter.on('error', () => {});
+        setTimeout(() => { waiter.destroy(); resolve(); }, 200);
+    });
+    await new Promise((r) => setTimeout(r, 300));
+    out.engineSawWaiterLeave = seen.waitClosed === true;
     out.echo = await new Promise((resolve, reject) => {
         const socket = net.connect(front, '127.0.0.1', () => socket.write('GET /ws HTTP/1.1\\r\\nHost: 127.0.0.1:' + front + '\\r\\nConnection: Upgrade\\r\\nUpgrade: websocket\\r\\n\\r\\n'));
         let data = '';
@@ -459,7 +542,25 @@ setTimeout(() => { console.error('the driver gave up waiting'); process.exit(1);
         socket.on('close', () => reject(new Error('the tunnel closed before it echoed')));
         socket.on('error', reject);
     });
+    {
+        const squatter = net.createServer().listen(0, '127.0.0.1');
+        await new Promise((r) => squatter.once('listening', r));
+        const taken = squatter.address().port;
+        // The relay says why it cannot listen, which is the point of this step and not a failure of the run.
+        const report = console.error;
+        console.error = () => {};
+        require('child_process').spawn(process.argv[2], ['--hub', '--hub-port=' + taken]);
+        await new Promise((r) => setTimeout(r, 300));
+        console.error = report;
+        out.killedWhenFrontIsTaken = globalThis.__child.killedWith || null;
+        squatter.close();
+    }
+    out.upgradeHost = seen.upgradeHost;
+    // A response still open when the engine ends is ended with it, not left for a client to wait on.
+    const hanging = getAs(front, '/hang', '127.0.0.1:' + front);
+    await new Promise((r) => setTimeout(r, 200));
     child.emit('exit', 0);
+    out.hangingEnded = await Promise.race([hanging, new Promise((r) => setTimeout(() => r({ error: 'still open' }), 1500))]);
     await new Promise((r) => setTimeout(r, 150));
     out.afterExit = await get(front, '/healthz').then(() => 'still answering', (e) => e.code);
     out.noteAfterExit = require('fs').existsSync(noteFile);
@@ -499,6 +600,18 @@ assert.strictEqual(hubRun.plainCsp, "frame-ancestors 'self'; report-uri https://
 assert.strictEqual(hubRun.engineSawHost, `127.0.0.1:${hubRun.back}`, 'the engine saw a Host that is not its own');
 assert.ok(/^HTTP\/1\.1 101 /.test(hubRun.echo) && hubRun.echo.endsWith('PING'), 'a WebSocket upgrade did not tunnel through');
 assert.strictEqual(hubRun.afterExit, 'ECONNREFUSED', 'the relay kept answering after the engine ended');
+assert.strictEqual(hubRun.foreignHost.status, 403, 'a request naming another host reached the engine: the relay rewrites Host, so DNS rebinding would get through');
+assert.strictEqual(hubRun.foreignHostPort.status, 403, 'a request naming this host with another port was let through');
+assert.strictEqual(hubRun.noHostReached, 0, 'the engine saw a request that named another host');
+assert.strictEqual(hubRun.localhostHost.status, 200, 'a request naming localhost and the relay\'s own port was refused');
+assert.ok(/^HTTP\/1\.1 403 /.test(hubRun.foreignUpgrade), 'a WebSocket upgrade naming another host was tunnelled: ' + hubRun.foreignUpgrade);
+assert.ok(hubRun.abortedBody.error && hubRun.abortedBody.error !== 'no answer', 'a client was left waiting for a body the engine abandoned: ' + JSON.stringify(hubRun.abortedBody));
+assert.ok(hubRun.killedWhenFrontIsTaken, 'the engine kept running with no relay when the extension\'s port was taken by someone else');
+assert.strictEqual(hubRun.engineSawClientLeave, true, 'a client that left a response did not reach the engine: the relay kept its side open');
+assert.strictEqual(hubRun.engineSawWaiterLeave, true, 'a client that left before the engine answered did not reach the engine');
+assert.strictEqual(hubRun.upgradeHost, `127.0.0.1:${hubRun.back}`, 'the engine saw an upgrade whose Host is not its own');
+assert.ok(hubRun.hangingEnded.error && hubRun.hangingEnded.error !== 'still open' && hubRun.hangingEnded.error !== 'no answer', 'a response open when the engine ended stayed open: ' + JSON.stringify(hubRun.hangingEnded));
+checked += 11;
 checked++;
 
 // When the system kills the editor server the engine outlives it, so the next
@@ -594,6 +707,53 @@ setTimeout(() => done('still running'), 4000);
         assert.strictEqual(got.result, want, `an earlier engine at start (${mode}): ${got.result}, wanted ${want}`);
         checked++;
     }
+    // The engine the extension host started has no parent to wait for it once the server that ran the host is
+    // gone, so a server that exits on its own, or is stopped with SIGTERM as the app does, ends the engine in the
+    // note. The server has no handler for SIGTERM of its own (a VS Code server installs one only for its exit
+    // diagnostics): it dies of the signal at once and runs no exit handler, so the script gives it none either
+    // and must leave it dying of the signal, not exiting with a code. The engine is made after the server has
+    // started, so the end can only be the exit's or the signal's.
+    const EXIT_DRIVER = path.join(tmp, 'exit-driver.js');
+    fs.writeFileSync(EXIT_DRIVER, `
+const cp = require('child_process');
+const fs = require('fs');
+const path = require('path');
+const [note, dir, fake, fix, how] = process.argv.slice(2);
+const script = path.join(dir, how === 'other' || how === 'other-signal' ? 'other-main.js' : 'server-main.js');
+fs.writeFileSync(script, how === 'signal' || how === 'other-signal'
+    ? "setInterval(function () {}, 1000);"
+    : "setTimeout(function () { process.exit(0); }, 1500);");
+const started = cp.spawn(process.execPath, ['--require', fake, '--require', fix, script], { stdio: 'ignore' });
+let dummy = null;
+let aliveBefore = null;
+let serverEnd = null;
+let ended = null;
+started.on('exit', (code, signal) => { serverEnd = signal || 'code ' + code; });
+const finish = () => { console.log(JSON.stringify({ aliveBefore, ended, serverEnd })); if (dummy) dummy.kill('SIGKILL'); started.kill('SIGKILL'); process.exit(0); };
+setTimeout(() => {
+    dummy = cp.spawn(process.execPath, ['-e', 'setInterval(function () {}, 1000)', '/x/.gemini/bin/agy', '--hub', '--hub-port=41999'], { stdio: 'ignore' });
+    fs.writeFileSync(note, JSON.stringify({ pid: dummy.pid, port: 41999 }));
+    dummy.on('exit', (code, signal) => { ended = signal; setTimeout(finish, 500); });
+}, 700);
+setTimeout(() => { aliveBefore = dummy !== null && dummy.exitCode === null && dummy.signalCode === null; }, 1100);
+if (how === 'signal' || how === 'other-signal') setTimeout(() => started.kill('SIGTERM'), 1200);
+setTimeout(finish, 6000);
+`);
+    for (const [how, want] of [
+        ['exit', { aliveBefore: true, ended: 'SIGTERM', serverEnd: 'code 0' }],
+        ['signal', { aliveBefore: true, ended: 'SIGTERM', serverEnd: 'SIGTERM' }],
+        ['other', { aliveBefore: true, ended: null, serverEnd: 'code 0' }],
+        ['other-signal', { aliveBefore: true, ended: null, serverEnd: 'SIGTERM' }],
+    ]) {
+        fs.rmSync(HUB_NOTE, { force: true });
+        const got = JSON.parse(execFileSync(
+            process.execPath,
+            [EXIT_DRIVER, HUB_NOTE, tmp, FAKE_ANDROID, FIX, how],
+            { env: { ...process.env, HOME: HUB_HOME, TERMUX_APP__DATA_DIR: DATA_LINK, LD_PRELOAD: '' }, encoding: 'utf8', timeout: 30000 },
+        ).trim().split('\n').pop());
+        assert.deepStrictEqual(got, want, `the engine at the server's end (${how}): ${JSON.stringify(got)}, wanted ${JSON.stringify(want)}`);
+        checked++;
+    }
 } else {
     console.log('skipped: ending an earlier engine reads /proc, which this system does not have');
 }
@@ -604,7 +764,9 @@ const KEEP = [
     ['the engine without a port', ENGINE, ['--hub', '--app_data_dir=antigravity']],
     ['the engine with port 0', ENGINE, ['--hub', '--hub-port=0']],
     ['the engine without --hub', ENGINE, ['--hub-port=41000']],
-    ['another program with the same flags', OUTSIDE.replace(/agy$/, 'other'), ['--hub', '--hub-port=41000']],
+    ['the engine with a port past 65535', ENGINE, ['--hub', '--hub-port=70000']],
+    // Inside the data directory, so the loader rule applies and only the hub rule can be told apart by the arguments.
+    ['another program in the data directory with the same flags', path.join(REAL_DATA, 'files/home/other-tool'), ['--hub', '--hub-port=41000']],
 ];
 for (const [label, file, args] of KEEP) {
     if (!fs.existsSync(file)) put(file, elf64(BIONIC_LINKER));

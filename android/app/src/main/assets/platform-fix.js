@@ -126,7 +126,11 @@ if (process.platform === 'android') {
   // terminal's interceptor, which does this itself.
   var LINKER = '/system/bin/linker64';
   var APP_DATA = null;
-  try { APP_DATA = fs.realpathSync(process.env.TERMUX_APP__DATA_DIR || ''); } catch (e) { /* unset: stays off */ }
+  // Only when it is set: realpathSync('') answers the working directory, which would turn the rule on for
+  // whatever lies under it.
+  if (process.env.TERMUX_APP__DATA_DIR) {
+    try { APP_DATA = fs.realpathSync(process.env.TERMUX_APP__DATA_DIR); } catch (e) { /* not a directory: stays off */ }
+  }
   var INTERCEPTED = /libtermux-exec/.test(process.env.LD_PRELOAD || '');
 
   /** The PT_INTERP string of an open ELF64 little-endian file, or null. */
@@ -171,10 +175,11 @@ if (process.platform === 'android') {
    */
   function throughLinker(file, rest, change) {
     if (typeof file !== 'string') return null;
-    var listed = Array.isArray(rest[0]);
+    // Node takes null or undefined for the argument list, and options then follow it.
+    var listed = Array.isArray(rest[0]) || rest[0] == null;
     var options = listed ? rest[1] : rest[0];
     if ((options && options.shell) || !bionicInAppData(file)) return null;
-    var args = listed ? rest[0] : [];
+    var args = Array.isArray(rest[0]) ? rest[0] : [];
     return [LINKER, [file].concat(change ? change(args) : args)].concat(rest.slice(listed ? 1 : 0));
   }
 
@@ -219,7 +224,7 @@ if (process.platform === 'android') {
     if (!ANTIGRAVITY_ENGINE.test(file) || args.indexOf('--hub') < 0) return null;
     for (var i = 0; i < args.length; i++) {
       var match = /^--hub-port=(\d{1,5})$/.exec(args[i]);
-      if (!match || Number(match[1]) === 0) continue;
+      if (!match || Number(match[1]) === 0 || Number(match[1]) > 65535) continue;
       var front = Number(match[1]);
       var back = front;
       while (back === front) back = 20000 + Math.floor(Math.random() * 40000);
@@ -230,12 +235,28 @@ if (process.platform === 'android') {
     return null;
   }
 
+  /**
+   * Whether `host` names this relay's own address. The engine refuses a Host header that is not its own, which
+   * is what stops a web page whose name was pointed at 127.0.0.1 (DNS rebinding) from reading its page, and the
+   * relay rewrites Host for the engine, so the relay has to be the one to refuse.
+   */
+  function ownHost(host, front) {
+    var value = String(host || '').toLowerCase();
+    return value === '127.0.0.1:' + front || value === 'localhost:' + front;
+  }
+
   /** Answers on `front` and relays to the engine on `back`, 502 while it is not accepting; closes when `child` ends. */
   function relayHub(front, back, child) {
     var http = require('http');
     var net = require('net');
+    var pipeline = require('stream').pipeline;
     var sockets = new Set();
     var server = http.createServer(function (req, res) {
+      if (!ownHost(req.headers.host, front)) {
+        res.writeHead(403);
+        res.end();
+        return;
+      }
       var headers = {};
       Object.keys(req.headers).forEach(function (name) {
         if (!HOP_BY_HOP.test(name)) headers[name] = req.headers[name];
@@ -250,7 +271,8 @@ if (process.platform === 'android') {
           sent.push(name, /^content-security-policy$/i.test(name) ? widenFrameAncestors(value) : value);
         }
         res.writeHead(answer.statusCode, answer.statusMessage, sent);
-        answer.pipe(res);
+        // Not pipe: an engine that resets in the middle of a body would leave the client waiting for ever.
+        pipeline(answer, res, function () { /* both ends are already closed */ });
       });
       up.on('error', function () {
         if (!res.headersSent) res.writeHead(502);
@@ -261,6 +283,10 @@ if (process.platform === 'android') {
     });
     // The page the engine serves opens a WebSocket back to it.
     server.on('upgrade', function (req, socket, head) {
+      if (!ownHost(req.headers.host, front)) {
+        socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
+        return;
+      }
       var up = net.connect(back, '127.0.0.1', function () {
         var lines = [req.method + ' ' + req.url + ' HTTP/1.1'];
         for (var i = 0; i < req.rawHeaders.length; i += 2) {
@@ -278,7 +304,14 @@ if (process.platform === 'android') {
       sockets.add(socket);
       socket.on('close', function () { sockets.delete(socket); });
     });
-    server.on('error', function (error) { console.error('[vscodroid] hub relay on ' + front + ': ' + error.message); });
+    server.on('error', function (error) {
+      console.error('[vscodroid] hub relay on ' + front + ': ' + error.message);
+      // Without the relay the extension would poll a port the engine is not on, or one that someone else holds.
+      // An engine that ends is something it recovers from, by starting another on a port it picks again.
+      if (error.code === 'EADDRINUSE' || error.code === 'EACCES') {
+        try { child.kill(); } catch (e) { /* already gone */ }
+      }
+    });
     server.listen(front, '127.0.0.1');
     child.once('exit', function () {
       server.close();
@@ -326,7 +359,21 @@ if (process.platform === 'android') {
   // terminal host starts when the first terminal opens, with an engine already
   // running. A worker has no argv[1] while preloads run on Node 22, so the name
   // test alone already skips it; the thread test keeps that from depending on it.
-  if (require('worker_threads').isMainThread && /(^|[\\/])server-main\.js$/.test(process.argv[1] || '')) endEarlierHub();
+  if (require('worker_threads').isMainThread && /(^|[\\/])server-main\.js$/.test(process.argv[1] || '')) {
+    endEarlierHub();
+    // An engine the extension host started has no parent to wait for it once this process is gone. The app
+    // stops the server with SIGTERM, which the server does not handle (it dies at once and runs no exit
+    // handler), so the engine is ended here, and the signal is then given back to the process, which dies of
+    // it as before. A server killed with SIGKILL reaches neither, and the next start ends the engine. A server
+    // that exits by itself ends it in the exit handler.
+    var onTerm = function () {
+      endEarlierHub();
+      process.removeListener('SIGTERM', onTerm);
+      process.kill(process.pid, 'SIGTERM');
+    };
+    process.on('SIGTERM', onTerm);
+    process.on('exit', endEarlierHub);
+  }
 
   var realSpawn = childProcess.spawn;
   childProcess.spawn = function (file) {
@@ -347,8 +394,13 @@ if (process.platform === 'android') {
       if (hub) endEarlierHub();
       var started = realSpawn.apply(this, call);
       if (hub && started && started.pid !== undefined) {
-        relayHub(hub.front, hub.back, started);
-        keepHubNote(started, hub.back);
+        try {
+          relayHub(hub.front, hub.back, started);
+          keepHubNote(started, hub.back);
+        } catch (e) {
+          console.error('[vscodroid] hub relay on ' + hub.front + ': ' + e.message);
+          try { started.kill(); } catch (killed) { /* already gone */ }
+        }
       }
       return started;
     }
