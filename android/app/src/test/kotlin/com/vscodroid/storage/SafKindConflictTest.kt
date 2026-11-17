@@ -36,6 +36,28 @@ class SafKindConflictTest : SafInitialSyncTestBase() {
     }
 
     /**
+     * A name too long to take `.local-<time>` within the 255 bytes of a name is cut to fit. The
+     * whole name failed the rename, so the device's folder could not be made at every open.
+     */
+    @Test
+    fun `a file with a long name where the device holds a folder is kept beside it under its name cut to fit`() {
+        val name = "f".repeat(240)
+        mirrorFile(name).writeText("my only copy")
+        deviceTree(mapOf("root" to listOf(Child(name, isDirectory = true)), "doc:$name" to emptyList()))
+
+        sync()
+
+        assertTrue(mirrorFile(name).isDirectory, "the device folder never took its name")
+        val aside = mirror.listFiles()!!.single { it.isFile }
+        assertEquals("my only copy", aside.readText())
+        val stem = aside.name.substringBefore(SafSyncEngine.LOCAL_COPY_SUFFIX)
+        assertTrue(
+            stem.isNotEmpty() && name.startsWith(stem) && aside.name.toByteArray(Charsets.UTF_8).size <= 255,
+            "the file was not kept under its name cut to fit, then the suffix: ${aside.name}",
+        )
+    }
+
+    /**
      * An earlier open, which leaves the record beside the mirror. The put-back pass acts
      * only against a record it can read, because that is what tells a stranded save from a
      * deletion made on the device, so a folder that was never opened before sends nothing.

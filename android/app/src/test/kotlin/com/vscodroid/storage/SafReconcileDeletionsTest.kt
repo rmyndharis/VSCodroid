@@ -18,6 +18,7 @@ import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
+import org.junit.jupiter.api.Assumptions.assumeFalse
 import org.junit.jupiter.api.BeforeEach
 import org.junit.jupiter.api.Test
 import org.junit.jupiter.api.io.TempDir
@@ -27,6 +28,7 @@ import java.io.ByteArrayInputStream
 import java.io.File
 import java.io.IOException
 import java.nio.file.Files
+import java.nio.file.attribute.PosixFilePermissions
 import java.security.MessageDigest
 import java.util.concurrent.atomic.AtomicBoolean
 
@@ -244,17 +246,47 @@ class SafReconcileDeletionsTest {
 
     @Test
     fun `a failed conflict preservation leaves the local edit intact`() {
+        val local = unsyncedConflict()
+        // The move that sets the edit aside is refused, here by a mirror directory nothing may
+        // write. A name too long for the suffix used to stand in for this, and is set aside now.
+        val permissions = Files.getPosixFilePermissions(mirror.toPath())
+        try {
+            Files.setPosixFilePermissions(mirror.toPath(), PosixFilePermissions.fromString("r-xr-xr-x"))
+            assumeFalse(mirror.canWrite(), "this process can bypass the directory permission fixture")
+
+            sync()
+
+            assertEquals("UNSYNCED EDIT", local.readText())
+            assertFalse(recordedPaths().contains(local.name))
+
+            deviceFolderHolding(local.name to "NEW DEVICE EDIT", modified = DEVICE_TIME + 2_000)
+            sync()
+
+            assertEquals("UNSYNCED EDIT", local.readText(), "retrying must not discard the unpreserved edit")
+        } finally {
+            Files.setPosixFilePermissions(mirror.toPath(), permissions)
+        }
+    }
+
+    /**
+     * A name too long to take `.local-<time>` within the 255 bytes of a name is cut to fit, so
+     * the edit is still set aside and the device's copy comes in. The whole name failed the
+     * rename, and the device's copy of such a file was refused at every open.
+     */
+    @Test
+    fun `a conflict over a long name sets the local edit aside under its name cut to fit`() {
         val local = unsyncedConflict("n".repeat(240) + ".txt")
 
         sync()
 
-        assertEquals("UNSYNCED EDIT", local.readText())
-        assertFalse(recordedPaths().contains(local.name))
-
-        deviceFolderHolding(local.name to "NEW DEVICE EDIT", modified = DEVICE_TIME + 2_000)
-        sync()
-
-        assertEquals("UNSYNCED EDIT", local.readText(), "retrying must not discard the unpreserved edit")
+        assertEquals("NEW DEVICE EDIT", local.readText(), "the device's copy did not come in")
+        val aside = mirror.listFiles()!!.single { it.isFile && it.readText() == "UNSYNCED EDIT" }
+        val stem = aside.name.substringBefore(SafSyncEngine.LOCAL_COPY_SUFFIX)
+        assertTrue(
+            aside.name == stem + SafSyncEngine.LOCAL_COPY_SUFFIX + (DEVICE_TIME + 1_000) &&
+                local.name.startsWith(stem) && aside.name.toByteArray(Charsets.UTF_8).size <= 255,
+            "the edit was not kept under its name cut to fit, then the suffix: ${aside.name}",
+        )
     }
 
     @Test
@@ -281,13 +313,19 @@ class SafReconcileDeletionsTest {
 
         assertTrue(mirrored("stranger.txt").isFile, "an unrecorded file is not a candidate")
         // The half with teeth. Survival on its own proves little here -- an empty record
-        // keeps everything however the candidates were chosen. This says where the record
-        // comes from: what the device answered with, filtered to what the sync can vouch
-        // for. Build it from the mirror's own listing instead and a file the app never
-        // wrote becomes a candidate the moment anything else changes.
-        assertEquals(
-            listOf("a.txt"), recordedPaths(),
-            "the record must be built from the enumeration, not from what the mirror holds"
+        // keeps everything however the candidates were chosen. This says where the record's
+        // proof comes from: what the device answered with, filtered to what the sync can
+        // vouch for. Build it from the mirror's own listing instead and a file the app never
+        // wrote becomes a candidate the moment anything else changes. The stranger is named,
+        // since a record written with no row for it would have the next open send it to the
+        // device as a save, but only without a digest, which proves nothing and removes nothing.
+        val digests = record.readLines().drop(1).associate {
+            it.substringBefore('\t') to SafSyncEngine.splitRecordLine(it).second
+        }
+        assertEquals(setOf("a.txt", "stranger.txt"), digests.keys)
+        assertTrue(
+            digests["a.txt"] != null && digests["stranger.txt"] == null,
+            "the record must vouch only for what the enumeration returned, not for what the mirror holds"
         )
     }
 
@@ -593,22 +631,32 @@ class SafReconcileDeletionsTest {
             mirrored("b.txt").isFile,
             "an unverifiable record line must never be acted on"
         )
+        // b.txt is named too, without a digest: nothing proves it is the device's old copy, and
+        // with no row the next open would read it as a save the device never got and put a
+        // document the device deleted back there.
         assertEquals(
-            listOf("a.txt"), recordedPaths(),
+            listOf("a.txt", "b.txt"), recordedPaths(),
             "the pass should still leave a record this build can use"
         )
+        val unproven = record.readLines().single { it.startsWith("b.txt\t") }
+        assertEquals(null, SafSyncEngine.splitRecordLine(unproven).second, "a copy nothing proved was recorded as proved")
     }
 
     @Test
-    fun `a file that grew past the limit keeps its mirror copy when the device drops it`() {
+    fun `a file that grew past the limit keeps an edited mirror copy when the device drops it`() {
         // The mutation the test above cannot reach: move `recordIdentity` into the
         // oversize branch. On a first sync nothing is at that path, so its `isFile` guard
         // hides the mutation. Here the file was under the limit at sync 1 -- so a real
         // copy exists -- and is over it at sync 2, which is when the branch would vouch
         // for a file it did not fetch. Sync 3 then deletes it.
+        //
+        // The copy is edited in between. A copy still exactly what sync 1 recorded keeps
+        // its row through the skip and follows the device's deletion, which
+        // SafHeldSaveFirstOpenTest pins; an edited one has nothing to vouch for it.
         deviceFolderHolding("a.txt" to "kept", "report.pdf" to "small enough for now")
         sync()
         assertTrue(mirrored("report.pdf").isFile, "the first sync has to bring it down")
+        mirrored("report.pdf").writeText("small enough for now, with my changes")
 
         deviceFolderHolding(
             "a.txt" to "kept",
@@ -624,8 +672,8 @@ class SafReconcileDeletionsTest {
         deviceFolderHolding("a.txt" to "kept")
         sync()
 
-        assertTrue(
-            mirrored("report.pdf").isFile,
+        assertEquals(
+            "small enough for now, with my changes", mirrored("report.pdf").readText(),
             "the mirror copy was deleted on the word of a sync that never read the file"
         )
     }
@@ -788,11 +836,19 @@ class SafReconcileDeletionsTest {
     @ValueSource(strings = [
         "redirect", "edit", "replacement",
         "unseen edit", "unseen edit beside an earlier copy", "unseen edit of a long name",
+        "unseen edit of a long name in another script", "unseen edit of a long name of emoji",
     ])
     fun `reconciliation retains a file changed during deletion verification`(shape: String) {
         val directory = mirrored("nested").apply { assertTrue(mkdirs()) }
-        // The long name leaves no room for the suffix of a kept copy.
-        val name = if (shape == "unseen edit of a long name") "n".repeat(240) + ".txt" else "notes.txt"
+        // The long names leave no room for the suffix of a kept copy within 255 bytes, the limit
+        // of a name where Android keeps app data. Each script spends a different number of bytes
+        // per character, and an emoji is two UTF-16 units that a cut must not split.
+        val name = when (shape) {
+            "unseen edit of a long name" -> "n".repeat(240) + ".txt"
+            "unseen edit of a long name in another script" -> "日本語".repeat(27) + ".txt"
+            "unseen edit of a long name of emoji" -> "😀".repeat(62) + ".txt"
+            else -> "notes.txt"
+        }
         val local = File(directory, name).apply { writeText("previously copied") }
         val modified = local.lastModified()
         val stamp = Files.getLastModifiedTime(local.toPath())
@@ -873,6 +929,15 @@ class SafReconcileDeletionsTest {
                 "unseen edit beside an earlier copy" -> {
                     assertEquals("$name${SafSyncEngine.LOCAL_COPY_SUFFIX}${modified + 1}", kept!!.name)
                     assertEquals("EARLIER COPY", earlier.readText(), "an earlier kept copy was replaced")
+                }
+                else -> if (shape.contains("long name")) {
+                    val suffix = "${SafSyncEngine.LOCAL_COPY_SUFFIX}$modified"
+                    val stem = kept!!.name.removeSuffix(suffix)
+                    assertTrue(
+                        kept.name.endsWith(suffix) && stem.isNotEmpty() && name.startsWith(stem) &&
+                            kept.name.toByteArray(Charsets.UTF_8).size <= 255,
+                        "the kept edit of a long name is not its name cut to fit, then the suffix: ${kept.name}",
+                    )
                 }
             }
             assertEquals(emptyList<String>(), recordedPaths(), "a row for the edit or its old name lets a later open remove it")

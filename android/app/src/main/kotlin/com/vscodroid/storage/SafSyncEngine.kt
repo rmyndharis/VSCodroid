@@ -795,11 +795,16 @@ class SafSyncEngine(private val context: Context) {
                 // say what is at that path. Usually there is nothing; but a file that was
                 // under the limit at an earlier sync and has since grown past it leaves a
                 // real, sync-written copy sitting there, and "nothing ever wrote this"
-                // would be the wrong reason for the right behaviour. Not vouching for it
-                // costs a stale copy that lingers, which is the direction to fail in.
+                // would be the wrong reason for the right behaviour. What the previous
+                // record said of that copy is carried while the copy is still exactly the
+                // one it names, as for a failed copy below: dropped, the copy read as a
+                // save the device never got, and a deletion of the document on the device
+                // afterwards put it back there with its old bytes.
                 if (doc.size > MAX_FILE_SIZE) {
                     skippedLarge++
                     unfetched.add(localPath.absolutePath)
+                    val line = identityLine(doc.relativePath, localPath)
+                    if (localPath.isFile && line in previouslyRecorded.orEmpty()) recorded += line
                     // At Logger.i, not d, for the reason the no-clock line below gives:
                     // Logger.d is gated on a debuggable build, so on a release build
                     // the only trace of this document was the count in the summary. The
@@ -1097,6 +1102,10 @@ class SafSyncEngine(private val context: Context) {
                     // the winner did finish is one save deferred to the next open
                     // of that folder; the cost of not arming it is the document.
                     unfetched.add(localPath.absolutePath)
+                    // The previous record's line is carried while the copy is still the
+                    // one it names, for the reason the size limit above carries it.
+                    val line = identityLine(doc.relativePath, localPath)
+                    if (localPath.isFile && line in previouslyRecorded.orEmpty()) recorded += line
                     Logger.w(
                         tag,
                         "Another sync of this folder is already copying " +
@@ -1472,17 +1481,18 @@ class SafSyncEngine(private val context: Context) {
      *   has just finished staging, so this is a local comparison
      *   and not a second read of the document.
      *
-     * Two ordinary branches of phase 2 also leave a path out of the record, and each is
-     * a known false positive here: a document skipped for size, and a document whose
-     * destination directory resolved outside the mirror. If the device copy of such a
-     * file later changes, the stale sync-written mirror copy is set aside under a
-     * `.local-` name and [uploadMirrorOnlyDocuments] then puts that name onto the device
-     * folder. Nothing is lost, and both folders gain a file nothing removes. Narrowing
-     * the test would need the reason a path went unrecorded to survive to the next sync,
-     * which nothing on disk carries today: `unfetched` is this sync's own set, and every
-     * path in it took a branch that never reaches here. A copy that failed, or that the
-     * free-space floor held back, is not among them: phase 2 carries the previous
-     * record's line for a mirror copy still exactly as that record described it.
+     * One ordinary branch of phase 2 also leaves a path out of the record, and is a known
+     * false positive here: a document whose destination directory resolved outside the
+     * mirror. If the device copy of such a file later changes, the stale sync-written
+     * mirror copy is set aside under a `.local-` name and [uploadMirrorOnlyDocuments]
+     * then puts that name onto the device folder. Nothing is lost, and both folders gain
+     * a file nothing removes. Narrowing the test would need the reason a path went
+     * unrecorded to survive to the next sync, which nothing on disk carries today:
+     * `unfetched` is this sync's own set, and every path in it took a branch that never
+     * reaches here. A copy that failed, that the free-space floor held back, that was
+     * skipped for size or that another open was copying is not among them: phase 2
+     * carries the previous record's line for a mirror copy still exactly as that record
+     * described it.
      *
      * The copy is renamed rather than duplicated, so the space cost is nothing and what
      * the sync then finds at the original name is absent, which is where the fetched copy
@@ -1516,11 +1526,14 @@ class SafSyncEngine(private val context: Context) {
         if (sameRootedBytes(destination, destination.leaf, fetched)) return false
 
         var time = entry.attributes.lastModifiedTime().toMillis()
-        var preserved = destination.sibling("${localPath.name}$LOCAL_COPY_SUFFIX$time")
+        var preserved = destination.sibling(localCopyName(localPath.name, time))
         while (inboundAttributes(destination, preserved) != null) {
             time++
-            preserved = destination.sibling("${localPath.name}$LOCAL_COPY_SUFFIX$time")
+            preserved = destination.sibling(localCopyName(localPath.name, time))
         }
+        // Straight after the probe, and that is as close as this can get: the move replaces an
+        // entry made at the free name in between, and nothing reachable here renames without
+        // replacing; see [localCopyName].
         destination.parent.move(destination.leaf, destination.parent, preserved)
         notePreservedLocalCopy(File(localPath.parentFile, preserved.toString()))
         Logger.i(
@@ -1588,12 +1601,14 @@ class SafSyncEngine(private val context: Context) {
                     }
                 }
                 var time = entry.lastModifiedTime().toMillis()
-                var preservedName = destination.sibling("${localPath.name}$LOCAL_COPY_SUFFIX$time")
+                requireCurrentParent(destination, localPath, mirrorRoot)
+                // The free name is probed last, straight before the move, which replaces an
+                // entry made there in between; see [localCopyName].
+                var preservedName = destination.sibling(localCopyName(localPath.name, time))
                 while (inboundAttributes(destination, preservedName) != null) {
                     time++
-                    preservedName = destination.sibling("${localPath.name}$LOCAL_COPY_SUFFIX$time")
+                    preservedName = destination.sibling(localCopyName(localPath.name, time))
                 }
-                requireCurrentParent(destination, localPath, mirrorRoot)
                 destination.parent.move(destination.leaf, destination.parent, preservedName)
                 requireCurrentParent(destination, localPath, mirrorRoot)
                 val preserved = File(localPath.parentFile, preservedName.toString())
@@ -2098,9 +2113,10 @@ class SafSyncEngine(private val context: Context) {
      * would be a candidate and every deletion the user made on the device since that
      * install's last sync would be undone, permanently, on the next open.
      * [reconcileDeletions] cannot offset it either: it declines on the same unusable
-     * record, so the file stays in the mirror and is offered again on every later open.
-     * This pass writes to the device, so it requires recognized history before adding
-     * a missing document.
+     * record, so the file stays in the mirror. This pass writes to the device, so it
+     * requires recognized history before adding a missing document. The record that open
+     * writes names each such file by a row without a digest, so the opens after it keep
+     * the file in the mirror and put it across only once it has changed.
      *
      * That rule is exact for the case it exists for and deliberately not wider. A path
      * the record no longer names, because the last sync kept a local edit there rather
@@ -2177,8 +2193,9 @@ class SafSyncEngine(private val context: Context) {
         // An unusable record cannot tell a save that never reached the device from a
         // document the user deleted there, and this pass writes to the device, so it
         // declines rather than guessing. Said at warn: the folder keeps files that only
-        // the mirror holds, which is the state this pass exists to end, and the next
-        // sync rewrites the record so it ends on the open after that.
+        // the mirror holds, which is the state this pass exists to end. The record this
+        // sync writes still cannot tell them apart, so it names them without a digest and
+        // a later open sends only the ones that change.
         val recorded = previouslyRecorded() ?: run {
             Logger.w(
                 tag,
@@ -2354,7 +2371,8 @@ class SafSyncEngine(private val context: Context) {
             if (recorded.isNotEmpty()) {
                 val record = File(mirrorDir.path + SYNCED_RECORD_SUFFIX)
                 val previous = readSyncedRecord(record)
-                    .takeIf { it.firstOrNull() == RECORD_HEADER }?.drop(1).orEmpty()
+                    .takeIf { it.firstOrNull() == RECORD_HEADER }?.drop(1)
+                    ?: unprovenRows(mirrorDir, documents.filterNot { it.isDirectory }.mapTo(HashSet()) { it.relativePath })
                 val settled = recorded.mapTo(HashSet()) { it.substringBefore('\t') }
                 writeSyncedRecord(record, previous.filterNot { it.substringBefore('\t') in settled } + recorded)
             }
@@ -2366,7 +2384,8 @@ class SafSyncEngine(private val context: Context) {
         var removed = 0
 
         val lines = readSyncedRecord(record)
-        val entries = if (lines.firstOrNull() == RECORD_HEADER) {
+        val usable = lines.firstOrNull() == RECORD_HEADER
+        val entries = if (usable) {
             lines.drop(1)
         } else {
             if (lines.isNotEmpty()) {
@@ -2392,13 +2411,34 @@ class SafSyncEngine(private val context: Context) {
             ) carried += line
         }
 
-        writeSyncedRecord(record, recorded + carried)
+        val unproven = if (usable) emptyList() else unprovenRows(mirrorDir, present)
+        writeSyncedRecord(record, recorded + carried + unproven.filterNot { it.substringBefore('\t') in settled })
         return removed
     }
 
     /**
-     * A row with no digest, written before digests existed or past the budget that reads them, cannot
-     * prove the mirror copy is the device's old bytes, so [removeRecordedCopy] keeps the copy. The row has
+     * Rows without a digest for the mirror files outside [present], written where the record could
+     * not be read. Such a record says nothing about them, and the one written in its place used to
+     * leave them out, after which the next open took each for a save the device never got and put
+     * a document the device had deleted back there. A row with no digest is what keeps an unproven
+     * copy ([isUnprovenCopyOfRecord]): neither removed nor sent while it matches, and sent once it
+     * changes. Chosen by [uploadPlan]'s walk, the one phase 2b takes, so what that pass never sends
+     * (links, skipped directories, machine-temporary names) gets no row either. A copy this open set
+     * aside is work it has just kept rather than a copy it cannot place, and goes across at the next
+     * open as before.
+     */
+    private fun unprovenRows(mirrorDir: File, present: Set<String>): List<String> {
+        val keptThisOpen = (localPreservedDuringSync.get().orEmpty() + preservedDuringSync.get().orEmpty())
+            .mapTo(HashSet()) { it.toRelativeString(mirrorDir) }
+        return uploadPlan(mirrorDir, Int.MAX_VALUE) {
+            it.isFile && it.toRelativeString(mirrorDir).let { path -> path !in present && path !in keptThisOpen }
+        }.entries.map { identityLine(it.toRelativeString(mirrorDir), it) }
+    }
+
+    /**
+     * A row with no digest, written before digests existed, past the budget that reads them, or by
+     * [unprovenRows] over a record that could not be read, cannot prove the mirror copy is the device's
+     * old bytes, so [removeRecordedCopy] keeps the copy. The row has
      * to stay with it: without one the copy reads as new local work, and the next open sends a document the
      * device deleted back to it. A copy that no longer matches its row is work of the user's and is let go.
      * A copy that could not be looked at has shown no such work, so it stays with its row as well; only a
@@ -2431,7 +2471,9 @@ class SafSyncEngine(private val context: Context) {
      * The entry is taken from its name before its bytes are proved a second time. Bytes written
      * in between are the person's and have lost their name by then, so they are kept beside it
      * as `<name>.local-<time>` and announced, like every other kept edit. No row names that copy,
-     * so [uploadMirrorOnlyDocuments] puts it across at the next open and nothing removes it.
+     * so [uploadMirrorOnlyDocuments] puts it across at the next open and nothing removes it. A
+     * second read or a removal that fails with the entry unchanged proves neither, and the entry
+     * goes back under its name while that is free, with null as the answer.
      */
     private fun removeRecordedCopy(mirrorDir: File, relativePath: String, line: String): Boolean? {
         val (identity, digest) = splitRecordLine(line)
@@ -2451,27 +2493,41 @@ class SafSyncEngine(private val context: Context) {
                 selected.parent.move(selected.leaf, selected.parent, preserved)
                 taken = true
                 var removed = false
+                // Whether what was taken is shown not to be the recorded copy. A failure before
+                // that is known shows nothing either way.
+                var changed = false
                 try {
                     val captured = inboundEntry(selected, preserved)
-                    if (captured != null && sameInboundAttributes(before, captured.attributes) &&
-                        captured.digest?.contentEquals(digest) == true
-                    ) {
+                    changed = captured == null || !sameInboundAttributes(before, captured.attributes) ||
+                        captured.digest?.contentEquals(digest) != true
+                    if (!changed) {
                         requireCurrentParent(selected, file, mirrorDir)
                         selected.parent.deleteFile(preserved)
                         removed = true
                     }
                 } finally {
                     val kept = if (removed) null else inboundAttributes(selected, preserved)
-                    if (kept != null) {
-                        // Where `<name>.local-<time>` cannot be given (it is too long), the copy keeps
+                    // A read or a removal that failed while the entry stayed as it was taken shows no
+                    // edit, so the copy goes back under its name, where its row still stands for it.
+                    // Kept as an edit, it was announced and then put on a device that had deleted it.
+                    if (kept != null && !changed && sameInboundAttributes(before, kept)) {
+                        try {
+                            if (inboundAttributes(selected) == null) {
+                                selected.parent.move(preserved, selected.parent, selected.leaf)
+                                taken = false
+                            }
+                        } catch (_: Exception) { }
+                    }
+                    if (kept != null && taken) {
+                        // Where even a shortened `<name>.local-<time>` cannot be given, the copy keeps
                         // the name it was taken under and is announced by that.
                         var name = preserved
                         try {
                             var time = kept.lastModifiedTime().toMillis()
-                            var free = selected.sibling("${file.name}$LOCAL_COPY_SUFFIX$time")
+                            var free = selected.sibling(localCopyName(file.name, time))
                             while (inboundAttributes(selected, free) != null) {
                                 time++
-                                free = selected.sibling("${file.name}$LOCAL_COPY_SUFFIX$time")
+                                free = selected.sibling(localCopyName(file.name, time))
                             }
                             selected.parent.move(preserved, selected.parent, free)
                             name = free
@@ -2485,7 +2541,7 @@ class SafSyncEngine(private val context: Context) {
         } catch (e: Exception) {
             Logger.d(tag, "Kept $relativePath during deletion: ${e.javaClass.simpleName}")
             // The row goes only when the failure shows nothing at the name, or came after the entry
-            // had left it. Any other failure left the copy unread where it was.
+            // had left it for good. Any other failure left the copy unproved where it was.
             if (taken || e is NoSuchFileException || e is NotDirectoryException) false else null
         }
     }
@@ -2503,8 +2559,10 @@ class SafSyncEngine(private val context: Context) {
      * branch keeps the mirror copy), so what this costs is a mirror that cannot be
      * reclaimed and, on a provider that omits COLUMN_LAST_MODIFIED, a folder that stops
      * receiving device-side changes until [deviceMatchesMirror] heals it a file at a
-     * time. The next sync of the same folder rewrites the record in full, so the damage
-     * lasts one sync, which is exactly as long as the folder goes unopened.
+     * time. The next sync of the same folder rewrites the record in full, so most of the
+     * damage lasts one sync, which is exactly as long as the folder goes unopened. What it
+     * cannot rebuild is the proof for mirror files the device no longer lists: those get
+     * rows without a digest ([unprovenRows]) and stay in the mirror until each changes.
      *
      * The temporary name is deterministic rather than unique, and that is what keeps an
      * interrupted write from leaving one small file per interruption beside the mirror:
@@ -2662,10 +2720,25 @@ class SafSyncEngine(private val context: Context) {
      * read shows neither a match nor an edit, and the two callers take it differently:
      * [holdsOnlyVouchedCopies] cannot vouch for it, and [uploadMirrorOnlyDocuments] must not
      * take it for the person's newer work.
+     *
+     * Time and length are compared before any byte is read: a copy they already tell apart is
+     * not the recorded one whatever it holds, and read first, a write landing during the read
+     * made it a copy that could not be read, so a save the device never got waited for a read
+     * no write interrupted.
      */
     private fun matchesRecordedCopy(file: File, relativePath: String, line: String): Boolean? {
         val (identity, digest) = splitRecordLine(line)
         if (digest == null) return false
+        val attributes = try {
+            Files.readAttributes(file.toPath(), BasicFileAttributes::class.java, LinkOption.NOFOLLOW_LINKS)
+        } catch (_: NoSuchFileException) {
+            return false
+        } catch (_: Exception) {
+            return null
+        }
+        if (!attributes.isRegularFile ||
+            identity != identityLine(relativePath, attributes.lastModifiedTime().toMillis(), attributes.size())
+        ) return false
         val entry = try {
             inboundEntry(file)
         } catch (_: Exception) {
@@ -6253,6 +6326,29 @@ class SafSyncEngine(private val context: Context) {
          * uploadable, watchable and visible in the explorer like any other file.
          */
         internal const val LOCAL_COPY_SUFFIX = ".local-"
+
+        /**
+         * `<name>.local-<time>`, the name a mirror copy is kept under beside [name]. A name too
+         * long to take the suffix within the limit, which is in bytes, is cut at a character
+         * first: the full name failed the rename, so a long name could not be set aside at all
+         * and a deletion kept its copy under a name that said nothing.
+         *
+         * The free name is probed and the move then replaces whatever is there, so an entry made
+         * at that name in between is lost. Nothing reachable here closes that: SecureDirectoryStream
+         * moves with renameat, android.system.Os offers rename and link by path only, and renameat2
+         * with RENAME_NOREPLACE is in Bionic from Android 11 and reachable only from native code.
+         * Each caller probes straight before its move.
+         */
+        internal fun localCopyName(name: String, time: Long): String {
+            val suffix = "$LOCAL_COPY_SUFFIX$time"
+            var stem = name
+            while (stem.isNotEmpty() &&
+                (stem + suffix).toByteArray(Charsets.UTF_8).size > SafStorageManager.MAX_NAME_BYTES
+            ) {
+                stem = stem.substring(0, stem.offsetByCodePoints(stem.length, -1))
+            }
+            return stem + suffix
+        }
 
         /**
          * What [setAsideDeviceCopy] puts in front of the device document's own

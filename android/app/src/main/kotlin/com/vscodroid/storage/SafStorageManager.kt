@@ -1387,7 +1387,7 @@ class SafStorageManager(context: Context) {
             safUri.lastPathSegment?.takeIf { it.isNotBlank() } ?: "Unknown"
 
         /** The longest name the filesystems Android keeps app data on take, in bytes. */
-        private const val MAX_NAME_BYTES = 255
+        internal const val MAX_NAME_BYTES = 255
 
         /**
          * [displayName] as one segment of a path, or null when it cannot be one.
