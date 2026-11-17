@@ -643,7 +643,8 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         }
 
         /**
-         * Deletes a document a failed download created.
+         * Deletes a document a failed download created, or an empty one the user chose to overwrite:
+         * the two cannot be told apart, and the coordinator asks only for a document it measured empty.
          *
          * The picker creates the file when the user confirms the name, so by
          * the time anything can go wrong there is already a file in their

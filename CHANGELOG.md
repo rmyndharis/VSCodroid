@@ -7,6 +7,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Fixed
+
+- Saving a download over a file you already have no longer freezes the editor while a large file is copied into it.
+
 ## [1.9.0] - 2026-11-16
 
 ### Added
@@ -58,7 +62,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A long notice that arrives while the app is in the background is shown whole in a dialog at the next return to the app, unless the app's process ended in between.
 - The Chat side bar no longer opens for a moment on the first launch.
 - A download saved over an existing file replaces it whole instead of leaving the end of the old file behind.
-- A download that fails or is cancelled before it has fully arrived leaves the file it was to replace as it was; a failure while that file is being replaced can still leave it partly written.
+- A download that fails or is cancelled before it has fully arrived leaves the file it was to replace as it was, unless that file was empty, in which case it is removed; a failure while that file is being replaced can still leave it partly written.
 - The notice after a download names the file as it was saved when its name was changed in the save dialog.
 - `git log`, `git diff` and other paged git commands print in the terminal instead of stopping with a pager error.
 - Clone Repository in Source Control completes, with and without submodules.
