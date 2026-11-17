@@ -4419,7 +4419,7 @@ claude() {
     private fun getCurrentVersionCode(): Int {
         return try {
             // longVersionCode unconditionally: it arrived in API 28 and minSdk
-            // here is 30, so the deprecated field the old branch fell back to was
+            // here is 29, so the deprecated field the old branch fell back to was
             // unreachable.
             context.packageManager.getPackageInfo(context.packageName, 0)
                 .longVersionCode.toInt()
