@@ -2958,6 +2958,9 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
             // offers has a port to load when the user does ask.
             serverPort = port
             runOnUiThread {
+                // "Taking longer than usual to start" is over. From Android 12 it is a dialog, which
+                // stayed over the working editor until it was tapped.
+                AppNotices.retract(this, getString(R.string.status_server_slow_start))
                 // A server that came back on its own is not the user asking, and
                 // the crash page has told them the editor stays down until they
                 // do. Loading here anyway ran the loop that page exists to stop

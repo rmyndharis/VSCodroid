@@ -93,7 +93,7 @@ class NoticeWiringTest {
             "a screen made again takes what its predecessor held before it looks for notices of its own",
         )
         assertTrue(
-            flush.contains("coordinators.getOrPut(activity) { NoticeDialogCoordinator() }.take(it)"),
+            flush.contains("coordinators.getOrPut(activity) { NoticeDialogCoordinator(onceKeys = shownOnceKeys) }.take(it)"),
             "what a screen made again takes goes into that screen's own coordinator",
         )
         for (member in listOf("override val isShowing: Boolean", "override fun dismiss()")) {
@@ -169,6 +169,28 @@ class NoticeWiringTest {
         assertTrue(
             helper.contains("ConcurrentHashMap.newKeySet<String>()"),
             "AppNotices process-once tracking must live on the process singleton rather than an Activity field",
+        )
+    }
+
+    /**
+     * "The server is taking longer than usual to start" is a dialog from Android 12, and nothing took
+     * it down when the server did start: it stayed over the working editor until it was tapped.
+     */
+    @Test
+    fun `the slow start notice is taken back when the server is ready`() {
+        val main = SourceScan.withoutComments(SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt"))
+        val callbacks = SourceScan.body(main, "private fun setupServiceCallbacks(")
+        val ready = callbacks.substringAfter("nodeService?.onServerReady = ").substringBefore("nodeService?.onServerError = ")
+
+        assertTrue(
+            ready.contains("AppNotices.retract(this, getString(R.string.status_server_slow_start))"),
+            "onServerReady no longer takes the slow start notice back",
+        )
+        val service = SourceScan.withoutComments(SourceScan.read("src/main/kotlin/com/vscodroid/service/NodeService.kt"))
+        assertTrue(
+            SourceScan.body(service, "private fun reportStartupNotice(").contains("if (!terminal) onServerError?.invoke(message)"),
+            "a terminal notice is raised as well as recorded again, and flashes as a dialog under the page " +
+                "that onServerGaveUp puts up at once",
         )
     }
 

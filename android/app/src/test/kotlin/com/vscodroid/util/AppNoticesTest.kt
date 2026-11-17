@@ -274,25 +274,120 @@ class AppNoticesTest {
         coordinator.drop(host)
         assertEquals(emptyList<String>(), host.toasts, "a notice shown at the start is not repeated")
     }
+    /**
+     * The low storage warning is asked for while the screen is being made, and a workspace's folders are
+     * published while the app is in the background: a long notice with a once key raised then cannot be a
+     * dialog yet. Dropped, it never came back, because nothing asks twice. It waits for the start of the
+     * screen, and its key is spent only when a person is shown it.
+     */
     @Test
-    fun `a notice with a once key is not held by a stopped screen`() {
+    fun `a notice with a once key waits for the screen to start and spends its key when shown`() {
+        val host = FakeNoticeHost(canShow = false, canHold = true)
+        val processFlags = mutableSetOf<String>()
+        val coordinator = NoticeDialogCoordinator(onceKeys = processFlags)
+        val raise = {
+            showNoticeWithPolicy(
+                message = "Long ".repeat(20),
+                fontScale = 1.0f,
+                sdkInt = 34,
+                showToast = { fail("a notice with a once key must wait for a screen, not become a toast") },
+                coordinator = coordinator,
+                host = host,
+                processOnceKey = AppNotices.ONCE_KEY_STORAGE_LOW,
+                shownOnceKeys = processFlags,
+            )
+        }
+
+        raise()
+        raise()
+
+        assertEquals(1, coordinator.entryCount, "raised twice while it waits, it is held once")
+        assertTrue(processFlags.isEmpty(), "nothing was shown, so the key is not spent")
+        assertEquals(emptyList<String>(), host.toasts)
+
+        host.canShow = true
+        coordinator.flush(host)
+
+        assertEquals(1, host.createdWindows.size, "the start of the screen shows the notice whole")
+        assertEquals(setOf(AppNotices.ONCE_KEY_STORAGE_LOW), processFlags, "showing it spends the key")
+
+        host.createdWindows[0].simulateUserDismiss()
+        raise()
+        assertEquals(1, host.createdWindows.size, "a spent key is not shown again")
+    }
+
+    @Test
+    fun `a notice taken back leaves an open dialog, which closes when nothing else is on it`() {
+        val host = FakeNoticeHost()
+        val coordinator = NoticeDialogCoordinator()
+        coordinator.enqueueAndShow("The server is slow to start", host)
+        coordinator.enqueueAndShow("A copy was kept beside notes.md", host)
+        val window = host.createdWindows.single()
+
+        coordinator.retract("The server is slow to start")
+
+        assertEquals("A copy was kept beside notes.md", window.text, "the other notice stays, alone")
+        assertTrue(window.isShowing)
+
+        coordinator.retract("A copy was kept beside notes.md")
+
+        assertFalse(window.isShowing, "a dialog with nothing left to say stayed up")
+        assertEquals(0, coordinator.entryCount)
+
+        coordinator.enqueueAndShow("Next", host)
+        assertEquals(2, host.createdWindows.size, "a notice after the dialog closed opens a dialog of its own")
+        assertEquals("Next", host.createdWindows[1].text)
+    }
+
+    @Test
+    fun `a notice taken back while its screen is stopped is not shown at the next start`() {
         val host = FakeNoticeHost(canShow = false, canHold = true)
         val coordinator = NoticeDialogCoordinator()
+        coordinator.hold("The server is slow to start")
+
+        coordinator.retract("The server is slow to start")
+        coordinator.retract("never raised")
+        host.canShow = true
+        coordinator.flush(host)
+
+        assertEquals(0, host.createdWindows.size)
+    }
+
+    @Test
+    fun `a held once notice whose key another screen spent is not shown`() {
+        val host = FakeNoticeHost(canShow = false, canHold = true)
         val processFlags = mutableSetOf<String>()
+        val coordinator = NoticeDialogCoordinator(onceKeys = processFlags)
+        coordinator.holdOnce("Long ".repeat(20), AppNotices.ONCE_KEY_MULTI_DEVICE_FOLDERS)
+        processFlags += AppNotices.ONCE_KEY_MULTI_DEVICE_FOLDERS
 
-        showNoticeWithPolicy(
-            message = "Long ".repeat(20),
-            fontScale = 1.0f,
-            sdkInt = 34,
-            showToast = { fail("a notice with a once key must wait for a screen, not become a toast") },
-            coordinator = coordinator,
-            host = host,
-            processOnceKey = AppNotices.ONCE_KEY_STORAGE_LOW,
-            shownOnceKeys = processFlags,
-        )
+        host.canShow = true
+        coordinator.flush(host)
 
+        assertEquals(0, host.createdWindows.size)
         assertEquals(0, coordinator.entryCount)
+    }
+
+    @Test
+    fun `a held once notice goes to the screen made in place of one taken down, untoasted and unspent`() {
+        val host = FakeNoticeHost(canShow = false, canHold = true)
+        val processFlags = mutableSetOf<String>()
+        val coordinator = NoticeDialogCoordinator(onceKeys = processFlags)
+        coordinator.holdOnce("Long ".repeat(20), AppNotices.ONCE_KEY_STORAGE_LOW)
+
+        val held = coordinator.drop(host)
+
+        assertEquals(emptyList<String>(), host.toasts, "a once notice is never a toast cut after two lines")
+        assertEquals(listOf<String?>(AppNotices.ONCE_KEY_STORAGE_LOW), held?.onceKeys)
         assertTrue(processFlags.isEmpty())
+
+        val next = NoticeDialogCoordinator(onceKeys = processFlags)
+        val nextHost = FakeNoticeHost()
+        next.take(held!!)
+        next.flush(nextHost)
+
+        assertEquals(1, nextHost.createdWindows.size)
+        assertEquals(setOf(AppNotices.ONCE_KEY_STORAGE_LOW), processFlags)
     }
 
     @Test

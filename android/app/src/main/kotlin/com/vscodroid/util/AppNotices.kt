@@ -97,12 +97,17 @@ internal interface BlockingNoticeHost {
 }
 
 // What a screen still held when it was taken down: the notices that never reached a dialog and
-// those on a dialog still open, with the count the ceiling pushed out.
-internal class HeldNotices(val texts: List<String>, val pushedOut: Int)
+// those on a dialog still open, with the count the ceiling pushed out. [onceKeys] is parallel to
+// [texts] and names the process-once key of an entry that has one, which the next screen spends
+// when it shows the entry.
+internal class HeldNotices(val texts: List<String>, val pushedOut: Int, val onceKeys: List<String?> = emptyList())
 
 internal class NoticeDialogCoordinator(
     private val maxEntries: Int = MAX_COMBINED_NOTICE_ENTRIES,
     private val maxUnshown: Int = MAX_UNSHOWN_NOTICE_ENTRIES,
+    // The process-once keys already spent. A held entry that has a key spends it when it is shown,
+    // and is not shown when the key is already spent.
+    private val onceKeys: MutableSet<String>? = null,
 ) {
     init {
         require(maxEntries >= 1) { "maxEntries must be positive: $maxEntries" }
@@ -114,7 +119,7 @@ internal class NoticeDialogCoordinator(
     // while the screen was started.
     private enum class Told { NOTHING, TOAST, DIALOG }
 
-    private class Entry(val text: String, var told: Told)
+    private class Entry(val text: String, var told: Told, val onceKey: String? = null)
 
     private val entries = ArrayDeque<Entry>()
     private var pushedOut = 0
@@ -149,6 +154,32 @@ internal class NoticeDialogCoordinator(
         openWindow?.takeIf { it.isShowing }?.setMessage(combinedMessage())
     }
 
+    // A notice with a process-once key raised on a screen that is alive but not started: it was not
+    // toasted and its key is not spent, and it waits for the start of a screen that can show it
+    // whole, where the key is spent. Counted as toasted so that a screen going away does not toast
+    // it, which would show it cut and leave its key to be spent again by the next call. Raised
+    // again while it waits, it is not added twice.
+    fun holdOnce(text: CharSequence, onceKey: String) {
+        if (entries.any { it.onceKey == onceKey }) return
+        appendEntry(text.toString(), Told.TOAST, onceKey)
+        openWindow?.takeIf { it.isShowing }?.setMessage(combinedMessage())
+    }
+
+    // Takes back a notice that has stopped being true, as "the server is slow to start" has once the
+    // server is up: off a dialog that is open, which closes when nothing else is on it, and out of
+    // what waits for a screen.
+    fun retract(text: CharSequence) {
+        if (!entries.removeAll { it.text == text.toString() }) return
+        val window = openWindow?.takeIf { it.isShowing } ?: return
+        if (entries.isEmpty()) {
+            openWindow = null
+            pushedOut = 0
+            window.dismiss()
+        } else {
+            window.setMessage(combinedMessage())
+        }
+    }
+
     fun flush(host: NoticeHostState) {
         if (entries.isEmpty()) return
         if (openWindow?.isShowing == true) {
@@ -162,7 +193,7 @@ internal class NoticeDialogCoordinator(
     // The notices of a screen the system took down, taken over by the screen made in its place.
     // They count as toasted at most, so the next start shows them whole.
     fun take(held: HeldNotices) {
-        held.texts.forEach { appendEntry(it, Told.TOAST) }
+        held.texts.forEachIndexed { index, text -> appendEntry(text, Told.TOAST, held.onceKeys.getOrNull(index)) }
         pushedOut += held.pushedOut
     }
 
@@ -173,7 +204,9 @@ internal class NoticeDialogCoordinator(
         // an app with no resumed activity, which is the state of an app whose screen is going.
         val untold = entries.filter { it.told == Told.NOTHING }.map { it.text }
         val onScreen = openWindow?.isShowing == true
-        val held = entries.filter { it.told != Told.DIALOG || onScreen }.map { it.text }
+        val heldEntries = entries.filter { it.told != Told.DIALOG || onScreen }
+        val held = heldEntries.map { it.text }
+        val heldKeys = heldEntries.map { it.onceKey }
         val count = pushedOut
         entries.clear()
         pushedOut = 0
@@ -185,7 +218,7 @@ internal class NoticeDialogCoordinator(
         openWindow = null
         win?.dismiss()
         if (untold.isNotEmpty()) host.showToast(noticesToast(untold, count, host::toastFits))
-        return if (held.isEmpty()) null else HeldNotices(held, count)
+        return if (held.isEmpty()) null else HeldNotices(held, count, heldKeys)
     }
 
     private fun combinedMessage(): String {
@@ -193,7 +226,7 @@ internal class NoticeDialogCoordinator(
         return if (pushedOut > 0) "(+$pushedOut) $joined" else joined
     }
 
-    private fun appendEntry(text: String, told: Told) {
+    private fun appendEntry(text: String, told: Told, onceKey: String? = null) {
         // The bound keeps a dialog a person watches from growing, so it pushes out entries already
         // shown. Entries not shown yet have a ceiling of their own: beyond it the oldest goes and
         // is counted, so that nothing grows without bound or leaves without a trace.
@@ -206,7 +239,14 @@ internal class NoticeDialogCoordinator(
             entries.removeAt(entries.indexOfFirst { it.told != Told.DIALOG })
             pushedOut += 1
         }
-        entries.addLast(Entry(text, told))
+        entries.addLast(Entry(text, told, onceKey))
+    }
+
+    // The entries a person has not been shown that carry a key already spent are not shown now, and
+    // the others spend theirs: a key is spent once, by whichever call shows it first.
+    private fun spendOnceKeys() {
+        val keys = onceKeys ?: return
+        entries.removeAll { it.told != Told.DIALOG && it.onceKey != null && !keys.add(it.onceKey) }
     }
 
     private fun presentOrDefer(host: NoticeHostState) {
@@ -228,6 +268,8 @@ internal class NoticeDialogCoordinator(
             return
         }
         waitingForBlocker = false
+        spendOnceKeys()
+        if (entries.isEmpty()) return
         var created: NoticeWindow? = null
         created = host.createAndShowDialog(combinedMessage()) {
             if (openWindow === created) {
@@ -285,8 +327,11 @@ internal fun showNoticeWithPolicy(
         return
     }
     // A notice with a once key is not an event: with no started screen it is neither shown nor
-    // spent, and waits for a screen that can show it whole.
-    if (processOnceKey != null) return
+    // spent, and waits for a screen that can show it whole, which spends the key when it does.
+    if (processOnceKey != null) {
+        if (coordinator != null && host != null && host.canHoldNotices()) coordinator.holdOnce(message, processOnceKey)
+        return
+    }
     // Both, for a stopped screen: the toast reaches the person now in whatever app is in front and
     // outlives a process ended before the next start, and the dialog at that start shows the whole text.
     if (coordinator != null && host != null && host.canHoldNotices()) {
@@ -320,7 +365,7 @@ internal object AppNotices {
     ) {
         val fontScale = context.resources?.configuration?.fontScale ?: 1f
         val coordinator = activity?.let {
-            coordinators.getOrPut(it) { NoticeDialogCoordinator() }
+            coordinators.getOrPut(it) { NoticeDialogCoordinator(onceKeys = shownOnceKeys) }
         }
         val host = activity?.let(::AndroidNoticeHost)
         showNoticeWithPolicy(
@@ -353,12 +398,17 @@ internal object AppNotices {
     // be seen.
     fun flush(activity: Activity) {
         heldForNextScreen.remove(activity.javaClass)?.let {
-            coordinators.getOrPut(activity) { NoticeDialogCoordinator() }.take(it)
+            coordinators.getOrPut(activity) { NoticeDialogCoordinator(onceKeys = shownOnceKeys) }.take(it)
         }
         val coordinator = coordinators[activity] ?: return
         val host = AndroidNoticeHost(activity, starting = true)
         coordinator.flush(host)
         host.starting = false
+    }
+
+    // A notice [activity] was given that is no longer true. A toast already shown fades by itself.
+    fun retract(activity: Activity, message: CharSequence) {
+        coordinators[activity]?.retract(message)
     }
 
     // carry: the call comes from onDestroy. What a screen that is not finishing still held is kept

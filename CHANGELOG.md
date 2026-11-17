@@ -16,6 +16,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The action button of a toolchain card shows its whole label at the largest font and display sizes.
 - The action button of a toolchain card shows its whole label at the largest font and display sizes.
 - An install made on Android 10 keeps its projects folder in the app's storage after the phone is updated, even when another app has made a folder of that name on shared storage.
+- A notice shown only once while the app runs, such as the one about a workspace that spans several device folders, waits for the app's return when it arrives in the background instead of being dropped.
+- On Android 12 and later, the notice that the server is taking longer than usual to start closes when the server starts instead of staying over the editor.
+- The notice that the server crashed repeatedly no longer appears for a moment under the page that says so.
 
 ## [1.9.0] - 2026-11-16
 
