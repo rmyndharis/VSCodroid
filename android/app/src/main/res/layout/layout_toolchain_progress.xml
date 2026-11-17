@@ -10,9 +10,9 @@
      process holding nothing but a stopped activity is what the system reclaims
      first. Off Play the transfer runs on a daemon thread inside this process
      with no resume (ToolchainManager.downloadViaHttp), so a reclaim loses all of
-     it, and the user is not simply offered it again: markPickerShown() has run
-     before this screen appears, so the next launch goes straight to the editor
-     and the only way back is the launcher long press.
+     it. The picker is offered again at the next launch, because markPickerShown()
+     runs only where the queue ends (SplashActivity.endDownloadQueue), but the
+     transfer starts over from nothing.
 
      On the root view rather than as a window flag, which is the distinction
      activity_splash.xml draws and the reason the picker beside this one

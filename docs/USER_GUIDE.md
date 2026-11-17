@@ -26,7 +26,7 @@ A practical guide to using VSCodroid, the full VS Code IDE running natively on y
 
 1. **Install**. Download from the [Play Store](https://play.google.com/store/apps/details?id=com.vscodroid) or [GitHub Releases](https://github.com/rmyndharis/VSCodroid/releases). The core download is roughly 270 MB, and you need about 800 MB free for the extraction that follows.
 2. **Binary extraction**. On first launch, VSCodroid extracts bundled tools (Node.js, Python, Git, Bash, and others) to internal storage. About 603 MB lands on disk, unpacked one file at a time behind a progress bar, so allow minutes rather than seconds on a slower device. The ~800 MB above is that payload plus the working room setup insists on before it will start. It happens on the first launch and again after every app update or reinstall, because extraction follows the installed package's version and update timestamp rather than only what is already unpacked. An update needs far less free space than a fresh install (the app credits what it already holds, so roughly 230 MB for a complete tree rather than 800 MB), but it does re-copy the files and it does take minutes. A first run that is interrupted and retried with the same installed package is the one case that does not start over: files already the right size are left alone.
-3. **Language Picker**. A prompt asks "What do you code in?" with options for Ruby, Java and C/C++. It comes back at each launch until you answer it with Continue or Skip (a Continue that chose something counts once its downloads have ended, so a start interrupted in the middle shows the picker again), and your answer is not final: touch and hold the app icon and pick **Manage toolchains** to add or remove them later. Whatever you select downloads there on the setup screen, one at a time; a download that fails is skipped and the rest continue. Skip goes straight to the editor.
+3. **Language Picker**. A prompt asks "What do you code in?" with options for Ruby, Java and C/C++. It comes back at each launch until you answer it with Continue or Skip (a Continue that chose something counts once its downloads have ended, so if the app ends before they finish, the picker comes back at the next launch), and your answer is not final: touch and hold the app icon and pick **Manage toolchains** to add or remove them later. Whatever you select downloads there on the setup screen, one at a time; a download that fails is skipped and the rest continue. Skip goes straight to the editor.
 4. **Ready**. The VS Code editor loads with terminal, file explorer, and all bundled tools available immediately.
 
 ### Default File Locations
@@ -1037,9 +1037,10 @@ Either way they land in the app's own storage and survive app updates.
 
 ### Installing After Setup
 
-The Language Picker stops appearing once you answer it with Continue or Skip, but the
-screen it offers stays reachable, by two routes. From the editor, run
-**VSCodroid: Manage Toolchains** from the Command Palette (**Ctrl+Shift+P**). From
+The Language Picker stops appearing once you answer it with Skip, or with Continue once the
+downloads it started have ended, but the screen it offers stays reachable, by two routes.
+From the editor, run **VSCodroid: Manage Toolchains** from the Command Palette
+(**Ctrl+Shift+P**). From
 outside it, **touch and hold the VSCodroid icon** (on the home screen or in the app
 drawer) and choose **Manage toolchains**. Both open the same screen, and installing
 and removing work exactly as they do during setup, so a language you skipped is not

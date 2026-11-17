@@ -73,8 +73,10 @@
              and isFirstRun() goes false; what is lost is the continuation after
              it, which offers the toolchain picker and opens the editor. The
              picker is not lost with it: continueAfterSetup() offers it on every
-             launch until Continue or Skip writes toolchain_picker_shown, so this
-             cost is one more launch. The second cost is worse and needs no timing
+             launch until toolchain_picker_shown is written (by Skip, by a Continue
+             with nothing to fetch, or where the downloads a Continue started end;
+             no launch in the process offers it while those run), so this cost is
+             one more launch. The second cost is worse and needs no timing
              argument: with the activity finished, the only thing holding the
              process through the write of the whole asset tree is the setup hold
              NodeService takes for it (SplashActivity.holdProcessForSetup), and a

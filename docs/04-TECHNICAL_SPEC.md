@@ -1842,8 +1842,11 @@ every non-Play user.
 ### 7.4 Language Picker Integration
 
 The picker is offered on every launch until it is answered, gated by `toolchain_picker_shown`,
-which only its Continue and Skip buttons write; a kill or an interrupted first run leaves it to be
-offered again on the next launch. It offers the entries of `ToolchainRegistry.available` that are
+which Skip and a Continue with nothing new to fetch write at once, and a Continue that starts
+downloads writes where its queue ends (`endDownloadQueue`, after the last pack or Cancel). While
+that queue runs, a process-wide flag keeps any other launch in the same process from offering it
+again; a kill, an interrupted first run, or a process that ends mid-queue leaves it to be offered
+again on the next launch. It offers the entries of `ToolchainRegistry.available` that are
 `offeredInPicker`:
 
 ```kotlin

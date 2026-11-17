@@ -53,4 +53,27 @@ class PickerAnsweredTest {
         val cancel = splash.substringAfter("cancelBtn.setOnClickListener {").substringBefore("// Start first download")
         assertTrue(cancel.contains("endDownloadQueue()"), "cancel no longer ends the queue, so it never answers the picker")
     }
+
+    /**
+     * The queue outlives its screen, so a splash made again while it runs finds the picker unanswered.
+     * `SplashDownloadLifetimeTest` drives the read and the clear; what it cannot drive is the screen that
+     * starts the queue. The flag is set before the first pack is asked for, because a refused request
+     * reports on the same thread and can end the queue before `downloadNext` returns: set after it, the
+     * flag would stay up for the rest of the process.
+     */
+    @Test
+    fun `a running queue keeps the picker down from its start to its end`() {
+        val start = SourceScan.body(splash, "private fun startDownloads(")
+        val set = start.indexOf("downloadQueueRunning = true")
+        assertTrue(set >= 0, "starting the downloads no longer marks a queue running")
+        assertTrue(set < start.lastIndexOf("downloadNext()"), "the queue is marked running only after its first pack was asked for")
+        assertTrue(
+            SourceScan.body(splash, "private fun endDownloadQueue(").contains("downloadQueueRunning = false"),
+            "the end of the queue leaves the picker down for the rest of the process",
+        )
+        assertTrue(
+            SourceScan.body(splash, "private fun shouldShowPicker(").contains("if (downloadQueueRunning) return false"),
+            "the picker is offered again over a queue still running",
+        )
+    }
 }

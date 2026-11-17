@@ -49,8 +49,13 @@ class SplashDownloadLifetimeTest {
             executor.shutdown()
             assertTrue(executor.awaitTermination(5, TimeUnit.SECONDS), "the install outlived its fixture")
         }
+        queueRunning.set(null, false)
         unmockkAll()
     }
+
+    // Process-wide, so a case that ends with it set would hide the picker from every later one.
+    private val queueRunning =
+        SplashActivity::class.java.getDeclaredField("downloadQueueRunning").apply { isAccessible = true }
 
     @Test
     fun `a destroyed splash keeps listening until every selected pack settles`() {
@@ -98,7 +103,17 @@ class SplashDownloadLifetimeTest {
         every { editor.putBoolean(any(), any()) } answers { answered += firstArg<String>() to secondArg<Boolean>(); editor }
         val preferences = mockk<SharedPreferences>(relaxed = true)
         every { preferences.edit() } returns editor
+        every { preferences.getBoolean(any(), any()) } answers {
+            answered.lastOrNull { it.first == firstArg<String>() }?.second ?: secondArg<Boolean>()
+        }
         every { screen.getSharedPreferences(any(), any()) } returns preferences
+        // The screen the system makes in place of the destroyed one (font size, language, display size),
+        // and one in a process that never wrote the preference.
+        val shouldShowPicker = SplashActivity::class.java.getDeclaredMethod("shouldShowPicker").apply { isAccessible = true }
+        val again = spyk(mockk<SplashActivity>(relaxed = true), recordPrivateCalls = true)
+        every { again.getSharedPreferences(any(), any()) } returns preferences
+        val unanswered = spyk(mockk<SplashActivity>(relaxed = true), recordPrivateCalls = true)
+        every { unanswered.getSharedPreferences(any(), any()) } returns mockk<SharedPreferences>(relaxed = true)
         every { screen invokeNoArgs "launchMain" } returns Unit
         fun field(name: String, value: Any?) {
             SplashActivity::class.java.getDeclaredField(name).apply { isAccessible = true }.set(screen, value)
@@ -122,6 +137,8 @@ class SplashDownloadLifetimeTest {
             "handleDownloadState", String::class.java, Int::class.javaPrimitiveType, Int::class.javaPrimitiveType,
         ).apply { isAccessible = true }
         m.onStateChange = { pack, status, percent, _, _ -> state.invoke(screen, pack, status, percent) }
+        // What startDownloads does before it asks for the first pack.
+        queueRunning.set(null, true)
         m.registerListener()
         m.install("toolchain_java")
 
@@ -158,9 +175,19 @@ class SplashDownloadLifetimeTest {
         assertEquals("java payload", File(filesDir, "usr/lib/jvm/test/payload").readText())
         assertEquals(listOf("toolchain_java", "toolchain_ruby"), synchronized(requests) { requests.toList() })
         assertEquals(emptyList<Pair<String, Boolean>>(), answered, "the picker was answered while a pack was still to be fetched")
+        assertFalse(
+            shouldShowPicker.invoke(again) as Boolean,
+            "a splash made again while Ruby was still downloading offered the picker over it, and a second " +
+                "Continue would start a second queue",
+        )
         listeners.toList().forEach { it.onStateUpdate(update("toolchain_ruby", AssetPackStatus.CANCELED)) }
         assertTrue(listeners.isEmpty(), "the finished queue kept its Play listener")
         assertEquals(listOf("toolchain_picker_shown" to true), answered, "the end of the queue did not answer the picker")
         assertFalse(m.onStateChange != null, "the finished queue kept the departed screen callback")
+        assertFalse(shouldShowPicker.invoke(again) as Boolean, "the picker answered by the end of the queue is offered again")
+        assertTrue(
+            shouldShowPicker.invoke(unanswered) as Boolean,
+            "the queue ended with no splash left and still keeps the picker down for the rest of the process",
+        )
     }
 }
