@@ -1,10 +1,18 @@
 package com.vscodroid
 
+import com.vscodroid.keyboard.KeyboardDismissal
 import com.vscodroid.service.EditorGateway
+import com.vscodroid.service.mockEditorGateway
+import com.vscodroid.webview.DownloadCoordinator
+import io.mockk.every
+import io.mockk.mockk
+import io.mockk.unmockkAll
+import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.Test
+import java.lang.reflect.InvocationTargetException
 
 /**
  * That a start away from the home port is said where the person sees it, and that
@@ -101,21 +109,15 @@ class AwayFromHomeWiringTest {
             SourceScan.body(main, "private fun awayFromHomeAnswered(").contains("awayFromHomeUnanswered = 0"),
             "an answered notice would be said again by the next activity",
         )
-        val back = SourceScan.body(main, "private fun returnUnansweredAwayFromHome(")
         assertTrue(
-            back.contains("EditorGateway.instance.noteAwayFromHome(home)") && back.contains("awayFromHomeUnanswered = 0"),
-            "the unanswered port no longer goes back to the gateway, or goes back twice",
+            notice.indexOf("awayFromHomeListener = EditorGateway.instance.listenersOpened") in 0 until notice.indexOf("fun show()"),
+            "the notice no longer records the listener it was said on, so it cannot be handed back to it alone",
         )
         val destroy = SourceScan.body(main, "override fun onDestroy(")
         val handBack = destroy.indexOf("returnUnansweredAwayFromHome()")
         assertTrue(
             handBack >= 0,
             "an activity that is taken down no longer hands the notice to the next editor load",
-        )
-        assertFalse(
-            Regex("""if \([^)]*isFinishing[^)]*\)\s*returnUnansweredAwayFromHome\(\)""").containsMatchIn(destroy),
-            "a screen closed from the recent apps keeps the notice to itself, while the service and the " +
-                "editor on the temporary port go on running and the next load says nothing",
         )
         assertTrue(
             destroy.indexOf("awayFromHomeNotice?.setOnDismissListener(null)") in 0 until handBack,
@@ -134,6 +136,101 @@ class AwayFromHomeWiringTest {
             SourceScan.body(main, "override fun waitForBlockingNoticeDismiss(")
                 .contains("away.setOnDismissListener { awayFromHomeAnswered() }"),
             "a notice waiting behind this dialog replaces its dismiss listener, and the answer is lost",
+        )
+    }
+
+    private fun setField(screen: MainActivity, name: String, value: Any?) {
+        MainActivity::class.java.getDeclaredField(name).apply { isAccessible = true }.set(screen, value)
+    }
+
+    // What showAwayFromHomeNotice records before it shows anything; the dialog itself needs a window.
+    private fun said(screen: MainActivity, gateway: EditorGateway, home: Int) {
+        setField(screen, "awayFromHomeUnanswered", home)
+        setField(screen, "awayFromHomeListener", gateway.listenersOpened)
+    }
+
+    @AfterEach
+    fun tearDown() = unmockkAll()
+
+    /**
+     * Stop Server releases the temporary origin and closes the editor, and the screen it closes is
+     * destroyed only later: after the next resumed screen goes idle, or at the system's timeout. A
+     * start opened in between binds its own listener and writes its own note. The late hand-back must
+     * not reach that listener: at home the next load said another app holds home, and away again it
+     * said the notice a second time.
+     */
+    @Test
+    fun `an unanswered notice goes back only to the listener it was said on`() {
+        val gateway = mockEditorGateway()
+        val screen = mockk<MainActivity>(relaxed = true)
+        every { screen["returnUnansweredAwayFromHome"]() } answers { callOriginal() }
+        val handBack = MainActivity::class.java.getDeclaredMethod("returnUnansweredAwayFromHome")
+            .apply { isAccessible = true }
+        val home = 13337
+        val away = gateway.bind(13340)
+
+        said(screen, gateway, home)
+        handBack.invoke(screen)
+        handBack.invoke(screen)
+        assertEquals(home, gateway.takeAwayFromHome(), "a screen made again on the same origin is not told")
+        assertEquals(0, gateway.takeAwayFromHome(), "the port went back twice")
+
+        said(screen, gateway, home)
+        gateway.release(away)
+        handBack.invoke(screen)
+        assertEquals(0, gateway.takeAwayFromHome(), "handed back to a gateway that has released the origin")
+
+        said(screen, gateway, home)
+        gateway.release(away)
+        gateway.bind(home)
+        gateway.noteAwayFromHome(0)
+        handBack.invoke(screen)
+        assertEquals(0, gateway.takeAwayFromHome(), "the start that went home is told another app holds home")
+        gateway.release(home)
+
+        val first = gateway.bind(13341)
+        said(screen, gateway, home)
+        gateway.release(first)
+        gateway.bind(13342)
+        gateway.noteAwayFromHome(home)
+        assertEquals(home, gateway.takeAwayFromHome(), "the start that went away again is told by its own note")
+        handBack.invoke(screen)
+        assertEquals(0, gateway.takeAwayFromHome(), "the start that went away again is told a second time")
+    }
+
+    /**
+     * Run rather than read: a guard on isFinishing has many spellings, braced, negated, on `this`, and
+     * a pattern over the source missed each one it did not name.
+     */
+    @Test
+    fun `a screen that is finishing hands its unanswered notice back`() {
+        val gateway = mockEditorGateway()
+        val screen = mockk<MainActivity>(relaxed = true)
+        every { screen.isFinishing } returns true
+        every { screen["returnUnansweredAwayFromHome"]() } answers { callOriginal() }
+        every { screen["onDestroy"]() } answers { callOriginal() }
+        // Filled by the constructor, which a mock does not run; onDestroy reaches both before the hand-back.
+        setField(screen, "keyboardDismissal", mockk<KeyboardDismissal>(relaxed = true))
+        setField(screen, "downloads", mockk<DownloadCoordinator>(relaxed = true))
+        gateway.bind(13340)
+        said(screen, gateway, 13337)
+
+        try {
+            MainActivity::class.java.getDeclaredMethod("onDestroy").apply { isAccessible = true }.invoke(screen)
+        } catch (e: InvocationTargetException) {
+            // The framework's own onDestroy, last in the override, has no state on a JVM mock.
+            val cause = e.cause ?: throw e
+            assertTrue(
+                cause.message?.startsWith("Method onDestroy in android.app.Activity not mocked.") == true,
+                "unexpected teardown failure: $cause",
+            )
+        }
+
+        assertEquals(
+            13337,
+            gateway.takeAwayFromHome(),
+            "a screen closed from the recent apps keeps the notice to itself, while the service and the " +
+                "editor on the temporary port go on running and the next load says nothing",
         )
     }
 

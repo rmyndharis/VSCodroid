@@ -297,6 +297,10 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
     // which leaves the service and the temporary origin running. After Stop Server the gateway has
     // already released that origin, and the next start's bind writes the note again.
     private var awayFromHomeUnanswered = 0
+
+    // The gateway's count of listeners opened when that notice was said, so it goes back only to the
+    // listener it is about: see [returnUnansweredAwayFromHome].
+    private var awayFromHomeListener = 0L
     private var pendingNoticeAfterCrash: (() -> Unit)? = null
 
     /**
@@ -3579,6 +3583,7 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
      */
     private fun showAwayFromHomeNotice(home: Int) {
         awayFromHomeUnanswered = home
+        awayFromHomeListener = EditorGateway.instance.listenersOpened
         fun show() {
             if (isFinishing || isDestroyed) return
             awayFromHomePendingShow = null
@@ -3638,7 +3643,14 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         val home = awayFromHomeUnanswered
         if (home <= 0) return
         awayFromHomeUnanswered = 0
-        EditorGateway.instance.noteAwayFromHome(home)
+        // Only while the listener it was said on is still the one bound. Stop Server releases that
+        // listener, and a start opened again before this screen is destroyed binds its own and writes
+        // its own note: at home, the port handed back here made the next load say another app holds
+        // home; away again, it made the next load say it a second time.
+        val gateway = EditorGateway.instance
+        if (gateway.boundPort != null && gateway.listenersOpened == awayFromHomeListener) {
+            gateway.noteAwayFromHome(home)
+        }
     }
 
     private fun flushPendingNoticeAfterCrash() {
