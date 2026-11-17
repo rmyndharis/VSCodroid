@@ -686,6 +686,9 @@ class FirstRunSetup(
 
             reportProgress(context.getString(R.string.setup_step_environment), 97)
             createDefaultSettings()
+            // A restore onto another phone looks exactly like this: no build has
+            // completed setup here, because the preferences are not restored.
+            if (nothingCompletedHere) withdrawRestoredEngineConsent()
 
             reportProgress(context.getString(R.string.setup_step_done), 100)
 
@@ -3426,6 +3429,32 @@ claude() {
             // should never look for them.
             markMovedDefaultsPruned()
         }
+    }
+
+    /**
+     * Turns `vscodroid.antigravity.runEngine` off in a machine settings file
+     * that came with a backup or a move from another phone.
+     *
+     * `data/Machine` travels in both (data_extraction_rules.xml), and the
+     * setting is the person's consent to an engine whose port every app on the
+     * phone can reach, given for the apps on that phone: platform-fix.js starts
+     * the engine whenever this file says so, and the process monitor's notice
+     * that asks for it is shown only while it is off. So the answer stays
+     * behind and the new phone asks again. Everything else in the file is
+     * kept. Called only where no build has completed setup, so an install
+     * keeps its own answer through every upgrade.
+     *
+     * Thrown for the reason [createDefaultSettings] throws: a failure here
+     * would start the engine on the new phone with no notice at all.
+     */
+    internal fun withdrawRestoredEngineConsent() {
+        val settingsFile = File(Environment.getMachineSettingsPath(context))
+        if (!settingsFile.exists()) return
+        val updated = withEngineConsentWithdrawn(settingsFile.readText()) ?: return
+        if (!writeAtomically(settingsFile) { it.write(updated.toByteArray()) }) {
+            throw IOException("could not write $settingsFile")
+        }
+        Logger.i(tag, "Turned the Antigravity engine off in settings restored from another phone")
     }
 
     /**
@@ -6704,7 +6733,7 @@ internal fun pruneMovedDefaults(content: String, autoHideSideBar: Boolean): Stri
         when (masked[cursor]) {
             '"' -> {
                 if (depth == 1) rootStrings.add(cursor)
-                cursor = JSON_STRING.matchAt(masked, cursor)?.range?.last ?: masked.length
+                cursor = jsonStringEnd(masked, cursor).let { if (it < 0) masked.length else it }
             }
             '{', '[' -> depth++
             '}', ']' -> if (--depth == 0) break
@@ -6759,24 +6788,160 @@ private fun prunableMovedDefaults(content: String): Boolean {
  * them is what stops a delimiter inside a value opening a comment that runs to
  * the end of the file.
  *
- * The pattern is the one `ProcessManager` documents at length beside its own
- * copy, deliberately restated rather than shared: that reader strips comments to
- * find a value and can afford to change the text's length, this one must not.
- * If either is ever wrong the other is too, so the KDoc there is the one to read.
+ * A string is walked whole before a comment is looked for, and a `//` or a
+ * block opener that has no end is left as text. `ProcessManager`'s reader of the
+ * heap ceiling is the other caller and documents at length why a delimiter has to
+ * be read in order with the strings around it.
+ *
+ * A loop and not a pattern: the pattern this replaced, an alternation under a
+ * star, ran out of stack on a long string, in a file the user makes as long as
+ * they like and that every server start reads.
  */
-private fun commentsBlanked(content: String): String =
-    STRING_OR_COMMENT.replace(content) { match ->
-        if (match.value.startsWith("\"")) {
-            match.value
-        } else {
-            buildString(match.value.length) {
-                for (c in match.value) append(if (c == '\n') '\n' else ' ')
+internal fun commentsBlanked(content: String): String {
+    val out = StringBuilder(content.length)
+    var i = 0
+    while (i < content.length) {
+        val c = content[i]
+        var end = -1
+        if (c == '"') {
+            // A string that never closes is no string: its quote is an ordinary character and the
+            // text after it is read as text, which is what the pattern this replaced did.
+            val close = jsonStringEnd(content, i)
+            if (close >= 0) {
+                out.append(content, i, close + 1)
+                i = close + 1
+                continue
             }
+        } else if (content.startsWith("//", i)) {
+            end = content.indexOf('\n', i).let { if (it < 0) content.length else it }
+        } else if (content.startsWith("/*", i)) {
+            end = content.indexOf("*/", i + 2).let { if (it < 0) -1 else it + 2 }
+        }
+        if (end < 0) {
+            out.append(c)
+            i++
+        } else {
+            for (k in i until end) out.append(if (content[k] == '\n') '\n' else ' ')
+            i = end
         }
     }
+    return out.toString()
+}
 
-/** A JSON string, a `//` comment, or a block comment, whichever starts first. */
-private val STRING_OR_COMMENT = Regex("""\"(?:\\.|[^\"\\])*\"|//[^\n]*|/\*[\s\S]*?\*/""")
+/**
+ * The offset of the quote that closes the string literal opening at [start], or -1 when it never
+ * does. A plain loop: the pattern this replaced, an alternation under a star, ran out of stack on a
+ * long string, and a settings file is the user's to make as long as they like.
+ */
+private fun jsonStringEnd(text: String, start: Int): Int {
+    var i = start + 1
+    while (i < text.length) {
+        when (text[i]) {
+            '\\' -> i++
+            '"' -> return i
+        }
+        i++
+    }
+    return -1
+}
+
+/**
+ * [content] with every `true` that can give `vscodroid.antigravity.runEngine` its value made `false`,
+ * or null when there is none to change.
+ *
+ * The three spellings platform-fix.js reads as the setting, which is how VS Code builds its settings
+ * from a file: the root key `vscodroid.antigravity.runEngine`, the key `runEngine` of an object under
+ * the root key `vscodroid.antigravity`, and `runEngine` under `antigravity` under `vscodroid`. A key may
+ * be spelled with escapes. One in a comment, in another object, a language block included, or inside
+ * a string is not the setting. Every copy is turned off and not only the last, which can only turn
+ * off a `true` that a later key already replaced: the answer a restore leaves behind is then "off"
+ * whichever of them the reader keeps. Only the value is replaced, so the rest of the person's file
+ * stays as it was. A document this cannot read is left alone: platform-fix.js cannot read it either,
+ * and reads it as off.
+ *
+ * One pass with a stack of the objects and arrays being read, and no pattern over the text, so a
+ * string of any length or a deep nesting costs time and never an `Error` out of setup.
+ */
+internal fun withEngineConsentWithdrawn(content: String): String? {
+    val bom = if (content.startsWith('\uFEFF')) 1 else 0
+    val brace = rootBraceIndex(content.substring(bom)).takeIf { it >= 0 }?.plus(bom) ?: return null
+    val masked = commentsBlanked(content)
+    val values = mutableListOf<Int>()
+    val keys = ArrayList<String?>() // the key each open container sits under, null for the root
+    val objects = ArrayList<Boolean>() // whether each open container is an object
+    var key: String? = null // the decoded key whose value comes next, null when unknown
+    var wantKey = false
+    var i = brace
+    while (i < masked.length) {
+        val c = masked[i]
+        when {
+            c == '{' || c == '[' -> {
+                keys.add(key)
+                objects.add(c == '{')
+                key = null
+                wantKey = c == '{'
+            }
+            c == '}' || c == ']' -> {
+                if (keys.isEmpty()) return null
+                keys.removeAt(keys.lastIndex)
+                objects.removeAt(objects.lastIndex)
+                key = null
+                if (keys.isEmpty()) break
+                wantKey = false
+            }
+            c == ',' -> {
+                key = null
+                wantKey = objects.last()
+            }
+            c == '"' -> {
+                val close = jsonStringEnd(masked, i)
+                if (close < 0) return null
+                key = if (wantKey) decodedKey(masked, i, close) else null
+                wantKey = false
+                i = close
+            }
+            c == ':' || c.isWhitespace() -> Unit
+            else -> {
+                // A number, `true`, `false` or `null`: a value, which ends whatever key it belonged to.
+                var end = i + 1
+                while (end < masked.length && (masked[end].isLetterOrDigit() || masked[end] in "+-._")) end++
+                if (end - i == 4 && masked.startsWith("true", i) && namesEngineConsent(keys, key)) values.add(i)
+                key = null
+                i = end - 1
+            }
+        }
+        i++
+    }
+    if (values.isEmpty()) return null
+    val updated = StringBuilder(content)
+    for (at in values.asReversed()) updated.replace(at, at + 4, "false")
+    return updated.toString()
+}
+
+/** The string literal at [open]..[close] with its escapes read, or null for one too long to be the key. */
+private fun decodedKey(text: String, open: Int, close: Int): String? =
+    if (close - open > ENGINE_CONSENT_KEY_LIMIT) {
+        null
+    } else {
+        runCatching { org.json.JSONTokener(text.substring(open, close + 1)).nextValue() as? String }.getOrNull()
+    }
+
+/**
+ * Whether a `true` under [key], inside the containers whose own keys are [keys] (the root's first, and
+ * null), is the setting. A container in an array, or under a key too long or too broken to read, has a
+ * null key, which no spelling of the setting has, so a path through either fails here.
+ */
+private fun namesEngineConsent(keys: List<String?>, key: String?): Boolean =
+    key != null && (keys.drop(1) + key) in ENGINE_CONSENT_PATHS
+
+private val ENGINE_CONSENT_PATHS = listOf(
+    listOf("vscodroid.antigravity.runEngine"),
+    listOf("vscodroid.antigravity", "runEngine"),
+    listOf("vscodroid", "antigravity", "runEngine"),
+)
+
+/** The longest literal, escapes counted, that can spell one of the names above: six characters a letter. */
+private const val ENGINE_CONSENT_KEY_LIMIT = 256
 
 /**
  * Adds a setting to a JSONC document, directly after its opening brace.
@@ -6807,9 +6972,6 @@ private fun insertSetting(content: String, key: String, value: String): String {
 private val TERMINAL_ENV_LINUX_KEY = Regex(""""terminal\.integrated\.env\.linux"\s*:""")
 private val TERMINAL_ENV_LINUX_OPEN = Regex(""""terminal\.integrated\.env\.linux"\s*:\s*\{""")
 private val LD_PRELOAD_KEY = Regex(""""LD_PRELOAD"\s*:""")
-
-/** A JSON string literal, escapes included, for stepping over one in a scan. */
-private val JSON_STRING = Regex(""""(?:\\.|[^"\\])*"""")
 
 /**
  * An `LD_PRELOAD` entry that is the whole of this app's own interceptor path
@@ -6906,7 +7068,7 @@ private fun objectEnd(scan: String, open: Int): Int {
     var i = open
     while (i < scan.length) {
         when (scan[i]) {
-            '"' -> i = (JSON_STRING.matchAt(scan, i) ?: return -1).range.last
+            '"' -> i = jsonStringEnd(scan, i).also { if (it < 0) return -1 }
             '{' -> depth++
             '}' -> if (--depth == 0) return i
         }

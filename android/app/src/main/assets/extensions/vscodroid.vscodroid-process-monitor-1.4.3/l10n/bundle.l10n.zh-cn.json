@@ -1,0 +1,6 @@
+{
+  "Google Antigravity is installed, but VSCodroid keeps its engine off. While the engine runs, other apps on this phone can reach it and use the account signed in to it. Turn it on only on a phone whose apps you trust.": "Google Antigravity 已安装，但 VSCodroid 让它的引擎保持关闭。引擎运行时，这部手机上的其他应用可以连接到引擎，并使用已登录引擎的账号。请只在你信任其中所有应用的手机上开启。",
+  "Turn On and Reload": "开启并重新加载",
+  "Don't Show Again": "不再显示",
+  "The Antigravity engine could not be turned on: {0}": "无法开启 Antigravity 引擎：{0}"
+}

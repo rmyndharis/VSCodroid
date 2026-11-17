@@ -46,6 +46,10 @@
   Restoring it is worth doing because `FirstRunSetup.createDefaultSettings()`
   writes only when the file is absent, so a restored copy is kept rather than
   overwritten on the new device's first run.
+  One setting in it is not kept: `vscodroid.antigravity.runEngine` consents to
+  an engine every app on the phone can reach, given for the apps on that phone,
+  so setup turns it off on an install no build has completed setup on, which is
+  what a restore is (`FirstRunSetup.withdrawRestoredEngineConsent`).
 
   Both sections are identical on purpose. A device-to-device transfer never
   leaves the user's hands and could justify carrying more than a cloud backup

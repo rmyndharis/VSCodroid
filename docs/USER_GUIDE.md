@@ -489,12 +489,19 @@ starts then reaches your files, so a `python3` task can run `./a.out` or a
 script by its path.
 
 What it does not reach is a program an extension starts on its own, without a
-terminal: an extension's own copy of Git, or a language server. Those still
-cannot start a file under the app's storage, which is why this guide keeps its
-`python3 -m` advice for that case. A terminal an extension opens carries it
-(measured with the JavaScript Debug Terminal on API 33 and 36 emulators,
-2026-09-23), since the setting applies to every terminal the editor creates,
-unless the extension asks for a strict environment of its own.
+terminal: an extension's own copy of Git, or a language server. VSCodroid hands
+one kind of such start to the system loader itself: a program built for Android,
+started by its full path with `spawn` or `execFile` (see [Extensions That Bundle
+a Compiled Program](#extensions-that-bundle-a-compiled-program)). Anything else
+an extension starts from the app's storage still fails: a script with a `#!`
+line, a musl program, a program named without its full path (toolchain commands
+aside, see [Toolchains Must Be Started by
+Name](#toolchains-must-be-started-by-name)), and a start made through a shell or
+with `spawnSync`, which is why this guide keeps its `python3 -m` advice for that
+case. A terminal an extension opens carries it (measured with the JavaScript
+Debug Terminal on API 33 and 36 emulators, 2026-09-23), since the setting
+applies to every terminal the editor creates, unless the extension asks for a
+strict environment of its own.
 
 Two limits show. A `#!` line of the form `#!/usr/bin/env -S ...` fails with
 `env: Unknown option`, because the system's `env` has no `-S`; write
@@ -633,6 +640,48 @@ Notebooks run in a Python virtual environment. Create one in the terminal with `
 If the extension offers to install `jupyter` and `notebook`, decline: that is a Jupyter server, whose dependencies cannot be built here and whose commands Android will not run from the app's storage.
 
 The Android build of that add-on is pointed at by `ZEROMQ_PREBUILD`, which every process VSCodroid starts inherits. A Node project of your own pinned to `zeromq` 5.x or 6.0.x picks it up too, which is what lets it load at all here. To run such a project against its own copy instead, clear the variable for that command: `ZEROMQ_PREBUILD= node app.js`.
+
+### Google Antigravity
+
+The Google Antigravity extension (`Google.google-antigravity` on Open VSX) installs from the Extensions view
+like any other. When it first starts it downloads its engine, about 60 MB, which unpacks to about 200 MB
+under `~/.gemini`. Once you have turned its engine on (below), VSCodroid starts that engine for the
+extension and lets the extension's panel show the page the engine serves, so the panel opens on the
+Antigravity welcome screen with **Continue with Google**.
+
+**The engine is off until you turn it on.** With the extension installed, VSCodroid shows a notice that
+says so and offers **Turn On and Reload**, or **Don't Show Again**, which keeps the notice away until the
+setting has been on once. The same switch is in Settings: search for `run engine` and
+tick **Vscodroid > Antigravity: Run Engine** (it is listed on the **Remote** tab), then run **Developer:
+Reload Window**. Until then VSCodroid runs nothing the extension keeps in `~/.gemini` but the engine's
+version check, and the extension's panel reads `Couldn't load this view` with a
+`spawn ... EACCES` error, which is the engine not being started. Untick the setting and reload the window
+to turn the engine off again: an engine that is running is stopped then. The setting belongs to the phone
+it was turned on on: restoring VSCodroid from a backup, or moving it to a new phone, turns it off again.
+With the engine on, VSCodroid starts it only with the arguments the extension itself gives it, so an
+argument added through `antigravity.serverArgs`, which the settings of a folder you open can set, keeps
+the engine from starting, with the same error. A folder's settings can still add a directory the agent may
+use (`--add-dir`), as each folder of the workspace already does, so open only folders you trust. The reason
+for the switch is the third point below.
+
+What to know before using it:
+
+- **Signing in.** The panel asks you to sign in in the browser and paste the authorization code shown on the
+  callback page.
+- **How far it has been tried.** On an emulator the engine started, sign-in completed, and the agent answered a
+  message, created a file and ran commands. `python3`, `git` and `node` ran from those commands. A program stored
+  directly under the app's files directory, such as the engine itself, answered `Permission denied`: the engine
+  starts the agent's commands itself, and VSCodroid cannot route those through the system loader. Installed
+  toolchains were not tried.
+- **Other apps on the phone.** While it runs, the engine listens on a port of `127.0.0.1`, and any app that can
+  use the network can open that port. The page the engine serves there includes the key its calls require, so
+  such an app can read the signed-in account's name, email address and plan, and should be assumed able to make
+  the engine's other calls too. VSCodroid has found no way to make the engine listen on a private socket, as the
+  editor does, which is why the engine stays off until you turn it on. Turn it on, and sign in, only on a
+  phone whose installed apps you trust.
+- **Processes and memory.** The engine is one more process counted against Android's phantom process limit (see
+  [Android Phantom Process Limit](#android-phantom-process-limit)) while it runs, and on an emulator it held
+  between about 140 and 200 MB of memory, on top of the editor's own.
 
 ### What Is Not Available
 
@@ -1008,10 +1057,12 @@ beyond that differs a great deal, and this is the whole of it, so you can pick w
 | C and C++ | Compiles to a temporary file and runs it | clangd, through its extension (see [C and C++](#c-and-c)) | None | None: no CMake or Ninja; `make` works |
 
 **Java here is for compiling and running programs, not an IDE.** The Language
-Support for Java extension from Open VSX installs but cannot run: it starts its server by the
-JDK's full path, which Android refuses to execute, and the server it would start needs about 650
-MB of memory on a phone. Nothing in VSCodroid works around that, so do not expect error squiggles
-or completion for Java.
+Support for Java extension from Open VSX installs, and whether it runs has not been measured: it
+starts its server by the JDK's full path, which VSCodroid now hands to the system loader when the
+extension uses `spawn` or `execFile`, but the server needs about 650 MB of memory on a phone, and
+the JDK cannot start its own helper programs outside a terminal (see [Toolchains Must Be Started by
+Name](#toolchains-must-be-started-by-name)). Do not count on error squiggles or
+completion for Java.
 
 **C and C++ have a language server.** The C/C++ toolchain includes `clangd`, and the clangd
 extension from Open VSX talks to it: see [C and C++](#c-and-c). There is no debugger for either.
@@ -1475,7 +1526,7 @@ What still fails is a start that names a path instead of a command, when the
 start comes from an extension or is the command of a `"type": "process"` task
 itself:
 
-- an absolute path such as `$JAVA_HOME/bin/java`, which is not a `PATH` lookup at all
+- an absolute path such as `$JAVA_HOME/bin/java`, which is not a `PATH` lookup at all, unless an extension starts it with `spawn` or `execFile`, which VSCodroid hands to the system loader (see [Extensions That Bundle a Compiled Program](#extensions-that-bundle-a-compiled-program))
 - a toolchain that forks its own helper by absolute path, which is what the JDK's `lib/jspawnhelper` does
 - `jshell` started anywhere but bash, because its default engine starts a second JVM that way; the terminal's `jshell` runs your snippets in its own JVM instead
 - a script under the app's storage run by its own path: Android refuses the script file itself, before its `#!` line is ever read. Run it as `ruby script.rb` instead
@@ -1577,7 +1628,10 @@ itself, outside any terminal, and that start is not covered.
 VSCodroid asks the marketplace for the musl build wherever an extension
 publishes one, which is what makes that route possible at all, but the extension
 itself then has to offer a setting that lets its command be prefixed. Almost
-none do. The Codex extension is handled by the app instead: see [Codex](#codex).
+none do. The Codex extension is handled by the app instead: see [Codex](#codex). So is a
+program built for Android itself that an extension downloads into its storage and then starts with `spawn` or
+`execFile`: the app hands it to the system loader, which is how the engine of Google Antigravity runs (see [Google
+Antigravity](#google-antigravity)).
 
 **How to recognise it.** The extension is installed and enabled, its commands are
 missing from the Command Palette or do nothing when run, and the Problems panel
@@ -1591,16 +1645,6 @@ Playwright, a library the extension carries, and the engine program it ships
 needs `libstdc++`, which VSCodroid does not provide. Neither is something to
 change on your side. For an AI assistant that runs here, see [Codex](#codex);
 GitHub Copilot Chat is built in.
-
-**Another is Google Antigravity, and this one is loud.** Version 1.12.0 installs
-and adds its icon to the Activity Bar, and its panel then reads `Couldn't load
-this view` with `spawn .../.gemini/bin/agy EACCES`. That is the second wall: the
-extension downloads its engine into the app's storage and starts it itself. The
-engine is a build for Android and does start from a terminal, as
-`~/.gemini/bin/agy`, where it asks for a Google sign-in. The panel is another
-matter: it shows a page that the engine serves, and that page names the places
-that may display it. An extension panel of this editor is not among them, so the
-panel would not load here even with the engine running.
 
 **One variant is loud rather than silent.** An extension that publishes a
 separate build per platform, with no musl build and no platform-independent one,
@@ -1648,7 +1692,9 @@ string the translation packs do not cover, roughly one in fifty. And the
 messages an extension shows while it is running, VSCodroid's own included: what
 is translated for an extension is what its manifest declares, its commands and
 its settings, while the notices it puts on screen as it works are written into
-its code.
+its code. The one exception is VSCodroid's notice about the Google Antigravity
+engine, which says what turning the engine on exposes and is translated with its
+buttons.
 
 Changing the language while VSCodroid is running takes effect on the spot: the
 editor reloads in the new one. What does not change is anything already written,

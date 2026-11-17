@@ -1,0 +1,6 @@
+{
+  "Google Antigravity is installed, but VSCodroid keeps its engine off. While the engine runs, other apps on this phone can reach it and use the account signed in to it. Turn it on only on a phone whose apps you trust.": "Rozšíření Google Antigravity je nainstalováno, ale VSCodroid nechává jeho jádro vypnuté. Dokud jádro běží, mohou se k němu připojit jiné aplikace v tomto telefonu a používat účet, který je v jádru přihlášený. Zapněte ho jen v telefonu, jehož aplikacím důvěřujete.",
+  "Turn On and Reload": "Zapnout a znovu načíst",
+  "Don't Show Again": "Znovu nezobrazovat",
+  "The Antigravity engine could not be turned on: {0}": "Jádro Antigravity se nepodařilo zapnout: {0}"
+}

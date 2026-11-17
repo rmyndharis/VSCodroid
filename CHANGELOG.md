@@ -7,6 +7,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 ## [Unreleased]
 
+### Added
+
+- The Google Antigravity extension starts its engine and shows its panel, once **Vscodroid > Antigravity: Run Engine** is turned on in Settings; the engine is off by default because other apps on the phone can reach it while it runs.
+- **Vscodroid > Antigravity: Run Engine** is turned off again on a phone that restores VSCodroid from a backup or a transfer.
+- A program built for Android that an extension downloaded into the app's storage starts through the system loader when the extension calls `spawn` or `execFile`, instead of failing with `EACCES`, except one in `~/.gemini` while that setting is off.
+
 ### Fixed
 
 - Saving a download over a file you already have no longer freezes the editor while a large file is copied into it.

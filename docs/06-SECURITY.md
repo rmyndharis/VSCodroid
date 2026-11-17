@@ -27,7 +27,13 @@ flowchart TD
     W["WebView (workbench UI)"] <--> |"HTTP + WebSocket on 127.0.0.1"| E["EditorGateway<br/>app-owned loopback endpoint"]
     E <--> |"Private filesystem socket"| N["VS Code Server (vscode-reh)<br/>extension host, terminals, the user's code"]
     N --> |"HTTPS_PROXY"| P["dns-proxy.js<br/>loopback proxy inside the server process"]
+    N --> |"only with vscodroid.antigravity.runEngine on"| R["Antigravity relay inside the server process<br/>127.0.0.1, the port the extension chose; Host check, no token"]
+    W <--> |"extension webview"| R
+    R <--> AG["Antigravity engine, downloaded by its extension<br/>127.0.0.1, a port of its own; its page hands out its key"]
   end
+  X["Other apps on the phone"] -.-> |"loopback TCP"| R
+  X -.-> |"loopback TCP"| AG
+  AG --> |"external HTTPS"| GA["Antigravity's own services"]
   W --> |"external HTTPS: gallery queries, READMEs, icons"| O["Open VSX"]
   P --> |"external HTTPS: VSIX downloads, web extension resources"| O
   N --> |"external HTTPS/SSH"| G["GitHub/GitLab remotes"]
@@ -107,7 +113,7 @@ without the credential minted for that boot, which rides in the proxy URL.
 | WebView process isolation            | WebView renderer runs in separate process                                                                                                                                                                                          |
 | AndroidBridge access control         | Every bridge method requires the per-session token and refuses without it; a reflection test fails the build if one is added that does not. There is no origin check -- `@JavascriptInterface` does not carry the caller's origin |
 | Code signing                         | APK/AAB signed with release key                                                                                                                                                                                                    |
-| No self-updating code (Play Store) | Core binaries bundled as .so in the APK; toolchains as on-demand asset packs via Play Store. The app downloads no executable code for itself on a Play install. User programs (compiled, or installed by pip or npm) run inside the sandbox through the system linker, and a program an extension brings with it is started by a loader the app ships; the app's server binds loopback only and takes a token, so there is no remote path to that execution. Sideload installs download toolchain ZIPs from GitHub Releases; `vscodroid pkg` is planned, not shipped |
+| No self-updating code (Play Store) | Core binaries bundled as .so in the APK; toolchains as on-demand asset packs via Play Store. The app downloads no executable code for itself on a Play install. User programs (compiled, or installed by pip or npm) run inside the sandbox through the system linker, and a program an extension brings with it is started by the musl loader the app ships or, when it is built for Android, by the system loader; the app's server binds loopback only and takes a token, so there is no remote path to that execution. The Google Antigravity extension's engine is the exception in kind: it listens on loopback with a token of its own that its page hands to any local client, so another app on the phone can use it. The app therefore runs nothing the extension keeps in `~/.gemini` but the engine's version check until the person turns on the machine setting `vscodroid.antigravity.runEngine`, which is off by default and is turned off again on a phone that restores it from a backup or a transfer; with it on, the engine's hub starts only with the arguments the extension builds (see the user guide). Sideload installs download toolchain ZIPs from GitHub Releases; `vscodroid pkg` is planned, not shipped |
 | Foreground Service notification      | The server runs under a foreground service; notification visibility follows Android's notification permission and system UI rules |
 
 ### 3.3 Extension Security
@@ -337,6 +343,9 @@ location. Clear Data wipes both.
 | App ↔ GitHub                      | HTTPS or SSH     | TLS 1.2+ or SSH                                   |
 | Extension host ↔ GitHub Copilot   | HTTPS            | Prompts and attached source, after a GitHub sign-in |
 | App ↔ Play Store (Asset Delivery) | HTTPS            | Managed by Play Store                             |
+| Antigravity panel ↔ relay in the server | HTTP and WebSocket (127.0.0.1, the port the extension chose) | Only while `vscodroid.antigravity.runEngine` is on; refuses a Host that is not its own and checks no token, so any app on the phone can connect; 32 connections at most |
+| Relay ↔ Antigravity engine        | HTTP and WebSocket (127.0.0.1, a port of the engine's own) | The engine's port answers any app on the phone too, and its page hands out the key its calls need |
+| Antigravity engine ↔ its services | HTTPS            | What its extension's own privacy policy covers     |
 | Built-in language features ↔ Schema and package registries | HTTPS | `json.schemastore.org`, the other schema hosts in `json.schemaDownload.trustedDomains`, and `registry.npmjs.org` when editing JSON, `package.json`, or JS/TS files; see `docs/PRIVACY_POLICY.md` |
 
 ---
