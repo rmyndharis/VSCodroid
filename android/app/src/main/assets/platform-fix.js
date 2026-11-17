@@ -361,7 +361,9 @@ if (process.platform === 'android') {
       var pid = Number(note.pid);
       if (!(pid > 1)) return;
       var words = fs.readFileSync('/proc/' + pid + '/cmdline', 'latin1').split('\0');
-      if (words.indexOf('--hub-port=' + note.port) >= 0 && words.some(function (word) { return ANTIGRAVITY_ENGINE.test(word); })) {
+      // The engine as this file starts it: the linker, the engine's path, then its arguments. A process
+      // that only names the engine among its arguments is not it, whatever pid it was given.
+      if (words[0] === LINKER && ANTIGRAVITY_ENGINE.test(words[1] || '') && words.indexOf('--hub-port=' + note.port) >= 0) {
         process.kill(pid, 'SIGTERM');
       }
     } catch (e) { /* no note, or that pid is gone */ }

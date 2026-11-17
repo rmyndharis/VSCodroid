@@ -663,6 +663,11 @@ checked++;
 // engine on that port. The check reads /proc, which only Linux has; the driver
 // plays the extension against a stand-in process.
 if (fs.existsSync('/proc/self/cmdline')) {
+    // A stand-in reads in /proc as the engine does on a device: the linker's name as its first word (argv0
+    // is only a name, the program is this Node), the engine's path as its second, then the arguments.
+    const STANDIN_ENGINE = put(path.join(tmp, 'standin/.gemini/bin/agy'), 'setInterval(function () {}, 1000);\n');
+    const STANDIN_OTHER = put(path.join(tmp, 'standin/other'), 'setInterval(function () {}, 1000);\n');
+    const standInEnv = { STANDIN_ENGINE, STANDIN_OTHER };
     const REAP_DRIVER = path.join(tmp, 'reap-driver.js');
     fs.writeFileSync(REAP_DRIVER, `
 const cp = require('child_process');
@@ -673,10 +678,12 @@ let dummy = null;
 if (mode === 'dead') {
     pid = 2147483000;
 } else {
-    const words = mode === 'wrong-port' ? ['/x/.gemini/bin/agy', '--hub', '--hub-port=41998']
-        : mode === 'not-the-engine' ? ['/x/other', '--hub', '--hub-port=41999']
-        : ['/x/.gemini/bin/agy', '--hub', '--hub-port=41999'];
-    dummy = cp.spawn(process.execPath, ['-e', 'setInterval(function () {}, 1000)'].concat(words), { stdio: 'ignore' });
+    const linker = { stdio: 'ignore', argv0: '/system/bin/linker64' };
+    dummy = mode === 'wrong-port' ? cp.spawn(process.execPath, [process.env.STANDIN_ENGINE, '--hub', '--hub-port=41998'], linker)
+        : mode === 'not-the-engine' ? cp.spawn(process.execPath, [process.env.STANDIN_OTHER, '--hub', '--hub-port=41999'], linker)
+        : mode === 'only-names-the-engine' ? cp.spawn(process.execPath, ['-e', 'setInterval(function () {}, 1000)', process.env.STANDIN_ENGINE, '--hub', '--hub-port=41999'], { stdio: 'ignore' })
+        : mode === 'not-under-the-linker' ? cp.spawn(process.execPath, [process.env.STANDIN_ENGINE, '--hub', '--hub-port=41999'], { stdio: 'ignore' })
+        : cp.spawn(process.execPath, [process.env.STANDIN_ENGINE, '--hub', '--hub-port=41999'], linker);
     pid = dummy.pid;
 }
 fs.writeFileSync(note, JSON.stringify({ pid: pid, port: 41999 }));
@@ -694,13 +701,15 @@ if (dummy) {
         ['match', 'ended by SIGTERM'],
         ['wrong-port', 'still running'],
         ['not-the-engine', 'still running'],
+        ['only-names-the-engine', 'still running'],
+        ['not-under-the-linker', 'still running'],
         ['dead', 'no crash'],
     ]) {
         fs.rmSync(HUB_NOTE, { force: true });
         const got = JSON.parse(execFileSync(
             process.execPath,
             ['--require', FAKE_ANDROID, '--require', FIX, REAP_DRIVER, ENGINE, mode, HUB_NOTE],
-            { env: { ...process.env, HOME: HUB_HOME, TERMUX_APP__DATA_DIR: DATA_LINK, LD_PRELOAD: '' }, encoding: 'utf8', timeout: 30000 },
+            { env: { ...process.env, ...standInEnv, HOME: HUB_HOME, TERMUX_APP__DATA_DIR: DATA_LINK, LD_PRELOAD: '' }, encoding: 'utf8', timeout: 30000 },
         ).trim().split('\n').pop());
         assert.strictEqual(got.result, want, `an earlier engine (${mode}): ${got.result}, wanted ${want}`);
         checked++;
@@ -717,7 +726,7 @@ const cp = require('child_process');
 const fs = require('fs');
 const path = require('path');
 const [mode, note, dir, fake, fix] = process.argv.slice(2);
-const dummy = cp.spawn(process.execPath, ['-e', 'setInterval(function () {}, 1000)', '/x/.gemini/bin/agy', '--hub', '--hub-port=41999'], { stdio: 'ignore' });
+const dummy = cp.spawn(process.execPath, [process.env.STANDIN_ENGINE, '--hub', '--hub-port=41999'], { stdio: 'ignore', argv0: '/system/bin/linker64' });
 fs.writeFileSync(note, JSON.stringify({ pid: dummy.pid, port: 41999 }));
 const idle = 'setTimeout(function () {}, 2500);';
 const named = path.join(dir, 'server-main.js');
@@ -746,7 +755,7 @@ setTimeout(() => done('still running'), 4000);
         const got = JSON.parse(execFileSync(
             process.execPath,
             [START_DRIVER, mode, HUB_NOTE, tmp, FAKE_ANDROID, FIX],
-            { env: { ...process.env, HOME: HUB_HOME, TERMUX_APP__DATA_DIR: DATA_LINK, LD_PRELOAD: '' }, encoding: 'utf8', timeout: 30000 },
+            { env: { ...process.env, ...standInEnv, HOME: HUB_HOME, TERMUX_APP__DATA_DIR: DATA_LINK, LD_PRELOAD: '' }, encoding: 'utf8', timeout: 30000 },
         ).trim().split('\n').pop());
         assert.strictEqual(got.result, want, `an earlier engine at start (${mode}): ${got.result}, wanted ${want}`);
         checked++;
@@ -775,7 +784,7 @@ let ended = null;
 started.on('exit', (code, signal) => { serverEnd = signal || 'code ' + code; });
 const finish = () => { console.log(JSON.stringify({ aliveBefore, ended, serverEnd })); if (dummy) dummy.kill('SIGKILL'); started.kill('SIGKILL'); process.exit(0); };
 setTimeout(() => {
-    dummy = cp.spawn(process.execPath, ['-e', 'setInterval(function () {}, 1000)', '/x/.gemini/bin/agy', '--hub', '--hub-port=41999'], { stdio: 'ignore' });
+    dummy = cp.spawn(process.execPath, [process.env.STANDIN_ENGINE, '--hub', '--hub-port=41999'], { stdio: 'ignore', argv0: '/system/bin/linker64' });
     fs.writeFileSync(note, JSON.stringify({ pid: dummy.pid, port: 41999 }));
     dummy.on('exit', (code, signal) => { ended = signal; setTimeout(finish, 500); });
 }, 700);
@@ -793,7 +802,7 @@ setTimeout(finish, 6000);
         const got = JSON.parse(execFileSync(
             process.execPath,
             [EXIT_DRIVER, HUB_NOTE, tmp, FAKE_ANDROID, FIX, how],
-            { env: { ...process.env, HOME: HUB_HOME, TERMUX_APP__DATA_DIR: DATA_LINK, LD_PRELOAD: '' }, encoding: 'utf8', timeout: 30000 },
+            { env: { ...process.env, ...standInEnv, HOME: HUB_HOME, TERMUX_APP__DATA_DIR: DATA_LINK, LD_PRELOAD: '' }, encoding: 'utf8', timeout: 30000 },
         ).trim().split('\n').pop());
         assert.deepStrictEqual(got, want, `the engine at the server's end (${how}): ${JSON.stringify(got)}, wanted ${JSON.stringify(want)}`);
         checked++;
