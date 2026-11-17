@@ -1,6 +1,7 @@
 package com.vscodroid.setup
 
 import android.content.Context
+import android.content.SharedPreferences
 import android.content.pm.InstallSourceInfo
 import android.content.pm.PackageManager
 import android.os.StatFs
@@ -91,6 +92,13 @@ class SplashDownloadLifetimeTest {
         every { screen.isDestroyed } returns true
         every { screen.getString(any()) } returns "Done"
         every { screen.getColor(any()) } returns 0
+        // What the queue records when it ends: the first-run picker counts as answered there.
+        val answered = mutableListOf<Pair<String, Boolean>>()
+        val editor = mockk<SharedPreferences.Editor>(relaxed = true)
+        every { editor.putBoolean(any(), any()) } answers { answered += firstArg<String>() to secondArg<Boolean>(); editor }
+        val preferences = mockk<SharedPreferences>(relaxed = true)
+        every { preferences.edit() } returns editor
+        every { screen.getSharedPreferences(any(), any()) } returns preferences
         every { screen invokeNoArgs "launchMain" } returns Unit
         fun field(name: String, value: Any?) {
             SplashActivity::class.java.getDeclaredField(name).apply { isAccessible = true }.set(screen, value)
@@ -149,8 +157,10 @@ class SplashDownloadLifetimeTest {
         assertTrue(secondRequested.await(5, TimeUnit.SECONDS), "the completed pack did not start the next selected pack")
         assertEquals("java payload", File(filesDir, "usr/lib/jvm/test/payload").readText())
         assertEquals(listOf("toolchain_java", "toolchain_ruby"), synchronized(requests) { requests.toList() })
+        assertEquals(emptyList<Pair<String, Boolean>>(), answered, "the picker was answered while a pack was still to be fetched")
         listeners.toList().forEach { it.onStateUpdate(update("toolchain_ruby", AssetPackStatus.CANCELED)) }
         assertTrue(listeners.isEmpty(), "the finished queue kept its Play listener")
+        assertEquals(listOf("toolchain_picker_shown" to true), answered, "the end of the queue did not answer the picker")
         assertFalse(m.onStateChange != null, "the finished queue kept the departed screen callback")
     }
 }

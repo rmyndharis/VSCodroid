@@ -756,10 +756,14 @@ class SplashActivity : AppCompatActivity() {
                 adapter.getSelectedPackNames(),
                 ToolchainManager(applicationContext).getInstalledToolchains(),
             )
-            markPickerShown()
             if (selected.isEmpty()) {
+                markPickerShown()
                 launchMain()
             } else {
+                // Not answered yet: the downloads that follow live in this process, which can end
+                // before they do, and the packs behind the one in flight would then be lost with
+                // nothing offering them again. The picker is marked answered where the queue ends
+                // ([endDownloadQueue]), so a process that dies in between shows it at the next start.
                 startDownloads(selected)
             }
         }
@@ -953,6 +957,7 @@ class SplashActivity : AppCompatActivity() {
      * one uninstalled.
      */
     private fun endDownloadQueue() {
+        markPickerShown()
         toolchainManager?.unregisterListener()
         toolchainManager?.onStateChange = null
     }
