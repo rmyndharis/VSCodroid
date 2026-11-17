@@ -292,7 +292,10 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
     private var awayFromHomePendingShow: (() -> Unit)? = null
 
     // The home port of an away-from-home notice the person has not answered yet, or 0. An activity
-    // taken down before the answer gives it back to the gateway, so the one made in its place says it.
+    // taken down before the answer gives it back to the gateway, so the next editor load says it:
+    // the one made in its place, or the next one opened after closing the app from the recent apps,
+    // which leaves the service and the temporary origin running. After Stop Server the gateway has
+    // already released that origin, and the next start's bind writes the note again.
     private var awayFromHomeUnanswered = 0
     private var pendingNoticeAfterCrash: (() -> Unit)? = null
 
@@ -946,10 +949,9 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         requestNotificationPermission()
         startAndBindService()
         checkPreviousCrash()
-        // Once the window is attached, which is after the activity has started: from Android 12 the
-        // warning is too long for a toast and is a dialog, and a screen that has not started cannot show
-        // one, so a call made here was neither shown nor remembered and the warning never appeared.
-        window.decorView.post { checkStorageHealth() }
+        // From Android 12 the warning is too long for a toast and is a dialog, which this screen cannot
+        // show before it has started: with its once key it is held, unspent, and shown at onStart.
+        checkStorageHealth()
         checkWebViewVersion()
         // Reading it here, and not only in onNewIntent, is what makes a sign-in
         // survive the app being killed while the browser had the screen. See
@@ -1317,12 +1319,14 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         extraKeyRow?.keyInjector = null
         (webView?.webViewClient as? VSCodroidWebViewClient)?.disposeAuthPage()
         crashDialog?.setOnDismissListener(null)
+        // Taken down with its screen, which the platform otherwise reports as a leaked window. Its
+        // crash logs stay, so a screen made again for a font size or language change asks again.
+        crashDialog?.takeIf { it.isShowing }?.dismiss()
         awayFromHomePendingShow = null
         awayFromHomeNotice?.setOnDismissListener(null)
-        // Taken down with its screen, which the platform otherwise reports as a leaked window, and
-        // handed back unless the app is closing: see [awayFromHomeUnanswered].
+        // Taken down with its screen for the same reason, and handed back: see [awayFromHomeUnanswered].
         awayFromHomeNotice?.takeIf { it.isShowing }?.dismiss()
-        if (!isFinishing) returnUnansweredAwayFromHome()
+        returnUnansweredAwayFromHome()
         AppNotices.drop(this, carry = true)
         webView?.destroy()
         webView = null
@@ -2973,8 +2977,9 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
             serverPort = port
             runOnUiThread {
                 // "Taking longer than usual to start" is over. From Android 12 it is a dialog, which
-                // stayed over the working editor until it was tapped.
-                AppNotices.retract(this, getString(R.string.status_server_slow_start))
+                // stayed over the working editor until it was tapped. By its topic: a screen made again
+                // for a change of language carries the text in the language it had.
+                AppNotices.retractTopic(this, NodeService.TOPIC_SLOW_START)
                 // A server that came back on its own is not the user asking, and
                 // the crash page has told them the editor stays down until they
                 // do. Loading here anyway ran the loop that page exists to stop
@@ -2997,7 +3002,10 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         nodeService?.onServerError = { message ->
             runOnUiThread {
                 Logger.e(tag, "Server error: $message")
-                AppNotices.showNotice(this, message, Toast.LENGTH_LONG)
+                // The service records a notice before it raises it, and the record names the topic
+                // readiness takes it back by.
+                val topic = nodeService?.lastStartupNotice()?.takeIf { it.message == message }?.topic
+                AppNotices.showNotice(this, message, Toast.LENGTH_LONG, topic = topic)
             }
         }
         // A toast lasts three and a half seconds; this state lasts until the app
@@ -3060,28 +3068,33 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         // Reading the source for the *name* isServerReady cannot tell a call whose
         // answer is obeyed from one whose answer is discarded, and the second is
         // the mutation that survived the suite.
+        val notice = service.lastStartupNotice()
         when (
             val decision = bindDecision(
-                notice = service.lastStartupNotice(),
+                notice = notice,
                 port = service.getPort(),
                 ready = service.isServerReady(),
             )
         ) {
             is BindDecision.ShowNotice -> {
                 Logger.w(tag, "Server start notice predating this binding: ${decision.message}")
-                AppNotices.showNotice(this, decision.message, Toast.LENGTH_LONG)
+                AppNotices.showNotice(this, decision.message, Toast.LENGTH_LONG, topic = notice?.topic)
             }
             is BindDecision.ShowGaveUp -> {
-                // The page, not only the toast. The toast is gone in three and a
-                // half seconds and what it leaves behind is the loading page,
-                // still saying the server is starting. The page below says what
-                // happened and carries the only control that can change it.
+                // The page alone. A toast is gone in three and a half seconds and
+                // leaves the loading page behind, still saying the server is
+                // starting; the page says what happened and carries the only
+                // control that can change it. No notice beside it: the page takes
+                // a notice down as it comes up, which flashed a dialog wherever
+                // the text is too long for a toast.
                 Logger.w(tag, "Server had already given up when this binding arrived")
-                AppNotices.showNotice(this, decision.message, Toast.LENGTH_LONG)
                 showServerGaveUpWithLog()
             }
             is BindDecision.Load -> {
                 Logger.i(tag, "Server already serving on port ${decision.port}, loading immediately")
+                // A server that came up while no screen was bound told nobody, and a slow start
+                // notice the screen before carried over is over.
+                AppNotices.retractTopic(this, NodeService.TOPIC_SLOW_START)
                 serverPort = decision.port
                 loadVSCode(decision.port)
             }
@@ -3123,7 +3136,7 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
      *
      * One caller is left on this variant that the flag cannot reach:
      * [BindDecision.ShowGaveUp], which an activity binding after the fact reads
-     * out of `lastStartupNotice()`, and a notice carries only `terminal`. Both
+     * out of `lastStartupNotice()`, whose `terminal` is not that flag. Both
      * states set it. The asymmetry is deliberate rather than overlooked: the
      * terminal state keeps the service alive on purpose, so a later bind is the
      * case it exists for, while STAND_DOWN calls `stopSelf()` in the next line
@@ -3167,8 +3180,11 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                     .map { redactSecrets(redactToken(it)) }
                     .let { collapseRuns(it, SERVER_LOG_LINES) }
             }
+            // A page this app loaded since owns the screen. A page the editor started by itself (its
+            // Reload Window, a main-frame load error) does not while the server stays given up: the
+            // gateway answers it with an empty 503, and this page is then the only thing said.
             if (request != recoveryPageEpoch || webView !== targetView ||
-                generation != AuthTabWindow.pageGeneration()) return@launch
+                (generation != AuthTabWindow.pageGeneration() && nodeService?.isServerReady() == true)) return@launch
             showErrorPage(getString(R.string.error_server_gave_up), RETRY_URL, detail.joinToString("\n"))
         }
     }
@@ -3483,7 +3499,8 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
      * The service hands the port out once per process. Until the person answers
      * the dialog the port is kept in [awayFromHomeUnanswered], and an activity
      * taken down before that (a font size or language change makes it again, and
-     * so does a reclaimed screen) gives it back, so the notice is not lost with it.
+     * so does a reclaimed screen; closing the app from the recent apps ends it
+     * while the server goes on) gives it back, so the notice is not lost with it.
      *
      * Stop Server is in the notification, and a phone with notifications turned
      * off for the app shows none, so the dialog carries the same action under the

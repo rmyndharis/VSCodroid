@@ -99,6 +99,24 @@ class ActivityTeardownTest {
     }
 
     @Test
+    fun `the previous-crash dialog goes down with its screen`() {
+        // A font size or language change makes this activity again with the dialog open, and a
+        // dialog left up when its activity is destroyed is a leaked window. Taken down without
+        // its listener, which would show a notice waiting behind it on a screen that is going.
+        // The crash logs stay, so the screen made again asks the same question.
+        val destroy = code(body("override fun onDestroy()"))
+        val unhooked = destroy.indexOfFirst { it.contains("crashDialog?.setOnDismissListener(null)") }
+        val dismissed = destroy.indexOfFirst { it.contains("crashDialog?.takeIf { it.isShowing }?.dismiss()") }
+
+        assertTrue(dismissed >= 0) {
+            "onDestroy leaves the previous-crash dialog up, and the platform reports its window as leaked"
+        }
+        assertTrue(unhooked in 0 until dismissed) {
+            "the dialog is dismissed with its listener still set, which runs a waiting notice on a screen that is going"
+        }
+    }
+
+    @Test
     fun `the extra key row lets go of a WebView that has been destroyed`() {
         // The only thing that rebuilds the injector is initBridge, which
         // recreateWebView reaches only through loadVSCode, and only when a port

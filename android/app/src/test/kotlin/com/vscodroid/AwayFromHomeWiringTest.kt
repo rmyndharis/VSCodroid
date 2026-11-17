@@ -79,9 +79,11 @@ class AwayFromHomeWiringTest {
 
     /**
      * The service hands the home port out once. A dialog nobody answered, taken down with its
-     * activity (a font size or language change makes the activity again) or by a crash page, was
-     * the only explanation of where the settings went, so the port goes back to the gateway and
-     * the next editor load says it again.
+     * activity (a font size or language change makes the activity again, and closing the app from
+     * the recent apps ends it while the server goes on) or by a crash page, was the only
+     * explanation of where the settings went, so the port goes back to the gateway and the next
+     * editor load says it again. After Stop Server the hand-back is spent on a gateway that has
+     * released the port, and the next start's bind writes the note again.
      */
     @Test
     fun `a notice nobody answered is handed back when its screen is taken down`() {
@@ -105,10 +107,20 @@ class AwayFromHomeWiringTest {
             "the unanswered port no longer goes back to the gateway, or goes back twice",
         )
         val destroy = SourceScan.body(main, "override fun onDestroy(")
+        val handBack = destroy.indexOf("returnUnansweredAwayFromHome()")
         assertTrue(
-            destroy.contains("if (!isFinishing) returnUnansweredAwayFromHome()"),
-            "an activity the system takes down no longer hands the notice to the one made in its " +
-                "place, or an app that is closing hands it to nobody",
+            handBack >= 0,
+            "an activity that is taken down no longer hands the notice to the next editor load",
+        )
+        assertFalse(
+            Regex("""if \([^)]*isFinishing[^)]*\)\s*returnUnansweredAwayFromHome\(\)""").containsMatchIn(destroy),
+            "a screen closed from the recent apps keeps the notice to itself, while the service and the " +
+                "editor on the temporary port go on running and the next load says nothing",
+        )
+        assertTrue(
+            destroy.indexOf("awayFromHomeNotice?.setOnDismissListener(null)") in 0 until handBack,
+            "the dismiss in onDestroy runs the answer listener first, which forgets the port before it is " +
+                "handed back",
         )
         assertTrue(
             destroy.contains("awayFromHomeNotice?.takeIf { it.isShowing }?.dismiss()"),

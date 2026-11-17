@@ -15,9 +15,10 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The action button of a toolchain card shows its whole label at the largest font and display sizes.
 - An install made on Android 10 keeps its projects folder in the app's storage after the phone is updated, even when another app has made a folder of that name on shared storage.
 - On Android 12 and later, a notice shown only once while the app runs, such as the one about a workspace that spans several device folders, waits for the app's return when it arrives in the background instead of being dropped.
-- On Android 12 and later, the notice that the server is taking longer than usual to start closes when the server starts instead of staying over the editor.
-- The notice that the server crashed repeatedly no longer appears for a moment under the page that says so.
-- The notice that another app is using the editor's port comes back after a font size or language change until it is answered.
+- On Android 12 and later, the notice that the server is taking longer than usual to start closes when the server starts instead of staying over the editor, also after a font size or language change, which no longer shows it twice.
+- The notice that the server crashed repeatedly or could not start no longer appears for a moment under the page that says so.
+- The page that says the server stopped is no longer skipped when the editor starts to reload at that moment, which left a blank screen.
+- The notice that another app is using the editor's port comes back until it is answered, after a font size or language change or after closing the app from the recent apps.
 - The notice that another app is using the editor's port offers Stop Server itself and names it in its text, for a phone with notifications turned off.
 - An install tapped on the Toolchains screen before the setup that follows an update has finished opens the setup screen instead of unpacking over it.
 - A keyboard put away after the screen is turned stays down when a text box other than the editor has the focus, such as Quick Open or the find box; the next touch used to bring it back.

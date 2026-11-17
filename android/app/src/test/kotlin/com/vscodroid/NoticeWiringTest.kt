@@ -47,7 +47,7 @@ class NoticeWiringTest {
         val toolchain = SourceScan.withoutComments(SourceScan.read("src/main/kotlin/com/vscodroid/ToolchainActivity.kt"))
         val splash = SourceScan.withoutComments(SourceScan.read("src/main/kotlin/com/vscodroid/SplashActivity.kt"))
 
-        assertEquals(25, Regex("""\bAppNotices\.showNotice\s*\(""").findAll(main).count())
+        assertEquals(24, Regex("""\bAppNotices\.showNotice\s*\(""").findAll(main).count())
         assertEquals(2, Regex("""\bAppNotices\.showNotice\s*\(""").findAll(toolchain).count())
         assertEquals(1, Regex("""\bAppNotices\.showNotice\s*\(""").findAll(splash).count())
 
@@ -175,43 +175,78 @@ class NoticeWiringTest {
     /**
      * "The server is taking longer than usual to start" is a dialog from Android 12, and nothing took
      * it down when the server did start: it stayed over the working editor until it was tapped.
+     *
+     * It is taken back by its topic, not its text: a screen made again for a language change carries
+     * the old language's text, which the new language's string does not match. And it is taken back
+     * where a screen binds to a server already ready, which is how a server that came up while no
+     * screen was bound reaches the dialog the screen before carried over.
      */
     @Test
-    fun `the slow start notice is taken back when the server is ready`() {
+    fun `the slow start notice is taken back by its topic when the server is ready`() {
         val main = SourceScan.withoutComments(SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt"))
         val callbacks = SourceScan.body(main, "private fun setupServiceCallbacks(")
         val ready = callbacks.substringAfter("nodeService?.onServerReady = ").substringBefore("nodeService?.onServerError = ")
+        val error = callbacks.substringAfter("nodeService?.onServerError = ").substringBefore("nodeService?.onServerGaveUp = ")
+        val retract = "AppNotices.retractTopic(this, NodeService.TOPIC_SLOW_START)"
 
+        assertTrue(ready.contains(retract), "onServerReady no longer takes the slow start notice back")
         assertTrue(
-            ready.contains("AppNotices.retract(this, getString(R.string.status_server_slow_start))"),
-            "onServerReady no longer takes the slow start notice back",
+            callbacks.substringAfter("is BindDecision.Load ->").substringBefore("BindDecision.Wait").contains(retract),
+            "a screen that binds to a server already ready leaves the slow start notice carried from the screen before",
+        )
+        assertFalse(
+            main.contains("AppNotices.retract("),
+            "a notice is taken back by its text again, which a language change makes miss",
+        )
+        assertTrue(
+            error.contains("lastStartupNotice()?.takeIf { it.message == message }?.topic") &&
+                error.contains("AppNotices.showNotice(this, message, Toast.LENGTH_LONG, topic = topic)"),
+            "a notice raised to a bound screen is shown without the topic its readiness takes it back by",
+        )
+        assertTrue(
+            callbacks.substringAfter("is BindDecision.ShowNotice ->").substringBefore("is BindDecision.ShowGaveUp ->")
+                .contains("AppNotices.showNotice(this, decision.message, Toast.LENGTH_LONG, topic = notice?.topic)"),
+            "a notice read when a screen binds is shown without the topic its readiness takes it back by",
         )
         val service = SourceScan.withoutComments(SourceScan.read("src/main/kotlin/com/vscodroid/service/NodeService.kt"))
+        assertTrue(
+            service.contains("reportStartupNotice(getString(R.string.status_server_slow_start), topic = TOPIC_SLOW_START)"),
+            "the slow start notice is recorded without its topic",
+        )
         assertTrue(
             SourceScan.body(service, "private fun reportStartupNotice(").contains("if (!terminal) onServerError?.invoke(message)"),
             "a terminal notice is raised as well as recorded again, and flashes as a dialog under the page " +
                 "that onServerGaveUp puts up at once",
         )
+        assertFalse(
+            callbacks.substringAfter("is BindDecision.ShowGaveUp ->").substringBefore("is BindDecision.Load ->")
+                .contains("AppNotices.showNotice("),
+            "a screen that binds after the server gave up raises the notice the gave-up page takes down at once",
+        )
     }
 
     /**
-     * From Android 12 the storage warning does not fit a toast, so it is a dialog, and an activity
-     * that has not started cannot show one: with a process-once key the notice is then neither shown
-     * nor remembered. `onCreate` runs before the start, so a call made there loses the warning for
-     * good. It is posted to the window instead, which runs once the activity has started.
+     * From Android 12 the storage warning does not fit a toast, so it is a dialog, which goes only on
+     * a started screen. `onCreate` runs before the start, and a notice with a process-once key raised
+     * there is held, its key unspent, and shown whole by the flush at `onStart` (`AppNoticesTest`, "a
+     * notice with a once key waits for the screen to start"). So the check needs no post to the
+     * window; what is pinned is that it runs once per screen, from `onCreate`.
      */
     @Test
-    fun `the storage warning is not asked for from onCreate before the activity has started`() {
+    fun `the storage warning is asked for once from onCreate and held for the start`() {
         val main = SourceScan.withoutComments(SourceScan.read("src/main/kotlin/com/vscodroid/MainActivity.kt"))
         val create = SourceScan.body(main, "override fun onCreate(")
 
-        assertTrue(
-            create.contains("window.decorView.post { checkStorageHealth() }"),
-            "onCreate must post checkStorageHealth to the window so that a dialog can be shown",
+        assertEquals(
+            1,
+            Regex("""\bcheckStorageHealth\(\)""").findAll(create).count(),
+            "onCreate no longer asks for the storage warning, or asks twice",
         )
-        assertFalse(
-            Regex("""(?<!\{ )\bcheckStorageHealth\(\)(?! \})""").containsMatchIn(create),
-            "onCreate calls checkStorageHealth directly, before the activity can show a dialog",
+        val helper = SourceScan.withoutComments(SourceScan.read("src/main/kotlin/com/vscodroid/util/AppNotices.kt"))
+        assertTrue(
+            SourceScan.body(helper, "internal fun showNoticeWithPolicy(")
+                .contains("coordinator.holdOnce(message, processOnceKey)"),
+            "a once notice raised before the screen has started is no longer held for the start",
         )
     }
 }

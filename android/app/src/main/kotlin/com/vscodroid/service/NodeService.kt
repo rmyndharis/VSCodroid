@@ -39,8 +39,11 @@ import android.annotation.SuppressLint
  * coming, which is the exact lie the give-up page exists to replace. A parallel
  * boolean would have been the same fact in two fields, kept in step by hand at
  * the four sites that write it.
+ *
+ * [topic] names a notice that stops being true later, so a screen can take it back by
+ * that rather than by its text, which a change of language alters.
  */
-data class StartupNotice(val message: String, val terminal: Boolean)
+data class StartupNotice(val message: String, val terminal: Boolean, val topic: String? = null)
 
 /**
  * Foreground Service that owns the Node.js server process.
@@ -877,7 +880,7 @@ class NodeService : Service() {
                 // than an ending -- and a message that reads as an ending is how
                 // the whole of this loop stops meaning anything to the person
                 // reading it.
-                reportStartupNotice(getString(R.string.status_server_slow_start))
+                reportStartupNotice(getString(R.string.status_server_slow_start), topic = TOPIC_SLOW_START)
             }
         }
         // "No server of ours" rather than "the process exited", because this loop
@@ -918,8 +921,8 @@ class NodeService : Service() {
         onServerError?.invoke(message)
     }
 
-    private fun reportStartupNotice(message: String, terminal: Boolean = false) {
-        startupNotice = StartupNotice(message, terminal)
+    private fun reportStartupNotice(message: String, terminal: Boolean = false, topic: String? = null) {
+        startupNotice = StartupNotice(message, terminal, topic)
         // A terminal notice is followed at once by [onServerGaveUp], whose page says it to a client
         // already bound, and is recorded above for one that binds later. Raised here as well it was a
         // notice that page took down the moment it came up: a dialog that flashed wherever the text is
@@ -1375,6 +1378,9 @@ class NodeService : Service() {
          * is, because by then the foreground status belongs to the server.
          */
         const val ACTION_RELEASE_HOLD = "com.vscodroid.action.RELEASE_SETUP_HOLD"
+
+        /** The topic of `status_server_slow_start`, which readiness takes back. */
+        const val TOPIC_SLOW_START = "server_slow_start"
     }
 }
 

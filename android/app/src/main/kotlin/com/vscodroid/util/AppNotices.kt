@@ -99,8 +99,23 @@ internal interface BlockingNoticeHost {
 // What a screen still held when it was taken down: the notices that never reached a dialog and
 // those on a dialog still open, with the count the ceiling pushed out. [onceKeys] is parallel to
 // [texts] and names the process-once key of an entry that has one, which the next screen spends
-// when it shows the entry.
-internal class HeldNotices(val texts: List<String>, val pushedOut: Int, val onceKeys: List<String?> = emptyList())
+// when it shows the entry. [topics] is parallel too, and names what a retraction matches.
+internal class HeldNotices(
+    val texts: List<String>,
+    val pushedOut: Int,
+    val onceKeys: List<String?> = emptyList(),
+    val topics: List<String?> = emptyList(),
+) {
+    // What is left once the notices on [topic] are taken back, or null when no notice is: a count
+    // of pushed-out notices alone has nothing to show and would only prefix an unrelated dialog.
+    fun withoutTopic(topic: String): HeldNotices? {
+        val kept = texts.indices.filter { topics.getOrNull(it) != topic }
+        if (kept.isEmpty()) return null
+        return HeldNotices(
+            kept.map { texts[it] }, pushedOut, kept.map { onceKeys.getOrNull(it) }, kept.map { topics.getOrNull(it) },
+        )
+    }
+}
 
 internal class NoticeDialogCoordinator(
     private val maxEntries: Int = MAX_COMBINED_NOTICE_ENTRIES,
@@ -119,7 +134,7 @@ internal class NoticeDialogCoordinator(
     // while the screen was started.
     private enum class Told { NOTHING, TOAST, DIALOG }
 
-    private class Entry(val text: String, var told: Told, val onceKey: String? = null)
+    private class Entry(val text: String, var told: Told, val onceKey: String? = null, val topic: String? = null)
 
     private val entries = ArrayDeque<Entry>()
     private var pushedOut = 0
@@ -130,11 +145,11 @@ internal class NoticeDialogCoordinator(
     val currentText: String?
         get() = if (entries.isEmpty()) null else combinedMessage()
 
-    fun enqueueAndShow(text: CharSequence, host: NoticeHostState) {
+    fun enqueueAndShow(text: CharSequence, host: NoticeHostState, topic: String? = null) {
         if (!host.canShowDialog()) return
         val active = openWindow
         if (active != null && active.isShowing) {
-            appendEntry(text.toString(), Told.DIALOG)
+            appendEntry(text.toString(), Told.DIALOG, topic = topic)
             active.setMessage(combinedMessage())
             return
         }
@@ -142,15 +157,15 @@ internal class NoticeDialogCoordinator(
             openWindow = null
             entries.removeAll { it.told == Told.DIALOG }
         }
-        appendEntry(text.toString(), Told.NOTHING)
+        appendEntry(text.toString(), Told.NOTHING, topic = topic)
         presentOrDefer(host)
     }
 
     // The notice of a stopped screen, toasted when it was raised, kept for the dialog at the
     // screen's next start. A dialog the screen still holds from before takes the text too, but it
     // counts as shown only once the screen is started again.
-    fun hold(text: CharSequence) {
-        appendEntry(text.toString(), Told.TOAST)
+    fun hold(text: CharSequence, topic: String? = null) {
+        appendEntry(text.toString(), Told.TOAST, topic = topic)
         openWindow?.takeIf { it.isShowing }?.setMessage(combinedMessage())
     }
 
@@ -165,11 +180,12 @@ internal class NoticeDialogCoordinator(
         openWindow?.takeIf { it.isShowing }?.setMessage(combinedMessage())
     }
 
-    // Takes back a notice that has stopped being true, as "the server is slow to start" has once the
-    // server is up: off a dialog that is open, which closes when nothing else is on it, and out of
-    // what waits for a screen.
-    fun retract(text: CharSequence) {
-        if (!entries.removeAll { it.text == text.toString() }) return
+    // Takes back the notices on [topic], which have stopped being true, as "the server is slow to
+    // start" has once the server is up: off a dialog that is open, which closes when nothing else is
+    // on it, and out of what waits for a screen. By topic and not by text, which a screen made again
+    // for a change of language carries in the language it had.
+    fun retractTopic(topic: String) {
+        if (!entries.removeAll { it.topic == topic }) return
         val window = openWindow?.takeIf { it.isShowing } ?: return
         if (entries.isEmpty()) {
             openWindow = null
@@ -207,7 +223,9 @@ internal class NoticeDialogCoordinator(
     // The notices of a screen the system took down, taken over by the screen made in its place.
     // They count as toasted at most, so the next start shows them whole.
     fun take(held: HeldNotices) {
-        held.texts.forEachIndexed { index, text -> appendEntry(text, Told.TOAST, held.onceKeys.getOrNull(index)) }
+        held.texts.forEachIndexed { index, text ->
+            appendEntry(text, Told.TOAST, held.onceKeys.getOrNull(index), held.topics.getOrNull(index))
+        }
         pushedOut += held.pushedOut
     }
 
@@ -221,6 +239,7 @@ internal class NoticeDialogCoordinator(
         val heldEntries = entries.filter { it.told != Told.DIALOG || onScreen }
         val held = heldEntries.map { it.text }
         val heldKeys = heldEntries.map { it.onceKey }
+        val heldTopics = heldEntries.map { it.topic }
         val count = pushedOut
         entries.clear()
         pushedOut = 0
@@ -232,7 +251,7 @@ internal class NoticeDialogCoordinator(
         openWindow = null
         win?.dismiss()
         if (untold.isNotEmpty()) host.showToast(noticesToast(untold, count, host::toastFits))
-        return if (held.isEmpty()) null else HeldNotices(held, count, heldKeys)
+        return if (held.isEmpty()) null else HeldNotices(held, count, heldKeys, heldTopics)
     }
 
     private fun combinedMessage(): String {
@@ -240,7 +259,10 @@ internal class NoticeDialogCoordinator(
         return if (pushedOut > 0) "(+$pushedOut) $joined" else joined
     }
 
-    private fun appendEntry(text: String, told: Told, onceKey: String? = null) {
+    private fun appendEntry(text: String, told: Told, onceKey: String? = null, topic: String? = null) {
+        // A notice on a topic already here says it again: a screen made again with the slow start
+        // dialog carried over is told the same thing by the service when it binds.
+        if (topic != null && entries.any { it.topic == topic }) return
         // The bound keeps a dialog a person watches from growing, so it pushes out entries already
         // shown. Entries not shown yet have a ceiling of their own: beyond it the oldest goes and
         // is counted, so that nothing grows without bound or leaves without a trace.
@@ -253,7 +275,7 @@ internal class NoticeDialogCoordinator(
             entries.removeAt(entries.indexOfFirst { it.told != Told.DIALOG })
             pushedOut += 1
         }
-        entries.addLast(Entry(text, told, onceKey))
+        entries.addLast(Entry(text, told, onceKey, topic))
     }
 
     // The entries a person has not been shown that carry a key already spent are not shown now, and
@@ -323,6 +345,7 @@ internal fun showNoticeWithPolicy(
     host: NoticeHostState?,
     processOnceKey: String? = null,
     shownOnceKeys: MutableSet<String>? = null,
+    topic: String? = null,
 ) {
     if (processOnceKey != null && shownOnceKeys != null && processOnceKey in shownOnceKeys) {
         return
@@ -338,7 +361,7 @@ internal fun showNoticeWithPolicy(
         if (processOnceKey != null && shownOnceKeys != null && !shownOnceKeys.add(processOnceKey)) {
             return
         }
-        coordinator.enqueueAndShow(message, host)
+        coordinator.enqueueAndShow(message, host, topic)
         return
     }
     // A notice with a once key is not an event: with no started screen it is neither shown nor
@@ -351,7 +374,7 @@ internal fun showNoticeWithPolicy(
     // outlives a process ended before the next start, and the dialog at that start shows the whole text.
     if (coordinator != null && host != null && host.canHoldNotices()) {
         showToast()
-        coordinator.hold(message)
+        coordinator.hold(message, topic)
         return
     }
     // No screen at all: the activity is gone or going, as when a save fails to reach a device
@@ -377,6 +400,8 @@ internal object AppNotices {
         duration: Int = Toast.LENGTH_LONG,
         activity: Activity? = context as? Activity,
         processOnceKey: String? = null,
+        // What [retractTopic] takes the notice back by, for one that stops being true.
+        topic: String? = null,
     ) {
         val fontScale = context.resources?.configuration?.fontScale ?: 1f
         val coordinator = activity?.let {
@@ -392,6 +417,7 @@ internal object AppNotices {
             host = host,
             processOnceKey = processOnceKey,
             shownOnceKeys = shownOnceKeys,
+            topic = topic,
         )
     }
 
@@ -421,9 +447,13 @@ internal object AppNotices {
         host.starting = false
     }
 
-    // A notice [activity] was given that is no longer true. A toast already shown fades by itself.
-    fun retract(activity: Activity, message: CharSequence) {
-        coordinators[activity]?.retract(message)
+    // The notices on [topic] that [activity] was given, no longer true, and those the screen before it
+    // left for it and it has not taken yet. A toast already shown fades by itself.
+    fun retractTopic(activity: Activity, topic: String) {
+        coordinators[activity]?.retractTopic(topic)
+        val held = heldForNextScreen[activity.javaClass] ?: return
+        val left = held.withoutTopic(topic)
+        if (left == null) heldForNextScreen.remove(activity.javaClass) else heldForNextScreen[activity.javaClass] = left
     }
 
     // carry: the call comes from onDestroy. What a screen that is not finishing still held is kept

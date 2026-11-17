@@ -1,5 +1,7 @@
 package com.vscodroid.util
 
+import android.app.Activity
+import io.mockk.mockk
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
 import org.junit.jupiter.api.Assertions.assertNull
@@ -320,16 +322,16 @@ class AppNoticesTest {
     fun `a notice taken back leaves an open dialog, which closes when nothing else is on it`() {
         val host = FakeNoticeHost()
         val coordinator = NoticeDialogCoordinator()
-        coordinator.enqueueAndShow("The server is slow to start", host)
-        coordinator.enqueueAndShow("A copy was kept beside notes.md", host)
+        coordinator.enqueueAndShow("The server is slow to start", host, topic = "slow")
+        coordinator.enqueueAndShow("A copy was kept beside notes.md", host, topic = "copy")
         val window = host.createdWindows.single()
 
-        coordinator.retract("The server is slow to start")
+        coordinator.retractTopic("slow")
 
-        assertEquals("A copy was kept beside notes.md", window.text, "the other notice stays, alone")
+        assertEquals("A copy was kept beside notes.md", window.text, "the notice on another topic stays, alone")
         assertTrue(window.isShowing)
 
-        coordinator.retract("A copy was kept beside notes.md")
+        coordinator.retractTopic("copy")
 
         assertFalse(window.isShowing, "a dialog with nothing left to say stayed up")
         assertEquals(0, coordinator.entryCount)
@@ -343,10 +345,10 @@ class AppNoticesTest {
     fun `a notice taken back while its screen is stopped is not shown at the next start`() {
         val host = FakeNoticeHost(canShow = false, canHold = true)
         val coordinator = NoticeDialogCoordinator()
-        coordinator.hold("The server is slow to start")
+        coordinator.hold("The server is slow to start", topic = "slow")
 
-        coordinator.retract("The server is slow to start")
-        coordinator.retract("never raised")
+        coordinator.retractTopic("slow")
+        coordinator.retractTopic("never raised")
         host.canShow = true
         coordinator.flush(host)
 
@@ -414,6 +416,97 @@ class AppNoticesTest {
         assertEquals("A copy was kept beside notes.md", window.text)
         assertTrue(window.isShowing)
         assertEquals(1, coordinator.entryCount)
+    }
+
+    /**
+     * A screen made again for a change of language carries the dialog in the language it had, and the
+     * service's record, read when the new screen binds, is in that language too. The new language's
+     * string matches neither, so a notice taken back by its text stayed over the working editor.
+     */
+    @Test
+    fun `a notice is taken back by its topic after a language change, from a dialog carried over`() {
+        val old = FakeNoticeHost()
+        val before = NoticeDialogCoordinator()
+        before.enqueueAndShow("The server is taking longer than usual to start.", old, topic = "slow")
+        before.enqueueAndShow("A copy was kept beside notes.md", old)
+
+        val held = before.drop(old)
+        assertEquals(listOf<String?>("slow", null), held?.topics, "the topic does not survive the screen being made again")
+
+        val next = FakeNoticeHost()
+        val after = NoticeDialogCoordinator()
+        after.take(held!!)
+        after.flush(next)
+        val window = next.createdWindows.single()
+
+        after.retractTopic("slow")
+
+        assertTrue(window.isShowing, "the notice on no topic went with it")
+        assertEquals("A copy was kept beside notes.md", window.text)
+    }
+
+    /**
+     * The screen made again shows the slow start dialog it was handed, and the service tells it the
+     * same thing when it binds. Added again, the dialog said it twice for as long as the server took.
+     */
+    @Test
+    fun `a notice on a topic already shown is not added twice`() {
+        val host = FakeNoticeHost()
+        val coordinator = NoticeDialogCoordinator()
+        coordinator.take(HeldNotices(listOf("Slow to start"), 0, topics = listOf("slow")))
+        coordinator.flush(host)
+
+        coordinator.enqueueAndShow("Slow to start", host, topic = "slow")
+        coordinator.hold("Slow to start", topic = "slow")
+        coordinator.enqueueAndShow("Something else", host)
+
+        assertEquals("Slow to start\n\nSomething else", host.createdWindows.single().text)
+    }
+
+    /**
+     * A server that comes up between one screen going and the next binding is told to nobody, and the
+     * slow start dialog the first screen carried waits for the next in the process-wide hand-over.
+     * Taken back from there, it is never shown over the editor.
+     */
+    @Test
+    fun `notices handed to the next screen lose those on a topic taken back, and keep the rest`() {
+        val held = HeldNotices(
+            texts = listOf("Slow to start", "A copy was kept", "Slow to start, again"),
+            pushedOut = 2,
+            onceKeys = listOf(null, AppNotices.ONCE_KEY_STORAGE_LOW, null),
+            topics = listOf("slow", "copy", "slow"),
+        )
+
+        val left = held.withoutTopic("slow")
+
+        assertEquals(listOf("A copy was kept"), left?.texts)
+        assertEquals(listOf<String?>(AppNotices.ONCE_KEY_STORAGE_LOW), left?.onceKeys, "a once key moved to another notice")
+        assertEquals(listOf<String?>("copy"), left?.topics)
+        assertEquals(2, left?.pushedOut)
+        assertNull(left?.withoutTopic("copy"), "a count with no notice left would only prefix the next, unrelated dialog")
+        assertEquals(listOf("Plain"), HeldNotices(listOf("Plain"), 0).withoutTopic("slow")?.texts, "notices held with no topics")
+    }
+
+    @Test
+    fun `a topic taken back for a screen reaches what the screen before it left for it`() {
+        @Suppress("UNCHECKED_CAST")
+        val handOver = AppNotices::class.java.getDeclaredField("heldForNextScreen")
+            .apply { isAccessible = true }.get(null) as HashMap<Class<out Activity>, HeldNotices>
+        val screen = mockk<Activity>(relaxed = true)
+        try {
+            handOver[screen.javaClass] = HeldNotices(listOf("Slow", "Kept"), 0, topics = listOf("slow", null))
+            AppNotices.retractTopic(screen, "slow")
+            assertEquals(
+                listOf("Kept"), handOver[screen.javaClass]?.texts,
+                "the next screen is handed the notice taken back, or loses the one on another topic",
+            )
+
+            handOver[screen.javaClass] = HeldNotices(listOf("Slow"), 3, topics = listOf("slow"))
+            AppNotices.retractTopic(screen, "slow")
+            assertFalse(screen.javaClass in handOver, "the next screen takes a hand-over with nothing left to show")
+        } finally {
+            handOver.remove(screen.javaClass)
+        }
     }
 
     @Test
