@@ -601,8 +601,10 @@ const throughLinker = (call) => (Array.isArray(call[1])
     ? [BIONIC_LINKER, [call[0], ...call[1]], ...call.slice(2)]
     : [BIONIC_LINKER, [call[0]], ...call.slice(1)]);
 
-// The file is read as VS Code reads it: comments and trailing commas out, strings kept, the top-level key
-// only, the last one when it is written twice, and a file that does not parse turns nothing on.
+// The file is read as VS Code builds its settings from it: comments and trailing commas out, strings kept,
+// the keys of the root object split at their dots into a tree in file order (so the dotted key, the key
+// written as an object under `vscodroid.antigravity` and the fully nested form all name the setting, and a
+// later key replaces what an earlier one made), and a file that does not parse turns nothing on.
 for (const [label, text, on] of [
     ['no settings file', null, false],
     ['the setting absent', '{\n    "update.mode": "none"\n}\n', false],
@@ -614,6 +616,14 @@ for (const [label, text, on] of [
     ['the key alone on its line inside another object', '{\n    "some.object": {\n        "vscodroid.antigravity.runEngine": true\n    }\n}\n', false],
     ['the key inside a language block', '{\n    "[python]": {\n        "vscodroid.antigravity.runEngine": true\n    }\n}\n', false],
     ['the key twice, true then false', '{\n    "vscodroid.antigravity.runEngine": true,\n    "vscodroid.antigravity.runEngine": false\n}\n', false],
+    ['the key, then a scalar where its parent should be', '{\n    "vscodroid.antigravity.runEngine": true,\n    "vscodroid": 1\n}\n', false],
+    ['a scalar where the parent should be, then the key', '{\n    "vscodroid": 1,\n    "vscodroid.antigravity.runEngine": true\n}\n', false],
+    ['the key, then the same setting written false as an object', '{\n    "vscodroid.antigravity.runEngine": true,\n    "vscodroid.antigravity": { "runEngine": false }\n}\n', false],
+    ['the key, then its first segment replaced by an empty object', '{\n    "vscodroid.antigravity.runEngine": true,\n    "vscodroid": {}\n}\n', false],
+    ['a dot inside a nested key, which VS Code does not split', '{\n    "vscodroid": { "antigravity.runEngine": true }\n}\n', false],
+    ['brackets nested far past what a settings file holds', '{\n    "vscodroid.antigravity.runEngine": true,\n    "x": ' + '['.repeat(20000) + ']'.repeat(20000) + '\n}\n', false],
+    ['a string broken across lines', '{\n    "a": "x\ny",\n    "vscodroid.antigravity.runEngine": true\n}\n', false],
+    ['a file past a megabyte', '{\n    "vscodroid.antigravity.runEngine": true,\n    "x": "' + 'x'.repeat(1 << 20) + '"\n}\n', false],
     ['a list, not an object', '[{ "vscodroid.antigravity.runEngine": true }]\n', false],
     ['null', 'null\n', false],
     ['true alone', 'true\n', false],
@@ -629,6 +639,12 @@ for (const [label, text, on] of [
     ['comments around the key and the value', '{ /* x */\n    "vscodroid.antigravity.runEngine" /* y */ : /* z */ true // on\n}\n', true],
     ['trailing commas', '{\n    "a": [1, 2,],\n    "vscodroid.antigravity.runEngine": true,\n}\n', true],
     ['the key twice, false then true', '{\n    "vscodroid.antigravity.runEngine": false,\n    "vscodroid.antigravity.runEngine": true\n}\n', true],
+    ['the setting written as an object under vscodroid.antigravity', '{\n    "vscodroid.antigravity": { "runEngine": true }\n}\n', true],
+    ['the fully nested form', '{\n    "vscodroid": { "antigravity": { "runEngine": true } }\n}\n', true],
+    ['the dotted key beside another key under vscodroid', '{\n    "vscodroid": { "other": 1 },\n    "vscodroid.antigravity.runEngine": true\n}\n', true],
+    ['the key after a setting of the same object written false', '{\n    "vscodroid.antigravity": { "runEngine": false },\n    "vscodroid.antigravity.runEngine": true\n}\n', true],
+    ['a raw tab inside a string before the key', '{\n    "a": "x\ty",\n    "vscodroid.antigravity.runEngine": true\n}\n', true],
+    ['a line comment ended by a bare CR', '{\r    "a": 1, // a comment\r    "vscodroid.antigravity.runEngine": true\r}\r', true],
 ]) {
     const home = homeWith(text);
     const call = [engineIn(home), HUB_ARGS, SPAWN_OPTIONS];
@@ -658,6 +674,7 @@ for (const [label, call] of [
     ['the remote control mode', [OFF_ENGINE, ['--remote-control'], SPAWN_OPTIONS]],
     ['no arguments', [OFF_ENGINE, SPAWN_OPTIONS]],
     ['--version with more after it', [OFF_ENGINE, ['--version', '--hub'], SPAWN_OPTIONS]],
+    ['--version of another program in ~/.gemini, which is not the extension\'s check of the engine', [AGY_NEXT, ['--version'], SPAWN_OPTIONS]],
     ['another program in ~/.gemini', [AGY_NEXT, HUB_ARGS, SPAWN_OPTIONS]],
     ['a link from elsewhere that ends at the engine', [LINK_TO_OFF_ENGINE, HUB_ARGS, SPAWN_OPTIONS]],
 ]) {
@@ -698,12 +715,38 @@ for (const home of [OFF_HOME, HUB_HOME]) {
 // --add-dir per folder among them, keep everything but the port; anything else a folder's
 // antigravity.serverArgs could add to them, a second copy of one of them included (the flag parser keeps
 // the last), is refused, the call left as written.
-const EXTENSION_ARGS = ['--hub', '--hub-port=41000', '--app_data_dir=antigravity', '--csrf_token=0123abcd', '--add-dir=/data/user/0/com.vscodroid/files/projects/a', '--add-dir=/data/user/0/com.vscodroid/files/projects/b c'];
-{
-    const got = spawnedUnder([HUB_ENGINE, EXTENSION_ARGS, SPAWN_OPTIONS], { home: HUB_HOME });
-    assert.strictEqual(got[0], BIONIC_LINKER, 'the extension\'s own hub start was refused');
-    assert.ok(/^--hub-port=\d+$/.test(got[1][2]) && got[1][2] !== '--hub-port=41000', 'with the setting on the engine kept the port the extension chose: ' + got[1][2]);
-    assert.deepStrictEqual([got[1][0], got[1][1], ...got[1].slice(3)], [HUB_ENGINE, ...EXTENSION_ARGS.filter((a) => a !== '--hub-port=41000')], 'the extension\'s other arguments changed');
+// The token is the extension's own as a flag only for an engine older than 1.5.2, and then the call's own
+// environment carries the same value (ANTIGRAVITY_SERVER_CSRF_TOKEN, which it always sets); a current engine
+// gets the environment alone.
+const FOLDERS = ['--add-dir=/data/user/0/com.vscodroid/files/projects/a', '--add-dir=/data/user/0/com.vscodroid/files/projects/b c'];
+const EXTENSION_ARGS = ['--hub', '--hub-port=41000', '--app_data_dir=antigravity', '--csrf_token=0123abcd', ...FOLDERS];
+const CURRENT_ENGINE_ARGS = ['--hub', '--hub-port=41000', '--app_data_dir=antigravity', ...FOLDERS];
+const withToken = (value) => ({ ...SPAWN_OPTIONS, env: { PATH: '/usr/bin', ANTIGRAVITY_SERVER_CSRF_TOKEN: value } });
+for (const [label, args, options] of [
+    ['an engine older than 1.5.2, token as flag and in the environment', EXTENSION_ARGS, withToken('0123abcd')],
+    ['a current engine, token in the environment only', CURRENT_ENGINE_ARGS, withToken('0123abcd')],
+    ['a call with no environment of its own, and no token flag', CURRENT_ENGINE_ARGS, SPAWN_OPTIONS],
+]) {
+    const got = spawnedUnder([HUB_ENGINE, args, options], { home: HUB_HOME });
+    assert.strictEqual(got[0], BIONIC_LINKER, `the extension's own hub start (${label}) was refused`);
+    assert.ok(/^--hub-port=\d+$/.test(got[1][2]) && got[1][2] !== '--hub-port=41000', `(${label}) the engine kept the port the extension chose: ${got[1][2]}`);
+    assert.deepStrictEqual([got[1][0], got[1][1], ...got[1].slice(3)], [HUB_ENGINE, ...args.filter((a) => a !== '--hub-port=41000')], `(${label}) the extension's other arguments changed`);
+    checked++;
+}
+// A token flag with any value other than the environment's is a folder's: it would choose the token the
+// engine and the page share. With no flag built by the extension for a current engine, any flag is the folder's.
+for (const [label, args, options] of [
+    ['a flag with no environment to match', EXTENSION_ARGS, SPAWN_OPTIONS],
+    ['a flag whose value is not the environment\'s', EXTENSION_ARGS, withToken('another')],
+    ['a flag with an environment that is not an object', EXTENSION_ARGS, { ...SPAWN_OPTIONS, env: 'ANTIGRAVITY_SERVER_CSRF_TOKEN=0123abcd' }],
+    ['an empty flag and an empty environment value', [...CURRENT_ENGINE_ARGS, '--csrf_token='], withToken('')],
+    ['an empty flag and no environment value', [...CURRENT_ENGINE_ARGS, '--csrf_token='], { ...SPAWN_OPTIONS, env: { PATH: '/usr/bin' } }],
+    ['a folder\'s flag beside the real token in the environment of a current engine', [...CURRENT_ENGINE_ARGS, '--csrf_token=chosen-by-the-folder'], withToken('0123abcd')],
+    ['a folder\'s flag when the call has no environment', [...CURRENT_ENGINE_ARGS, '--csrf_token=chosen-by-the-folder'], SPAWN_OPTIONS],
+    ['the extension\'s flag twice', [...EXTENSION_ARGS, '--csrf_token=0123abcd'], withToken('0123abcd')],
+]) {
+    const call = [HUB_ENGINE, args, options];
+    assert.deepStrictEqual(spawnedUnder(call, { home: HUB_HOME }), call, `a hub start with ${label} was started`);
     checked++;
 }
 for (const [label, extra] of [
@@ -711,7 +754,6 @@ for (const [label, extra] of [
     ['a second port spelled with one dash', ['-hub-port=8080']],
     ['a port given as a separate word', ['--hub-port', '8080']],
     ['a second data directory', ['--app_data_dir=/sdcard/antigravity']],
-    ['a second token', ['--csrf_token=chosen-by-the-folder']],
     ['--hub twice', ['--hub']],
     ['an argument the extension does not build', ['--remote-control']],
     ['a bare word', ['serve']],

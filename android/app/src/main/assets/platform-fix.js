@@ -216,21 +216,112 @@ if (process.platform === 'android') {
   // downloading the engine again when it fails. This is about what extensions start: a terminal runs
   // what the person types there through its own exec interceptor.
   //
-  // Read from the machine settings file at each such call, as VS Code reads it: comments and trailing
-  // commas out, strings kept, then the top-level key, the last one when it is written twice. The same
-  // key inside another object, a language block included, is not this setting, and a file that does
-  // not parse turns nothing on.
+  // Read from the machine settings file at each such call, and the way VS Code builds its settings from
+  // it: the keys of the root object are split at their dots into a tree, in file order, so
+  // `"vscodroid.antigravity.runEngine": true`, `"vscodroid.antigravity": {"runEngine": true}` and the fully
+  // nested form all name this setting, a later key replaces what an earlier one made, and a key whose
+  // parent is a scalar is dropped. The same key inside another object, a language block included, is not
+  // this setting. A file that does not parse turns nothing on. VS Code recovers from some syntax errors (a
+  // missing comma), so the Settings editor can show the box ticked over a file this reads as off, which
+  // keeps the engine down, the safe side of the two.
   var ENGINE_SETTING = 'vscodroid.antigravity.runEngine';
-  var STRING_OR_COMMENT = /"(?:\\.|[^"\\])*"|\/\/[^\n]*|\/\*[\s\S]*?\*\//g;
-  var STRING_OR_TRAILING_COMMA = /"(?:\\.|[^"\\])*"|,(?=\s*[}\]])/g;
+  var SETTINGS_BYTES = 1 << 20;
+  var SETTINGS_DEPTH = 64;
+
+  /**
+   * `text` as JSON that JSON.parse takes, or null when it is not a settings file: comments out (a line
+   * comment ends at a CR as well as an LF, as VS Code's scanner ends it), a comma before a closing bracket
+   * out, a raw control character inside a string escaped, a byte order mark dropped. One pass over the
+   * text with strings kept whole, so no pattern can run away on a long one. A comment or a string that never
+   * ends, a string that breaks across lines, or brackets nested past SETTINGS_DEPTH is not a settings file.
+   */
+  function settingsAsJson(text) {
+    var out = [];
+    var i = text.charCodeAt(0) === 0xFEFF ? 1 : 0;
+    var depth = 0;
+    var comma = -1; // where in `out` a comma that no token has followed yet stands
+    while (i < text.length) {
+      var c = text.charAt(i);
+      if (c === '"') {
+        var piece = '"';
+        i++;
+        for (;;) {
+          if (i >= text.length) return null;
+          var d = text.charAt(i);
+          if (d === '"') break;
+          if (d === '\\') {
+            if (i + 1 >= text.length) return null;
+            piece += d + text.charAt(i + 1);
+            i += 2;
+            continue;
+          }
+          if (d === '\n' || d === '\r') return null;
+          piece += d < ' ' ? '\\u' + ('0000' + d.charCodeAt(0).toString(16)).slice(-4) : d;
+          i++;
+        }
+        out.push(piece + '"');
+        comma = -1;
+        i++;
+      } else if (c === '/' && text.charAt(i + 1) === '/') {
+        while (i < text.length && text.charAt(i) !== '\n' && text.charAt(i) !== '\r') i++;
+        out.push(' ');
+      } else if (c === '/' && text.charAt(i + 1) === '*') {
+        var close = text.indexOf('*/', i + 2);
+        if (close < 0) return null;
+        out.push(' ');
+        i = close + 2;
+      } else {
+        if (c === ',') {
+          comma = out.length;
+        } else if (c === '}' || c === ']') {
+          if (comma >= 0) out[comma] = ' ';
+          comma = -1;
+          depth--;
+        } else if (c === '{' || c === '[') {
+          if (++depth > SETTINGS_DEPTH) return null;
+          comma = -1;
+        } else if (c > ' ') {
+          comma = -1;
+        }
+        out.push(c);
+        i++;
+      }
+    }
+    return out.join('');
+  }
+
+  /** The setting as the tree VS Code builds from the keys of `raw` holds it: only `true` turns it on. */
+  function engineValue(raw) {
+    if (raw === null || typeof raw !== 'object' || Array.isArray(raw)) return false;
+    var root = Object.create(null);
+    Object.keys(raw).forEach(function (key) {
+      var segments = key.split('.');
+      var last = segments.pop();
+      var at = root;
+      for (var i = 0; i < segments.length; i++) {
+        var next = at[segments[i]];
+        if (next === undefined) next = at[segments[i]] = Object.create(null);
+        else if (next === null || typeof next !== 'object') return;
+        at = next;
+      }
+      at[last] = raw[key];
+    });
+    var node = root;
+    var names = ENGINE_SETTING.split('.');
+    for (var j = 0; j < names.length; j++) {
+      if (node === null || typeof node !== 'object') return false;
+      node = node[names[j]];
+    }
+    return node === true;
+  }
 
   function engineTurnedOn() {
     if (!process.env.HOME) return false;
-    // A space, not nothing: what stood either side of a comment stays two tokens.
-    var keep = function (found) { return found.charAt(0) === '"' ? found : ' '; };
     try {
-      var settings = fs.readFileSync(path.join(process.env.HOME, '.vscodroid', 'data', 'Machine', 'settings.json'), 'utf8');
-      return JSON.parse(settings.replace(/^\uFEFF/, '').replace(STRING_OR_COMMENT, keep).replace(STRING_OR_TRAILING_COMMA, keep))[ENGINE_SETTING] === true;
+      var file = path.join(process.env.HOME, '.vscodroid', 'data', 'Machine', 'settings.json');
+      if (fs.statSync(file).size > SETTINGS_BYTES) return false;
+      var json = settingsAsJson(fs.readFileSync(file, 'utf8'));
+      return json !== null && engineValue(JSON.parse(json));
     } catch (e) {
       return false;
     }
@@ -261,10 +352,17 @@ if (process.platform === 'android') {
   // The arguments the extension builds for a hub start, by name. `antigravity.serverArgs` appends its own,
   // and the folder that is open can set it in its own settings (the editor runs without Workspace Trust), so
   // a hub start carrying any other argument is not started, nor one that repeats any but --add-dir: the flag
-  // parser keeps the last of a repeated one, which would let the folder choose the engine's port, its data
-  // directory or its token. A repeated --add-dir only adds a directory the agent may use, as each folder of
-  // the workspace already does.
-  var HUB_ARGUMENT = /^--(?:hub|hub-port=\d{1,5}|app_data_dir=[\s\S]*|csrf_token=[\s\S]*|add-dir=[\s\S]*)$/;
+  // parser keeps the last of a repeated one, which would let the folder choose the engine's port or its data
+  // directory. A repeated --add-dir only adds a directory the agent may use, as each folder of the workspace
+  // already does.
+  //
+  // `--csrf_token=<value>` is the extension's own only for an engine older than 1.5.2, which takes the token as
+  // a flag as well as in the environment (ANTIGRAVITY_SERVER_CSRF_TOKEN). It passes only with the value the
+  // call's own environment carries: with a current engine the extension builds no such flag, so one that
+  // arrives is a folder's, and would choose the token.
+  var HUB_ARGUMENT = /^--(?:hub|hub-port=\d{1,5}|app_data_dir=[\s\S]*|add-dir=[\s\S]*)$/;
+  var TOKEN_FLAG = '--csrf_token=';
+  var TOKEN_ENV = 'ANTIGRAVITY_SERVER_CSRF_TOKEN';
 
   /**
    * For `agy --hub --hub-port=<n>`: the port the extension chose, the one the
@@ -275,16 +373,20 @@ if (process.platform === 'android') {
    * start with an argument outside HUB_ARGUMENT, null for anything else, which
    * runs as an ordinary program would, with no relay and no note.
    */
-  function antigravityHub(file, args) {
+  function antigravityHub(file, args, env) {
     if (!ANTIGRAVITY_ENGINE.test(file) || args.indexOf('--hub') < 0) return null;
     var ports = args.filter(function (arg) { return /^--hub-port=/.test(arg); });
     if (!ports.length) return null;
+    var token = env && typeof env === 'object' && typeof env[TOKEN_ENV] === 'string' ? env[TOKEN_ENV] : '';
     var seen = {};
     var refused = args.some(function (arg) {
       var name = arg.split('=')[0];
       var again = seen[name] && name !== '--add-dir';
       seen[name] = true;
-      return again || !HUB_ARGUMENT.test(arg);
+      var own = arg.indexOf(TOKEN_FLAG) === 0
+        ? token !== '' && arg.slice(TOKEN_FLAG.length) === token
+        : HUB_ARGUMENT.test(arg);
+      return again || !own;
     });
     if (refused) return false;
     var front = Number(ports[0].slice('--hub-port='.length));
@@ -473,8 +575,11 @@ if (process.platform === 'android') {
     var gemini = typeof file === 'string' && fromGemini(file);
     var on = gemini && engineTurnedOn();
     var args = Array.isArray(rest[0]) ? rest[0] : [];
-    var hub = on ? antigravityHub(file, args) : null;
-    if ((gemini && !on && !(args.length === 1 && args[0] === '--version')) || hub === false) {
+    // The options are the first of what follows, or the second after an argument list, as in throughLinker.
+    var options = Array.isArray(rest[0]) || rest[0] == null ? rest[1] : rest[0];
+    var hub = on ? antigravityHub(file, args, options && options.env) : null;
+    var versionCheck = ANTIGRAVITY_ENGINE.test(file) && args.length === 1 && args[0] === '--version';
+    if ((gemini && !on && !versionCheck) || hub === false) {
       // An engine an earlier extension host started is ended as well, so that turning the setting off and
       // reloading the window leaves none running.
       endEarlierHub();
