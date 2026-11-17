@@ -54,9 +54,9 @@ internal fun mockEditorGateway(): EditorGateway {
 }
 
 /**
- * Makes a fixture editor under [proc] die of the SIGTERM a reap sends first, as the shipped
- * one does through platform-fix.js, after passing its pid to the SIGKILL hook. A case that
- * collects or refuses signals there then sees every editor a reap ends, by either signal.
+ * Makes a fixture editor under [proc] die of the SIGTERM a reap sends first, as an editor does
+ * once any handler it has for the signal has run, after passing its pid to the SIGKILL hook. A
+ * case that collects or refuses signals there then sees every editor a reap ends, by either signal.
  */
 internal fun ProcessManager.editorsDieOfTheirSigterm(proc: File) {
     terminateRecordedProcess = { pid ->

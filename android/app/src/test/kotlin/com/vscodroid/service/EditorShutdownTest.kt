@@ -196,6 +196,45 @@ class EditorShutdownTest {
     }
 
     @Test
+    fun `a pid given to an editor of another run during the wait is not killed`() {
+        val signals = mutableListOf<String>()
+        record(8123)
+        manager.terminateRecordedProcess = {
+            signals += "TERM $it"
+            File(temp, "proc/$it/environ").writeText("VSCODROID_SERVER_RUN_ID=another-run\u0000")
+        }
+        manager.killRecordedProcess = { signals += "KILL $it" }
+
+        manager.stopServer()
+
+        assertEquals(listOf("TERM 8123"), signals)
+    }
+
+    @Test
+    fun `an unrecorded editor given to another run after the scan gets no signal`() {
+        // The signals go out once the whole scan is done, so a pid it found can have been
+        // freed and given to an editor of another run by the time its turn comes.
+        val signals = mutableListOf<String>()
+        val owner = runId
+        manager.terminateRecordedProcess = {
+            signals += "TERM $it"
+            File(temp, "proc/${if (it == 8123) 8124 else 8123}").takeIf { dir -> dir.isDirectory }
+                ?.let { dir -> File(dir, "environ").writeText("VSCODROID_SERVER_RUN_ID=another-run\u0000") }
+            File(temp, "proc/$it").deleteRecursively()
+        }
+        manager.killRecordedProcess = { signals += "KILL $it" }
+        bootstrap(alive = true, exits = true) {
+            unrecordedChild(8123, owner)
+            unrecordedChild(8124, owner)
+        }
+
+        manager.stopServer()
+
+        assertEquals(1, signals.size, "signalled: $signals")
+        assertTrue(signals.single().startsWith("TERM "), "signalled: $signals")
+    }
+
+    @Test
     fun `an unrecorded editor is asked with SIGTERM first and every one is ended`() {
         val signals = mutableListOf<String>()
         val owner = runId

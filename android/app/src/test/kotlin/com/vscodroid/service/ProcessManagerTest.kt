@@ -3343,12 +3343,13 @@ class AdoptionTest {
         //
         // Fired from the serving thread, between the request being read and the
         // answer being written, so the stop is inside the round trip by
-        // construction rather than by timing.
+        // construction rather than by timing. Both calls, as `NodeService.shutdown`
+        // makes them.
         val killed = mutableListOf<Int>()
         manager.killRecordedProcess = { killed += it }
         val holder = serving(200)
         recordEditorServer(pid = 4242, port = holder.port)
-        holder.beforeAnswer = { manager.stopServer() }
+        holder.beforeAnswer = { manager.stopServer(); manager.releaseAwayOrigin() }
 
         assertFalse(
             manager.startServer(),
@@ -3370,6 +3371,109 @@ class AdoptionTest {
                 "is the only thing left holding the port",
         )
         assertNull(EditorGateway.instance.boundPort, "the origin this refused start bound was kept")
+    }
+
+    /**
+     * The Stop of the notification inside an adoption on a temporary origin, the one a start
+     * follows its survivor to, or binds when home is busy. `NodeService.shutdown` releases that
+     * origin right after `stopServer()`, under the start, so the start can no longer read the
+     * port it bound from the field: the survivor's note names that port and nothing else.
+     */
+    private fun stopInsideAdoptionRequest(request: Int, awayFromHome: Boolean): List<Int> {
+        val killed = mutableListOf<Int>()
+        manager.killRecordedProcess = { killed += it }
+        val holder = serving(200)
+        recordEditorServer(pid = 4242, port = holder.port)
+        remember(if (awayFromHome) holder.port + 1 else holder.port)
+        var requests = 0
+        holder.beforeAnswer = {
+            if (++requests == request) { manager.stopServer(); manager.releaseAwayOrigin() }
+        }
+
+        assertFalse(manager.startServer(), "a start a stop refused reported success")
+        assertTrue(requests >= request, "the stop never landed inside the adoption")
+        return killed
+    }
+
+    @Test
+    fun `a stop inside the version check on a temporary origin ends the survivor`() {
+        assertEquals(listOf(4242), stopInsideAdoptionRequest(1, awayFromHome = true), "the survivor was left running")
+    }
+
+    @Test
+    fun `a stop inside the run proof on a temporary origin ends the survivor`() {
+        assertEquals(listOf(4242), stopInsideAdoptionRequest(2, awayFromHome = true), "the survivor was left running")
+    }
+
+    @Test
+    fun `a stop inside the run proof at home ends the survivor`() {
+        assertEquals(listOf(4242), stopInsideAdoptionRequest(2, awayFromHome = false), "the survivor was left running")
+    }
+
+    @Test
+    fun `a stop inside an adoption that fails spawns no editor afterwards`() {
+        // At home, so the stop releases nothing and the port stays known: what is left to
+        // pin is the step after the survivor that failed its check has been reaped, which
+        // went on to rotate the token and spawn although the stop had already landed.
+        val holder = serving(200, reports = "another-build")
+        recordEditorServer(pid = 4242, port = holder.port)
+        remember(holder.port)
+        manager.killRecordedProcess = { }
+        holder.beforeAnswer = { manager.stopServer(); manager.releaseAwayOrigin() }
+
+        assertFalse(manager.startServer(), "a start a stop refused reported success")
+
+        verify(exactly = 0) { Environment.buildProcessEnvironment(any(), any()) }
+        assertEquals(token, File(tempDir, "token").readText(), "a stopped start rotated the token")
+    }
+
+    /**
+     * Holds the reap a stop causes inside its SIGTERM and stops again meanwhile, as
+     * `NodeService.onDestroy` does after the notification's Stop. That stop runs on the main
+     * thread and takes the lock the start holds, so it must not wait for the editor to leave.
+     */
+    private fun assertAnotherStopIsNotHeldByTheReap() {
+        val reaping = CountDownLatch(1)
+        val release = CountDownLatch(1)
+        manager.terminateRecordedProcess = {
+            reaping.countDown()
+            release.await(10, TimeUnit.SECONDS)
+            File(tempDir, "proc/$it").deleteRecursively()
+        }
+        val started = AtomicReference<Boolean?>()
+        val starter = thread { started.set(manager.startServer()) }
+        var stopper: Thread? = null
+        try {
+            assertTrue(reaping.await(10, TimeUnit.SECONDS), "the start never reaped the survivor")
+            stopper = thread { manager.stopServer() }
+            stopper.join(2_000)
+            assertFalse(stopper.isAlive, "a stop waited for the reap of the survivor")
+        } finally {
+            release.countDown()
+            starter.join(10_000)
+            stopper?.join(10_000)
+        }
+        assertEquals(false, started.get())
+    }
+
+    @Test
+    fun `a stop does not wait behind the reap of a stop that landed before adoption`() {
+        val holder = serving(200)
+        recordEditorServer(pid = 4242, port = holder.port)
+        val gateway = EditorGateway.instance
+        every { gateway.noteAwayFromHome(any()) } answers { manager.stopServer() }
+
+        assertAnotherStopIsNotHeldByTheReap()
+    }
+
+    @Test
+    fun `a stop does not wait behind the reap of a stop that landed inside adoption`() {
+        val holder = serving(200)
+        recordEditorServer(pid = 4242, port = holder.port)
+        val first = AtomicBoolean(true)
+        holder.beforeAnswer = { if (first.compareAndSet(true, false)) manager.stopServer() }
+
+        assertAnotherStopIsNotHeldByTheReap()
     }
 
     @Test
@@ -4247,7 +4351,9 @@ class AdoptionTest {
             assertTrue(entered.await(5, TimeUnit.SECONDS), "adoption never reached its recorded-pid read")
             stopper = thread(name = "adoption-stopper") {
                 try {
+                    // NodeService.shutdown, then the stop of its onDestroy.
                     manager.stopServer()
+                    manager.releaseAwayOrigin()
                     manager.stopServer()
                 } catch (error: Throwable) {
                     failure.set(error)
@@ -5202,15 +5308,11 @@ class HomePortTest {
         assertEquals(home, gateway.boundPort, "home stays reserved against other programs while the process lives")
     }
 
-    @Test
-    fun `a stop landing as a start follows its survivor gives up the temporary origin`() {
-        // The survivor of an earlier process ran on a temporary port, and a start follows
-        // it there to adopt it. A stop that lands once that port is bound ends the survivor
-        // and must not leave the start's listener on a port that is not home.
-        val home = freePort()
-        stored = home
-        hold(home)
-        val away = freePort()
+    /**
+     * The survivor of an earlier process, recorded on the temporary port [away], and a manager
+     * whose SIGKILL hook collects the pids it ends.
+     */
+    private fun followedSurvivor(away: Int, killed: MutableList<Int>): Pair<EditorGateway, ProcessManager> {
         val runId = "run-4242"
         val socket = editorBackendSocket(contextMock, runId)!!
         File(tempDir, "server").mkdirs()
@@ -5224,16 +5326,52 @@ class HomePortTest {
         val gateway = spyk(EditorGateway()).also { gateways += it }
         val manager = manager(gateway)
         manager.procDirField = File(tempDir, "proc")
-        val killed = mutableListOf<Int>()
         manager.killRecordedProcess = { killed += it }
         manager.editorsDieOfTheirSigterm(File(tempDir, "proc"))
-        every { gateway.bind(any()) } answers { callOriginal().also { manager.stopServer() } }
+        return gateway to manager
+    }
+
+    @Test
+    fun `a stop landing as a start follows its survivor gives up the temporary origin`() {
+        // The survivor of an earlier process ran on a temporary port, and a start follows
+        // it there to adopt it. A stop that lands once that port is bound ends the survivor
+        // and must not leave the start's listener on a port that is not home.
+        val home = freePort()
+        stored = home
+        hold(home)
+        val away = freePort()
+        val killed = mutableListOf<Int>()
+        val (gateway, manager) = followedSurvivor(away, killed)
+        every { gateway.bind(any()) } answers {
+            callOriginal().also { manager.stopServer(); manager.releaseAwayOrigin() }
+        }
 
         assertFalse(manager.startServer(), "a start a stop refused reported success")
 
         assertEquals(listOf(4242), killed, "the survivor the stop landed on was left running")
         assertNull(gateway.boundPort, "the temporary origin $away outlived the stop that refused its start")
         assertEquals(home, stored)
+    }
+
+    @Test
+    fun `a stop landing after a start bound its survivor's port still ends the survivor`() {
+        // One step later than the case above: the bound port is already the start's, and the
+        // release that comes with the notification's Stop clears it under the start.
+        val home = freePort()
+        stored = home
+        hold(home)
+        val away = freePort()
+        val killed = mutableListOf<Int>()
+        val (gateway, manager) = followedSurvivor(away, killed)
+        every { gateway.noteAwayFromHome(any()) } answers {
+            callOriginal(); manager.stopServer(); manager.releaseAwayOrigin()
+        }
+
+        assertFalse(manager.startServer(), "a start a stop refused reported success")
+
+        assertEquals(listOf(4242), killed, "the survivor the stop landed on was left running")
+        assertFalse(File(tempDir, "server/editor-server.pid").exists(), "the survivor's note would be adopted again")
+        assertNull(gateway.boundPort, "the temporary origin $away outlived the stop that refused its start")
     }
     @Test
     fun stoppedStartMustNotBindAfterTemporaryRelease() {
