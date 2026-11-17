@@ -14,10 +14,11 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - On Android 12 and later the low storage warning is shown; it was dropped before the screen could show it.
 - The action button of a toolchain card shows its whole label at the largest font and display sizes.
 - An install made on Android 10 keeps its projects folder in the app's storage after the phone is updated, even when another app has made a folder of that name on shared storage.
-- A notice shown only once while the app runs, such as the one about a workspace that spans several device folders, waits for the app's return when it arrives in the background instead of being dropped.
+- On Android 12 and later, a notice shown only once while the app runs, such as the one about a workspace that spans several device folders, waits for the app's return when it arrives in the background instead of being dropped.
 - On Android 12 and later, the notice that the server is taking longer than usual to start closes when the server starts instead of staying over the editor.
 - The notice that the server crashed repeatedly no longer appears for a moment under the page that says so.
-- The notice that another app is using the editor's port comes back after a font size or language change until it is answered, and offers Stop Server itself for a phone with notifications turned off.
+- The notice that another app is using the editor's port comes back after a font size or language change until it is answered.
+- The notice that another app is using the editor's port offers Stop Server itself, for a phone with notifications turned off.
 - The Toolchains shortcut opened while the setup that follows an update is running goes to the setup screen instead of installing over files still being unpacked.
 - A keyboard put away after the screen is turned stays down when a text box other than the editor has the focus, such as Quick Open or the find box; the next touch used to bring it back.
 - A file another app deleted from a device folder is no longer put back there when the app's copy of it could not be read as the folder opened.
@@ -38,7 +39,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - Format Document uses the bundled Prettier for JavaScript, TypeScript, JSON, CSS, HTML and the other languages it covers without asking which formatter to use; a formatter chosen for one of those languages in Settings still wins, and one chosen for every language does not.
 - The Java toolchain checks HTTPS connections against Mozilla's list of trusted certificate authorities instead of OpenJDK's own.
 - A Java toolchain installed earlier keeps OpenJDK's certificate list until it is removed and installed again.
-- The low storage warning and the notice about a workspace that spans several device folders are shown once while the app runs, instead of at every start of its screen.
+- On Android 11 and earlier the low storage warning, and on every version the notice about a workspace that spans several device folders, are shown once while the app runs, instead of at every start of its screen.
 
 ### Fixed
 
