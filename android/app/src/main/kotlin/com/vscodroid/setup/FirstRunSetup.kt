@@ -6101,6 +6101,20 @@ private fun releaseWriteLock(path: String, lock: DestinationLock) = synchronized
     if (--lock.holders == 0) WRITE_LOCKS.remove(path)
 }
 
+/**
+ * Runs [block] holding the lock [writeAtomically] holds for [dest], for a change of [dest] made in
+ * more than one step that a write of it must not land inside.
+ */
+internal fun <T> holdingWriteLock(dest: File, block: () -> T): T {
+    val path = dest.absolutePath
+    val lock = claimWriteLock(path)
+    try {
+        return synchronized(lock) { block() }
+    } finally {
+        releaseWriteLock(path, lock)
+    }
+}
+
 /** The temporary files [writeAtomically] is writing right now, so a sweep never takes one for a stray. */
 private val LIVE_TEMPS: MutableSet<String> = java.util.concurrent.ConcurrentHashMap.newKeySet()
 

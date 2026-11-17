@@ -24,6 +24,7 @@ import java.io.File
 import java.nio.file.Files
 import java.nio.file.LinkOption
 import java.nio.file.Path
+import kotlin.concurrent.thread
 
 /**
  * What `toolchain-exec.tsv` has to contain for a toolchain command to work when
@@ -745,6 +746,37 @@ class ToolchainExecTableTest {
 
         assertEquals("new\n", File(gitDist, "ssh-askpass.sh.script").readText())
         assertTrue(Files.isSymbolicLink(File(gitDist, "ssh-askpass.sh").toPath()))
+    }
+
+    /**
+     * The pass runs beside the setup that follows an update: the launch repair queues it as setup
+     * starts, and a removal from the Toolchains screen runs it whenever it is confirmed. Setup's write
+     * of the new script landing between the set-aside and the link was overwritten by the link, and the
+     * earlier build's copy went on running behind it until the next update, since a pass leaves a name
+     * that is already a link alone.
+     */
+    @Test
+    fun `an extraction landing as the pass links a script does not leave the earlier copy kept`() {
+        val askpass = gitHelper("askpass.sh", "old\n")
+        var extraction: Thread? = null
+        every { Os.symlink(any(), File(gitDist, ".askpass.sh.tmp~").absolutePath) } answers {
+            if (extraction == null) {
+                extraction = thread { writeAtomically(askpass) { it.write("new\n".toByteArray()) } }
+                extraction!!.join(500)
+            }
+            Files.createSymbolicLink(Path.of(secondArg<String>()), Path.of(firstArg<String>()))
+            Unit
+        }
+
+        regenerate()
+        extraction!!.join(5_000)
+        regenerate()
+
+        assertEquals(
+            "new\n", File(gitDist, "askpass.sh.script").readText(),
+            "the earlier build's script is the one the link runs",
+        )
+        assertTrue(Files.isSymbolicLink(askpass.toPath()))
     }
 
     @Test
