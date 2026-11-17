@@ -43,6 +43,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A Stop Server pressed while the server was still starting, or while the app was reconnecting to an editor on a temporary port, no longer leaves the editor server running in the background.
 - Opening VSCodroid again just after Stop Server no longer leaves "Starting server..." on the screen with the server already running behind it.
 - Connecting or removing a game controller, a remote or a keyboard with a D-pad no longer reloads the editor.
+- Opening VSCodroid again while its server is still running, as after swiping it away from the recent apps, no longer repeats the file checks of a start, so the editor comes back sooner.
+- The first start after the app was closed shows the splash while those checks run, instead of holding the screen until they end.
 - A connection to the editor's port that sends nothing is closed after 10 seconds instead of two minutes, so silent connections from another app no longer hold all 32 slots for that long.
 
 ## [1.9.0] - 2026-11-16
