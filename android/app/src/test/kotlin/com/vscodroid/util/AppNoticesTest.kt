@@ -353,6 +353,69 @@ class AppNoticesTest {
         assertEquals(0, host.createdWindows.size)
     }
 
+    /**
+     * A dialog stays open while its screen is stopped, and a notice held then is put on its text. The
+     * start of the screen is when a person sees it, so that is when its once key is spent: left
+     * unspent, the next call with the key put the same notice on the dialog a second time.
+     */
+    @Test
+    fun `a once notice held under a dialog that stayed open spends its key when the screen starts`() {
+        val host = FakeNoticeHost()
+        val processFlags = mutableSetOf<String>()
+        val coordinator = NoticeDialogCoordinator(onceKeys = processFlags)
+        val once = "Long ".repeat(20)
+        val raise = {
+            showNoticeWithPolicy(
+                message = once,
+                fontScale = 1.0f,
+                sdkInt = 34,
+                showToast = { fail("a notice with a once key is never a toast cut after two lines") },
+                coordinator = coordinator,
+                host = host,
+                processOnceKey = AppNotices.ONCE_KEY_MULTI_DEVICE_FOLDERS,
+                shownOnceKeys = processFlags,
+            )
+        }
+        coordinator.enqueueAndShow("A copy was kept beside notes.md", host)
+        val window = host.createdWindows.single()
+
+        host.canShow = false
+        host.canHold = true
+        raise()
+        assertTrue(processFlags.isEmpty(), "nobody has seen it yet")
+
+        host.canShow = true
+        coordinator.flush(host)
+
+        assertEquals(setOf(AppNotices.ONCE_KEY_MULTI_DEVICE_FOLDERS), processFlags, "seen on the open dialog, so spent")
+        val shown = window.text
+        assertTrue(shown.endsWith(once), "the dialog does not carry the notice: $shown")
+
+        raise()
+        assertEquals(shown, window.text, "the notice went onto the dialog a second time")
+        assertEquals(1, host.createdWindows.size)
+    }
+
+    @Test
+    fun `a once notice held under an open dialog comes off it when another screen spent the key`() {
+        val host = FakeNoticeHost()
+        val processFlags = mutableSetOf<String>()
+        val coordinator = NoticeDialogCoordinator(onceKeys = processFlags)
+        coordinator.enqueueAndShow("A copy was kept beside notes.md", host)
+        val window = host.createdWindows.single()
+        host.canShow = false
+        host.canHold = true
+        coordinator.holdOnce("Long ".repeat(20), AppNotices.ONCE_KEY_STORAGE_LOW)
+        processFlags += AppNotices.ONCE_KEY_STORAGE_LOW
+
+        host.canShow = true
+        coordinator.flush(host)
+
+        assertEquals("A copy was kept beside notes.md", window.text)
+        assertTrue(window.isShowing)
+        assertEquals(1, coordinator.entryCount)
+    }
+
     @Test
     fun `a held once notice whose key another screen spent is not shown`() {
         val host = FakeNoticeHost(canShow = false, canHold = true)

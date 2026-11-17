@@ -182,8 +182,22 @@ internal class NoticeDialogCoordinator(
 
     fun flush(host: NoticeHostState) {
         if (entries.isEmpty()) return
-        if (openWindow?.isShowing == true) {
-            if (host.canShowDialog()) entries.forEach { it.told = Told.DIALOG }
+        val open = openWindow
+        if (open?.isShowing == true) {
+            if (!host.canShowDialog()) return
+            // What was held while the screen was stopped went onto this dialog unseen, and is seen
+            // now: its once key is spent as on a dialog made new. Left unspent, the next call with
+            // that key showed the notice a second time.
+            if (spendOnceKeys()) {
+                if (entries.isEmpty()) {
+                    openWindow = null
+                    pushedOut = 0
+                    open.dismiss()
+                    return
+                }
+                open.setMessage(combinedMessage())
+            }
+            entries.forEach { it.told = Told.DIALOG }
             return
         }
         waitingForBlocker = false
@@ -243,10 +257,11 @@ internal class NoticeDialogCoordinator(
     }
 
     // The entries a person has not been shown that carry a key already spent are not shown now, and
-    // the others spend theirs: a key is spent once, by whichever call shows it first.
-    private fun spendOnceKeys() {
-        val keys = onceKeys ?: return
-        entries.removeAll { it.told != Told.DIALOG && it.onceKey != null && !keys.add(it.onceKey) }
+    // the others spend theirs: a key is spent once, by whichever call shows it first. True when an
+    // entry came off.
+    private fun spendOnceKeys(): Boolean {
+        val keys = onceKeys ?: return false
+        return entries.removeAll { it.told != Told.DIALOG && it.onceKey != null && !keys.add(it.onceKey) }
     }
 
     private fun presentOrDefer(host: NoticeHostState) {
