@@ -18,7 +18,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - On Android 12 and later, the notice that the server is taking longer than usual to start closes when the server starts instead of staying over the editor, also after a font size or language change, which no longer shows it twice.
 - The notice that the server crashed repeatedly or could not start no longer appears for a moment under the page that says so.
 - The page that says the server stopped is no longer skipped when the editor starts to reload at that moment, which left a blank screen.
-- The notice that another app is using the editor's port comes back until it is answered, after a font size or language change or after closing the app from the recent apps.
+- The notice that another app is using the editor's port comes back until it is answered, after a font size or language change or after closing the app from the recent apps, and no longer comes back wrongly after Stop Server.
 - The notice that another app is using the editor's port offers Stop Server itself and names it in its text, for a phone with notifications turned off.
 - An install tapped on the Toolchains screen before the setup that follows an update has finished opens the setup screen instead of unpacking over it.
 - A keyboard put away after the screen is turned stays down when a text box other than the editor has the focus, such as Quick Open or the find box; the next touch used to bring it back.
@@ -38,7 +38,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The notice that a sign-in was cut off by an editor restart no longer comes back after a font size or language change or an update.
 - Leaving the editor just as the folder picker or a download's save dialog was about to open no longer crashes the app.
 - The message for a device folder that failed to open names the error instead of ending in "null".
-- A git helper script that an update unpacks at the moment VSCodroid links it no longer leaves the earlier version running behind the link.
+- After an update, the git sign-in prompt and the `vscodroid` command no longer keep running the previous version's script when a toolchain is removed or repaired while setup unpacks.
 - A Stop Server pressed while the server was still starting, or while the app was reconnecting to an editor on a temporary port, no longer leaves the editor server running in the background.
 - A connection to the editor's port that sends nothing is closed after 10 seconds instead of two minutes, so silent connections from another app no longer hold all 32 slots for that long.
 
