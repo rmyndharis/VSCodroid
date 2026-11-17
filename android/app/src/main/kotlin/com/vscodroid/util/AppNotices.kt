@@ -98,7 +98,7 @@ internal interface BlockingNoticeHost {
 
 // What a screen still held when it was taken down: the notices that never reached a dialog and
 // those on a dialog still open, with the count the ceiling pushed out. [onceKeys] is parallel to
-// [texts] and names the process-once key of an entry that has one, which the next screen spends
+// [texts] and names the process-once key of an entry not shown yet, which the next screen spends
 // when it shows the entry. [topics] is parallel too, and names what a retraction matches.
 internal class HeldNotices(
     val texts: List<String>,
@@ -238,7 +238,9 @@ internal class NoticeDialogCoordinator(
         val onScreen = openWindow?.isShowing == true
         val heldEntries = entries.filter { it.told != Told.DIALOG || onScreen }
         val held = heldEntries.map { it.text }
-        val heldKeys = heldEntries.map { it.onceKey }
+        // An entry on the dialog has spent its key already, and the next screen would read the spent
+        // key as another screen's and drop the only copy of a dialog still open.
+        val heldKeys = heldEntries.map { if (it.told == Told.DIALOG) null else it.onceKey }
         val heldTopics = heldEntries.map { it.topic }
         val count = pushedOut
         entries.clear()

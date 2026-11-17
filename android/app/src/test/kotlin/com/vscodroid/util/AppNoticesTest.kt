@@ -628,6 +628,58 @@ class AppNoticesTest {
         assertEquals(listOf("Open ".repeat(20)), next.createdWindows.map { it.text })
     }
 
+    /**
+     * A notice with a once key raised while its screen is being made waits for the start, which shows
+     * it and spends the key. Still open when a font size or language change makes the screen again, it
+     * comes back like any other open dialog: the new screen's own call finds the key spent and adds
+     * nothing, so what the old screen hands over is the only copy, and it must not be dropped as one
+     * whose key some other screen spent.
+     */
+    @Test
+    fun `a once notice shown at the start comes back when its screen is made again, and only once`() {
+        for (key in listOf(AppNotices.ONCE_KEY_STORAGE_LOW, AppNotices.ONCE_KEY_MULTI_DEVICE_FOLDERS)) {
+            val processFlags = mutableSetOf<String>()
+            val once = "Long ".repeat(20)
+            fun raise(coordinator: NoticeDialogCoordinator, host: FakeNoticeHost) = showNoticeWithPolicy(
+                message = once,
+                fontScale = 1.0f,
+                sdkInt = 34,
+                showToast = { fail("a notice with a once key is never a toast cut after two lines") },
+                coordinator = coordinator,
+                host = host,
+                processOnceKey = key,
+                shownOnceKeys = processFlags,
+            )
+            val first = NoticeDialogCoordinator(onceKeys = processFlags)
+            val firstHost = FakeNoticeHost(canShow = false, canHold = true)
+            raise(first, firstHost)
+            firstHost.canShow = true
+            first.flush(firstHost)
+            assertEquals(listOf(once), firstHost.createdWindows.map { it.text }, key)
+
+            val held = first.drop(firstHost)
+            val second = NoticeDialogCoordinator(onceKeys = processFlags)
+            val secondHost = FakeNoticeHost(canShow = false, canHold = true)
+            raise(second, secondHost)
+            second.take(held!!)
+            secondHost.canShow = true
+            second.flush(secondHost)
+            assertEquals(
+                listOf(once), secondHost.createdWindows.map { it.text },
+                "$key: the dialog on screen went with its screen and the new one never showed it",
+            )
+
+            secondHost.createdWindows.single().simulateUserDismiss()
+            assertNull(second.drop(secondHost), "$key: a dialog a person closed is handed on")
+            val third = NoticeDialogCoordinator(onceKeys = processFlags)
+            val thirdHost = FakeNoticeHost(canShow = false, canHold = true)
+            raise(third, thirdHost)
+            thirdHost.canShow = true
+            third.flush(thirdHost)
+            assertEquals(0, thirdHost.createdWindows.size, "$key: shown again after it was closed")
+        }
+    }
+
     @Test
     fun `a dialog that stopped showing is not handed to the screen made again`() {
         val host = FakeNoticeHost()
