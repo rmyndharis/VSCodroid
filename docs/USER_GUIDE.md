@@ -581,6 +581,24 @@ Solarized Light and Tomorrow Night Blue. Switch with **Preferences: Color Theme*
 Palette, no download needed. Three file-icon themes ship too, Seti among them. Anything beyond
 these comes from the marketplace.
 
+### Choosing a Formatter
+
+**Format Document** uses the bundled Prettier, without asking, for CSS, SCSS, Less, HTML, Handlebars,
+JavaScript, TypeScript and their React variants, JSON, JSON with comments, Markdown, YAML, Docker
+Compose, GraphQL and Vue. Other languages use whichever formatter is installed for them.
+
+To use another formatter for one of those languages, choose it for that language: run **Format
+Document With...** in the Command Palette, then **Configure Default Formatter...**, and pick it.
+That writes a setting for the language of the open file, such as
+`"[javascript]": { "editor.defaultFormatter": "biomejs.biome" }`, and it wins over Prettier.
+
+A formatter set for every language at once (**Editor: Default Formatter** in Settings, with no
+language chosen) does not win for the languages listed above: the bundled choice is made per
+language, and the editor reads a per-language setting first. Set it per language as above.
+
+If you uninstall Prettier, do the same for those languages. Until then **Format Document** says the
+configured formatter is not available instead of falling back to the editor's built-in one.
+
 ### Recommended Extensions to Install
 
 | Extension | What It Does |
