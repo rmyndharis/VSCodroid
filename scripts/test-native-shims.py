@@ -695,10 +695,10 @@ static void check(const struct timespec *ts, long expected) {
         assert(context.uc_mcontext.regs[0] == 3);
     }
 }
-/* A SIGSYS sent with kill or tgkill: nothing was refused, so x0 is the caller's own. */
-static void sent(int syscall_field) {
+/* A SIGSYS sent with kill, tgkill or sigqueue: nothing was refused, so x0 is the caller's own. */
+static void sent(int code, int syscall_field) {
     const unsigned long regs[6] = {7, 8, 9, 0, 10, 8};
-    siginfo_t info = {0, syscall_field};
+    siginfo_t info = {code, syscall_field};
     ucontext_t context = {0};
     for (int i = 0; i < 6; i++) context.uc_mcontext.regs[i] = regs[i];
     int before = calls;
@@ -707,9 +707,13 @@ static void sent(int syscall_field) {
     for (int i = 0; i < 6; i++) assert(context.uc_mcontext.regs[i] == regs[i]);
 }
 int main(void) {
-    sent(__NR_epoll_pwait2);
-    sent(0);
-    sent(129);
+    /* SI_USER (kill), SI_TKILL (tgkill), SI_QUEUE (sigqueue), and codes that are not SYS_SECCOMP. */
+    const int codes[] = {0, -6, -1, 2, 7};
+    for (unsigned i = 0; i < sizeof(codes) / sizeof(codes[0]); i++) {
+        sent(codes[i], __NR_epoll_pwait2);
+        sent(codes[i], 0);
+        sent(codes[i], 129);
+    }
     check(NULL, -1);
     check(&(struct timespec){0, 0}, 0);
     check(&(struct timespec){0, 1}, 1);
