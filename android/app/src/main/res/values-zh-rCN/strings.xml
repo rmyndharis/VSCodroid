@@ -225,13 +225,13 @@
     <string name="shortcut_toolchains_short">工具链</string>
     <string name="shortcut_toolchains_long">管理工具链</string>
     <string name="toolchain_size_download_and_installed">下载 %1$s，安装后占用 %2$s</string>
-    <!-- Shown when a save could not be written out to the device folder. Names the
-         consequence rather than the error: the user's next decision is whether to
-         copy the file out before uninstalling, not which exception was thrown. -->
     <string name="saf_device_copy_preserved">设备修改已保留在旁边：%1$s。</string>
     <plurals name="saf_device_copies_preserved">
         <item quantity="other">已保留 %1$d 处设备修改。请查找 .device- 和时间。</item>
     </plurals>
+    <!-- Shown when a save could not be written out to the device folder. Names the
+         consequence rather than the error: the user's next decision is whether to
+         copy the file out before uninstalling, not which exception was thrown. -->
     <string name="saf_write_back_failed">%1$s 未能写入设备文件夹。唯一的副本在 VSCodroid 内。</string>
 
     <!-- Shown once after a folder opens when documents in it could not be copied into

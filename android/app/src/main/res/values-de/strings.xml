@@ -225,14 +225,14 @@
     <string name="shortcut_toolchains_short">Toolchains</string>
     <string name="shortcut_toolchains_long">Toolchains verwalten</string>
     <string name="toolchain_size_download_and_installed">%1$s Download, %2$s installiert</string>
-    <!-- Shown when a save could not be written out to the device folder. Names the
-         consequence rather than the error: the user's next decision is whether to
-         copy the file out before uninstalling, not which exception was thrown. -->
     <string name="saf_device_copy_preserved">Geräteänderung daneben: %1$s.</string>
     <plurals name="saf_device_copies_preserved">
         <item quantity="one">%1$d Geräteänderung behalten. Suchen Sie .device- und eine Uhrzeit.</item>
         <item quantity="other">%1$d Geräteänderungen behalten. Suchen Sie .device- und eine Uhrzeit.</item>
     </plurals>
+    <!-- Shown when a save could not be written out to the device folder. Names the
+         consequence rather than the error: the user's next decision is whether to
+         copy the file out before uninstalling, not which exception was thrown. -->
     <string name="saf_write_back_failed">%1$s hat den Geräteordner nicht erreicht. Die einzige Kopie liegt in VSCodroid.</string>
 
     <!-- Shown once after a folder opens when documents in it could not be copied into

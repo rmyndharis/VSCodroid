@@ -225,15 +225,15 @@
     <string name="shortcut_toolchains_short">Toolchain</string>
     <string name="shortcut_toolchains_long">Gestisci toolchain</string>
     <string name="toolchain_size_download_and_installed">%1$s da scaricare, %2$s installati</string>
-    <!-- Shown when a save could not be written out to the device folder. Names the
-         consequence rather than the error: the user's next decision is whether to
-         copy the file out before uninstalling, not which exception was thrown. -->
     <string name="saf_device_copy_preserved">Copia del dispositivo accanto al file: %1$s.</string>
     <plurals name="saf_device_copies_preserved">
         <item quantity="one">Conservata %1$d modifica. Cerca .device- e un orario.</item>
         <item quantity="many">Conservate %1$d modifiche. Cerca .device- e un orario.</item>
         <item quantity="other">Conservate %1$d modifiche. Cerca .device- e un orario.</item>
     </plurals>
+    <!-- Shown when a save could not be written out to the device folder. Names the
+         consequence rather than the error: the user's next decision is whether to
+         copy the file out before uninstalling, not which exception was thrown. -->
     <string name="saf_write_back_failed">%1$s non è arrivato nella cartella del dispositivo. L\'unica copia è dentro VSCodroid.</string>
 
     <!-- Shown once after a folder opens when documents in it could not be copied into

@@ -69,9 +69,12 @@ class PreservedDeviceNameTest {
         assertTrue(files.size >= 14, "expected default and thirteen locales, found ${files.size}")
         for (file in files) {
             val text = file.readText()
+            // The placeholder is read from this string's own element: anywhere else in the file would do for a
+            // text.contains, and a translation that left it out would pass.
+            val single = Regex("""<string name="saf_local_copy_preserved">([^<]*)</string>""").find(text)?.groupValues?.get(1)
             assertTrue(
-                text.contains("""name="saf_local_copy_preserved"""") && text.contains("%1\$s"),
-                "${file.parentFile?.name} is missing saf_local_copy_preserved with %1\$s",
+                single != null && single.contains("%1\$s"),
+                "${file.parentFile?.name} is missing saf_local_copy_preserved with %1\$s in that string",
             )
             val block = text.substringAfter("""<plurals name="saf_local_copies_preserved">""", "")
                 .substringBefore("</plurals>", "")
