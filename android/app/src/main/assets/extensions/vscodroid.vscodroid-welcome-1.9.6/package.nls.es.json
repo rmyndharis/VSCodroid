@@ -11,7 +11,7 @@
   "walkthrough.folder.title": "Abre tu proyecto",
   "walkthrough.folder.description": "Abre una carpeta del almacenamiento del teléfono, como una dentro de Documents o Download. También aparecen los archivos que otras aplicaciones guardaron en ella.\n\n[Abrir una carpeta del dispositivo](command:vscodroid.openFolderFromDevice)",
   "walkthrough.run.title": "Ejecuta tu código",
-  "walkthrough.run.description": "Abre un archivo y toca el botón de reproducir en la barra de título del editor. Los archivos de JavaScript, TypeScript, Python, Ruby, Java, C, C++ y shell se ejecutan en un terminal.\n\nRuby, Java y C/C++ se instalan a petición, y el botón los ofrece cuando faltan.\n\n[Administrar cadenas de herramientas](command:vscodroid.manageToolchains)",
+  "walkthrough.run.description": "Abre un archivo y toca el botón de reproducir en la barra de título del editor. Los archivos de JavaScript, Python, Ruby, Java, C, C++ y shell se ejecutan en un terminal.\n\nRuby, Java y C/C++ se instalan a petición, y el botón los ofrece cuando faltan.\n\n[Administrar cadenas de herramientas](command:vscodroid.manageToolchains)",
   "walkthrough.tools.title": "Tus herramientas de desarrollo",
   "walkthrough.tools.description": "VSCodroid trae todo lo necesario para empezar a programar:\n\n$(check) **Node.js** + npm: listo\n\n$(check) **Python** + pip: listo\n\n$(check) **Git**: listo\n\n$(check) **make**: listo\n\n**Java 25**, **Ruby** y **C/C++** se instalan cuando los pides. Mantén pulsado el icono de VSCodroid en la pantalla de inicio y elige **Administrar cadenas de herramientas**.\n\n[Entendido](command:vscodroid.welcome.toolsDismissed)",
   "walkthrough.terminal.title": "Un terminal de verdad",

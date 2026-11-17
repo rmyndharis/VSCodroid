@@ -2,7 +2,7 @@
   "name": "vscodroid-welcome",
   "displayName": "%displayName%",
   "description": "%description%",
-  "version": "1.9.5",
+  "version": "1.9.6",
   "publisher": "vscodroid",
   "engines": {
     "vscode": "^1.96.0"

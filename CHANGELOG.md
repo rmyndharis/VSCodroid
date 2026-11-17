@@ -25,6 +25,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - An edit that lands just as the app removes its copy of a file another app deleted from a device folder is kept as `<name>.local-<time>` and a notice says so.
 - Clear Caches no longer unlinks the sockets in the editor's temporary directory, so git sign-in prompts and the `vscodroid` command keep working until the next restart.
 - The first-run toolchain picker is marked answered when the downloads it started have ended, so a start that ends in the middle of them shows it again instead of dropping the packs not yet fetched.
+- The Get Started walkthrough no longer says that every TypeScript file runs from the play button; the user guide lists the cases that fail.
 
 ## [1.9.0] - 2026-11-16
 
