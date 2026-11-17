@@ -387,17 +387,28 @@ object Environment {
         val filesDir = context.filesDir.absolutePath
         val internal = "$filesDir/projects"
         if (sdkInt == Build.VERSION_CODES.Q) return internal
-        val externalDir = context.getExternalFilesDir(null) ?: return internal
+        // `~/projects`, which is written beside the folder and outlives it, so its target is the
+        // record of which folder this install uses; a relative link is read from `~`. Os.readlink
+        // throws off a device and on anything that is not a link, and both mean the same thing
+        // here: no such record. Read only by the answers below that need it.
+        val link by lazy {
+            runCatching {
+                File("$filesDir/home").toPath().resolve(Os.readlink("$filesDir/home/projects")).normalize().toString()
+            }.getOrNull()
+        }
+        // A launch that cannot see shared storage knows nothing new about where the install works,
+        // so the record answers. Answering internal made that folder and pointed the link at it,
+        // which is how an Android 10 install is recognised below, so an install working on shared
+        // storage was moved onto an empty folder for good.
+        val externalDir = context.getExternalFilesDir(null) ?: return link ?: internal
         val legacy = File(externalDir, "projects")
         if (legacy.isDirectory) {
             // Something else can make this folder while the phone is still on Android 10 (see above),
             // and it is there when an update takes the phone to 11 or later. An install that has been
-            // working in the internal folder says so in its `~/projects` link and is not moved by it.
-            // Read only when both folders exist, so an install with no folder of its own on shared
-            // storage still costs one stat.
-            val keptInternal = File(internal).isDirectory &&
-                runCatching { Os.readlink("$filesDir/home/projects") }.getOrNull() == internal
-            return if (keptInternal) internal else legacy.absolutePath
+            // working in the internal folder says so in its `~/projects` link and is not moved by it,
+            // also while that folder is missing: ensureProjectsDir() makes it again. Read only when the
+            // folder on shared storage exists, so an install with none still costs one stat.
+            return if (link == internal) internal else legacy.absolutePath
         }
         // Answered before the link is read, so the ordinary case costs one stat
         // and no syscall: once either directory is there, that is the answer.
@@ -407,12 +418,8 @@ object Environment {
         // storage directory, which is what ensureProjectsDir() exists to repair.
         // Telling those apart matters, because answering "internal" for the
         // second would move an existing install's workspace on the strength of a
-        // deletion, with `.bashrc` still exporting the old path. `~/projects` is
-        // written beside the directory and outlives it, so its target is the
-        // record of which one this install has been using. Os.readlink throws off
-        // a device and on anything that is not a link, and both mean the same
-        // thing here: no such record.
-        val link = runCatching { Os.readlink("$filesDir/home/projects") }.getOrNull()
+        // deletion, with `.bashrc` still exporting the old path. The link tells
+        // them apart.
         return if (link == legacy.absolutePath) legacy.absolutePath else internal
     }
 
