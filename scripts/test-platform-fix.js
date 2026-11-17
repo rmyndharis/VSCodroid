@@ -429,7 +429,10 @@ const RECORD_HUB = path.join(tmp, 'record-hub.js');
 fs.writeFileSync(
     RECORD_HUB,
     "const cp = require('child_process');\nconst EventEmitter = require('events');\n" +
-        "cp.spawn = function () { globalThis.__spawned = Array.prototype.slice.call(arguments); const c = new EventEmitter(); c.pid = 4242; c.kill = function (signal) { c.killedWith = signal || 'SIGTERM'; }; globalThis.__child = c; return c; };\n",
+        "cp.spawn = function () { globalThis.__spawned = Array.prototype.slice.call(arguments); const c = new EventEmitter(); c.pid = 4242; c.kill = function (signal) { c.killedWith = signal || 'SIGTERM'; }; globalThis.__child = c; return c; };\n" +
+        // The server made last, which right after a hub start is the relay.
+        "const http = require('http');\nconst createServer = http.createServer;\n" +
+        "http.createServer = function () { const s = createServer.apply(this, arguments); globalThis.__relay = s; return s; };\n",
 );
 const HUB_DRIVER = path.join(tmp, 'hub-driver.js');
 fs.writeFileSync(HUB_DRIVER, `
@@ -573,74 +576,159 @@ setTimeout(() => { console.error('the driver gave up waiting'); process.exit(1);
     process.exit(0);
 })().catch((e) => { console.error(e); process.exit(1); });
 `);
-// The shim keeps a note of the engine it started under $HOME/.vscodroid, so the
-// runs get a home of their own.
-const HUB_HOME = path.join(tmp, 'hub-home');
-fs.mkdirSync(path.join(HUB_HOME, '.vscodroid'), { recursive: true });
-const HUB_NOTE = path.join(HUB_HOME, '.vscodroid/antigravity-hub.json');
-
-// The engine's own port answers any app on the phone, so its hub is started only once the person has
-// turned on the machine setting `vscodroid.antigravity.runEngine`. The file is read the way the app
-// reads its heap setting: comments out, strings kept, the key only at the start of a line. With the
-// setting off the extension's spawn is left exactly as written, and fails as it did before.
+// The engine's own port answers any app on the phone, so nothing the Antigravity extension keeps in
+// $HOME/.gemini runs until the person has turned on the machine setting `vscodroid.antigravity.runEngine`.
+// Each home here lies inside the data directory, so the linker rule applies, and carries an engine of its
+// own at .gemini/bin/agy, a file and not a link: a link out of the home would take the engine out of the
+// setting's reach. The shim keeps its note of a started engine under the home's .vscodroid as well.
 const machineSettings = (home) => path.join(home, '.vscodroid/data/Machine/settings.json');
-const homeWith = (name, text) => {
-    const home = path.join(tmp, name);
+const engineIn = (home) => path.join(home, '.gemini/bin/agy');
+let homes = 0;
+const homeWith = (text) => {
+    const home = path.join(REAL_DATA, 'files', `home-${homes++}`);
+    put(engineIn(home), elf64(BIONIC_LINKER));
     if (text !== null) put(machineSettings(home), text);
-    else fs.mkdirSync(home, { recursive: true });
     return home;
 };
-put(machineSettings(HUB_HOME), '{\n    // what the app wrote\n    "git.path": "/x/libgit.so",\n    "vscodroid.antigravity.runEngine": true,\n    "update.mode": "none"\n}\n');
-const HUB_CALL = [ENGINE, ['--hub', '--hub-port=41000', '--app_data_dir=antigravity'], SPAWN_OPTIONS];
-for (const [label, text] of [
-    ['no settings file', null],
-    ['the setting absent', '{\n    "update.mode": "none"\n}\n'],
-    ['the setting false', '{\n    "vscodroid.antigravity.runEngine": false\n}\n'],
-    ['the setting in a line comment', '{\n    // "vscodroid.antigravity.runEngine": true,\n    "update.mode": "none"\n}\n'],
-    ['the setting in a block comment', '{\n    /*\n    "vscodroid.antigravity.runEngine": true,\n    */\n    "update.mode": "none"\n}\n'],
-    ['the setting quoted inside another value', '{\n    "note": "\\"vscodroid.antigravity.runEngine\\": true"\n}\n'],
-    ['a file that is not text the reader understands', '\u0000\u0001'],
+const SETTING_ON = '{\n    // what the app wrote\n    "git.path": "/x/libgit.so",\n    "vscodroid.antigravity.runEngine": true,\n    "update.mode": "none"\n}\n';
+const HUB_HOME = homeWith(SETTING_ON);
+const HUB_ENGINE = engineIn(HUB_HOME);
+const HUB_NOTE = path.join(HUB_HOME, '.vscodroid/antigravity-hub.json');
+const OFF_HOME = homeWith(null);
+const OFF_ENGINE = engineIn(OFF_HOME);
+const HUB_ARGS = ['--hub', '--hub-port=41000', '--app_data_dir=antigravity'];
+const throughLinker = (call) => (Array.isArray(call[1])
+    ? [BIONIC_LINKER, [call[0], ...call[1]], ...call.slice(2)]
+    : [BIONIC_LINKER, [call[0]], ...call.slice(1)]);
+
+// The file is read as VS Code reads it: comments and trailing commas out, strings kept, the top-level key
+// only, the last one when it is written twice, and a file that does not parse turns nothing on.
+for (const [label, text, on] of [
+    ['no settings file', null, false],
+    ['the setting absent', '{\n    "update.mode": "none"\n}\n', false],
+    ['the setting false', '{\n    "vscodroid.antigravity.runEngine": false\n}\n', false],
+    ['the setting in a line comment', '{\n    // "vscodroid.antigravity.runEngine": true,\n    "update.mode": "none"\n}\n', false],
+    ['the setting in a block comment', '{\n    /*\n    "vscodroid.antigravity.runEngine": true,\n    */\n    "update.mode": "none"\n}\n', false],
+    ['the setting quoted inside another value', '{\n    "note": "\\"vscodroid.antigravity.runEngine\\": true"\n}\n', false],
+    ['a file that is not text the reader understands', '\u0000\u0001', false],
+    ['the key alone on its line inside another object', '{\n    "some.object": {\n        "vscodroid.antigravity.runEngine": true\n    }\n}\n', false],
+    ['the key inside a language block', '{\n    "[python]": {\n        "vscodroid.antigravity.runEngine": true\n    }\n}\n', false],
+    ['the key twice, true then false', '{\n    "vscodroid.antigravity.runEngine": true,\n    "vscodroid.antigravity.runEngine": false\n}\n', false],
+    ['a list, not an object', '[{ "vscodroid.antigravity.runEngine": true }]\n', false],
+    ['null', 'null\n', false],
+    ['true alone', 'true\n', false],
+    ['a block comment that never closes', '{\n    /*\n    "vscodroid.antigravity.runEngine": true\n}\n', false],
+    ['a value split by a comment', '{\n    "vscodroid.antigravity.runEngine": tr/**/ue\n}\n', false],
+    ['the file the app writes, with the setting on', SETTING_ON, true],
+    ['a single line', '{"vscodroid.antigravity.runEngine": true}', true],
+    ['a byte order mark and a single line', '﻿{"vscodroid.antigravity.runEngine": true}', true],
+    ['CRLF line ends', '{\r\n\t"update.mode": "none",\r\n\t"vscodroid.antigravity.runEngine": true\r\n}\r\n', true],
+    ['the key written with an escaped dot', '{\n    "vscodroid.antigravity\\u002erunEngine": true\n}\n', true],
+    ['// inside a string before the key', '{\n    "a": "http://example.test/",\n    "vscodroid.antigravity.runEngine": true\n}\n', true],
+    ['/* inside a string before the key', '{\n    "a": "/*",\n    "vscodroid.antigravity.runEngine": true,\n    "b": "*/"\n}\n', true],
+    ['comments around the key and the value', '{ /* x */\n    "vscodroid.antigravity.runEngine" /* y */ : /* z */ true // on\n}\n', true],
+    ['trailing commas', '{\n    "a": [1, 2,],\n    "vscodroid.antigravity.runEngine": true,\n}\n', true],
+    ['the key twice, false then true', '{\n    "vscodroid.antigravity.runEngine": false,\n    "vscodroid.antigravity.runEngine": true\n}\n', true],
 ]) {
-    const home = homeWith('off-' + checked, text);
-    assert.deepStrictEqual(spawnedUnder(HUB_CALL, { home }), HUB_CALL, `${label}: the engine's hub was started with the setting off`);
-    assert.strictEqual(fs.existsSync(path.join(home, '.vscodroid/antigravity-hub.json')), false, `${label}: a note was kept for an engine that was not started`);
+    const home = homeWith(text);
+    const call = [engineIn(home), HUB_ARGS, SPAWN_OPTIONS];
+    const got = spawnedUnder(call, { home });
+    if (on) {
+        assert.strictEqual(got[0], BIONIC_LINKER, `${label}: VS Code reads the setting as on and the engine's hub was not started`);
+    } else {
+        assert.deepStrictEqual(got, call, `${label}: VS Code reads the setting as off and the engine's hub was started`);
+        assert.strictEqual(fs.existsSync(path.join(home, '.vscodroid/antigravity-hub.json')), false, `${label}: a note was kept for an engine that was not started`);
+    }
     checked++;
 }
-// The same through execFile, plain and promisified: the hub is as much a way round the setting there as
-// through spawn, whichever of them an extension calls. With the setting off the call is left as written;
-// with it on, and for any run of the engine that is not the hub, it still goes through the linker.
-for (const how of ['plain', 'promisified']) {
-    const hub = [ENGINE, ['--hub', '--hub-port=41000'], { timeout: 5000 }];
-    const expected = [how, ...hub];
-    assert.deepStrictEqual(spawnedUnder([how, hub], { record: RECORD_EXEC, main: EXEC_MAIN }), expected, `execFile (${how}) started the hub with the setting off`);
-    assert.deepStrictEqual(spawnedUnder([how, [ENGINE, ['--hub', '--hub-port=41000'], '@callback']], { record: RECORD_EXEC, main: EXEC_MAIN }).slice(0, 2),
-        [how, ENGINE], `execFile (${how}) with a callback was started with the setting off`);
-    assert.deepStrictEqual(spawnedUnder([how, hub], { record: RECORD_EXEC, main: EXEC_MAIN, home: HUB_HOME }), [how, BIONIC_LINKER, [ENGINE, '--hub', '--hub-port=41000'], { timeout: 5000 }],
-        `execFile (${how}) with the setting on did not go through the linker`);
-    assert.deepStrictEqual(spawnedUnder([how, [ENGINE, ['--version'], { timeout: 5000 }]], { record: RECORD_EXEC, main: EXEC_MAIN }),
-        [how, BIONIC_LINKER, [ENGINE, '--version'], { timeout: 5000 }], `execFile (${how}) of the engine for its version is held back with the setting off`);
-    checked += 4;
+
+// With the setting off, whatever is asked of a program in ~/.gemini is left as written, which fails with
+// EACCES as it did before: the engine's Go flag parser takes -hub and --hub=true for --hub, it listens in a
+// second mode as well, and the extension and the engine update themselves. Only `agy --version`, the
+// extension's check of what it downloaded, goes through the linker. With the setting on all of them run,
+// the relay standing only in front of the start it knows.
+const AGY_NEXT = put(path.join(OFF_HOME, '.gemini/bin/agy.next'), elf64(BIONIC_LINKER));
+put(path.join(HUB_HOME, '.gemini/bin/agy.next'), elf64(BIONIC_LINKER));
+const LINK_TO_OFF_ENGINE = path.join(tmp, 'outside/gemini-engine-link');
+fs.symlinkSync(OFF_ENGINE, LINK_TO_OFF_ENGINE);
+for (const [label, call] of [
+    ['the hub as the extension starts it', [OFF_ENGINE, HUB_ARGS, SPAWN_OPTIONS]],
+    ['--hub=true', [OFF_ENGINE, ['--hub=true', '--hub-port=41000'], SPAWN_OPTIONS]],
+    ['single-dash flags', [OFF_ENGINE, ['-hub', '-hub-port=41000'], SPAWN_OPTIONS]],
+    ['the remote control mode', [OFF_ENGINE, ['--remote-control'], SPAWN_OPTIONS]],
+    ['no arguments', [OFF_ENGINE, SPAWN_OPTIONS]],
+    ['--version with more after it', [OFF_ENGINE, ['--version', '--hub'], SPAWN_OPTIONS]],
+    ['another program in ~/.gemini', [AGY_NEXT, HUB_ARGS, SPAWN_OPTIONS]],
+    ['a link from elsewhere that ends at the engine', [LINK_TO_OFF_ENGINE, HUB_ARGS, SPAWN_OPTIONS]],
+]) {
+    assert.deepStrictEqual(spawnedUnder(call, { home: OFF_HOME }), call, `setting off, ${label}: the call was changed, so it runs`);
+    // The start the relay knows is checked on its own below.
+    const on = [call[0].replace(OFF_HOME, HUB_HOME), ...call.slice(1)];
+    if (call[0] !== LINK_TO_OFF_ENGINE && !(call[0] === OFF_ENGINE && call[1] === HUB_ARGS)) {
+        assert.deepStrictEqual(spawnedUnder(on, { home: HUB_HOME }), throughLinker(on), `setting on, ${label}: not started through the linker as it was written`);
+    }
+    checked++;
 }
+assert.deepStrictEqual(spawnedUnder([OFF_ENGINE, ['--version'], SPAWN_OPTIONS], { home: OFF_HOME }), throughLinker([OFF_ENGINE, ['--version'], SPAWN_OPTIONS]),
+    'setting off, the extension\'s check of the engine\'s version was held back, so it downloads the engine again');
+checked++;
+for (const how of ['plain', 'promisified']) {
+    const exec = (call, home) => spawnedUnder([how, call], { record: RECORD_EXEC, main: EXEC_MAIN, home });
+    const hub = [OFF_ENGINE, ['--hub', '--hub-port=41000'], { timeout: 5000 }];
+    assert.deepStrictEqual(exec(hub, OFF_HOME), [how, ...hub], `execFile (${how}) started the hub with the setting off`);
+    assert.deepStrictEqual(exec([OFF_ENGINE, ['--hub', '--hub-port=41000'], '@callback'], OFF_HOME).slice(0, 2), [how, OFF_ENGINE], `execFile (${how}) with a callback was started with the setting off`);
+    assert.deepStrictEqual(exec([OFF_ENGINE, ['--remote-control'], { timeout: 5000 }], OFF_HOME), [how, OFF_ENGINE, ['--remote-control'], { timeout: 5000 }], `execFile (${how}) of the remote control mode was started with the setting off`);
+    const version = [OFF_ENGINE, ['--version'], { timeout: 5000 }];
+    assert.deepStrictEqual(exec(version, OFF_HOME), [how, ...throughLinker(version)], `execFile (${how}) of the engine for its version is held back with the setting off`);
+    // No relay here: an engine started by execFile with the setting on is an ordinary program on the port it was given.
+    const onHub = [HUB_ENGINE, ['--hub', '--hub-port=41000'], { timeout: 5000 }];
+    assert.deepStrictEqual(exec(onHub, HUB_HOME), [how, ...throughLinker(onHub)], `execFile (${how}) with the setting on did not go through the linker as it was written`);
+    checked += 5;
+}
+
+// A program outside $HOME/.gemini is not the setting's to hold back, even one at a path ending in
+// .gemini/bin/agy: it goes through the linker either way, and gets no relay.
+for (const home of [OFF_HOME, HUB_HOME]) {
+    const call = [ENGINE, HUB_ARGS, SPAWN_OPTIONS];
+    assert.deepStrictEqual(spawnedUnder(call, { home }), throughLinker(call), `a program outside $HOME/.gemini was changed by the setting (${home === HUB_HOME ? 'on' : 'off'})`);
+    checked++;
+}
+
+// The hub start the relay knows, with the setting on: the extension's own arguments, a CSRF token and one
+// --add-dir per folder among them, keep everything but the port; anything else a folder's
+// antigravity.serverArgs could add to them, a second copy of one of them included (the flag parser keeps
+// the last), is refused, the call left as written.
+const EXTENSION_ARGS = ['--hub', '--hub-port=41000', '--app_data_dir=antigravity', '--csrf_token=0123abcd', '--add-dir=/data/user/0/com.vscodroid/files/projects/a', '--add-dir=/data/user/0/com.vscodroid/files/projects/b c'];
 {
-    const withoutPort = [ENGINE, ['--hub', '--app_data_dir=antigravity'], SPAWN_OPTIONS];
-    assert.deepStrictEqual(spawnedUnder(withoutPort), withoutPort, 'a hub start that names no port was started with the setting off');
-    const version = [ENGINE, ['--version'], SPAWN_OPTIONS];
-    assert.deepStrictEqual(spawnedUnder(version), [BIONIC_LINKER, [ENGINE, '--version'], SPAWN_OPTIONS], 'the setting is for the hub: another run of the engine is not held back');
-    const on = spawnedUnder(HUB_CALL, { home: HUB_HOME });
-    assert.strictEqual(on[0], BIONIC_LINKER, 'with the setting on the hub was not started through the linker');
-    assert.strictEqual(on[1][0], ENGINE);
-    assert.ok(/^--hub-port=\d+$/.test(on[1][2]) && on[1][2] !== '--hub-port=41000', 'with the setting on the engine kept the port the extension chose: ' + on[1][2]);
-    checked += 3;
+    const got = spawnedUnder([HUB_ENGINE, EXTENSION_ARGS, SPAWN_OPTIONS], { home: HUB_HOME });
+    assert.strictEqual(got[0], BIONIC_LINKER, 'the extension\'s own hub start was refused');
+    assert.ok(/^--hub-port=\d+$/.test(got[1][2]) && got[1][2] !== '--hub-port=41000', 'with the setting on the engine kept the port the extension chose: ' + got[1][2]);
+    assert.deepStrictEqual([got[1][0], got[1][1], ...got[1].slice(3)], [HUB_ENGINE, ...EXTENSION_ARGS.filter((a) => a !== '--hub-port=41000')], 'the extension\'s other arguments changed');
+    checked++;
+}
+for (const [label, extra] of [
+    ['a second port, which the flag parser takes', ['--hub-port=8080']],
+    ['a second port spelled with one dash', ['-hub-port=8080']],
+    ['a port given as a separate word', ['--hub-port', '8080']],
+    ['a second data directory', ['--app_data_dir=/sdcard/antigravity']],
+    ['a second token', ['--csrf_token=chosen-by-the-folder']],
+    ['--hub twice', ['--hub']],
+    ['an argument the extension does not build', ['--remote-control']],
+    ['a bare word', ['serve']],
+]) {
+    const call = [HUB_ENGINE, [...EXTENSION_ARGS, ...extra], SPAWN_OPTIONS];
+    assert.deepStrictEqual(spawnedUnder(call, { home: HUB_HOME }), call, `a hub start with ${label} was started`);
+    checked++;
 }
 const hubRun = JSON.parse(execFileSync(
     process.execPath,
-    ['--require', FAKE_ANDROID, '--require', RECORD_HUB, '--require', FIX, HUB_DRIVER, ENGINE],
+    ['--require', FAKE_ANDROID, '--require', RECORD_HUB, '--require', FIX, HUB_DRIVER, HUB_ENGINE],
     { env: { ...process.env, HOME: HUB_HOME, TERMUX_APP__DATA_DIR: DATA_LINK, LD_PRELOAD: '' }, encoding: 'utf8', timeout: 60000 },
 ).trim().split('\n').pop());
 assert.deepStrictEqual(hubRun.noteAfterSpawn, { pid: 4242, port: hubRun.back }, 'the note does not name the engine that was started and the port it was given');
 assert.strictEqual(hubRun.noteAfterExit, false, 'the note outlived the engine it names');
 assert.strictEqual(hubRun.spawned[0], BIONIC_LINKER, 'the engine was not started through the linker');
-assert.strictEqual(hubRun.spawned[1][0], ENGINE);
+assert.strictEqual(hubRun.spawned[1][0], HUB_ENGINE);
 assert.notStrictEqual(hubRun.back, hubRun.front, 'the engine was given the port the extension chose, so the relay has nothing to stand in front of');
 assert.deepStrictEqual(
     hubRun.spawned[1].slice(1), ['--hub', `--hub-port=${hubRun.back}`, '--app_data_dir=antigravity'],
@@ -672,6 +760,67 @@ assert.strictEqual(hubRun.upgradeHost, `127.0.0.1:${hubRun.back}`, 'the engine s
 assert.ok(hubRun.hangingEnded.error && hubRun.hangingEnded.error !== 'still open' && hubRun.hangingEnded.error !== 'no answer', 'a response open when the engine ended stayed open: ' + JSON.stringify(hubRun.hangingEnded));
 checked += 11;
 checked++;
+
+// Any app on the phone can connect to the relay, which runs in the editor server and shares its file
+// descriptors with the extension host and the terminal host. So it holds 32 connections at once and closes
+// the rest unanswered, takes them again once they are gone, gives a request a bounded time for its headers
+// and its body (Node's own are 60 s and 300 s) and closes a tunnel that has been idle for long enough.
+const CAP_DRIVER = path.join(tmp, 'cap-driver.js');
+fs.writeFileSync(CAP_DRIVER, `
+const http = require('http');
+const net = require('net');
+const free = () => new Promise((resolve) => { const s = net.createServer().listen(0, '127.0.0.1', () => { const p = s.address().port; s.close(() => resolve(p)); }); });
+const pause = (ms) => new Promise((r) => setTimeout(r, ms));
+setTimeout(() => { console.error('the driver gave up waiting'); process.exit(1); }, 20000).unref();
+(async () => {
+    const front = await free();
+    require('child_process').spawn(process.argv[2], ['--hub', '--hub-port=' + front]);
+    const relay = globalThis.__relay;
+    const back = Number(globalThis.__spawned[1].find((a) => a.startsWith('--hub-port=')).split('=')[1]);
+    // An engine that waits for the body of a POST, which these never send.
+    const engine = http.createServer((req, res) => { if (req.method !== 'POST') res.end('ok'); });
+    engine.on('upgrade', (req, socket) => socket.write('HTTP/1.1 101 Switching Protocols\\r\\nUpgrade: websocket\\r\\nConnection: Upgrade\\r\\n\\r\\n'));
+    await new Promise((r) => engine.listen(back, '127.0.0.1', r));
+    const out = { headersTimeout: relay.headersTimeout, requestTimeout: relay.requestTimeout, refused: 0 };
+    const held = [];
+    for (let i = 0; i < 40; i++) {
+        const socket = net.connect(front, '127.0.0.1', () => socket.write('POST /x HTTP/1.1\\r\\nHost: 127.0.0.1:' + front + '\\r\\nContent-Length: 1000000\\r\\n\\r\\n'));
+        let answered = false;
+        socket.on('data', () => { answered = true; });
+        socket.on('error', () => {});
+        socket.on('close', () => { if (!answered) out.refused++; });
+        held.push(socket);
+        await pause(5);
+    }
+    await pause(1000);
+    const refusedWhileHeld = out.refused;
+    held.forEach((socket) => socket.destroy());
+    await pause(300);
+    out.refused = refusedWhileHeld;
+    out.afterRelease = await new Promise((resolve) => {
+        http.get({ host: '127.0.0.1', port: front, path: '/healthz', agent: false, timeout: 3000 }, (res) => { res.resume(); resolve(res.statusCode); })
+            .on('error', (e) => resolve(e.code || e.message));
+    });
+    const idle = new Promise((resolve) => relay.once('upgrade', (req, socket) => setImmediate(() => resolve(socket.timeout || null))));
+    const tunnel = net.connect(front, '127.0.0.1', () => tunnel.write('GET /ws HTTP/1.1\\r\\nHost: 127.0.0.1:' + front + '\\r\\nConnection: Upgrade\\r\\nUpgrade: websocket\\r\\n\\r\\n'));
+    tunnel.on('error', () => {});
+    out.tunnelIdle = await idle;
+    tunnel.destroy();
+    console.log(JSON.stringify(out));
+    process.exit(0);
+})().catch((e) => { console.error(e); process.exit(1); });
+`);
+const capRun = JSON.parse(execFileSync(
+    process.execPath,
+    ['--require', FAKE_ANDROID, '--require', RECORD_HUB, '--require', FIX, CAP_DRIVER, HUB_ENGINE],
+    { env: { ...process.env, HOME: HUB_HOME, TERMUX_APP__DATA_DIR: DATA_LINK, LD_PRELOAD: '' }, encoding: 'utf8', timeout: 60000 },
+).trim().split('\n').pop());
+assert.strictEqual(capRun.refused, 8, `40 connections held at the relay: ${capRun.refused} closed unanswered, wanted the 8 past 32`);
+assert.strictEqual(capRun.afterRelease, 200, `the relay did not take a request once the held connections were gone: ${capRun.afterRelease}`);
+assert.ok(capRun.requestTimeout > 0 && capRun.requestTimeout <= 60000, `a request may take ${capRun.requestTimeout} ms to send its body`);
+assert.ok(capRun.headersTimeout > 0 && capRun.headersTimeout <= capRun.requestTimeout, `a request may take ${capRun.headersTimeout} ms to send its headers`);
+assert.ok(capRun.tunnelIdle > 0, 'an idle tunnel is never closed');
+checked += 3;
 
 // When the system kills the editor server the engine outlives it, so the next
 // start ends the engine named in the note, but only while that pid still runs the
@@ -723,7 +872,7 @@ if (dummy) {
         fs.rmSync(HUB_NOTE, { force: true });
         const got = JSON.parse(execFileSync(
             process.execPath,
-            ['--require', FAKE_ANDROID, '--require', FIX, REAP_DRIVER, ENGINE, mode, HUB_NOTE],
+            ['--require', FAKE_ANDROID, '--require', FIX, REAP_DRIVER, HUB_ENGINE, mode, HUB_NOTE],
             { env: { ...process.env, ...standInEnv, HOME: HUB_HOME, TERMUX_APP__DATA_DIR: DATA_LINK, LD_PRELOAD: '' }, encoding: 'utf8', timeout: 30000 },
         ).trim().split('\n').pop());
         assert.strictEqual(got.result, want, `an earlier engine (${mode}): ${got.result}, wanted ${want}`);
@@ -732,10 +881,10 @@ if (dummy) {
     // With the setting turned off the hub is not started, and an engine an earlier extension host started is
     // ended all the same: turning the setting off and reloading the window must leave none running.
     {
-        const home = homeWith('off-with-an-engine', '{\n    "update.mode": "none"\n}\n');
+        const home = homeWith('{\n    "update.mode": "none"\n}\n');
         const got = JSON.parse(execFileSync(
             process.execPath,
-            ['--require', FAKE_ANDROID, '--require', FIX, REAP_DRIVER, ENGINE, 'match', path.join(home, '.vscodroid/antigravity-hub.json')],
+            ['--require', FAKE_ANDROID, '--require', FIX, REAP_DRIVER, engineIn(home), 'match', path.join(home, '.vscodroid/antigravity-hub.json')],
             { env: { ...process.env, ...standInEnv, HOME: home, TERMUX_APP__DATA_DIR: DATA_LINK, LD_PRELOAD: '' }, encoding: 'utf8', timeout: 30000 },
         ).trim().split('\n').pop());
         assert.strictEqual(got.result, 'ended by SIGTERM', `an engine left running when the setting is turned off: ${got.result}`);
@@ -747,12 +896,22 @@ if (dummy) {
     // main thread: a worker whose script has the same name, and any other
     // program, must leave the engine alone (the terminal host is a worker that
     // starts later, with an engine already running).
+    //
+    // The editor server is the file server.js forks, vscode-reh/out/server-main.js beside platform-fix.js, so
+    // these runs use a copy of the shipped file laid out that way. A script of that name anywhere else is a
+    // person's own program, which a terminal starts with this file preloaded as well.
+    const SERVER_FIX = path.join(tmp, 'server/platform-fix.js');
+    const EDITOR_DIR = path.join(tmp, 'server/vscode-reh/out');
+    const ELSEWHERE_DIR = path.join(tmp, 'project');
+    fs.mkdirSync(EDITOR_DIR, { recursive: true });
+    fs.mkdirSync(ELSEWHERE_DIR, { recursive: true });
+    fs.copyFileSync(FIX, SERVER_FIX);
     const START_DRIVER = path.join(tmp, 'start-driver.js');
     fs.writeFileSync(START_DRIVER, `
 const cp = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const [mode, note, dir, fake, fix] = process.argv.slice(2);
+const [mode, note, dir, fake, fix, elsewhere] = process.argv.slice(2);
 const dummy = cp.spawn(process.execPath, [process.env.STANDIN_ENGINE, '--hub', '--hub-port=41999'], { stdio: 'ignore', argv0: '/system/bin/linker64' });
 fs.writeFileSync(note, JSON.stringify({ pid: dummy.pid, port: 41999 }));
 const idle = 'setTimeout(function () {}, 2500);';
@@ -764,7 +923,7 @@ if (mode === 'worker-start') {
     fs.writeFileSync(other, "const { Worker } = require('worker_threads'); new Worker(" + JSON.stringify(named) + ", { execArgv: ['--require', " + JSON.stringify(fake) + ", '--require', " + JSON.stringify(fix) + "] });");
     args = [other];
 } else {
-    const main = mode === 'other-main' ? other : named;
+    const main = mode === 'other-main' ? other : mode === 'elsewhere-main' ? path.join(elsewhere, 'server-main.js') : named;
     fs.writeFileSync(main, idle);
     args = ['--require', fake, '--require', fix, main];
 }
@@ -777,11 +936,12 @@ setTimeout(() => done('still running'), 4000);
         ['server-start', 'ended by SIGTERM'],
         ['worker-start', 'still running'],
         ['other-main', 'still running'],
+        ['elsewhere-main', 'still running'],
     ]) {
         fs.rmSync(HUB_NOTE, { force: true });
         const got = JSON.parse(execFileSync(
             process.execPath,
-            [START_DRIVER, mode, HUB_NOTE, tmp, FAKE_ANDROID, FIX],
+            [START_DRIVER, mode, HUB_NOTE, EDITOR_DIR, FAKE_ANDROID, SERVER_FIX, ELSEWHERE_DIR],
             { env: { ...process.env, ...standInEnv, HOME: HUB_HOME, TERMUX_APP__DATA_DIR: DATA_LINK, LD_PRELOAD: '' }, encoding: 'utf8', timeout: 30000 },
         ).trim().split('\n').pop());
         assert.strictEqual(got.result, want, `an earlier engine at start (${mode}): ${got.result}, wanted ${want}`);
@@ -798,37 +958,44 @@ setTimeout(() => done('still running'), 4000);
 const cp = require('child_process');
 const fs = require('fs');
 const path = require('path');
-const [note, dir, fake, fix, how] = process.argv.slice(2);
-const script = path.join(dir, how === 'other' || how === 'other-signal' ? 'other-main.js' : 'server-main.js');
-fs.writeFileSync(script, how === 'signal' || how === 'other-signal'
-    ? "setInterval(function () {}, 1000);"
-    : "setTimeout(function () { process.exit(0); }, 1500);");
+const [note, dir, fake, fix, how, elsewhere] = process.argv.slice(2);
+const script = /^elsewhere/.test(how) ? path.join(elsewhere, 'server-main.js') : path.join(dir, /^other/.test(how) ? 'other-main.js' : 'server-main.js');
+// A program of the person's own with a SIGTERM handler of its own, which has to run once per signal.
+const count = path.join(elsewhere, 'handled');
+fs.rmSync(count, { force: true });
+fs.writeFileSync(script, how === 'elsewhere-signal'
+    ? "process.on('SIGTERM', function () { require('fs').appendFileSync(" + JSON.stringify(count) + ", 'x'); setTimeout(function () { process.exit(0); }, 300); }); setInterval(function () {}, 1000);"
+    : /signal$/.test(how)
+        ? "setInterval(function () {}, 1000);"
+        : "setTimeout(function () { process.exit(0); }, 1500);");
 const started = cp.spawn(process.execPath, ['--require', fake, '--require', fix, script], { stdio: 'ignore' });
 let dummy = null;
 let aliveBefore = null;
 let serverEnd = null;
 let ended = null;
 started.on('exit', (code, signal) => { serverEnd = signal || 'code ' + code; });
-const finish = () => { console.log(JSON.stringify({ aliveBefore, ended, serverEnd })); if (dummy) dummy.kill('SIGKILL'); started.kill('SIGKILL'); process.exit(0); };
+const finish = () => { console.log(JSON.stringify({ aliveBefore, ended, serverEnd, handled: fs.existsSync(count) ? fs.readFileSync(count, 'utf8').length : 0 })); if (dummy) dummy.kill('SIGKILL'); started.kill('SIGKILL'); process.exit(0); };
 setTimeout(() => {
     dummy = cp.spawn(process.execPath, [process.env.STANDIN_ENGINE, '--hub', '--hub-port=41999'], { stdio: 'ignore', argv0: '/system/bin/linker64' });
     fs.writeFileSync(note, JSON.stringify({ pid: dummy.pid, port: 41999 }));
     dummy.on('exit', (code, signal) => { ended = signal; setTimeout(finish, 500); });
 }, 700);
 setTimeout(() => { aliveBefore = dummy !== null && dummy.exitCode === null && dummy.signalCode === null; }, 1100);
-if (how === 'signal' || how === 'other-signal') setTimeout(() => started.kill('SIGTERM'), 1200);
+if (/signal$/.test(how)) setTimeout(() => started.kill('SIGTERM'), 1200);
 setTimeout(finish, 6000);
 `);
     for (const [how, want] of [
-        ['exit', { aliveBefore: true, ended: 'SIGTERM', serverEnd: 'code 0' }],
-        ['signal', { aliveBefore: true, ended: 'SIGTERM', serverEnd: 'SIGTERM' }],
-        ['other', { aliveBefore: true, ended: null, serverEnd: 'code 0' }],
-        ['other-signal', { aliveBefore: true, ended: null, serverEnd: 'SIGTERM' }],
+        ['exit', { aliveBefore: true, ended: 'SIGTERM', serverEnd: 'code 0', handled: 0 }],
+        ['signal', { aliveBefore: true, ended: 'SIGTERM', serverEnd: 'SIGTERM', handled: 0 }],
+        ['other', { aliveBefore: true, ended: null, serverEnd: 'code 0', handled: 0 }],
+        ['other-signal', { aliveBefore: true, ended: null, serverEnd: 'SIGTERM', handled: 0 }],
+        ['elsewhere', { aliveBefore: true, ended: null, serverEnd: 'code 0', handled: 0 }],
+        ['elsewhere-signal', { aliveBefore: true, ended: null, serverEnd: 'code 0', handled: 1 }],
     ]) {
         fs.rmSync(HUB_NOTE, { force: true });
         const got = JSON.parse(execFileSync(
             process.execPath,
-            [EXIT_DRIVER, HUB_NOTE, tmp, FAKE_ANDROID, FIX, how],
+            [EXIT_DRIVER, HUB_NOTE, EDITOR_DIR, FAKE_ANDROID, SERVER_FIX, how, ELSEWHERE_DIR],
             { env: { ...process.env, ...standInEnv, HOME: HUB_HOME, TERMUX_APP__DATA_DIR: DATA_LINK, LD_PRELOAD: '' }, encoding: 'utf8', timeout: 30000 },
         ).trim().split('\n').pop());
         assert.deepStrictEqual(got, want, `the engine at the server's end (${how}): ${JSON.stringify(got)}, wanted ${JSON.stringify(want)}`);
@@ -841,10 +1008,10 @@ setTimeout(finish, 6000);
 // Only the engine's own launch is touched: another program with the same flags,
 // and the engine without a hub port, keep their arguments.
 const KEEP = [
-    ['the engine without a port', ENGINE, ['--hub', '--app_data_dir=antigravity']],
-    ['the engine with port 0', ENGINE, ['--hub', '--hub-port=0']],
-    ['the engine without --hub', ENGINE, ['--hub-port=41000']],
-    ['the engine with a port past 65535', ENGINE, ['--hub', '--hub-port=70000']],
+    ['the engine without a port', HUB_ENGINE, ['--hub', '--app_data_dir=antigravity']],
+    ['the engine with port 0', HUB_ENGINE, ['--hub', '--hub-port=0']],
+    ['the engine without --hub', HUB_ENGINE, ['--hub-port=41000']],
+    ['the engine with a port past 65535', HUB_ENGINE, ['--hub', '--hub-port=70000']],
     // Inside the data directory, so the loader rule applies and only the hub rule can be told apart by the arguments.
     ['another program in the data directory with the same flags', path.join(REAL_DATA, 'files/home/other-tool'), ['--hub', '--hub-port=41000']],
 ];

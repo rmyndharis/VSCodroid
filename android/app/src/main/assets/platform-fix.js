@@ -204,34 +204,46 @@ if (process.platform === 'android') {
 
   // The engine's own port answers every app on the phone that can use the network, and the page it
   // serves there hands out the key its calls need, so an app that finds the port can use the account
-  // signed in to the engine. The engine has no option that closes this. So the app does not start the
-  // engine's hub until the person has turned on `vscodroid.antigravity.runEngine`, a machine setting
-  // the process monitor extension declares and offers when it sees the Antigravity extension. With the
-  // setting off the extension's spawn is left as it was written and fails with EACCES, as it always
-  // did here.
+  // signed in to the engine. The engine has no option that closes this. So the app runs nothing from
+  // ~/.gemini, where the extension keeps what it downloads, until the person has turned on
+  // `vscodroid.antigravity.runEngine`, a machine setting the process monitor extension declares and
+  // offers when it sees the Antigravity extension. With the setting off such a call is left as it was
+  // written and fails with EACCES, as it always did here, whatever its arguments: the engine is a Go
+  // program whose flag parser takes `-hub` and `--hub=true` for `--hub`, it has a second listening
+  // mode (`--remote-control`), and the extension and the engine both update themselves, so a list of
+  // the arguments that start a listener would not stay complete. The one call let through is exactly
+  // `agy --version`, which the extension runs to check the engine it downloaded and answers by
+  // downloading the engine again when it fails. This is about what extensions start: a terminal runs
+  // what the person types there through its own exec interceptor.
   //
-  // Read from the machine settings file at each hub start, the way the app reads its heap setting:
-  // comments are removed, strings are kept, and the key counts only at the start of a line, so one
-  // that is commented out or quoted inside another value does not turn it on.
-  var ENGINE_SETTING = /^\s*"vscodroid\.antigravity\.runEngine"\s*:\s*true\b/m;
+  // Read from the machine settings file at each such call, as VS Code reads it: comments and trailing
+  // commas out, strings kept, then the top-level key, the last one when it is written twice. The same
+  // key inside another object, a language block included, is not this setting, and a file that does
+  // not parse turns nothing on.
+  var ENGINE_SETTING = 'vscodroid.antigravity.runEngine';
   var STRING_OR_COMMENT = /"(?:\\.|[^"\\])*"|\/\/[^\n]*|\/\*[\s\S]*?\*\//g;
+  var STRING_OR_TRAILING_COMMA = /"(?:\\.|[^"\\])*"|,(?=\s*[}\]])/g;
 
   function engineTurnedOn() {
     if (!process.env.HOME) return false;
+    // A space, not nothing: what stood either side of a comment stays two tokens.
+    var keep = function (found) { return found.charAt(0) === '"' ? found : ' '; };
     try {
       var settings = fs.readFileSync(path.join(process.env.HOME, '.vscodroid', 'data', 'Machine', 'settings.json'), 'utf8');
-      return ENGINE_SETTING.test(settings.replace(STRING_OR_COMMENT, function (found) {
-        return found.charAt(0) === '"' ? found : '';
-      }));
+      return JSON.parse(settings.replace(/^\uFEFF/, '').replace(STRING_OR_COMMENT, keep).replace(STRING_OR_TRAILING_COMMA, keep))[ENGINE_SETTING] === true;
     } catch (e) {
       return false;
     }
   }
 
-  // A start of the engine's hub with the setting off, by whichever child_process function the
-  // extension calls: spawn and execFile both reach here, so that neither is a way round the setting.
-  function hubWhileOff(file, args) {
-    return ANTIGRAVITY_ENGINE.test(file) && args.indexOf('--hub') >= 0 && !engineTurnedOn();
+  /** Whether the real path of `file` is inside ~/.gemini; an error of any kind says it is not. */
+  function fromGemini(file) {
+    if (!process.env.HOME || !path.isAbsolute(file)) return false;
+    try {
+      return fs.realpathSync(file).indexOf(fs.realpathSync(path.join(process.env.HOME, '.gemini')) + '/') === 0;
+    } catch (e) {
+      return false;
+    }
   }
 
   var WEBVIEW_ORIGIN = 'https://*.vscode-cdn.net';
@@ -246,26 +258,40 @@ if (process.platform === 'android') {
     }).join(';');
   }
 
+  // The arguments the extension builds for a hub start, by name. `antigravity.serverArgs` appends its own,
+  // and the folder that is open can set it in its own settings (the editor runs without Workspace Trust), so
+  // a hub start carrying any other argument is not started, nor one that repeats any but --add-dir: the flag
+  // parser keeps the last of a repeated one, which would let the folder choose the engine's port, its data
+  // directory or its token. A repeated --add-dir only adds a directory the agent may use, as each folder of
+  // the workspace already does.
+  var HUB_ARGUMENT = /^--(?:hub|hub-port=\d{1,5}|app_data_dir=[\s\S]*|csrf_token=[\s\S]*|add-dir=[\s\S]*)$/;
+
   /**
    * For `agy --hub --hub-port=<n>`: the port the extension chose, the one the
    * engine is given instead and the argument list that says so. A random port
    * in the dynamic range, as the extension's own is. A clash makes the engine
    * print `port <n> is already in use`, which the extension's own port
-   * collision handling matches; that path was read, not run.
+   * collision handling matches; that path was read, not run. False for that
+   * start with an argument outside HUB_ARGUMENT, null for anything else, which
+   * runs as an ordinary program would, with no relay and no note.
    */
   function antigravityHub(file, args) {
     if (!ANTIGRAVITY_ENGINE.test(file) || args.indexOf('--hub') < 0) return null;
-    for (var i = 0; i < args.length; i++) {
-      var match = /^--hub-port=(\d{1,5})$/.exec(args[i]);
-      if (!match || Number(match[1]) === 0 || Number(match[1]) > 65535) continue;
-      var front = Number(match[1]);
-      var back = front;
-      while (back === front) back = 20000 + Math.floor(Math.random() * 40000);
-      var changed = args.slice();
-      changed[i] = '--hub-port=' + back;
-      return { front: front, back: back, args: changed };
-    }
-    return null;
+    var ports = args.filter(function (arg) { return /^--hub-port=/.test(arg); });
+    if (!ports.length) return null;
+    var seen = {};
+    var refused = args.some(function (arg) {
+      var name = arg.split('=')[0];
+      var again = seen[name] && name !== '--add-dir';
+      seen[name] = true;
+      return again || !HUB_ARGUMENT.test(arg);
+    });
+    if (refused) return false;
+    var front = Number(ports[0].slice('--hub-port='.length));
+    if (front === 0 || front > 65535) return null;
+    var back = front;
+    while (back === front) back = 20000 + Math.floor(Math.random() * 40000);
+    return { front: front, back: back, args: args.map(function (arg) { return arg === ports[0] ? '--hub-port=' + back : arg; }) };
   }
 
   /**
@@ -278,13 +304,25 @@ if (process.platform === 'android') {
     return value === '127.0.0.1:' + front || value === 'localhost:' + front;
   }
 
+  // Any app on the phone can open connections to the relay, and it runs in the editor server, which shares
+  // its file descriptors with the extension host and the terminal host. So it holds at most this many, each
+  // with one more to the engine. A request has HEADERS_MS for its headers and REQUEST_MS for its body too,
+  // which over loopback takes milliseconds; a response may take as long as it takes (measured on Node 22 and
+  // 24). Node looks every 30 s (connectionsCheckingInterval), so a stalled request goes up to 30 s later. A tunnel quiet both ways for TUNNEL_IDLE_MS is closed: no keepalive of
+  // the page's own was found in the extension or the engine, so that is a bound on abandoned tunnels, not
+  // a margin over a measured interval.
+  var RELAY_CONNECTIONS = 32;
+  var HEADERS_MS = 15000;
+  var REQUEST_MS = 30000;
+  var TUNNEL_IDLE_MS = 10 * 60 * 1000;
+
   /** Answers on `front` and relays to the engine on `back`, 502 while it is not accepting; closes when `child` ends. */
   function relayHub(front, back, child) {
     var http = require('http');
     var net = require('net');
     var pipeline = require('stream').pipeline;
     var sockets = new Set();
-    var server = http.createServer(function (req, res) {
+    var server = http.createServer({ headersTimeout: HEADERS_MS, requestTimeout: REQUEST_MS }, function (req, res) {
       if (!ownHost(req.headers.host, front)) {
         res.writeHead(403);
         res.end();
@@ -330,17 +368,25 @@ if (process.platform === 'android') {
         up.pipe(socket);
         socket.pipe(up);
       });
+      var idle = function () { socket.destroy(); up.destroy(); };
+      socket.setTimeout(TUNNEL_IDLE_MS, idle);
+      up.setTimeout(TUNNEL_IDLE_MS, idle);
       up.on('error', function () { socket.destroy(); });
       socket.on('error', function () { up.destroy(); });
     });
+    server.maxConnections = RELAY_CONNECTIONS;
     server.on('connection', function (socket) {
       sockets.add(socket);
       socket.on('close', function () { sockets.delete(socket); });
     });
     server.on('error', function (error) {
       console.error('[vscodroid] hub relay on ' + front + ': ' + error.message);
-      // Without the relay the extension would poll a port the engine is not on, or one that someone else holds.
-      // An engine that ends is something it recovers from, by starting another on a port it picks again.
+      // Without the relay the extension would poll a port the engine is not on, or one that someone else holds,
+      // so the engine is ended. The extension tries a new port only when the engine itself says its port is in
+      // use, and restarts on its own only an engine that was ready, so this start fails with "Server failed to
+      // start: process terminated by signal SIGTERM" and the engine stays down until something starts it again,
+      // such as a reload of the window. The port is one the extension found free a moment earlier, so this needs
+      // another app to take it in between.
       if (error.code === 'EADDRINUSE' || error.code === 'EACCES') {
         try { child.kill(); } catch (e) { /* already gone */ }
       }
@@ -394,7 +440,15 @@ if (process.platform === 'android') {
   // terminal host starts when the first terminal opens, with an engine already
   // running. A worker has no argv[1] while preloads run on Node 22, so the name
   // test alone already skips it; the thread test keeps that from depending on it.
-  if (require('worker_threads').isMainThread && /(^|[\\/])server-main\.js$/.test(process.argv[1] || '')) {
+  // The file itself and not its name: NODE_OPTIONS loads this into every Node
+  // process a terminal starts, and a script of the same name elsewhere is the
+  // person's own. server.js forks the one beside this file.
+  var EDITOR_SERVER = path.join(__dirname, 'vscode-reh', 'out', 'server-main.js');
+  var editorServer = false;
+  try {
+    editorServer = !!process.argv[1] && fs.realpathSync(process.argv[1]) === fs.realpathSync(EDITOR_SERVER);
+  } catch (e) { /* not a file, or no editor server here */ }
+  if (require('worker_threads').isMainThread && editorServer) {
     endEarlierHub();
     // An engine the extension host started has no parent to wait for it once this process is gone. The app
     // stops the server with SIGTERM, which the server does not handle (it dies at once and runs no exit
@@ -410,6 +464,27 @@ if (process.platform === 'android') {
     process.on('exit', endEarlierHub);
   }
 
+  /**
+   * What a child_process call of `file` with `rest` after it becomes, for spawn, execFile and the promisified
+   * execFile alike: `call`, the arguments for the linker, or none when the call is left as written, and
+   * `hub`, the relay to put in front of an engine only spawn (`relay`) starts. See ENGINE_SETTING for ~/.gemini.
+   */
+  function engineCall(file, rest, relay) {
+    var gemini = typeof file === 'string' && fromGemini(file);
+    var on = gemini && engineTurnedOn();
+    var args = Array.isArray(rest[0]) ? rest[0] : [];
+    var hub = on ? antigravityHub(file, args) : null;
+    if ((gemini && !on && !(args.length === 1 && args[0] === '--version')) || hub === false) {
+      // An engine an earlier extension host started is ended as well, so that turning the setting off and
+      // reloading the window leaves none running.
+      endEarlierHub();
+      return {};
+    }
+    if (!relay) hub = null;
+    var call = throughLinker(file, rest, hub ? function () { return hub.args; } : null);
+    return { call: call, hub: call && hub };
+  }
+
   var realSpawn = childProcess.spawn;
   childProcess.spawn = function (file) {
     if (typeof file === 'string' && CODEX_BUNDLED.test(file)) {
@@ -420,32 +495,21 @@ if (process.platform === 'android') {
         return realSpawn.apply(this, args);
       }
     }
-    var hub = null;
-    var turnedOff = false;
-    var call = throughLinker(file, Array.prototype.slice.call(arguments, 1), function (args) {
-      // Every hub start, with a port to relay or without: see ENGINE_SETTING.
-      turnedOff = hubWhileOff(file, args);
-      hub = turnedOff ? null : antigravityHub(file, args);
-      return hub ? hub.args : args;
-    });
-    if (call && !turnedOff) {
-      if (hub) endEarlierHub();
-      var started = realSpawn.apply(this, call);
-      if (hub && started && started.pid !== undefined) {
-        try {
-          relayHub(hub.front, hub.back, started);
-          keepHubNote(started, hub.back);
-        } catch (e) {
-          console.error('[vscodroid] hub relay on ' + hub.front + ': ' + e.message);
-          try { started.kill(); } catch (killed) { /* already gone */ }
-        }
+    var gate = engineCall(file, Array.prototype.slice.call(arguments, 1), true);
+    if (!gate.call) return realSpawn.apply(this, arguments);
+    var hub = gate.hub;
+    if (hub) endEarlierHub();
+    var started = realSpawn.apply(this, gate.call);
+    if (hub && started && started.pid !== undefined) {
+      try {
+        relayHub(hub.front, hub.back, started);
+        keepHubNote(started, hub.back);
+      } catch (e) {
+        console.error('[vscodroid] hub relay on ' + hub.front + ': ' + e.message);
+        try { started.kill(); } catch (killed) { /* already gone */ }
       }
-      return started;
     }
-    // Turned off: an engine an earlier extension host started is ended as well, so that turning the
-    // setting off and reloading the window leaves none running.
-    if (turnedOff) endEarlierHub();
-    return realSpawn.apply(this, arguments);
+    return started;
   };
 
   // execFile reaches the internal spawn, not the exported one replaced above, and
@@ -456,15 +520,10 @@ if (process.platform === 'android') {
   var realExecFile = childProcess.execFile;
   var realExecFilePromised = realExecFile[promisify.custom];
 
-  // The call execFile is to make: through the linker, unless it starts the engine's hub with the setting
-  // off, which is left as written and fails with EACCES, as the same call does through spawn.
+  // The call execFile is to make: the same rules as spawn, without a relay, so an engine's hub started
+  // this way with the setting on is an ordinary program on the port it was given.
   function execFileCall(file, all) {
-    var held = false;
-    var call = throughLinker(file, Array.prototype.slice.call(all, 1), function (args) {
-      held = hubWhileOff(file, args);
-      return args;
-    });
-    return call && !held ? call : all;
+    return engineCall(file, Array.prototype.slice.call(all, 1), false).call || all;
   }
   childProcess.execFile = function (file) {
     return realExecFile.apply(this, execFileCall(file, arguments));
