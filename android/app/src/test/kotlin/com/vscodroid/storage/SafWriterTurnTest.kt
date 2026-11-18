@@ -18,7 +18,6 @@ import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
-import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
@@ -273,6 +272,29 @@ class SafWriterTurnTest {
         assertTrue(engine.holdsOnlyVouchedCopies(mirror), "completed saves left the mirror unvouched")
     }
 
+    /** The mirror's turn: the lock a write holds while it runs, which a waiting write is queued on. */
+    private fun turnOf(mirror: File): java.util.concurrent.locks.ReentrantLock {
+        val access = (SafSyncEngine::class.java.getDeclaredField("mirrorAccess").apply { isAccessible = true }
+            .get(null) as Map<*, *>)[mirror.absolutePath] ?: error("no turn was made for ${mirror.absolutePath}")
+        return access.javaClass.getDeclaredMethod("getLock").apply { isAccessible = true }
+            .invoke(access) as java.util.concurrent.locks.ReentrantLock
+    }
+
+    /**
+     * Whether [waiter] is still queued on the mirror's turn while somebody holds it. Read as a state, not raced: the
+     * one that gave back its claim after the turn left the turn free, or to the waiter, by the time it reached the
+     * registry, and then this is never true.
+     */
+    private fun waitsOnHeldTurn(mirror: File, waiter: Thread): Boolean {
+        val turn = turnOf(mirror)
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        while (System.nanoTime() < deadline) {
+            if (turn.isLocked && turn.hasQueuedThread(waiter)) return true
+            Thread.sleep(5)
+        }
+        return false
+    }
+
     /**
      * The write in flight gives its provider claim back before it gives the turn back.
      *
@@ -303,9 +325,8 @@ class SafWriterTurnTest {
             val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
             while (oldDrain.state != Thread.State.BLOCKED && System.nanoTime() < deadline) Thread.sleep(5)
             assertEquals(Thread.State.BLOCKED, oldDrain.state, "the first drain never came to give its claim back")
-            Thread.sleep(400)
-            assertNotEquals(
-                Thread.State.BLOCKED, newDrain.state,
+            assertTrue(
+                waitsOnHeldTurn(mirror, newDrain),
                 "the second drain was handed the turn while the first still held the provider claim",
             )
         }

@@ -19,7 +19,6 @@ import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
-import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertNotNull
 import org.junit.jupiter.api.Assertions.assertNull
 import org.junit.jupiter.api.Assertions.assertTrue
@@ -676,6 +675,29 @@ class SafProviderClaimWaitTest {
      * stops whoever gives a claim back or takes one. The rename, let go, comes to give its claim
      * back and stops there. The save must still be waiting for the turn, not at the registry.
      */
+    /** The mirror's turn: the lock a write holds while it runs, which a waiting write is queued on. */
+    private fun turnOf(mirror: File): java.util.concurrent.locks.ReentrantLock {
+        val access = (SafSyncEngine::class.java.getDeclaredField("mirrorAccess").apply { isAccessible = true }
+            .get(null) as Map<*, *>)[mirror.absolutePath] ?: error("no turn was made for ${mirror.absolutePath}")
+        return access.javaClass.getDeclaredMethod("getLock").apply { isAccessible = true }
+            .invoke(access) as java.util.concurrent.locks.ReentrantLock
+    }
+
+    /**
+     * Whether [waiter] is still queued on the mirror's turn while somebody holds it. Read as a state, not raced: the
+     * one that gave back its claim after the turn left the turn free, or to the waiter, by the time it reached the
+     * registry, and then this is never true.
+     */
+    private fun waitsOnHeldTurn(mirror: File, waiter: Thread): Boolean {
+        val turn = turnOf(mirror)
+        val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(5)
+        while (System.nanoTime() < deadline) {
+            if (turn.isLocked && turn.hasQueuedThread(waiter)) return true
+            Thread.sleep(5)
+        }
+        return false
+    }
+
     @Test
     fun `a save waiting for its turn behind a rename is not handed it before the rename gives back the provider claim`() {
         val fixture = setupRenameFixture()
@@ -701,9 +723,8 @@ class SafProviderClaimWaitTest {
                 val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
                 while (renaming.state != Thread.State.BLOCKED && System.nanoTime() < deadline) Thread.sleep(5)
                 assertEquals(Thread.State.BLOCKED, renaming.state, "the rename never came to give its claim back")
-                Thread.sleep(400)
-                assertNotEquals(
-                    Thread.State.BLOCKED, saving.state,
+                assertTrue(
+                    waitsOnHeldTurn(mirror, saving),
                     "the save was handed the turn while the rename still held the provider claim",
                 )
             }
