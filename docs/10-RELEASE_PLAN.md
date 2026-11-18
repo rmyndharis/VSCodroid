@@ -49,7 +49,7 @@ flowchart TD
   REPO["GitHub Repository"] --> B1["Pull request to main, and every push to main<br/>build.yml: debug APK, unit tests, instrumented suite compiled<br/>lint.yml: Android lint and the repository self-checks"]
   REPO --> B2["A pull request touching one of seven build-configuration paths, or a push to main touching those or the app sources<br/>r8.yml: R8, the resource shrinker and lintVitalRelease"]
   REPO --> B3["Tag v*<br/>release.yml: published server checked against this commit, then signed AAB and APK, toolchain ZIPs, GitHub Release"]
-  REPO --> B4["Push to main touching docs/site, the user guide or the privacy policy<br/>pages.yml: publishes the usage site"]
+  REPO --> B4["Push to main touching docs/site, the user guide, the privacy policy or the changelog, a finished release.yml run, Monday 04:17 UTC, or by hand<br/>pages.yml: publishes the usage site"]
   REPO --> B5["r8.yml: Monday 03:00 UTC, pushes to main, pull requests, or by hand<br/>patch-drift.yml: Monday 04:00 UTC, or by hand"]
   REPO --> B6["Dispatched by hand on a VS Code bump, arm64 runner<br/>build-vscode-oss.yml: builds the server once per version"]
 ```

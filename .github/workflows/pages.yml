@@ -23,8 +23,20 @@ on:
       - "docs/site/**"
       - "docs/USER_GUIDE.md"
       - "docs/PRIVACY_POLICY.md"
+      - "CHANGELOG.md"
       - "scripts/build-docs-site.py"
+      - "scripts/fetch-site-live.py"
       - ".github/workflows/pages.yml"
+  # The landing page names the latest release, so the site is built again once
+  # one has been published. `release:` would never fire here: the release is
+  # created with the workflow's own token, and what that token does starts no
+  # other workflow.
+  workflow_run:
+    workflows: [Release]
+    types: [completed]
+  # Once a week as well, for the star count.
+  schedule:
+    - cron: "17 4 * * 1"
   workflow_dispatch:
 
 permissions:
@@ -39,6 +51,8 @@ concurrency:
 jobs:
   deploy:
     name: Deploy to GitHub Pages
+    # A release run that failed published nothing new to show.
+    if: github.event_name != 'workflow_run' || github.event.workflow_run.conclusion == 'success'
     runs-on: ubuntu-latest
     environment:
       name: github-pages
@@ -62,6 +76,13 @@ jobs:
 
       - name: Render the documents into pages
         run: python3 scripts/build-docs-site.py
+
+      - name: Read the latest release and the star count
+        # With the workflow's token: an address without one is answered 60
+        # times an hour, and the runners share theirs.
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: python3 scripts/fetch-site-live.py
 
       - name: Setup Pages
         uses: actions/configure-pages@45bfe0192ca1faeb007ade9deae92b16b8254a0d # v6.0.0

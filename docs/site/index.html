@@ -6,8 +6,11 @@
 <title>VSCodroid | VS Code on Android</title>
 <meta name="description" content="A full VS Code editor running natively on Android, with a real terminal, Git, Node.js and Python bundled. Download, open, code.">
 <meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#0e1116">
 <link rel="icon" href="assets/vscodroid.png" type="image/png">
+<link rel="preload" href="assets/fonts/plus-jakarta-sans.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="assets/style.css">
+<script src="assets/site.js" defer></script>
 <meta property="og:title" content="VSCodroid">
 <meta property="og:description" content="VS Code on Android, with a real terminal and toolchain. Download, open, code.">
 <meta property="og:image" content="https://rmyndharis.github.io/VSCodroid/assets/feature_graphic.png">
@@ -26,7 +29,7 @@
     <nav class="site-nav" aria-label="Main">
       <a href="guide.html">User guide</a>
       <a href="privacy-policy.html">Privacy</a>
-      <a href="https://github.com/rmyndharis/VSCodroid">GitHub</a>
+      <a href="https://github.com/rmyndharis/VSCodroid">GitHub <span class="stars" hidden><span data-live="stars"></span><span class="sr"> stars</span></span></a>
     </nav>
   </div>
 </header>
@@ -35,13 +38,19 @@
 
   <section class="hero">
     <div class="wrap hero-grid">
-      <div>
-        <h1>VS Code, on your phone</h1>
+      <div class="hero-copy">
+        <!-- The version is filled in by assets/site.js, and the words before
+             it stay hidden until it is: the link reads on its own. -->
+        <p class="hero-tag">
+          <span hidden>Latest <span class="hero-tag-long">release </span><span data-live="version"></span></span>
+          <a href="changelog.html">What's new <span aria-hidden="true">&rarr;</span></a>
+        </p>
+        <h1>VS Code, <span>on your phone</span></h1>
         <p class="lede">
           Not an editor inspired by it. The real workbench, with a real
           terminal, running natively on Android.
         </p>
-        <div class="hero-actions">
+        <div class="actions">
           <a class="btn btn-primary"
              href="https://play.google.com/store/apps/details?id=com.vscodroid">
             Get it on Google Play
@@ -51,69 +60,151 @@
             Download the APK
           </a>
         </div>
-        <p class="hero-note">
-          <span class="fact">Android 10</span> or newer, <span class="fact">64-bit</span>.
-          Around <span class="fact">800 MB</span> free space for the first
-          launch, and much less for each update.
-        </p>
       </div>
-      <div class="device">
-        <img src="assets/01_editor.webp"
-             alt="VSCodroid on a phone: a Node.js server open in the editor, with the terminal below it showing the Node, Python and Git versions and the server running."
-             width="540" height="1200" fetchpriority="high">
+      <div class="hero-visual">
+        <div class="device">
+          <img src="assets/01_editor.webp"
+               alt="VSCodroid on a phone: a Node.js server open in the editor, with the terminal below it showing the Node, Python and Git versions and the server running."
+               width="540" height="1200" fetchpriority="high">
+          <!-- Covers that make the last command in the picture look typed.
+               They sit on its last three terminal rows, measured from this
+               picture, and are gone when the animation ends. -->
+          <span class="term-type" aria-hidden="true"><span></span></span>
+          <span class="term-out" aria-hidden="true"></span>
+          <span class="term-caret" aria-hidden="true"></span>
+        </div>
+        <!-- Each note points at a row of the screenshot above, so the
+             positions in the stylesheet belong to this picture. -->
+        <ul class="pointers" role="list" aria-label="In this screenshot">
+          <li class="pointer-workbench">
+            <strong>The VS Code workbench</strong>
+            <span>built from Code&nbsp;-&nbsp;OSS</span>
+          </li>
+          <li class="pointer-terminal">
+            <strong>Bash on a proper PTY</strong>
+            <span>not a shell emulator</span>
+          </li>
+          <li class="pointer-runtimes">
+            <strong>Node.js, Python and Git</strong>
+            <span>bundled, no setup</span>
+          </li>
+          <li class="pointer-extensions">
+            <strong>Extensions</strong>
+            <span>from Open VSX</span>
+          </li>
+        </ul>
       </div>
+    </div>
+    <div class="wrap">
+      <dl class="specs">
+        <div>
+          <dt>Android</dt>
+          <dd>10 or newer, 64-bit</dd>
+        </div>
+        <div>
+          <dt>First launch</dt>
+          <dd>Around 800 MB free</dd>
+        </div>
+        <div>
+          <dt>Offline</dt>
+          <dd>Editing, terminal and runtimes</dd>
+        </div>
+        <div>
+          <dt>Telemetry</dt>
+          <dd>None collected</dd>
+        </div>
+      </dl>
     </div>
   </section>
 
   <section class="section section-sunken">
-    <div class="wrap">
-      <h2>AI assistants in the editor</h2>
-      <p class="section-intro">
-        Chat with GitHub Copilot, Claude Code or Codex from the side bar. Each
-        one signs in with your own account, and each is a cloud service, so it
-        needs a connection.
-      </p>
+    <div class="wrap split">
+      <div>
+        <p class="eyebrow"><span>01</span> / Assistants</p>
+        <h2>AI assistants in the editor</h2>
+        <p class="section-intro">
+          Chat with GitHub Copilot, Claude Code or Codex from the side bar. Each
+          one signs in with your own account, and each is a cloud service, so it
+          needs a connection.
+        </p>
+        <p class="assistants-note">
+          GitHub Copilot Chat is built in. Claude Code and Codex are extensions
+          you add from the extensions view, and Codex also needs its toolchain,
+          added from the toolchains screen. What you ask goes to the provider,
+          under its own terms; the <a href="privacy-policy.html">privacy policy</a>
+          has the details.
+        </p>
+      </div>
       <ul class="shots shots-three">
         <li class="shot">
           <figure>
             <img src="assets/06_copilot_chat.webp" alt="GitHub Copilot Chat in the side bar. The request asks for a Python list comprehension that squares the numbers one to five, and the reply is the code."
                  width="540" height="1200" loading="lazy">
-            <figcaption>GitHub Copilot Chat</figcaption>
+            <figcaption>GitHub Copilot Chat <span>Built in</span></figcaption>
           </figure>
         </li>
         <li class="shot">
           <figure>
             <img src="assets/07_claude_code.webp" alt="The Claude Code panel. The same request, answered with the code and a short explanation."
                  width="540" height="1200" loading="lazy">
-            <figcaption>Claude Code</figcaption>
+            <figcaption>Claude Code <span>Extension</span></figcaption>
           </figure>
         </li>
         <li class="shot">
           <figure>
             <img src="assets/08_codex.webp" alt="The Codex panel. The same request, answered with the code."
                  width="540" height="1200" loading="lazy">
-            <figcaption>Codex</figcaption>
+            <figcaption>Codex <span>Extension and toolchain</span></figcaption>
           </figure>
         </li>
       </ul>
-      <p class="assistants-note">
-        GitHub Copilot Chat is built in. Claude Code and Codex are extensions
-        you add from the extensions view, and Codex also needs its toolchain,
-        added from the toolchains screen. What you ask goes to the provider,
-        under its own terms; the <a href="privacy-policy.html">privacy policy</a>
-        has the details.
-      </p>
     </div>
   </section>
 
   <section class="section">
     <div class="wrap">
-      <h2>What you get</h2>
+      <p class="eyebrow"><span>02</span> / In the box</p>
+      <h2>Everything needed to work is bundled</h2>
       <p class="section-intro">
-        Everything needed to actually work is bundled. There is no setup step,
-        no Termux to install first, and nothing to configure before the first
-        file opens.
+        There is no setup step, no Termux to install first, and nothing to
+        configure before the first file opens.
       </p>
+      <div class="kit">
+        <div>
+          <h3>Shell and tools</h3>
+          <ul class="chips">
+            <li>Bash</li>
+            <li>Git</li>
+            <li>make</li>
+            <li>ripgrep</li>
+            <li>tmux</li>
+            <li>OpenSSH</li>
+          </ul>
+          <p>
+            Bash on a proper PTY, with the rest already on the path. Not a
+            shell emulator over a socket.
+          </p>
+        </div>
+        <div>
+          <h3>Runtimes</h3>
+          <ul class="chips">
+            <li>Node&nbsp;24</li>
+            <li>npm</li>
+            <li>Python&nbsp;3</li>
+            <li>pip</li>
+          </ul>
+          <p>Node.js with npm and Python with pip, installed on first launch.</p>
+        </div>
+        <div>
+          <h3>On demand</h3>
+          <ul class="chips">
+            <li>Ruby</li>
+            <li>Java&nbsp;25</li>
+            <li>C/C++</li>
+          </ul>
+          <p>Installed when you ask for them.</p>
+        </div>
+      </div>
       <ul class="features">
         <li class="feature">
           <h3>The VS Code workbench</h3>
@@ -121,22 +212,6 @@
             Built from the MIT-licensed Code&nbsp;-&nbsp;OSS source, so the
             editor, the command palette, settings and keybindings are the ones
             you already know.
-          </p>
-        </li>
-        <li class="feature">
-          <h3>Bash and the usual tools</h3>
-          <p>
-            Bash on a proper PTY, with Git, make, ripgrep, tmux and OpenSSH
-            already on the path. Not a shell emulator over a socket.
-          </p>
-        </li>
-        <li class="feature">
-          <h3>Node.js and Python, bundled</h3>
-          <p>
-            <span class="fact">Node&nbsp;24</span> with npm, and
-            <span class="fact">Python&nbsp;3</span> with pip, both installed on
-            first launch. Ruby, <span class="fact">Java&nbsp;25</span> and C/C++
-            install on demand when you ask for them.
           </p>
         </li>
         <li class="feature">
@@ -169,6 +244,7 @@
 
   <section class="section section-sunken">
     <div class="wrap">
+      <p class="eyebrow"><span>03</span> / First run</p>
       <h2>Getting started</h2>
       <p class="section-intro">
         Four steps, and only the unpacking and the language downloads take any
@@ -176,43 +252,35 @@
       </p>
       <ol class="steps">
         <li>
-          <div>
-            <h3>Install</h3>
-            <p>
-              From Google Play, or by sideloading the APK from GitHub Releases.
-              Both are the same build.
-            </p>
-          </div>
+          <h3>Install</h3>
+          <p>
+            From Google Play, or by sideloading the APK from GitHub Releases.
+            Both are the same build.
+          </p>
         </li>
         <li>
-          <div>
-            <h3>Let it unpack</h3>
-            <p>
-              The first launch extracts the editor and the bundled tools behind
-              a progress bar, and it needs the space before it starts rather than
-              partway through. It repeats after each app update, though an update
-              needs far less room because what is already unpacked counts toward
-              it.
-            </p>
-          </div>
+          <h3>Let it unpack</h3>
+          <p>
+            The first launch extracts the editor and the bundled tools behind
+            a progress bar, and it needs the space before it starts rather than
+            partway through. It repeats after each app update, though an update
+            needs far less room because what is already unpacked counts toward
+            it.
+          </p>
         </li>
         <li>
-          <div>
-            <h3>Pick your languages</h3>
-            <p>
-              Ruby, <span class="fact">Java&nbsp;25</span> and C/C++ are offered until you answer, and can be added
-              or removed later from the app icon's long-press menu.
-            </p>
-          </div>
+          <h3>Pick your languages</h3>
+          <p>
+            Ruby, Java&nbsp;25 and C/C++ are offered until you answer, and can
+            be added or removed later from the app icon's long-press menu.
+          </p>
         </li>
         <li>
-          <div>
-            <h3>Open a folder and work</h3>
-            <p>
-              Use the app's projects directory, or open a folder from device
-              storage. The terminal starts where the editor is.
-            </p>
-          </div>
+          <h3>Open a folder and work</h3>
+          <p>
+            Use the app's projects directory, or open a folder from device
+            storage. The terminal starts where the editor is.
+          </p>
         </li>
       </ol>
       <p class="section-cta">
@@ -221,11 +289,12 @@
     </div>
   </section>
 
-  <section class="section">
+  <section class="section section-ink">
     <div class="wrap">
+      <p class="eyebrow"><span>04</span> / Screens</p>
       <h2>A look around</h2>
       <p class="section-intro">
-        Screenshots from a phone, at the size a phone actually shows them.
+        The app itself at phone size, not mockups.
       </p>
       <ul class="shots">
         <li class="shot">
@@ -260,17 +329,16 @@
     </div>
   </section>
 
-  <section class="section section-sunken">
+  <section class="section">
     <div class="wrap">
-      <div class="prose">
-        <h2>Worth knowing before you start</h2>
-        <p class="section-intro">
-          Android is not a desktop, and a few things follow from that. The user
-          guide covers each in full.
-        </p>
-      </div>
-      <ul class="features">
-        <li class="feature">
+      <p class="eyebrow"><span>05</span> / Limits</p>
+      <h2>Worth knowing before you start</h2>
+      <p class="section-intro">
+        Android is not a desktop, and a few things follow from that. The user
+        guide covers each in full.
+      </p>
+      <ul class="limits">
+        <li>
           <h3>No C compiler until you add one</h3>
           <p>
             Packages that build native code at install time fail until the
@@ -282,7 +350,7 @@
             so those install without it.
           </p>
         </li>
-        <li class="feature">
+        <li>
           <h3>Tools start indirectly</h3>
           <p>
             Android refuses to execute files in an app's private storage.
@@ -293,7 +361,7 @@
             outside a shell, use <code>python3 -m pip</code>.
           </p>
         </li>
-        <li class="feature">
+        <li>
           <h3>Some extensions cannot work</h3>
           <p>
             An extension that ships a compiled desktop Linux binary installs
@@ -302,6 +370,28 @@
           </p>
         </li>
       </ul>
+    </div>
+  </section>
+
+  <section class="section section-brand">
+    <div class="wrap cta">
+      <div>
+        <h2>Download, open, code</h2>
+        <p>
+          From Google Play, or by sideloading the APK from GitHub Releases.
+          Both are the same build.
+        </p>
+      </div>
+      <div class="actions">
+        <a class="btn btn-primary"
+           href="https://play.google.com/store/apps/details?id=com.vscodroid">
+          Get it on Google Play
+        </a>
+        <a class="btn btn-ghost"
+           href="https://github.com/rmyndharis/VSCodroid/releases">
+          Download the APK
+        </a>
+      </div>
     </div>
   </section>
 
@@ -319,7 +409,8 @@
       <nav class="footer-links" aria-label="Footer">
         <a href="guide.html">User guide</a>
         <a href="privacy-policy.html">Privacy policy</a>
-        <a href="https://github.com/rmyndharis/VSCodroid">Source</a>
+        <a href="https://github.com/rmyndharis/VSCodroid">Source <span class="stars" hidden><span data-live="stars"></span><span class="sr"> stars</span></span></a>
+        <a href="changelog.html">Release notes</a>
         <a href="https://github.com/rmyndharis/VSCodroid/releases">Releases</a>
         <a href="https://github.com/rmyndharis/VSCodroid/issues">Report an issue</a>
       </nav>

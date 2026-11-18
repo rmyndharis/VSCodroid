@@ -877,6 +877,33 @@ esac
                 else:
                     self.assertIn(message, result["stderr"], result)
 
+    def test_site_live_data_holds_only_what_was_checked(self):
+        source = SOURCE / "scripts/fetch-site-live.py"
+        module = types.ModuleType("fixture_site_live")
+        module.__file__ = str(source)
+        exec(compile(source.read_text(encoding="utf-8"), str(source), "exec"), module.__dict__)
+
+        self.assertEqual(
+            {"version": "v1.9.0", "stars": "380"},
+            module.live({"stargazers_count": 380}, {"tag_name": "v1.9.0"}),
+        )
+        for count, text in ((0, "0"), (999, "999"), (1000, "1k"), (12345, "12.3k")):
+            self.assertEqual(text, module.stars_text(count))
+        # The browser writes these strings onto the page, so anything that is
+        # not a release tag or a count is refused, not passed along.
+        for repository, release in (
+            ({"stargazers_count": 380}, {"tag_name": "server-1.139.1"}),
+            ({"stargazers_count": 380}, {"tag_name": "<b>v1.9.0</b>"}),
+            ({"stargazers_count": 380}, {}),
+            ({"stargazers_count": "380"}, {"tag_name": "v1.9.0"}),
+            ({"stargazers_count": True}, {"tag_name": "v1.9.0"}),
+            ({"stargazers_count": -1}, {"tag_name": "v1.9.0"}),
+            ({}, {"tag_name": "v1.9.0"}),
+            ([], {"tag_name": "v1.9.0"}),
+        ):
+            with self.assertRaises(ValueError, msg=(repository, release)):
+                module.live(repository, release)
+
     def test_offline_termux_packages_never_attempt_a_download(self):
         library = SOURCE / "scripts/lib/termux-packages.sh"
         payload = b"cached package bytes"
