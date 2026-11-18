@@ -132,7 +132,12 @@ python3 scripts/build-nls-bundles.py
 #     Claude Code CLI cannot start. Also writes only into jniLibs.
 ./scripts/build-claude-shim.sh
 
-# 15. (Optional) On-demand toolchains. download-cpp.sh checks the base APK's usr/lib
+# 15. The helper that moves a kept copy of a device folder's file to a name nobody
+#     holds (requires NDK). Also writes only into jniLibs. Without it the move checks
+#     the name first and then moves, which leaves a gap for a file made in between.
+./scripts/build-move-noreplace.sh
+
+# 16. (Optional) On-demand toolchains. download-cpp.sh checks the base APK's usr/lib
 #     for the libraries its pack leaves out, so it runs after step 1; it requires a
 #     case-sensitive volume (set ALLOW_CASE_INSENSITIVE=1 for a local test pack only);
 #     download-java.sh requires NDK, for the libandroid-spawn.so it builds
@@ -452,7 +457,7 @@ installed toolchain: the toolchain checks then report skipped, and only
 
 **Nothing runs it automatically, and that is a measured conclusion rather than an
 oversight.** GitHub's arm64 runners expose no `/dev/kvm`, so an emulator there
-runs under full software emulation; and eleven of the fourteen bundled binaries
+runs under full software emulation; and twelve of the fifteen bundled binaries
 request `/system/bin/linker64`, so running them under `qemu-user` needs Android's
 Bionic from a system image: 2.1 GB, inside a partitioned disk image. Both routes
 were attempted and measured; the issue tracker carries the evidence.

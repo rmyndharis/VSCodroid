@@ -230,10 +230,10 @@ adb install android/app/build/outputs/apk/debug/app-debug.apk
 > [!WARNING]
 > **The steps above build the Android shell only.** A runnable app also needs the server tree,
 > the Node runtime and the bundled tools, which the `scripts/download-*.sh` scripts fetch.
-> Seven scripts cross-compile with the Android NDK: `scripts/build-native-addons.sh` (which also
+> Eight scripts cross-compile with the Android NDK: `scripts/build-native-addons.sh` (which also
 > needs CMake), `scripts/build-glibc-shim.sh`, `scripts/build-exec-trampoline.sh`,
-> `scripts/build-claude-shim.sh`, `scripts/build-termux-exec.sh`, `scripts/build-selfexe-shim.sh`
-> and `scripts/download-java.sh` (which builds the Java pack's `libandroid-spawn.so`). See [CONTRIBUTING.md](CONTRIBUTING.md) for the order to run them in.
+> `scripts/build-claude-shim.sh`, `scripts/build-termux-exec.sh`, `scripts/build-selfexe-shim.sh`,
+> `scripts/build-move-noreplace.sh` and `scripts/download-java.sh` (which builds the Java pack's `libandroid-spawn.so`). See [CONTRIBUTING.md](CONTRIBUTING.md) for the order to run them in.
 
 ## 📦 Size Estimates
 
