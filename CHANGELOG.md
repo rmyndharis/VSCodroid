@@ -67,6 +67,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A client that resets the connection while the Antigravity panel's relay refuses it no longer raises an unhandled error in the extension host.
 - The log no longer carries the device folder or the download target named by a failed folder sync or a download that could not be removed.
 - Coming back from the Open Folder picker after more than five minutes no longer reloads the editor ahead of the folder you chose.
+- The About dialog is no longer opened on a screen that has already closed, which could end the app.
+- The notice about an old system WebView is marked as seen when it is dismissed, so a screen closed under it no longer hides it for good.
 
 ## [1.9.0] - 2026-11-16
 

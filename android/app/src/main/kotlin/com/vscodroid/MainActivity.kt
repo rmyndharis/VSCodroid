@@ -7898,6 +7898,9 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
      * Shows the About dialog. Called from AndroidBridge via JS.
      */
     fun showAboutDialog() {
+        // The bridge posts this, so it can run after this screen is gone, and show() on a window whose
+        // token is dead throws on the main thread.
+        if (isFinishing || isDestroyed) return
         // The stand-in is a resource for the reason `tls_unknown_host` is one:
         // it is rendered inside a translated sentence, so a Kotlin literal here
         // leaves one English word in the middle of an otherwise translated
@@ -8387,7 +8390,8 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         // 113.0.5672.136. VSCodroid is tested a..." and never what to do about it
         // (measured on an API 34 image).
         if (!WebViewVersion.shouldWarn(version, workspacePrefs.getString(KEY_WEBVIEW_WARNED, null))) return
-        workspacePrefs.edit { putString(KEY_WEBVIEW_WARNED, version) }
+        // Remembered when the dialog is answered, not before it is shown: a screen that ends under it, or a
+        // process that is killed, would otherwise leave a warning nobody saw marked as given.
         AlertDialog.Builder(this)
             .setTitle(getString(R.string.webview_below_minimum_title))
             .setMessage(
@@ -8399,6 +8403,7 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
             )
             .setPositiveButton(getString(R.string.webview_update)) { _, _ -> openStoreListing(pkg.packageName) }
             .setNegativeButton(getString(R.string.crash_dismiss), null)
+            .setOnDismissListener { workspacePrefs.edit { putString(KEY_WEBVIEW_WARNED, version) } }
             .show()
     }
 
