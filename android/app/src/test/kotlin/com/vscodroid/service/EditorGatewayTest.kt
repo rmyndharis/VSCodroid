@@ -21,6 +21,7 @@ import java.io.Closeable
 import java.io.File
 import java.io.IOException
 import java.net.InetAddress
+import java.net.InetSocketAddress
 import java.net.Socket
 import java.net.UnixDomainSocketAddress
 import java.nio.ByteBuffer
@@ -39,7 +40,16 @@ import java.util.concurrent.atomic.AtomicInteger
 
 class EditorGatewayTest {
     @TempDir lateinit var directory: File
-    private val gateway = EditorGateway()
+    // Which clients the gateway takes for this process's own, by the address they connected
+    // from. Every one unless a test says otherwise: on a device the page's connections are, and
+    // the suite's clients stand for those.
+    private val everyClient: Set<InetSocketAddress> = object : AbstractSet<InetSocketAddress>() {
+        override val size = 0
+        override fun iterator() = emptyList<InetSocketAddress>().iterator()
+        override fun contains(element: InetSocketAddress) = true
+    }
+    private var ownClients: () -> Set<InetSocketAddress> = { everyClient }
+    private val gateway = EditorGateway({ ownClients() })
     private val resources = ConcurrentLinkedQueue<Closeable>()
     private val workers = mutableListOf<Thread>()
     private val failures = ConcurrentLinkedQueue<Throwable>()
@@ -640,6 +650,123 @@ class EditorGatewayTest {
             it.getOutputStream().write(request, 0, 1)
             Thread.sleep(10000) // past the bound counted from the connect
             it.getOutputStream().write(request, 1, request.size - 1)
+            assertArrayEquals(reply, it.getInputStream().readNBytes(reply.size))
+        }
+    }
+
+    /** A client that has sent the first byte of [request] and keeps its connection open. */
+    private fun holder(request: ByteArray): Socket = client().apply {
+        soTimeout = 5000
+        getOutputStream().write(request, 0, 1)
+    }
+
+    // Closed with the byte it sent still unread, a connection is reset and not ended.
+    private fun Socket.wasClosed(): Boolean = try { getInputStream().read() == -1 } catch (_: java.net.SocketException) { true }
+
+    private fun Socket.finish(request: ByteArray, reply: ByteArray) {
+        getOutputStream().write(request, 1, request.size - 1)
+        assertArrayEquals(reply, getInputStream().readNBytes(reply.size))
+    }
+
+    @Test
+    fun aNewClientTakesTheSlotOfTheOldestConnectionAnotherProgramOpened() {
+        // Any app can connect to the origin. Thirty-two connections that had each sent one byte
+        // held every slot for as long as their owner liked, and the page was refused meanwhile.
+        ownClients = { emptySet() }
+        val request = "GET / HTTP/1.1\r\nHost: x\r\n\r\n".toByteArray()
+        val reply = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok".toByteArray()
+        val (path, server) = backend("held")
+        answering(server, request, reply)
+        gateway.bind(0)
+        gateway.selectBackend(path, "held-run")
+        val held = List(32) { holder(request) }
+
+        val first = holder(request)
+        assertTrue(held[0].wasClosed(), "the oldest connection kept its slot")
+        val second = holder(request)
+        assertTrue(held[1].wasClosed(), "the next oldest connection kept its slot")
+
+        first.finish(request, reply)
+        second.finish(request, reply)
+        held.drop(2).forEach { it.finish(request, reply) }
+    }
+
+    @Test
+    fun aConnectionOfThisProcessIsNeverClosedForANewClient() {
+        val ours = java.util.concurrent.ConcurrentHashMap.newKeySet<InetSocketAddress>()
+        ownClients = { ours }
+        val request = "GET / HTTP/1.1\r\nHost: x\r\n\r\n".toByteArray()
+        val reply = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok".toByteArray()
+        val (path, server) = backend("ours")
+        answering(server, request, reply)
+        gateway.bind(0)
+        gateway.selectBackend(path, "ours-run")
+        // The fifth is another program's and the other thirty-one are the page's.
+        val held = List(32) { index ->
+            holder(request).also { if (index != 4) ours.add(it.localSocketAddress as InetSocketAddress) }
+        }
+
+        val page = holder(request).also { ours.add(it.localSocketAddress as InetSocketAddress) }
+        assertTrue(held[4].wasClosed(), "the other program's connection kept its slot")
+
+        // Every slot is this process's now, so the next client is the one that goes without.
+        client().use {
+            assertEquals("HTTP/1.1 503 Service Unavailable", it.getInputStream().bufferedReader().readLine())
+        }
+        page.finish(request, reply)
+        held.filterIndexed { index, _ -> index != 4 }.forEach { it.finish(request, reply) }
+    }
+
+    /**
+     * The rule that tells this process's connections from another's, on the addresses of both
+     * ends of a socket. The port alone does not: another app chooses the address and the port
+     * it connects from.
+     */
+    @Test
+    fun onlyASocketConnectedToTheListenerIsAClientOfThisProcess() {
+        fun at(host: String, port: Int) = InetSocketAddress(InetAddress.getByName(host), port)
+        val listener = at("127.0.0.1", 13337)
+        val page = at("127.0.0.1", 40001)
+        val ends = listOf<Pair<java.net.SocketAddress?, java.net.SocketAddress?>>(
+            // A connection of the page: its client end, and the end this process accepted for it.
+            page to listener,
+            listener to page,
+            // Accepted for another app that connects from the listener's own port number.
+            listener to at("127.0.0.2", 13337),
+            // Accepted for another app that connects from the page's port number, elsewhere.
+            listener to at("127.0.0.2", 40001),
+            // Sockets of this process that have nothing to do with the listener.
+            at("127.0.0.1", 40002) to at("127.0.0.1", 13338),
+            at("10.0.2.16", 40003) to at("93.184.216.34", 13337),
+            at("127.0.0.1", 40004) to null,
+            null to listener,
+        )
+
+        assertEquals(setOf(page), clientsOf(listener, ends))
+    }
+
+    @Test
+    fun withNoAnswerAboutWhoseTheConnectionsAreNoneIsClosed() {
+        ownClients = { throw IOException("The descriptors cannot be listed") }
+        val request = "GET / HTTP/1.1\r\nHost: x\r\n\r\n".toByteArray()
+        val reply = "HTTP/1.1 200 OK\r\nContent-Length: 2\r\n\r\nok".toByteArray()
+        val (path, server) = backend("unknown")
+        answering(server, request, reply)
+        gateway.bind(0)
+        gateway.selectBackend(path, "unknown-run")
+        val held = List(32) { holder(request) }
+
+        client().use {
+            assertEquals("HTTP/1.1 503 Service Unavailable", it.getInputStream().bufferedReader().readLine())
+        }
+        held.forEach {
+            it.finish(request, reply)
+            it.close()
+        }
+        Thread.sleep(1500) // the relays let their slots go once both pumps have left
+        // The listener goes on serving after the failure.
+        client().use {
+            it.getOutputStream().write(request)
             assertArrayEquals(reply, it.getInputStream().readNBytes(reply.size))
         }
     }

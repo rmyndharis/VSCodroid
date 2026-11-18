@@ -1260,14 +1260,22 @@ of the buffer and the lines after it whole, in 5 of 5 and 7 of 7 runs on the two
 The builds called the nine rules and the patch as it is above carried one rule more than the
 patch has now, the third of the nine: it remembered the last refusal and was to refuse the
 next letter sent over the same range. It could not act, because the restart that follows a
-refusal ends the composition the rule needed, and it has been removed; no device run has been
-made without it. Two more results are known limits that the rules pass: the word written again
-at the caret in a composition that has typed (`line twoxtwo`, one recorded update, in a run
-that ended damaged), and, after a refusal, a keyboard that goes on with the range it kept: its
-next letter over that range, or the refused write sent again, replaces or deletes the rest of
-the word after the caret (`alpha betz Charlie delta`, `alpha bet Charlie delta`). What a
-keyboard sends after a restart of input is not recorded. The rules are run on the patched
-source by `scripts/check-editcontext-ime.js`, in the server build.
+refusal ends the composition the rule needed, and it has been removed; the runs after a
+refusal below were made without it. One more result is a known limit that the rules pass: the
+word written again at the caret in a composition that has typed (`line twoxtwo`, one recorded
+update, in a run that ended damaged). A keyboard that went on with the range it kept after a
+refusal would be passed as well: its next letter over that range, or the refused write sent
+again, replaces or deletes the rest of the word after the caret (`alpha betz Charlie delta`,
+`alpha bet Charlie delta`). Neither Gboard recorded does that. After the restart a refusal
+forces, the keyboard reads the text and the caret again, opens the word at the caret with the
+word's own text and sends the next letter as an insertion at the caret: with the key row's Tab
+inside a word (`RD` over 0..2 refused, `RD` opened again over 4..6, `z` over 4..4, and the
+line read `WO  zRD ONE`) in 4 of 4 runs on an Android 13 emulator with Gboard 12.4 and in 3 of
+3 on an Android 12 emulator with Gboard 10.8, and with the tail drop dispatched into the
+editor while Gboard 12.4 held the word open (`bet` over 6..10 refused, `beta` opened again,
+`z` over 9..9), the letter typed 0.4 to 3 s after the refusal. The rules are run on the
+patched source by `scripts/check-editcontext-ime.js`, in the server build, which replays
+those recordings among its cases.
 
 Patch 0051 keeps the EditContext buffer where it is while the caret has not moved. After an
 Enter typed on the keyboard at the end of a line, the buffer keeps its start on the line above

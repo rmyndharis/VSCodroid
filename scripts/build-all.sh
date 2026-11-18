@@ -77,6 +77,7 @@ step 10/11 "Building native addons, the compatibility shim and the exec intercep
 
 # The same, and it can sit here for the same reason: it writes only into jniLibs.
 "$SCRIPT_DIR/build-claude-shim.sh"
+"$SCRIPT_DIR/build-move-noreplace.sh"
 
 step 11/11 "Building the APK..."
 cd "$ROOT_DIR/android"

@@ -104,6 +104,7 @@
 | KB-61 | A touch just outside the suggestion list | In the JavaScript file of KB-51, on line 2, type `alp` and open the suggestion list (Ctrl on the extra key row, then Space on the keyboard) so that `alpha1` is listed. Tap the editor just outside the edge of the list, on the text of another line | The list closes, the line still reads `alp`, and no suggestion is written into the file | | |
 | KB-62 | A suggestion list after the screen is turned | In a plain-text file holding `alpine` on one line and `alpha1` on another, on a new line type `alp` and open the suggestion list (Ctrl on the extra key row, then Space on the keyboard) so that the word is underlined and the list is open. With a keyboard that underlines words, turn the phone to landscape and back with the list still open, then type `h`. Press Tab on the extra key row. Repeat on another new line, using Enter on a hardware keyboard in place of Tab | The list follows the typed word and shows `alpha1` for `alph`. Neither Tab nor Enter puts `alpine` in place of the typed letters, because `alpine` no longer fits `alph` | | |
 | KB-63 | A keyboard put away with Back, and the screen turned | On a phone, tap a word so the keyboard comes up, then press Back to put it away. Turn the phone to landscape and back to portrait right after. Drag to scroll the file without tapping. Tap a word, type `alp` so that it is underlined, press Back, and turn the phone | The keyboard stays down after each turn and after the scroll: a scroll does not bring it back, and a turn right after Back, or while the word is underlined, does not bring it back either | | |
+| KB-64 | The extra key row's Tab inside a word, then a letter | On a keyboard that underlines words, in a plain-text file holding `WORD ONE`, tap between `WO` and `RD`, tap **tab** on the extra key row, then type `z` | The line reads `WO  zRD ONE`: the two spaces of the Tab, the letter right after them, and nothing else changed or repeated | | |
 
 ## 4. Screen & Orientation
 
@@ -179,6 +180,7 @@
 | BG-7 | An adopted session keeps its network | `adb shell ps -A \| grep libnode` shows two processes; **`kill -9` the parent** (the lower PID, the one the other lists as its PPID), then relaunch the app. It must be SIGKILL: the bootstrap handles SIGTERM and kills its child on the way out, so a plain `kill` leaves nothing to adopt. `ps` shows `libnode` rather than `server.js` because that is argv[0] | Editor loads against the surviving server, the notification reads "Local development server active" with no warning beside it, and the session reaches the network: the marketplace lists extensions and `npm view express` prints a version | | |
 | BG-8 | A server that will not come back says so | With the editor open, `adb shell kill -9` the `libnode` process repeatedly until the notification reads "Server crashed repeatedly" | The page stops reading "Starting server..." and states that the server could not be restarted, that files are safe, and offers **Try again**. Tapping it returns to the loading page and starts a new attempt; nothing requires force-stopping the app | | |
 | BG-9 | A bootstrap killed under an open editor does not reload it | With a file edited and a terminal running `sleep 600`, `kill -9` the parent `libnode` as in BG-7 and keep the app in the foreground | Within a few seconds logcat shows `adopting it` and `Adopted the server the page is connected to; not reloading`; the page does not reload, the edit and the terminal are still there | | |
+| BG-10 | Another program holds the editor's port | With the editor open, in `adb shell` run `for i in $(seq 1 40); do (while true; do (printf 'GET / HTTP/1.1\r\nX-A: '; while sleep 1; do printf a \|\| exit; done) 2>/dev/null \| toybox nc 127.0.0.1 13337 >/dev/null 2>&1; done) & done; wait` (use the port in the page's address if it is not 13337) and leave it running. In a second `adb shell` run `am force-stop com.vscodroid`, open the app again, then open a terminal in the editor. Close the first shell when done | The editor comes up as quickly as it does without the loop and the terminal opens; it does not stay on "Starting server..." | | |
 
 BG-7 proves where the DNS proxy lives. An adopted server outlived the bootstrap
 that forked it, and the proxy that lets musl-built programs resolve names is
@@ -346,18 +348,18 @@ first launch of a build that has this line, so the row to run instead is TC-8.
 |----------|-------|------|------|------|
 | Device Matrix | 4 | | | |
 | Android Versions | 7 | | | |
-| Keyboard Input | 63 | | | |
+| Keyboard Input | 64 | | | |
 | Screen & Orientation | 18 | | | |
 | Editor Operations | 19 | | | |
 | Extensions | 9 | | | |
-| Background/Foreground | 9 | | | |
+| Background/Foreground | 10 | | | |
 | Low Memory & Stress | 5 | | | |
 | Performance | 11 | | | |
 | Toolchains | 13 | | | |
 | Terminal & Tools | 18 | | | |
 | SAF & Files | 28 | | | |
 | Display Language | 6 | | | |
-| **Total** | **210** | | | |
+| **Total** | **212** | | | |
 
 **Overall Result**: [ ] PASS / [ ] FAIL
 

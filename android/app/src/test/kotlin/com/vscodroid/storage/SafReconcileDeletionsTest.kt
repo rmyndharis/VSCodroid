@@ -201,8 +201,8 @@ class SafReconcileDeletionsTest {
         return cursor
     }
 
-    private fun sync() = runBlocking {
-        SafSyncEngine(context).initialSync(mockk<Uri>(relaxed = true), mirror) { _, _ -> }
+    private fun sync(prepare: (SafSyncEngine) -> Unit = {}) = runBlocking {
+        SafSyncEngine(context).also(prepare).initialSync(mockk<Uri>(relaxed = true), mirror) { _, _ -> }
     }
 
     private fun mirrored(name: String) = File(mirror, name)
@@ -230,6 +230,58 @@ class SafReconcileDeletionsTest {
         assertEquals("EARLIER BACKUP", backup.readText())
         assertEquals("NEW DEVICE EDIT", local.readText())
         assertTrue(mirror.listFiles()!!.filter { it.isFile }.any { it.readText() == "UNSYNCED EDIT" })
+    }
+
+    /**
+     * The name was free when the engine looked and taken when it moved: another program made a
+     * file there in between, and the move replaced it. The move now refuses a taken name in the
+     * same step, and the edit goes under the next one.
+     */
+    @Test
+    fun `a file made at the preservation name while the edit is set aside is not replaced`() {
+        val local = unsyncedConflict()
+        val first = mirrored("notes.txt.local-${local.lastModified()}")
+        val asked = mutableListOf<String>()
+
+        sync { engine ->
+            engine.exclusiveMove = { directory, _, from, to ->
+                asked += to
+                if (asked.size == 1) {
+                    File(directory, to).writeText("MADE IN BETWEEN")
+                    ExclusiveMove.Outcome.TAKEN
+                } else {
+                    Files.move(File(directory, from).toPath(), File(directory, to).toPath())
+                    ExclusiveMove.Outcome.MOVED
+                }
+            }
+        }
+
+        assertEquals("MADE IN BETWEEN", first.readText(), "the file made in between was replaced")
+        assertEquals("NEW DEVICE EDIT", local.readText())
+        assertEquals(listOf(first.name, "notes.txt.local-${DEVICE_TIME + 1_001}"), asked)
+        assertEquals("UNSYNCED EDIT", mirrored(asked.last()).readText())
+    }
+
+    /**
+     * A helper ended before it said how it ended may have made the move. Taken as not having, the
+     * edit was looked for under its old name, which it had left, and was announced nowhere.
+     */
+    @Test
+    fun `an edit a helper moved without saying so is taken as moved`() {
+        val local = unsyncedConflict()
+        val asked = mutableListOf<String>()
+
+        sync { engine ->
+            engine.exclusiveMove = { directory, _, from, to ->
+                asked += to
+                Files.move(File(directory, from).toPath(), File(directory, to).toPath())
+                ExclusiveMove.Outcome.UNKNOWN
+            }
+        }
+
+        assertEquals(listOf("notes.txt.local-${DEVICE_TIME + 1_000}"), asked)
+        assertEquals("UNSYNCED EDIT", mirrored(asked.single()).readText())
+        assertEquals("NEW DEVICE EDIT", local.readText())
     }
 
     @Test

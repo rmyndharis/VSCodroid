@@ -141,9 +141,9 @@ BINARY_MAGIC = (
 # compiled here from scripts/exec-trampoline.c against Bionic alone; the two
 # Claude Code files are compiled here from scripts/claude-launch.c and
 # scripts/seccomp-shim.c, the second freestanding, so it links against no libc
-# at all -- it is loaded beside musl's and calls the kernel directly; and
+# at all -- it is loaded beside musl's and calls the kernel directly;
 # libselfexe.so is compiled here from scripts/selfexe-shim.c against Bionic
-# alone.
+# alone; and so is libmove-noreplace.so, from scripts/move-noreplace.c.
 LIBRARIES = {
     # --- built here, MIT, no third-party obligation ---
     "libglibc-shim.so": ("VSCodroid", "MIT"),
@@ -161,6 +161,7 @@ LIBRARIES = {
     "libclaude-launch.so": ("VSCodroid", "MIT"),
     "libseccomp-shim.so": ("VSCodroid", "MIT"),
     "libselfexe.so": ("VSCodroid", "MIT"),
+    "libmove-noreplace.so": ("VSCodroid", "MIT"),
     # --- copyleft: attribution AND a source offer ---
     "libbash.so": ("Bash", "GPL-3.0"),
     "libgit.so": ("Git", "GPL-2.0"),

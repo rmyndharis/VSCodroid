@@ -42,16 +42,17 @@
  *
  * What they do not model is the keyboard. A case states what the keyboard sends, taken
  * from the recordings the patch descriptions quote, and what the editor must hold
- * afterwards. Nothing here says what a keyboard sends after a restart of input: the two
- * cases named "after the restart" replay both answers, a composition that starts again and
- * none, and only a device with a composing keyboard can tell which one it gives.
+ * afterwards. That holds for what follows a refusal as well: the two cases named "as
+ * recorded" replay what Gboard sent after the restart a refusal forced, and the two named
+ * "a keyboard that goes on with the range" replay one that did not read the text again,
+ * which neither Gboard recorded did.
  *
  * 0052 and 0053 are reached without their widgets. `_onListTap` runs on an object that
  * has the three members it reads, and `SuggestModel` is built on an editor made of its
  * event hooks, with upstream's refilter replaced by a counter.
  *
  * NEGATIVE CONTROL, measured on the 1.139.1 tree with Node 22.23.2. Against upstream's
- * files, with no patch applied, 75 of the 82 cases fail. Each of these single edits to a
+ * files, with no patch applied, 77 of the 84 cases fail. Each of these single edits to a
  * copy of a patched file fails at least one case:
  *
  *   0046  the body of the blur listener removed; the composing clause dropped from the
@@ -1088,14 +1089,41 @@ check('0050 second rule: the tail drop is refused and input restarts (the state 
     return [p.state(), refused('alpha beta Charlie delta', 9)];
 });
 
-check('0050 after the restart, a composition starting again: the letter sent over the range that was refused is applied (known limit)', async () => {
+// After the restart Gboard reads the text and the caret again: it opens the word at the caret
+// with the word's own text and sends the next letter as an insertion at the caret. Recorded
+// on an API 33 emulator with Gboard 12.4 (the tail drop sent to the editor while the keyboard
+// held the word open, and the Tab below in 4 of 4 runs) and on an API 31 emulator with
+// Gboard 10.8 (the Tab, 3 of 3 runs), with the letter 0.4 to 3 s after the refusal.
+check('0050 after the restart, as recorded: the keyboard opens the word again with its own text and the letter lands at the caret', async () => {
+    const p = await tailDropRefused();
+    await p.compose();
+    await p.update('beta', 6, 10, 9);
+    await p.endComposition();
+    await p.update('z', 9, 9);
+    return [p.state(), applied('alpha betza Charlie delta', 10, 1)];
+});
+
+check('0050 after the restart, as recorded: the Tab inside a word, refused, and the letter typed after it', async () => {
+    const p = page('WO  RD ONE', [4]);
+    await p.compose();
+    await p.update('WO', 0, 2, 4);
+    await p.update('RD', 0, 2, 4);
+    await p.compose();
+    await p.repeat(2, 'RD', 4, 6, 4);
+    await p.endComposition();
+    await p.compose();
+    await p.update('z', 4, 4);
+    return [p.state(), applied('WO  zRD ONE', 5, 1)];
+});
+
+check('0050 after the restart, a keyboard that goes on with the range that was refused, in a new composition: its letter is applied', async () => {
     const p = await tailDropRefused();
     await p.compose();
     await p.update('betz', 6, 10);
     return [p.state(), applied('alpha betz Charlie delta', 10, 1)];
 });
 
-check('0050 after the restart, no composition starting: the same letter is applied as well (known limit)', async () => {
+check('0050 after the restart, a keyboard that goes on with the range and opens no composition: the same letter is applied as well', async () => {
     const p = await tailDropRefused();
     await p.update('betz', 6, 10);
     return [p.state(), applied('alpha betz Charlie delta', 10, 1)];

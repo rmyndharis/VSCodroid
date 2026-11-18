@@ -1533,14 +1533,10 @@ class SafSyncEngine(private val context: Context) {
 
         var time = entry.attributes.lastModifiedTime().toMillis()
         var preserved = destination.sibling(localCopyName(localPath.name, time))
-        while (inboundAttributes(destination, preserved) != null) {
+        while (!moveToFreeName(destination, localPath, destination.leaf, preserved)) {
             time++
             preserved = destination.sibling(localCopyName(localPath.name, time))
         }
-        // Straight after the probe, and that is as close as this can get: the move replaces an
-        // entry made at the free name in between, and nothing reachable here renames without
-        // replacing; see [localCopyName].
-        destination.parent.move(destination.leaf, destination.parent, preserved)
         notePreservedLocalCopy(File(localPath.parentFile, preserved.toString()))
         Logger.i(
             tag,
@@ -1608,14 +1604,11 @@ class SafSyncEngine(private val context: Context) {
                 }
                 var time = entry.lastModifiedTime().toMillis()
                 requireCurrentParent(destination, localPath, mirrorRoot)
-                // The free name is probed last, straight before the move, which replaces an
-                // entry made there in between; see [localCopyName].
                 var preservedName = destination.sibling(localCopyName(localPath.name, time))
-                while (inboundAttributes(destination, preservedName) != null) {
+                while (!moveToFreeName(destination, localPath, destination.leaf, preservedName)) {
                     time++
                     preservedName = destination.sibling(localCopyName(localPath.name, time))
                 }
-                destination.parent.move(destination.leaf, destination.parent, preservedName)
                 requireCurrentParent(destination, localPath, mirrorRoot)
                 val preserved = File(localPath.parentFile, preservedName.toString())
                 notePreservedLocalCopy(preserved)
@@ -2522,10 +2515,7 @@ class SafSyncEngine(private val context: Context) {
                     // Kept as an edit, it was announced and then put on a device that had deleted it.
                     if (kept != null && !changed && sameInboundAttributes(before, kept)) {
                         try {
-                            if (inboundAttributes(selected) == null) {
-                                selected.parent.move(preserved, selected.parent, selected.leaf)
-                                taken = false
-                            }
+                            if (moveToFreeName(selected, file, preserved, selected.leaf)) taken = false
                         } catch (_: Exception) { }
                     }
                     if (kept != null && taken) {
@@ -2535,11 +2525,10 @@ class SafSyncEngine(private val context: Context) {
                         try {
                             var time = kept.lastModifiedTime().toMillis()
                             var free = selected.sibling(localCopyName(file.name, time))
-                            while (inboundAttributes(selected, free) != null) {
+                            while (!moveToFreeName(selected, file, preserved, free)) {
                                 time++
                                 free = selected.sibling(localCopyName(file.name, time))
                             }
-                            selected.parent.move(preserved, selected.parent, free)
                             name = free
                         } catch (_: Exception) { }
                         notePreservedLocalCopy(File(file.parentFile, name.toString()))
@@ -3348,6 +3337,52 @@ class SafSyncEngine(private val context: Context) {
 
     private fun requireCurrentParent(dest: OutboundPath, file: File, mirrorRoot: File) {
         if (!parentIsCurrent(dest, file, mirrorRoot)) throw IOException("The mirror directory changed")
+    }
+
+    /**
+     * How an entry is moved to a name only while that name is free: [ExclusiveMove.move] with
+     * this build's helper, unavailable where there is none. A `var` so that the suite, which
+     * runs where the helper does not, can stand in for it.
+     */
+    internal var exclusiveMove: (directory: File, key: Any, from: String, to: String) -> ExclusiveMove.Outcome =
+        { directory, key, from, to ->
+            moveHelper?.let { ExclusiveMove.move(it, directory, key, from, to) } ?: ExclusiveMove.Outcome.UNAVAILABLE
+        }
+
+    private val moveHelper: File? by lazy {
+        try {
+            File(com.vscodroid.util.Environment.getMoveHelperPath(context)).takeIf { it.isFile }
+        } catch (_: Exception) {
+            null
+        }
+    }
+
+    /**
+     * Moves [from] to [to], both names in the directory [dest] holds open, unless [to] is taken;
+     * false when it is, with nothing moved. [entry] is any entry of that directory, for its path.
+     *
+     * The move and the refusal are one step ([exclusiveMove]), so an entry another program makes
+     * at [to] meanwhile is never replaced: the caller is told the name is taken and goes on to
+     * another, or leaves the entry where it is. Where the helper is unavailable, the name is
+     * looked at and the move then made, which is what every caller did before and leaves the
+     * moment between the two in which such an entry is replaced.
+     */
+    private fun moveToFreeName(dest: OutboundPath, entry: File, from: Path, to: Path): Boolean {
+        val directory = entry.absoluteFile.parentFile
+        val outcome = if (directory == null) ExclusiveMove.Outcome.UNAVAILABLE
+        else exclusiveMove(directory, dest.parentKey(), from.toString(), to.toString())
+        when (outcome) {
+            ExclusiveMove.Outcome.MOVED -> return true
+            ExclusiveMove.Outcome.TAKEN -> return false
+            // The helper was ended before it said. An entry gone from its name and one standing
+            // at the other is the move it made; looked for under its old name it would be lost.
+            ExclusiveMove.Outcome.UNKNOWN ->
+                if (inboundAttributes(dest, from) == null && inboundAttributes(dest, to) != null) return true
+            ExclusiveMove.Outcome.UNAVAILABLE -> Unit
+        }
+        if (inboundAttributes(dest, to) != null) return false
+        dest.parent.move(from, dest.parent, to)
+        return true
     }
 
     private fun inboundAttributes(dest: OutboundPath, name: Path = dest.leaf): BasicFileAttributes? = try {
@@ -6343,12 +6378,9 @@ class SafSyncEngine(private val context: Context) {
          * first: the full name failed the rename, so a long name could not be set aside at all
          * and a deletion kept its copy under a name that said nothing.
          *
-         * The free name is probed and the move then replaces whatever is there, so an entry made
-         * at that name in between is lost. Nothing reachable here closes that: SecureDirectoryStream
-         * moves with renameat, android.system.Os offers rename and link by path only, and renameat2
-         * with RENAME_NOREPLACE is in Bionic from Android 11 and reachable only from native code.
-         * Each caller probes straight before its move. [removeRecordedCopy] has the same window
-         * where it puts a copy it took for deletion back under the copy's own name.
+         * A caller moves its copy there with [moveToFreeName], which refuses a name that is taken,
+         * and goes on to the next time while it is refused. [removeRecordedCopy] puts a copy it
+         * took for deletion back under the copy's own name the same way.
          */
         internal fun localCopyName(name: String, time: Long): String = cutToFit(name, "$LOCAL_COPY_SUFFIX$time")
 

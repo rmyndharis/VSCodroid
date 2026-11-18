@@ -108,8 +108,18 @@ removed, and the letter is applied in both cases, as it was. The rules
 after it keep their numbers, fourth to ninth, so that the counts and the
 device runs below read as they were written: the builds they call the
 nine rules, and the ones they call this patch as it is, carried the
-third as well. The removal has not been run on a device; by the order of
-events above it changes the outcome of no update that a keyboard sends.
+third as well. By the order of events above the removal changes the
+outcome of no update that a keyboard sends, and on a device no update
+came for the rule to judge: after the restart a refusal forces, Gboard
+reads the text and the caret again, opens the word at the caret with the
+word's own text and sends the next letter as an insertion at the caret.
+It did not go on with the range that was refused in any run: the Tab
+inside a word in 4 of 4 runs on an API 33 emulator with Gboard 12.4 and
+in 3 of 3 on an API 31 emulator with Gboard 10.8 (RD over 0..2 refused,
+RD opened again over 4..6, then z over 4..4, and the line read WO  zRD
+ONE), and the tail drop sent to the editor while Gboard 12.4 held the
+word open (bet over 6..10 refused, beta opened again over 6..10, then z
+over 9..9), with the letter 0.4 to 3 s after the refusal.
 
 What is refused is narrow by shape. A keyboard in step keeps the caret
 on the same characters, so after an edit of the text before the caret it
