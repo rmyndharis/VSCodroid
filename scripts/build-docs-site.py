@@ -3,8 +3,8 @@
 
     build-docs-site.py
 
-Two pages, each generated from the Markdown that is already maintained in
-`docs/`, rather than transcribed into HTML beside it. The privacy policy used to
+Three pages, each generated from Markdown that is already maintained in the
+repository, rather than transcribed into HTML beside it. The privacy policy used to
 exist twice, as `docs/PRIVACY_POLICY.md` and a hand-written
 `docs/site/privacy-policy.html`, with nothing holding the two together; that is
 the same shape as every other defect where one fact was kept in two places and
@@ -18,7 +18,7 @@ in front of a milestone table, and it is why this script names its inputs one at
 a time rather than walking a directory.
 
 The site's own stylesheet is shared with the hand-written landing page, so a
-change to one is a change to all three.
+change to one is a change to all four.
 """
 
 import html
@@ -56,6 +56,14 @@ PAGES = [
         "description": "What VSCodroid stores, what it sends, and to whom.",
         "nav": "privacy",
     },
+    {
+        "source": ROOT / "CHANGELOG.md",
+        "output": SITE / "changelog.html",
+        "title": "Release notes",
+        "description": "What changed in each release of VSCodroid.",
+        # Not in the header: it has room for three links on a phone.
+        "nav": "changelog",
+    },
 ]
 
 NAV = [
@@ -64,6 +72,9 @@ NAV = [
     (None, "https://github.com/rmyndharis/VSCodroid", "GitHub"),
 ]
 
+# Filled in by assets/site.js from what the deploy read; hidden until then.
+STARS = ' <span class="stars" hidden><span data-live="stars"></span><span class="sr"> stars</span></span>'
+
 # The guide opens with its own table of contents, written for a reader scrolling
 # one long Markdown file. The page builds a sidebar from the same headings, so
 # publishing both would be the same list twice, disagreeing the first time one
@@ -71,6 +82,10 @@ NAV = [
 INLINE_TOC = re.compile(
     r"^## Table of Contents\s*\n.*?(?=^## )", re.M | re.S
 )
+
+# The changelog opens with what has been merged and not released. A reader of
+# the site can install none of it, so the page starts at the newest release.
+UNRELEASED = re.compile(r"^## \[Unreleased\]\s*\n.*?(?=^## )", re.M | re.S)
 
 # Wide content scrolls inside its own box rather than making the page scroll.
 TABLE = re.compile(r"(<table>.*?</table>)", re.S)
@@ -89,6 +104,7 @@ def render(source: pathlib.Path) -> "tuple[str, list[tuple[str, str]]]":
 
     text = source.read_text(encoding="utf-8")
     text = INLINE_TOC.sub("", text)
+    text = UNRELEASED.sub("", text)
 
     # The first heading becomes the page title, which the shell renders itself.
     text = re.sub(r"\A#\s+.*?\n", "", text, count=1)
@@ -105,10 +121,16 @@ def render(source: pathlib.Path) -> "tuple[str, list[tuple[str, str]]]":
     # Anchors, added here rather than by the toc extension so the ids match the
     # sidebar exactly and nothing depends on that extension's slug rules.
     entries: "list[tuple[str, str]]" = []
+    seen: "dict[str, int]" = {}
 
     def anchor(match: "re.Match[str]") -> str:
         level, inner = match.group(1), match.group(2)
         slug = slugify(inner)
+        # The changelog has a "Fixed" under every release, and an id has to be
+        # the only one on its page.
+        seen[slug] = seen.get(slug, 0) + 1
+        if seen[slug] > 1:
+            slug = f"{slug}-{seen[slug]}"
         if level == "2":
             entries.append((slug, re.sub(r"<[^>]+>", "", inner)))
         return f'<h{level} id="{slug}">{inner}</h{level}>'
@@ -122,7 +144,7 @@ def shell(page: dict, body: str, entries: "list[tuple[str, str]]") -> str:
     nav = "\n".join(
         f'      <a href="{href}"'
         + (' aria-current="page"' if key and key == page["nav"] else "")
-        + f">{label}</a>"
+        + f">{label}{STARS if key is None else ''}</a>"
         for key, href, label in NAV
     )
     toc = "\n".join(
@@ -148,8 +170,11 @@ def shell(page: dict, body: str, entries: "list[tuple[str, str]]") -> str:
 <title>{html.escape(page["title"])} | VSCodroid</title>
 <meta name="description" content="{html.escape(page["description"])}">
 <meta name="color-scheme" content="light dark">
+<meta name="theme-color" content="#0e1116">
 <link rel="icon" href="assets/vscodroid.png" type="image/png">
+<link rel="preload" href="assets/fonts/plus-jakarta-sans.woff2" as="font" type="font/woff2" crossorigin>
 <link rel="stylesheet" href="assets/style.css">
+<script src="assets/site.js" defer></script>
 </head>
 <body>
 
@@ -188,7 +213,8 @@ def shell(page: dict, body: str, entries: "list[tuple[str, str]]") -> str:
       <nav class="footer-links" aria-label="Footer">
         <a href="guide.html">User guide</a>
         <a href="privacy-policy.html">Privacy policy</a>
-        <a href="https://github.com/rmyndharis/VSCodroid">Source</a>
+        <a href="https://github.com/rmyndharis/VSCodroid">Source{STARS}</a>
+        <a href="changelog.html">Release notes</a>
         <a href="https://github.com/rmyndharis/VSCodroid/releases">Releases</a>
         <a href="https://github.com/rmyndharis/VSCodroid/issues">Report an issue</a>
       </nav>

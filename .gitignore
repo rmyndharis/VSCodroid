@@ -192,3 +192,5 @@ toolchain-zips/
 # the generator exists to remove.
 /docs/site/guide.html
 /docs/site/privacy-policy.html
+/docs/site/changelog.html
+/docs/site/assets/live.json

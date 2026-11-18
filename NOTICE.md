@@ -226,6 +226,15 @@ Many bundled binaries and shared libraries are compiled by the [Termux](https://
 
 The `libc++_shared.so` C++ standard library is distributed under the Apache 2.0 / MIT dual license as part of the [Android NDK](https://developer.android.com/ndk).
 
+## Project Website
+
+The site published from `docs/site` is not part of the app. It serves two typefaces from `docs/site/assets/fonts`, each with its license text beside it:
+
+| Typeface | License | Source |
+|----------|---------|--------|
+| Plus Jakarta Sans | SIL Open Font License 1.1 | https://github.com/tokotype/PlusJakartaSans |
+| JetBrains Mono | SIL Open Font License 1.1 | https://github.com/JetBrains/JetBrainsMono |
+
 ---
 
 This file is provided for attribution purposes. For exact license texts, refer to the `LICENSE` files in each software's source repository. If you believe any attribution is missing or incorrect, please open an issue at https://github.com/rmyndharis/VSCodroid/issues.
