@@ -335,6 +335,16 @@ jobs:
         env:
           ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
         run: bash scripts/build-claude-shim.sh
+
+      # What the device-folder engine runs to move a kept copy to a free name
+      # without replacing a file made there meanwhile. Not skipped on a cache
+      # hit, for the reason the self-exe library is not: it compiles in a moment,
+      # and a jniLibs directory restored from before this step existed has no
+      # copy of it.
+      - name: Build the move helper
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
+        run: bash scripts/build-move-noreplace.sh
       # Two `ls ... || true` lines stood here under this name, which is a
       # listing rather than a check: nothing it could print would fail the job,
       # an entirely empty assets tree included. That tree is gitignored build

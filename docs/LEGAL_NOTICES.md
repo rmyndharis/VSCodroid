@@ -499,7 +499,8 @@ lets a downloaded toolchain command start from a bare name on `PATH`. So are
 `libclaude-launch.so` and `libseccomp-shim.so`, built here from
 `scripts/claude-launch.c` and `scripts/seccomp-shim.c`; the second is
 freestanding and links against no library at all, so there is nothing in it to
-attribute but this project's own source.
+attribute but this project's own source. `libmove-noreplace.so` is built here
+from `scripts/move-noreplace.c`.
 
 One row below is built here rather than downloaded: `libtermux-exec.so` is
 compiled by `scripts/build-termux-exec.sh` from termux-exec-package 2.5.0 and
@@ -842,4 +843,4 @@ For questions about licenses, trademarks, or legal notices:
 
 ---
 
-_This document was last updated on November 12, 2026._
+_This document was last updated on November 18, 2026._

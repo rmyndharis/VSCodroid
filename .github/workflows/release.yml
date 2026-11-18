@@ -539,6 +539,7 @@ jobs:
           python3 scripts/test-copilot-compile-guard.py
           python3 scripts/test-patch-sysroot-paths.py
           python3 scripts/test-exec-trampoline.py
+          python3 scripts/test-move-noreplace.py
           python3 scripts/test-selfexe-shim.py
           python3 scripts/test-check-server-published.py
           python3 scripts/test-extension-updates.py
@@ -693,6 +694,11 @@ jobs:
         env:
           ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
         run: bash scripts/build-claude-shim.sh
+
+      - name: Build the move helper
+        env:
+          ANDROID_NDK_HOME: ${{ env.ANDROID_NDK_HOME }}
+        run: bash scripts/build-move-noreplace.sh
 
       # Runs where the libraries actually exist, which lint.yml is not: it
       # builds stub assets, and a stub tree has nothing to attribute. Berkeley

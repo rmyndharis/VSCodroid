@@ -567,6 +567,14 @@ object Environment {
     fun getTrampolinePath(context: Context): String =
         "${context.applicationInfo.nativeLibraryDir}/libexec-trampoline.so"
 
+    /**
+     * The program that moves an entry to a name only while that name is free, built by
+     * `scripts/build-move-noreplace.sh` into `jniLibs/arm64-v8a`; `storage/ExclusiveMove.kt`
+     * runs it and says why it has to be a program.
+     */
+    fun getMoveHelperPath(context: Context): String =
+        "${context.applicationInfo.nativeLibraryDir}/libmove-noreplace.so"
+
     fun getExtensionsDir(context: Context): String =
         "${context.filesDir}/home/.vscodroid/extensions"
 

@@ -1257,6 +1257,10 @@ val requiredJniLibs = listOf(
     "libgit-remote-curl.so",
     "libldmusl.so",
     "libmake.so",
+    // What moves a device folder's kept copy to a free name without replacing a file
+    // made there meanwhile. Missing, the engine looks at the name and then moves, as it
+    // did before, with nothing to say the helper is not there.
+    "libmove-noreplace.so",
     "libnode.so",
     "libpython.so",
     "libripgrep.so",
@@ -1276,6 +1280,7 @@ val jniLibProducers = mapOf(
     "libgit-remote-curl.so" to "scripts/download-termux-tools.sh",
     "libldmusl.so" to "scripts/download-musl-loader.sh",
     "libmake.so" to "scripts/download-termux-tools.sh",
+    "libmove-noreplace.so" to "scripts/build-move-noreplace.sh",
     "libnode.so" to "scripts/download-node.sh",
     "libpython.so" to "scripts/download-python.sh",
     "libripgrep.so" to "scripts/fetch-vscode-oss.sh",
