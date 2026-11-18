@@ -7012,9 +7012,9 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
      *
      * It has to be a media query rather than anything sampled in Kotlin: this runs
      * once per page load, and MainActivity's `configChanges` in the manifest absorbs
-     * `orientation`, `screenSize` and `screenLayout` among others, with no
-     * `onConfigurationChanged`, so nothing re-invokes the injection when the window
-     * changes. Line numbers are left off deliberately: both citations here named
+     * `orientation`, `screenSize` and `screenLayout` among others, and its
+     * `onConfigurationChanged` does not inject this again, so nothing re-invokes the
+     * injection when the window changes. Line numbers are left off deliberately: both citations here named
      * the right attribute and the wrong line within a day of being written. Letting the browser hold the condition costs nothing and never goes
      * stale.
      */
