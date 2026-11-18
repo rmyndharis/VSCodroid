@@ -2253,10 +2253,20 @@ class FirstRunSetup(
                 // where an appender behind this one can take that retry away
                 // before the next launch gets here, see the KDoc.
                 //
+                // A header with nothing after it is a cut-short copy of ours. Text after
+                // the header is a person's own or a longer cut, and the header proves
+                // nothing about it, so it is kept aside before the rewrite, and the
+                // rewrite waits for the next launch if it cannot be kept.
+                val beyondHeader = headerWithoutBody && text.orEmpty().removePrefix(BASHRC_HEADER).isNotBlank()
+                val aside = File(context.filesDir, "home/.vscodroid/bashrc.before-repair")
+                val kept = !beyondHeader || run {
+                    aside.parentFile?.mkdirs()
+                    writeAtomically(aside, { Logger.w(tag, it) }) { it.write(text.orEmpty().toByteArray()) }
+                }
                 // The rewrite is not expected to throw (a failed write is
                 // reported as false), but a throw must not skip the settings
                 // repair below either.
-                val rewritten = runCatching { writeBashrc() }
+                val rewritten = kept && runCatching { writeBashrc() }
                     .onFailure { Logger.e(tag, "The .bashrc rewrite threw", it as? Exception) }
                     .getOrDefault(false)
                 if (rewritten) {

@@ -58,6 +58,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Codex toolchain card quotes 375 MB, up from 360 MB, so the pack of a newer Codex build still fits its recorded size.
 - A .bashrc that is a link, as when it is kept in a dotfiles repository, stays a link when VSCodroid adds its blocks to it; the repository's file gets them.
 - A toolchain removal that runs while a file is being written no longer deletes that file's temporary file, which made the write fail.
+- A .bashrc that starts with VSCodroid's header but has text of its own after it is kept as ~/.vscodroid/bashrc.before-repair before the repair replaces it.
 
 ## [1.9.0] - 2026-11-16
 
