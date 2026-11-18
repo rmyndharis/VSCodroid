@@ -521,6 +521,19 @@ setTimeout(() => { console.error('the driver gave up waiting'); process.exit(1);
         socket.on('close', () => resolve(data.split('\\r\\n')[0]));
         socket.setTimeout(3000, () => { socket.destroy(); });
     });
+    // A client that resets the connection right after a refused upgrade: the relay's end of it must not raise an
+    // error nobody listens for.
+    const uncaught = [];
+    process.on('uncaughtException', (e) => uncaught.push(e.code || e.message));
+    await new Promise((resolve) => {
+        const socket = net.connect(front, '127.0.0.1', () => {
+            socket.write('GET /ws HTTP/1.1\\r\\nHost: evil.example:' + front + '\\r\\nConnection: Upgrade\\r\\nUpgrade: websocket\\r\\n\\r\\n');
+            setTimeout(() => { socket.resetAndDestroy(); resolve(); }, 20);
+        });
+        socket.on('error', () => {});
+    });
+    await new Promise((r) => setTimeout(r, 300));
+    out.uncaughtAfterRefusedUpgrade = uncaught;
     // An engine that resets in the middle of a body: the client must be let go, not left waiting.
     out.abortedBody = await getAs(front, '/abort', '127.0.0.1:' + front);
     // A client that walks away from a response the engine is still writing: the engine has to see it go.
@@ -656,6 +669,39 @@ for (const [label, text, on] of [
         assert.strictEqual(fs.existsSync(path.join(home, '.vscodroid/antigravity-hub.json')), false, `${label}: a note was kept for an engine that was not started`);
     }
     checked++;
+}
+
+// Where ~/.gemini and the machine settings are is read when the file is loaded. An extension in the shared host
+// may reassign or delete HOME later, and the decision must not follow it: the gate would be skipped (no
+// ~/.gemini under the new HOME) or read a file of its own.
+const homeChangedMain = (statement) => {
+    const file = path.join(tmp, `home-changed-${homes++}.js`);
+    fs.writeFileSync(
+        file,
+        `${statement}\n` +
+            "const result = require('child_process').spawn(...JSON.parse(process.argv[2]));\n" +
+            "if (result !== 'child') throw new Error('the return value was lost: ' + result);\n",
+    );
+    return file;
+};
+for (const [label, statement] of [
+    ['HOME reassigned to a directory with no ~/.gemini', `process.env.HOME = ${JSON.stringify(tmp)};`],
+    ['HOME deleted', 'delete process.env.HOME;'],
+    ['HOME reassigned to a home whose setting is on', `process.env.HOME = ${JSON.stringify(HUB_HOME)};`],
+]) {
+    const call = [OFF_ENGINE, HUB_ARGS, SPAWN_OPTIONS];
+    assert.deepStrictEqual(spawnedUnder(call, { home: OFF_HOME, main: homeChangedMain(statement) }), call, `setting off, ${label}: the engine's hub was started`);
+    checked++;
+}
+{
+    const call = [HUB_ENGINE, HUB_ARGS, SPAWN_OPTIONS];
+    for (const [label, statement] of [
+        ['HOME reassigned to a home whose setting is off', `process.env.HOME = ${JSON.stringify(OFF_HOME)};`],
+        ['HOME deleted', 'delete process.env.HOME;'],
+    ]) {
+        assert.strictEqual(spawnedUnder(call, { home: HUB_HOME, main: homeChangedMain(statement) })[0], BIONIC_LINKER, `setting on, ${label}: the engine's hub was held back`);
+        checked++;
+    }
 }
 
 // With the setting off, whatever is asked of a program in ~/.gemini is left as written, which fails with
@@ -794,6 +840,7 @@ assert.strictEqual(hubRun.foreignHostPort.status, 403, 'a request naming this ho
 assert.strictEqual(hubRun.noHostReached, 0, 'the engine saw a request that named another host');
 assert.strictEqual(hubRun.localhostHost.status, 200, 'a request naming localhost and the relay\'s own port was refused');
 assert.ok(/^HTTP\/1\.1 403 /.test(hubRun.foreignUpgrade), 'a WebSocket upgrade naming another host was tunnelled: ' + hubRun.foreignUpgrade);
+assert.deepStrictEqual(hubRun.uncaughtAfterRefusedUpgrade, [], 'a client that reset the connection after a refused upgrade made the relay raise an error nobody listens for');
 assert.ok(hubRun.abortedBody.error && hubRun.abortedBody.error !== 'no answer', 'a client was left waiting for a body the engine abandoned: ' + JSON.stringify(hubRun.abortedBody));
 assert.ok(hubRun.killedWhenFrontIsTaken, 'the engine kept running with no relay when the extension\'s port was taken by someone else');
 assert.strictEqual(hubRun.engineSawClientLeave, true, 'a client that left a response did not reach the engine: the relay kept its side open');
@@ -878,7 +925,7 @@ if (fs.existsSync('/proc/self/cmdline')) {
     fs.writeFileSync(REAP_DRIVER, `
 const cp = require('child_process');
 const fs = require('fs');
-const [engine, mode, note] = process.argv.slice(2);
+const [engine, mode, note, call] = process.argv.slice(2);
 let pid;
 let dummy = null;
 if (mode === 'dead') {
@@ -893,7 +940,7 @@ if (mode === 'dead') {
     pid = dummy.pid;
 }
 fs.writeFileSync(note, JSON.stringify({ pid: pid, port: 41999 }));
-const started = cp.spawn(engine, ['--hub', '--hub-port=41500']);
+const started = cp.spawn(engine, call === 'version' ? ['--version'] : ['--hub', '--hub-port=41500']);
 started.on('error', () => {});
 const done = (result) => { console.log(JSON.stringify({ result: result })); if (dummy) dummy.kill('SIGKILL'); process.exit(0); };
 if (dummy) {
@@ -930,6 +977,15 @@ if (dummy) {
             { env: { ...process.env, ...standInEnv, HOME: home, TERMUX_APP__DATA_DIR: DATA_LINK, LD_PRELOAD: '' }, encoding: 'utf8', timeout: 30000 },
         ).trim().split('\n').pop());
         assert.strictEqual(got.result, 'ended by SIGTERM', `an engine left running when the setting is turned off: ${got.result}`);
+        checked++;
+        // The extension's check of the engine's version is let through with the setting off, and ends an earlier
+        // engine all the same: the extension host that started it may have ended without a word.
+        const versionRun = JSON.parse(execFileSync(
+            process.execPath,
+            ['--require', FAKE_ANDROID, '--require', FIX, REAP_DRIVER, engineIn(home), 'match', path.join(home, '.vscodroid/antigravity-hub.json'), 'version'],
+            { env: { ...process.env, ...standInEnv, HOME: home, TERMUX_APP__DATA_DIR: DATA_LINK, LD_PRELOAD: '' }, encoding: 'utf8', timeout: 30000 },
+        ).trim().split('\n').pop());
+        assert.strictEqual(versionRun.result, 'ended by SIGTERM', `the version check left an engine running with the setting off: ${versionRun.result}`);
         checked++;
     }
 

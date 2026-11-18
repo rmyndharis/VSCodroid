@@ -62,6 +62,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A toolchain install whose links could not be made fails and asks for free space, instead of being recorded as installed with a tree that does not run.
 - After Stop Server, a webview of the earlier editor page is no longer sent the new connection token at the old port.
 - A workspace folder that holds the sign-in files of Claude Code, Codex, the Antigravity engine or the cargo, Maven, Gradle, Azure, Google Cloud and git tools is no longer readable by webviews.
+- The Antigravity engine switch keeps holding the engine back when an extension changes the HOME of the extension host.
+- The Antigravity engine's version check ends an engine an earlier editor session left running when the setting is off.
+- A client that resets the connection while the Antigravity panel's relay refuses it no longer raises an unhandled error in the extension host.
 
 ## [1.9.0] - 2026-11-16
 

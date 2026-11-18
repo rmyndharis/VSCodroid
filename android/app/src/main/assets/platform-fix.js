@@ -132,6 +132,9 @@ if (process.platform === 'android') {
     try { APP_DATA = fs.realpathSync(process.env.TERMUX_APP__DATA_DIR); } catch (e) { /* not a directory: stays off */ }
   }
   var INTERCEPTED = /libtermux-exec/.test(process.env.LD_PRELOAD || '');
+  // The person's home, read once. An extension in the shared host may reassign or delete HOME later, and where
+  // ~/.gemini and the machine settings are must not follow it: the setting would no longer hold anything back.
+  var HOME = process.env.HOME || null;
 
   /** The PT_INTERP string of an open ELF64 little-endian file, or null. */
   function elfInterpreter(fd) {
@@ -316,9 +319,9 @@ if (process.platform === 'android') {
   }
 
   function engineTurnedOn() {
-    if (!process.env.HOME) return false;
+    if (!HOME) return false;
     try {
-      var file = path.join(process.env.HOME, '.vscodroid', 'data', 'Machine', 'settings.json');
+      var file = path.join(HOME, '.vscodroid', 'data', 'Machine', 'settings.json');
       if (fs.statSync(file).size > SETTINGS_BYTES) return false;
       var json = settingsAsJson(fs.readFileSync(file, 'utf8'));
       return json !== null && engineValue(JSON.parse(json));
@@ -329,9 +332,9 @@ if (process.platform === 'android') {
 
   /** Whether the real path of `file` is inside ~/.gemini; an error of any kind says it is not. */
   function fromGemini(file) {
-    if (!process.env.HOME || !path.isAbsolute(file)) return false;
+    if (!HOME || !path.isAbsolute(file)) return false;
     try {
-      return fs.realpathSync(file).indexOf(fs.realpathSync(path.join(process.env.HOME, '.gemini')) + '/') === 0;
+      return fs.realpathSync(file).indexOf(fs.realpathSync(path.join(HOME, '.gemini')) + '/') === 0;
     } catch (e) {
       return false;
     }
@@ -457,6 +460,9 @@ if (process.platform === 'android') {
     // The page the engine serves opens a WebSocket back to it.
     server.on('upgrade', function (req, socket, head) {
       if (!ownHost(req.headers.host, front)) {
+        // Node takes its own error listener off an upgrade socket, and a client that resets the connection
+        // would raise an error nobody listens for.
+        socket.on('error', function () {});
         socket.end('HTTP/1.1 403 Forbidden\r\nConnection: close\r\nContent-Length: 0\r\n\r\n');
         return;
       }
@@ -506,7 +512,7 @@ if (process.platform === 'android') {
   // and about 200 MB. So each start ends the one before it. The pid and port of
   // the engine started last are kept in a note, and the note is believed only
   // while that pid still runs the engine on that port.
-  var HUB_NOTE = process.env.HOME ? path.join(process.env.HOME, '.vscodroid', 'antigravity-hub.json') : null;
+  var HUB_NOTE = HOME ? path.join(HOME, '.vscodroid', 'antigravity-hub.json') : null;
 
   function endEarlierHub() {
     if (!HUB_NOTE) return;
@@ -579,12 +585,12 @@ if (process.platform === 'android') {
     var options = Array.isArray(rest[0]) || rest[0] == null ? rest[1] : rest[0];
     var hub = on ? antigravityHub(file, args, options && options.env) : null;
     var versionCheck = ANTIGRAVITY_ENGINE.test(file) && args.length === 1 && args[0] === '--version';
-    if ((gemini && !on && !versionCheck) || hub === false) {
-      // An engine an earlier extension host started is ended as well, so that turning the setting off and
-      // reloading the window leaves none running.
-      endEarlierHub();
-      return {};
-    }
+    var refused = (gemini && !on && !versionCheck) || hub === false;
+    // An engine an earlier extension host started is ended as well, so that turning the setting off and
+    // reloading the window leaves none running. The version check that is let through ends it too: the host
+    // that started the engine may have ended without a word.
+    if (refused || (gemini && !on)) endEarlierHub();
+    if (refused) return {};
     if (!relay) hub = null;
     var call = throughLinker(file, rest, hub ? function () { return hub.args; } : null);
     return { call: call, hub: call && hub };
