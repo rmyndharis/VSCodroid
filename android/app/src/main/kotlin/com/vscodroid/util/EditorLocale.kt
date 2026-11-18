@@ -40,11 +40,13 @@ import java.util.Locale
  * hardcoded to "en" and assigns it over `VSCODE_NLS_CONFIG` before reading it,
  * and it builds the extension host's environment through the language-pack
  * machinery, which needs a pack installed in the user data directory. So the
- * strings the server logs and the messages an extension shows at runtime stay
- * English however this resolves, and an earlier version of this file that
- * exported the answer to that process was writing to nobody. See
- * `assets/server.js`, which records the same finding beside the line it
- * explains.
+ * strings the server logs and the host's own messages stay English however this
+ * resolves, and an earlier version of this file that exported the answer to that
+ * process was writing to nobody. What an extension reads through
+ * `vscode.env.language` and `vscode.l10n` follows the language the client sends
+ * instead (`appLanguage` in the shipped `extensionHostProcess.js`, read there and
+ * not measured on a device). See `assets/server.js`, which records the same
+ * finding beside the line it explains.
  *
  * The bundle names are vscode-loc's, which are lower case and not always what a
  * device would call itself: Portuguese exists only as `pt-br`, and Chinese as
