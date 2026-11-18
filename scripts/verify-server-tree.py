@@ -76,13 +76,14 @@ PRUNED = (
 # runs its postinstall a second time, and that postinstall deletes and rewrites
 # each of the package's directories (copyCopilotCLIFolders in
 # extensions/copilot/script/postinstall.ts: rm, mkdir, cp). A copy that reads a
-# directory in that moment takes part of it and reports nothing, so a tree can
-# come out short with every other check green: a published server lacked
-# definitions/rubber-duck.agent.yaml and definitions/task.agent.yaml, earlier
-# builds lacked sdk/ or differed in queries/. build-vscode-oss.sh puts two of
-# those directories back by hand; this is what refuses the rest, on the build
-# side before a tree is published and on the fetch side before one is used. A
-# build this refuses is run again.
+# directory in that moment takes part of it and reports nothing, so a tree came
+# out short with every other check green: one published server lacked
+# definitions/rubber-duck.agent.yaml and definitions/task.agent.yaml, and the
+# sixteen files of sdk/queries/ were there in one build and gone in the next
+# (the server published on 2026-11-17 was without them). build-vscode-oss.sh now
+# completes the copy from the source once the compile has exited; this list is
+# what holds the result to account, on the build side before a tree is
+# published and on the fetch side before one is used.
 #
 # A new pin brings another version of the package and another list. Take it
 # from a tree built at that pin, after two builds have agreed on it:
@@ -151,6 +152,22 @@ COPILOT_PACKAGE_FILES = frozenset("""
     sdk/index.js
     sdk/prebuilds/linux-arm64/cli-native.node
     sdk/prebuilds/linux-arm64/runtime.node
+    sdk/queries/bash-highlights.scm
+    sdk/queries/c-highlights.scm
+    sdk/queries/cpp-highlights.scm
+    sdk/queries/csharp-highlights.scm
+    sdk/queries/css-highlights.scm
+    sdk/queries/go-highlights.scm
+    sdk/queries/html-highlights.scm
+    sdk/queries/java-highlights.scm
+    sdk/queries/javascript-highlights.scm
+    sdk/queries/json-highlights.scm
+    sdk/queries/php-highlights.scm
+    sdk/queries/python-highlights.scm
+    sdk/queries/ruby-highlights.scm
+    sdk/queries/rust-highlights.scm
+    sdk/queries/scala-highlights.scm
+    sdk/queries/typescript-highlights.scm
     sdk/ripgrep/bin/linux-arm64/rg
     sdk/tgrep/bin/linux-arm64/tgrep
     shims.txt
@@ -602,8 +619,8 @@ def main(tree):
                 said.append(f"{len(extra)} not in the list: {', '.join(extra[:8])}")
             check(not missing and not extra,
                   f"@github/copilot holds its {len(COPILOT_PACKAGE_FILES)} files and no other",
-                  "; ".join(said) + "; a copy made while the package was being rewritten "
-                  "is short, so build again, and a new pin needs a new list")
+                  "; ".join(said) + "; the build completes this package from its source, "
+                  "so a tree built before it did is short, and a new pin needs a new list")
 
     # The line readiness waits for. ProcessManager.probeReadiness refuses to call
     # a spawned start ready until the output reader has seen this sentence,
@@ -1012,8 +1029,8 @@ def self_test() -> int:
             (lambda: None, f"ok      {label}"),
             (lambda: (package / lost).unlink(), f"FAIL    {label}  1 missing: {lost}"),
             (lambda: (package / lost).write_text("x"), f"ok      {label}"),
-            (lambda: (package / "sdk/queries").mkdir() or (package / "sdk/queries/a.scm").write_text("x"),
-             f"FAIL    {label}  1 not in the list: sdk/queries/a.scm"),
+            (lambda: (package / "definitions/one-more.agent.yaml").write_text("x"),
+             f"FAIL    {label}  1 not in the list: definitions/one-more.agent.yaml"),
         ):
             change()
             out = io.StringIO()

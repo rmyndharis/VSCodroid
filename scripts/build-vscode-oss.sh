@@ -558,7 +558,8 @@ step "Copilot extension (compile-copilot-extension-build)"
 #
 # The built server has also come out without sdk/definitions and
 # sdk/builtin-skills, which the same postinstall writes next to index.js. The
-# source tree is complete once the compile has exited, so both are copied from it.
+# source tree is complete once the compile has exited, so the step after this
+# check copies from it whatever .build lacks.
 t0=$SECONDS
 sdk="$SRC/.build/extensions/copilot/node_modules/@github/copilot/sdk"
 npm run gulp compile-copilot-extension-build
@@ -580,9 +581,121 @@ for name in definitions builtin-skills; do
         echo "  ERROR: the compile left no $sdk_src/$name" >&2
         exit 1
     }
-    rm -rf "$sdk/$name"
-    cp -R "$sdk_src/$name" "$sdk/$name"
 done
+
+# The whole package is made complete here, those two directories with it. The
+# postinstall does not stop at sdk: copyCopilotCLIFolders deletes and rewrites
+# every directory of node_modules/@github/copilot (rm, mkdir, cp), so the copy
+# into .build can take part of any of them. Published servers have come out
+# without two files of definitions/, and with or without the sixteen of
+# sdk/queries/ from one build to the next, each with every gate green.
+#
+# The compile has exited, so the source directory is whole. What .build should
+# hold of it is the source minus what the packaging leaves out, and that is read
+# from the files the packaging reads: build/.moduleignore and
+# build/.moduleignore.<platform>, applied as cleanNodeModules in
+# build/lib/util.ts applies them, with the two things
+# packageCopilotExtensionStream leaves out itself (test and tests directories,
+# and names that start with a dot). A file missing from the copy, or differing
+# from its source, is copied again.
+#
+# A file in the copy that those rules leave out stops the build: the rules read
+# here would no longer describe what the packaging does, and a step that no
+# longer describes it would put back files that were left out on purpose.
+# verify-server-tree.py holds the list of what reaches the tree in the end.
+python3 - "$SRC" <<'PY'
+import filecmp, os, pathlib, re, shutil, sys
+
+root = pathlib.Path(sys.argv[1])
+PACKAGE = "extensions/copilot/node_modules/@github/copilot"
+source, built = root / PACKAGE, root / ".build" / PACKAGE
+
+
+def expand(pattern):
+    found = re.search(r"\{([^{}]*)\}", pattern)
+    if not found:
+        return [pattern]
+    head, tail = pattern[:found.start()], pattern[found.end():]
+    return [alt for choice in found.group(1).split(",") for alt in expand(head + choice + tail)]
+
+
+def glob(pattern):
+    alternatives = []
+    for plain in expand(pattern):
+        parts, out = plain.split("/"), ""
+        for index, part in enumerate(parts):
+            last = index == len(parts) - 1
+            if part == "**":
+                out += ".+" if last else "(?:[^/]+/)*"
+                continue
+            out += "".join("[^/]*" if c == "*" else "[^/]" if c == "?" else re.escape(c) for c in part)
+            out += "" if last else "/"
+        alternatives.append(out)
+    return re.compile("^(?:" + "|".join(alternatives) + ")$")
+
+
+def rules(path):
+    excludes, includes = [], []
+    if path.is_file():
+        for line in path.read_text().splitlines():
+            line = line.strip()
+            if line.startswith("!"):
+                includes.append(glob("**/node_modules/" + line[1:]))
+            elif line and not line.startswith("#"):
+                excludes.append(glob("**/node_modules/" + line))
+    return excludes, includes
+
+
+platform = "darwin" if sys.platform == "darwin" else "linux"
+rule_sets = [rules(root / "build/.moduleignore"), rules(root / f"build/.moduleignore.{platform}")]
+
+
+def kept(name):
+    parts = name.split("/")
+    if any(part.startswith(".") for part in parts) or any(part in ("test", "tests") for part in parts[:-1]):
+        return False
+    path = f"{PACKAGE}/{name}"
+    return not any(
+        any(rule.match(path) for rule in excludes) and not any(rule.match(path) for rule in includes)
+        for excludes, includes in rule_sets
+    )
+
+
+def files(top):
+    return {pathlib.Path(directory, name).relative_to(top).as_posix()
+            for directory, _, names in os.walk(top) for name in names}
+
+
+def same(left, right):
+    if left.is_symlink() or right.is_symlink():
+        return left.is_symlink() and right.is_symlink() and os.readlink(left) == os.readlink(right)
+    return filecmp.cmp(left, right, shallow=False)
+
+
+expected = {name for name in files(source) if kept(name)}
+present = files(built)
+unexpected = sorted(present - expected)
+if unexpected:
+    print(f"  ERROR: .build/{PACKAGE} holds {len(unexpected)} file(s) the packaging rules leave out:", file=sys.stderr)
+    for name in unexpected[:20]:
+        print(f"    {name}", file=sys.stderr)
+    print("  The rules read here no longer describe what the packaging copies.", file=sys.stderr)
+    sys.exit(1)
+copied = []
+for name in sorted(expected):
+    origin, target = source / name, built / name
+    if name in present and same(origin, target):
+        continue
+    target.parent.mkdir(parents=True, exist_ok=True)
+    if target.is_symlink() or target.exists():
+        target.unlink()
+    shutil.copy2(origin, target, follow_symlinks=False)
+    copied.append(name)
+print(f"  @github/copilot: {len(expected)} of {len(files(source))} source files belong in .build, "
+      f"{len(copied)} put back")
+for name in copied[:40]:
+    print(f"    {name}")
+PY
 
 step "Package (vscode-reh-web-linux-$ARCH-min-ci)"
 # Packaging only -- native extensions, the node download, the copy into place.
