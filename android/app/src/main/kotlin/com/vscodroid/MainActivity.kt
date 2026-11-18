@@ -686,7 +686,8 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                 // Reported and not raised: this only ever runs on a path that has
                 // already failed, and a delete that fails leaves a file the user
                 // can delete themselves, which is not worth a second message.
-                Logger.w(tag, "Could not remove the unfinished download", e)
+                // The class and not the exception: its message names the document the page chose.
+                Logger.w(tag, "Could not remove the unfinished download: ${e.javaClass.simpleName}")
             }
         }
 
@@ -1911,7 +1912,8 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
                 // screen, because the window that carried the dialog is what has
                 // gone; the notice below is a toast and outlives it.
                 if (!isFinishing && !isDestroyed) dialog.dismiss()
-                Logger.e(tag, "SAF permission revoked during sync", e)
+                // The class and not the exception: its message quotes the tree URI, see [openSafFolder].
+                Logger.e(tag, "SAF permission revoked during sync: ${e.javaClass.simpleName}")
                 reportSyncFailure(
                     getString(R.string.saf_sync_denied),
                     restoreWatcherAfterFailure(previouslyWatched, uri)
@@ -1935,7 +1937,8 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
             } catch (e: Exception) {
                 // Guarded for the reason the handler above it is.
                 if (!isFinishing && !isDestroyed) dialog.dismiss()
-                Logger.e(tag, "SAF sync failed", e)
+                // The class and not the exception: its message can name a path or the tree URI.
+                Logger.e(tag, "SAF sync failed: ${e.javaClass.simpleName}")
                 // Never null: many exceptions carry no message, and the sentence then
                 // ended in the word null.
                 reportSyncFailure(

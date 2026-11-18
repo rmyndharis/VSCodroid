@@ -65,6 +65,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The Antigravity engine switch keeps holding the engine back when an extension changes the HOME of the extension host.
 - The Antigravity engine's version check ends an engine an earlier editor session left running when the setting is off.
 - A client that resets the connection while the Antigravity panel's relay refuses it no longer raises an unhandled error in the extension host.
+- The log no longer carries the device folder or the download target named by a failed folder sync or a download that could not be removed.
 
 ## [1.9.0] - 2026-11-16
 
