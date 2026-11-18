@@ -55,6 +55,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - A file made in a device folder at the moment the app keeps a copy beside it as `<name>.local-<time>`, or puts a copy back under its own name, is no longer replaced by that copy.
 - The server build completes the Copilot extension's `@github/copilot` package from its source, so a build no longer comes out with files missing: one published build had lost two, and the sixteen files of `sdk/queries` were in some builds and not in others.
 - A server tree whose `@github/copilot` package is not the expected set of files is refused when it is built and when it is fetched.
+- The Codex toolchain card quotes 375 MB, up from 360 MB, so the pack of a newer Codex build still fits its recorded size.
 
 ## [1.9.0] - 2026-11-16
 

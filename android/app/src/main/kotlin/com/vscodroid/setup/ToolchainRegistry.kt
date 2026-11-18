@@ -156,13 +156,15 @@ object ToolchainRegistry {
             displayName = "Codex",
             shortLabel = "Codex",
             descriptionRes = R.string.toolchain_codex_description,
-            // 335,548 KiB measured with `du -sk` over the pack's `usr/` tree,
-            // which is 343.6 MB in 4 KiB blocks, in 5 files: the engine at 255
-            // MB and its code-mode helper at 72 MB account for all but 10 KiB
-            // of notices. 360,000,000 leaves 16 MB for a newer build of the
-            // engine: Termux takes whatever the package is on the day the pack
-            // is built, and package-toolchains.sh refuses a tree above this.
-            estimatedSize = 360_000_000,
+            // The pack's `usr/` tree in 4 KiB blocks, in 5 files: the engine at
+            // about 255 MB and its code-mode helper at about 72 MB account for all
+            // but 10 KiB of notices. It was 343.6 MB at the first build, 353.1 MB
+            // in 1.9.0, 354.0 MB with Termux's codex 0.169.1 and about 357.4 MB
+            // with 0.170.0, and it grows by about 4 MB a build. 375,000,000 leaves
+            // 17 MB for newer builds: Termux takes whatever the package is on the
+            // day the pack is built, and package-toolchains.sh refuses a tree above
+            // this. Measure the pack again before a release.
+            estimatedSize = 375_000_000,
             downloadSize = 134_000_000,
             downloadUrl = "https://github.com/rmyndharis/VSCodroid/releases/latest/download/toolchain_codex.zip",
             offeredInPicker = false,

@@ -1035,7 +1035,7 @@ Beyond the bundled tools (Node.js, Python, Git, Bash), VSCodroid offers addition
 | Ruby | 11 MB | 41 MB | ruby, gem, irb, bundler, rake, and the headers native gems build against |
 | Java 25 (OpenJDK) | 69 MB | 192 MB | java, javac, jar, jshell |
 | C/C++ (clang) | 80 MB | 280 MB | cc, c++, gcc, g++, clang, clang++, ld, ar, ranlib, nm, strip, objdump, objcopy, readelf, size, clangd (the language server), and the C and C++ headers |
-| Codex | 134 MB | 360 MB | codex, OpenAI's coding agent (see [Codex](#codex)); not a language, so the first-run picker does not offer it |
+| Codex | 134 MB | 375 MB | codex, OpenAI's coding agent (see [Codex](#codex)); not a language, so the first-run picker does not offer it |
 
 Codex is the largest. Installing a toolchain holds the unpacked copy and the
 installed copy at once, so the install asks for roughly twice the installed size free while
@@ -1213,7 +1213,7 @@ files in the project and run commands. The `codex` command in a terminal shares 
 What to know before using it:
 
 - **Space.** The extension is about 420 MB to download and about 1.2 GB once unpacked, on top of the
-  toolchain's 360 MB, and Codex keeps its own data under `~/.codex`: about 150 MB after a few runs, 50 MB of it
+  toolchain's 375 MB, and Codex keeps its own data under `~/.codex`: about 150 MB after a few runs, 50 MB of it
   a catalogue of plugins it fetches when it first starts. A phone short of space may not have room for the
   extension, or for the next update of the app once it is installed.
 - **Approvals.** The engine's own sandbox is not available on Android: `codex sandbox` answers that it is not
@@ -1707,7 +1707,7 @@ VS Code's web client runs as a single window. You cannot open multiple VS Code w
 
 ### Storage
 
-Core installation extracts approximately 603 MB to internal storage. With Ruby and Java installed, expect around 830 MB, and about 1,090 MB with C/C++ as well. The Codex toolchain adds about 360 MB. Setup needs about 800 MB free before it starts, which is more than it ends up occupying because extraction needs room to work. If it refuses, it asks for the shortfall it measured rather than the whole figure, so a device part of the way through is asked only for what is missing. Beyond it, keep a few hundred MB free for node_modules, build artifacts and caches.
+Core installation extracts approximately 603 MB to internal storage. With Ruby and Java installed, expect around 830 MB, and about 1,090 MB with C/C++ as well. The Codex toolchain adds about 375 MB. Setup needs about 800 MB free before it starts, which is more than it ends up occupying because extraction needs room to work. If it refuses, it asks for the shortfall it measured rather than the whole figure, so a device part of the way through is asked only for what is missing. Beyond it, keep a few hundred MB free for node_modules, build artifacts and caches.
 
 ---
 

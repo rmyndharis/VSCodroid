@@ -245,7 +245,7 @@ adb install android/app/build/outputs/apk/debug/app-debug.apk
 | Extracted to internal storage (core)   | ~603 MB              |
 | Extracted, plus Ruby and Java          | ~830 MB              |
 | Extracted, plus Ruby, Java and C/C++   | ~1,090 MB            |
-| + Codex, on top of any of these        | +360 MB              |
+| + Codex, on top of any of these        | +375 MB              |
 | RAM usage (typical)                    | ~400-700 MB          |
 
 The install figure includes the space needed to allocate missing files and directories
