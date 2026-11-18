@@ -7,16 +7,12 @@ import com.vscodroid.BuildConfig
  * Makes main-thread disk I/O visible in a debug build, and only after launch.
  *
  * Installed from the tail of `MainActivity.onCreate`, deliberately not from
- * `VSCodroidApp.onCreate`. Everything before that point touches the filesystem on
- * the main thread on purpose and says so in place: the block of launch repairs in
- * `SplashActivity.onCreate` carries the comment "These touch the filesystem on the
- * main thread at launch", and it runs before the first frame. The volume is not a
- * handful either. `setupGitCore` alone does an lstat and usually a readlink per
- * entry over `assets/usr/lib/git-core/gitcore-symlinks`, which holds 146 lines
- * today, and it is one repair among more than a dozen. A policy installed at
- * process start therefore logs violations by the hundred on every single launch,
- * against code that already documents why each one is there, and a diagnostic that
- * noisy is one that gets deleted rather than read. Installed here it covers the
+ * `VSCodroidApp.onCreate`. What runs before that point still touches the filesystem
+ * on the main thread in places, and says so where it does. A policy installed at
+ * process start would log those on every single launch, against code that already
+ * documents why each one is there, and a diagnostic that noisy is one that gets
+ * deleted rather than read. (The launch repairs of `SplashActivity` run on an I/O
+ * thread, which a main-thread policy does not see.) Installed here it covers the
  * editor session instead, where the expected list below is short enough to act on.
  *
  * Network is not detected here, because the platform already detects it and kills
