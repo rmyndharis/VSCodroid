@@ -265,7 +265,7 @@ VSCodroid/
 | File | Purpose |
 | ---- | ------- |
 | `MainActivity.kt` | WebView setup, JS bridge registration, intent handling, OAuth callbacks |
-| `SplashActivity.kt` | First-run asset extraction, progress UI, the toolchain picker, and the launch repairs, which run at the first start of each process |
+| `SplashActivity.kt` | First-run asset extraction, progress UI, the toolchain picker, and the launch repairs, which run on every start |
 | `VSCodroidApp.kt` | Application class, WebView pre-warm, CrashReporter init |
 | `bridge/AndroidBridge.kt` | JS interface: clipboard, file picker, OAuth, SSH, storage, toolchains |
 | `bridge/SecurityManager.kt` | The bridge session token: issues it, and validates it on every `@JavascriptInterface` call. It judges the caller, never the destination: there is no URL allow-list, and WebView navigation is decided in `VSCodroidWebViewClient.shouldOverrideUrlLoading`. That callback is not one rule: an external main-frame navigation is handed to the system, an http or https subframe is rendered in place instead, and a subframe naming any other scheme needs a user gesture behind it or nothing leaves |
@@ -934,14 +934,15 @@ else (`FirstRunSetup.kt`). Move the name and leave the code alone and the
 extraction happens while the migration that was supposed to accompany it never
 runs.
 
-**Tool symlinks are rebuilt at the first launch of every process, not only on
-first run** (`SplashActivity.kt` runs `setupToolSymlinks()` with the other launch
-repairs, off the main thread, and `LaunchRepairRecord` lets a later launch of
-the same process skip them). Android assigns a new `nativeLibraryDir` on every
-reinstall, which dangles every absolute symlink pointing into it, and a
-reinstall also ends the process, so the launch after it repairs. `File.exists()`
-follows links and answers false for a dangling one, so staleness is detected
-with `Os.lstat()`.
+**Tool symlinks are rebuilt on every launch, not only on first run**
+(`SplashActivity.kt` runs `setupToolSymlinks()` with the other launch repairs,
+off the main thread, under the splash). Android assigns a new `nativeLibraryDir`
+on every reinstall, which dangles every absolute symlink pointing into it.
+`File.exists()` follows links and answers false for a dangling one, so staleness
+is detected with `Os.lstat()`. No launch skips the repairs, because some of what
+they mend changes while the process lives: a certificate authority installed in
+Android Settings reaches git, pip, Ruby and Node only through the CA bundle
+check, and the foreground service can keep the process alive for days.
 
 **`server.js` rewrites `product.json` on every start with a shallow
 `Object.assign`.** Nested objects are replaced whole, not merged, so
