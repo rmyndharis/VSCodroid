@@ -138,6 +138,31 @@ class EngineConsentRestoreTest {
         assertTrue(compared > 20_000, "too few documents were compared: $compared")
     }
 
+    /**
+     * A line comment ends at a CR as well as at an LF, as it does in VS Code's scanner and in
+     * platform-fix.js, which reads the same file to start the engine. Ended only at an LF, a file
+     * whose lines end in a bare CR had everything after its first comment read as that comment: the
+     * setting on the next line was on for platform-fix.js and was not found here, so a restore left
+     * the engine's consent standing.
+     */
+    @Test
+    fun `a line comment ends at a carriage return`() {
+        val bare = "{\r// a comment\r\"$key\": true\r}\r"
+        assertEquals("{\r// a comment\r\"$key\": false\r}\r", withEngineConsentWithdrawn(bare))
+        assertEquals("{\r" + " ".repeat("// a comment".length) + "\r\"$key\": true\r}\r", commentsBlanked(bare))
+
+        val crlf = "{\r\n// a comment\r\n\"$key\": true\r\n}\r\n"
+        assertEquals("{\r\n// a comment\r\n\"$key\": false\r\n}\r\n", withEngineConsentWithdrawn(crlf))
+        assertEquals(crlf.length, commentsBlanked(crlf).length)
+
+        // A comment before the root brace, which the search for that brace has to step over as well.
+        val headed = "// a header\r{\r\"$key\": true\r}\r"
+        assertEquals("// a header\r{\r\"$key\": false\r}\r", withEngineConsentWithdrawn(headed))
+
+        // A comment that is the last thing in the file, with no line break after it.
+        assertEquals("{}\r" + " ".repeat("// no line break".length), commentsBlanked("{}\r// no line break"))
+    }
+
     @Test
     fun `blanking comments keeps the length and the line breaks, and strings whole`() {
         val text = "{ // it's a comment\n \"a\": \"http://x/*y*/\", /* two\nlines */ \"b\": 1 }"
