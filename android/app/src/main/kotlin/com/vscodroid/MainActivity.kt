@@ -490,8 +490,12 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
     private val folderPickerLauncher = registerForActivityResult(
         ActivityResultContracts.OpenDocumentTree()
     ) { uri ->
+        folderPickerPending = false
         uri?.let { handleSafFolderSelected(it) }
     }
+
+    /** The folder picker is open, so its answer is on its way to this page; see [fileChooserIsPending]. */
+    private var folderPickerPending = false
 
     /**
      * The device file picker behind `<input type=file>`, which is what the
@@ -1549,10 +1553,13 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
         // here on the main thread, and an uncaught throw ends the process with the
         // server in it.
         try {
+            folderPickerPending = true
             folderPickerLauncher.launch(null)
         } catch (e: ActivityNotFoundException) {
+            folderPickerPending = false
             Logger.w(tag, "No document tree picker on this device", e)
         } catch (e: IllegalStateException) {
+            folderPickerPending = false
             Logger.w(tag, "The folder picker is no longer registered", e)
         }
     }
@@ -2356,16 +2363,18 @@ class MainActivity : AppCompatActivity(), BlockingNoticeHost {
     }
 
     /**
-     * Whether an `<input type=file>` is still waiting for the device picker.
+     * Whether an `<input type=file>` or the Open Folder picker is still waiting for the device picker.
      *
      * Asked of the chrome client on the current WebView, which is where
      * [deliverFileChooserResult] takes the answer, so the two cannot disagree
      * about which document is owed one. A client that was replaced with its page
      * reports nothing pending, which is right: there is no selection left to
-     * protect.
+     * protect. The folder picker is the same trip through another app, and a
+     * reload on the way back would come ahead of its answer, raise the leave-page
+     * dialog over the sync progress and load the page twice.
      */
     private fun fileChooserIsPending(): Boolean =
-        (webView?.webChromeClient as? VSCodroidWebChromeClient)?.hasPendingFileChooser == true
+        (webView?.webChromeClient as? VSCodroidWebChromeClient)?.hasPendingFileChooser == true || folderPickerPending
 
     /**
      * Whether the create-document picker for a download is still waiting to be
