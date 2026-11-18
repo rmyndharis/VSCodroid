@@ -18,6 +18,7 @@ import kotlinx.coroutines.runBlocking
 import org.junit.jupiter.api.AfterEach
 import org.junit.jupiter.api.Assertions.assertEquals
 import org.junit.jupiter.api.Assertions.assertFalse
+import org.junit.jupiter.api.Assertions.assertNotEquals
 import org.junit.jupiter.api.Assertions.assertThrows
 import org.junit.jupiter.api.Assertions.assertTrue
 import org.junit.jupiter.api.BeforeEach
@@ -270,6 +271,52 @@ class SafWriterTurnTest {
             "one serialized save replaced the other save's receipt",
         )
         assertTrue(engine.holdsOnlyVouchedCopies(mirror), "completed saves left the mirror unvouched")
+    }
+
+    /**
+     * The write in flight gives its provider claim back before it gives the turn back.
+     *
+     * The claim is per provider, and a save asks for it without waiting. A save that has waited
+     * for the turn takes it the moment it is freed and asks for the claim next, so with the claim
+     * given back after the turn the two met in that gap now and then: the claim was found held and
+     * the save that had only had to wait was held back, announced as kept inside the app and, in a
+     * drain that was ending, not sent.
+     *
+     * Read off the threads instead of raced: the claim registry's monitor is held here, which stops
+     * whoever gives a claim back or takes one. The first drain, let go, comes to give its claim
+     * back and stops there. The second must still be waiting for the turn, not at the registry.
+     */
+    @Test
+    fun `a save waiting for its turn is not handed it before the write in flight gives back the provider claim`() {
+        val record = File(mirror.path + SafSyncEngine.SYNCED_RECORD_SUFFIX)
+        record.writeText(SafSyncEngine.RECORD_HEADER)
+        val (_, restored, oldDrain) = twoDrainsOneHeld()
+        val newDrain = drain(restored).also { it.start() }
+        newDrain.join(400)
+        assertTrue(newDrain.isAlive, "the second drain gave up at once instead of waiting its turn")
+
+        val registry = SafSyncEngine::class.java.getDeclaredField("providerMutations")
+            .apply { isAccessible = true }.get(null)!!
+        synchronized(registry) {
+            release.countDown()
+            // Generous: the polling stops as soon as the first drain is there, and a loaded machine is slow to get it there.
+            val deadline = System.nanoTime() + TimeUnit.SECONDS.toNanos(30)
+            while (oldDrain.state != Thread.State.BLOCKED && System.nanoTime() < deadline) Thread.sleep(5)
+            assertEquals(Thread.State.BLOCKED, oldDrain.state, "the first drain never came to give its claim back")
+            Thread.sleep(400)
+            assertNotEquals(
+                Thread.State.BLOCKED, newDrain.state,
+                "the second drain was handed the turn while the first still held the provider claim",
+            )
+        }
+        oldDrain.join(15_000)
+        newDrain.join(15_000)
+
+        assertFalse(oldDrain.isAlive)
+        assertFalse(newDrain.isAlive)
+        assertEquals("A1", text("a.txt"))
+        assertEquals("B1", text("b.txt"), "the second save was held back and not sent")
+        assertEquals(emptyList<String>(), lost, "a save that only had to wait was announced as lost")
     }
 
     @Test
